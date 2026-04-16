@@ -1,6 +1,7 @@
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
+import { useSettingStore } from '@/stores/setting';
 import {
   APPROVAL_WAITING_STATUSES,
   BLOCKING_WAIT_REASONS,
@@ -18,6 +19,8 @@ import { deriveToolViewState } from '@/composables/workflow/useToolStateMapper';
  * 阶段9：建立 tool_call_id 统一视图模型，避免多轨状态冲突
  */
 export const useWorkflowStore = defineStore('workflow', () => {
+  const settingStore = useSettingStore();
+
   const safeParseArguments = (raw) => {
     if (!raw) return {};
     if (typeof raw === 'string') {
@@ -100,6 +103,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const currentWorkflow = computed(() => {
     return workflows.value.find(w => w.id === currentWorkflowId.value);
   });
+
+  const persistLastSelectedWorkflowId = (workflowId) => {
+    void settingStore.setSetting('workflowLastSelectedId', workflowId || '').catch((error) => {
+      console.warn('[Workflow] Failed to persist last selected workflow id:', error);
+    });
+  };
 
   const runningLikeStates = [...RUNNING_STATUSES];
   const waitingLikeStates = [...WAITING_STATUSES];
@@ -720,6 +729,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
           ...snapshot.workflow
         };
       }
+
+      persistLastSelectedWorkflowId(workflowId);
     } catch (err) {
       await _handleError(err);
       messages.value = [];
@@ -849,7 +860,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const incomingQueuedUserMessageId = message.metadata?.queued_user_message_id;
     const index = messages.value.findIndex((m) => {
       if (message.id && m.id === message.id) return true;
-      if (incomingToolCallId && m.metadata?.tool_call_id === incomingToolCallId) return true;
+      if (
+        incomingToolCallId &&
+        m.metadata?.tool_call_id === incomingToolCallId &&
+        m.role === message.role
+      ) {
+        return true;
+      }
       if (
         incomingQueuedUserMessageId &&
         m.metadata?.queued_user_message_id === incomingQueuedUserMessageId
@@ -1005,6 +1022,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       clearTaskLedger(currentWorkflowId.value);
     }
     currentWorkflowId.value = null;
+    persistLastSelectedWorkflowId('');
     messages.value = [];
     todoList.value = [];
     isRunning.value = false;

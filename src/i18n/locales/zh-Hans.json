@@ -798,12 +798,22 @@
     "thoughtCompleted": "已思考",
     "thinking": "思考中...",
     "approval": {
-      "action": "待执行操作",
-      "details": "操作详情",
+      "backgroundMessage": "“{workflow}” 需要审批：{action}",
+      "backgroundTitle": "后台工作流等待审批",
+      "queueButton": "Approval",
       "rejectionMessageLabel": "拒绝说明",
-      "rejectionMessagePlaceholder": "如果你不希望执行这个操作，可以输入原因。",
-      "title": "安全审批",
-      "warning": "该操作具有潜在风险，请确认是否继续执行。"
+      "rejectionMessagePlaceholder": "如果你不希望执行这个操作，可以输入原因。"
+    },
+    "askUser": {
+      "answerLabel": "回答：",
+      "backgroundMessage": "“{workflow}” 正在等待你的输入",
+      "backgroundTitle": "后台工作流等待输入",
+      "customLabel": "自定义输入",
+      "customPlaceholder": "我想输入...",
+      "responseTitle": "已提交的选择",
+      "submit": "提交",
+      "validationCustomRequired": "请补充自定义输入内容。",
+      "validationRequired": "请为每一项选择一个选项或填写输入内容。"
     },
     "autoApprovedTools": "自动审批的工具",
     "allowedShellCommands": "允许的 Shell 命令",
@@ -822,6 +832,7 @@
     "finalAuditTooltip": "终审模式：任务结束前由 AI 自动进行质量审核",
     "historyTab": "会话",
     "newWorkflow": "新建工作流",
+    "muteApprovalNotifications": "静音审批提示音",
     "retrying": "请求频率过快，正在重试 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
     "startFailed": "启动工作流失败: {error}",
     "noAgentError": "没有可用的代理。请先在设置中创建代理。",
@@ -839,6 +850,7 @@
       "totalCalls": "总调用",
       "title": "状态面板"
     },
+    "unmuteApprovalNotifications": "开启审批提示音",
     "todoList": {
       "title": "待办事项",
       "next": "下一步"

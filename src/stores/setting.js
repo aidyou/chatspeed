@@ -21,6 +21,8 @@ const defaultSettings = {
   codeLightTheme: 'atom-one-light',
   codeDarkTheme: 'github-dark',
   showMenuButton: true,
+  workflowApprovalMuted: true,
+  workflowLastSelectedId: '',
   // chat settings
   historyMessages: 5,
   conversationTitleGenModel: { id: '', model: '' },

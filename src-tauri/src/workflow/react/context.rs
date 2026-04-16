@@ -54,6 +54,20 @@ impl ContextManager {
         })
     }
 
+    fn latest_successful_finish_task_index(messages: &[WorkflowMessage]) -> Option<usize> {
+        messages
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, message)| {
+                if Self::is_successful_finish_task_message(message) {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+    }
+
     fn estimate_message_tokens(message: &WorkflowMessage) -> f64 {
         let content_to_estimate = if let Some(att) = &message.attached_context {
             format!("{}\n\n{}", message.message, att)
@@ -311,6 +325,27 @@ impl ContextManager {
             .find(|m| m.role == "user")
             .map(|m| m.message.clone())
             .unwrap_or_default()
+    }
+
+    /// Returns all messages that belong to the current work segment after the last successful finish_task.
+    pub fn messages_since_last_finish_task(&self) -> Vec<WorkflowMessage> {
+        let start_index = Self::latest_successful_finish_task_index(&self.messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        self.messages.iter().skip(start_index).cloned().collect()
+    }
+
+    /// Returns the first user request after the last successful finish_task.
+    /// Falls back to the initial query if the current segment has no user message yet.
+    pub fn current_user_request_since_last_finish_task(&self) -> String {
+        self.messages_since_last_finish_task()
+            .into_iter()
+            .find(|message| {
+                message.role == "user" && message.step_type.as_deref() != Some("observe")
+            })
+            .map(|message| message.message)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| self.get_initial_query())
     }
 
     /// Prunes the context for transitioning from Planning to Execution.
@@ -773,6 +808,90 @@ mod tests {
         assert!(
             context.messages.iter().any(|m| m.id == post_finish.id),
             "messages after the compression boundary should stay in memory"
+        );
+    }
+
+    #[tokio::test]
+    async fn current_user_request_uses_work_segment_after_last_finish_task() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-current-task-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Initial task".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add initial task");
+        let _ = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_FINISH_TASK })),
+            )
+            .await
+            .expect("failed to add finish task");
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Working on the next request".to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add assistant message");
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Current task after finish".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add current task");
+
+        assert_eq!(
+            context.current_user_request_since_last_finish_task(),
+            "Current task after finish".to_string()
+        );
+
+        let segment = context.messages_since_last_finish_task();
+        assert_eq!(segment.len(), 2);
+        assert_eq!(
+            segment.first().map(|message| message.role.as_str()),
+            Some("assistant")
+        );
+        assert_eq!(
+            segment.last().map(|message| message.role.as_str()),
+            Some("user")
         );
     }
 }

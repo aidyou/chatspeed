@@ -1,6 +1,7 @@
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::{ChatMetadata, MessageType};
+use crate::db::WorkflowMessage;
 use crate::tools::{TOOL_FINISH_TASK, TOOL_TODO_CREATE, TOOL_WEB_SEARCH};
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
@@ -18,7 +19,66 @@ pub struct IntelligenceManager {
     pub active_model_name: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ToolApprovalReview {
+    pub approved: bool,
+    pub reason: String,
+    pub risk_level: String,
+}
+
 impl IntelligenceManager {
+    fn truncate_text(value: &str, max_chars: usize) -> String {
+        let mut text: String = value.chars().take(max_chars).collect();
+        if value.chars().count() > max_chars {
+            text.push_str("...");
+        }
+        text
+    }
+
+    fn format_message_excerpt(message: &WorkflowMessage, max_chars: usize) -> String {
+        let role = &message.role;
+        let step_type = message.step_type.as_deref().unwrap_or_default();
+        let tool_name = message
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("tool_name"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let mut content = message.message.clone();
+        if !message
+            .reasoning
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            content.push_str("\n<reasoning>\n");
+            content.push_str(message.reasoning.as_deref().unwrap_or_default());
+            content.push_str("\n</reasoning>");
+        }
+
+        format!(
+            "<message role=\"{}\" step_type=\"{}\" tool_name=\"{}\">{}\n</message>",
+            role,
+            step_type,
+            tool_name,
+            Self::truncate_text(&content, max_chars).replace('\n', "\n    ")
+        )
+    }
+
+    fn format_recent_messages(
+        messages: &[WorkflowMessage],
+        limit: usize,
+        max_chars: usize,
+    ) -> String {
+        let start = messages.len().saturating_sub(limit);
+        messages[start..]
+            .iter()
+            .map(|message| Self::format_message_excerpt(message, max_chars))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn sanitize_generated_title(raw: &str) -> String {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -431,6 +491,158 @@ impl IntelligenceManager {
                 Ok(Some(feedback.to_string()))
             }
         }
+    }
+
+    /// Reviews a proposed tool call in smart approval mode.
+    pub async fn review_tool_approval(
+        &self,
+        context: &ContextManager,
+        workspace_context: &str,
+        tool_name: &str,
+        tool_category: &str,
+        tool_scope: &str,
+        tool_description: &str,
+        tool_args: &serde_json::Value,
+        assistant_text: &str,
+    ) -> Result<ToolApprovalReview, WorkflowEngineError> {
+        log::info!(
+            "IntelligenceManager {}: Reviewing tool approval for '{}'",
+            self.session_id,
+            tool_name
+        );
+
+        let current_goal = context.current_user_request_since_last_finish_task();
+        let work_messages = context.messages_since_last_finish_task();
+        let recent_messages = Self::format_recent_messages(&work_messages, 10, 700);
+        let args_text =
+            serde_json::to_string_pretty(tool_args).unwrap_or_else(|_| "{}".to_string());
+
+        let system_prompt = crate::workflow::react::prompts::TOOL_APPROVAL_REVIEW_PROMPT;
+        let user_prompt = format!(
+            "<approval_context>\n\
+<workspace_context>\n{}\n</workspace_context>\n\
+<current_user_goal>\n{}\n</current_user_goal>\n\
+<assistant_intent>\n{}\n</assistant_intent>\n\
+<tool_call>\n\
+  <name>{}</name>\n\
+  <category>{}</category>\n\
+  <scope>{}</scope>\n\
+  <description>{}</description>\n\
+  <arguments>\n{}\n</arguments>\n</tool_call>\n\
+<recent_work>\n{}\n</recent_work>\n</approval_context>",
+            workspace_context,
+            current_goal,
+            Self::truncate_text(assistant_text, 1500),
+            tool_name,
+            tool_category,
+            tool_scope,
+            tool_description,
+            args_text,
+            recent_messages
+        );
+
+        let messages = vec![
+            serde_json::json!({
+                "role": "system",
+                "content": system_prompt
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": user_prompt
+            }),
+        ];
+
+        let chat_interface = {
+            let mut chats_guard = self.chat_state.chats.lock().await;
+            chats_guard
+                .entry(crate::ccproxy::ChatProtocol::OpenAI)
+                .or_default()
+                .entry(self.session_id.clone() + "_approval_reviewer")
+                .or_insert_with(|| crate::create_chat!(self.chat_state.main_store))
+                .clone()
+        };
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        let session_id_review = self.session_id.clone() + "_approval_reviewer";
+        let provider_id = self.active_provider_id;
+        let model_name = self.active_model_name.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = chat_interface
+                .chat(
+                    provider_id,
+                    &model_name,
+                    session_id_review,
+                    messages,
+                    None,
+                    Some(ChatMetadata {
+                        reasoning: Some(true),
+                        ..Default::default()
+                    }),
+                    move |chunk| {
+                        let _ = tx.try_send(chunk);
+                    },
+                )
+                .await
+            {
+                log::error!("IntelligenceManager approval review task failed: {}", e);
+            }
+        });
+
+        let mut result = String::new();
+        while let Some(chunk) = rx.recv().await {
+            match chunk.r#type {
+                MessageType::Text => result.push_str(&chunk.chunk),
+                MessageType::Finished => break,
+                MessageType::Error => {
+                    log::error!(
+                        "IntelligenceManager approval review LLM error: {}",
+                        chunk.chunk
+                    );
+                    return Err(WorkflowEngineError::General(
+                        "Approval review model failed".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let result = result.trim();
+        let review_json: serde_json::Value = match serde_json::from_str(
+            crate::libs::util::format_json_str(result).as_str(),
+        ) {
+            Ok(v) => v,
+            Err(_) => {
+                let result_lower = result.to_lowercase();
+                if result_lower.contains("approve") && !result_lower.contains("reject") {
+                    serde_json::json!({
+                        "approved": true,
+                        "reason": if result.is_empty() { "approved".to_string() } else { result.to_string() },
+                        "risk_level": "low"
+                    })
+                } else {
+                    serde_json::json!({
+                        "approved": false,
+                        "reason": if result.is_empty() { "approval review rejected the call".to_string() } else { result.to_string() },
+                        "risk_level": "medium"
+                    })
+                }
+            }
+        };
+
+        Ok(ToolApprovalReview {
+            approved: review_json["approved"].as_bool().unwrap_or(false),
+            reason: review_json["reason"]
+                .as_str()
+                .unwrap_or("Approval review unavailable")
+                .trim()
+                .to_string(),
+            risk_level: review_json["risk_level"]
+                .as_str()
+                .unwrap_or("medium")
+                .trim()
+                .to_string(),
+        })
     }
 
     /// Generates a concise title for the workflow session based on the user's initial query.

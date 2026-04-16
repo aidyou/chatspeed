@@ -6,6 +6,59 @@
   display: flex;
   flex-direction: column;
 
+  .approval-queue-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--cs-text-color-secondary);
+    margin-right: var(--cs-space);
+
+    &.blinking > .cs {
+      animation: approval-queue-flash 1.4s ease-in-out infinite;
+    }
+  }
+
+  .approval-queue-count {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: var(--cs-success-color);
+    color: var(--cs-color-white);
+    font-size: var(--cs-font-size-xs);
+    line-height: 1;
+    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 2px var(--cs-bg-color);
+  }
+
+  .approval-menu-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 220px;
+  }
+
+  .approval-menu-workflow {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--cs-text-color-primary);
+  }
+
+  .approval-menu-action {
+    font-size: 12px;
+    color: var(--cs-text-color-secondary);
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.4;
+  }
+
   .workflow-main {
     flex: 1;
     min-height: 0;
@@ -20,5 +73,16 @@
       height: 100%;
       position: relative; // For floating panels
     }
+  }
+}
+
+@keyframes approval-queue-flash {
+  0%,
+  100% {
+    color: var(--cs-text-color-secondary);
+  }
+
+  50% {
+    color: var(--cs-success-color);
   }
 }

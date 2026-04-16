@@ -11,6 +11,18 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-approval:before {
+  content: "\e696";
+}
+
+.cs-mute:before {
+  content: "\13f7c";
+}
+
+.cs-unmute:before {
+  content: "\e862";
+}
+
 .cs-list_dir:before {
   content: "\e67b";
 }
@@ -865,10 +877,6 @@
 
 .cs-skill:before {
   content: "\e72a";
-}
-
-.cs-sound:before {
-  content: "\e60f";
 }
 
 .cs-about:before {

@@ -15,9 +15,12 @@ impl ToolDefinition for AskUser {
         1. Gather user preferences or requirements\n\
         2. Clarify ambiguous instructions\n\
         3. Get decisions on implementation choices as you work\n\
-        4. Offer choices to the user about what direction to take.\n\n\
+        4. Offer grouped choices to the user about what direction to take.\n\n\
         Usage notes:\n\
-        - Users will always be able to select \"Other\" to provide custom text input\n\
+        - Pass grouped choices using an `items` array\n\
+        - Each item MUST use the shape {\"title\": \"...\", \"options\": [\"...\", \"...\"]}\n\
+        - Each item title becomes a separate section in the UI when multiple groups are provided\n\
+        - Users will always be able to provide custom text input separately if none of the options fit\n\
         - If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label"
     }
     fn category(&self) -> ToolCategory {
@@ -33,14 +36,32 @@ impl ToolDefinition for AskUser {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "question": { "type": "string", "description": "The complete question to ask the user. Should be clear and specific." },
-                    "options": {
+                    "items": {
                         "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Optional list of buttons for the user to click for a quick response."
+                        "description": "Grouped selection prompts. Each item becomes one section in the UI.",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {
+                                    "type": "string",
+                                    "description": "The title for this option group."
+                                },
+                                "options": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "minItems": 1,
+                                    "description": "Selectable options for this group. Show the recommended option first when applicable."
+                                }
+                            },
+                            "required": ["title", "options"],
+                            "additionalProperties": false
+                        }
                     }
-                },
-                "required": ["question"]
+                }
+                ,
+                "required": ["items"],
+                "additionalProperties": false
             }),
             output_schema: None,
             disabled: false,
@@ -141,7 +162,12 @@ mod tests {
     async fn test_ask_user() {
         let tool = AskUser;
         let params = json!({
-            "question": "What is your preference?"
+            "items": [
+                {
+                    "title": "Choose a strategy",
+                    "options": ["Fast", "Safe"]
+                }
+            ]
         });
 
         let result = tool.call(params).await.unwrap();
@@ -149,10 +175,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ask_user_without_question() {
+    async fn test_ask_user_with_empty_params() {
         let tool = AskUser;
         // Tool doesn't validate, so empty params should work
-        let params = json!({});
+        let params = json!([]);
 
         let result = tool.call(params).await.unwrap();
         assert_eq!(result.content.unwrap(), "Waiting for user response");

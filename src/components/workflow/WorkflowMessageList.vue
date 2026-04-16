@@ -10,7 +10,25 @@
       </div>
       <div class="content-container">
         <div class="content" v-if="message.role === 'user'">
-          <pre class="simple-text">{{ message.message }}</pre>
+          <div v-if="getAskUserResponseItems(message).length > 0" class="ask-user-response-card">
+            <div class="ask-user-response-title">{{ $t('workflow.askUser.responseTitle') }}</div>
+            <div
+              v-for="(item, itemIndex) in getAskUserResponseItems(message)"
+              :key="`${item.title}-${itemIndex}`"
+              class="ask-user-response-item">
+              <div class="ask-user-response-question">{{ item.title }}</div>
+              <div class="ask-user-response-answer">
+                <span class="answer-label">{{ $t('workflow.askUser.answerLabel') }}</span>
+                <span>{{ formatAskUserAnswer(item) }}</span>
+              </div>
+              <pre
+                v-if="item.source === 'custom' && item.choice"
+                class="ask-user-response-custom"
+                >{{ item.choice }}</pre
+              >
+            </div>
+          </div>
+          <pre v-else class="simple-text">{{ getVisibleUserContent(message) }}</pre>
         </div>
         <div v-else class="ai-content chat">
           <!-- CLI Style Tool Call (Results) -->
@@ -76,35 +94,96 @@
                 <!-- Final Result -->
                 <MarkdownSimple
                   v-if="
-                    shouldShowToolRawContent(message) && message.toolDisplay.displayType === 'diff'
+                    message.metadata?.approval_status !== 'pending' &&
+                    shouldShowToolRawContent(message) &&
+                    message.toolDisplay.displayType === 'diff'
                   "
                   :content="getDiffMarkdown(removeSystemReminder(message.message))" />
                 <div
                   v-else-if="
+                    message.metadata?.approval_status !== 'pending' &&
                     shouldShowToolRawContent(message) &&
                     message.toolDisplay.displayType === 'choice'
                   "
                   class="choice-container">
-                  <div class="choice-question">
-                    {{ parseChoiceContent(removeSystemReminder(message.message)).question }}
+                  <div
+                    v-for="group in getChoiceGroups(message)"
+                    :key="group.title"
+                    class="choice-group">
+                    <div class="choice-question">
+                      {{ group.title }}
+                    </div>
+                    <el-radio-group
+                      :model-value="getAskUserSelection(message, group.title)"
+                      class="choice-options vertical numbered"
+                      @update:model-value="
+                        value => setAskUserSelection(message, group.title, value)
+                      ">
+                      <el-radio
+                        v-for="(opt, optIndex) in group.options"
+                        :key="`${group.title}-${opt}`"
+                        :value="opt"
+                        :disabled="!canAnswerAskUser(message, index) || askUserSubmitting">
+                        <span class="choice-option-label">{{ optIndex + 1 }}. {{ opt }}</span>
+                      </el-radio>
+                      <div class="choice-custom-row">
+                        <el-radio
+                          :value="CUSTOM_ASK_USER_VALUE"
+                          :disabled="!canAnswerAskUser(message, index) || askUserSubmitting">
+                          <span class="choice-option-label">{{ group.options.length + 1 }}.</span>
+                        </el-radio>
+                        <el-input
+                          :model-value="getAskUserCustomInput(message, group.title)"
+                          class="choice-custom-input"
+                          type="textarea"
+                          :autosize="{ minRows: 1, maxRows: 6 }"
+                          :placeholder="$t('workflow.askUser.customPlaceholder')"
+                          :disabled="!canAnswerAskUser(message, index) || askUserSubmitting"
+                          @focus="setAskUserSelection(message, group.title, CUSTOM_ASK_USER_VALUE)"
+                          @update:model-value="
+                            value => setAskUserCustomInput(message, group.title, value)
+                          " />
+                      </div>
+                    </el-radio-group>
                   </div>
-                  <div class="choice-options">
+                  <div v-if="canAnswerAskUser(message, index)" class="choice-submit-row">
                     <el-button
-                      v-for="opt in parseChoiceContent(removeSystemReminder(message.message))
-                        .options"
-                      :key="opt"
                       size="small"
-                      plain
-                      round
-                      :disabled="isRunning"
-                      @click="$emit('send-choice', opt)">
-                      {{ opt }}
+                      type="primary"
+                      :loading="askUserSubmitting"
+                      @click="submitAskUserResponse(message)">
+                      {{ $t('workflow.askUser.submit') }}
                     </el-button>
                   </div>
                 </div>
-                <pre v-else-if="shouldShowToolRawContent(message)" class="raw-content">{{
-                  removeSystemReminder(message.message)
-                }}</pre>
+                <pre
+                  v-else-if="
+                    message.metadata?.approval_status !== 'pending' &&
+                    shouldShowToolRawContent(message)
+                  "
+                  class="raw-content"
+                  >{{ removeSystemReminder(message.message) }}</pre
+                >
+                <ApprovalDialog
+                  v-if="message.metadata?.approval_status === 'pending'"
+                  inline
+                  :action="message.metadata?.tool_name || message.toolDisplay.action"
+                  :details="removeSystemReminder(message.message)"
+                  :display-type="message.metadata?.display_type || message.toolDisplay.displayType"
+                  :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
+                  :loading="approvalLoading && activeApprovalId === message.metadata?.tool_call_id"
+                  @update:rejection-message="
+                    value => setApprovalDraft(message.metadata?.tool_call_id, value)
+                  "
+                  @approve="$emit('approve-tool', message.metadata?.tool_call_id)"
+                  @approve-all="$emit('approve-all-tool', message.metadata?.tool_call_id)"
+                  @reject="
+                    $emit(
+                      'reject-tool',
+                      message.metadata?.tool_call_id,
+                      getApprovalDraft(message.metadata?.tool_call_id)
+                    )
+                  " />
               </div>
             </template>
           </div>
@@ -253,12 +332,17 @@
 
 <script setup>
 import { ref, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { showMessage } from '@/libs/util'
+import ApprovalDialog from './ApprovalDialog.vue'
 import MarkdownSimple from './MarkdownSimple.vue'
 import { useWorkflowStore } from '@/stores/workflow'
 
 const workflowStore = useWorkflowStore()
+const { t } = useI18n()
+const CUSTOM_ASK_USER_VALUE = '__custom__'
 
-defineProps({
+const props = defineProps({
   messages: {
     type: Array,
     default: () => []
@@ -296,6 +380,14 @@ defineProps({
     type: Object,
     default: null
   },
+  approvalLoading: {
+    type: Boolean,
+    default: false
+  },
+  activeApprovalId: {
+    type: String,
+    default: ''
+  },
   isMessageExpanded: {
     type: Function,
     required: true
@@ -327,12 +419,210 @@ defineProps({
   getReasoningPreview: {
     type: Function,
     required: true
+  },
+  askUserSubmitting: {
+    type: Boolean,
+    default: false
   }
 })
 
-defineEmits(['toggle-expand', 'toggle-reasoning', 'send-choice', 'scroll-bottom'])
+const emit = defineEmits([
+  'toggle-expand',
+  'toggle-reasoning',
+  'scroll-bottom',
+  'approve-tool',
+  'approve-all-tool',
+  'reject-tool',
+  'submit-ask-user'
+])
 
 const messagesRef = ref(null)
+const approvalDrafts = ref({})
+const askUserDrafts = ref({})
+
+const getApprovalDraft = toolCallId => {
+  if (!toolCallId) return ''
+  return approvalDrafts.value[toolCallId] || ''
+}
+
+const setApprovalDraft = (toolCallId, value) => {
+  if (!toolCallId) return
+  approvalDrafts.value = {
+    ...approvalDrafts.value,
+    [toolCallId]: value
+  }
+}
+
+const getChoiceKey = message =>
+  message.metadata?.tool_call_id || message.displayId || message.id || ''
+
+const getAskUserResponseItems = message => {
+  const content = message?.message || ''
+  const match = content.match(/<ask_user_response>\s*([\s\S]*?)\s*<\/ask_user_response>/i)
+  if (!match) return []
+
+  try {
+    const parsed = JSON.parse(match[1])
+    return Array.isArray(parsed) ? parsed : []
+  } catch (error) {
+    return []
+  }
+}
+
+const formatAskUserAnswer = item => {
+  if (!item) return ''
+  if (item.source === 'custom') {
+    return `${t('workflow.askUser.customLabel')} (${item.choice_index})`
+  }
+  return item.choice_index ? `${item.choice_index}. ${item.choice}` : item.choice || ''
+}
+
+const getVisibleUserContent = message => props.removeSystemReminder(message?.message || '')
+
+const getChoiceGroups = message =>
+  props.parseChoiceContent(props.removeSystemReminder(message.message || '')).groups || []
+
+const ensureAskUserDraft = message => {
+  const key = getChoiceKey(message)
+  if (!key) return {}
+  if (askUserDrafts.value[key]) return askUserDrafts.value[key]
+
+  const groups = getChoiceGroups(message)
+  const nextDraft = groups.reduce((acc, group) => {
+    acc[group.title] = {
+      selection: '',
+      customInput: ''
+    }
+    return acc
+  }, {})
+
+  askUserDrafts.value = {
+    ...askUserDrafts.value,
+    [key]: nextDraft
+  }
+
+  return nextDraft
+}
+
+const updateAskUserDraft = (message, updater) => {
+  const key = getChoiceKey(message)
+  if (!key) return
+  const current = ensureAskUserDraft(message)
+  askUserDrafts.value = {
+    ...askUserDrafts.value,
+    [key]: updater(current)
+  }
+}
+
+const getAskUserSelection = (message, title) => ensureAskUserDraft(message)[title]?.selection || ''
+
+const setAskUserSelection = (message, title, value) => {
+  updateAskUserDraft(message, current => ({
+    ...current,
+    [title]: {
+      ...current[title],
+      selection: value
+    }
+  }))
+}
+
+const getAskUserCustomInput = (message, title) =>
+  ensureAskUserDraft(message)[title]?.customInput || ''
+
+const setAskUserCustomInput = (message, title, value) => {
+  updateAskUserDraft(message, current => ({
+    ...current,
+    [title]: {
+      ...current[title],
+      selection: value?.trim() ? CUSTOM_ASK_USER_VALUE : current[title]?.selection,
+      customInput: value
+    }
+  }))
+}
+
+const hasRealUserResponseAfter = fromIndex => {
+  for (let i = fromIndex + 1; i < props.messages.length; i++) {
+    const msg = props.messages[i]
+    if (msg?.role !== 'user') continue
+    if (msg?.metadata?.queue_status === 'queued') continue
+    const content = props.removeSystemReminder(msg.message || '').trim()
+    if (!content) continue
+    return true
+  }
+  return false
+}
+
+const canAnswerAskUser = (message, index) => {
+  if (props.isRunning) return false
+  if (!getChoiceGroups(message).length) return false
+  return !hasRealUserResponseAfter(index)
+}
+
+const buildAskUserResponse = message => {
+  const groups = getChoiceGroups(message)
+  const draft = ensureAskUserDraft(message)
+  const selections = []
+
+  for (const group of groups) {
+    const groupDraft = draft[group.title] || {}
+    const selection = groupDraft.selection || ''
+    const customInput = (groupDraft.customInput || '').trim()
+
+    if (!selection) {
+      return {
+        ok: false,
+        error: 'workflow.askUser.validationRequired'
+      }
+    }
+
+    if (selection === CUSTOM_ASK_USER_VALUE) {
+      if (!customInput) {
+        return {
+          ok: false,
+          error: 'workflow.askUser.validationCustomRequired'
+        }
+      }
+
+      selections.push({
+        title: group.title,
+        choice_index: group.options.length + 1,
+        choice: customInput,
+        source: 'custom'
+      })
+      continue
+    }
+
+    const optionIndex = group.options.findIndex(option => option === selection)
+    if (optionIndex === -1) {
+      return {
+        ok: false,
+        error: 'workflow.askUser.validationRequired'
+      }
+    }
+
+    selections.push({
+      title: group.title,
+      choice_index: optionIndex + 1,
+      choice: selection,
+      source: 'option'
+    })
+  }
+
+  return {
+    ok: true,
+    content: `<ask_user_response>\n${JSON.stringify(selections, null, 2)}\n</ask_user_response>`
+  }
+}
+
+const submitAskUserResponse = message => {
+  const result = buildAskUserResponse(message)
+  if (!result.ok) {
+    showMessage(t(result.error), 'warning')
+    return
+  }
+
+  emit('submit-ask-user', result.content)
+}
 
 const scrollToBottom = (force = false) => {
   if (messagesRef.value) {

@@ -6,55 +6,49 @@ import { useWorkflowStore } from '@/stores/workflow'
 import { SIGNAL_TYPES } from '@/composables/workflow/signalTypes'
 
 /**
- * Composable for managing approval dialog logic
- * Handles approve, reject, and approve all actions
+ * Composable for managing workflow approval actions.
+ * Approval UI is rendered inline in the message list.
  */
 export function useWorkflowApproval({ currentWorkflowId }) {
   const { t } = useI18n()
   const workflowStore = useWorkflowStore()
 
-  const approvalVisible = ref(false)
-  const approvalAction = ref('')
-  const approvalDetails = ref('')
-  const approvalDisplayType = ref('')
-  const approvalRequestId = ref('')
   const approvalLoading = ref(false)
-  const rejectionMessage = ref('')
+  const activeApprovalId = ref('')
 
-  // Show approval dialog
-  const showApproval = (payload) => {
-    approvalRequestId.value = payload.id
-    approvalAction.value = payload.action
-    approvalDetails.value = payload.details
-    approvalDisplayType.value = payload.displayType || ''
-    rejectionMessage.value = ''
-    approvalVisible.value = true
-  }
-
-  // Hide approval dialog
-  const hideApproval = () => {
-    rejectionMessage.value = ''
-    approvalVisible.value = false
-  }
-
-  const onApproveAction = async () => {
+  const submitApproval = async ({
+    toolCallId,
+    approved,
+    approveAll = false,
+    rejectionMessage = '',
+    sessionId = currentWorkflowId.value
+  }) => {
+    if (!toolCallId || !sessionId) {
+      return
+    }
     approvalLoading.value = true
+    activeApprovalId.value = toolCallId
     try {
       const signal = JSON.stringify({
         type: SIGNAL_TYPES.APPROVAL,
-        approved: true,
-        approve_all: false,
-        id: approvalRequestId.value
+        approved,
+        approve_all: approveAll,
+        id: toolCallId,
+        rejection_message: rejectionMessage?.trim() || undefined
       })
+
       await invokeWrapper('workflow_signal', {
-        sessionId: currentWorkflowId.value,
+        sessionId,
         signal
       })
-      workflowStore.markToolApprovedRunning(approvalRequestId.value)
-      approvalVisible.value = false
+
+      if (approved) {
+        workflowStore.markToolApprovedRunning(toolCallId)
+      } else {
+        workflowStore.markToolRejected(toolCallId)
+      }
     } catch (error) {
-      console.error('Failed to approve action:', error)
-      // If session is lost, force close dialog
+      console.error('Failed to resolve approval action:', error)
       if (
         String(error).includes('No sender') ||
         String(error).includes('No active session') ||
@@ -65,105 +59,44 @@ export function useWorkflowApproval({ currentWorkflowId }) {
             'Session disconnected. Please refresh the page to restore the workflow.',
           'warning'
         )
-        approvalVisible.value = false
-        // Reset running state since the session is lost
         workflowStore.setRunning(false)
       } else {
         showMessage(String(error), 'error')
       }
     } finally {
       approvalLoading.value = false
+      activeApprovalId.value = ''
     }
   }
 
-  const onApproveAllAction = async () => {
-    approvalLoading.value = true
-    try {
-      const signal = JSON.stringify({
-        type: SIGNAL_TYPES.APPROVAL,
-        approved: true,
-        approve_all: true,
-        id: approvalRequestId.value
-      })
-      await invokeWrapper('workflow_signal', {
-        sessionId: currentWorkflowId.value,
-        signal
-      })
-      workflowStore.markToolApprovedRunning(approvalRequestId.value)
-      approvalVisible.value = false
-    } catch (error) {
-      console.error('Failed to approve all actions:', error)
-      if (
-        String(error).includes('No sender') ||
-        String(error).includes('No active session') ||
-        String(error).includes('Session interrupted')
-      ) {
-        showMessage(
-          t('workflow.sessionLost') ||
-            'Session disconnected. Please refresh the page to restore the workflow.',
-          'warning'
-        )
-        approvalVisible.value = false
-        // Reset running state since the session is lost
-        workflowStore.setRunning(false)
-      } else {
-        showMessage(String(error), 'error')
-      }
-    } finally {
-      approvalLoading.value = false
-    }
-  }
+  const onApproveAction = (toolCallId, sessionId) =>
+    submitApproval({
+      toolCallId,
+      sessionId,
+      approved: true,
+      approveAll: false
+    })
 
-  const onRejectAction = async () => {
-    approvalLoading.value = true
-    try {
-      const signal = JSON.stringify({
-        type: SIGNAL_TYPES.APPROVAL,
-        approved: false,
-        approve_all: false,
-        id: approvalRequestId.value,
-        rejection_message: rejectionMessage.value?.trim() || undefined
-      })
-      await invokeWrapper('workflow_signal', {
-        sessionId: currentWorkflowId.value,
-        signal
-      })
-      workflowStore.markToolRejected(approvalRequestId.value)
-      approvalVisible.value = false
-      rejectionMessage.value = ''
-    } catch (error) {
-      console.error('Failed to reject action:', error)
-      if (
-        String(error).includes('No sender') ||
-        String(error).includes('No active session') ||
-        String(error).includes('Session interrupted')
-      ) {
-        showMessage(
-          t('workflow.sessionLost') ||
-            'Session disconnected. Please refresh the page to restore the workflow.',
-          'warning'
-        )
-        approvalVisible.value = false
-        // Reset running state since the session is lost
-        workflowStore.setRunning(false)
-      } else {
-        showMessage(String(error), 'error')
-      }
-    } finally {
-      approvalLoading.value = false
-    }
-  }
+  const onApproveAllAction = (toolCallId, sessionId) =>
+    submitApproval({
+      toolCallId,
+      sessionId,
+      approved: true,
+      approveAll: true
+    })
+
+  const onRejectAction = (toolCallId, rejectionMessage, sessionId) =>
+    submitApproval({
+      toolCallId,
+      sessionId,
+      approved: false,
+      approveAll: false,
+      rejectionMessage
+    })
 
   return {
-    approvalVisible,
-    approvalAction,
-    approvalDetails,
-    approvalDisplayType,
-    approvalRequestId,
     approvalLoading,
-    rejectionMessage,
-    showApproval,
-    hideApproval,
+    activeApprovalId,
     onApproveAction,
     onApproveAllAction,
     onRejectAction

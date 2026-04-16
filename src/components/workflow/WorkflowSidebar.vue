@@ -20,8 +20,8 @@
                 }">
                 <div class="workflow-title">{{ wf.title || wf.userQuery || $t('workflow.untitled') }}</div>
                 <div class="workflow-status" v-if="wf.status">
-                  <span :class="['status-indicator', wf.status.toLowerCase()]"></span>
-                  {{ wf.status }}
+                  <span :class="['status-indicator', getWorkflowStatusClass(wf.status)]"></span>
+                  {{ getWorkflowStatusLabel(wf.status) }}
                 </div>
                 <div class="icons" v-show="wf.id === hoveredWorkflowIndex">
                   <div class="icon icon-edit" @click.stop="$emit('edit-workflow', wf.id)">
@@ -98,6 +98,17 @@ defineEmits([
 const activeSidebarTab = ref('history')
 const searchQuery = ref('')
 const hoveredWorkflowIndex = ref(null)
+const runningStatuses = new Set(['thinking', 'executing', 'auditing', 'running'])
+
+const getWorkflowStatusClass = (status) => {
+  const normalized = String(status || '').toLowerCase()
+  return runningStatuses.has(normalized) ? 'running' : normalized
+}
+
+const getWorkflowStatusLabel = (status) => {
+  const normalized = String(status || '').toLowerCase()
+  return runningStatuses.has(normalized) ? 'running' : status
+}
 
 const filteredWorkflows = computed(() => {
   if (!searchQuery.value) return props.workflows

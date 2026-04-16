@@ -11,6 +11,31 @@
       </template>
       <template #center></template>
       <template #right>
+        <el-dropdown v-if="pendingApprovalList.length > 0" trigger="click" @command="handleApprovalCommand">
+          <div class="icon-btn upperLayer approval-queue-btn blinking">
+            <cs name="approval" />
+            <span class="approval-queue-count">{{ approvalQueueCount }}</span>
+          </div>
+          <template #dropdown>
+            <el-dropdown-menu class="approval-queue-menu">
+              <el-dropdown-item
+                v-for="item in pendingApprovalList"
+                :key="item.key"
+                :command="item.sessionId">
+                <div class="approval-menu-item">
+                  <div class="approval-menu-workflow">{{ item.workflowTitle }}</div>
+                  <div class="approval-menu-action">{{ item.action }}</div>
+                </div>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <div class="icon-btn upperLayer" @click="toggleWorkflowApprovalMute">
+          <el-tooltip :content="$t(`workflow.${workflowApprovalMuted ? 'unmuteApprovalNotifications' : 'muteApprovalNotifications'}`)" :hide-after="0" :enterable="false"
+            placement="bottom">
+            <cs :name="workflowApprovalMuted ? 'mute' : 'unmute'" />
+          </el-tooltip>
+        </div>
         <div class="icon-btn upperLayer pin-btn" @click="onPin" :class="{ active: isAlwaysOnTop }">
           <el-tooltip :content="$t(`common.${isAlwaysOnTop ? 'unpin' : 'pin'}`)" :hide-after="0" :enterable="false"
             placement="bottom">
@@ -37,12 +62,17 @@
           :queued-messages="workflowStore.messageQueue"
           :is-chatting="isChatting" :chat-state="chatState" :is-compressing="isCompressing"
           :compression-message="compressionMessage" :last-assistant-message="lastAssistantMessage"
+          :approval-loading="approvalLoading" :active-approval-id="activeApprovalId"
+          :ask-user-submitting="askUserSubmitting"
           :is-message-expanded="isMessageExpanded" :is-reasoning-expanded="isReasoningExpanded"
           :remove-system-reminder="removeSystemReminder" :get-diff-markdown="getDiffMarkdown"
           :parse-choice-content="parseChoiceContent" :get-parsed-message="getParsedMessage"
           :get-reasoning-preview="getReasoningPreview" :should-show-tool-raw-content="shouldShowToolRawContent"
           @toggle-expand="toggleMessageExpand"
-          @toggle-reasoning="toggleReasoningExpand" @send-choice="sendUserChoice" />
+          @toggle-reasoning="toggleReasoningExpand"
+          @submit-ask-user="submitAskUserResponse"
+          @approve-tool="onApproveAction" @approve-all-tool="onApproveAllAction"
+          @reject-tool="onRejectAction" />
 
       <!-- Status Panel (Floating) -->
       <StatusPanel />
@@ -54,7 +84,7 @@
           :current-workflow-id="currentWorkflowId" :selected-agent="selectedAgent" :can-edit-agent="canEditCurrentWorkflowAgent"
           :active-model-name="activeModelName"
           :planning-mode="planningMode" :approval-level="approvalLevel" :final-audit-mode="finalAuditMode"
-          :agents="agentStore.agents" :active-ask-user="activeAskUser" :show-skill-suggestions="showSkillSuggestions"
+          :agents="agentStore.agents" :show-skill-suggestions="showSkillSuggestions"
           :show-file-suggestions="showFileSuggestions" :filtered-system-skills="filteredSystemSkills"
           :file-suggestions="fileSuggestions" :selected-skill-index="selectedSkillIndex"
           :selected-file-index="selectedFileIndex" :on-input-key-down="onInputKeyDown"
@@ -82,10 +112,6 @@
       </template>
     </el-dialog>
 
-    <ApprovalDialog v-model="approvalVisible" v-model:rejection-message="rejectionMessage" :action="approvalAction" :details="approvalDetails" :display-type="approvalDisplayType"
-      :loading="approvalLoading" @approve="onApproveAction" @approve-all="onApproveAllAction"
-      @reject="onRejectAction" @stop="onStop" />
-
     <WorkflowModelSelector v-model="modelSelectorVisible" :initial-tab="modelSelectorTab" :agent="selectedAgent"
       @save="onModelConfigSave" />
   </div>
@@ -104,7 +130,6 @@ import { useWindowStore } from '@/stores/window'
 
 import Titlebar from '@/components/window/Titlebar.vue'
 import StatusPanel from '@/components/workflow/StatusPanel.vue'
-import ApprovalDialog from '@/components/workflow/ApprovalDialog.vue'
 import WorkflowModelSelector from '@/components/workflow/WorkflowModelSelector.vue'
 import WorkflowSidebar from '@/components/workflow/WorkflowSidebar.vue'
 import WorkflowMessageList from '@/components/workflow/WorkflowMessageList.vue'
@@ -204,13 +229,8 @@ const {
 
 // Approval composable
 const {
-  approvalVisible,
-  approvalAction,
-  approvalDetails,
-  approvalDisplayType,
-  approvalRequestId,
   approvalLoading,
-  rejectionMessage,
+  activeApprovalId,
   onApproveAction,
   onApproveAllAction,
   onRejectAction
@@ -269,11 +289,6 @@ const core = useWorkflowCore({
   currentWorkflow: computed(() => workflowStore.currentWorkflow),
   chattingParser,
   chatState,
-  approvalVisible,
-  approvalRequestId,
-  approvalAction,
-  approvalDetails,
-  approvalDisplayType,
   enhancedMessages,
   isCompressing,
   compressionMessage,
@@ -301,6 +316,7 @@ const {
   canStop,
   canContinue,
   activeModelName,
+  pendingApprovalList,
   canSwitchWorkflow,
   selectWorkflow,
   startNewWorkflow,
@@ -362,6 +378,11 @@ const onSkillSelect = (skill) => {
 const currentWorkflowId = computed(() => workflowStore.currentWorkflowId)
 const currentWorkflow = computed(() => workflowStore.currentWorkflow)
 const isAlwaysOnTop = computed(() => windowStore.workflowWindowAlwaysOnTop)
+const workflowApprovalMuted = computed(() => !!settingStore.settings.workflowApprovalMuted)
+const approvalQueueCount = computed(() => {
+  const count = pendingApprovalList.value.length
+  return count > 9 ? '9+' : String(count)
+})
 
 const filteredWorkflows = computed(() => {
   const searchQuery = '' // From WorkflowSidebar component
@@ -370,6 +391,8 @@ const filteredWorkflows = computed(() => {
     (wf.title || wf.userQuery).toLowerCase().includes(searchQuery.toLowerCase())
   )
 })
+
+const askUserSubmitting = ref(false)
 
 const canEditCurrentWorkflowAgent = computed(() => {
   if (!currentWorkflowId.value || !currentWorkflow.value) {
@@ -410,44 +433,6 @@ const onSelectedAgentChange = async (agent) => {
   }
 }
 
-const isAskUserPromptMessage = (msg) => {
-  if (!msg || msg.role !== 'tool') return false
-  const meta = msg.metadata || {}
-  const toolName = (
-    meta.tool_name ||
-    meta.tool_call?.name ||
-    meta.tool_call?.function?.name ||
-    ''
-  ).toLowerCase()
-  const title = (meta.title || '').toLowerCase()
-  const summary = (meta.summary || '').toLowerCase()
-  return toolName === 'ask_user' || title === 'ask user' || summary.includes('waiting for user')
-}
-
-const hasUserResponseAfter = (messages, fromIndex) => {
-  for (let i = fromIndex + 1; i < messages.length; i++) {
-    const msg = messages[i]
-    if (msg?.role !== 'user') continue
-    if (msg?.metadata?.queue_status === 'queued') continue
-    const content = (msg.message || '').trim()
-    if (!content) continue
-    if (content.includes('<SYSTEM_REMINDER>')) continue
-    return true
-  }
-  return false
-}
-
-const activeAskUser = computed(() => {
-  const rawMessages = workflowStore.messages || []
-  for (let i = rawMessages.length - 1; i >= 0; i--) {
-    const msg = rawMessages[i]
-    if (!isAskUserPromptMessage(msg)) continue
-    if (hasUserResponseAfter(rawMessages, i)) return null
-    return parseChoiceContent(removeSystemReminder(msg.message || ''))
-  }
-  return null
-})
-
   // 错误边界处理
   const onErrorCaptured = (err, instance, info) => {
     console.warn('[Workflow] UI error captured:', err.message, info)
@@ -455,12 +440,40 @@ const activeAskUser = computed(() => {
     return false
   }
 
-  const sendUserChoice = (option) => {
-    inputMessage.value = option
+const submitAskUserResponse = async (content) => {
+  if (!content?.trim()) return
+
+  askUserSubmitting.value = true
+  try {
+    await coreOnSendMessage(content)
+  } finally {
+    askUserSubmitting.value = false
   }
+}
 
 const onPin = () => {
   windowStore.toggleWorkflowWindowAlwaysOnTop()
+}
+
+const toggleWorkflowApprovalMute = async () => {
+  await settingStore.setSetting('workflowApprovalMuted', !workflowApprovalMuted.value)
+}
+
+const handleApprovalCommand = async (sessionId) => {
+  if (!sessionId) return
+  await selectWorkflow(sessionId)
+}
+
+const resolveInitialWorkflowId = () => {
+  const savedWorkflowId = settingStore.settings.workflowLastSelectedId
+  if (
+    savedWorkflowId &&
+    workflowStore.workflows.some((workflow) => workflow.id === savedWorkflowId)
+  ) {
+    return savedWorkflowId
+  }
+
+  return workflowStore.workflows[0]?.id || null
 }
 
 const onGlobalKeyDown = (event) => {
@@ -532,10 +545,10 @@ onMounted(async () => {
     selectedAgent.value = agentStore.primaryAgents[0]
   }
 
-  // Load the last workflow if available
-  if (workflowStore.workflows.length > 0) {
-    await selectWorkflow(workflowStore.workflows[0].id)
-    // Approval dialog will be shown via request_confirm_broadcast in selectWorkflow
+  // Restore the last selected workflow if it still exists.
+  const initialWorkflowId = resolveInitialWorkflowId()
+  if (initialWorkflowId) {
+    await selectWorkflow(initialWorkflowId)
   } else {
     // First launch bootstrap: create one empty workflow so sending messages never hits "no session".
     await coreCreateNewWorkflow()

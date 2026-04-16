@@ -1,7 +1,51 @@
 <template>
+  <div v-if="inline" class="approval-inline-panel" :class="{ 'diff-dialog': isEditAction }">
+    <div class="approval-content">
+      <div class="details-box">
+        <div v-if="isEditAction" class="diff-view">
+          <div class="diff-text">
+            <div
+              v-for="(line, index) in diffLines"
+              :key="`${index}-${line.lineNumber}-${line.prefix}`"
+              class="diff-line"
+              :class="line.type">
+              <span class="diff-prefix" :data-prefix="line.prefix" aria-hidden="true"></span>
+              <span class="diff-line-number">{{ line.lineNumber }}</span>
+              <span class="diff-separator">|</span>
+              <span class="diff-content">{{ line.content }}</span>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="isShellAction" class="shell-view">
+          <MarkdownSimple :content="shellMarkdown" class-name="approval-markdown" />
+        </div>
+        <pre v-else class="details-text">{{ detailPayload.detailsText }}</pre>
+      </div>
+      <div class="rejection-note-box">
+        <div class="note-header">{{ $t('workflow.approval.rejectionMessageLabel') }}</div>
+        <el-input
+          :model-value="rejectionMessage"
+          type="textarea"
+          :autosize="{ minRows: 1, maxRows: 6 }"
+          resize="none"
+          :placeholder="$t('workflow.approval.rejectionMessagePlaceholder')"
+          @update:model-value="value => emit('update:rejectionMessage', value)" />
+      </div>
+      <div class="dialog-footer inline-footer">
+        <el-button @click="onReject" :loading="loading" round>{{ $t('common.reject') }}</el-button>
+        <el-button type="primary" @click="onApprove" :loading="loading" round>{{
+          $t('common.approve')
+        }}</el-button>
+        <el-button type="success" @click="onApproveAll" :loading="loading" round>{{
+          $t('common.approveAll')
+        }}</el-button>
+      </div>
+    </div>
+  </div>
   <el-dialog
+    v-else
     v-model="visible"
-    :title="title"
+    :title="action || ''"
     :width="dialogWidth"
     :close-on-click-modal="false"
     :close-on-press-escape="false"
@@ -10,17 +54,7 @@
     :modal-class="isEditAction ? 'diff-dialog-overlay' : ''"
     custom-class="approval-dialog">
     <div class="approval-content">
-      <div class="action-info">
-        <span class="label">{{ $t('workflow.approval.action') }}:</span>
-        <el-tag type="warning">{{ action }}</el-tag>
-        <span v-if="isShellAction" class="warning-text">{{ $t('workflow.approval.warning') }}</span>
-        <span v-if="isEditAction && filePath" class="file-path">{{ filePath }}</span>
-      </div>
       <div class="details-box">
-        <div v-if="!isShellAction" class="details-header">
-          <span>{{ $t('workflow.approval.details') }}</span>
-          <span class="warning-text">{{ $t('workflow.approval.warning') }}</span>
-        </div>
         <div v-if="isEditAction" class="diff-view">
           <div v-if="filePath" class="diff-file-path">File: {{ filePath }}</div>
           <div class="diff-text">
@@ -46,17 +80,12 @@
         <el-input
           :model-value="rejectionMessage"
           type="textarea"
-          :rows="isEditAction ? 2 : 3"
+          :autosize="{ minRows: 1, maxRows: 6 }"
           resize="none"
           :placeholder="$t('workflow.approval.rejectionMessagePlaceholder')"
           @update:model-value="value => emit('update:rejectionMessage', value)" />
       </div>
-    </div>
-    <template #footer>
-      <div class="dialog-footer">
-        <el-button @click="onStop" :loading="loading" round type="danger">{{
-          $t('workflow.pause')
-        }}</el-button>
+      <div class="dialog-footer inline-footer">
         <el-button @click="onReject" :loading="loading" round>{{ $t('common.reject') }}</el-button>
         <el-button type="primary" @click="onApprove" :loading="loading" round>{{
           $t('common.approve')
@@ -65,7 +94,7 @@
           $t('common.approveAll')
         }}</el-button>
       </div>
-    </template>
+    </div>
   </el-dialog>
 </template>
 
@@ -77,6 +106,10 @@ import MarkdownSimple from '@/components/workflow/MarkdownSimple.vue'
 
 const props = defineProps({
   modelValue: Boolean,
+  inline: {
+    type: Boolean,
+    default: false
+  },
   action: String,
   details: {
     type: [String, Object, Array],
@@ -98,11 +131,10 @@ const emit = defineEmits([
   'update:rejectionMessage',
   'approve',
   'approveAll',
-  'reject',
-  'stop'
+  'reject'
 ])
 
-const { t } = useI18n()
+useI18n()
 
 const normalizeDetailsPayload = value => {
   if (value == null || value === '') {
@@ -254,7 +286,6 @@ const visible = computed({
   set: val => emit('update:modelValue', val)
 })
 
-const title = computed(() => t('workflow.approval.title'))
 const rejectionMessage = computed(() => props.rejectionMessage || '')
 const shellMarkdown = computed(() => `\`\`\`bash\n${detailPayload.value.detailsText || ''}\n\`\`\``)
 
@@ -273,71 +304,16 @@ const onApproveAll = () => {
 const onReject = () => {
   emit('reject')
 }
-
-const onStop = () => {
-  emit('stop')
-}
 </script>
 
 <style scoped lang="scss">
 .approval-content {
-  .action-info {
-    margin-bottom: var(--cs-space-md);
-    display: flex;
-    align-items: center;
-    gap: var(--cs-space-sm);
-    flex-wrap: wrap;
-
-    .label {
-      font-weight: bold;
-      color: var(--cs-text-color-primary);
-      flex-shrink: 0;
-    }
-
-    .el-tag {
-      flex-shrink: 0;
-    }
-
-    .file-path {
-      font-size: var(--cs-font-size-sm);
-      color: var(--cs-text-color-secondary);
-      font-family: var(--cs-font-family-mono);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .warning-text {
-      font-size: var(--cs-font-size-xs);
-      color: var(--el-color-danger);
-      font-style: italic;
-      margin-left: auto;
-    }
-  }
-
   .details-box {
     background-color: var(--cs-bg-color-dark);
     border: 1px solid var(--cs-border-color);
     border-radius: var(--cs-border-radius-md);
     padding: var(--cs-space-sm);
     margin-bottom: var(--cs-space-md);
-
-    .details-header {
-      font-size: var(--cs-font-size-xs);
-      color: var(--cs-text-color-secondary);
-      margin-bottom: var(--cs-space-xs);
-      text-transform: uppercase;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-
-      .warning-text {
-        font-size: var(--cs-font-size-xs);
-        color: var(--el-color-danger);
-        font-style: italic;
-        text-transform: none;
-      }
-    }
 
     .details-text {
       margin: 0;
@@ -358,12 +334,15 @@ const onStop = () => {
         white-space: pre-wrap;
         word-break: break-word;
         overflow-wrap: anywhere;
+        margin: 0;
       }
 
       :deep(pre code.hljs) {
         white-space: pre-wrap;
         word-break: break-word;
         overflow-wrap: anywhere;
+        background: none;
+        padding: var(--cs-space-sm);
       }
     }
 
@@ -384,8 +363,8 @@ const onStop = () => {
         max-height: min(48vh, 520px);
         overflow: auto;
         background: var(--cs-bg-color-light);
-        border-radius: var(--cs-border-radius-sm);
-        border: 1px solid var(--cs-border-color);
+        // border-radius: var(--cs-border-radius-sm);
+        // border: 1px solid var(--cs-border-color);
         font-family: var(--cs-font-family-mono);
         font-size: var(--cs-font-size-sm);
 
@@ -396,12 +375,12 @@ const onStop = () => {
           white-space: pre;
 
           &.added {
-            background: color-mix(in srgb, var(--el-color-success) 12%, transparent);
+            // background: color-mix(in srgb, var(--el-color-success) 12%, transparent);
             color: var(--el-color-success-dark-2);
           }
 
           &.removed {
-            background: color-mix(in srgb, var(--el-color-danger) 12%, transparent);
+            // background: color-mix(in srgb, var(--el-color-danger) 12%, transparent);
             color: var(--el-color-danger-dark-2);
           }
 
@@ -455,6 +434,10 @@ const onStop = () => {
       text-transform: uppercase;
     }
   }
+}
+
+.inline-footer {
+  margin-top: var(--cs-space-sm);
 }
 </style>
 
@@ -519,10 +502,6 @@ const onStop = () => {
       min-height: 0;
       max-height: 100%;
 
-      .action-info {
-        flex-shrink: 0;
-      }
-
       .details-box {
         // flex: 1;
         display: flex;
@@ -531,20 +510,12 @@ const onStop = () => {
         min-height: 0;
         max-height: calc(100% - 60px);
 
-        .details-header {
-          flex-shrink: 0;
-        }
-
         .diff-view {
           flex: 1;
           min-height: 0;
           max-height: 100%;
           overflow-y: auto;
         }
-      }
-
-      .warning-text {
-        flex-shrink: 0;
       }
     }
   }

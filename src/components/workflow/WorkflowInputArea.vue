@@ -25,19 +25,6 @@
     </div>
     <StatusNotifier />
     <div class="input">
-      <div v-if="activeAskUser" class="input-status-hint">
-        <div class="hint-header">
-          <cs name="talk" size="12px" />
-          <span>{{ activeAskUser ? activeAskUser.question : 'AI is waiting for your response...' }}</span>
-        </div>
-        <div v-if="activeAskUser" class="hint-options">
-          <el-button v-for="opt in activeAskUser.options" :key="opt" size="small" plain round
-            @click="inputMessage = opt">
-            {{ opt }}
-          </el-button>
-        </div>
-      </div>
-
       <el-input ref="inputRef" v-model="inputMessage" type="textarea" :autosize="{ minRows: 1, maxRows: 10 }"
         :placeholder="$t('chat.inputMessagePlaceholder', { at: '/' })" @keydown="onInputKeyDown"
         @compositionstart="onCompositionStart" @compositionend="onCompositionEnd" />
@@ -250,10 +237,6 @@ const props = defineProps({
   agents: {
     type: Array,
     default: () => []
-  },
-  activeAskUser: {
-    type: Object,
-    default: null
   },
   showSkillSuggestions: {
     type: Boolean,

@@ -795,12 +795,22 @@
     "planningModeTooltip": "Planning Mode: AI research and strategy before execution",
     "approvePlan": "Approve Plan",
     "approval": {
-      "action": "Pending Action",
-      "details": "Action Details",
+      "backgroundMessage": "\"{workflow}\" is waiting for approval: {action}",
+      "backgroundTitle": "Background Approval Needed",
+      "queueButton": "Approval",
       "rejectionMessageLabel": "Rejection Note",
-      "rejectionMessagePlaceholder": "If you do not want this action to run, you can optionally explain why.",
-      "title": "Security Approval",
-      "warning": "This operation has potential risks. Please confirm whether to continue."
+      "rejectionMessagePlaceholder": "If you do not want this action to run, you can optionally explain why."
+    },
+    "askUser": {
+      "answerLabel": "Answer:",
+      "backgroundMessage": "\"{workflow}\" is waiting for your input",
+      "backgroundTitle": "Background Input Needed",
+      "customLabel": "Custom input",
+      "customPlaceholder": "I want to type...",
+      "responseTitle": "Submitted response",
+      "submit": "Submit",
+      "validationCustomRequired": "Please enter your custom response.",
+      "validationRequired": "Please answer every item before submitting."
     },
     "autoApprovedTools": "Auto-Approved Tools",
     "allowedShellCommands": "Allowed Shell Commands",
@@ -816,6 +826,7 @@
     "confirmationWaiting": "Step budget exhausted. Do you want to continue?",
     "tools": "Tools",
     "editWorkflowTitle": "Edit Workflow Title",
+    "muteApprovalNotifications": "Mute approval sound",
     "newWorkflow": "New Workflow",
     "retrying": "Request too fast, retrying (attempt {attempt}/{total}), waiting {seconds} seconds...",
     "startFailed": "Failed to start workflow: {error}",
@@ -857,6 +868,7 @@
       "empty": "Empty",
       "contextUsage": "Context Usage"
     },
+    "unmuteApprovalNotifications": "Enable approval sound",
     "selectAgentFirst": "Please select an agent first"
   }
 }

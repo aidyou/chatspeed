@@ -191,7 +191,6 @@ export function useWorkflowMessages() {
         if (m.role === 'tool') {
           const name = m.metadata?.tool_call?.name || m.metadata?.tool_call?.function?.name || ''
           if (name === 'answer_user' || name === 'finish_task') return false
-          if (m.metadata?.approval_status === 'rejected') return false
           if (
             m.metadata?.execution_status === 'running' &&
             !workflowStore.getToolStream(m.metadata?.tool_call_id).length
@@ -199,6 +198,10 @@ export function useWorkflowMessages() {
             return true
           }
           return true
+        }
+        if (m.role === 'user' && m.metadata?.approval_status === 'rejected') {
+          const visibleContent = removeSystemReminder(m.message || '')
+          return !!visibleContent
         }
         if (m.role === 'assistant') {
           const hasTextContent =
@@ -222,6 +225,7 @@ export function useWorkflowMessages() {
   const isMessageExpanded = message => {
     // Only force expansion for 'Ask User' to ensure visibility of interaction points.
     // Everything else (especially heavy Diffs) should be collapsed by default.
+    if (message.metadata?.approval_status === 'pending') return true
     if (message.toolDisplay?.action === 'Ask User') return true
     return expandedMessages.value.has(message.displayId)
   }
@@ -582,12 +586,64 @@ export function useWorkflowMessages() {
     }
   }
 
+  const normalizeChoiceGroups = parsed => {
+    if (Array.isArray(parsed)) {
+      const groups = parsed
+        .map(group => ({
+          title: typeof group?.title === 'string' ? group.title.trim() : '',
+          options: Array.isArray(group?.options)
+            ? group.options
+                .filter(option => typeof option === 'string')
+                .map(option => option.trim())
+                .filter(Boolean)
+            : []
+        }))
+        .filter(group => group.title && group.options.length > 0)
+
+      return { groups }
+    }
+
+    if (parsed && typeof parsed === 'object') {
+      const question = typeof parsed.question === 'string' ? parsed.question.trim() : ''
+      const options = Array.isArray(parsed.options)
+        ? parsed.options
+            .filter(option => typeof option === 'string')
+            .map(option => option.trim())
+            .filter(Boolean)
+        : []
+
+      if (question || options.length > 0) {
+        return {
+          groups: [
+            {
+              title: question || t('workflow.waitingForUser') || 'Waiting for user',
+              options
+            }
+          ].filter(group => group.options.length > 0)
+        }
+      }
+    }
+
+    if (typeof parsed === 'string' && parsed.trim()) {
+      return {
+        groups: [
+          {
+            title: parsed.trim(),
+            options: []
+          }
+        ]
+      }
+    }
+
+    return { groups: [] }
+  }
+
   // Parse choice content for Ask User tool
   const parseChoiceContent = content => {
     try {
-      return JSON.parse(content)
+      return normalizeChoiceGroups(JSON.parse(content))
     } catch (e) {
-      return { question: content, options: [] }
+      return normalizeChoiceGroups(content)
     }
   }
 

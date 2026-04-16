@@ -164,45 +164,6 @@ footer.input-container {
         border-radius: var(--cs-border-radius-lg);
         padding: var(--cs-space-sm) var(--cs-space) var(--cs-space-xs);
 
-        .input-status-hint {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            font-size: 11px;
-            color: var(--el-color-primary);
-            padding: 8px;
-            background: var(--el-color-primary-light-9);
-            border-radius: var(--cs-border-radius-sm);
-            margin-bottom: 8px;
-
-            .hint-header {
-                display: flex;
-                align-items: center;
-                gap: 6px;
-            }
-
-            .hint-options {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 6px;
-                padding-left: 18px;
-
-                .el-button {
-                    font-size: 11px;
-                    height: 24px;
-                    padding: 0 8px;
-                    margin: 0;
-                    background: var(--cs-bg-color);
-                    border-color: var(--el-color-primary-light-7);
-
-                    &:hover {
-                        background: var(--el-color-primary);
-                        color: white;
-                    }
-                }
-            }
-        }
-
         .icons {
             display: flex;
             align-items: center;

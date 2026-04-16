@@ -1114,6 +1114,38 @@ impl LlmProcessor {
             env_info, progress_info
         )
     }
+
+    pub fn build_workspace_context(&self) -> String {
+        let (allowed_roots, cwd) = if let Ok(guard) = self.path_guard.read() {
+            let roots = guard.workspace_roots();
+            let primary = guard.get_primary_root().map(|p| p.to_path_buf());
+            (roots, primary)
+        } else {
+            (vec![], None)
+        };
+
+        let cwd = cwd
+            .or_else(|| allowed_roots.first().cloned())
+            .unwrap_or_default();
+
+        let mut workspace_context = String::from("Workspace Context\n");
+        if !cwd.as_os_str().is_empty() {
+            workspace_context.push_str(&format!(" - Primary working directory: {:?}\n", cwd));
+        }
+
+        if allowed_roots.len() > 1 {
+            workspace_context.push_str(" - Additional working directories:\n");
+            for root in allowed_roots.iter().skip(1) {
+                workspace_context.push_str(&format!("   - {:?}\n", root));
+            }
+        }
+
+        workspace_context.push_str(
+            " - Relative paths resolve against the primary working directory.\n\
+             - Any file operation outside the primary or additional working directories is not allowed.\n",
+        );
+        workspace_context
+    }
 }
 
 pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str) -> String {

@@ -790,10 +790,22 @@
     "thoughtCompleted": "思考完成",
     "thinking": "思考中...",
     "approval": {
-      "action": "待決定的操作",
-      "details": "操作詳細資訊",
-      "title": "安全審核",
-      "warning": "此操作有潛在風險，請確認是否繼續。"
+      "backgroundMessage": "「{workflow}」需要審批：{action}",
+      "backgroundTitle": "背景工作流程等待審批",
+      "queueButton": "Approval",
+      "rejectionMessageLabel": "拒絕說明",
+      "rejectionMessagePlaceholder": "如果你不希望執行這個操作，可以輸入原因。"
+    },
+    "askUser": {
+      "answerLabel": "回答：",
+      "backgroundMessage": "「{workflow}」正在等待你的輸入",
+      "backgroundTitle": "背景工作流程等待輸入",
+      "customLabel": "自訂輸入",
+      "customPlaceholder": "我想輸入...",
+      "responseTitle": "已提交的選擇",
+      "submit": "提交",
+      "validationCustomRequired": "請補充自訂輸入內容。",
+      "validationRequired": "請為每一項選擇一個選項或填寫輸入內容。"
     },
     "autoApprovedTools": "自動審批的工具",
     "allowedShellCommands": "允許的 Shell 命令",
@@ -803,6 +815,7 @@
     "confirmDeleteWorkflow": "確定要刪除此工作流程嗎？此操作無法復原。",
     "continue": "繼續",
     "editWorkflowTitle": "編輯工作流程標題",
+    "muteApprovalNotifications": "靜音審批提示音",
     "finalAuditTooltip": "最終審核模式：AI 在任務完成前自動執行品質審查",
     "historyTab": "對話",
     "newWorkflow": "新增工作流程",
@@ -816,6 +829,7 @@
       "empty": "空",
       "contextUsage": "上下文使用量"
     },
+    "unmuteApprovalNotifications": "開啟審批提示音",
     "todoList": {
       "title": "待辦事項",
       "next": "下一個"

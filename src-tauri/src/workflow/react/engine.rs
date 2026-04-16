@@ -15,6 +15,7 @@ use crate::tools::{
     ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER, TOOL_FINISH_TASK, TOOL_SUBMIT_PLAN,
     TOOL_WEB_FETCH,
 };
+use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
     compression::ContextCompressor,
     context::ContextManager,
@@ -3090,6 +3091,36 @@ impl WorkflowExecutor {
         {
             if let Some(result) = self.handle_fs_path_guard_intercept(name, args)? {
                 return Ok(Some(result));
+            }
+        }
+
+        // 2.4 Smart approval AI review
+        if self.policy.approval_level == ApprovalLevel::Smart
+            && name != crate::tools::TOOL_BASH
+            && !Self::is_smart_mode_read_only_tool(name)
+        {
+            if let Some(review) = self
+                .review_tool_call_for_smart_mode(name, args, text_part)
+                .await?
+            {
+                if review.approved {
+                    log::info!(
+                        "WorkflowExecutor {}: AI approved tool '{}' in Smart mode (risk: {}, reason: {})",
+                        self.session_id,
+                        name,
+                        review.risk_level,
+                        review.reason
+                    );
+                    return Ok(None);
+                }
+
+                log::info!(
+                    "WorkflowExecutor {}: AI did not auto-approve tool '{}' in Smart mode (risk: {}, reason: {})",
+                    self.session_id,
+                    name,
+                    review.risk_level,
+                    review.reason
+                );
             }
         }
 

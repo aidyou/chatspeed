@@ -1,17 +1,75 @@
 use serde_json::json;
 
 use crate::tools::{
-    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_EDIT_FILE, TOOL_GLOB,
-    TOOL_GREP, TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_EDIT_FILE, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::events::WorkflowEvent;
+use crate::workflow::react::intelligence::ToolApprovalReview;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
 use crate::workflow::react::types::{GatewayPayload, WorkflowState};
 
 impl WorkflowExecutor {
+    pub(crate) fn is_smart_mode_read_only_tool(name: &str) -> bool {
+        matches!(
+            name,
+            crate::tools::TOOL_READ_FILE
+                | crate::tools::TOOL_LIST_DIR
+                | crate::tools::TOOL_GLOB
+                | crate::tools::TOOL_GREP
+                | crate::tools::TOOL_WEB_SEARCH
+                | crate::tools::TOOL_WEB_FETCH
+        )
+    }
+
+    pub(crate) async fn review_tool_call_for_smart_mode(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        assistant_text: &str,
+    ) -> Result<Option<ToolApprovalReview>, WorkflowEngineError> {
+        let tool = match self.tool_manager.get_tool(tool_name).await {
+            Ok(tool) => tool,
+            Err(error) => {
+                log::warn!(
+                    "WorkflowExecutor {}: Skipping AI approval review for unknown tool '{}': {}",
+                    self.session_id,
+                    tool_name,
+                    error
+                );
+                return Ok(None);
+            }
+        };
+
+        match self
+            .intelligence_manager
+            .review_tool_approval(
+                &self.context,
+                &self.llm_processor.build_workspace_context(),
+                tool_name,
+                &tool.category().to_string(),
+                tool.scope().as_str(),
+                tool.description(),
+                args,
+                assistant_text,
+            )
+            .await
+        {
+            Ok(review) => Ok(Some(review)),
+            Err(error) => {
+                log::warn!(
+                    "WorkflowExecutor {}: AI approval review failed for '{}': {}",
+                    self.session_id,
+                    tool_name,
+                    error
+                );
+                Ok(None)
+            }
+        }
+    }
+
     /// Determines if a tool call should be intercepted for user approval based on the current ApprovalLevel.
     pub(crate) fn should_intercept_for_approval(
         &self,
@@ -69,14 +127,7 @@ impl WorkflowExecutor {
 
         // Smart mode: allow read/write tools, intercept risky bash or unknown mutations
         if self.policy.approval_level == ApprovalLevel::Smart {
-            let is_safe_tool = name.starts_with(TOOL_READ_FILE)
-                || name == TOOL_EDIT_FILE
-                || name == TOOL_WRITE_FILE
-                || name == TOOL_LIST_DIR
-                || name == TOOL_GLOB
-                || name == TOOL_GREP
-                || name == TOOL_WEB_SEARCH
-                || name == TOOL_WEB_FETCH;
+            let is_safe_tool = Self::is_smart_mode_read_only_tool(name);
 
             if is_safe_tool {
                 return false;
@@ -168,26 +219,72 @@ impl WorkflowExecutor {
         &mut self,
         args: &serde_json::Value,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        let question = args["question"]
-            .as_str()
-            .unwrap_or("Waiting for your response...");
-        let options = args["options"].as_array();
-
-        // We no longer send a Confirm signal here to avoid redundant popups.
-        // The message is already displayed in the chat stream.
-        // We just pause the engine and wait for user input in the main text area.
-        self.update_state(WorkflowState::AwaitingUser).await?;
-
-        // Format content as JSON if we have options, otherwise just the question
-        let content = if let Some(opts) = options {
-            json!({
-                "question": question,
-                "options": opts
-            })
-            .to_string()
+        let groups = if let Some(groups) = args.as_array() {
+            groups.clone()
+        } else if args.get("title").is_some() || args.get("options").is_some() {
+            vec![args.clone()]
+        } else if let Some(groups) = args.get("items").and_then(|value| value.as_array()) {
+            groups.clone()
+        } else if let Some(groups) = args.get("groups").and_then(|value| value.as_array()) {
+            groups.clone()
+        } else if let (Some(question), Some(options)) = (
+            args.get("question").and_then(|value| value.as_str()),
+            args.get("options").and_then(|value| value.as_array()),
+        ) {
+            vec![json!({
+                "title": question,
+                "options": options
+            })]
         } else {
-            question.to_string()
+            Vec::new()
         };
+
+        let normalized_groups: Vec<serde_json::Value> = groups
+            .into_iter()
+            .filter_map(|group| {
+                let title = group
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())?;
+
+                let options: Vec<String> = group
+                    .get("options")
+                    .and_then(|value| value.as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect();
+
+                if options.is_empty() {
+                    return None;
+                }
+
+                Some(json!({
+                    "title": title,
+                    "options": options
+                }))
+            })
+            .collect();
+
+        if normalized_groups.is_empty() {
+            return Ok(Some(ReinforcedResult {
+                content: "<SYSTEM_REMINDER>Error: 'ask_user' requires grouped choices with at least one valid item. Use either {\"items\":[{\"title\":\"...\",\"options\":[\"...\"]}]} or the legacy equivalent, and ensure every group has a title plus at least one option.</SYSTEM_REMINDER>".to_string(),
+                title: "Ask User Error".to_string(),
+                summary: "Invalid ask_user payload".to_string(),
+                is_error: true,
+                error_type: Some("InvalidAskUserPayload".to_string()),
+                display_type: "text".to_string(),
+                approval_status: None,
+            }));
+        }
+
+        self.update_state(WorkflowState::AwaitingUser).await?;
+        let content =
+            serde_json::to_string(&normalized_groups).unwrap_or_else(|_| "[]".to_string());
 
         Ok(Some(ReinforcedResult {
             content,
@@ -195,7 +292,7 @@ impl WorkflowExecutor {
             summary: "Waiting for user".to_string(),
             is_error: false,
             error_type: None,
-            display_type: if options.is_some() { "choice" } else { "text" }.to_string(),
+            display_type: "choice".to_string(),
             approval_status: None,
         }))
     }
@@ -330,6 +427,28 @@ impl WorkflowExecutor {
                             );
                             // Don't intercept - allow the read-only command
                         } else {
+                            if let Some(review) = self
+                                .review_tool_call_for_smart_mode(TOOL_BASH, args, command_str)
+                                .await?
+                            {
+                                if review.approved {
+                                    log::info!(
+                                        "WorkflowExecutor {}: AI approved bash command in Smart mode (risk: {}, reason: {})",
+                                        self.session_id,
+                                        review.risk_level,
+                                        review.reason
+                                    );
+                                    return Ok(None);
+                                }
+
+                                log::info!(
+                                    "WorkflowExecutor {}: AI did not auto-approve bash command in Smart mode (risk: {}, reason: {})",
+                                    self.session_id,
+                                    review.risk_level,
+                                    review.reason
+                                );
+                            }
+
                             log::info!(
                                 "WorkflowExecutor {}: Intercepting bash command for review in Smart mode: {}",
                                 self.session_id, reason

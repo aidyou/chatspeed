@@ -49,6 +49,62 @@
         align-items: flex-start;
         gap: 8px;
 
+        .ask-user-response-card {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          padding: 14px 16px;
+          border-radius: var(--cs-border-radius-lg);
+          max-width: 100%;
+          min-width: 0;
+          border: 1px solid var(--cs-border-color);
+          background: var(--cs-bg-color-light);
+
+          .ask-user-response-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--cs-text-color-secondary);
+          }
+
+          .ask-user-response-item {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+          }
+
+          .ask-user-response-question {
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--cs-text-color-primary);
+            white-space: pre-wrap;
+            word-break: break-word;
+          }
+
+          .ask-user-response-answer {
+            font-size: 12px;
+            line-height: 1.6;
+            color: var(--cs-text-color-primary);
+
+            .answer-label {
+              color: var(--cs-text-color-secondary);
+              margin-right: 6px;
+            }
+          }
+
+          .ask-user-response-custom {
+            margin: 0;
+            padding: 10px 12px;
+            border-radius: var(--cs-border-radius-md);
+            background: var(--cs-bg-color);
+            color: var(--cs-text-color-regular);
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 12px;
+            line-height: 1.6;
+            font-family: inherit;
+          }
+        }
+
         .simple-text {
           padding: var(--cs-space);
           border-radius: var(--cs-border-radius-lg);
@@ -104,12 +160,12 @@
           transition: all 0.2s ease;
 
           // Status-based border colors (override tool type colors)
-          &.status-success {
-            border-left-color: var(--el-color-success);
-          }
+        //   &.status-success {
+        //     border-left-color: var(--el-color-success);
+        //   }
 
           &.status-error {
-            border-left-color: var(--el-color-danger);
+            // border-left-color: var(--el-color-danger);
 
             .finish-task-display {
               .finish-text,
@@ -270,10 +326,10 @@
 
           .tool-detail {
             margin-top: 8px;
-            margin-left: 20px;
+            // margin-left: 20px;
             padding: 12px;
             background-color: var(--cs-bg-color-light);
-            border-radius: var(--cs-border-radius-sm);
+            border-radius: var(--cs-border-radius-md);
             /* border-left: 2px solid var(--cs-border-color); */
             font-family: var(--cs-font-family-mono, monospace);
 
@@ -282,6 +338,15 @@
               background: var(--cs-bg-color-light);
               border-radius: var(--cs-border-radius-md);
               margin-top: 8px;
+              display: flex;
+              flex-direction: column;
+              gap: 12px;
+
+              .choice-group {
+                padding: 12px;
+                border-radius: var(--cs-border-radius-md);
+                background: var(--cs-bg-color);
+              }
 
               .choice-question {
                 font-size: var(--cs-font-size-sm);
@@ -294,6 +359,53 @@
                 display: flex;
                 flex-wrap: wrap;
                 gap: 8px;
+
+                &.vertical {
+                  flex-direction: column;
+                  flex-wrap: nowrap;
+                  align-items: stretch;
+
+                  :deep(.el-radio) {
+                    width: 100%;
+                    margin: 0;
+                    align-items: flex-start;
+                    min-height: 32px;
+                  }
+                }
+
+                &.numbered {
+                  :deep(.el-radio__label) {
+                    display: block;
+                    white-space: normal;
+                    line-height: 1.5;
+                    padding-left: 8px;
+                    color: var(--cs-text-color-primary);
+                  }
+                }
+              }
+
+              .choice-option-label {
+                display: inline-block;
+                white-space: normal;
+              }
+
+              .choice-custom-row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+
+                .el-radio {
+                  margin-right: 0;
+                }
+              }
+
+              .choice-custom-input {
+                flex: 1;
+              }
+
+              .choice-submit-row {
+                display: flex;
+                justify-content: flex-end;
               }
             }
 

@@ -6,7 +6,9 @@ import { showMessage } from '@/libs/util'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
 import { useModelStore } from '@/stores/model'
+import { useSettingStore } from '@/stores/setting'
 import { ElMessageBox } from 'element-plus'
+import notificationSoundUrl from '../../../src-tauri/assets/sound/notification.mp3'
 import {
     SIGNAL_TYPES,
     TERMINAL_STATUSES,
@@ -32,11 +34,6 @@ export function useWorkflowCore({
     currentWorkflow,
     chattingParser,
     chatState,
-    approvalVisible,
-    approvalRequestId,
-    approvalAction,
-    approvalDetails,
-    approvalDisplayType,
     enhancedMessages,
     isCompressing,
     compressionMessage,
@@ -53,9 +50,11 @@ export function useWorkflowCore({
     const workflowStore = useWorkflowStore()
     const agentStore = useAgentStore()
     const modelStore = useModelStore()
+    const settingStore = useSettingStore()
 
     const unlistenWorkflowEvents = ref(null)
     const backgroundStateListeners = new Map<string, () => void>()
+    const pendingApprovalEntries = ref({})
     const modelSelectorVisible = ref(false)
     const modelSelectorTab = ref('act')
     const modelSelectorMode = ref('provider')
@@ -78,6 +77,27 @@ export function useWorkflowCore({
     const isAwaitingApproval = computed(() => {
         return canApprovePlan.value
     })
+    const pendingApprovalList = computed(() =>
+        Object.values(pendingApprovalEntries.value).sort((a, b) => b.updatedAt - a.updatedAt)
+    )
+    const approvalNotificationAudio = ref(null)
+
+    const playApprovalNotificationSound = async () => {
+        if (settingStore.settings.workflowApprovalMuted) return
+
+        try {
+            if (!approvalNotificationAudio.value) {
+                approvalNotificationAudio.value = new Audio(notificationSoundUrl)
+                approvalNotificationAudio.value.preload = 'auto'
+            }
+
+            approvalNotificationAudio.value.pause()
+            approvalNotificationAudio.value.currentTime = 0
+            await approvalNotificationAudio.value.play()
+        } catch (error) {
+            console.warn('[Workflow] Failed to play approval notification sound:', error)
+        }
+    }
 
     const activeModelName = computed(() => {
         // 1. Try to get from current configs (reflected in settings/workflow)
@@ -195,25 +215,6 @@ export function useWorkflowCore({
         }
     }
 
-    // Watch for state changes to handle UI side effects
-    watch(
-        () => currentWorkflow.value?.status,
-        (newStatus, oldStatus) => {
-            const statusLower = (newStatus || '').toLowerCase()
-            const isApprovalWaiting = statusLower === WORKFLOW_STATUSES.AWAITING_APPROVAL || waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
-            const previousStatusLower = (oldStatus || '').toLowerCase()
-            const wasApprovalWaiting =
-                previousStatusLower === WORKFLOW_STATUSES.AWAITING_APPROVAL ||
-                waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
-
-            // Close approval dialog only when the workflow is actually leaving
-            // approval waiting, not during the confirm -> awaiting_approval race.
-            if (wasApprovalWaiting && !isApprovalWaiting && approvalVisible.value) {
-                approvalVisible.value = false
-            }
-        }
-    )
-
     const sendUserMessageSignal = async (sessionId, content, queuedUserMessageId = null) => {
         const signalPayload = {
             type: SIGNAL_TYPES.USER_MESSAGE,
@@ -255,6 +256,72 @@ export function useWorkflowCore({
             }
         }
         backgroundStateListeners.clear()
+
+        pendingApprovalEntries.value = {}
+    }
+
+    const upsertPendingApprovalEntry = (sessionId, payload = {}) => {
+        if (!sessionId) return
+
+        const workflow = workflows.value.find((item) => item.id === sessionId)
+        const workflowTitle = workflow?.title || workflow?.userQuery || t('workflow.untitled')
+        const approvalId = payload.id || 'awaiting_approval'
+        const key = `${sessionId}:${approvalId}`
+
+        pendingApprovalEntries.value = {
+            ...pendingApprovalEntries.value,
+            [key]: {
+                key,
+                id: approvalId,
+                sessionId,
+                kind: payload.kind || 'approval',
+                workflowTitle,
+                action: payload.action || t('workflow.awaiting_approval'),
+                updatedAt: Date.now()
+            }
+        }
+    }
+
+    const clearPendingApprovalEntries = (sessionId, kind = null) => {
+        if (!sessionId) {
+            pendingApprovalEntries.value = {}
+            return
+        }
+
+        const nextEntries = { ...pendingApprovalEntries.value }
+        let changed = false
+
+        for (const key of Object.keys(nextEntries)) {
+            if (!key.startsWith(`${sessionId}:`)) {
+                continue
+            }
+            if (kind && nextEntries[key]?.kind !== kind) {
+                continue
+            }
+            if (key.startsWith(`${sessionId}:`)) {
+                delete nextEntries[key]
+                changed = true
+            }
+        }
+
+        if (changed) {
+            pendingApprovalEntries.value = nextEntries
+        }
+    }
+
+    const showBackgroundApprovalNotification = (sessionId, payload) => {
+        if (!payload?.id) return
+
+        upsertPendingApprovalEntry(sessionId, payload)
+        playApprovalNotificationSound()
+    }
+
+    const showBackgroundAskUserNotification = (sessionId) => {
+        upsertPendingApprovalEntry(sessionId, {
+            id: 'awaiting_user',
+            kind: 'ask_user',
+            action: t('workflow.awaiting_user')
+        })
     }
 
     const syncBackgroundStateListeners = async () => {
@@ -288,7 +355,14 @@ export function useWorkflowCore({
             const unlisten = await listen(eventName, (event) => {
                 safeExecute(() => {
                     const payload = event.payload
-                    if (payload?.type !== 'state') return
+                    if (!payload?.type) return
+
+                    if (payload.type === 'confirm') {
+                        showBackgroundApprovalNotification(sessionId, payload)
+                        return
+                    }
+
+                    if (payload.type !== 'state') return
 
                     workflowStore.updateWorkflowStatus(
                         sessionId,
@@ -297,6 +371,18 @@ export function useWorkflowCore({
                     )
 
                     const statusLower = String(payload.state || '').toLowerCase()
+                    const isApprovalWaiting = payload.wait_reason === WORKFLOW_WAIT_REASONS.APPROVAL
+                    const isAwaitingUser = payload.wait_reason === WORKFLOW_WAIT_REASONS.USER_INPUT
+
+                    if (isAwaitingUser) {
+                        showBackgroundAskUserNotification(sessionId)
+                    } else {
+                        clearPendingApprovalEntries(sessionId, 'ask_user')
+                    }
+
+                    if (!isApprovalWaiting) {
+                        clearPendingApprovalEntries(sessionId, 'approval')
+                    }
                     if (TERMINAL_STATUSES.includes(statusLower)) {
                         workflowStore.loadWorkflows().catch((error) => {
                             console.warn('[Workflow] Failed to refresh workflows after background terminal state:', error)
@@ -311,6 +397,35 @@ export function useWorkflowCore({
             })
 
             backgroundStateListeners.set(sessionId, unlisten)
+        }
+
+        for (const workflow of workflows.value) {
+            if (!workflow?.id || workflow.id === activeSessionId) continue
+
+            const statusLower = String(workflow.status || '').toLowerCase()
+            const waitReasonValue = workflow.waitReason || null
+
+            if (
+                statusLower === WORKFLOW_STATUSES.AWAITING_USER ||
+                waitReasonValue === WORKFLOW_WAIT_REASONS.USER_INPUT
+            ) {
+                showBackgroundAskUserNotification(workflow.id)
+            } else {
+                clearPendingApprovalEntries(workflow.id, 'ask_user')
+            }
+
+            if (
+                statusLower === WORKFLOW_STATUSES.AWAITING_APPROVAL ||
+                waitReasonValue === WORKFLOW_WAIT_REASONS.APPROVAL
+            ) {
+                upsertPendingApprovalEntry(workflow.id, {
+                    id: 'awaiting_approval',
+                    action: t('workflow.awaiting_approval')
+                })
+                continue
+            }
+
+            clearPendingApprovalEntries(workflow.id, 'approval')
         }
     }
 
@@ -373,6 +488,7 @@ export function useWorkflowCore({
 
                     const isApprovalWaiting = payload.wait_reason === WORKFLOW_WAIT_REASONS.APPROVAL
                     if (!isApprovalWaiting) {
+                        clearPendingApprovalEntries(sessionId)
                         flushDeferredQueuedMessages().catch((error) => {
                             console.warn('Failed to flush deferred queue after state update:', error)
                         })
@@ -405,11 +521,9 @@ export function useWorkflowCore({
                     // Force scroll for new full messages
                     scrollToBottom(true)
                 } else if (payload.type === 'confirm') {
-                    approvalRequestId.value = payload.id
-                    approvalAction.value = payload.action
-                    approvalDetails.value = payload.details || ''
-                    approvalDisplayType.value = payload.display_type || ''
-                    approvalVisible.value = true
+                    // Current-session approvals are rendered inline in tool messages.
+                    upsertPendingApprovalEntry(sessionId, payload)
+                    playApprovalNotificationSound()
                 } else if (payload.type === 'retry_status') {
                     // Handle 429 retry status
                     setRetryStatus(payload)
@@ -483,40 +597,42 @@ export function useWorkflowCore({
             
             const status = workflowStore.currentWorkflow?.status?.toLowerCase()
             const pendingApprovalRequest = workflowStore.pendingApprovalRequest
-            const hasPendingApproval = !!pendingApprovalRequest
-            
-            console.log('[Workflow] Checking approval recovery:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasPendingApproval:', hasPendingApproval, 'hasLiveSession:', workflowStore.hasLiveSession)
-            
-            if (status === WORKFLOW_STATUSES.AWAITING_APPROVAL && hasPendingApproval) {
-                if (workflowStore.hasLiveSession) {
-                    console.log('[Workflow] Requesting rebroadcast_pending for live awaiting_approval session')
-                    try {
-                        await invokeWrapper('workflow_signal', {
-                            sessionId: id,
-                            signal: JSON.stringify({ type: SIGNAL_TYPES.REBROADCAST_PENDING })
-                        })
-                        console.log('[Workflow] rebroadcast_pending sent successfully')
-                    } catch (e) {
-                        console.warn('[Workflow] rebroadcast_pending failed, fallback to local dialog reconstruction:', e)
-                        approvalRequestId.value = pendingApprovalRequest?.toolCallId || ''
-                        approvalAction.value = pendingApprovalRequest?.toolName || 'Tool Approval'
-                        approvalDetails.value = pendingApprovalRequest?.details || ''
-                        approvalDisplayType.value = pendingApprovalRequest?.displayType || ''
-                        approvalVisible.value = true
+
+            console.log('[Workflow] Checking session recovery:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasLiveSession:', workflowStore.hasLiveSession)
+
+            clearPendingApprovalEntries(id)
+
+            if (status === WORKFLOW_STATUSES.AWAITING_APPROVAL && pendingApprovalRequest && !workflowStore.pendingApprovalMessage) {
+                upsertPendingApprovalEntry(id, {
+                    id: pendingApprovalRequest.toolCallId || 'awaiting_approval',
+                    action: pendingApprovalRequest.toolName || t('workflow.awaiting_approval')
+                })
+                workflowStore.addMessage({
+                    sessionId: id,
+                    role: 'tool',
+                    message: pendingApprovalRequest.details || '',
+                    stepType: 'Observe',
+                    stepIndex: workflowStore.messages.length,
+                    isError: false,
+                    errorType: null,
+                    metadata: {
+                        tool_call_id: pendingApprovalRequest.toolCallId || '',
+                        tool_name: pendingApprovalRequest.toolName || '',
+                        display_type: pendingApprovalRequest.displayType || '',
+                        summary: t('workflow.awaiting_approval'),
+                        approval_status: 'pending',
+                        execution_status: 'pending_approval'
                     }
-                } else {
-                    console.log('[Workflow] Orphan awaiting_approval detected, reconstructing approval dialog from structured snapshot data')
-                    approvalRequestId.value = pendingApprovalRequest?.toolCallId || ''
-                    approvalAction.value = pendingApprovalRequest?.toolName || 'Tool Approval'
-                    approvalDetails.value = pendingApprovalRequest?.details || ''
-                    approvalDisplayType.value = pendingApprovalRequest?.displayType || ''
-                    approvalVisible.value = true
-                }
-            } else if (status === WORKFLOW_STATUSES.PAUSED && workflowStore.waitReason === WORKFLOW_WAIT_REASONS.CONFIRMATION && workflowStore.hasLiveSession) {
+                })
+            } else if (status !== WORKFLOW_STATUSES.AWAITING_APPROVAL) {
+                clearPendingApprovalEntries(id)
+            }
+
+            if (status === WORKFLOW_STATUSES.PAUSED && workflowStore.waitReason === WORKFLOW_WAIT_REASONS.CONFIRMATION && workflowStore.hasLiveSession) {
                 console.log('[Workflow] Workflow in live confirmation waiting, showing dialog')
                 showConfirmationDialog()
             } else {
-                console.log('[Workflow] No approval dialog recovery needed. status:', status)
+                console.log('[Workflow] No confirmation dialog recovery needed. status:', status)
             }
 
             // Initialize settings from workflow's agentConfig or fallback to agent defaults
@@ -921,10 +1037,6 @@ export function useWorkflowCore({
             clearRetryTimer()
             resetChatState()
             workflowStore.setNotification('', 'info')
-            
-            if (approvalVisible.value) {
-                approvalVisible.value = false
-            }
 
             try {
                 await invokeWrapper('workflow_stop', {
@@ -1056,8 +1168,15 @@ export function useWorkflowCore({
                 // Reload workflows
                 await workflowStore.loadWorkflows()
 
-                // Load the last workflow if available
-                if (workflows.value.length > 0) {
+                const savedWorkflowId = settingStore.settings.workflowLastSelectedId
+                const restoredWorkflow = savedWorkflowId
+                    ? workflows.value.find((workflow) => workflow.id === savedWorkflowId)
+                    : null
+
+                // Restore the last selected workflow if it still exists, otherwise fall back to the latest one.
+                if (restoredWorkflow) {
+                    await selectWorkflow(restoredWorkflow.id)
+                } else if (workflows.value.length > 0) {
                     await selectWorkflow(workflows.value[0].id)
                 }
             } catch (error) {
@@ -1220,6 +1339,7 @@ export function useWorkflowCore({
         canContinue,
         canApprovePlan,
         isAwaitingApproval,
+        pendingApprovalList,
         activeModelName,
         canSwitchWorkflow,
         setupWorkflowEvents,

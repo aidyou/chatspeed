@@ -13,7 +13,21 @@ use url::form_urlencoded::{byte_serialize, parse};
 /// # Returns
 /// The formatted JSON string
 pub fn format_json_str(jstr: &str) -> String {
-    let mut jstr = jstr.trim();
+    let mut jstr = jstr.trim().to_string();
+
+    if jstr.starts_with("```") {
+        if let Some(end) = jstr.rfind("```") {
+            let inner = &jstr[..end];
+            let inner = inner.lines().skip(1).collect::<Vec<_>>().join("\n");
+            if !inner.trim().is_empty() {
+                jstr = inner.trim().to_string();
+            }
+        }
+    }
+
+    if jstr.starts_with('`') && jstr.ends_with('`') && jstr.len() >= 2 {
+        jstr = jstr.trim_matches('`').trim().to_string();
+    }
 
     // 1. Try to extract content between the first { and the last } or [ and ]
     let start_brace = jstr.find('{');
@@ -35,7 +49,7 @@ pub fn format_json_str(jstr: &str) -> String {
 
     if let (Some(s), Some(e)) = (start, end) {
         if s <= e {
-            jstr = &jstr[s..=e];
+            jstr = jstr[s..=e].to_string();
         }
     }
 
