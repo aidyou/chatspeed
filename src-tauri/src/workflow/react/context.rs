@@ -84,7 +84,11 @@ impl ContextManager {
             messages
                 .iter()
                 .filter(|message| !Self::is_summary_message(message))
-                .filter(|message| message.id.is_some_and(|id| id > compressed_until_message_id))
+                .filter(|message| {
+                    message
+                        .id
+                        .is_some_and(|id| id > compressed_until_message_id)
+                })
                 .cloned(),
         );
         compacted
@@ -99,7 +103,8 @@ impl ContextManager {
     }
 
     pub fn build_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
-        let compressed_until_message_id = Self::latest_summary_boundary_id(&self.messages).unwrap_or(0);
+        let compressed_until_message_id =
+            Self::latest_summary_boundary_id(&self.messages).unwrap_or(0);
 
         let last_finish_idx = self
             .messages
@@ -108,7 +113,9 @@ impl ContextManager {
             .rev()
             .find(|(_, message)| {
                 Self::is_successful_finish_task_message(message)
-                    && message.id.is_some_and(|id| id > compressed_until_message_id)
+                    && message
+                        .id
+                        .is_some_and(|id| id > compressed_until_message_id)
             })
             .map(|(idx, _)| idx)?;
 
@@ -447,12 +454,8 @@ mod tests {
         insert_workflow(&store, session_id);
 
         let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
-        let mut context = ContextManager::new(
-            session_id.to_string(),
-            store.clone(),
-            4096,
-            tsid_generator,
-        );
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
 
         let _ = context
             .add_message(
@@ -536,7 +539,10 @@ mod tests {
             })
             .count();
 
-        assert_eq!(summary_messages, 1, "summary should be persisted exactly once");
+        assert_eq!(
+            summary_messages, 1,
+            "summary should be persisted exactly once"
+        );
         assert!(
             snapshot.messages.len() >= 18,
             "compression should preserve the full database history"
@@ -549,15 +555,12 @@ mod tests {
             "initial user query should remain in the stored history"
         );
         assert!(
-            context
-                .messages
-                .iter()
-                .any(|m| {
-                    m.metadata
-                        .as_ref()
-                        .map(|meta| meta["type"] == "summary")
-                        .unwrap_or(false)
-                }),
+            context.messages.iter().any(|m| {
+                m.metadata
+                    .as_ref()
+                    .map(|meta| meta["type"] == "summary")
+                    .unwrap_or(false)
+            }),
             "the in-memory context should include the persisted summary"
         );
         assert!(
@@ -579,12 +582,8 @@ mod tests {
         insert_workflow(&store, session_id);
 
         let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
-        let mut context = ContextManager::new(
-            session_id.to_string(),
-            store.clone(),
-            4096,
-            tsid_generator,
-        );
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
 
         let _ = context
             .add_message(
@@ -637,7 +636,10 @@ mod tests {
             4096,
             Arc::new(TsidGenerator::new(2).expect("failed to create tsid")),
         );
-        restored.load_history().await.expect("load history should succeed");
+        restored
+            .load_history()
+            .await
+            .expect("load history should succeed");
 
         let snapshot = store
             .read()
@@ -659,12 +661,8 @@ mod tests {
         insert_workflow(&store, session_id);
 
         let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
-        let mut context = ContextManager::new(
-            session_id.to_string(),
-            store.clone(),
-            4096,
-            tsid_generator,
-        );
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
 
         let _ = context
             .add_message(
@@ -755,7 +753,11 @@ mod tests {
             .expect("second finish task should be compressible");
 
         assert_eq!(
-            candidate.first().and_then(|m| m.metadata.as_ref()).and_then(|m| m.get("type")).and_then(|v| v.as_str()),
+            candidate
+                .first()
+                .and_then(|m| m.metadata.as_ref())
+                .and_then(|m| m.get("type"))
+                .and_then(|v| v.as_str()),
             Some("summary"),
             "incremental compression should start from the latest summary"
         );
@@ -764,12 +766,12 @@ mod tests {
             finish_task_2.id,
             "incremental compression should stop at the latest finish_task after the summary"
         );
-        assert_eq!(compressed_until_id, finish_task_2.id.expect("finish task id missing"));
+        assert_eq!(
+            compressed_until_id,
+            finish_task_2.id.expect("finish task id missing")
+        );
         assert!(
-            context
-                .messages
-                .iter()
-                .any(|m| m.id == post_finish.id),
+            context.messages.iter().any(|m| m.id == post_finish.id),
             "messages after the compression boundary should stay in memory"
         );
     }

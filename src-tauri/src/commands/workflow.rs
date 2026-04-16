@@ -40,7 +40,9 @@ fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessa
             continue;
         };
 
-        if message.role == "tool" || (message.role == "user" && message.step_type.as_deref() == Some("observe")) {
+        if message.role == "tool"
+            || (message.role == "user" && message.step_type.as_deref() == Some("observe"))
+        {
             latest_tool_message_index.insert(tool_call_id.to_string(), idx);
         }
     }
@@ -66,7 +68,8 @@ fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessa
 
         if next_message.role == "assistant" {
             if let Some(meta) = next_message.metadata.as_mut() {
-                if let Some(tool_calls) = meta.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
+                if let Some(tool_calls) = meta.get_mut("tool_calls").and_then(|v| v.as_array_mut())
+                {
                     tool_calls.retain(|call| {
                         let call_id = call
                             .get("id")
@@ -399,10 +402,7 @@ pub async fn create_workflow(
                 // Preserve per-role model parameters from the inherited config.
                 // `temperature < 0` and `max_tokens <= 0` are valid sentinels in this
                 // codebase for "off/unset", so do not erase them during merge.
-                for model in [
-                    &mut validated_models.plan,
-                    &mut validated_models.act,
-                ] {
+                for model in [&mut validated_models.plan, &mut validated_models.act] {
                     if let Some(m) = model {
                         if let Some(temp) = m.temperature {
                             m.temperature = Some(if temp < 0.0 {

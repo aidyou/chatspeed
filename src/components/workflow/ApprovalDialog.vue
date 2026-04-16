@@ -1,7 +1,14 @@
 <template>
-  <el-dialog v-model="visible" :title="title" :width="dialogWidth" :close-on-click-modal="false"
-    :close-on-press-escape="false" :show-close="false" :class="{ 'diff-dialog': isEditAction }"
-    :modal-class="isEditAction ? 'diff-dialog-overlay' : ''" custom-class="approval-dialog">
+  <el-dialog
+    v-model="visible"
+    :title="title"
+    :width="dialogWidth"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false"
+    :show-close="false"
+    :class="{ 'diff-dialog': isEditAction }"
+    :modal-class="isEditAction ? 'diff-dialog-overlay' : ''"
+    custom-class="approval-dialog">
     <div class="approval-content">
       <div class="action-info">
         <span class="label">{{ $t('workflow.approval.action') }}:</span>
@@ -17,8 +24,11 @@
         <div v-if="isEditAction" class="diff-view">
           <div v-if="filePath" class="diff-file-path">File: {{ filePath }}</div>
           <div class="diff-text">
-            <div v-for="(line, index) in diffLines" :key="`${index}-${line.lineNumber}-${line.prefix}`"
-              class="diff-line" :class="line.type">
+            <div
+              v-for="(line, index) in diffLines"
+              :key="`${index}-${line.lineNumber}-${line.prefix}`"
+              class="diff-line"
+              :class="line.type">
               <span class="diff-prefix" :data-prefix="line.prefix" aria-hidden="true"></span>
               <span class="diff-line-number">{{ line.lineNumber }}</span>
               <span class="diff-separator">|</span>
@@ -39,8 +49,7 @@
           :rows="isEditAction ? 2 : 3"
           resize="none"
           :placeholder="$t('workflow.approval.rejectionMessagePlaceholder')"
-          @update:model-value="value => emit('update:rejectionMessage', value)"
-        />
+          @update:model-value="value => emit('update:rejectionMessage', value)" />
       </div>
     </div>
     <template #footer>
@@ -84,11 +93,18 @@ const props = defineProps({
   loading: Boolean
 })
 
-const emit = defineEmits(['update:modelValue', 'update:rejectionMessage', 'approve', 'approveAll', 'reject', 'stop'])
+const emit = defineEmits([
+  'update:modelValue',
+  'update:rejectionMessage',
+  'approve',
+  'approveAll',
+  'reject',
+  'stop'
+])
 
 const { t } = useI18n()
 
-const normalizeDetailsPayload = (value) => {
+const normalizeDetailsPayload = value => {
   if (value == null || value === '') {
     return { detailsObject: null, detailsText: '' }
   }
@@ -96,7 +112,7 @@ const normalizeDetailsPayload = (value) => {
   if (typeof value === 'string') {
     try {
       const parsed = JSON.parse(value)
-      const detailsObject = Array.isArray(parsed) ? (parsed[0] || null) : parsed
+      const detailsObject = Array.isArray(parsed) ? parsed[0] || null : parsed
       return {
         detailsObject: detailsObject && typeof detailsObject === 'object' ? detailsObject : null,
         detailsText: value
@@ -133,9 +149,7 @@ const isFileChangePayload = computed(() => {
   if (!data) return false
   const hasPath = typeof data.file_path === 'string' || typeof data.path === 'string'
   const hasEditFields =
-    data.old_string !== undefined ||
-    data.new_string !== undefined ||
-    data.content !== undefined
+    data.old_string !== undefined || data.new_string !== undefined || data.content !== undefined
   return hasPath && hasEditFields
 })
 
@@ -336,27 +350,26 @@ const onStop = () => {
       overflow-y: auto;
     }
 
-.shell-view {
-  max-height: min(36vh, 320px);
-  overflow: auto;
+    .shell-view {
+      max-height: min(36vh, 320px);
+      overflow: auto;
 
-  :deep(pre) {
-    white-space: pre-wrap;
-    word-break: break-word;
-    overflow-wrap: anywhere;
-  }
+      :deep(pre) {
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
 
-  :deep(pre code.hljs) {
-    white-space: pre-wrap;
-    word-break: break-word;
-    overflow-wrap: anywhere;
-  }
-}
+      :deep(pre code.hljs) {
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+    }
 
     .diff-view {
       max-height: none;
       overflow: visible;
-      background-color: var(--cs-bg-color);
       border-radius: var(--cs-border-radius-sm);
       padding: 4px;
 
@@ -370,7 +383,7 @@ const onStop = () => {
       .diff-text {
         max-height: min(48vh, 520px);
         overflow: auto;
-        background: var(--cs-bg-color-dark);
+        background: var(--cs-bg-color-light);
         border-radius: var(--cs-border-radius-sm);
         border: 1px solid var(--cs-border-color);
         font-family: var(--cs-font-family-mono);
@@ -476,21 +489,15 @@ const onStop = () => {
 
 .diff-dialog.el-dialog {
   position: fixed !important;
-  top: var(--cs-titlebar-height, 32px) !important;
+  top: calc(var(--cs-titlebar-height, 32px) + 10px) !important;
   left: 5% !important;
   width: 90% !important;
-  height: calc(100vh - var(--cs-titlebar-height, 32px) * 2) !important;
+  // height: calc(100vh - var(--cs-titlebar-height, 32px) * 2) !important;
   max-height: calc(100vh - var(--cs-titlebar-height, 32px) * 2) !important;
   margin: 0 !important;
   z-index: 2001 !important;
   display: flex;
   flex-direction: column;
-
-  .el-dialog__header,
-  .el-dialog__body,
-  .el-dialog__footer {
-    background: var(--cs-bg-color) !important;
-  }
 
   .el-dialog__header {
     flex-shrink: 0;
@@ -517,7 +524,7 @@ const onStop = () => {
       }
 
       .details-box {
-        flex: 1;
+        // flex: 1;
         display: flex;
         flex-direction: column;
         overflow: hidden;

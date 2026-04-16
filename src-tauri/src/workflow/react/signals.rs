@@ -33,7 +33,11 @@ pub fn parse_runtime_signal(raw: &str) -> RuntimeSignal {
             queued_user_message_id: parsed["queued_user_message_id"]
                 .as_str()
                 .map(|s| s.to_string())
-                .or_else(|| parsed["queuedUserMessageId"].as_str().map(|s| s.to_string())),
+                .or_else(|| {
+                    parsed["queuedUserMessageId"]
+                        .as_str()
+                        .map(|s| s.to_string())
+                }),
         };
     }
 

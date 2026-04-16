@@ -6,16 +6,25 @@ const LOOP_DETECT_WINDOW: usize = 8;
 /// Minimum repeat count within the window that triggers a loop warning.
 const LOOP_REPEAT_THRESHOLD: usize = 3;
 
+/// Minimum consecutive identical no-tool responses before surfacing a loop warning.
+const NO_TOOL_RESPONSE_REPEAT_THRESHOLD: usize = 3;
+
 /// Detects when the agent repeats the same tool call with identical arguments.
 pub(crate) struct LoopDetector {
     /// Sliding window of (tool_name, args_hash) pairs.
     recent_calls: VecDeque<(String, u64)>,
+    /// Last normalized assistant response seen on a no-tool turn.
+    last_no_tool_response: Option<String>,
+    /// Consecutive count of identical no-tool assistant responses.
+    consecutive_no_tool_responses: usize,
 }
 
 impl LoopDetector {
     pub fn new() -> Self {
         Self {
             recent_calls: VecDeque::with_capacity(LOOP_DETECT_WINDOW),
+            last_no_tool_response: None,
+            consecutive_no_tool_responses: 0,
         }
     }
 
@@ -99,5 +108,100 @@ impl LoopDetector {
         } else {
             None
         }
+    }
+
+    /// Records a no-tool assistant response and returns a warning if the exact same
+    /// normalized response has been repeated consecutively for too long.
+    pub fn record_no_tool_response_and_check(&mut self, response_text: &str) -> Option<String> {
+        let normalized = normalize_response_text(response_text)?;
+
+        if self.last_no_tool_response.as_deref() == Some(normalized.as_str()) {
+            self.consecutive_no_tool_responses += 1;
+        } else {
+            self.last_no_tool_response = Some(normalized.clone());
+            self.consecutive_no_tool_responses = 1;
+        }
+
+        if self.consecutive_no_tool_responses >= NO_TOOL_RESPONSE_REPEAT_THRESHOLD {
+            Some(format!(
+                "<SYSTEM_REMINDER>LOOP DETECTED: You have produced the exact same assistant response {} times in a row without calling any tools.\n\
+                Repeating the same text is not progress. You MUST change strategy now:\n\
+                1. If you still need information, call an appropriate tool instead of repeating the same sentence.\n\
+                2. If the task is actually complete, provide a concise final summary and call 'finish_task'.\n\
+                3. If you cannot continue because of a real limitation, explain the limitation once and then call 'ask_user' or 'finish_task'.\n\
+                Do NOT output the same response again without a tool call.</SYSTEM_REMINDER>",
+                self.consecutive_no_tool_responses
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Clears the no-tool response repetition tracker after progress is made.
+    pub fn reset_no_tool_response_history(&mut self) {
+        self.last_no_tool_response = None;
+        self.consecutive_no_tool_responses = 0;
+    }
+}
+
+fn normalize_response_text(response_text: &str) -> Option<String> {
+    let normalized = response_text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LoopDetector;
+    use serde_json::json;
+
+    #[test]
+    fn detects_repeated_tool_calls_with_identical_args() {
+        let mut detector = LoopDetector::new();
+        let args = json!({"path":"/tmp/demo.txt"});
+
+        assert!(detector.record_and_check("read_file", &args).is_none());
+        assert!(detector.record_and_check("read_file", &args).is_none());
+        assert!(detector.record_and_check("read_file", &args).is_none());
+
+        let warning = detector.record_and_check("read_file", &args);
+        assert!(warning.is_some(), "expected repeated tool call warning");
+    }
+
+    #[test]
+    fn detects_repeated_no_tool_responses_after_threshold() {
+        let mut detector = LoopDetector::new();
+
+        assert!(detector
+            .record_no_tool_response_and_check("你好，我无法给到相关内容。")
+            .is_none());
+        assert!(detector
+            .record_no_tool_response_and_check("你好， 我无法给到相关内容。")
+            .is_none());
+
+        let warning = detector.record_no_tool_response_and_check("  你好，我无法给到相关内容。  ");
+        assert!(
+            warning.is_some(),
+            "expected repeated no-tool response warning"
+        );
+    }
+
+    #[test]
+    fn reset_clears_no_tool_response_streak() {
+        let mut detector = LoopDetector::new();
+
+        detector.record_no_tool_response_and_check("same reply");
+        detector.record_no_tool_response_and_check("same reply");
+        detector.reset_no_tool_response_history();
+
+        assert!(detector
+            .record_no_tool_response_and_check("same reply")
+            .is_none());
     }
 }

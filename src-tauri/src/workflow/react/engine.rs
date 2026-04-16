@@ -177,7 +177,8 @@ impl WorkflowExecutor {
     }
 
     fn sync_runtime_limits(&mut self) {
-        self.context.max_tokens = Self::effective_context_limit(&self.agent_config, &self.policy.phase);
+        self.context.max_tokens =
+            Self::effective_context_limit(&self.agent_config, &self.policy.phase);
         self.max_steps = Self::effective_max_steps(&self.agent_config, &self.policy.phase);
     }
 }
@@ -2310,7 +2311,7 @@ impl WorkflowExecutor {
 
             self.update_state(WorkflowState::Executing).await?;
             let results_opt = match self
-                .execute_tools(full_response, tool_calls_json, &mut signal_rx)
+                .execute_tools(full_response.clone(), tool_calls_json, &mut signal_rx)
                 .await
             {
                 Ok(results) => Some(results),
@@ -2383,16 +2384,22 @@ impl WorkflowExecutor {
             if queued_applied {
                 self.current_step = 0;
                 self.consecutive_no_tool_calls = 0;
+                self.loop_detector.reset_no_tool_response_history();
             }
 
             if results.is_empty() {
+                let repeated_no_tool_warning = self
+                    .loop_detector
+                    .record_no_tool_response_and_check(&full_response);
                 self.consecutive_no_tool_calls += 1;
                 log::warn!(
                     "WorkflowExecutor {}: No tool calls in response (consecutive: {})",
                     self.session_id,
                     self.consecutive_no_tool_calls
                 );
-                let error_msg = if let Some(invalid_tool_call_error) = invalid_tool_call_error {
+                let error_msg = if let Some(warning) = repeated_no_tool_warning {
+                    warning
+                } else if let Some(invalid_tool_call_error) = invalid_tool_call_error {
                     format!(
                         "<SYSTEM_REMINDER>Error: {}. You must call exactly one of the available tools exposed in this session. Re-read the tool list and try again with a valid tool name and valid arguments.</SYSTEM_REMINDER>",
                         invalid_tool_call_error
@@ -2423,6 +2430,7 @@ impl WorkflowExecutor {
                 if self.flush_queued_user_messages().await? {
                     self.current_step = 0;
                     self.consecutive_no_tool_calls = 0;
+                    self.loop_detector.reset_no_tool_response_history();
                 }
                 if self.consecutive_no_tool_calls >= 3 {
                     self.consecutive_no_tool_calls = 0;
@@ -2432,6 +2440,7 @@ impl WorkflowExecutor {
                 continue;
             } else {
                 self.consecutive_no_tool_calls = 0;
+                self.loop_detector.reset_no_tool_response_history();
             }
 
             let has_successful_finish_task =
@@ -3675,7 +3684,8 @@ impl WorkflowExecutor {
                         "[Workflow][session={}][phase=signal] Queueing user message during active execution",
                         self.session_id
                     );
-                    self.enqueue_user_message(content, queued_user_message_id).await?;
+                    self.enqueue_user_message(content, queued_user_message_id)
+                        .await?;
                 }
                 RuntimeSignal::Other => {}
             }

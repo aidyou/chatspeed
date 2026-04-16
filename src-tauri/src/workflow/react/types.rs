@@ -438,7 +438,7 @@ mod tests {
         let json = r#"{"type":"approval","id":"call_123","approved":true,"approve_all":false}"#;
         let signal = WorkflowSignal::parse(json).unwrap();
         assert!(
-            matches!(signal, WorkflowSignal::ApprovalDecision { tool_call_id, approved, approve_all }
+            matches!(signal, WorkflowSignal::ApprovalDecision { tool_call_id, approved, approve_all, .. }
             if tool_call_id == "call_123" && approved && !approve_all)
         );
 
@@ -471,6 +471,7 @@ mod tests {
             tool_call_id: "call_1".to_string(),
             approved: true,
             approve_all: false,
+            rejection_message: None,
         };
         assert!(approval.is_valid_for(Some(&WaitReason::Approval)));
         assert!(!approval.is_valid_for(Some(&WaitReason::UserInput)));
