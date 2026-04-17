@@ -287,7 +287,54 @@ const visible = computed({
 })
 
 const rejectionMessage = computed(() => props.rejectionMessage || '')
-const shellMarkdown = computed(() => `\`\`\`bash\n${detailPayload.value.detailsText || ''}\n\`\`\``)
+
+const stripMarkdownFences = value => {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('```')) return trimmed
+  const withoutFence = trimmed.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/```$/, '')
+  return withoutFence.trim()
+}
+
+const extractShellCommand = payload => {
+  if (!payload) return ''
+
+  const directCommand = payload.detailsObject?.command
+  if (typeof directCommand === 'string' && directCommand.trim()) {
+    return directCommand.trim()
+  }
+
+  const rawText = stripMarkdownFences(payload.detailsText || '')
+  if (!rawText) return ''
+
+  try {
+    const parsed = JSON.parse(rawText)
+    if (typeof parsed === 'string') {
+      return parsed.trim()
+    }
+    if (parsed && typeof parsed.command === 'string') {
+      return parsed.command.trim()
+    }
+  } catch {
+    const braceStart = rawText.indexOf('{')
+    const braceEnd = rawText.lastIndexOf('}')
+    if (braceStart >= 0 && braceEnd > braceStart) {
+      try {
+        const parsed = JSON.parse(rawText.slice(braceStart, braceEnd + 1))
+        if (parsed && typeof parsed.command === 'string') {
+          return parsed.command.trim()
+        }
+      } catch {
+        // Fall through to use the plain text as the command.
+      }
+    }
+  }
+
+  return rawText
+}
+
+const shellCommand = computed(() => extractShellCommand(detailPayload.value))
+const shellMarkdown = computed(() => `\`\`\`bash\n${shellCommand.value || ''}\n\`\`\``)
 
 const dialogWidth = computed(() => {
   return isEditAction.value ? '90%' : '500px'

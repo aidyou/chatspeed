@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-warning:before {
+  content: "\e6a1";
+}
+
 .cs-approval:before {
   content: "\e696";
 }
@@ -77,10 +81,6 @@
 
 .cs-refresh:before {
   content: "\e71e";
-}
-
-.cs-warning:before {
-  content: "\e68b";
 }
 
 .cs-brain:before {

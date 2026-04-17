@@ -24,6 +24,96 @@ impl WorkflowExecutor {
         )
     }
 
+    fn is_read_only_shell_stage(stage: &str) -> bool {
+        let stage = stage.trim();
+        if stage.is_empty() {
+            return true;
+        }
+
+        let stage = stage
+            .replace("2>&1", " ")
+            .replace("1>&2", " ")
+            .replace("2>/dev/null", " ")
+            .replace("2> /dev/null", " ")
+            .replace("1>/dev/null", " ")
+            .replace("1> /dev/null", " ")
+            .replace("&>/dev/null", " ");
+        let stage = stage.trim().to_lowercase();
+        if stage.is_empty() {
+            return true;
+        }
+
+        READ_ONLY_BASH_CMDS_EXACT.contains(stage.as_str())
+            || READ_ONLY_BASH_PREFIXES
+                .iter()
+                .any(|&prefix| stage.starts_with(prefix))
+    }
+
+    fn is_safe_shell_filter(stage: &str) -> bool {
+        let stage = stage.trim().to_lowercase();
+        if stage.is_empty() {
+            return true;
+        }
+
+        const SAFE_FILTER_PREFIXES: &[&str] = &[
+            "tail ", "head ", "grep ", "egrep ", "fgrep ", "less", "more", "sed ", "awk ", "cut ",
+            "sort ", "uniq ", "wc ", "tr ", "jq ",
+        ];
+
+        SAFE_FILTER_PREFIXES
+            .iter()
+            .any(|&prefix| stage.starts_with(prefix))
+    }
+
+    fn is_smart_mode_read_only_shell_command(command_str: &str) -> bool {
+        let mut candidate = command_str.trim().to_lowercase();
+        if candidate.is_empty() {
+            return false;
+        }
+
+        // Allow workspace navigation prepended to an otherwise read-only diagnostic command.
+        if let Some(rest) = candidate
+            .strip_prefix("cd ")
+            .or_else(|| candidate.strip_prefix("pushd "))
+        {
+            for delimiter in ["&&", "||", ";"] {
+                if let Some((_, rest)) = rest.split_once(delimiter) {
+                    candidate = rest.trim().to_string();
+                    break;
+                }
+            }
+        }
+
+        if candidate.is_empty() {
+            return false;
+        }
+
+        for segment in candidate.split("&&") {
+            for segment in segment.split("||") {
+                for segment in segment.split(';') {
+                    let segment = segment.trim();
+                    if segment.is_empty() {
+                        continue;
+                    }
+
+                    let mut stage_iter = segment.split('|');
+                    let first_stage = stage_iter.next().unwrap_or("").trim();
+                    if !Self::is_read_only_shell_stage(first_stage) {
+                        return false;
+                    }
+
+                    for stage in stage_iter {
+                        if !Self::is_safe_shell_filter(stage) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
     pub(crate) async fn review_tool_call_for_smart_mode(
         &self,
         tool_name: &str,
@@ -412,6 +502,16 @@ impl WorkflowExecutor {
                             self.session_id, reason
                         );
                     } else if self.policy.approval_level == ApprovalLevel::Smart {
+                        // In Smart mode, allow read-only diagnostic commands even if they use
+                        // command chaining or output shaping to trim noisy output.
+                        if Self::is_smart_mode_read_only_shell_command(command_str) {
+                            log::info!(
+                                "WorkflowExecutor {}: Auto-approving read-only diagnostic bash command in Smart mode: {}",
+                                self.session_id, command_str
+                            );
+                            return Ok(None);
+                        }
+
                         // In Smart mode, check if this is a read-only command before intercepting
                         let command_str_lower = command_str.to_lowercase();
                         let is_read_only = READ_ONLY_BASH_CMDS_EXACT
@@ -543,6 +643,25 @@ impl WorkflowExecutor {
                     (
                         serde_json::to_string(&preview_args).unwrap_or_default(),
                         preview_args,
+                    )
+                }
+                TOOL_BASH => {
+                    let command = args
+                        .get("command")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    let preview = if command.is_empty() {
+                        serde_json::to_string_pretty(args).unwrap_or_default()
+                    } else {
+                        command.clone()
+                    };
+                    (
+                        preview.clone(),
+                        serde_json::json!({
+                            "command": command,
+                        }),
                     )
                 }
                 _ => {
