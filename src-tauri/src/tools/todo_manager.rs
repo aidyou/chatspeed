@@ -431,7 +431,7 @@ mod tests {
             store_guard.add_agent(&agent).unwrap();
             // Pass None for agent_config
             store_guard
-                .create_workflow(&session_id, "Test prompt", &agent_id, None)
+                .create_workflow(&session_id, "Test prompt", &agent_id, None, None)
                 .unwrap();
         }
 

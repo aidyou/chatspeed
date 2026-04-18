@@ -17,6 +17,7 @@ use serde_json::Value;
 #[serde(rename_all = "camelCase")]
 pub struct Workflow {
     pub id: Option<String>,
+    pub parent_session_id: Option<String>,
     pub title: Option<String>,
     pub user_query: String,
     pub todo_list: Option<String>,
@@ -65,6 +66,7 @@ impl From<&Row<'_>> for Workflow {
     fn from(row: &Row<'_>) -> Self {
         Self {
             id: row.get("id").ok(),
+            parent_session_id: row.get("parent_session_id").ok(),
             title: row.get("title").ok(),
             user_query: row.get("user_query").unwrap_or_default(),
             todo_list: row.get("todo_list").ok(),
@@ -130,6 +132,7 @@ impl MainStore {
         user_query: &str,
         agent_id: &str,
         agent_config: Option<String>,
+        parent_session_id: Option<&str>,
     ) -> Result<Workflow, StoreError> {
         let conn = self
             .conn
@@ -137,8 +140,8 @@ impl MainStore {
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         conn.execute(
-            "INSERT INTO workflows (id, user_query, agent_id, agent_config, status) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, user_query, agent_id, agent_config, "pending"],
+            "INSERT INTO workflows (id, parent_session_id, user_query, agent_id, agent_config, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, parent_session_id, user_query, agent_id, agent_config, "pending"],
         )?;
 
         let workflow: Workflow = conn.query_row(
@@ -155,7 +158,9 @@ impl MainStore {
             .conn
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let mut stmt = conn.prepare("SELECT * FROM workflows ORDER BY created_at DESC")?;
+        let mut stmt = conn.prepare(
+            "SELECT * FROM workflows WHERE parent_session_id IS NULL AND id NOT LIKE 'task\\_%' ESCAPE '\\' ORDER BY created_at DESC",
+        )?;
         let rows = stmt.query_map([], |row| Ok(Workflow::from(row)))?;
         let mut workflows = Vec::new();
         for row in rows {
@@ -704,6 +709,44 @@ mod tests {
             loaded_cancelled.last_event_id,
             Some(expected_last_event_id),
             "cancelled snapshot last_event_id should align with event tail"
+        );
+    }
+
+    #[test]
+    fn test_list_workflows_excludes_child_workflows() {
+        let store = create_test_store();
+
+        store
+            .create_workflow("parent-session", "Parent query", "agent-parent", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "task_legacy_child_session",
+                "Legacy child query",
+                "agent-child",
+                None,
+                None,
+            )
+            .expect("failed to create legacy child workflow");
+        store
+            .create_workflow(
+                "child-session",
+                "Child query",
+                "agent-child",
+                None,
+                Some("parent-session"),
+            )
+            .expect("failed to create child workflow");
+
+        let workflows = store
+            .list_workflows()
+            .expect("failed to list top-level workflows");
+
+        assert_eq!(workflows.len(), 1);
+        assert_eq!(
+            workflows[0].id.as_deref(),
+            Some("parent-session"),
+            "child workflow should not appear in top-level workflow list"
         );
     }
 }

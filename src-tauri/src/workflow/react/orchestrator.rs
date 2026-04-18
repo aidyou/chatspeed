@@ -33,6 +33,11 @@ pub enum BackgroundTask {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct CompletedTaskSnapshot {
+    pub output: String,
+}
+
 impl BackgroundTask {
     pub fn owner_session_id(&self) -> Option<&str> {
         match self {
@@ -50,6 +55,17 @@ lazy_static::lazy_static! {
     /// Global registry for all background tasks (Sub-agents and Shell commands)
     /// This allows different tools to share the same task_id namespace.
     pub static ref BACKGROUND_TASKS: Arc<DashMap<String, BackgroundTask>> = Arc::new(DashMap::new());
+    /// Terminal snapshots allow task_output to inspect tasks after they leave the active registry.
+    pub static ref COMPLETED_BACKGROUND_TASKS: Arc<DashMap<String, CompletedTaskSnapshot>> = Arc::new(DashMap::new());
+}
+
+fn remember_completed_task(task_id: impl Into<String>, output: impl Into<String>) {
+    COMPLETED_BACKGROUND_TASKS.insert(
+        task_id.into(),
+        CompletedTaskSnapshot {
+            output: output.into(),
+        },
+    );
 }
 
 pub fn list_background_task_ids_for_owner(owner_session_id: &str) -> Vec<String> {
@@ -83,16 +99,31 @@ pub async fn stop_background_task(task_id: &str, chat_state: Option<&Arc<ChatSta
 
             let mut guard = executor.lock().await;
             guard.set_state(crate::workflow::react::types::WorkflowState::Cancelled);
+            remember_completed_task(task_id, format!("Task {} has been cancelled.", task_id));
             get_child_task_registry().unregister_child_task(task_id);
             true
         }
         BackgroundTask::ShellCommand {
-            status, stop_tx, ..
+            command,
+            stdout,
+            stderr,
+            status,
+            stop_tx,
+            ..
         } => {
             if let Some(tx) = stop_tx.lock().await.take() {
                 let _ = tx.send(());
             }
             *status.lock().await = "Stopped".to_string();
+            let out = stdout.lock().await.clone();
+            let err = stderr.lock().await.clone();
+            remember_completed_task(
+                task_id,
+                format!(
+                    "Command: {}\nStatus: Stopped\nSTDOUT: {}\nSTDERR: {}",
+                    command, out, err
+                ),
+            );
             get_child_task_registry().unregister_child_task(task_id);
             true
         }
@@ -192,6 +223,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 task,
                 &agent_config.id,
                 Some(workflow_config.to_json()),
+                parent_session_id,
             )?;
         }
 
@@ -562,6 +594,31 @@ impl ToolDefinition for TaskTool {
                 .to_string(),
             );
 
+            let output = match completion_result
+                .get("status")
+                .and_then(|value| value.as_str())
+            {
+                Some("completed") => format!(
+                    "Status: completed. Latest Output: {}",
+                    completion_result
+                        .get("summary")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                ),
+                Some(status) => format!(
+                    "Status: {}. Latest Output: {}",
+                    status,
+                    completion_result
+                        .get("error")
+                        .and_then(|value| value.as_str())
+                        .or_else(|| completion_result
+                            .get("summary")
+                            .and_then(|value| value.as_str()))
+                        .unwrap_or_default()
+                ),
+                None => "Status: completed.".to_string(),
+            };
+            remember_completed_task(task_id_clone.clone(), output);
             get_child_task_registry().unregister_child_task(&task_id_clone);
             BACKGROUND_TASKS.remove(&task_id_clone);
         });
@@ -623,48 +680,51 @@ impl ToolDefinition for TaskOutputTool {
         let task_id = params["task_id"]
             .as_str()
             .ok_or(ToolError::InvalidParams("task_id required".into()))?;
-        let task = BACKGROUND_TASKS.get(task_id).ok_or_else(|| {
-            ToolError::ExecutionFailed(format!(
-                "Task {} not found in active background tasks",
-                task_id
-            ))
-        })?;
-
-        match task.value() {
-            BackgroundTask::SubAgent { executor, .. } => {
-                let guard = executor.lock().await;
-                // Simplified: return latest assistant message or state
-                let mut result = format!("Status: {:?}. ", guard.state());
-                if let Some(last_msg) = guard
-                    .messages()
-                    .iter()
-                    .rev()
-                    .find(|m| m.role == "assistant")
-                {
-                    result.push_str("Latest Output: ");
-                    result.push_str(&last_msg.message);
+        if let Some(task) = BACKGROUND_TASKS.get(task_id) {
+            return match task.value() {
+                BackgroundTask::SubAgent { executor, .. } => {
+                    let guard = executor.lock().await;
+                    let mut result = format!("Status: {:?}. ", guard.state());
+                    if let Some(last_msg) = guard
+                        .messages()
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == "assistant")
+                    {
+                        result.push_str("Latest Output: ");
+                        result.push_str(&last_msg.message);
+                    }
+                    Ok(ToolCallResult::success(Some(result), None))
                 }
-                Ok(ToolCallResult::success(Some(result), None))
-            }
-            BackgroundTask::ShellCommand {
-                command,
-                stdout,
-                stderr,
-                status,
-                ..
-            } => {
-                let out = stdout.lock().await;
-                let err = stderr.lock().await;
-                let s = status.lock().await;
-                Ok(ToolCallResult::success(
-                    Some(format!(
-                        "Command: {}\nStatus: {}\nSTDOUT: {}\nSTDERR: {}",
-                        command, s, out, err
-                    )),
-                    None,
-                ))
-            }
+                BackgroundTask::ShellCommand {
+                    command,
+                    stdout,
+                    stderr,
+                    status,
+                    ..
+                } => {
+                    let out = stdout.lock().await;
+                    let err = stderr.lock().await;
+                    let s = status.lock().await;
+                    Ok(ToolCallResult::success(
+                        Some(format!(
+                            "Command: {}\nStatus: {}\nSTDOUT: {}\nSTDERR: {}",
+                            command, s, out, err
+                        )),
+                        None,
+                    ))
+                }
+            };
         }
+
+        if let Some(snapshot) = COMPLETED_BACKGROUND_TASKS.get(task_id) {
+            return Ok(ToolCallResult::success(Some(snapshot.output.clone()), None));
+        }
+
+        Err(ToolError::ExecutionFailed(format!(
+            "Task {} not found in active or completed background tasks",
+            task_id
+        )))
     }
 }
 
@@ -718,14 +778,32 @@ impl ToolDefinition for TaskStopTool {
                 BackgroundTask::SubAgent { executor, .. } => {
                     let mut guard = executor.lock().await;
                     guard.set_state(crate::workflow::react::types::WorkflowState::Cancelled);
+                    remember_completed_task(
+                        task_id,
+                        format!("Task {} has been terminated.", task_id),
+                    );
                 }
                 BackgroundTask::ShellCommand {
-                    status, stop_tx, ..
+                    command,
+                    stdout,
+                    stderr,
+                    status,
+                    stop_tx,
+                    ..
                 } => {
                     if let Some(tx) = stop_tx.lock().await.take() {
                         let _ = tx.send(());
                     }
                     *status.lock().await = "Stopped".to_string();
+                    let out = stdout.lock().await.clone();
+                    let err = stderr.lock().await.clone();
+                    remember_completed_task(
+                        task_id,
+                        format!(
+                            "Command: {}\nStatus: Stopped\nSTDOUT: {}\nSTDERR: {}",
+                            command, out, err
+                        ),
+                    );
                 }
             }
             Ok(ToolCallResult::success(
@@ -738,5 +816,48 @@ impl ToolDefinition for TaskStopTool {
                 task_id
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{remember_completed_task, TaskOutputTool, COMPLETED_BACKGROUND_TASKS};
+    use crate::tools::ToolDefinition;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn task_output_reads_completed_snapshot() {
+        let task_id = "task_test_completed_snapshot";
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+        remember_completed_task(task_id, "Status: completed. Latest Output: done");
+
+        let tool = TaskOutputTool;
+        let result = tool
+            .call(json!({ "task_id": task_id }))
+            .await
+            .expect("task_output should read completed snapshot");
+
+        let content = result.content.unwrap_or_default();
+        assert!(content.contains("Status: completed"));
+        assert!(content.contains("done"));
+
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+    }
+
+    #[test]
+    fn completed_snapshot_overwrites_latest_terminal_state() {
+        let task_id = "task_test_snapshot_overwrite";
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+
+        remember_completed_task(task_id, "first");
+        remember_completed_task(task_id, "second");
+
+        let snapshot = COMPLETED_BACKGROUND_TASKS
+            .get(task_id)
+            .map(|entry| entry.output.clone());
+        let snapshot = snapshot.expect("snapshot should exist");
+        assert_eq!(snapshot, "second");
+
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
     }
 }

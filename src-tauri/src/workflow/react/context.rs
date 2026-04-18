@@ -478,7 +478,7 @@ mod tests {
             .add_agent(&agent)
             .expect("failed to create agent");
         store_guard
-            .create_workflow(session_id, "Initial query", "test-agent", None)
+            .create_workflow(session_id, "Initial query", "test-agent", None, None)
             .expect("failed to create workflow");
     }
 

@@ -1,3 +1,7 @@
+use super::{column_exists, MigrationDefinition};
+use crate::db::StoreError;
+use rusqlite::Connection;
+
 /// Version 5 migration SQL statements
 pub const MIGRATION_SQL: &[(&str, &str)] = &[
     // Workflows table
@@ -5,6 +9,7 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "workflows",
         "CREATE TABLE IF NOT EXISTS workflows (
             id TEXT PRIMARY KEY,
+            parent_session_id TEXT REFERENCES workflows(id),
             title TEXT,
             user_query TEXT NOT NULL,
             todo_list TEXT,
@@ -18,6 +23,10 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
     (
         "idx_workflows_updated_at",
         "CREATE INDEX IF NOT EXISTS idx_workflows_updated_at ON workflows(updated_at DESC)"
+    ),
+    (
+        "idx_workflows_parent_session_id",
+        "CREATE INDEX IF NOT EXISTS idx_workflows_parent_session_id ON workflows(parent_session_id)"
     ),
     // Workflow messages table
     (
@@ -121,3 +130,55 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "CREATE INDEX IF NOT EXISTS idx_agents_parent_agent_id ON agents(parent_agent_id)"
     ),
 ];
+
+fn ensure_agent_hierarchy_columns(conn: &Connection) -> Result<(), StoreError> {
+    if !column_exists(conn, "agents", "role")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN role TEXT DEFAULT 'primary'",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "agents", "parent_agent_id")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN parent_agent_id TEXT REFERENCES agents(id)",
+            [],
+        )?;
+    }
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agents_parent_agent_id ON agents(parent_agent_id)",
+        [],
+    )?;
+
+    Ok(())
+}
+
+fn ensure_workflow_parent_column(conn: &Connection) -> Result<(), StoreError> {
+    if !column_exists(conn, "workflows", "parent_session_id")? {
+        conn.execute(
+            "ALTER TABLE workflows ADD COLUMN parent_session_id TEXT REFERENCES workflows(id)",
+            [],
+        )?;
+    }
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workflows_parent_session_id ON workflows(parent_session_id)",
+        [],
+    )?;
+
+    Ok(())
+}
+
+pub fn ensure(conn: &Connection) -> Result<(), StoreError> {
+    ensure_agent_hierarchy_columns(conn)?;
+    ensure_workflow_parent_column(conn)?;
+    Ok(())
+}
+
+pub const MIGRATION: MigrationDefinition = MigrationDefinition {
+    version: 5,
+    description: "v5 migration: Add workflows table, and models/shell_policy columns to agents",
+    sql: MIGRATION_SQL,
+    ensure: Some(ensure),
+};

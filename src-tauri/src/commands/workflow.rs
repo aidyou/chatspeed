@@ -438,6 +438,7 @@ pub async fn create_workflow(
             user_query,
             &request.agent_id,
             Some(agent_config_json),
+            None,
         )
         .map_err(|e| e.to_string())?;
 
