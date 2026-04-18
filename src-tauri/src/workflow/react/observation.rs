@@ -5,9 +5,16 @@ use crate::tools::{
 };
 
 use rust_i18n::t;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub struct ObservationReinforcer;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationKind {
+    TurnBlockedPostponed,
+}
 
 pub struct ReinforcedResult {
     pub content: String,
@@ -17,6 +24,7 @@ pub struct ReinforcedResult {
     pub error_type: Option<String>,
     pub display_type: String,            // "default", "diff", "text"
     pub approval_status: Option<String>, // "pending", "approved", "rejected", None
+    pub observation_kind: Option<ObservationKind>,
 }
 
 impl ObservationReinforcer {
@@ -175,6 +183,7 @@ impl ObservationReinforcer {
                         error_type: None,
                         display_type: display_type.to_string(),
                         approval_status: None,
+                        observation_kind: None,
                     }
                 } else if raw_res.len() > 20000 {
                     let truncated = match raw_res.char_indices().nth(20000) {
@@ -192,6 +201,7 @@ impl ObservationReinforcer {
                         error_type: None,
                         display_type: display_type.to_string(),
                         approval_status: None,
+                        observation_kind: None,
                     }
                 } else {
                     ReinforcedResult {
@@ -202,6 +212,7 @@ impl ObservationReinforcer {
                         error_type: None,
                         display_type: display_type.to_string(),
                         approval_status: None,
+                        observation_kind: None,
                     }
                 }
             }
@@ -230,6 +241,7 @@ impl ObservationReinforcer {
                     error_type: Some(error_type.to_string()),
                     display_type: "text".to_string(),
                     approval_status: None,
+                    observation_kind: None,
                 }
             }
         }

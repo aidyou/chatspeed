@@ -147,7 +147,17 @@ impl WorkflowExecutor {
             )
             .await
         {
-            Ok(review) => Ok(Some(review)),
+            Ok(review) => {
+                log::info!(
+                    "WorkflowExecutor {}: Smart approval AI review for '{}' -> approved={}, risk_level={}, reason={}",
+                    self.session_id,
+                    tool_name,
+                    review.approved,
+                    review.risk_level,
+                    review.reason
+                );
+                Ok(Some(review))
+            }
             Err(error) => {
                 log::warn!(
                     "WorkflowExecutor {}: AI approval review failed for '{}': {}",
@@ -166,15 +176,7 @@ impl WorkflowExecutor {
         name: &str,
         args: &serde_json::Value,
     ) -> bool {
-        // Core workflow tools are internal and safe, never intercept them
-        if name.starts_with("todo_")
-            || name.starts_with("task_")
-            || name.starts_with("skill_")
-            || name == crate::tools::TOOL_ASK_USER
-            || name == crate::tools::TOOL_TASK
-            || name == crate::tools::TOOL_SKILL
-            || name == crate::tools::TOOL_FINISH_TASK
-        {
+        if crate::tools::is_auto_execute_workflow_tool(name) {
             return false;
         }
 
@@ -275,6 +277,7 @@ impl WorkflowExecutor {
                 error_type: Some("NoSummary".into()),
                 display_type: "text".to_string(),
                 approval_status: None,
+                observation_kind: None,
             }));
         }
 
@@ -302,6 +305,7 @@ impl WorkflowExecutor {
             error_type: None,
             display_type: "text".to_string(),
             approval_status: None,
+            observation_kind: None,
         }))
     }
 
@@ -369,6 +373,7 @@ impl WorkflowExecutor {
                 error_type: Some("InvalidAskUserPayload".to_string()),
                 display_type: "text".to_string(),
                 approval_status: None,
+                observation_kind: None,
             }));
         }
 
@@ -384,6 +389,7 @@ impl WorkflowExecutor {
             error_type: None,
             display_type: "choice".to_string(),
             approval_status: None,
+            observation_kind: None,
         }))
     }
 
@@ -400,6 +406,7 @@ impl WorkflowExecutor {
                 error_type: Some("NoSummary".into()),
                 display_type: "text".to_string(),
                 approval_status: None,
+                observation_kind: None,
             }));
         }
 
@@ -423,6 +430,7 @@ impl WorkflowExecutor {
                         error_type: Some("PendingTodos".into()),
                         display_type: "text".to_string(),
                         approval_status: None,
+                        observation_kind: None,
                     }));
                 }
             }
@@ -448,6 +456,7 @@ impl WorkflowExecutor {
                     error_type: Some("AuditRejected".into()),
                     display_type: "text".to_string(),
                     approval_status: None,
+                    observation_kind: None,
                 }));
             }
         }
@@ -460,6 +469,7 @@ impl WorkflowExecutor {
             error_type: None,
             display_type: "text".to_string(),
             approval_status: None,
+            observation_kind: None,
         }))
     }
 
@@ -493,6 +503,7 @@ impl WorkflowExecutor {
                         error_type: Some("Security".to_string()),
                         display_type: "text".to_string(),
                         approval_status: None,
+                        observation_kind: None,
                     }));
                 }
                 crate::tools::ShellDecision::Review(reason) => {
@@ -733,6 +744,7 @@ impl WorkflowExecutor {
             error_type: None,
             display_type,
             approval_status: Some("pending".to_string()),
+            observation_kind: None,
         }))
     }
 
@@ -761,6 +773,7 @@ impl WorkflowExecutor {
                     error_type: Some("Security".to_string()),
                     display_type: "text".to_string(),
                     approval_status: None,
+                    observation_kind: None,
                 }));
             }
         }

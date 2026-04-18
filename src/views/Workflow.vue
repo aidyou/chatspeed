@@ -82,6 +82,7 @@
           :has-live-session="hasLiveSession" :wait-reason="waitReason"
           :current-workflow="currentWorkflow"
           :current-workflow-id="currentWorkflowId" :selected-agent="selectedAgent" :can-edit-agent="canEditCurrentWorkflowAgent"
+          :show-planning-mode-toggle="showPlanningModeToggle"
           :active-model-name="activeModelName"
           :planning-mode="planningMode" :approval-level="approvalLevel" :final-audit-mode="finalAuditMode"
           :agents="agentStore.agents" :show-skill-suggestions="showSkillSuggestions"
@@ -167,6 +168,14 @@ const selectedAgent = ref(null)
 const approvalLevel = ref('default')
 const finalAuditMode = ref('on')
 const planningMode = ref(false)
+
+const showPlanningModeToggle = computed(() => {
+  const workflow = workflowStore.currentWorkflow
+  if (!workflow) return true
+
+  const hasStartedContent = Boolean(String(workflow.userQuery || '').trim()) || (workflow.messagesCount || 0) > 0
+  return !hasStartedContent && !workflowStore.hasLiveSession
+})
 
 // System skills
 const systemSkills = ref([])

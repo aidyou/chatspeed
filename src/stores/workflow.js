@@ -13,6 +13,7 @@ import {
   WORKFLOW_WAIT_REASONS
 } from '@/composables/workflow/signalTypes';
 import { deriveToolViewState } from '@/composables/workflow/useToolStateMapper';
+import { isAutoExecuteWorkflowTool } from '@/composables/workflow/toolApproval';
 
 /**
  * Task Ledger - 统一任务账本模型
@@ -915,11 +916,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
           upsertToolViewState({
             toolCallId,
             toolName,
-            status: 'pending',
+            status: isAutoExecuteWorkflowTool(toolName) ? 'approved_running' : 'pending',
             title: message.metadata?.title || toolName,
-            summary: 'Awaiting approval',
+            summary: isAutoExecuteWorkflowTool(toolName) ? 'Executing...' : 'Awaiting approval',
             arguments: args,
-            approvalStatus: 'pending'
+            approvalStatus: isAutoExecuteWorkflowTool(toolName) ? 'approved' : 'pending'
           });
         }
       }

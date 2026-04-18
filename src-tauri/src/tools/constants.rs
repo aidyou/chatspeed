@@ -33,6 +33,22 @@ pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";
 
 use phf::{phf_set, Set};
 
+pub fn is_auto_execute_workflow_tool(name: &str) -> bool {
+    matches!(
+        name,
+        TOOL_TASK
+            | TOOL_TASK_OUTPUT
+            | TOOL_TASK_STOP
+            | TOOL_TODO_CREATE
+            | TOOL_TODO_LIST
+            | TOOL_TODO_UPDATE
+            | TOOL_TODO_GET
+            | TOOL_ASK_USER
+            | TOOL_FINISH_TASK
+            | TOOL_SKILL
+    )
+}
+
 /// Read-only bash commands that require exact match (no arguments expected)
 /// Uses perfect hash function for O(1) lookup performance
 pub static READ_ONLY_BASH_CMDS_EXACT: Set<&'static str> = phf_set! {
@@ -106,11 +122,16 @@ pub const READ_ONLY_BASH_PREFIXES: &[&str] = &[
     "pgrep ",
     // Git config
     "git config --get",
+    "git status ",
     "git remote ",
     "git branch ",
     "git show ",
     "git log ",
     "git diff ",
+    "git rev-parse ",
+    "git ls-files ",
+    "git ls-tree ",
+    "git stash list ",
     // Package manager queries
     "npm list",
     "npm ls",

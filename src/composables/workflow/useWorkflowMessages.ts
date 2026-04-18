@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
 import { resolveWorkflowToolIcon } from './toolIcons'
+import { isAutoExecuteWorkflowTool } from './toolApproval'
 import { useI18n } from 'vue-i18n'
 import * as Diff from 'diff'
 
@@ -166,7 +167,9 @@ export function useWorkflowMessages() {
                   ? 'User rejected'
                   : isRunning
                     ? 'Executing...'
-                    : 'Awaiting approval'
+                    : isAutoExecuteWorkflowTool(name)
+                      ? 'Executing...'
+                      : 'Awaiting approval'
               }
             })
             .filter(call => {

@@ -6,6 +6,7 @@
  */
 
 import type { ToolViewState, ToolViewStatus } from './useTaskLedger'
+import { isAutoExecuteWorkflowTool } from './toolApproval'
 
 /** Raw message interface */
 export interface RawMessage {
@@ -254,13 +255,15 @@ export function deriveToolViewState(
 
           const existing = result.get(id)
           if (!existing) {
+            const autoExecute = isAutoExecuteWorkflowTool(toolName)
             result.set(id, {
               toolCallId: id,
               toolName,
-              status: 'pending',
+              status: autoExecute ? 'approved_running' : 'pending',
               title: generateTitle(toolName, args),
-              summary: 'Awaiting approval',
+              summary: autoExecute ? 'Executing...' : 'Awaiting approval',
               arguments: args,
+              approvalStatus: autoExecute ? 'approved' : 'pending',
               createdAt: message.createdAt || now,
               updatedAt: now,
               workflowId,

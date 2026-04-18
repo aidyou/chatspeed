@@ -44,7 +44,7 @@
           </div>
 
           <div class="icons">
-            <el-tooltip :content="$t('workflow.planningModeTooltip')" placement="top">
+            <el-tooltip v-if="showPlanningModeToggle" :content="$t('workflow.planningModeTooltip')" placement="top">
               <label class="icon-btn upperLayer" :class="{ active: planningMode }"
                 @click="$emit('toggle-planning-mode')">
                 <cs name="skill-plan" class="small" />
@@ -221,6 +221,10 @@ const props = defineProps({
   activeModelName: {
     type: String,
     default: 'Select Model'
+  },
+  showPlanningModeToggle: {
+    type: Boolean,
+    default: true
   },
   planningMode: {
     type: Boolean,

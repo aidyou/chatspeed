@@ -184,9 +184,9 @@ export function useWorkflowCore({
                 agentConfig: JSON.stringify(agentConfig)
             })
 
-            // 2. Signal engine if workflow is active (skip for awaiting_approval to avoid race with request_confirm_broadcast)
+            // 2. Signal engine if workflow is active, including structured waiting states.
             const status = currentWorkflow.value?.status
-            if (status && [WORKFLOW_STATUSES.THINKING, WORKFLOW_STATUSES.EXECUTING, WORKFLOW_STATUSES.PAUSED, WORKFLOW_STATUSES.AWAITING_USER].includes(status)) {
+            if (status && [WORKFLOW_STATUSES.THINKING, WORKFLOW_STATUSES.EXECUTING, WORKFLOW_STATUSES.PAUSED, WORKFLOW_STATUSES.AWAITING_USER, WORKFLOW_STATUSES.AWAITING_APPROVAL].includes(status)) {
                 try {
                     const signalType = toSignalType(key)
                     await invokeWrapper('workflow_signal', {
@@ -658,6 +658,11 @@ export function useWorkflowCore({
             } else {
                 approvalLevel.value = 'default'
             }
+            isSyncingWorkflowConfig.value = false
+
+            // planningMode is a workflow phase display, not a runtime hot-toggle for live sessions.
+            isSyncingWorkflowConfig.value = true
+            planningMode.value = String(config.phase || '').toLowerCase() === 'planning'
             isSyncingWorkflowConfig.value = false
         }
 

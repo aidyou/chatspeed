@@ -503,6 +503,7 @@ impl ToolDefinition for ShellExecute {
 
         let timeout_ms = params["timeout"].as_u64().unwrap_or(120_000).min(600_000);
         let run_in_background = params["run_in_background"].as_bool().unwrap_or(false);
+        let working_dir = self.default_working_dir();
 
         if run_in_background {
             let task_id = format!(
@@ -531,15 +532,22 @@ impl ToolDefinition for ShellExecute {
                 },
             );
 
+            let working_dir_for_spawn = working_dir.clone();
             tokio::spawn(async move {
                 let spawn_result = if cfg!(target_os = "windows") {
                     let mut command = Command::new("cmd");
                     command.args(["/C", &cmd_to_run]);
+                    if let Some(dir) = &working_dir_for_spawn {
+                        command.current_dir(dir);
+                    }
                     command.kill_on_drop(true);
                     command.spawn()
                 } else {
                     let mut command = Command::new("sh");
                     command.args(["-c", &cmd_to_run]);
+                    if let Some(dir) = &working_dir_for_spawn {
+                        command.current_dir(dir);
+                    }
                     command.kill_on_drop(true);
                     command.spawn()
                 };
@@ -600,9 +608,19 @@ impl ToolDefinition for ShellExecute {
 
         // Fallback to standard execution
         let cmd_future = if cfg!(target_os = "windows") {
-            Command::new("cmd").args(["/C", command_str]).output()
+            let mut command = Command::new("cmd");
+            command.args(["/C", command_str]);
+            if let Some(dir) = &working_dir {
+                command.current_dir(dir);
+            }
+            command.output()
         } else {
-            Command::new("sh").args(["-c", command_str]).output()
+            let mut command = Command::new("sh");
+            command.args(["-c", command_str]);
+            if let Some(dir) = &working_dir {
+                command.current_dir(dir);
+            }
+            command.output()
         };
 
         match timeout(Duration::from_millis(timeout_ms), cmd_future).await {
@@ -637,6 +655,14 @@ impl ToolDefinition for ShellExecute {
 }
 
 impl ShellExecute {
+    fn default_working_dir(&self) -> Option<std::path::PathBuf> {
+        self.policy_engine
+            .path_guard
+            .read()
+            .ok()
+            .and_then(|guard| guard.get_primary_root().map(|path| path.to_path_buf()))
+    }
+
     /// Execute command with real-time output streaming to frontend
     async fn call_with_streaming(
         &self,
@@ -664,19 +690,30 @@ impl ShellExecute {
                     self.tsid_generator.generate().unwrap_or_default()
                 )
             });
+        let working_dir = self.default_working_dir();
 
         let mut child = if cfg!(target_os = "windows") {
-            Command::new("cmd")
+            let mut command = Command::new("cmd");
+            command
                 .args(["/C", command_str])
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .stderr(Stdio::piped());
+            if let Some(dir) = &working_dir {
+                command.current_dir(dir);
+            }
+            command
                 .spawn()
                 .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?
         } else {
-            Command::new("sh")
+            let mut command = Command::new("sh");
+            command
                 .args(["-c", command_str])
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .stderr(Stdio::piped());
+            if let Some(dir) = &working_dir {
+                command.current_dir(dir);
+            }
+            command
                 .spawn()
                 .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?
         };
@@ -1089,6 +1126,36 @@ mod tests {
         let result_status = engine.check(cmd_status, false);
         println!("\ngit status result: {:?}", result_status);
         assert!(!matches!(result_status, ShellDecision::Deny(_)));
+
+        let cmd_status_short = "git status --short";
+        let result_status_short = engine.check(cmd_status_short, false);
+        println!("\ngit status --short result: {:?}", result_status_short);
+        assert_eq!(result_status_short, ShellDecision::Allow);
+    }
+
+    #[test]
+    fn test_shell_execute_uses_primary_root_as_default_working_dir() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let nested_dir = project_root.join("nested");
+        std::fs::create_dir_all(&nested_dir).unwrap();
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![nested_dir.clone()],
+            vec![],
+            vec![],
+        )));
+        let shell = ShellExecute::new(
+            guard,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(1)),
+            vec![],
+            false,
+        );
+
+        assert_eq!(
+            shell.default_working_dir().as_deref(),
+            Some(nested_dir.as_path())
+        );
     }
 
     #[test]

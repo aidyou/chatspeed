@@ -28,7 +28,7 @@ use crate::workflow::react::{
     loop_detector::LoopDetector,
     memory::{MemoryManager, MemoryScope},
     memory_analyzer::MemoryAnalyzer,
-    observation::{ObservationReinforcer, ReinforcedResult},
+    observation::{ObservationKind, ObservationReinforcer, ReinforcedResult},
     orchestrator::SubAgentFactory,
     policy::{ExecutionPhase, ExecutionPolicy},
     security::PathGuard,
@@ -143,6 +143,19 @@ impl WorkflowExecutor {
         }
 
         sanitized
+    }
+
+    fn parse_approval_level_from_signal(sig_json: &Value) -> Option<(String, ApprovalLevel)> {
+        let level_str = sig_json
+            .get("approvalLevel")
+            .and_then(|v| v.as_str())
+            .or_else(|| sig_json.get("level").and_then(|v| v.as_str()))
+            .or_else(|| sig_json.get("approval_level").and_then(|v| v.as_str()))?;
+
+        use std::str::FromStr;
+        ApprovalLevel::from_str(level_str)
+            .ok()
+            .map(|level| (level_str.to_string(), level))
     }
 
     fn phase_model_context_limit(agent_config: &Agent, phase: &ExecutionPhase) -> Option<usize> {
@@ -1186,23 +1199,8 @@ impl WorkflowExecutor {
                 }
 
                 if signal_type_enum == Some(SignalType::UpdateApprovalLevel) {
-                    let level_str = signal_json
-                        .get("approvalLevel")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| signal_json.get("level").and_then(|v| v.as_str()));
-                    if let Some(level_str) = level_str {
-                        log::info!(
-                            "WorkflowExecutor {}: Updating approval level to {} while waiting",
-                            self.session_id,
-                            level_str
-                        );
-                        use std::str::FromStr;
-                        if let Ok(level) =
-                            crate::workflow::react::policy::ApprovalLevel::from_str(level_str)
-                        {
-                            self.policy.approval_level = level;
-                        }
-                    }
+                    self.apply_runtime_approval_level_update(&signal_json, true)
+                        .await?;
                     continue;
                 }
 
@@ -2334,6 +2332,15 @@ impl WorkflowExecutor {
             };
 
             for (id, reinforced, original_call) in &results {
+                if Self::is_postponed_turn_block_result(reinforced) {
+                    log::info!(
+                        "[Workflow][session={}][phase=observe] Suppressing postponed tool observation '{}'",
+                        self.session_id,
+                        reinforced.title
+                    );
+                    continue;
+                }
+
                 // Extract tool name from the original call for the metadata
                 let tool_name = original_call
                     .get("name")
@@ -2364,6 +2371,10 @@ impl WorkflowExecutor {
                 // Add approval_status if it exists in the reinforced result
                 if let Some(approval_status) = &reinforced.approval_status {
                     metadata["approval_status"] = serde_json::json!(approval_status);
+                }
+                if let Some(observation_kind) = &reinforced.observation_kind {
+                    metadata["observation_kind"] =
+                        serde_json::to_value(observation_kind).unwrap_or(serde_json::Value::Null);
                 }
 
                 let _ = self
@@ -2796,6 +2807,7 @@ impl WorkflowExecutor {
                     error_type: None,
                     display_type: "text".to_string(),
                     approval_status: Some("rejected".to_string()),
+                    observation_kind: Some(ObservationKind::TurnBlockedPostponed),
                 }, call));
                 continue;
             }
@@ -2963,6 +2975,7 @@ impl WorkflowExecutor {
                 error_type: None,
                 display_type: "text".to_string(),
                 approval_status: None,
+                observation_kind: None,
             });
         }
 
@@ -2992,6 +3005,7 @@ impl WorkflowExecutor {
                                     error_type: None,
                                     display_type: "text".to_string(),
                                     approval_status: None,
+                                    observation_kind: None,
                                 });
                             }
                             _ => {}
@@ -3068,6 +3082,7 @@ impl WorkflowExecutor {
                 error_type: Some("LoopDetected".to_string()),
                 display_type: "text".to_string(),
                 approval_status: None,
+                observation_kind: None,
             }));
         }
 
@@ -3150,6 +3165,10 @@ impl WorkflowExecutor {
         }
 
         Ok(None)
+    }
+
+    fn is_postponed_turn_block_result(reinforced: &ReinforcedResult) -> bool {
+        reinforced.observation_kind == Some(ObservationKind::TurnBlockedPostponed)
     }
 
     pub(crate) async fn update_state(
@@ -3572,6 +3591,63 @@ impl WorkflowExecutor {
             .collect()
     }
 
+    fn persist_workflow_agent_config_value(&self, key: &str, value: Value) {
+        if let Ok(store) = self.context.main_store.write() {
+            if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                let mut agent_config: serde_json::Value = snapshot
+                    .workflow
+                    .agent_config
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or(serde_json::json!({}));
+                agent_config[key] = value;
+                if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                    let _ = store.update_workflow_agent_config(&self.session_id, &config_str);
+                }
+            }
+        }
+    }
+
+    async fn apply_runtime_approval_level_update(
+        &mut self,
+        sig_json: &Value,
+        waiting: bool,
+    ) -> Result<bool, WorkflowEngineError> {
+        let Some((level_str, level)) = Self::parse_approval_level_from_signal(sig_json) else {
+            return Ok(false);
+        };
+
+        if waiting {
+            log::info!(
+                "WorkflowExecutor {}: Updating approval level to {} while waiting",
+                self.session_id,
+                level_str
+            );
+        } else {
+            log::info!(
+                "WorkflowExecutor {}: Updating approval level to {}",
+                self.session_id,
+                level_str
+            );
+        }
+
+        self.policy.approval_level = level.clone();
+        self.persist_workflow_agent_config_value("approvalLevel", serde_json::json!(level_str));
+
+        if waiting
+            && self.state == WorkflowState::AwaitingApproval
+            && level == ApprovalLevel::Full
+            && !self.pending_approvals.is_empty()
+        {
+            log::info!(
+                "WorkflowExecutor {}: Approval level switched to full while awaiting approval; resuming execution",
+                self.session_id
+            );
+            self.update_state(WorkflowState::Thinking).await?;
+        }
+
+        Ok(true)
+    }
+
     async fn handle_runtime_config_signal(
         &mut self,
         sig_json: &Value,
@@ -3620,39 +3696,9 @@ impl WorkflowExecutor {
         }
 
         if sig_type_enum == Some(SignalType::UpdateApprovalLevel) {
-            let level_str = sig_json
-                .get("approvalLevel")
-                .and_then(|v| v.as_str())
-                .or_else(|| sig_json.get("level").and_then(|v| v.as_str()))
-                .or_else(|| sig_json.get("approval_level").and_then(|v| v.as_str()));
-            if let Some(level_str) = level_str {
-                log::info!(
-                    "WorkflowExecutor {}: Updating approval level to {}",
-                    self.session_id,
-                    level_str
-                );
-                use std::str::FromStr;
-                if let Ok(level) =
-                    crate::workflow::react::policy::ApprovalLevel::from_str(level_str)
-                {
-                    self.policy.approval_level = level;
-                    if let Ok(store) = self.context.main_store.write() {
-                        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
-                            let mut agent_config: serde_json::Value = snapshot
-                                .workflow
-                                .agent_config
-                                .and_then(|s| serde_json::from_str(&s).ok())
-                                .unwrap_or(serde_json::json!({}));
-                            agent_config["approval_level"] = serde_json::json!(level_str);
-                            if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                                let _ = store
-                                    .update_workflow_agent_config(&self.session_id, &config_str);
-                            }
-                        }
-                    }
-                }
-            }
-            return Ok(true);
+            return self
+                .apply_runtime_approval_level_update(sig_json, false)
+                .await;
         }
 
         if sig_type_enum == Some(SignalType::UpdateFinalAudit) {
