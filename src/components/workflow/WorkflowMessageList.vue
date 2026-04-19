@@ -4,6 +4,8 @@
       v-for="(message, index) in messages"
       :key="message.displayId"
       class="message"
+      :data-message-id="message.displayId || message.id || null"
+      :data-child-task-id="getMessageChildTaskId(message)"
       :class="[message.role, message.stepType?.toLowerCase(), { 'is-error': message.isError }]">
       <div class="avatar" v-if="message.role === 'user'">
         <cs name="talk" class="user-icon" />
@@ -478,6 +480,19 @@ const formatAskUserAnswer = item => {
 }
 
 const getVisibleUserContent = message => props.removeSystemReminder(message?.message || '')
+
+const getMessageChildTaskId = message => {
+  const meta = message?.metadata || {}
+  if (meta.child_task_id || meta.childTaskId) return meta.child_task_id || meta.childTaskId
+  if ((meta.tool_name || '').toLowerCase() !== 'task') return null
+
+  try {
+    const parsed = JSON.parse(message.message || '{}')
+    return parsed.task_id || parsed.taskId || null
+  } catch {
+    return null
+  }
+}
 
 const getChoiceGroups = message =>
   props.parseChoiceContent(props.removeSystemReminder(message.message || '')).groups || []

@@ -169,6 +169,25 @@ impl MainStore {
         Ok(workflows)
     }
 
+    pub fn list_nonterminal_child_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT * FROM workflows
+             WHERE parent_session_id IS NOT NULL
+               AND LOWER(status) NOT IN ('completed', 'error', 'failed', 'cancelled')
+             ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| Ok(Workflow::from(row)))?;
+        let mut workflows = Vec::new();
+        for row in rows {
+            workflows.push(row?);
+        }
+        Ok(workflows)
+    }
+
     pub fn delete_workflow(&self, id: &str) -> Result<(), StoreError> {
         let mut conn = self
             .conn

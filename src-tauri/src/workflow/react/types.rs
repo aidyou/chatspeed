@@ -80,6 +80,26 @@ pub enum GatewayPayload {
     ContextUsage {
         total_tokens: usize,
     },
+    /// Lightweight projection of a child task for the parent session UI.
+    ChildTaskProgress {
+        child_task_id: String,
+        parent_session_id: String,
+        status: RuntimeState,
+        workflow_state: WorkflowState,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        wait_reason: Option<WaitReason>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+        tool_calls_count: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_context_tokens: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_context_tokens: Option<usize>,
+        is_error: bool,
+        updated_at_ms: i64,
+    },
     /// Generic notification message for the UI status bar
     Notification {
         message: String,

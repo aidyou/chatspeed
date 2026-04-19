@@ -456,6 +456,116 @@ impl WorkflowExecutor {
         }
     }
 
+    async fn dispatch_child_task_progress(&self) {
+        let parent_session_id = {
+            let store = match self.context.main_store.read() {
+                Ok(store) => store,
+                Err(e) => {
+                    log::warn!(
+                        "[Workflow][session={}][phase=child_progress] Cannot read store: {}",
+                        self.session_id,
+                        e
+                    );
+                    return;
+                }
+            };
+
+            match store.get_workflow_snapshot(&self.session_id) {
+                Ok(snapshot) => snapshot.workflow.parent_session_id,
+                Err(e) => {
+                    log::warn!(
+                        "[Workflow][session={}][phase=child_progress] Cannot read child workflow: {}",
+                        self.session_id,
+                        e
+                    );
+                    None
+                }
+            }
+        };
+
+        let Some(parent_session_id) = parent_session_id else {
+            return;
+        };
+
+        let wait_reason = match &self.state {
+            WorkflowState::Paused => Some(WaitReason::Confirmation),
+            WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
+            WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
+                Some(WaitReason::Approval)
+            }
+            WorkflowState::AwaitingChildTask => Some(WaitReason::ChildTask),
+            _ => None,
+        };
+        let latest_summary = self
+            .context
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "assistant" || message.role == "tool")
+            .map(|message| {
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("summary").and_then(|value| value.as_str()))
+                    .unwrap_or(&message.message)
+                    .to_string()
+            });
+        let tool_calls_count = self
+            .context
+            .messages
+            .iter()
+            .filter(|message| message.role == "tool")
+            .count();
+        let payload = GatewayPayload::ChildTaskProgress {
+            child_task_id: self.session_id.clone(),
+            parent_session_id: parent_session_id.clone(),
+            status: RuntimeState::from(&self.state),
+            workflow_state: self.state.clone(),
+            wait_reason,
+            title: self.subagent_type.clone(),
+            summary: latest_summary,
+            tool_calls_count,
+            current_context_tokens: Some(self.context.current_token_estimate()),
+            max_context_tokens: Some(self.context.max_tokens),
+            is_error: matches!(self.state, WorkflowState::Error | WorkflowState::Cancelled),
+            updated_at_ms: chrono::Utc::now().timestamp_millis(),
+        };
+
+        let dispatch_result = if let Some(ref dispatcher) = self.dispatcher {
+            dispatcher
+                .dispatch_ui(parent_session_id.clone(), payload.clone())
+                .await
+        } else {
+            Ok(())
+        };
+
+        if let Err(e) = dispatch_result {
+            log::warn!(
+                "[Workflow][session={}][parent={}][phase=child_progress] Dispatcher failed: {}, falling back to gateway",
+                self.session_id,
+                parent_session_id,
+                e
+            );
+            if let Err(e) = self.gateway.send(&parent_session_id, payload).await {
+                log::warn!(
+                    "[Workflow][session={}][parent={}][phase=child_progress] Gateway fallback failed: {}",
+                    self.session_id,
+                    parent_session_id,
+                    e
+                );
+            }
+        } else if self.dispatcher.is_none() {
+            if let Err(e) = self.gateway.send(&parent_session_id, payload).await {
+                log::warn!(
+                    "[Workflow][session={}][parent={}][phase=child_progress] Dispatch failed: {}",
+                    self.session_id,
+                    parent_session_id,
+                    e
+                );
+            }
+        }
+    }
+
     async fn dispatch_terminal_with_fallback(
         &self,
         terminal_state: &str,
@@ -1609,7 +1719,15 @@ impl WorkflowExecutor {
                                     None,
                                     resolution.is_error,
                                     resolution.is_error.then(|| "ChildTaskFailed".to_string()),
-                                    Some(json!({"child_task_id": child_task_id, "result": result})),
+                                    Some(json!({
+                                        "child_task_id": child_task_id,
+                                        "result": result,
+                                        "title": format!("Child task {}", resolution.child_task_id),
+                                        "summary": resolution.content,
+                                        "execution_status": resolution.status,
+                                        "is_error": resolution.is_error,
+                                        "error_type": if resolution.is_error { "ChildTaskFailed" } else { "" }
+                                    })),
                                 )
                                 .await?;
 
@@ -2375,6 +2493,21 @@ impl WorkflowExecutor {
                 if let Some(observation_kind) = &reinforced.observation_kind {
                     metadata["observation_kind"] =
                         serde_json::to_value(observation_kind).unwrap_or(serde_json::Value::Null);
+                }
+                if tool_name == crate::tools::TOOL_TASK {
+                    if let Ok(task_result) =
+                        serde_json::from_str::<serde_json::Value>(&reinforced.content)
+                    {
+                        if let Some(task_id) = task_result.get("task_id").and_then(|v| v.as_str()) {
+                            metadata["child_task_id"] = serde_json::json!(task_id);
+                        }
+                        if let Some(status) = task_result.get("status").and_then(|v| v.as_str()) {
+                            metadata["child_task_status"] = serde_json::json!(status);
+                        }
+                        if let Some(mode) = task_result.get("mode").and_then(|v| v.as_str()) {
+                            metadata["child_task_mode"] = serde_json::json!(mode);
+                        }
+                    }
                 }
 
                 let _ = self
@@ -3308,6 +3441,7 @@ impl WorkflowExecutor {
             wait_reason,
         })
         .await?;
+        self.dispatch_child_task_progress().await;
 
         {
             let store_res = self
@@ -3496,6 +3630,7 @@ impl WorkflowExecutor {
         .await?;
 
         self.dispatch_context_usage().await?;
+        self.dispatch_child_task_progress().await;
 
         // Summary messages should not trigger compression - they are the result of compression
         let is_summary = msg

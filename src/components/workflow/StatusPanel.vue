@@ -122,17 +122,23 @@
           <div class="section-header">
             <cs name="agent" size="14px" />
             <span>{{ t('workflow.statusPanel.childAgents') || 'Child Agents' }}</span>
-            <span class="section-meta">{{ childAgentSummaries.length }}</span>
+            <span class="section-meta">{{ childAgentTotalCount > childAgentSummaries.length ? `${childAgentSummaries.length}/${childAgentTotalCount}` : childAgentSummaries.length }}</span>
           </div>
           <ul class="child-agent-list">
-            <li v-for="child in childAgentSummaries" :key="child.id" class="child-agent-item" :class="child.status">
+            <li
+              v-for="child in childAgentSummaries"
+              :key="child.id"
+              class="child-agent-item clickable"
+              :class="child.status"
+              @click="jumpToChildMessage(child)">
               <div class="child-main">
                 <span class="child-title" :title="child.title">{{ child.title }}</span>
                 <span class="child-id" :title="child.id">{{ child.shortId }}</span>
                 <span class="child-summary" :title="child.summary">{{ child.summary }}</span>
               </div>
               <div class="child-right">
-                <span class="child-tools">{{ child.toolCalls }}</span>
+                <span v-if="child.contextPercent !== null" class="child-context">{{ child.contextPercent }}%</span>
+                <span class="child-tools" :title="`${child.toolCalls} tool calls`">{{ child.toolCalls }}</span>
                 <cs v-if="child.status === 'running'" name="loading" size="12px" class="cs-spin child-status" />
                 <cs v-else-if="child.status === 'success'" name="check" size="12px" class="child-status success" />
                 <cs v-else-if="child.status === 'failed'" name="error" size="12px" class="child-status error" />
@@ -172,6 +178,7 @@ import { useI18n } from 'vue-i18n'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
 import { resolveWorkflowToolIcon } from '@/composables/workflow/toolIcons'
+import { invokeWrapper } from '@/libs/tauri'
 
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
@@ -217,6 +224,8 @@ const PANEL_HEIGHT = 200
 const COLLAPSED_WIDTH = 140
 const COLLAPSED_HEIGHT = 40
 const TRIGGER_SIZE = 44
+const CHILD_AGENT_LIMIT = 5
+const childSnapshotProgress = ref(new Map())
 
 // Calculate progress percentage
 const progressPercent = computed(() => {
@@ -422,43 +431,126 @@ const totalToolCalls = computed(() => {
   return toolLedger.value.length > 0 ? toolLedger.value.length : toolMessagesAll.value.length
 })
 
-const childSessionIds = computed(() => {
+const extractChildTaskIdFromMessage = (message) => {
+  const meta = message?.metadata || {}
+  if (meta.child_task_id || meta.childTaskId) return meta.child_task_id || meta.childTaskId
+  if ((meta.tool_name || '').toLowerCase() !== 'task') return null
+
+  try {
+    const parsed = JSON.parse(message.message || '{}')
+    return parsed.task_id || parsed.taskId || null
+  } catch {
+    return null
+  }
+}
+
+const truncateSummary = (value, limit = 60) => {
+  const text = removeSystemReminder(String(value || '')).trim()
+  if (!text) return ''
+  return text.length > limit ? `${text.slice(0, limit)}...` : text
+}
+
+const normalizeChildPanelStatus = (status, isError = false) => {
+  const normalized = String(status || '').toLowerCase()
+  if (isError || ['failed', 'error', 'cancelled', 'interrupted'].includes(normalized)) return 'failed'
+  if (['completed', 'success'].includes(normalized)) return 'success'
+  if (['running', 'thinking', 'executing', 'waiting', 'pending'].includes(normalized)) return 'running'
+  return 'pending'
+}
+
+const contextPercentFromProgress = (progress) => {
+  const current = progress?.currentContextTokens ?? progress?.current_context_tokens
+  const max = progress?.maxContextTokens ?? progress?.max_context_tokens
+  if (typeof current !== 'number' || typeof max !== 'number' || max <= 0) return null
+  return Math.min(100, Math.round((current / max) * 100))
+}
+
+const buildChildProgressFromSnapshot = (id, snapshot) => {
+  const ctx = snapshot?.executionContext || {}
+  const workflow = snapshot?.workflow || {}
+  const snapshotMessages = Array.isArray(snapshot?.messages) ? snapshot.messages : []
+  const latest = [...snapshotMessages]
+    .reverse()
+    .find((message) => message?.role === 'assistant' || message?.role === 'tool')
+  const latestMeta = latest?.metadata || {}
+  const status = ctx.state || workflow.status || 'pending'
+  return {
+    childTaskId: id,
+    parentSessionId: workflow.parentSessionId || workflow.parent_session_id || workflowStore.currentWorkflowId,
+    status,
+    workflowState: workflow.status || status,
+    waitReason: ctx.waitReason || ctx.wait_reason || workflow.waitReason || null,
+    title: workflow.title || workflow.userQuery || id,
+    summary: latestMeta.summary || latest?.message || '',
+    toolCallsCount: snapshotMessages.filter((message) => message?.role === 'tool').length,
+    currentContextTokens: ctx.currentContextTokens ?? ctx.current_context_tokens ?? null,
+    maxContextTokens: ctx.maxContextTokens ?? ctx.max_context_tokens ?? null,
+    isError: latest?.isError || latest?.is_error || latestMeta.is_error || ['failed', 'error', 'cancelled'].includes(String(status).toLowerCase()),
+    updatedAtMs: Date.now()
+  }
+}
+
+const childSessionIdsFromSource = computed(() => {
   const ctx = workflowStore.currentWorkflow?.executionContext || {}
   const sessionsFromContext = ctx.childSessions || ctx.child_sessions || []
+  const waitingTaskId = ctx.waitingOnTaskId || ctx.waiting_on_task_id || null
   const sessionsFromMessages = messages.value
-    .map((m) => m?.metadata?.child_task_id || m?.metadata?.childTaskId)
+    .map((m) => extractChildTaskIdFromMessage(m))
     .filter(Boolean)
+  const sessionsFromProgress = Array.from(workflowStore.childTaskProgress?.keys?.() || [])
 
-  return Array.from(new Set([...(Array.isArray(sessionsFromContext) ? sessionsFromContext : []), ...sessionsFromMessages]))
+  return Array.from(new Set([
+    waitingTaskId,
+    ...(Array.isArray(sessionsFromContext) ? sessionsFromContext : []),
+    ...sessionsFromMessages,
+    ...sessionsFromProgress
+  ].filter(Boolean)))
 })
 
-const childAgentSummaries = computed(() => {
+const childSessionIds = computed(() => {
+  return Array.from(new Set([
+    ...childSessionIdsFromSource.value,
+    ...Array.from(childSnapshotProgress.value.keys())
+  ]))
+})
+
+const childAgentTotalCount = computed(() => childSessionIds.value.length)
+
+const childAgentSummariesAll = computed(() => {
   const ids = childSessionIds.value
   if (!ids.length) return []
 
   return ids.map((id) => {
+    const ctx = workflowStore.currentWorkflow?.executionContext || {}
     const childWorkflow = workflowStore.workflows.find((w) => w.id === id)
     const related = messages.value.filter((m) => {
-      const meta = m.metadata || {}
-      return meta.child_task_id === id || meta.childTaskId === id
+      return extractChildTaskIdFromMessage(m) === id
     })
     const last = related[related.length - 1]
-    let status = 'running'
+    const lastIndex = last ? messages.value.lastIndexOf(last) : -1
+    const eventProgress = workflowStore.childTaskProgress?.get?.(id)
+    const snapshotProgress = childSnapshotProgress.value.get(id)
+    const progress = eventProgress || snapshotProgress || {}
+    let status = (ctx.waitingOnTaskId || ctx.waiting_on_task_id) === id ? 'running' : 'pending'
     let summary = t('workflow.statusPanel.childRunning') || 'Running'
     let toolCalls = 0
 
     if (last) {
-      const content = removeSystemReminder(last.message || '').trim()
-      if (content) {
-        summary = content.length > 60 ? `${content.slice(0, 60)}...` : content
-      }
-      const lower = `${last.errorType || ''} ${last.message || ''}`.toLowerCase()
-      if (last.isError || lower.includes('failed') || lower.includes('cancel')) {
+      const meta = last.metadata || {}
+      const content = truncateSummary(last.message || '')
+      if (content) summary = content
+      const executionStatus = meta.execution_status || meta.child_task_status || ''
+      if (last.isError || meta.is_error || executionStatus === 'failed' || executionStatus === 'cancelled') {
         status = 'failed'
-      } else if (last.metadata?.result || last.role === 'tool') {
+      } else if (meta.result || executionStatus === 'completed') {
         status = 'success'
+      } else if (executionStatus === 'waiting' || executionStatus === 'running') {
+        status = 'running'
       }
-      const resultObj = last.metadata?.result
+      if (meta.summary) {
+        summary = truncateSummary(meta.summary)
+      }
+      const resultObj = meta.result
       if (resultObj && typeof resultObj === 'object') {
         toolCalls =
           resultObj.tool_calls_count ||
@@ -467,6 +559,12 @@ const childAgentSummaries = computed(() => {
           resultObj.toolCalls ||
           0
       }
+    }
+
+    if (progress.childTaskId || progress.child_task_id) {
+      status = normalizeChildPanelStatus(progress.status || progress.workflowState || progress.workflow_state, progress.isError || progress.is_error)
+      toolCalls = progress.toolCallsCount ?? progress.tool_calls_count ?? toolCalls
+      summary = truncateSummary(progress.summary) || summary
     }
 
     if (childWorkflow?.status) {
@@ -478,14 +576,61 @@ const childAgentSummaries = computed(() => {
     return {
       id,
       shortId: id.length > 14 ? `${id.slice(0, 7)}...${id.slice(-4)}` : id,
-      title: childWorkflow?.title || childWorkflow?.userQuery || id,
+      title: progress.title || childWorkflow?.title || childWorkflow?.userQuery || id,
       status,
       summary,
       toolCalls,
-      waitReason: childWorkflow?.waitReason || null
+      contextPercent: contextPercentFromProgress(progress),
+      waitReason: progress.waitReason || progress.wait_reason || childWorkflow?.waitReason || null,
+      lastSeen: Math.max(lastIndex, progress.updatedAtMs || progress.updated_at_ms || 0)
     }
   })
 })
+
+const childAgentSummaries = computed(() => {
+  return [...childAgentSummariesAll.value]
+    .sort((a, b) => b.lastSeen - a.lastSeen)
+    .slice(0, CHILD_AGENT_LIMIT)
+})
+
+const refreshChildSnapshots = async () => {
+  const ids = childSessionIdsFromSource.value.slice(-CHILD_AGENT_LIMIT)
+  if (!ids.length) {
+    childSnapshotProgress.value = new Map()
+    return
+  }
+
+  const next = new Map()
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: id })
+      next.set(id, buildChildProgressFromSnapshot(id, snapshot))
+    } catch (error) {
+      console.warn(`[Workflow] Failed to load child task snapshot ${id}:`, error)
+    }
+  }))
+  childSnapshotProgress.value = next
+}
+
+const escapeSelectorValue = (value) => {
+  if (window.CSS?.escape) return window.CSS.escape(value)
+  return String(value).replace(/["\\]/g, '\\$&')
+}
+
+const jumpToChildMessage = (child) => {
+  if (!child?.id) return
+  const selector = `[data-child-task-id="${escapeSelectorValue(child.id)}"]`
+  const matches = Array.from(document.querySelectorAll(selector))
+  const target = matches[matches.length - 1]
+  if (!target) return
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  if (typeof target.animate === 'function') {
+    target.animate([
+      { backgroundColor: 'rgba(64, 158, 255, 0.18)' },
+      { backgroundColor: 'transparent' }
+    ], { duration: 1200, easing: 'ease-out' })
+  }
+}
 
 // Hide panel when there's no data to show
 const hasData = computed(() => {
@@ -856,7 +1001,16 @@ watch(() => workflowStore.currentWorkflowId, (newId) => {
     isCollapsed.value = false
   }
   activeTab.value = 'main'
+  childSnapshotProgress.value = new Map()
 })
+
+watch(
+  () => childSessionIdsFromSource.value.join('|'),
+  () => {
+    refreshChildSnapshots()
+  },
+  { immediate: true }
+)
 
 watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
   // When data first appears (panel becomes visible), ensure it's within viewport
@@ -1067,6 +1221,16 @@ watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
     margin-bottom: 4px;
     border-left: 2px solid var(--cs-border-color);
 
+    &.clickable {
+      cursor: pointer;
+      transition: background-color 0.2s ease, transform 0.2s ease;
+
+      &:hover {
+        background: var(--cs-hover-bg-color);
+        transform: translateX(-1px);
+      }
+    }
+
     &:last-child {
       margin-bottom: 0;
     }
@@ -1122,6 +1286,12 @@ watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
       color: var(--cs-text-color-placeholder);
       min-width: 14px;
       text-align: right;
+    }
+
+    .child-context {
+      font-family: var(--cs-font-family-mono, monospace);
+      color: var(--el-color-primary);
+      font-size: 10px;
     }
 
     .child-status.success {

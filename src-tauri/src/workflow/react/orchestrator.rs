@@ -549,6 +549,10 @@ impl ToolDefinition for TaskTool {
             let completion_result = match result {
                 Ok(_) => {
                     let messages = guard.messages();
+                    let tool_calls_count = messages
+                        .iter()
+                        .filter(|message| message.role == "tool")
+                        .count();
                     let mut summary = None;
                     for msg in messages.iter().rev() {
                         if msg.role == "assistant" {
@@ -565,10 +569,16 @@ impl ToolDefinition for TaskTool {
                     json!({
                         "status": status,
                         "task_id": task_id_clone,
-                        "summary": summary.unwrap_or_default()
+                        "summary": summary.unwrap_or_default(),
+                        "tool_calls_count": tool_calls_count
                     })
                 }
                 Err(e) => {
+                    let messages = guard.messages();
+                    let tool_calls_count = messages
+                        .iter()
+                        .filter(|message| message.role == "tool")
+                        .count();
                     let status = if matches!(e, WorkflowEngineError::Cancelled(_))
                         || final_state == crate::workflow::react::types::WorkflowState::Cancelled
                     {
@@ -579,7 +589,8 @@ impl ToolDefinition for TaskTool {
                     json!({
                         "status": status,
                         "task_id": task_id_clone,
-                        "error": e.to_string()
+                        "error": e.to_string(),
+                        "tool_calls_count": tool_calls_count
                     })
                 }
             };

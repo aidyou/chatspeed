@@ -1147,7 +1147,7 @@ mod tests {
         )));
         let shell = ShellExecute::new(
             guard,
-            Arc::new(crate::libs::tsid::TsidGenerator::new(1)),
+            Arc::new(crate::libs::tsid::TsidGenerator::new(1).unwrap()),
             vec![],
             false,
         );

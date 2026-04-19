@@ -91,6 +91,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const autoApprovedTools = ref([]);
   const shellPolicy = ref([]);
   const toolStreams = ref(new Map()); // tool_id -> string[] (max 100 lines)
+  const childTaskProgress = ref(new Map()); // child_task_id -> lightweight parent UI projection
 
   // ==================== Task Ledger State ====================
   /**
@@ -201,6 +202,37 @@ export const useWorkflowStore = defineStore('workflow', () => {
       details: pendingTool.details ?? '',
       displayType: pendingTool.displayType ?? pendingTool.display_type ?? ''
     };
+  };
+
+  const upsertChildTaskProgress = (progress = {}) => {
+    const childTaskId = progress.childTaskId ?? progress.child_task_id;
+    if (!childTaskId) return;
+
+    const currentWorkflow = currentWorkflowId.value;
+    const parentSessionId = progress.parentSessionId ?? progress.parent_session_id ?? currentWorkflow;
+    if (currentWorkflow && parentSessionId && parentSessionId !== currentWorkflow) return;
+
+    const nextProgress = new Map(childTaskProgress.value);
+    const existing = nextProgress.get(childTaskId) || {};
+    nextProgress.set(childTaskId, {
+      ...existing,
+      ...progress,
+      childTaskId,
+      parentSessionId,
+      status: progress.status ?? existing.status ?? null,
+      workflowState: progress.workflowState ?? progress.workflow_state ?? existing.workflowState ?? null,
+      waitReason: progress.waitReason ?? progress.wait_reason ?? existing.waitReason ?? null,
+      toolCallsCount: progress.toolCallsCount ?? progress.tool_calls_count ?? existing.toolCallsCount ?? 0,
+      currentContextTokens: progress.currentContextTokens ?? progress.current_context_tokens ?? existing.currentContextTokens ?? null,
+      maxContextTokens: progress.maxContextTokens ?? progress.max_context_tokens ?? existing.maxContextTokens ?? null,
+      isError: progress.isError ?? progress.is_error ?? existing.isError ?? false,
+      updatedAtMs: progress.updatedAtMs ?? progress.updated_at_ms ?? Date.now()
+    });
+    childTaskProgress.value = nextProgress;
+  };
+
+  const clearChildTaskProgress = () => {
+    childTaskProgress.value = new Map();
   };
 
   const findLatestPendingApprovalMessage = (list = []) => {
@@ -661,6 +693,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     currentWorkflowId.value = workflowId;
     messageQueue.value = [];
     error.value = null;
+    clearChildTaskProgress();
 
     try {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
@@ -1032,6 +1065,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     autoApprovedTools.value = [];
     shellPolicy.value = [];
     messageQueue.value = [];
+    clearChildTaskProgress();
   };
 
   return {
@@ -1049,6 +1083,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     autoApprovedTools,
     shellPolicy,
     toolStreams,
+    childTaskProgress,
 
     // Task Ledger State
     taskLedgerMap,
@@ -1105,6 +1140,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     setHasLiveSession,
     updateWorkflowStatus,
     setCurrentContextTokens,
+    upsertChildTaskProgress,
+    clearChildTaskProgress,
     updateWorkflowAllowedPaths,
     updateWorkflowFinalAudit,
     loadMessages,

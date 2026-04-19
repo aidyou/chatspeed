@@ -461,9 +461,90 @@ pub async fn create_workflow(
 pub async fn list_workflows(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
 ) -> Result<Vec<Workflow>, String> {
+    {
+        let store = state.write().map_err(|e| e.to_string())?;
+        reconcile_interrupted_child_workflows(&store).map_err(|e| e.to_string())?;
+    }
+
     let store = state.read().map_err(|e| e.to_string())?;
     let list = store.list_workflows().map_err(|e| e.to_string())?;
     Ok(list)
+}
+
+fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate::db::StoreError> {
+    let child_workflows = store.list_nonterminal_child_workflows()?;
+    for child in child_workflows {
+        let Some(child_id) = child.id.clone() else {
+            continue;
+        };
+
+        if BACKGROUND_TASKS.contains_key(&child_id) {
+            continue;
+        }
+
+        log::info!(
+            "[Workflow][session={}][phase=reconcile][event=child_interrupted] Marking stale child task as cancelled",
+            child_id
+        );
+
+        store.update_workflow_status(&child_id, &WorkflowState::Cancelled.to_string())?;
+
+        let mut context =
+            store
+                .get_execution_context(&child_id)?
+                .unwrap_or_else(|| ExecutionContext {
+                    session_id: child_id.clone(),
+                    state: RuntimeState::Cancelled,
+                    wait_reason: None,
+                    current_step: 0,
+                    max_steps: 0,
+                    pending_tools: Vec::new(),
+                    last_action_summary: None,
+                    current_context_tokens: None,
+                    max_context_tokens: None,
+                    last_event_id: None,
+                    version: ExecutionContext::CURRENT_VERSION.to_string(),
+                    waiting_on_task_id: None,
+                    child_sessions: Vec::new(),
+                });
+        context.state = RuntimeState::Cancelled;
+        context.wait_reason = None;
+        context.pending_tools.clear();
+        context.waiting_on_task_id = None;
+        context.last_action_summary =
+            Some("Child task interrupted by application restart.".to_string());
+        store.upsert_execution_context(&context)?;
+
+        if let Some(parent_session_id) = child.parent_session_id.clone() {
+            let message = format!(
+                "Child task {} was interrupted by application restart and marked as cancelled.",
+                child_id
+            );
+            let parent_message = WorkflowMessage {
+                id: None,
+                session_id: parent_session_id,
+                role: "assistant".to_string(),
+                message: message.clone(),
+                reasoning: None,
+                metadata: Some(json!({
+                    "child_task_id": child_id,
+                    "summary": message,
+                    "execution_status": "interrupted",
+                    "is_error": true,
+                    "error_type": "ChildTaskInterrupted"
+                })),
+                attached_context: None,
+                step_type: Some(StepType::Observe.to_string()),
+                step_index: 0,
+                is_error: true,
+                error_type: Some("ChildTaskInterrupted".to_string()),
+                created_at: None,
+            };
+            let _ = store.add_workflow_message(&parent_message)?;
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
