@@ -6,6 +6,16 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+fn should_skip_list_dir_entry(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    name == "node_modules"
+        || name == ".git"
+        || name == "__pycache__"
+        || name_lower.ends_with(".pyc")
+        || name_lower == "thumbs.db"
+        || name_lower == ".ds_store"
+}
+
 pub struct ReadFile;
 
 #[async_trait]
@@ -420,6 +430,11 @@ impl ToolDefinition for ListDir {
 
             // Skip the root path itself
             if entry.depth() == 0 {
+                continue;
+            }
+
+            let name = entry.file_name().to_string_lossy();
+            if should_skip_list_dir_entry(&name) {
                 continue;
             }
 
@@ -924,5 +939,27 @@ mod tests {
         let result = tool.call(params).await.unwrap();
         let content = result.content.unwrap();
         assert_eq!(content, "Directory is empty or not found.");
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_filters_git_and_common_noise() {
+        let tool = ListDir;
+        let temp_dir = tempdir().unwrap();
+        let path_str = temp_dir.path().to_string_lossy().to_string();
+
+        fs::create_dir(temp_dir.path().join(".git")).unwrap();
+        fs::create_dir(temp_dir.path().join("__pycache__")).unwrap();
+        fs::write(temp_dir.path().join("visible.txt"), "").unwrap();
+
+        let params = json!({
+            "path": path_str
+        });
+
+        let result = tool.call(params).await.unwrap();
+        let content = result.content.unwrap();
+
+        assert!(content.contains("visible.txt"));
+        assert!(!content.contains(".git"));
+        assert!(!content.contains("__pycache__"));
     }
 }

@@ -226,6 +226,16 @@ const COLLAPSED_HEIGHT = 40
 const TRIGGER_SIZE = 44
 const CHILD_AGENT_LIMIT = 5
 const childSnapshotProgress = ref(new Map())
+const MIN_TOP_GAP = 5
+const DRAG_START_THRESHOLD = 4
+
+const getSafeTopInset = () => {
+  if (typeof window === 'undefined') return 37
+  const rootStyle = getComputedStyle(document.documentElement)
+  const raw = rootStyle.getPropertyValue('--cs-titlebar-height').trim()
+  const titlebarHeight = Number.parseFloat(raw || '32')
+  return (Number.isFinite(titlebarHeight) ? titlebarHeight : 32) + MIN_TOP_GAP
+}
 
 // Calculate progress percentage
 const progressPercent = computed(() => {
@@ -689,6 +699,7 @@ const triggerStyle = computed(() => {
 // Large panel drag
 const startDrag = (e) => {
   if (e.target.closest('.action-btn')) return
+  e.preventDefault()
 
   const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX
   const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY
@@ -701,6 +712,7 @@ const startDrag = (e) => {
     }
   }
 
+  hasDragged.value = false
   isDragging.value = true
 
   document.addEventListener('mousemove', onDrag)
@@ -711,9 +723,17 @@ const startDrag = (e) => {
 
 const onDrag = (e) => {
   if (!isDragging.value) return
+  e.preventDefault()
 
   const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX
   const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY
+
+  const deltaX = clientX - (position.value.x + dragOffset.value.x)
+  const deltaY = clientY - (position.value.y + dragOffset.value.y)
+  if (!hasDragged.value && Math.hypot(deltaX, deltaY) < DRAG_START_THRESHOLD) {
+    return
+  }
+  hasDragged.value = true
 
   const newX = clientX - dragOffset.value.x
   const newY = clientY - dragOffset.value.y
@@ -722,10 +742,11 @@ const onDrag = (e) => {
   const width = isCollapsed.value ? COLLAPSED_WIDTH : PANEL_WIDTH
   const height = isCollapsed.value ? COLLAPSED_HEIGHT : (panelRef.value?.offsetHeight || 250)
   const bottomReserved = isCollapsed.value ? 0 : 150
+  const topInset = getSafeTopInset()
 
   position.value = {
     x: Math.max(0, Math.min(newX, window.innerWidth - width)),
-    y: Math.max(0, Math.min(newY, window.innerHeight - height - bottomReserved))
+    y: Math.max(topInset, Math.min(newY, window.innerHeight - height - bottomReserved))
   }
 }
 
@@ -735,6 +756,10 @@ const stopDrag = () => {
   document.removeEventListener('mouseup', stopDrag)
   document.removeEventListener('touchmove', onDrag)
   document.removeEventListener('touchend', stopDrag)
+
+  if (!hasDragged.value) {
+    return
+  }
 
   isPositioned.value = true
 
@@ -752,6 +777,7 @@ const stopDrag = () => {
 // Trigger button drag
 const startTriggerDrag = (e) => {
   hasDragged.value = false
+  e.preventDefault()
 
   const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX
   const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY
@@ -786,18 +812,23 @@ const onTriggerDrag = (e) => {
   if (!isDragging.value) return
   e.preventDefault()
 
-  hasDragged.value = true
-
   const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX
   const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY
+  const deltaX = clientX - (position.value.x + dragOffset.value.x)
+  const deltaY = clientY - (position.value.y + dragOffset.value.y)
+  if (!hasDragged.value && Math.hypot(deltaX, deltaY) < DRAG_START_THRESHOLD) {
+    return
+  }
+  hasDragged.value = true
 
   const newX = clientX - dragOffset.value.x
   const newY = clientY - dragOffset.value.y
+  const topInset = getSafeTopInset()
 
   // Boundary limit - small circle 44x44
   position.value = {
     x: Math.max(0, Math.min(newX, window.innerWidth - TRIGGER_SIZE)),
-    y: Math.max(0, Math.min(newY, window.innerHeight - TRIGGER_SIZE))
+    y: Math.max(topInset, Math.min(newY, window.innerHeight - TRIGGER_SIZE))
   }
 }
 
@@ -886,17 +917,19 @@ const restorePosition = () => {
       // Calculate position from edge distance
       const width = TRIGGER_SIZE
       const height = TRIGGER_SIZE
+      const topInset = getSafeTopInset()
       position.value = {
         x: Math.max(0, Math.min(window.innerWidth - savedEdgeDist.right - width, window.innerWidth - width)),
-        y: Math.max(0, Math.min(window.innerHeight - savedEdgeDist.bottom - height, window.innerHeight - height))
+        y: Math.max(topInset, Math.min(window.innerHeight - savedEdgeDist.bottom - height, window.innerHeight - height))
       }
       isPositioned.value = true
     } else if (saved) {
       // Fallback to old position format (backward compatibility)
       const savedPos = JSON.parse(saved)
+      const topInset = getSafeTopInset()
       position.value = {
         x: Math.max(0, Math.min(savedPos.x, window.innerWidth - TRIGGER_SIZE)),
-        y: Math.max(0, Math.min(savedPos.y, window.innerHeight - TRIGGER_SIZE))
+        y: Math.max(topInset, Math.min(savedPos.y, window.innerHeight - TRIGGER_SIZE))
       }
       // Calculate edge distance from absolute position
       edgeDistance.value = {
@@ -943,10 +976,11 @@ const constrainPosition = () => {
   // Calculate new position based on edge distance
   let newX = window.innerWidth - edgeDistance.value.right - width
   let newY = window.innerHeight - edgeDistance.value.bottom - height
+  const topInset = getSafeTopInset()
 
   // Constrain to viewport bounds
   newX = Math.max(0, Math.min(newX, window.innerWidth - width))
-  newY = Math.max(0, Math.min(newY, window.innerHeight - height))
+  newY = Math.max(topInset, Math.min(newY, window.innerHeight - height))
 
   // Update position
   position.value = { x: newX, y: newY }
@@ -970,7 +1004,7 @@ onMounted(() => {
 
     // Constrain to viewport bounds with 20px margin
     targetLeft = Math.max(20, Math.min(targetLeft, window.innerWidth - panelWidth - 20))
-    targetTop = Math.max(20, Math.min(targetTop, window.innerHeight - panelHeight - 20))
+    targetTop = Math.max(getSafeTopInset(), Math.min(targetTop, window.innerHeight - panelHeight - 20))
 
     // If constrained position differs from default, we need to set it explicitly
     if (targetLeft !== window.innerWidth - panelWidth - defaultRight ||
@@ -1067,6 +1101,8 @@ watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
   border-bottom: 1px solid var(--cs-border-color-light);
   cursor: grab;
   user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 
   &:active {
     cursor: grabbing;

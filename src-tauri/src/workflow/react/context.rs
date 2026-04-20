@@ -32,12 +32,31 @@ impl ContextManager {
             return false;
         }
 
-        message
-            .metadata
-            .as_ref()
-            .and_then(|meta| meta.get("tool_name").and_then(|v| v.as_str()))
+        let Some(meta) = message.metadata.as_ref() else {
+            return false;
+        };
+
+        let is_finish_task = meta
+            .get("tool_name")
+            .and_then(|v| v.as_str())
             .map(|tool_name| tool_name == TOOL_FINISH_TASK)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if !is_finish_task {
+            return false;
+        }
+
+        let execution_status = meta
+            .get("execution_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed");
+        let approval_status = meta
+            .get("approval_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("approved");
+
+        execution_status == "completed"
+            && approval_status != "pending"
+            && approval_status != "rejected"
     }
 
     fn latest_summary_message(messages: &[WorkflowMessage]) -> Option<&WorkflowMessage> {
@@ -1063,6 +1082,56 @@ mod tests {
         assert_eq!(
             segment.last().map(|message| message.role.as_str()),
             Some("user")
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_finish_task_does_not_create_compression_boundary() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-rejected-finish-task-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Task".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add task");
+
+        let _ = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                Some(json!({
+                    "tool_name": TOOL_FINISH_TASK,
+                    "execution_status": "rejected",
+                    "approval_status": "rejected"
+                })),
+            )
+            .await
+            .expect("failed to add rejected finish_task");
+
+        assert!(
+            context.build_blocking_compression_candidate().is_none(),
+            "rejected finish_task must not be treated as a successful compression boundary"
         );
     }
 }

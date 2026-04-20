@@ -62,6 +62,22 @@ impl MemoryAnalyzer {
             });
         }
 
+        log::info!(
+            "[Workflow][session={}][phase=memory] Memory analyzer LLM request starting: provider_id={}, model={}, user_inputs={}, has_global_memory={}, has_project_memory={}",
+            session_id,
+            provider_id,
+            model_name,
+            user_inputs.len(),
+            current_global_memory
+                .as_ref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false),
+            current_project_memory
+                .as_ref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+        );
+
         // Get chat interface
         let chat_interface = {
             let mut chats_guard = chat_state.chats.lock().await;
@@ -130,6 +146,26 @@ impl MemoryAnalyzer {
         // Parse JSON response
         // The response should be a JSON object with global_memory and project_memory
         let result = Self::parse_response(&response)?;
+
+        log::info!(
+            "[Workflow][session={}][phase=memory] Memory analyzer LLM request finished: global_update={}, project_update={}, has_reasoning={}",
+            session_id,
+            result
+                .global_memory
+                .as_ref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false),
+            result
+                .project_memory
+                .as_ref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false),
+            result
+                .reasoning
+                .as_ref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+        );
 
         Ok(result)
     }

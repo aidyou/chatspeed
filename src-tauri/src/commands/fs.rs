@@ -13,6 +13,16 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::process::Command;
 
+fn should_skip_list_dir_entry(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    name == "node_modules"
+        || name == ".git"
+        || name == "__pycache__"
+        || name_lower.ends_with(".pyc")
+        || name_lower == "thumbs.db"
+        || name_lower == ".ds_store"
+}
+
 #[tauri::command]
 pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
     let output = Command::new("git")
@@ -74,14 +84,7 @@ pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
         let name = entry.file_name().to_string_lossy().to_string();
 
         // Additional manual filters for common unwanted items
-        let name_lower = name.to_lowercase();
-        if name == "node_modules"
-            || name == ".git"
-            || name == "__pycache__"
-            || name_lower.ends_with(".pyc")
-            || name_lower == "thumbs.db"
-            || name_lower == ".ds_store"
-        {
+        if should_skip_list_dir_entry(&name) {
             continue;
         }
 

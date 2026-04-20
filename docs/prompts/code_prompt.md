@@ -323,6 +323,7 @@ Confirm that:
 - Do not claim success prematurely.
 - Use `finish_task` only when the requested work is actually complete or when you have reached a clear stopping point accepted by the user.
 - When calling `finish_task`, you MUST provide a brief completion report in the user-visible output.
+- The completion report before `finish_task` must be a real user-visible summary, not a placeholder. It must explicitly cover what was completed, what was verified, and any important remaining notes or limitations.
 - The completion report MUST summarize:
   - what was completed,
   - what was verified,

@@ -2778,6 +2778,8 @@ impl WorkflowExecutor {
                         .and_then(|v| v.as_str())
                         .unwrap_or_default();
                     tool_name == TOOL_FINISH_TASK
+                        && reinforced.approval_status.as_deref() != Some("pending")
+                        && reinforced.approval_status.as_deref() != Some("rejected")
                 });
 
             if has_successful_finish_task {
@@ -2893,9 +2895,22 @@ impl WorkflowExecutor {
         // === Memory Analysis After Workflow Completion ===
         // Run only for successful completion to avoid extra model calls after stop/cancel.
         if self.state == WorkflowState::Completed {
+            log::info!(
+                "[Workflow][session={}][phase=memory] Starting post-completion memory analysis",
+                self.session_id
+            );
             if let Err(e) = self.analyze_and_update_memories().await {
-                log::warn!("Memory analysis failed: {}", e);
+                log::warn!(
+                    "[Workflow][session={}][phase=memory] Memory analysis failed: {}",
+                    self.session_id,
+                    e
+                );
                 // Don't fail the workflow if memory analysis fails
+            } else {
+                log::info!(
+                    "[Workflow][session={}][phase=memory] Post-completion memory analysis finished",
+                    self.session_id
+                );
             }
         } else {
             log::info!(
@@ -2922,9 +2937,18 @@ impl WorkflowExecutor {
 
         // Skip if no user inputs
         if user_inputs.is_empty() {
-            log::debug!("No user inputs to analyze for memory");
+            log::info!(
+                "[Workflow][session={}][phase=memory] Skip memory analysis because there are no user inputs",
+                self.session_id
+            );
             return Ok(());
         }
+
+        log::info!(
+            "[Workflow][session={}][phase=memory] Analyzing {} user input(s) for memory updates",
+            self.session_id,
+            user_inputs.len()
+        );
 
         // 2. Read current memories (using Arc directly, no lock needed)
         let current_global = self.memory_manager.read(MemoryScope::Global).ok().flatten();
@@ -2948,6 +2972,7 @@ impl WorkflowExecutor {
         .map_err(|e| WorkflowEngineError::General(format!("Memory analysis failed: {}", e)))?;
 
         // 4. Update memories if changed
+        let mut updated_global = false;
         if let Some(new_global) = analysis.global_memory {
             let old_global = current_global.unwrap_or_default();
             if new_global.trim() != old_global.trim() {
@@ -2959,10 +2984,15 @@ impl WorkflowExecutor {
                             e
                         ))
                     })?;
-                log::info!("Global memory updated");
+                updated_global = true;
+                log::info!(
+                    "[Workflow][session={}][phase=memory] Global memory updated",
+                    self.session_id
+                );
             }
         }
 
+        let mut updated_project = false;
         if let Some(new_project) = analysis.project_memory {
             let old_project = current_project.unwrap_or_default();
             if new_project.trim() != old_project.trim() {
@@ -2975,9 +3005,20 @@ impl WorkflowExecutor {
                                 e
                             ))
                         })?;
-                    log::info!("Project memory updated");
+                    updated_project = true;
+                    log::info!(
+                        "[Workflow][session={}][phase=memory] Project memory updated",
+                        self.session_id
+                    );
                 }
             }
+        }
+
+        if !updated_global && !updated_project {
+            log::info!(
+                "[Workflow][session={}][phase=memory] Memory analysis completed with no memory changes",
+                self.session_id
+            );
         }
 
         Ok(())

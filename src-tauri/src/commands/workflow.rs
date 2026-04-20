@@ -1610,64 +1610,86 @@ pub async fn workflow_signal(
             .and_then(|value| value["type"].as_str().map(SignalType::from_str))
             .flatten();
 
-        // Route signal through manager
-        if let Err(e) = workflow_manager_arc.route_signal(&session_id, &signal_type) {
-            let allow_recovery_for_terminal_user_message = matches!(
+        let snapshot_status_lower = workflow_snapshot.workflow.status.to_lowercase();
+        let snapshot_is_terminal = matches!(
+            snapshot_status_lower.as_str(),
+            "completed" | "cancelled" | "error" | "failed"
+        );
+        let should_force_recovery_for_terminal_user_message = snapshot_is_terminal
+            && matches!(
                 signal_type_enum,
                 Some(SignalType::UserMessage | SignalType::LegacyUserInput)
             );
-            if allow_recovery_for_terminal_user_message {
-                log::warn!(
-                    "[Workflow][session={}][phase=signal] Live session rejected user message with '{}'. Treating as stale terminal session and entering recovery.",
-                    session_id,
-                    e
-                );
-                workflow_manager_arc.remove_session(&session_id);
-                gateway_arc.unregister_session(&session_id).await;
-                true
-            } else {
-                log::warn!(
-                    "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: {}",
-                    session_id,
-                    signal_type,
-                    e
-                );
-                return Err(format!("Signal rejected: {}", e));
-            }
-        } else {
-            log::info!(
-                "[WorkflowManager][session={}][event=signal_routed] Signal '{}' routed successfully",
-                session_id,
-                signal_type
-            );
 
-            // Now inject through gateway
-            match gateway_arc.inject_input(&session_id, signal.clone()).await {
-                Ok(_) => {
-                    log::info!(
-                        "[Workflow][session={}][phase=signal] Signal injected successfully, type={}",
+        if should_force_recovery_for_terminal_user_message {
+            log::warn!(
+                "[Workflow][session={}][phase=signal] Live session still registered but snapshot is terminal (status={}). Treating user message as resume request and entering recovery.",
+                session_id,
+                workflow_snapshot.workflow.status
+            );
+            workflow_manager_arc.remove_session(&session_id);
+            gateway_arc.unregister_session(&session_id).await;
+            true
+        } else {
+            // Route signal through manager
+            if let Err(e) = workflow_manager_arc.route_signal(&session_id, &signal_type) {
+                let allow_recovery_for_terminal_user_message = matches!(
+                    signal_type_enum,
+                    Some(SignalType::UserMessage | SignalType::LegacyUserInput)
+                );
+                if allow_recovery_for_terminal_user_message {
+                    log::warn!(
+                        "[Workflow][session={}][phase=signal] Live session rejected user message with '{}'. Treating as stale terminal session and entering recovery.",
                         session_id,
-                        signal_type
+                        e
                     );
-                    return Ok("Signal injected".to_string());
+                    workflow_manager_arc.remove_session(&session_id);
+                    gateway_arc.unregister_session(&session_id).await;
+                    true
+                } else {
+                    log::warn!(
+                        "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: {}",
+                        session_id,
+                        signal_type,
+                        e
+                    );
+                    return Err(format!("Signal rejected: {}", e));
                 }
-                Err(e) => {
-                    if is_stale_gateway_injection_error(&e) {
-                        log::warn!(
-                            "[Workflow][session={}][phase=signal] Gateway injection hit stale live session: {}. Removing stale session and entering recovery.",
+            } else {
+                log::info!(
+                    "[WorkflowManager][session={}][event=signal_routed] Signal '{}' routed successfully",
+                    session_id,
+                    signal_type
+                );
+
+                // Now inject through gateway
+                match gateway_arc.inject_input(&session_id, signal.clone()).await {
+                    Ok(_) => {
+                        log::info!(
+                            "[Workflow][session={}][phase=signal] Signal injected successfully, type={}",
                             session_id,
-                            e
+                            signal_type
                         );
-                        workflow_manager_arc.remove_session(&session_id);
-                        gateway_arc.unregister_session(&session_id).await;
-                        true
-                    } else {
-                        log::warn!(
-                            "[Workflow][session={}][phase=signal] Gateway injection failed despite active session: {}",
-                            session_id,
-                            e
-                        );
-                        return Err(format!("Gateway injection failed: {}", e));
+                        return Ok("Signal injected".to_string());
+                    }
+                    Err(e) => {
+                        if is_stale_gateway_injection_error(&e) {
+                            log::warn!(
+                                "[Workflow][session={}][phase=signal] Gateway injection hit stale live session: {}. Removing stale session and entering recovery.",
+                                session_id,
+                                e
+                            );
+                            workflow_manager_arc.remove_session(&session_id);
+                            gateway_arc.unregister_session(&session_id).await;
+                            true
+                        } else {
+                            log::warn!(
+                                "[Workflow][session={}][phase=signal] Gateway injection failed despite active session: {}",
+                                session_id,
+                                e
+                            );
+                            return Err(format!("Gateway injection failed: {}", e));
+                        }
                     }
                 }
             }

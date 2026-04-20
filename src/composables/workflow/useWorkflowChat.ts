@@ -79,12 +79,16 @@ export function useWorkflowChat() {
 
   // Handle chunk for streaming
   const processChunk = (content) => {
+    clearRetryTimer()
+    workflowStore.setNotification('', 'info')
     chatState.value.content += content
     chatState.value.blocks = chattingParser.process(content)
   }
 
   // Handle reasoning chunk
   const processReasoningChunk = (content) => {
+    clearRetryTimer()
+    workflowStore.setNotification('', 'info')
     chatState.value.reasoning += content
   }
 

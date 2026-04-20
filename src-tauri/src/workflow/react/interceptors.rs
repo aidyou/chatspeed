@@ -28,6 +28,45 @@ impl WorkflowExecutor {
         Self::is_smart_mode_read_only_tool(name) || matches!(name, TOOL_EDIT_FILE | TOOL_WRITE_FILE)
     }
 
+    fn normalized_finish_task_summary(text_part: &str) -> String {
+        text_part
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .filter(|line| {
+                let lower = line.to_ascii_lowercase();
+                !matches!(
+                    lower.as_str(),
+                    "done" | "finished" | "complete" | "completed" | "task complete"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn is_valid_finish_task_summary(text_part: &str) -> bool {
+        let normalized = Self::normalized_finish_task_summary(text_part);
+        if normalized.is_empty() {
+            return false;
+        }
+
+        let non_whitespace_len = normalized.chars().filter(|c| !c.is_whitespace()).count();
+        if non_whitespace_len < 32 {
+            return false;
+        }
+
+        let meaningful_lines = normalized
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count();
+        let has_sentence_shape = normalized.contains('\n')
+            || normalized.contains('。')
+            || normalized.contains('.')
+            || normalized.contains(':');
+
+        meaningful_lines >= 2 || has_sentence_shape
+    }
+
     fn is_read_only_shell_stage(stage: &str) -> bool {
         let stage = stage.trim();
         if stage.is_empty() {
@@ -413,13 +452,13 @@ impl WorkflowExecutor {
         &mut self,
         text_part: &str,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        if text_part.trim().is_empty() {
+        if !Self::is_valid_finish_task_summary(text_part) {
             return Ok(Some(ReinforcedResult {
-                content: "<SYSTEM_REMINDER>Error: You called 'finish_task' but your plain text response was empty. You MUST provide a comprehensive summary or report in plain text BEFORE the tool call block to inform the user of your results.</SYSTEM_REMINDER>".into(),
+                content: "<SYSTEM_REMINDER>Error: You called 'finish_task' without a valid user-visible completion report. Before calling 'finish_task', you MUST provide a concise but meaningful final summary in plain text that covers: 1) what was completed, 2) what you verified, and 3) any important remaining notes or limitations. A short placeholder such as 'done', 'completed', or hidden reasoning alone is not sufficient.</SYSTEM_REMINDER>".into(),
                 title: "FinishTask Error".to_string(),
-                summary: "Missing summary".to_string(),
+                summary: "Invalid completion report".to_string(),
                 is_error: true,
-                error_type: Some("NoSummary".into()),
+                error_type: Some("InvalidFinishSummary".into()),
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
@@ -796,5 +835,26 @@ impl WorkflowExecutor {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkflowExecutor;
+
+    #[test]
+    fn finish_task_summary_rejects_placeholder_text() {
+        assert!(!WorkflowExecutor::is_valid_finish_task_summary("done"));
+        assert!(!WorkflowExecutor::is_valid_finish_task_summary(
+            "<think>looks good</think>"
+        ));
+        assert!(!WorkflowExecutor::is_valid_finish_task_summary("Completed"));
+    }
+
+    #[test]
+    fn finish_task_summary_accepts_meaningful_user_visible_report() {
+        assert!(WorkflowExecutor::is_valid_finish_task_summary(
+            "Implemented the workflow fix and verified it with cargo check.\nRemaining note: UI behavior still needs manual confirmation."
+        ));
     }
 }
