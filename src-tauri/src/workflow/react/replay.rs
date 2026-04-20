@@ -123,6 +123,10 @@ impl EventReducer {
             "tool_started" => WorkflowEventType::ToolStarted,
             "tool_completed" => WorkflowEventType::ToolCompleted,
             "tool_failed" => WorkflowEventType::ToolFailed,
+            "child_task_started" => WorkflowEventType::ChildTaskStarted,
+            "child_task_completed" => WorkflowEventType::ChildTaskCompleted,
+            "child_task_failed" => WorkflowEventType::ChildTaskFailed,
+            "child_task_interrupted" => WorkflowEventType::ChildTaskInterrupted,
             "workflow_completed" => WorkflowEventType::WorkflowCompleted,
             "workflow_failed" => WorkflowEventType::WorkflowFailed,
             "workflow_cancelled" => WorkflowEventType::WorkflowCancelled,
@@ -243,6 +247,49 @@ impl EventReducer {
                     }
                 }
             }
+            WorkflowEventType::ChildTaskStarted => {
+                let child_task_id =
+                    event.event_data["child_task_id"].as_str().ok_or_else(|| {
+                        RecoveryError::MissingEventData {
+                            event_type: "child_task_started".to_string(),
+                            field: "child_task_id".to_string(),
+                        }
+                    })?;
+                if !self.child_sessions.iter().any(|id| id == child_task_id) {
+                    self.child_sessions.push(child_task_id.to_string());
+                }
+                self.waiting_on_task_id = Some(child_task_id.to_string());
+                self.wait_reason = Some(WaitReason::ChildTask);
+                self.state = RuntimeState::Waiting;
+            }
+            WorkflowEventType::ChildTaskCompleted
+            | WorkflowEventType::ChildTaskFailed
+            | WorkflowEventType::ChildTaskInterrupted => {
+                let child_task_id =
+                    event.event_data["child_task_id"].as_str().ok_or_else(|| {
+                        RecoveryError::MissingEventData {
+                            event_type: event.event_type.clone(),
+                            field: "child_task_id".to_string(),
+                        }
+                    })?;
+                self.child_sessions.retain(|id| id != child_task_id);
+                if self.waiting_on_task_id.as_deref() == Some(child_task_id) {
+                    self.waiting_on_task_id = None;
+                    self.wait_reason = None;
+                }
+                self.state = match event_type {
+                    WorkflowEventType::ChildTaskInterrupted => RuntimeState::Pending,
+                    _ => RuntimeState::Running,
+                };
+                if let Some(summary) = event
+                    .event_data
+                    .get("result")
+                    .and_then(|result| result.get("summary").or_else(|| result.get("error")))
+                    .and_then(|value| value.as_str())
+                {
+                    self.last_action_summary = Some(summary.chars().take(200).collect());
+                }
+            }
             WorkflowEventType::WorkflowCompleted => {
                 self.state = RuntimeState::Completed;
                 self.wait_reason = None;
@@ -285,6 +332,7 @@ impl EventReducer {
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_task_id: self.waiting_on_task_id,
             child_sessions: self.child_sessions,
+            pending_child_completions: Vec::new(),
         }
     }
 }

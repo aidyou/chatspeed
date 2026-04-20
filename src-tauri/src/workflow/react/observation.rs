@@ -435,6 +435,22 @@ impl ObservationReinforcer {
             TOOL_TODO_GET => t!("workflow.summary.todo_get").to_string(),
             TOOL_SUBMIT_PLAN => "Submit Plan".to_string(),
             TOOL_FINISH_TASK => "Finish Task".to_string(),
+            crate::tools::TOOL_TASK_OUTPUT => {
+                let task_id = args["task_id"].as_str().unwrap_or("").trim();
+                if task_id.is_empty() {
+                    "Task Output".to_string()
+                } else {
+                    format!("Task Output {}", task_id)
+                }
+            }
+            crate::tools::TOOL_SKILL => {
+                let skill = args["skill"].as_str().unwrap_or("").trim();
+                if skill.is_empty() {
+                    "Skill".to_string()
+                } else {
+                    format!("Skill {}", skill)
+                }
+            }
             _ => {
                 // Special handling for MCP tools (format: server__MCP__tool)
                 if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {

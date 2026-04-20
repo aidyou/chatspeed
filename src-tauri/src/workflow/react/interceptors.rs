@@ -24,6 +24,10 @@ impl WorkflowExecutor {
         )
     }
 
+    pub(crate) fn is_smart_mode_auto_approved_tool(name: &str) -> bool {
+        Self::is_smart_mode_read_only_tool(name) || matches!(name, TOOL_EDIT_FILE | TOOL_WRITE_FILE)
+    }
+
     fn is_read_only_shell_stage(stage: &str) -> bool {
         let stage = stage.trim();
         if stage.is_empty() {
@@ -172,7 +176,7 @@ impl WorkflowExecutor {
 
     /// Determines if a tool call should be intercepted for user approval based on the current ApprovalLevel.
     pub(crate) fn should_intercept_for_approval(
-        &self,
+        &mut self,
         name: &str,
         args: &serde_json::Value,
     ) -> bool {
@@ -188,6 +192,18 @@ impl WorkflowExecutor {
         // If already in auto_approve list, don't intercept
         if self.auto_approve.contains(name) {
             return false;
+        }
+
+        if name == TOOL_BASH {
+            let command_str = args["command"].as_str().unwrap_or("").trim();
+            if !command_str.is_empty() && self.smart_approved_bash_commands.remove(command_str) {
+                log::info!(
+                    "WorkflowExecutor {}: Skipping approval for Smart-AI-approved bash command: {}",
+                    self.session_id,
+                    command_str
+                );
+                return false;
+            }
         }
 
         // Special handling for bash: Check shell policy first
@@ -219,7 +235,7 @@ impl WorkflowExecutor {
 
         // Smart mode: allow read/write tools, intercept risky bash or unknown mutations
         if self.policy.approval_level == ApprovalLevel::Smart {
-            let is_safe_tool = Self::is_smart_mode_read_only_tool(name);
+            let is_safe_tool = Self::is_smart_mode_auto_approved_tool(name);
 
             if is_safe_tool {
                 return false;
@@ -256,7 +272,7 @@ impl WorkflowExecutor {
                 return !is_read_only_bash; // Intercept if NOT explicitly in the read-only whitelist
             }
 
-            // All other tools (write_file, edit_file, delete_*, etc.) should be intercepted
+            // All other tools (delete_*, risky bash, unknown mutations, etc.) should be intercepted
             return true;
         }
 
@@ -366,7 +382,7 @@ impl WorkflowExecutor {
 
         if normalized_groups.is_empty() {
             return Ok(Some(ReinforcedResult {
-                content: "<SYSTEM_REMINDER>Error: 'ask_user' requires grouped choices with at least one valid item. Use either {\"items\":[{\"title\":\"...\",\"options\":[\"...\"]}]} or the legacy equivalent, and ensure every group has a title plus at least one option.</SYSTEM_REMINDER>".to_string(),
+                content: "<SYSTEM_REMINDER>Error: 'ask_user' requires grouped choices with at least one valid item. Use {\"items\":[{\"title\":\"...\",\"options\":[\"...\"]}]} and ensure every group has a direct decision title plus at least one concise, actionable option. Use ask_user only for blocking decisions required to continue; do not use it for status updates, generic feedback, final answers, or plan approval. Do not include custom-input placeholder options because the UI already provides custom text input.</SYSTEM_REMINDER>".to_string(),
                 title: "Ask User Error".to_string(),
                 summary: "Invalid ask_user payload".to_string(),
                 is_error: true,
@@ -543,6 +559,8 @@ impl WorkflowExecutor {
                                 .await?
                             {
                                 if review.approved {
+                                    self.smart_approved_bash_commands
+                                        .insert(command_str.trim().to_string());
                                     log::info!(
                                         "WorkflowExecutor {}: AI approved bash command in Smart mode (risk: {}, reason: {})",
                                         self.session_id,

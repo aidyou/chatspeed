@@ -3,6 +3,7 @@ use crate::db::{AgentConfig, MainStore, Workflow, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::child_tasks::get_child_task_registry;
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
+use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::orchestrator::{
@@ -12,7 +13,8 @@ use crate::workflow::react::orchestrator::{
 use crate::workflow::react::replay::{restore_execution_context, RecoveryResult};
 use crate::workflow::react::signals::SignalType;
 use crate::workflow::react::types::{
-    ExecutionContext, RuntimeState, StepType, WaitReason, WorkflowSignal, WorkflowState,
+    ChildTaskCompletion, ExecutionContext, RuntimeState, StepType, WaitReason, WorkflowSignal,
+    WorkflowState,
 };
 use chrono::{DateTime, Local};
 use glob::glob;
@@ -506,6 +508,7 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                     version: ExecutionContext::CURRENT_VERSION.to_string(),
                     waiting_on_task_id: None,
                     child_sessions: Vec::new(),
+                    pending_child_completions: Vec::new(),
                 });
         context.state = RuntimeState::Cancelled;
         context.wait_reason = None;
@@ -516,19 +519,34 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
         store.upsert_execution_context(&context)?;
 
         if let Some(parent_session_id) = child.parent_session_id.clone() {
+            let event = WorkflowEvent::child_task_interrupted(
+                parent_session_id.clone(),
+                child_id.clone(),
+                "application_restart".to_string(),
+            );
+            store.append_workflow_event(&event)?;
+
             let message = format!(
-                "Child task {} was interrupted by application restart and marked as cancelled.",
+                "<SYSTEM_REMINDER>\nChild task {} was interrupted by application restart and marked as cancelled. If you still need to continue that delegated work, call the child agent again with a fresh task.\n</SYSTEM_REMINDER>",
                 child_id
             );
             let parent_message = WorkflowMessage {
                 id: None,
-                session_id: parent_session_id,
-                role: "assistant".to_string(),
+                session_id: parent_session_id.clone(),
+                role: "user".to_string(),
                 message: message.clone(),
                 reasoning: None,
                 metadata: Some(json!({
+                    "message_kind": "runtime_observation",
+                    "observation_type": "child_task_interrupted",
                     "child_task_id": child_id,
-                    "summary": message,
+                    "summary": "Child task interrupted",
+                    "result": {
+                        "status": "interrupted",
+                        "task_id": child_id,
+                        "error": "Child task interrupted by application restart",
+                        "tool_calls_count": context.pending_tools.len()
+                    },
                     "execution_status": "interrupted",
                     "is_error": true,
                     "error_type": "ChildTaskInterrupted"
@@ -541,6 +559,37 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                 created_at: None,
             };
             let _ = store.add_workflow_message(&parent_message)?;
+
+            if let Some(mut parent_context) = store.get_execution_context(&parent_session_id)? {
+                parent_context
+                    .child_sessions
+                    .retain(|existing| existing != &child_id);
+                if parent_context.waiting_on_task_id.as_deref() == Some(&child_id) {
+                    parent_context.waiting_on_task_id = None;
+                    parent_context.wait_reason = None;
+                    parent_context.state = RuntimeState::Pending;
+                }
+                parent_context
+                    .pending_child_completions
+                    .retain(|existing| existing.child_task_id != child_id);
+                parent_context
+                    .pending_child_completions
+                    .push(ChildTaskCompletion {
+                        child_task_id: child_id.clone(),
+                        parent_session_id: parent_session_id.clone(),
+                        status: "interrupted".to_string(),
+                        summary: None,
+                        error: Some(message.clone()),
+                        tool_calls_count: 0,
+                        completed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        consumed: true,
+                    });
+                store.upsert_execution_context(&parent_context)?;
+                store.update_workflow_status(
+                    &parent_session_id,
+                    &WorkflowState::Pending.to_string(),
+                )?;
+            }
         }
     }
 

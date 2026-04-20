@@ -11,17 +11,17 @@ impl ToolDefinition for AskUser {
         crate::tools::TOOL_ASK_USER
     }
     fn description(&self) -> &str {
-        "Use this tool when you need to ask the user questions during execution. This allows you to:\n\
-        1. Gather user preferences or requirements\n\
-        2. Clarify ambiguous instructions\n\
-        3. Get decisions on implementation choices as you work\n\
-        4. Offer grouped choices to the user about what direction to take.\n\n\
-        Usage notes:\n\
-        - Pass grouped choices using an `items` array\n\
-        - Each item MUST use the shape {\"title\": \"...\", \"options\": [\"...\", \"...\"]}\n\
-        - Each item title becomes a separate section in the UI when multiple groups are provided\n\
-        - Users will always be able to provide custom text input separately if none of the options fit\n\
-        - If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label"
+        "Ask the user for a blocking decision that is required before you can continue.\n\n\
+        Use ask_user only when the next step genuinely depends on user input, such as choosing between mutually exclusive implementation paths, clarifying an ambiguous requirement, or confirming a risky change. \
+        Do NOT use ask_user for routine status updates, final answers, progress reports, generic feedback surveys, or plan approval in Planning Mode; use submit_plan for plan approval and answer_user/finish_task for reporting.\n\n\
+        Usage rules:\n\
+        - Pass grouped choices using an `items` array.\n\
+        - Prefer one focused group. Use multiple groups only when each group is an independent blocking decision.\n\
+        - Each item MUST use the shape {\"title\": \"...\", \"options\": [\"...\", \"...\"]}.\n\
+        - Titles must be direct questions or decision labels, not vague headings like \"Any thoughts?\".\n\
+        - Options must be concise, mutually exclusive, and actionable. Do not include placeholder options like \"I want to input...\" because the UI already provides custom text input.\n\
+        - If you recommend a specific option, make it the first option and add \"(Recommended)\" at the end of the label.\n\
+        - Include the concrete consequence in the option text when it matters, for example \"Proceed with safe change; skip data backfill\"."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::Interaction
@@ -38,20 +38,20 @@ impl ToolDefinition for AskUser {
                 "properties": {
                     "items": {
                         "type": "array",
-                        "description": "Grouped selection prompts. Each item becomes one section in the UI.",
+                        "description": "Grouped blocking decisions. Prefer one focused item; use multiple items only for independent decisions that all block progress.",
                         "minItems": 1,
                         "items": {
                             "type": "object",
                             "properties": {
                                 "title": {
                                     "type": "string",
-                                    "description": "The title for this option group."
+                                    "description": "A direct question or decision label. Avoid vague headings like 'Any thoughts?' or status-only text."
                                 },
                                 "options": {
                                     "type": "array",
                                     "items": { "type": "string" },
                                     "minItems": 1,
-                                    "description": "Selectable options for this group. Show the recommended option first when applicable."
+                                    "description": "Concise, mutually exclusive, actionable options. Do not include a custom-input placeholder; the UI already provides custom text input. Put the recommended option first and suffix it with '(Recommended)' when applicable."
                                 }
                             },
                             "required": ["title", "options"],

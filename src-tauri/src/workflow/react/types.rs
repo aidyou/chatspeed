@@ -218,6 +218,15 @@ pub enum WorkflowSignal {
         child_task_id: String,
         result: serde_json::Value,
     },
+    /// Background context compression completed and is ready to be persisted.
+    CompressionReady {
+        compressed_until_message_id: i64,
+        summary: String,
+    },
+    CompressionFailed {
+        compressed_until_message_id: i64,
+        error: String,
+    },
 }
 
 impl WorkflowSignal {
@@ -241,6 +250,8 @@ impl WorkflowSignal {
             (WorkflowSignal::UpdateModelConfig { .. }, _) => true,
             (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
             (WorkflowSignal::RemoveShellPolicyItem { .. }, _) => true,
+            (WorkflowSignal::CompressionReady { .. }, _) => true,
+            (WorkflowSignal::CompressionFailed { .. }, _) => true,
             // UserMessage is valid for UserInput waiting
             (WorkflowSignal::UserMessage { .. }, Some(WaitReason::UserInput)) => true,
             // ApprovalDecision is valid for Approval waiting
@@ -269,6 +280,8 @@ impl WorkflowSignal {
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",
             WorkflowSignal::RemoveShellPolicyItem { .. } => "remove_shell_policy_item",
             WorkflowSignal::ChildTaskComplete { .. } => "child_task_complete",
+            WorkflowSignal::CompressionReady { .. } => "compression_ready",
+            WorkflowSignal::CompressionFailed { .. } => "compression_failed",
         }
     }
 }
@@ -281,6 +294,37 @@ pub struct PendingTool {
     pub details: Option<String>,
     #[serde(default)]
     pub display_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChildTaskCompletion {
+    pub child_task_id: String,
+    pub parent_session_id: String,
+    pub status: String,
+    pub summary: Option<String>,
+    pub error: Option<String>,
+    #[serde(default)]
+    pub tool_calls_count: usize,
+    pub completed_at_ms: i64,
+    #[serde(default)]
+    pub consumed: bool,
+}
+
+impl ChildTaskCompletion {
+    pub fn to_signal_result(&self) -> serde_json::Value {
+        let mut result = serde_json::json!({
+            "status": self.status,
+            "task_id": self.child_task_id,
+            "tool_calls_count": self.tool_calls_count,
+        });
+        if let Some(summary) = &self.summary {
+            result["summary"] = serde_json::json!(summary);
+        }
+        if let Some(error) = &self.error {
+            result["error"] = serde_json::json!(error);
+        }
+        result
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -303,6 +347,8 @@ pub struct ExecutionContext {
     pub waiting_on_task_id: Option<String>,
     #[serde(default)]
     pub child_sessions: Vec<String>,
+    #[serde(default)]
+    pub pending_child_completions: Vec<ChildTaskCompletion>,
 }
 
 impl ExecutionContext {
@@ -324,6 +370,7 @@ impl ExecutionContext {
             version: Self::CURRENT_VERSION.to_string(),
             waiting_on_task_id: None,
             child_sessions: Vec::new(),
+            pending_child_completions: Vec::new(),
         }
     }
 }
@@ -343,6 +390,7 @@ mod tests {
         assert_eq!(ctx.version, "1.1.0");
         assert!(ctx.waiting_on_task_id.is_none());
         assert!(ctx.child_sessions.is_empty());
+        assert!(ctx.pending_child_completions.is_empty());
     }
 
     #[test]

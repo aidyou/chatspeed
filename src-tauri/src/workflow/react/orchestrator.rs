@@ -5,7 +5,9 @@ use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinitio
 use crate::workflow::react::child_tasks::get_child_task_registry;
 use crate::workflow::react::engine::ReActExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
+use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::gateway::Gateway;
+use crate::workflow::react::types::{ChildTaskCompletion, ExecutionContext, RuntimeState};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -57,6 +59,7 @@ lazy_static::lazy_static! {
     pub static ref BACKGROUND_TASKS: Arc<DashMap<String, BackgroundTask>> = Arc::new(DashMap::new());
     /// Terminal snapshots allow task_output to inspect tasks after they leave the active registry.
     pub static ref COMPLETED_BACKGROUND_TASKS: Arc<DashMap<String, CompletedTaskSnapshot>> = Arc::new(DashMap::new());
+    static ref TASK_OUTPUT_THROTTLE: Arc<DashMap<String, (i64, String)>> = Arc::new(DashMap::new());
 }
 
 fn remember_completed_task(task_id: impl Into<String>, output: impl Into<String>) {
@@ -66,6 +69,106 @@ fn remember_completed_task(task_id: impl Into<String>, output: impl Into<String>
             output: output.into(),
         },
     );
+}
+
+fn build_child_completion(
+    parent_session_id: &str,
+    child_task_id: &str,
+    result: &Value,
+) -> ChildTaskCompletion {
+    ChildTaskCompletion {
+        child_task_id: child_task_id.to_string(),
+        parent_session_id: parent_session_id.to_string(),
+        status: result
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("completed")
+            .to_string(),
+        summary: result
+            .get("summary")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        error: result
+            .get("error")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        tool_calls_count: result
+            .get("tool_calls_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0) as usize,
+        completed_at_ms: chrono::Utc::now().timestamp_millis(),
+        consumed: false,
+    }
+}
+
+fn persist_child_completion(
+    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    completion: ChildTaskCompletion,
+) -> Result<(), WorkflowEngineError> {
+    let store = main_store
+        .read()
+        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    let mut context = store
+        .get_execution_context(&completion.parent_session_id)
+        .map_err(WorkflowEngineError::Db)?
+        .unwrap_or_else(|| ExecutionContext {
+            session_id: completion.parent_session_id.clone(),
+            state: RuntimeState::Waiting,
+            wait_reason: Some(crate::workflow::react::types::WaitReason::ChildTask),
+            current_step: 0,
+            max_steps: 0,
+            pending_tools: Vec::new(),
+            last_action_summary: None,
+            current_context_tokens: None,
+            max_context_tokens: None,
+            last_event_id: None,
+            version: ExecutionContext::CURRENT_VERSION.to_string(),
+            waiting_on_task_id: Some(completion.child_task_id.clone()),
+            child_sessions: vec![completion.child_task_id.clone()],
+            pending_child_completions: Vec::new(),
+        });
+
+    context
+        .pending_child_completions
+        .retain(|existing| existing.child_task_id != completion.child_task_id);
+    context.pending_child_completions.push(completion);
+    store
+        .upsert_execution_context(&context)
+        .map_err(WorkflowEngineError::Db)?;
+    Ok(())
+}
+
+fn append_child_task_event(
+    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    event: WorkflowEvent,
+) -> Result<(), WorkflowEngineError> {
+    let store = main_store
+        .read()
+        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    store
+        .append_workflow_event(&event)
+        .map_err(WorkflowEngineError::Db)?;
+    Ok(())
+}
+
+fn format_available_task_ids() -> String {
+    let mut task_ids: Vec<String> = BACKGROUND_TASKS
+        .iter()
+        .map(|entry| entry.key().clone())
+        .chain(
+            COMPLETED_BACKGROUND_TASKS
+                .iter()
+                .map(|entry| entry.key().clone()),
+        )
+        .collect();
+    task_ids.sort();
+    task_ids.dedup();
+
+    if task_ids.is_empty() {
+        "No active or completed background tasks are currently available.".to_string()
+    } else {
+        format!("Currently available task IDs: {}.", task_ids.join(", "))
+    }
 }
 
 pub fn list_background_task_ids_for_owner(owner_session_id: &str) -> Vec<String> {
@@ -290,6 +393,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
 /// Task tool for spawning autonomous sub-agents (Full Spec Clone)
 pub struct TaskTool {
     executor_factory: Arc<dyn SubAgentFactory>,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
     tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     parent_session_id: Option<String>,
     child_agents: Vec<Agent>,
@@ -298,10 +402,12 @@ pub struct TaskTool {
 impl TaskTool {
     pub fn new(
         factory: Arc<dyn SubAgentFactory>,
+        main_store: Arc<std::sync::RwLock<MainStore>>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     ) -> Self {
         Self {
             executor_factory: factory,
+            main_store,
             tsid_generator,
             parent_session_id: None,
             child_agents: Vec::new(),
@@ -332,7 +438,8 @@ impl ToolDefinition for TaskTool {
         The prompt must contain a clear objective, the exact scope to investigate or implement, relevant constraints, \
         and the expected output format or success criteria. \
         If the child agent must return structured findings, explicitly state which facts, files, risks, or conclusions must be included. \
-        Use execution_mode='call' when the parent must wait for the child result, or execution_mode='background' when the child should continue asynchronously and be inspected later with task_output."
+        Use execution_mode='call' when the parent cannot continue until the child finishes. \
+        Use execution_mode='background' when the child can run in parallel while the parent continues other work; completion will be reported automatically, and task_output can be used later if the result is explicitly needed."
     }
 
     fn category(&self) -> ToolCategory {
@@ -399,7 +506,7 @@ impl ToolDefinition for TaskTool {
                     "execution_mode": {
                         "type": "string",
                         "enum": ["call", "background"],
-                        "description": "Execution mode for the child agent. Use 'call' to wait for child completion and resume the parent workflow with the child result. Use 'background' to continue asynchronously and inspect the child later via task_output."
+                        "description": "Execution mode for the child agent. Use 'call' if you must wait for the child to finish before continuing; the parent workflow will pause and resume with the final child result. Use 'background' if you can continue other work in parallel; the system will report completion automatically, and you may inspect the result later with task_output when needed."
                     }
                 },
                 "required": ["description", "prompt"],
@@ -495,7 +602,25 @@ impl ToolDefinition for TaskTool {
         }
 
         if execution_mode == "background" {
+            if let Some(parent_session_id) = self.parent_session_id.as_ref() {
+                if let Err(e) = append_child_task_event(
+                    &self.main_store,
+                    WorkflowEvent::child_task_started(
+                        parent_session_id.clone(),
+                        task_id.clone(),
+                        "background".to_string(),
+                    ),
+                ) {
+                    log::warn!(
+                        "[Workflow][session={}][parent={}][phase=child_start] Failed to persist background child task event: {}",
+                        task_id,
+                        parent_session_id,
+                        e
+                    );
+                }
+            }
             let exec_clone = sub_executor.clone();
+            let task_id_clone = task_id.clone();
             BACKGROUND_TASKS.insert(
                 task_id.clone(),
                 BackgroundTask::SubAgent {
@@ -506,9 +631,45 @@ impl ToolDefinition for TaskTool {
 
             tokio::spawn(async move {
                 let mut guard = exec_clone.lock().await;
-                if let Err(e) = guard.run_loop().await {
-                    log::error!("Background task {} failed: {}", guard.session_id(), e);
-                }
+                let result = guard.run_loop().await;
+                let final_state = guard.state();
+                let messages = guard.messages();
+                let tool_calls_count = messages
+                    .iter()
+                    .filter(|message| message.role == "tool")
+                    .count();
+                let latest_output = messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == "assistant")
+                    .map(|message| message.message.clone())
+                    .unwrap_or_default();
+
+                let output = match result {
+                    Ok(_) => {
+                        let status = if final_state
+                            == crate::workflow::react::types::WorkflowState::Cancelled
+                        {
+                            "cancelled"
+                        } else {
+                            "completed"
+                        };
+                        format!(
+                            "Status: {}. Tool Calls: {}. Latest Output: {}",
+                            status, tool_calls_count, latest_output
+                        )
+                    }
+                    Err(e) => {
+                        log::error!("Background task {} failed: {}", guard.session_id(), e);
+                        format!(
+                            "Status: failed. Tool Calls: {}. Latest Output: {}",
+                            tool_calls_count, e
+                        )
+                    }
+                };
+                remember_completed_task(task_id_clone.clone(), output);
+                TASK_OUTPUT_THROTTLE.remove(&task_id_clone);
+                BACKGROUND_TASKS.remove(&task_id_clone);
             });
 
             return Ok(ToolCallResult::success(Some(json!({
@@ -529,6 +690,21 @@ impl ToolDefinition for TaskTool {
         })?;
 
         get_child_task_registry().register_child_task(task_id.clone(), parent_id.clone());
+        if let Err(e) = append_child_task_event(
+            &self.main_store,
+            WorkflowEvent::child_task_started(
+                parent_id.clone(),
+                task_id.clone(),
+                "call".to_string(),
+            ),
+        ) {
+            log::warn!(
+                "[Workflow][session={}][parent={}][phase=child_start] Failed to persist child task event: {}",
+                task_id,
+                parent_id,
+                e
+            );
+        }
 
         let exec_clone = sub_executor.clone();
         BACKGROUND_TASKS.insert(
@@ -541,6 +717,7 @@ impl ToolDefinition for TaskTool {
 
         let parent_id = parent_id.clone();
         let task_id_clone = task_id.clone();
+        let main_store = self.main_store.clone();
         tokio::spawn(async move {
             let mut guard = exec_clone.lock().await;
             let result = guard.run_loop().await;
@@ -595,7 +772,39 @@ impl ToolDefinition for TaskTool {
                 }
             };
 
-            let _ = crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
+            let completion_status = completion_result
+                .get("status")
+                .and_then(|value| value.as_str())
+                .unwrap_or("completed")
+                .to_string();
+            if let Err(e) = append_child_task_event(
+                &main_store,
+                WorkflowEvent::child_task_completed(
+                    parent_id.clone(),
+                    task_id_clone.clone(),
+                    completion_status,
+                    completion_result.clone(),
+                ),
+            ) {
+                log::warn!(
+                    "[Workflow][session={}][parent={}][phase=child_completion] Failed to persist child completion event: {}",
+                    task_id_clone,
+                    parent_id,
+                    e
+                );
+            }
+
+            let completion = build_child_completion(&parent_id, &task_id_clone, &completion_result);
+            if let Err(e) = persist_child_completion(&main_store, completion) {
+                log::error!(
+                    "[Workflow][session={}][parent={}][phase=child_completion] Failed to persist child completion: {}",
+                    task_id_clone,
+                    parent_id,
+                    e
+                );
+            }
+
+            if let Err(e) = crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
                 &parent_id,
                 json!({
                     "type": "child_task_complete",
@@ -603,7 +812,14 @@ impl ToolDefinition for TaskTool {
                     "result": completion_result
                 })
                 .to_string(),
-            );
+            ) {
+                log::warn!(
+                    "[Workflow][session={}][parent={}][phase=child_completion] Live signal delivery failed; durable completion will be replayed on recovery: {}",
+                    task_id_clone,
+                    parent_id,
+                    e
+                );
+            }
 
             let output = match completion_result
                 .get("status")
@@ -631,6 +847,7 @@ impl ToolDefinition for TaskTool {
             };
             remember_completed_task(task_id_clone.clone(), output);
             get_child_task_registry().unregister_child_task(&task_id_clone);
+            TASK_OUTPUT_THROTTLE.remove(&task_id_clone);
             BACKGROUND_TASKS.remove(&task_id_clone);
         });
 
@@ -659,7 +876,8 @@ impl ToolDefinition for TaskOutputTool {
         "- Retrieves output from a running or completed task (background agent, shell, or remote session)\n\
         - Takes a task_id parameter identifying the task\n\
         - Returns the task output along with status information\n\
-        - Use this tool to check if a parallel agent or process has finished its work."
+        - Set wait_until_complete=true only when the next step depends on the final child result; the tool will wait until the task finishes, fails, or is stopped\n\
+        - Leave wait_until_complete=false when you only need a non-blocking status check. Do not poll running child agents repeatedly; continue other work or wait for the automatic completion notification."
     }
 
     fn category(&self) -> ToolCategory {
@@ -677,7 +895,11 @@ impl ToolDefinition for TaskOutputTool {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "task_id": { "type": "string", "description": "The task ID to get output from" }
+                    "task_id": { "type": "string", "description": "The task ID to get output from" },
+                    "wait_until_complete": {
+                        "type": "boolean",
+                        "description": "When true, wait until the task reaches a terminal state and return only the final result. Use this if you cannot continue until the child agent finishes. When false or omitted, return the current status immediately; use this for non-blocking checks while continuing other work."
+                    }
                 },
                 "required": ["task_id"]
             }),
@@ -691,11 +913,101 @@ impl ToolDefinition for TaskOutputTool {
         let task_id = params["task_id"]
             .as_str()
             .ok_or(ToolError::InvalidParams("task_id required".into()))?;
+        let wait_until_complete = params["wait_until_complete"].as_bool().unwrap_or(false);
+        if wait_until_complete {
+            loop {
+                if let Some(snapshot) = COMPLETED_BACKGROUND_TASKS.get(task_id) {
+                    return Ok(ToolCallResult::success(Some(snapshot.output.clone()), None));
+                }
+
+                let Some(task) = BACKGROUND_TASKS.get(task_id) else {
+                    break;
+                };
+
+                match task.value() {
+                    BackgroundTask::SubAgent { executor, .. } => {
+                        let executor = executor.clone();
+                        drop(task);
+                        let guard = executor.lock().await;
+                        let state = guard.state();
+                        if matches!(
+                            state,
+                            crate::workflow::react::types::WorkflowState::Completed
+                                | crate::workflow::react::types::WorkflowState::Error
+                                | crate::workflow::react::types::WorkflowState::Cancelled
+                        ) {
+                            let mut result = format!("Status: {:?}. ", state);
+                            if let Some(last_msg) = guard
+                                .messages()
+                                .iter()
+                                .rev()
+                                .find(|m| m.role == "assistant" || m.role == "tool")
+                            {
+                                result.push_str("Latest Output: ");
+                                result.push_str(&last_msg.message);
+                            }
+                            return Ok(ToolCallResult::success(Some(result), None));
+                        }
+                    }
+                    BackgroundTask::ShellCommand {
+                        command,
+                        stdout,
+                        stderr,
+                        status,
+                        ..
+                    } => {
+                        let command = command.clone();
+                        let stdout = stdout.clone();
+                        let stderr = stderr.clone();
+                        let status = status.clone();
+                        drop(task);
+
+                        let current_status = status.lock().await.clone();
+                        if current_status != "Running" {
+                            let out = stdout.lock().await.clone();
+                            let err = stderr.lock().await.clone();
+                            return Ok(ToolCallResult::success(
+                                Some(format!(
+                                    "Command: {}\nStatus: {}\nSTDOUT: {}\nSTDERR: {}",
+                                    command, current_status, out, err
+                                )),
+                                None,
+                            ));
+                        }
+                    }
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            }
+        }
+
         if let Some(task) = BACKGROUND_TASKS.get(task_id) {
             return match task.value() {
                 BackgroundTask::SubAgent { executor, .. } => {
                     let guard = executor.lock().await;
-                    let mut result = format!("Status: {:?}. ", guard.state());
+                    let state = guard.state();
+                    let is_terminal = matches!(
+                        state,
+                        crate::workflow::react::types::WorkflowState::Completed
+                            | crate::workflow::react::types::WorkflowState::Error
+                            | crate::workflow::react::types::WorkflowState::Cancelled
+                    );
+                    if !is_terminal {
+                        let now = chrono::Utc::now().timestamp_millis();
+                        if let Some(cached) = TASK_OUTPUT_THROTTLE.get(task_id) {
+                            if now - cached.0 < 15_000 {
+                                return Ok(ToolCallResult::success(
+                                    Some(format!(
+                                        "{}\n<SYSTEM_REMINDER>This task is still running. Do not poll it repeatedly; continue other work or wait for the completion event.</SYSTEM_REMINDER>",
+                                        cached.1
+                                    )),
+                                    None,
+                                ));
+                            }
+                        }
+                    }
+
+                    let mut result = format!("Status: {:?}. ", state);
                     if let Some(last_msg) = guard
                         .messages()
                         .iter()
@@ -704,6 +1016,12 @@ impl ToolDefinition for TaskOutputTool {
                     {
                         result.push_str("Latest Output: ");
                         result.push_str(&last_msg.message);
+                    }
+                    if !is_terminal {
+                        TASK_OUTPUT_THROTTLE.insert(
+                            task_id.to_string(),
+                            (chrono::Utc::now().timestamp_millis(), result.clone()),
+                        );
                     }
                     Ok(ToolCallResult::success(Some(result), None))
                 }
@@ -732,9 +1050,11 @@ impl ToolDefinition for TaskOutputTool {
             return Ok(ToolCallResult::success(Some(snapshot.output.clone()), None));
         }
 
+        let available_tasks = format_available_task_ids();
         Err(ToolError::ExecutionFailed(format!(
-            "Task {} not found in active or completed background tasks",
-            task_id
+            "Task {} not found in active or completed background tasks.\n<SYSTEM_REMINDER>Before calling task_output, make sure you have created a background task with the task tool and use the exact task_id returned by that tool. {} Do not use task_output as a generic final-answer tool.</SYSTEM_REMINDER>",
+            task_id,
+            available_tasks
         )))
     }
 }

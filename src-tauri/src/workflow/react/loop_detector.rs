@@ -93,16 +93,22 @@ impl LoopDetector {
         }
 
         if repeat_count >= LOOP_REPEAT_THRESHOLD {
+            let task_output_guidance = if tool_name == crate::tools::TOOL_TASK_OUTPUT {
+                "\nFor task_output specifically: do NOT call task_output again for the same missing or unavailable task_id. task_output only retrieves results for task IDs returned by the task tool; it is not a final-answer/output tool. If no valid task exists, continue with another appropriate tool or report the limitation."
+            } else {
+                ""
+            };
             Some(format!(
                 "ERROR: LOOP DETECTED\n<SYSTEM_REMINDER>You have called '{}' with identical arguments {} times \
                 in the last {} steps. This is unproductive repetition. You MUST change your approach NOW:\n\
                 1. If searching the web: try completely different keywords or a different data source.\n\
                 2. If fetching a URL: the content may be unavailable — mark the task as 'data_missing' and continue.\n\
-                3. If all alternatives are exhausted: accept the limitation and move to the next task.\n\
+                3. If all alternatives are exhausted: accept the limitation and move to the next task.{}\n\
                 Do NOT call '{}' with the same parameters again.</SYSTEM_REMINDER>",
                 tool_name,
                 repeat_count + 1,
                 LOOP_DETECT_WINDOW,
+                task_output_guidance,
                 tool_name
             ))
         } else {

@@ -1,7 +1,7 @@
 <template>
   <div class="messages" ref="messagesRef">
     <div
-      v-for="(message, index) in messages"
+      v-for="(message, index) in visibleMessages"
       :key="message.displayId"
       class="message"
       :data-message-id="message.displayId || message.id || null"
@@ -333,7 +333,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue'
+import { computed, ref, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
 import ApprovalDialog from './ApprovalDialog.vue'
@@ -441,6 +441,19 @@ const emit = defineEmits([
 const messagesRef = ref(null)
 const approvalDrafts = ref({})
 const askUserDrafts = ref({})
+
+const isHiddenSystemObservation = message => {
+  if (message?.metadata?.message_kind === 'runtime_observation') return true
+  if (message?.metadata?.messageKind === 'runtime_observation') return true
+  if (message?.metadata?.error_type === 'ChildTaskInterrupted') return true
+  if (message?.metadata?.errorType === 'ChildTaskInterrupted') return true
+  if (message?.role !== 'user') return false
+  if ((message.stepType || '').toLowerCase() !== 'observe') return false
+  if (getAskUserResponseItems(message).length > 0) return false
+  return props.removeSystemReminder(message.message || '').trim() === ''
+}
+
+const visibleMessages = computed(() => props.messages.filter(message => !isHiddenSystemObservation(message)))
 
 const getApprovalDraft = toolCallId => {
   if (!toolCallId) return ''

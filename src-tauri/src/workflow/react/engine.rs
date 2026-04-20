@@ -26,6 +26,7 @@ use crate::workflow::react::{
     intelligence::IntelligenceManager,
     llm::LlmProcessor,
     loop_detector::LoopDetector,
+    manager::WorkflowManager,
     memory::{MemoryManager, MemoryScope},
     memory_analyzer::MemoryAnalyzer,
     observation::{ObservationKind, ObservationReinforcer, ReinforcedResult},
@@ -36,8 +37,8 @@ use crate::workflow::react::{
     sinks::{DBSink, Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
     types::{
-        ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType, WaitReason,
-        WorkflowSignal, WorkflowState,
+        ChildTaskCompletion, ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType,
+        WaitReason, WorkflowSignal, WorkflowState,
     },
 };
 
@@ -94,6 +95,7 @@ pub struct WorkflowExecutor {
     pub subagent_type: Option<String>,
     pub last_compression_step: usize,
     pub last_compression_boundary_id: Option<i64>,
+    pub background_compression_boundary_id: Option<i64>,
     /// Rules and permissions for this ReAct session.
     pub policy: ExecutionPolicy,
     /// Memory manager for reading/writing memory files
@@ -102,6 +104,9 @@ pub struct WorkflowExecutor {
     pub(crate) loop_detector: LoopDetector,
     /// Memory cache for tools awaiting user approval.
     pub(crate) pending_approvals: Arc<dashmap::DashMap<String, serde_json::Value>>,
+    /// One-shot cache of bash commands approved by Smart AI review to prevent
+    /// the generic approval path from re-intercepting the same command.
+    pub(crate) smart_approved_bash_commands: HashSet<String>,
     /// Flag indicating recovery failed - session is in safe-failed read-only state.
     pub(crate) recovery_failed: bool,
     /// Error message if recovery failed.
@@ -114,6 +119,8 @@ pub struct WorkflowExecutor {
     pub child_task_id: Option<String>,
     /// Phase 7: All child task session IDs created by this parent session.
     pub child_sessions: Vec<String>,
+    /// Durable child completions restored from snapshot but not yet consumed.
+    pub pending_child_completions: Vec<ChildTaskCompletion>,
 }
 
 impl WorkflowExecutor {
@@ -194,6 +201,132 @@ impl WorkflowExecutor {
         self.context.max_tokens =
             Self::effective_context_limit(&self.agent_config, &self.policy.phase);
         self.max_steps = Self::effective_max_steps(&self.agent_config, &self.policy.phase);
+    }
+
+    async fn persist_compression_summary(
+        &mut self,
+        summary: String,
+        compressed_until_message_id: i64,
+    ) -> Result<(), WorkflowEngineError> {
+        self.context
+            .compress(
+                summary,
+                self.current_step as i32,
+                compressed_until_message_id,
+            )
+            .await?;
+        self.last_compression_step = self.current_step;
+        self.last_compression_boundary_id = Some(compressed_until_message_id);
+        self.background_compression_boundary_id = None;
+        log::info!(
+            "[Workflow][session={}][phase=compression] Persisted summary through boundary {}. current_context_tokens={}",
+            self.session_id,
+            compressed_until_message_id,
+            self.context.current_token_estimate()
+        );
+        self.dispatch_context_usage().await?;
+        Ok(())
+    }
+
+    fn spawn_background_compression(
+        &mut self,
+        compression_candidate: Vec<WorkflowMessage>,
+        compressed_until_message_id: i64,
+    ) {
+        self.background_compression_boundary_id = Some(compressed_until_message_id);
+        let compressor = self.compressor.clone();
+        let session_id = self.session_id.clone();
+
+        tokio::spawn(async move {
+            match compressor.compress(&compression_candidate).await {
+                Ok(summary) => {
+                    let signal = serde_json::to_string(&WorkflowSignal::CompressionReady {
+                        compressed_until_message_id,
+                        summary,
+                    });
+
+                    match signal {
+                        Ok(payload) => {
+                            if let Err(err) =
+                                WorkflowManager::send_signal_to_session(&session_id, payload)
+                            {
+                                log::warn!(
+                                    "[Workflow][session={}][phase=compression] Failed to deliver background compression result for boundary {}: {}",
+                                    session_id,
+                                    compressed_until_message_id,
+                                    err
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            log::warn!(
+                                "[Workflow][session={}][phase=compression] Failed to serialize background compression result for boundary {}: {}",
+                                session_id,
+                                compressed_until_message_id,
+                                err
+                            );
+                        }
+                    }
+                }
+                Err(err) => {
+                    let error_message = err.to_string();
+                    let signal = serde_json::to_string(&WorkflowSignal::CompressionFailed {
+                        compressed_until_message_id,
+                        error: error_message.clone(),
+                    });
+                    if let Ok(payload) = signal {
+                        if let Err(delivery_err) =
+                            WorkflowManager::send_signal_to_session(&session_id, payload)
+                        {
+                            log::warn!(
+                                "[Workflow][session={}][phase=compression] Background compression failed for boundary {} and failure signal could not be delivered: {}; original_error={}",
+                                session_id,
+                                compressed_until_message_id,
+                                delivery_err,
+                                error_message
+                            );
+                        }
+                    } else {
+                        log::warn!(
+                            "[Workflow][session={}][phase=compression] Background compression request failed for boundary {}: {}",
+                            session_id,
+                            compressed_until_message_id,
+                            error_message
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    async fn apply_background_compression_ready(
+        &mut self,
+        compressed_until_message_id: i64,
+        summary: String,
+    ) -> Result<(), WorkflowEngineError> {
+        if self.last_compression_boundary_id == Some(compressed_until_message_id) {
+            self.background_compression_boundary_id = None;
+            return Ok(());
+        }
+
+        if self.background_compression_boundary_id != Some(compressed_until_message_id) {
+            log::info!(
+                "[Workflow][session={}][phase=compression] Ignoring stale background compression result for boundary {}. in_flight={:?}",
+                self.session_id,
+                compressed_until_message_id,
+                self.background_compression_boundary_id
+            );
+            return Ok(());
+        }
+
+        self.persist_compression_summary(summary, compressed_until_message_id)
+            .await
+    }
+
+    fn clear_background_compression_if_matches(&mut self, compressed_until_message_id: i64) {
+        if self.background_compression_boundary_id == Some(compressed_until_message_id) {
+            self.background_compression_boundary_id = None;
+        }
     }
 }
 
@@ -393,6 +526,7 @@ impl WorkflowExecutor {
             subagent_type,
             last_compression_step: 0,
             last_compression_boundary_id: None,
+            background_compression_boundary_id: None,
             policy,
             memory_manager: {
                 let project_root = allowed_paths.first().cloned();
@@ -400,12 +534,14 @@ impl WorkflowExecutor {
             },
             loop_detector: LoopDetector::new(),
             pending_approvals: Arc::new(dashmap::DashMap::new()),
+            smart_approved_bash_commands: HashSet::new(),
             recovery_failed: false,
             recovery_error: None,
             dispatcher: None,
             queued_user_messages: VecDeque::new(),
             child_task_id: None,
             child_sessions: Vec::new(),
+            pending_child_completions: Vec::new(),
         };
 
         // Phase 6: wire default dispatcher with UI + DB sinks for all executors.
@@ -681,6 +817,7 @@ impl WorkflowExecutor {
 
                         self.child_task_id = context.waiting_on_task_id.clone();
                         self.child_sessions = context.child_sessions.clone();
+                        self.pending_child_completions = context.pending_child_completions.clone();
 
                         if self.state == WorkflowState::AwaitingApproval
                             && context.pending_tools.is_empty()
@@ -723,6 +860,28 @@ impl WorkflowExecutor {
                                 self.child_task_id,
                                 self.child_sessions.len()
                             );
+                            if let Some(completion) = self
+                                .pending_child_completions
+                                .iter()
+                                .find(|completion| {
+                                    !completion.consumed
+                                        && Some(completion.child_task_id.as_str())
+                                            == self.child_task_id.as_deref()
+                                })
+                                .cloned()
+                            {
+                                log::info!(
+                                    "[Workflow][session={}][phase=restore][event=child_completion_replay] Replaying durable child completion {}",
+                                    self.session_id,
+                                    completion.child_task_id
+                                );
+                                let _ = self
+                                    .apply_child_task_completion(
+                                        completion.child_task_id.clone(),
+                                        completion.to_signal_result(),
+                                    )
+                                    .await?;
+                            }
                         }
                     }
                     crate::workflow::react::replay::RecoveryResult::SafeFailed {
@@ -938,6 +1097,7 @@ impl WorkflowExecutor {
                     tm.register_tool(Arc::new(
                         crate::workflow::react::orchestrator::TaskTool::new(
                             self.sub_agent_factory.clone(),
+                            self.context.main_store.clone(),
                             self.tsid_generator.clone(),
                         )
                         .with_parent_session(self.session_id.clone())
@@ -1698,41 +1858,10 @@ impl WorkflowExecutor {
                                 result
                             );
 
-                            if let Some(resolution) =
-                                crate::workflow::react::child_tasks::resolve_child_task_completion(
-                                    &mut self.child_task_id,
-                                    &mut self.child_sessions,
-                                    &child_task_id,
-                                    &result,
-                                )
+                            if !self
+                                .apply_child_task_completion(child_task_id.clone(), result)
+                                .await?
                             {
-                                self.add_message_and_notify_internal(
-                                    "assistant".to_string(),
-                                    format!(
-                                        "Child task {} {}: {}",
-                                        resolution.child_task_id,
-                                        resolution.status,
-                                        resolution.content
-                                    ),
-                                    None,
-                                    None,
-                                    None,
-                                    resolution.is_error,
-                                    resolution.is_error.then(|| "ChildTaskFailed".to_string()),
-                                    Some(json!({
-                                        "child_task_id": child_task_id,
-                                        "result": result,
-                                        "title": format!("Child task {}", resolution.child_task_id),
-                                        "summary": resolution.content,
-                                        "execution_status": resolution.status,
-                                        "is_error": resolution.is_error,
-                                        "error_type": if resolution.is_error { "ChildTaskFailed" } else { "" }
-                                    })),
-                                )
-                                .await?;
-
-                                self.update_state(WorkflowState::Thinking).await?;
-                            } else {
                                 log::warn!(
                                     "[Workflow][session={}][phase=wait][event=child_task_mismatch] Received completion for unexpected child task {}. Expected: {:?}",
                                     self.session_id,
@@ -1740,6 +1869,32 @@ impl WorkflowExecutor {
                                     self.child_task_id
                                 );
                             }
+                            continue;
+                        }
+                        WorkflowSignal::CompressionReady {
+                            compressed_until_message_id,
+                            summary,
+                        } => {
+                            self.apply_background_compression_ready(
+                                compressed_until_message_id,
+                                summary,
+                            )
+                            .await?;
+                            continue;
+                        }
+                        WorkflowSignal::CompressionFailed {
+                            compressed_until_message_id,
+                            error,
+                        } => {
+                            self.clear_background_compression_if_matches(
+                                compressed_until_message_id,
+                            );
+                            log::warn!(
+                                "[Workflow][session={}][phase=compression] Background rollup compression failed for boundary {}: {}",
+                                self.session_id,
+                                compressed_until_message_id,
+                                error
+                            );
                             continue;
                         }
                         _ => {}
@@ -2078,6 +2233,30 @@ impl WorkflowExecutor {
                                 self.current_step = 0;
                                 self.max_steps += DEFAULT_MAX_STEPS;
                                 self.update_state(WorkflowState::Thinking).await?;
+                            }
+                            WorkflowSignal::CompressionReady {
+                                compressed_until_message_id,
+                                summary,
+                            } => {
+                                self.apply_background_compression_ready(
+                                    compressed_until_message_id,
+                                    summary,
+                                )
+                                .await?;
+                            }
+                            WorkflowSignal::CompressionFailed {
+                                compressed_until_message_id,
+                                error,
+                            } => {
+                                self.clear_background_compression_if_matches(
+                                    compressed_until_message_id,
+                                );
+                                log::warn!(
+                                    "[Workflow][session={}][phase=compression] Background rollup compression failed for boundary {}: {}",
+                                    self.session_id,
+                                    compressed_until_message_id,
+                                    error
+                                );
                             }
                             WorkflowSignal::UserMessage { content, .. } => {
                                 let user_content = content.clone();
@@ -2610,90 +2789,101 @@ impl WorkflowExecutor {
                 self.sync_todo_list().await?;
             }
 
-            // --- TRIGGER CONTEXT COMPRESSION IF NEEDED ---
-            // Cooldown: at least 3 steps since last compression to prevent infinite loops
-            if needs_compression && self.current_step > self.last_compression_step + 3 {
-                if let Some((compression_candidate, compressed_until_message_id)) =
-                    self.context.build_compression_candidate()
-                {
-                    if self.last_compression_boundary_id == Some(compressed_until_message_id) {
-                        log::info!(
-                            "[Workflow][session={}][phase=compression] Skip compression because boundary {} was already compressed",
-                            self.session_id,
-                            compressed_until_message_id
-                        );
-                        continue;
-                    }
+            // --- TRIGGER CONTEXT COMPRESSION ---
+            // Cooldown: at least 3 steps since the last persisted compression to prevent churn.
+            if self.current_step > self.last_compression_step + 3 {
+                if needs_compression {
+                    if let Some((compression_candidate, compressed_until_message_id)) =
+                        self.context.build_blocking_compression_candidate()
+                    {
+                        if self.last_compression_boundary_id == Some(compressed_until_message_id) {
+                            log::info!(
+                                "[Workflow][session={}][phase=compression] Skip blocking compression because boundary {} was already compressed",
+                                self.session_id,
+                                compressed_until_message_id
+                            );
+                            continue;
+                        }
 
-                    self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
-                        is_compressing: true,
-                        message: t!("workflow.compression_in_progress").to_string(),
-                    })
-                    .await?;
+                        self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
+                            is_compressing: true,
+                            message: t!("workflow.compression_in_progress").to_string(),
+                        })
+                        .await?;
 
-                    self.dispatch_ui_payload(GatewayPayload::Notification {
-                        message: t!("workflow.compression_in_progress").to_string(),
-                        category: Some("info".to_string()),
-                    })
-                    .await?;
+                        self.dispatch_ui_payload(GatewayPayload::Notification {
+                            message: t!("workflow.compression_in_progress").to_string(),
+                            category: Some("info".to_string()),
+                        })
+                        .await?;
 
-                    let compression_result = self.compressor.compress(&compression_candidate).await;
+                        let compression_result =
+                            self.compressor.compress(&compression_candidate).await;
 
-                    self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
-                        is_compressing: false,
-                        message: String::new(),
-                    })
-                    .await?;
+                        self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
+                            is_compressing: false,
+                            message: String::new(),
+                        })
+                        .await?;
 
-                    self.dispatch_ui_payload(GatewayPayload::Notification {
-                        message: String::new(),
-                        category: Some("info".to_string()),
-                    })
-                    .await?;
+                        self.dispatch_ui_payload(GatewayPayload::Notification {
+                            message: String::new(),
+                            category: Some("info".to_string()),
+                        })
+                        .await?;
 
-                    match compression_result {
-                        Ok(summary) => match self
-                            .context
-                            .compress(
-                                summary,
-                                self.current_step as i32,
-                                compressed_until_message_id,
-                            )
-                            .await
-                        {
-                            Ok(()) => {
-                                self.last_compression_step = self.current_step;
-                                self.last_compression_boundary_id =
-                                    Some(compressed_until_message_id);
-                                log::info!(
-                                    "[Workflow][session={}][phase=compression] Persisted summary through boundary {}. current_context_tokens={}",
-                                    self.session_id,
-                                    compressed_until_message_id,
-                                    self.context.current_token_estimate()
-                                );
-                                self.dispatch_context_usage().await?;
+                        match compression_result {
+                            Ok(summary) => {
+                                if let Err(err) = self
+                                    .persist_compression_summary(
+                                        summary,
+                                        compressed_until_message_id,
+                                    )
+                                    .await
+                                {
+                                    log::warn!(
+                                        "[Workflow][session={}][phase=compression] Failed to persist compressed context: {}",
+                                        self.session_id,
+                                        err
+                                    );
+                                }
                             }
                             Err(err) => {
                                 log::warn!(
-                                    "[Workflow][session={}][phase=compression] Failed to persist compressed context: {}",
+                                    "[Workflow][session={}][phase=compression] Compression request failed: {}",
                                     self.session_id,
                                     err
                                 );
                             }
-                        },
-                        Err(err) => {
-                            log::warn!(
-                                "[Workflow][session={}][phase=compression] Compression request failed: {}",
+                        }
+                    } else {
+                        log::info!(
+                            "[Workflow][session={}][phase=compression] Skip blocking compression because no completed finish_task segment is available",
+                            self.session_id
+                        );
+                    }
+                } else if self.background_compression_boundary_id.is_none() {
+                    if let Some((compression_candidate, compressed_until_message_id)) =
+                        self.context.build_rollup_compression_candidate()
+                    {
+                        if self.last_compression_boundary_id == Some(compressed_until_message_id) {
+                            log::info!(
+                                "[Workflow][session={}][phase=compression] Skip background rollup because boundary {} was already compressed",
                                 self.session_id,
-                                err
+                                compressed_until_message_id
+                            );
+                        } else {
+                            log::info!(
+                                "[Workflow][session={}][phase=compression] Starting background rollup compression through boundary {}",
+                                self.session_id,
+                                compressed_until_message_id
+                            );
+                            self.spawn_background_compression(
+                                compression_candidate,
+                                compressed_until_message_id,
                             );
                         }
                     }
-                } else {
-                    log::info!(
-                        "[Workflow][session={}][phase=compression] Skip compression because no completed finish_task segment is available",
-                        self.session_id
-                    );
                 }
             }
 
@@ -3245,6 +3435,7 @@ impl WorkflowExecutor {
         // 2.4 Smart approval AI review
         if self.policy.approval_level == ApprovalLevel::Smart
             && name != crate::tools::TOOL_BASH
+            && !crate::tools::is_auto_execute_workflow_tool(name)
             && !Self::is_smart_mode_read_only_tool(name)
         {
             if let Some(review) = self
@@ -3302,6 +3493,52 @@ impl WorkflowExecutor {
 
     fn is_postponed_turn_block_result(reinforced: &ReinforcedResult) -> bool {
         reinforced.observation_kind == Some(ObservationKind::TurnBlockedPostponed)
+    }
+
+    async fn apply_child_task_completion(
+        &mut self,
+        child_task_id: String,
+        result: serde_json::Value,
+    ) -> Result<bool, WorkflowEngineError> {
+        if let Some(resolution) = crate::workflow::react::child_tasks::resolve_child_task_completion(
+            &mut self.child_task_id,
+            &mut self.child_sessions,
+            &child_task_id,
+            &result,
+        ) {
+            self.pending_child_completions
+                .retain(|completion| completion.child_task_id != child_task_id);
+
+            self.add_message_and_notify_internal(
+                "user".to_string(),
+                format!(
+                    "<SYSTEM_REMINDER>\nChild task {} {}: {}\n</SYSTEM_REMINDER>",
+                    resolution.child_task_id, resolution.status, resolution.content
+                ),
+                None,
+                None,
+                Some(StepType::Observe),
+                resolution.is_error,
+                resolution.is_error.then(|| "ChildTaskFailed".to_string()),
+                Some(json!({
+                    "message_kind": "runtime_observation",
+                    "observation_type": "child_task_completion",
+                    "child_task_id": child_task_id,
+                    "result": result,
+                    "title": format!("Child task {}", resolution.child_task_id),
+                    "summary": resolution.content,
+                    "execution_status": resolution.status,
+                    "is_error": resolution.is_error,
+                    "error_type": if resolution.is_error { "ChildTaskFailed" } else { "" }
+                })),
+            )
+            .await?;
+
+            self.update_state(WorkflowState::Thinking).await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     pub(crate) async fn update_state(
@@ -3908,6 +4145,31 @@ impl WorkflowExecutor {
             {
                 continue;
             }
+
+            if let Some(WorkflowSignal::CompressionReady {
+                compressed_until_message_id,
+                summary,
+            }) = WorkflowSignal::parse(&s)
+            {
+                self.apply_background_compression_ready(compressed_until_message_id, summary)
+                    .await?;
+                continue;
+            }
+
+            if let Some(WorkflowSignal::CompressionFailed {
+                compressed_until_message_id,
+                error,
+            }) = WorkflowSignal::parse(&s)
+            {
+                self.clear_background_compression_if_matches(compressed_until_message_id);
+                log::warn!(
+                    "[Workflow][session={}][phase=compression] Background rollup compression failed for boundary {}: {}",
+                    self.session_id,
+                    compressed_until_message_id,
+                    error
+                );
+                continue;
+            }
         }
 
         // Also drain user messages stashed by temporary signal consumers (e.g. LLM retry backoff).
@@ -4146,6 +4408,7 @@ impl WorkflowExecutor {
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_task_id: self.child_task_id.clone(),
             child_sessions: self.child_sessions.clone(),
+            pending_child_completions: self.pending_child_completions.clone(),
         }
     }
 

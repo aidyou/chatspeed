@@ -17,10 +17,8 @@ pub struct ChildTaskRegistry {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ParentSessionInfo {
     pub parent_session_id: String,
-    pub child_task_id: String,
 }
 
 impl ChildTaskRegistry {
@@ -38,7 +36,6 @@ impl ChildTaskRegistry {
             child_task_id.clone(),
             ParentSessionInfo {
                 parent_session_id: parent_session_id.clone(),
-                child_task_id,
             },
         );
         let mut entry = self.child_mapping.entry(parent_session_id).or_default();
@@ -124,7 +121,7 @@ pub fn resolve_child_task_completion(
         .or_else(|| result.get("error").and_then(|e| e.as_str()))
         .unwrap_or("Child task completed")
         .to_string();
-    let is_error = matches!(status.as_str(), "failed" | "cancelled");
+    let is_error = matches!(status.as_str(), "failed" | "cancelled" | "interrupted");
 
     child_sessions.retain(|id| id != incoming_child_task_id);
     *expected_child_task_id = None;
@@ -152,7 +149,6 @@ mod tests {
 
         let parent_info = registry.get_parent_info("child_1").unwrap();
         assert_eq!(parent_info.parent_session_id, "parent_1");
-        assert_eq!(parent_info.child_task_id, "child_1");
 
         let removed = registry.unregister_child_task("child_1").unwrap();
         assert_eq!(removed.parent_session_id, "parent_1");
@@ -243,6 +239,29 @@ mod tests {
 
         assert_eq!(resolution.status, "cancelled");
         assert_eq!(resolution.content, "user cancelled");
+        assert!(resolution.is_error);
+        assert_eq!(waiting_on, None);
+        assert!(child_sessions.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_child_task_completion_interrupted() {
+        let mut waiting_on = Some("child_1".to_string());
+        let mut child_sessions = vec!["child_1".to_string()];
+
+        let resolution = resolve_child_task_completion(
+            &mut waiting_on,
+            &mut child_sessions,
+            "child_1",
+            &serde_json::json!({
+                "status": "interrupted",
+                "error": "process restarted"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(resolution.status, "interrupted");
+        assert_eq!(resolution.content, "process restarted");
         assert!(resolution.is_error);
         assert_eq!(waiting_on, None);
         assert!(child_sessions.is_empty());

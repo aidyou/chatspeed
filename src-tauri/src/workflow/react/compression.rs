@@ -8,6 +8,7 @@ use crate::workflow::react::prompts::CONTEXT_COMPRESSION_PROMPT;
 use serde_json::json;
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct ContextCompressor {
     pub chat_state: Arc<ChatState>,
     pub provider_id: i64,

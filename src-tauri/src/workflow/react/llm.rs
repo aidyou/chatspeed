@@ -618,6 +618,7 @@ impl LlmProcessor {
 
     fn normalize_history(&self, raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
         let mut history: Vec<serde_json::Value> = Vec::new();
+        let mut deferred_system_observations: Vec<String> = Vec::new();
 
         // If a tool call has both an approval preview (pending) and a later final observation
         // (approved/executed), keep only the final one in LLM context to avoid duplicate tool
@@ -646,6 +647,20 @@ impl LlmProcessor {
         for m in raw_history {
             // As part of defensive programming, filter out system messages
             if m.role == "system" {
+                continue;
+            }
+
+            let is_runtime_observation = m
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("message_kind"))
+                .and_then(|value| value.as_str())
+                == Some("runtime_observation");
+            let is_internal_system_observation = m.role == "user"
+                && m.step_type.as_deref() == Some("observe")
+                && (is_runtime_observation || m.message.contains("<SYSTEM_REMINDER>"));
+            if is_internal_system_observation {
+                deferred_system_observations.push(m.message.clone());
                 continue;
             }
 
@@ -782,6 +797,21 @@ impl LlmProcessor {
                     }
                 }
             }
+        }
+
+        if !deferred_system_observations.is_empty()
+            && !history.last().is_some_and(|msg| {
+                msg["role"] == "assistant"
+                    && msg
+                        .get("tool_calls")
+                        .and_then(|calls| calls.as_array())
+                        .is_some_and(|calls| !calls.is_empty())
+            })
+        {
+            history.push(serde_json::json!({
+                "role": "user",
+                "content": deferred_system_observations.join("\n\n")
+            }));
         }
 
         history

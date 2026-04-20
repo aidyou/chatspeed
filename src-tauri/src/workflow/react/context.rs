@@ -68,6 +68,10 @@ impl ContextManager {
             })
     }
 
+    fn latest_summary_index(messages: &[WorkflowMessage]) -> Option<usize> {
+        messages.iter().rposition(Self::is_summary_message)
+    }
+
     fn estimate_message_tokens(message: &WorkflowMessage) -> f64 {
         let content_to_estimate = if let Some(att) = &message.attached_context {
             format!("{}\n\n{}", message.message, att)
@@ -116,30 +120,34 @@ impl ContextManager {
             .round() as usize
     }
 
-    pub fn build_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
+    fn build_compression_candidate_after_finish_count(
+        &self,
+        minimum_finish_tasks_after_summary: usize,
+    ) -> Option<(Vec<WorkflowMessage>, i64)> {
         let compressed_until_message_id =
             Self::latest_summary_boundary_id(&self.messages).unwrap_or(0);
 
-        let last_finish_idx = self
+        let finish_task_indices: Vec<usize> = self
             .messages
             .iter()
             .enumerate()
-            .rev()
-            .find(|(_, message)| {
+            .filter(|(_, message)| {
                 Self::is_successful_finish_task_message(message)
                     && message
                         .id
                         .is_some_and(|id| id > compressed_until_message_id)
             })
-            .map(|(idx, _)| idx)?;
+            .map(|(idx, _)| idx)
+            .collect();
 
+        if finish_task_indices.len() < minimum_finish_tasks_after_summary {
+            return None;
+        }
+
+        let last_finish_idx = *finish_task_indices.last()?;
         let compressed_until_id = self.messages[last_finish_idx].id?;
 
-        let start_idx = self
-            .messages
-            .iter()
-            .rposition(Self::is_summary_message)
-            .unwrap_or(0);
+        let start_idx = Self::latest_summary_index(&self.messages).unwrap_or(0);
 
         if start_idx > last_finish_idx {
             return None;
@@ -149,6 +157,18 @@ impl ContextManager {
             self.messages[start_idx..=last_finish_idx].to_vec(),
             compressed_until_id,
         ))
+    }
+
+    pub fn build_blocking_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
+        self.build_compression_candidate_after_finish_count(1)
+    }
+
+    pub fn build_rollup_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
+        if Self::latest_summary_index(&self.messages).is_none() {
+            return None;
+        }
+
+        self.build_compression_candidate_after_finish_count(2)
     }
 
     pub fn new(
@@ -545,7 +565,7 @@ mod tests {
             .0;
 
         let (candidate_messages, compressed_until_id) = context
-            .build_compression_candidate()
+            .build_blocking_compression_candidate()
             .expect("finish_task should create a compressible segment");
 
         context
@@ -690,7 +710,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_compression_candidate_starts_after_previous_summary() {
+    async fn build_rollup_compression_candidate_starts_after_previous_summary() {
         let (_dir, store) = setup_store();
         let session_id = "session-summary-boundary-test";
         insert_workflow(&store, session_id);
@@ -752,7 +772,7 @@ mod tests {
             )
             .await
             .expect("failed to add second task");
-        let finish_task_2 = context
+        let _finish_task_2 = context
             .add_message(
                 "tool".to_string(),
                 "Finished".to_string(),
@@ -767,7 +787,7 @@ mod tests {
             .await
             .expect("failed to add second finish task")
             .0;
-        let post_finish = context
+        let _ = context
             .add_message(
                 "user".to_string(),
                 "task 3".to_string(),
@@ -780,11 +800,40 @@ mod tests {
                 None,
             )
             .await
+            .expect("failed to add third task");
+        let finish_task_3 = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                6,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_FINISH_TASK })),
+            )
+            .await
+            .expect("failed to add third finish task")
+            .0;
+        let post_finish = context
+            .add_message(
+                "user".to_string(),
+                "task 4".to_string(),
+                None,
+                None,
+                None,
+                7,
+                false,
+                None,
+                None,
+            )
+            .await
             .expect("failed to add active task")
             .0;
 
         let (candidate, compressed_until_id) = context
-            .build_compression_candidate()
+            .build_rollup_compression_candidate()
             .expect("second finish task should be compressible");
 
         assert_eq!(
@@ -798,16 +847,138 @@ mod tests {
         );
         assert_eq!(
             candidate.last().and_then(|m| m.id),
-            finish_task_2.id,
+            finish_task_3.id,
             "incremental compression should stop at the latest finish_task after the summary"
         );
         assert_eq!(
             compressed_until_id,
-            finish_task_2.id.expect("finish task id missing")
+            finish_task_3.id.expect("finish task id missing")
         );
         assert!(
             context.messages.iter().any(|m| m.id == post_finish.id),
             "messages after the compression boundary should stay in memory"
+        );
+    }
+
+    #[tokio::test]
+    async fn rollup_candidate_requires_two_finished_segments_after_summary() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-rollup-threshold-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 1".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add first task");
+        let finish_task_1 = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_FINISH_TASK })),
+            )
+            .await
+            .expect("failed to add first finish task")
+            .0;
+
+        context
+            .compress(
+                "<state_snapshot>task1</state_snapshot>".to_string(),
+                2,
+                finish_task_1.id.expect("finish_task should have id"),
+            )
+            .await
+            .expect("initial compression should succeed");
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 2".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add second task");
+        let _ = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                4,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_FINISH_TASK })),
+            )
+            .await
+            .expect("failed to add second finish task");
+
+        assert!(
+            context.build_rollup_compression_candidate().is_none(),
+            "background rollup should not trigger until two finished segments exist after the latest summary"
+        );
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 3".to_string(),
+                None,
+                None,
+                None,
+                5,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add third task");
+        let finish_task_3 = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                6,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_FINISH_TASK })),
+            )
+            .await
+            .expect("failed to add third finish task")
+            .0;
+
+        let (_, compressed_until_id) = context
+            .build_rollup_compression_candidate()
+            .expect("background rollup should trigger after two finished segments");
+        assert_eq!(
+            compressed_until_id,
+            finish_task_3.id.expect("finish task id missing")
         );
     }
 
