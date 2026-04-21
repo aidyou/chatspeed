@@ -270,7 +270,7 @@ tools:
     function_not_found: "函數未找到"
     initialization: "初始化錯誤"
     invalid_params: "無效參數：%{details}"
-    io_error: "IO 錯誤"
+    io_error: "IO 錯誤：%{details}"
     mcp_server_not_found: "MCP 伺服器未找到"
     network_error: "網路錯誤"
     serialization: "序列化錯誤"

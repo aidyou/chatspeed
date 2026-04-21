@@ -1205,7 +1205,7 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
             "<SYSTEM_REMINDER>Check the tool's input schema and ensure all required fields are provided with correct types.</SYSTEM_REMINDER>".to_string()
         }
         "NoToolCall" => {
-            "<SYSTEM_REMINDER>CRITICAL: You MUST call a tool in every response. Review the available tools and select the appropriate one for your current step. If you need to communicate with the user, use 'answer_user'. If the task is complete, use 'finish_task'.</SYSTEM_REMINDER>".to_string()
+            "<SYSTEM_REMINDER>CRITICAL: You MUST call a tool in every response. Review the available tools and select the appropriate one for your current step. If you need to communicate with the user, use 'answer_user'. If the task is complete, use 'complete_workflow_with_summary'.</SYSTEM_REMINDER>".to_string()
         }
         "Timeout" => {
             "<SYSTEM_REMINDER>Operation timed out. Consider breaking the task into smaller steps or using a less resource-intensive approach.</SYSTEM_REMINDER>".to_string()

@@ -5,7 +5,7 @@
       :key="message.displayId"
       class="message"
       :data-message-id="message.displayId || message.id || null"
-      :data-child-task-id="getMessageChildTaskId(message)"
+      :data-child-task-id="getMessageSubAgentId(message)"
       :class="[message.role, message.stepType?.toLowerCase(), { 'is-error': message.isError }]">
       <div class="avatar" v-if="message.role === 'user'">
         <cs name="talk" class="user-icon" />
@@ -41,18 +41,16 @@
               message.toolDisplay.toolType || 'tool-system',
               message.toolDisplay.isError ? 'status-error' : 'status-success'
             ]">
-            <!-- finish_task special display -->
-            <template
-              v-if="
-                message.toolDisplay?.action === $t('workflow.finishTask') ||
-                message.toolDisplay?.action?.includes('Finish')
-              ">
+            <!-- complete_workflow_with_summary special display -->
+            <template v-if="isFinishTaskMessage(message)">
               <div class="tool-line finish-task-display">
                 <cs
                   :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
                   size="14px"
                   class="tool-type-icon finish-icon" />
-                <span class="finish-text">{{ $t('workflow.finishTask') }}</span>
+                <span class="finish-text">
+                  {{ getFinishTaskLabel(message) }}
+                </span>
               </div>
             </template>
 
@@ -204,8 +202,7 @@
                   :class="{
                     rotating:
                       isRunning &&
-                      !getParsedMessage(message).content &&
-                      (message.metadata?.tool_calls?.length || 0) === 0 &&
+                      !hasThoughtCompleted(message) &&
                       !isReasoningExpanded(message.displayId) &&
                       message === lastAssistantMessage
                   }" />
@@ -217,10 +214,7 @@
                   </template>
                   <template
                     v-else-if="
-                      isRunning &&
-                      !getParsedMessage(message).content &&
-                      (message.metadata?.tool_calls?.length || 0) === 0 &&
-                      message === lastAssistantMessage
+                      isRunning && !hasThoughtCompleted(message) && message === lastAssistantMessage
                     ">
                     {{ getReasoningPreview(message.reasoning || message.message) }}
                   </template>
@@ -278,10 +272,10 @@
                 name="reasoning"
                 size="14px"
                 class="reasoning-icon"
-                :class="{ rotating: !chatState.content }" />
+                :class="{ rotating: !hasStreamingThoughtCompleted }" />
               <span class="reasoning-text">
                 {{
-                  chatState.content
+                  hasStreamingThoughtCompleted
                     ? $t('workflow.thoughtCompleted') || 'Thought Complete'
                     : getReasoningPreview(chatState.reasoning)
                 }}
@@ -445,15 +439,123 @@ const askUserDrafts = ref({})
 const isHiddenSystemObservation = message => {
   if (message?.metadata?.message_kind === 'runtime_observation') return true
   if (message?.metadata?.messageKind === 'runtime_observation') return true
-  if (message?.metadata?.error_type === 'ChildTaskInterrupted') return true
-  if (message?.metadata?.errorType === 'ChildTaskInterrupted') return true
+  if (message?.metadata?.error_type === 'SubAgentInterrupted') return true
+  if (message?.metadata?.errorType === 'SubAgentInterrupted') return true
   if (message?.role !== 'user') return false
   if ((message.stepType || '').toLowerCase() !== 'observe') return false
   if (getAskUserResponseItems(message).length > 0) return false
   return props.removeSystemReminder(message.message || '').trim() === ''
 }
 
-const visibleMessages = computed(() => props.messages.filter(message => !isHiddenSystemObservation(message)))
+const getMessageToolName = message => {
+  return String(
+    message?.metadata?.tool_name ||
+      message?.metadata?.tool_call?.name ||
+      message?.metadata?.tool_call?.function?.name ||
+      ''
+  ).toLowerCase()
+}
+
+const isFinishTaskMessage = message => {
+  const metaToolName =
+    getMessageToolName(message)
+  const action = message?.toolDisplay?.action || ''
+  return (
+    metaToolName === 'complete_workflow_with_summary' ||
+    action === t('workflow.finishTask') ||
+    action.includes('Finish')
+  )
+}
+
+const isFinishTaskErrorMessage = message => {
+  if (!message || message.role !== 'tool') return false
+  return isFinishTaskMessage(message) && !!message.toolDisplay?.isError
+}
+
+const isSameFinishTaskError = (left, right) => {
+  if (!isFinishTaskErrorMessage(left) || !isFinishTaskErrorMessage(right)) return false
+  return (
+    props.removeSystemReminder(left.message || '') ===
+      props.removeSystemReminder(right.message || '') &&
+    (left.toolDisplay?.summary || '') === (right.toolDisplay?.summary || '')
+  )
+}
+
+const collapseRepeatedFinishTaskErrors = messages => {
+  const collapsed = []
+
+  for (let index = 0; index < messages.length; ) {
+    const current = messages[index]
+
+    if (!isFinishTaskErrorMessage(current)) {
+      collapsed.push(current)
+      index += 1
+      continue
+    }
+
+    let count = 1
+    let nextIndex = index + 1
+    while (nextIndex < messages.length && isSameFinishTaskError(current, messages[nextIndex])) {
+      count += 1
+      nextIndex += 1
+    }
+
+    if (count > 1) {
+      collapsed.push({
+        ...current,
+        displayId: `${current.displayId || current.id || `finish_task_${index}`}_collapsed_${count}`,
+        metadata: {
+          ...(current.metadata || {}),
+          finish_task_error_count: count
+        }
+      })
+    } else {
+      collapsed.push(current)
+    }
+
+    index = nextIndex
+  }
+
+  return collapsed
+}
+
+const visibleMessages = computed(() =>
+  collapseRepeatedFinishTaskErrors(
+    props.messages.filter(message => !isHiddenSystemObservation(message))
+  )
+)
+const lastVisibleMessage = computed(
+  () => visibleMessages.value[visibleMessages.value.length - 1] || null
+)
+const getVisibleMessageIndex = message =>
+  visibleMessages.value.findIndex(item => item.displayId === message?.displayId)
+
+const hasSubsequentVisibleOutput = message => {
+  const index = getVisibleMessageIndex(message)
+  if (index === -1) return false
+
+  return visibleMessages.value.slice(index + 1).some(item => item.role !== 'user')
+}
+
+const hasStreamingThoughtCompleted = computed(() => {
+  if (props.chatState.content) return true
+
+  const message = lastVisibleMessage.value
+  if (!message || message.role === 'user') return false
+
+  if (message.role === 'tool') return true
+
+  return hasThoughtCompleted(message)
+})
+
+const hasThoughtCompleted = message => {
+  if (!message) return false
+  if (props.getParsedMessage(message).content) return true
+  if ((message.metadata?.tool_calls?.length || 0) > 0) return true
+  if ((message.pendingToolCalls?.length || 0) > 0) return true
+  if (hasSubsequentVisibleOutput(message)) return true
+  return false
+}
 
 const getApprovalDraft = toolCallId => {
   if (!toolCallId) return ''
@@ -492,12 +594,18 @@ const formatAskUserAnswer = item => {
   return item.choice_index ? `${item.choice_index}. ${item.choice}` : item.choice || ''
 }
 
+const getFinishTaskLabel = message => {
+  const count = Number(message?.metadata?.finish_task_error_count || 1)
+  if (count > 1) return `${t('workflow.finishTask')} (${count})`
+  return t('workflow.finishTask')
+}
+
 const getVisibleUserContent = message => props.removeSystemReminder(message?.message || '')
 
-const getMessageChildTaskId = message => {
+const getMessageSubAgentId = message => {
   const meta = message?.metadata || {}
-  if (meta.child_task_id || meta.childTaskId) return meta.child_task_id || meta.childTaskId
-  if ((meta.tool_name || '').toLowerCase() !== 'task') return null
+  if (meta.sub_agent_id || meta.subAgentId) return meta.sub_agent_id || meta.subAgentId
+  if ((meta.tool_name || '').toLowerCase() !== 'sub_agent_run') return null
 
   try {
     const parsed = JSON.parse(message.message || '{}')

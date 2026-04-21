@@ -93,8 +93,8 @@ impl LoopDetector {
         }
 
         if repeat_count >= LOOP_REPEAT_THRESHOLD {
-            let task_output_guidance = if tool_name == crate::tools::TOOL_TASK_OUTPUT {
-                "\nFor task_output specifically: do NOT call task_output again for the same missing or unavailable task_id. task_output only retrieves results for task IDs returned by the task tool; it is not a final-answer/output tool. If no valid task exists, continue with another appropriate tool or report the limitation."
+            let task_output_guidance = if tool_name == crate::tools::TOOL_SUB_AGENT_OUTPUT {
+                "\nFor sub_agent_output specifically: do NOT call sub_agent_output again for the same missing or unavailable task_id. sub_agent_output only retrieves results for sub-agent IDs returned by sub_agent_run; it is not a final-answer/output tool. If no valid sub-agent exists, continue with another appropriate tool or report the limitation."
             } else {
                 ""
             };
@@ -133,8 +133,8 @@ impl LoopDetector {
                 "<SYSTEM_REMINDER>LOOP DETECTED: You have produced the exact same assistant response {} times in a row without calling any tools.\n\
                 Repeating the same text is not progress. You MUST change strategy now:\n\
                 1. If you still need information, call an appropriate tool instead of repeating the same sentence.\n\
-                2. If the task is actually complete, provide a concise final summary and call 'finish_task'.\n\
-                3. If you cannot continue because of a real limitation, explain the limitation once and then call 'ask_user' or 'finish_task'.\n\
+                2. If the task is actually complete, provide a concise final summary and call 'complete_workflow_with_summary'.\n\
+                3. If you cannot continue because of a real limitation, explain the limitation once and then call 'ask_user' or 'complete_workflow_with_summary'.\n\
                 Do NOT output the same response again without a tool call.</SYSTEM_REMINDER>",
                 self.consecutive_no_tool_responses
             ))

@@ -270,7 +270,7 @@ tools:
     function_not_found: "Fonction introuvable"
     initialization: "Erreur d'initialisation"
     invalid_params: "Paramètres invalides : %{details}"
-    io_error: "Erreur d'E/S"
+    io_error: "Erreur d'E/S : %{details}"
     mcp_server_not_found: "Serveur MCP introuvable"
     network_error: "Erreur réseau"
     serialization: "Erreur de sérialisation"

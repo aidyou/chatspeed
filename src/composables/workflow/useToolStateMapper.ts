@@ -60,11 +60,11 @@ function isInternalTool(toolName: string): boolean {
   return [
     'answer_user',
     'ask_user',
-    'finish_task',
+    'complete_workflow_with_summary',
     'submit_plan',
-    'task',
-    'task_output',
-    'task_stop'
+    'sub_agent_run',
+    'sub_agent_output',
+    'sub_agent_stop'
   ].includes(name)
 }
 
@@ -202,18 +202,21 @@ function determineStatus(message: RawMessage): ToolViewStatus | null {
  */
 function generateTitle(toolName: string, args?: Record<string, any>): string {
   const formatters: Record<string, (args: Record<string, any>) => string> = {
-    read_file: (a) => `Read ${a.file_path || a.path || 'file'}`,
-    write_file: (a) => `Write ${a.file_path || a.path || 'file'}`,
-    edit_file: (a) => `Edit ${a.file_path || a.path || 'file'}`,
-    list_dir: (a) => `List ${a.path || a.dir || '.'}`,
-    glob: (a) => `Glob ${a.pattern || a.glob || ''}`,
-    grep: (a) => `Grep "${a.pattern || a.query || ''}"`,
-    bash: (a) => `Bash: ${(a.command || '').substring(0, 40)}`,
-    web_fetch: (a) => `Fetch ${a.url || ''}`,
-    web_search: (a) => `Search "${a.query || ''}"`,
+    read_file: a => `Read ${a.file_path || a.path || 'file'}`,
+    write_file: a => `Write ${a.file_path || a.path || 'file'}`,
+    edit_file: a => `Edit ${a.file_path || a.path || 'file'}`,
+    list_dir: a => `List ${a.path || a.dir || '.'}`,
+    glob: a => `Glob ${a.pattern || a.glob || ''}`,
+    grep: a => `Grep "${a.pattern || a.query || ''}"`,
+    bash: a => `Bash: ${(a.command || '').substring(0, 40)}`,
+    web_fetch: a => `Fetch ${a.url || ''}`,
+    web_search: a => `Search "${a.query || ''}"`,
     todo_create: () => 'Create Todo',
     todo_update: () => 'Update Todo',
-    finish_task: () => 'Finish Task',
+    sub_agent_run: () => 'Run Sub-agent',
+    sub_agent_output: () => 'Sub-agent Output',
+    sub_agent_stop: () => 'Stop Sub-agent',
+    complete_workflow_with_summary: () => 'Complete Workflow with Summary',
     ask_user: () => 'Ask User'
   }
 
@@ -288,11 +291,11 @@ export function deriveToolViewState(
 
     // Status priority
     const priority: Record<ToolViewStatus, number> = {
-      'final_error': 4,
-      'final_success': 4,
-      'rejected': 3,
-      'approved_running': 2,
-      'pending': 1
+      final_error: 4,
+      final_success: 4,
+      rejected: 3,
+      approved_running: 2,
+      pending: 1
     }
 
     const newPriority = priority[status]
@@ -351,7 +354,7 @@ export function assertNoConflictingStates(
       if (foundStatus && foundStatus !== state.status) {
         throw new Error(
           `Conflicting states for tool_call_id ${toolCallId}: ` +
-          `${foundStatus} vs ${state.status}`
+            `${foundStatus} vs ${state.status}`
         )
       }
       foundStatus = state.status
@@ -359,15 +362,14 @@ export function assertNoConflictingStates(
   }
 
   if (foundCount > 1) {
-    throw new Error(
-      `Multiple entries for tool_call_id ${toolCallId}: ${foundCount} entries`
-    )
+    throw new Error(`Multiple entries for tool_call_id ${toolCallId}: ${foundCount} entries`)
   }
 }
 
-export function checkForConflicts(
-  tools: Map<string, ToolViewState>
-): { hasConflict: boolean; conflicts: string[] } {
+export function checkForConflicts(tools: Map<string, ToolViewState>): {
+  hasConflict: boolean
+  conflicts: string[]
+} {
   const conflicts: string[] = []
   const seen = new Set<string>()
 

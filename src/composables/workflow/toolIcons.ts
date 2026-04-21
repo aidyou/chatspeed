@@ -31,7 +31,7 @@ export function resolveWorkflowToolIcon(toolName: string, fallback = 'tool'): st
     return 'todo'
   }
 
-  if (normalized.startsWith('task')) {
+  if (normalized.startsWith('task') || normalized.startsWith('sub_agent')) {
     return 'task'
   }
 

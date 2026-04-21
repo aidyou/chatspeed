@@ -6,6 +6,23 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+fn format_read_file_open_error(path_str: &str, error: &std::io::Error) -> ToolError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => ToolError::IoError(format!(
+            "File not found: {}. Verify the path and use 'list_dir' to inspect nearby directories.",
+            path_str
+        )),
+        std::io::ErrorKind::PermissionDenied => ToolError::IoError(format!(
+            "Permission denied while opening file: {}. Check file permissions or ask the user to grant access.",
+            path_str
+        )),
+        _ => ToolError::IoError(format!(
+            "Failed to open file {}: {}",
+            path_str, error
+        )),
+    }
+}
+
 fn should_skip_list_dir_entry(name: &str) -> bool {
     let name_lower = name.to_lowercase();
     name == "node_modules"
@@ -74,9 +91,17 @@ impl ToolDefinition for ReadFile {
 
         const MAX_LINE_LENGTH: usize = 10_000;
         const MAX_TOTAL_SIZE: usize = 1_024_000;
+        let path = Path::new(path_str);
 
-        let file = fs::File::open(path_str)
-            .map_err(|e| ToolError::IoError(format!("Failed to open file: {}", e)))?;
+        if path.is_dir() {
+            return Err(ToolError::InvalidParams(format!(
+                "Path is a directory, not a file: {}. Use 'list_dir' to inspect directories.",
+                path_str
+            )));
+        }
+
+        let file =
+            fs::File::open(path_str).map_err(|e| format_read_file_open_error(path_str, &e))?;
         let reader = BufReader::new(file);
 
         let mut lines = Vec::new();
@@ -89,8 +114,14 @@ impl ToolDefinition for ReadFile {
             if i >= offset + limit {
                 break;
             }
-            let content =
-                line.map_err(|e| ToolError::IoError(format!("Error reading line {}: {}", i, e)))?;
+            let content = line.map_err(|e| {
+                ToolError::IoError(format!(
+                    "Failed to read line {} from {}: {}",
+                    i + 1,
+                    path_str,
+                    e
+                ))
+            })?;
             if content.len() > MAX_LINE_LENGTH {
                 return Err(ToolError::ExecutionFailed(format!(
                     "Line {} is too long. Use 'grep' or 'edit_file'.",
@@ -565,7 +596,31 @@ mod tests {
         });
         let result = tool.call(params).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ToolError::IoError(_)));
+        match result.unwrap_err() {
+            ToolError::IoError(msg) => {
+                assert!(msg.contains("File not found"));
+                assert!(msg.contains("/nonexistent/path/file.txt"));
+            }
+            other => panic!("Expected IoError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_directory_returns_invalid_params() {
+        let tool = ReadFile;
+        let temp_dir = tempdir().unwrap();
+        let params = json!({
+            "file_path": temp_dir.path().to_string_lossy().to_string()
+        });
+        let result = tool.call(params).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ToolError::InvalidParams(msg) => {
+                assert!(msg.contains("Path is a directory"));
+                assert!(msg.contains("list_dir"));
+            }
+            other => panic!("Expected InvalidParams, got {:?}", other),
+        }
     }
 
     #[tokio::test]

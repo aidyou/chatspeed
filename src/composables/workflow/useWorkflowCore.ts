@@ -537,8 +537,8 @@ export function useWorkflowCore({
                     }
                 } else if (payload.type === 'context_usage') {
                     workflowStore.setCurrentContextTokens(sessionId, payload.total_tokens)
-                } else if (payload.type === 'child_task_progress') {
-                    workflowStore.upsertChildTaskProgress(payload)
+                } else if (payload.type === 'sub_agent_progress') {
+                    workflowStore.upsertSubAgentProgress(payload)
                 } else if (payload.type === 'notification') {
                     workflowStore.setNotification(payload.message, payload.category)
                 } else if (payload.type === 'auto_approved_tools_updated') {

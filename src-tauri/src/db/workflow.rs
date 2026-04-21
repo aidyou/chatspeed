@@ -159,7 +159,9 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn.prepare(
-            "SELECT * FROM workflows WHERE parent_session_id IS NULL AND id NOT LIKE 'task\\_%' ESCAPE '\\' ORDER BY created_at DESC",
+            "SELECT * FROM workflows
+             WHERE parent_session_id IS NULL AND id NOT LIKE 'subagent\\_%' ESCAPE '\\'
+             ORDER BY updated_at DESC, created_at DESC",
         )?;
         let rows = stmt.query_map([], |row| Ok(Workflow::from(row)))?;
         let mut workflows = Vec::new();
@@ -195,27 +197,46 @@ impl MainStore {
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         let tx = conn.transaction()?;
+        let workflow_ids = {
+            let mut stmt = tx.prepare(
+                "WITH RECURSIVE workflow_tree(id, depth) AS (
+                    SELECT id, 0 FROM workflows WHERE id = ?1
+                    UNION ALL
+                    SELECT workflows.id, workflow_tree.depth + 1
+                    FROM workflows
+                    JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+                )
+                SELECT id FROM workflow_tree ORDER BY depth DESC",
+            )?;
+            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
+            let mut ids = Vec::new();
+            for row in rows {
+                ids.push(row?);
+            }
+            ids
+        };
 
-        // 1. Delete associated messages first
-        tx.execute(
-            "DELETE FROM workflow_messages WHERE session_id = ?1",
-            params![id],
-        )?;
+        for workflow_id in &workflow_ids {
+            tx.execute(
+                "DELETE FROM workflow_messages WHERE session_id = ?1",
+                params![workflow_id],
+            )?;
 
-        // 2. Delete snapshot (stage 2)
-        tx.execute(
-            "DELETE FROM workflow_snapshots WHERE session_id = ?1",
-            params![id],
-        )?;
+            tx.execute(
+                "DELETE FROM workflow_snapshots WHERE session_id = ?1",
+                params![workflow_id],
+            )?;
 
-        // 3. Delete events (stage 4)
-        tx.execute(
-            "DELETE FROM workflow_events WHERE session_id = ?1",
-            params![id],
-        )?;
+            tx.execute(
+                "DELETE FROM workflow_events WHERE session_id = ?1",
+                params![workflow_id],
+            )?;
+        }
 
-        // 4. Delete the workflow record
-        tx.execute("DELETE FROM workflows WHERE id = ?1", params![id])?;
+        // Delete child workflow rows before their parent to satisfy parent_session_id FK.
+        for workflow_id in &workflow_ids {
+            tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+        }
 
         tx.commit()?;
         Ok(())
@@ -283,6 +304,11 @@ impl MainStore {
                 if msg.is_error { 1 } else { 0 },
                 msg.error_type,
             ],
+        )?;
+
+        conn.execute(
+            "UPDATE workflows SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+            params![msg.session_id],
         )?;
 
         let id = conn.last_insert_rowid();
@@ -476,11 +502,11 @@ impl MainStore {
         let context_json = serde_json::to_string(ctx)?;
         let state_str = ctx.state.to_string();
         let wait_reason_str = ctx.wait_reason.as_ref().map(|wr| wr.to_string());
-        let child_sessions_json = serde_json::to_string(&ctx.child_sessions)?;
+        let sub_agent_sessions_json = serde_json::to_string(&ctx.sub_agent_sessions)?;
 
         conn.execute(
             "INSERT OR REPLACE INTO workflow_snapshots
-             (session_id, context_json, version, state, wait_reason, waiting_on_task_id, child_sessions, updated_at)
+             (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
             params![
                 ctx.session_id,
@@ -488,8 +514,8 @@ impl MainStore {
                 ctx.version,
                 state_str,
                 wait_reason_str,
-                ctx.waiting_on_task_id.clone(),
-                child_sessions_json,
+                ctx.waiting_on_sub_agent_id.clone(),
+                sub_agent_sessions_json,
             ],
         )?;
 
@@ -766,6 +792,44 @@ mod tests {
             workflows[0].id.as_deref(),
             Some("parent-session"),
             "child workflow should not appear in top-level workflow list"
+        );
+    }
+
+    #[test]
+    fn test_delete_workflow_removes_sub_agent_descendants() {
+        let store = create_test_store();
+
+        store
+            .create_workflow("parent-session", "Parent query", "agent-parent", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "subagent-child",
+                "Child query",
+                "agent-child",
+                None,
+                Some("parent-session"),
+            )
+            .expect("failed to create child workflow");
+
+        store
+            .delete_workflow("parent-session")
+            .expect("failed to recursively delete workflow tree");
+
+        let conn = store
+            .conn
+            .lock()
+            .expect("failed to lock db connection for delete assertion");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM workflows WHERE id IN ('parent-session', 'subagent-child')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to count deleted workflows");
+        assert_eq!(
+            count, 0,
+            "parent and sub-agent workflow rows should be deleted"
         );
     }
 }

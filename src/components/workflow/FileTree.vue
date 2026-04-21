@@ -24,6 +24,7 @@
             <span class="root-name" :title="root">{{ getDirName(root) }}</span>
           </div>
           <div class="root-actions">
+            <cs name="ext-folder-open" size="12px" class="action-btn open-btn" @click.stop="openAuthorizedFolder(root)" />
             <cs name="refresh" size="12px" class="action-btn refresh-btn" @click.stop="refreshRoot(root)" />
             <cs name="trash" size="12px" class="action-btn remove-btn" @click.stop="onRemovePath(root)" />
           </div>
@@ -95,6 +96,15 @@ const onAddPath = async () => {
 
 const onRemovePath = (path) => {
   emit('removePath', path)
+}
+
+const openAuthorizedFolder = async (path) => {
+  if (!path) return
+  try {
+    await invokeWrapper('open_path_in_file_manager', { path })
+  } catch (error) {
+    console.error('Failed to open authorized folder:', error)
+  }
 }
 
 const toggleExpand = async (path) => {

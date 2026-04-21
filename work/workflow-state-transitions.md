@@ -43,8 +43,8 @@ pub enum WorkflowState {
 | Thinking | AwaitingApproval | 工具需要审批 | interceptors.rs:151, 444 |
 | Thinking | AwaitingAutoApproval | Full 模式提交计划 | interceptors.rs:146 |
 | Thinking | AwaitingUser | ask_user 工具调用 | interceptors.rs:178 |
-| Thinking | Auditing | finish_task 且启用审计 | interceptors.rs:249 |
-| Thinking | Completed | finish_task 无需审计 | interceptors.rs:267, engine.rs:1418, 1681 |
+| Thinking | Auditing | complete_workflow_with_summary 且启用审计 | interceptors.rs:249 |
+| Thinking | Completed | complete_workflow_with_summary 无需审计 | interceptors.rs:267, engine.rs:1418, 1681 |
 | Thinking | Cancelled | stop 信号 | engine.rs:916, 1588, 2449 |
 | Thinking | Thinking | 信号处理后恢复 | engine.rs:1217, 1233, 1318, 1325, 1367, 1411, 1451, 2338 |
 
@@ -68,7 +68,7 @@ pub enum WorkflowState {
 
 | 源状态 | 目标状态 | 触发点 | 文件:行号 |
 |--------|----------|--------|-----------|
-| * | Completed | finish_task 成功 | interceptors.rs:267, engine.rs:1418, 1681 |
+| * | Completed | complete_workflow_with_summary 成功 | interceptors.rs:267, engine.rs:1418, 1681 |
 | * | Error | 引擎崩溃 | commands/workflow.rs:700 |
 | * | Cancelled | stop 信号或用户取消 | engine.rs:916, 1588, 2449 |
 

@@ -2,7 +2,7 @@
 
 use crate::db::MainStore;
 use crate::workflow::react::child_tasks::{
-    get_child_task_registry, resolve_child_task_completion, ChildTaskRegistry,
+    get_sub_agent_registry, resolve_sub_agent_completion, SubAgentRegistry,
 };
 use crate::workflow::react::manager::WorkflowManager;
 use crate::workflow::react::types::{ExecutionContext, RuntimeState, WaitReason};
@@ -18,51 +18,51 @@ fn create_test_store() -> Arc<std::sync::RwLock<MainStore>> {
 }
 
 #[test]
-fn test_p0_parent_task_enters_waiting_on_task_id() {
+fn test_p0_parent_session_enters_waiting_on_sub_agent() {
     let mut ctx = ExecutionContext::new("parent_session".to_string());
 
-    ctx.wait_reason = Some(WaitReason::ChildTask);
+    ctx.wait_reason = Some(WaitReason::SubAgent);
     ctx.state = RuntimeState::Waiting;
-    ctx.waiting_on_task_id = Some("child_task_1".to_string());
-    ctx.child_sessions.push("child_task_1".to_string());
+    ctx.waiting_on_sub_agent_id = Some("subagent_1".to_string());
+    ctx.sub_agent_sessions.push("subagent_1".to_string());
 
-    assert_eq!(ctx.waiting_on_task_id, Some("child_task_1".to_string()));
+    assert_eq!(ctx.waiting_on_sub_agent_id, Some("subagent_1".to_string()));
     assert_eq!(ctx.state, RuntimeState::Waiting);
-    assert_eq!(ctx.wait_reason, Some(WaitReason::ChildTask));
+    assert_eq!(ctx.wait_reason, Some(WaitReason::SubAgent));
 }
 
 #[test]
-fn test_p0_child_task_completion_triggers_parent_resume() {
-    let mut waiting_on = Some("child_1".to_string());
-    let mut child_sessions = vec!["child_1".to_string()];
+fn test_p0_sub_agent_completion_triggers_parent_resume() {
+    let mut waiting_on = Some("subagent_1".to_string());
+    let mut sub_agent_sessions = vec!["subagent_1".to_string()];
 
-    let resolution = resolve_child_task_completion(
+    let resolution = resolve_sub_agent_completion(
         &mut waiting_on,
-        &mut child_sessions,
-        "child_1",
+        &mut sub_agent_sessions,
+        "subagent_1",
         &serde_json::json!({
             "status": "completed",
-            "summary": "child done"
+            "summary": "sub-agent done"
         }),
     )
     .unwrap();
 
     assert_eq!(resolution.status, "completed");
-    assert_eq!(resolution.content, "child done");
+    assert_eq!(resolution.content, "sub-agent done");
     assert!(!resolution.is_error);
     assert_eq!(waiting_on, None);
-    assert!(child_sessions.is_empty());
+    assert!(sub_agent_sessions.is_empty());
 }
 
 #[test]
-fn test_p0_child_task_failure_triggers_parent_convergence() {
-    let mut waiting_on = Some("child_1".to_string());
-    let mut child_sessions = vec!["child_1".to_string()];
+fn test_p0_sub_agent_failure_triggers_parent_convergence() {
+    let mut waiting_on = Some("subagent_1".to_string());
+    let mut sub_agent_sessions = vec!["subagent_1".to_string()];
 
-    let resolution = resolve_child_task_completion(
+    let resolution = resolve_sub_agent_completion(
         &mut waiting_on,
-        &mut child_sessions,
-        "child_1",
+        &mut sub_agent_sessions,
+        "subagent_1",
         &serde_json::json!({
             "status": "failed",
             "error": "tool failed"
@@ -74,18 +74,18 @@ fn test_p0_child_task_failure_triggers_parent_convergence() {
     assert_eq!(resolution.content, "tool failed");
     assert!(resolution.is_error);
     assert_eq!(waiting_on, None);
-    assert!(child_sessions.is_empty());
+    assert!(sub_agent_sessions.is_empty());
 }
 
 #[test]
-fn test_p0_child_task_cancelled_triggers_parent_convergence() {
-    let mut waiting_on = Some("child_1".to_string());
-    let mut child_sessions = vec!["child_1".to_string()];
+fn test_p0_sub_agent_cancelled_triggers_parent_convergence() {
+    let mut waiting_on = Some("subagent_1".to_string());
+    let mut sub_agent_sessions = vec!["subagent_1".to_string()];
 
-    let resolution = resolve_child_task_completion(
+    let resolution = resolve_sub_agent_completion(
         &mut waiting_on,
-        &mut child_sessions,
-        "child_1",
+        &mut sub_agent_sessions,
+        "subagent_1",
         &serde_json::json!({
             "status": "cancelled",
             "error": "cancelled"
@@ -97,7 +97,7 @@ fn test_p0_child_task_cancelled_triggers_parent_convergence() {
     assert_eq!(resolution.content, "cancelled");
     assert!(resolution.is_error);
     assert_eq!(waiting_on, None);
-    assert!(child_sessions.is_empty());
+    assert!(sub_agent_sessions.is_empty());
 }
 
 #[test]
@@ -105,10 +105,10 @@ fn test_p0_parent_knows_waiting_task_after_restart() {
     let store = create_test_store();
 
     let mut ctx = ExecutionContext::new("parent_session".to_string());
-    ctx.wait_reason = Some(WaitReason::ChildTask);
+    ctx.wait_reason = Some(WaitReason::SubAgent);
     ctx.state = RuntimeState::Waiting;
-    ctx.waiting_on_task_id = Some("child_task_1".to_string());
-    ctx.child_sessions = vec!["child_task_1".to_string(), "child_task_2".to_string()];
+    ctx.waiting_on_sub_agent_id = Some("subagent_1".to_string());
+    ctx.sub_agent_sessions = vec!["subagent_1".to_string(), "subagent_2".to_string()];
 
     let store_guard = store.write().unwrap();
     store_guard.upsert_execution_context(&ctx).unwrap();
@@ -120,93 +120,93 @@ fn test_p0_parent_knows_waiting_task_after_restart() {
     assert!(loaded.is_some());
     let loaded_ctx = loaded.unwrap();
     assert_eq!(
-        loaded_ctx.waiting_on_task_id,
-        Some("child_task_1".to_string())
+        loaded_ctx.waiting_on_sub_agent_id,
+        Some("subagent_1".to_string())
     );
-    assert_eq!(loaded_ctx.child_sessions.len(), 2);
+    assert_eq!(loaded_ctx.sub_agent_sessions.len(), 2);
     assert!(loaded_ctx
-        .child_sessions
-        .contains(&"child_task_1".to_string()));
+        .sub_agent_sessions
+        .contains(&"subagent_1".to_string()));
     assert!(loaded_ctx
-        .child_sessions
-        .contains(&"child_task_2".to_string()));
+        .sub_agent_sessions
+        .contains(&"subagent_2".to_string()));
 }
 
 #[test]
-fn test_p0_execution_context_serialization_with_child_task() {
+fn test_p0_execution_context_serialization_with_sub_agent() {
     let mut ctx = ExecutionContext::new("parent_session".to_string());
 
-    ctx.wait_reason = Some(WaitReason::ChildTask);
+    ctx.wait_reason = Some(WaitReason::SubAgent);
     ctx.state = RuntimeState::Waiting;
-    ctx.waiting_on_task_id = Some("child_task_1".to_string());
-    ctx.child_sessions.push("child_task_1".to_string());
+    ctx.waiting_on_sub_agent_id = Some("subagent_1".to_string());
+    ctx.sub_agent_sessions.push("subagent_1".to_string());
 
     let json = serde_json::to_string(&ctx).unwrap();
     let restored: ExecutionContext = serde_json::from_str(&json).unwrap();
 
     assert_eq!(
-        restored.waiting_on_task_id,
-        Some("child_task_1".to_string())
+        restored.waiting_on_sub_agent_id,
+        Some("subagent_1".to_string())
     );
-    assert_eq!(restored.child_sessions.len(), 1);
-    assert_eq!(restored.child_sessions[0], "child_task_1");
-    assert_eq!(restored.wait_reason, Some(WaitReason::ChildTask));
+    assert_eq!(restored.sub_agent_sessions.len(), 1);
+    assert_eq!(restored.sub_agent_sessions[0], "subagent_1");
+    assert_eq!(restored.wait_reason, Some(WaitReason::SubAgent));
 }
 
 #[test]
-fn test_child_task_registry_multiple_children() {
-    let registry = ChildTaskRegistry::new();
+fn test_sub_agent_registry_multiple_children() {
+    let registry = SubAgentRegistry::new();
 
-    registry.register_child_task("child_1".to_string(), "parent_1".to_string());
-    registry.register_child_task("child_2".to_string(), "parent_1".to_string());
-    registry.register_child_task("child_3".to_string(), "parent_2".to_string());
+    registry.register_sub_agent("subagent_1".to_string(), "parent_1".to_string());
+    registry.register_sub_agent("subagent_2".to_string(), "parent_1".to_string());
+    registry.register_sub_agent("subagent_3".to_string(), "parent_2".to_string());
 
-    assert!(registry.is_child_task("child_1"));
-    assert!(registry.is_child_task("child_2"));
-    assert!(registry.is_child_task("child_3"));
+    assert!(registry.is_sub_agent("subagent_1"));
+    assert!(registry.is_sub_agent("subagent_2"));
+    assert!(registry.is_sub_agent("subagent_3"));
 
     assert_eq!(
         registry
-            .get_parent_info("child_1")
+            .get_parent_info("subagent_1")
             .unwrap()
             .parent_session_id,
         "parent_1"
     );
     assert_eq!(
         registry
-            .get_parent_info("child_2")
+            .get_parent_info("subagent_2")
             .unwrap()
             .parent_session_id,
         "parent_1"
     );
     assert_eq!(
         registry
-            .get_parent_info("child_3")
+            .get_parent_info("subagent_3")
             .unwrap()
             .parent_session_id,
         "parent_2"
     );
 
-    let parent_1_children = registry.list_child_tasks_for_parent("parent_1");
+    let parent_1_children = registry.list_sub_agents_for_parent("parent_1");
     assert_eq!(parent_1_children.len(), 2);
-    assert!(parent_1_children.contains(&"child_1".to_string()));
-    assert!(parent_1_children.contains(&"child_2".to_string()));
+    assert!(parent_1_children.contains(&"subagent_1".to_string()));
+    assert!(parent_1_children.contains(&"subagent_2".to_string()));
 }
 
 #[test]
-fn test_global_child_task_registry_singleton() {
-    let registry1 = get_child_task_registry();
-    let registry2 = get_child_task_registry();
+fn test_global_sub_agent_registry_singleton() {
+    let registry1 = get_sub_agent_registry();
+    let registry2 = get_sub_agent_registry();
 
-    registry1.register_child_task("test_child".to_string(), "test_parent".to_string());
+    registry1.register_sub_agent("subagent_test".to_string(), "test_parent".to_string());
 
-    assert!(registry2.is_child_task("test_child"));
+    assert!(registry2.is_sub_agent("subagent_test"));
     assert_eq!(
-        registry2.list_child_tasks_for_parent("test_parent"),
-        vec!["test_child".to_string()]
+        registry2.list_sub_agents_for_parent("test_parent"),
+        vec!["subagent_test".to_string()]
     );
 
-    registry1.unregister_child_task("test_child");
+    registry1.unregister_sub_agent("subagent_test");
 }
 
 #[test]

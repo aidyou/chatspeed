@@ -13,7 +13,7 @@ impl ToolDefinition for AskUser {
     fn description(&self) -> &str {
         "Ask the user for a blocking decision that is required before you can continue.\n\n\
         Use ask_user only when the next step genuinely depends on user input, such as choosing between mutually exclusive implementation paths, clarifying an ambiguous requirement, or confirming a risky change. \
-        Do NOT use ask_user for routine status updates, final answers, progress reports, generic feedback surveys, or plan approval in Planning Mode; use submit_plan for plan approval and answer_user/finish_task for reporting.\n\n\
+        Do NOT use ask_user for routine status updates, final answers, progress reports, generic feedback surveys, or plan approval in Planning Mode; use submit_plan for plan approval and answer_user/complete_workflow_with_summary for reporting.\n\n\
         Usage rules:\n\
         - Pass grouped choices using an `items` array.\n\
         - Prefer one focused group. Use multiple groups only when each group is an independent blocking decision.\n\
@@ -123,11 +123,17 @@ pub struct FinishTask;
 #[async_trait]
 impl ToolDefinition for FinishTask {
     fn name(&self) -> &str {
-        crate::tools::TOOL_FINISH_TASK
+        crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
     }
     fn description(&self) -> &str {
         "Signals that the current task has been fully addressed and is now complete. \
-        This tool takes no arguments. Ensure you have provided a comprehensive summary of your work and conclusions in your plain text response BEFORE calling this tool."
+        This tool takes no arguments.\n\n\
+        Strict usage rules:\n\
+        - Call this only after the requested work is actually complete or you have reached a clear stopping point accepted by the user.\n\
+        - Before calling this tool, you MUST output a user-visible plain-text completion report.\n\
+        - That report MUST explicitly cover: 1) what was completed, 2) what was verified, and 3) any important remaining notes or limitations.\n\
+        - Do NOT call complete_workflow_with_summary with placeholder text such as 'done', 'completed', or hidden reasoning only.\n\
+        - If complete_workflow_with_summary is rejected, do NOT immediately retry it. First fix the missing summary or resolve any remaining active todo items, then call complete_workflow_with_summary again."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::Interaction

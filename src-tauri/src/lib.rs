@@ -236,6 +236,7 @@ pub async fn run() -> crate::error::Result<()> {
             read_text_file,
             get_git_status,
             list_dir,
+            open_path_in_file_manager,
 
             // window
             open_setting_window,

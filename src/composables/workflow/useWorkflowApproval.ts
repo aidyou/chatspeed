@@ -43,6 +43,7 @@ export function useWorkflowApproval({ currentWorkflowId }) {
       })
 
       if (approved) {
+        workflowStore.updateWorkflowStatus(sessionId, 'thinking', null)
         workflowStore.markToolApprovedRunning(toolCallId)
       } else {
         workflowStore.markToolRejected(toolCallId)

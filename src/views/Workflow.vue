@@ -365,8 +365,8 @@ const onSendMessage = async () => {
 }
 
 // Wrapper for createNewWorkflow that also clears input
-const createNewWorkflow = () => {
-  coreCreateNewWorkflow()
+const createNewWorkflow = async () => {
+  await coreCreateNewWorkflow()
   clearInput()
 }
 
@@ -393,12 +393,40 @@ const approvalQueueCount = computed(() => {
   return count > 9 ? '9+' : String(count)
 })
 
+const getWorkflowSortTime = (workflow) => {
+  const candidates = [
+    workflow?.updatedAtMs,
+    workflow?.updated_at_ms,
+    workflow?.updatedAt,
+    workflow?.updated_at,
+    workflow?.createdAt,
+    workflow?.created_at
+  ]
+
+  for (const value of candidates) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value
+    }
+    if (typeof value === 'string' && value) {
+      const timestamp = Date.parse(value)
+      if (!Number.isNaN(timestamp)) {
+        return timestamp
+      }
+    }
+  }
+
+  return 0
+}
+
 const filteredWorkflows = computed(() => {
   const searchQuery = '' // From WorkflowSidebar component
-  if (!searchQuery) return workflows.value
-  return workflows.value.filter((wf) =>
+  const base = !searchQuery
+    ? workflows.value
+    : workflows.value.filter((wf) =>
     (wf.title || wf.userQuery).toLowerCase().includes(searchQuery.toLowerCase())
-  )
+    )
+
+  return [...base].sort((a, b) => getWorkflowSortTime(b) - getWorkflowSortTime(a))
 })
 
 const askUserSubmitting = ref(false)
@@ -421,21 +449,21 @@ const onSelectedAgentChange = async (agent) => {
   }
 
   try {
-    await invokeWrapper('update_workflow_agent_id', {
+    const agentConfigResult = await invokeWrapper('update_workflow_agent_id', {
       sessionId: currentWorkflowId.value,
       agentId: agent.id
     })
+    const agentConfig = typeof agentConfigResult === 'string'
+      ? JSON.parse(agentConfigResult)
+      : agentConfigResult
 
     if (workflowStore.currentWorkflow) {
       workflowStore.currentWorkflow.agentId = agent.id
-      workflowStore.currentWorkflow.agentConfig = {
-        ...(workflowStore.currentWorkflow.agentConfig || {}),
-        models: agent.models || null,
-        allowedPaths: agent.allowedPaths || [],
-        shellPolicy: agent.shellPolicy || [],
-        approvalLevel: agent.approvalLevel || 'default',
-        finalAudit: false
-      }
+      workflowStore.currentWorkflow.agentConfig = agentConfig || {}
+      workflowStore.currentWorkflow.allowedPaths = agentConfig?.allowedPaths || []
+      workflowStore.currentWorkflow.shellPolicy = agentConfig?.shellPolicy || []
+      workflowStore.setShellPolicy(agentConfig?.shellPolicy || [])
+      workflowStore.setAutoApprovedTools(agentConfig?.autoApprove || [])
     }
   } catch (error) {
     console.error('Failed to update workflow agent:', error)

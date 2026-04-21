@@ -474,6 +474,7 @@ impl OpenAIChat {
                         metadata_option.as_ref().and_then(|m| m.to_value()),
                         None,
                     ));
+                    log::info!("tool call: {}", tcd.name);
                     #[cfg(debug_assertions)]
                     {
                         log::debug!(

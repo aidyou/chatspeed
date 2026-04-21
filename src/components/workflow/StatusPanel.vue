@@ -1,13 +1,19 @@
 <template>
   <Teleport to="body">
     <!-- Large panel -->
-    <div v-if="isVisible && hasData" ref="panelRef" class="status-panel"
-      :class="{ collapsed: isCollapsed, dragging: isDragging }" :style="panelStyle">
+    <div
+      v-if="isVisible && hasData"
+      ref="panelRef"
+      class="status-panel"
+      :class="{ collapsed: isCollapsed, dragging: isDragging }"
+      :style="panelStyle">
       <!-- Drag handle/header -->
       <div class="panel-header upperLayer" @mousedown="startDrag" @touchstart="startDrag">
         <div class="header-left">
           <cs name="list" size="14px" class="drag-icon" />
-          <span v-if="!isCollapsed" class="header-title">{{ t('workflow.statusPanel.title') }}</span>
+          <span v-if="!isCollapsed" class="header-title">{{
+            t('workflow.statusPanel.title')
+          }}</span>
         </div>
         <div class="header-actions">
           <span v-if="isCollapsed" class="collapsed-progress">{{ progressPercent }}%</span>
@@ -29,92 +35,127 @@
           <button
             class="tab-btn"
             :class="{ active: activeTab === 'main' }"
-            @click="activeTab = 'main'"
-          >
+            @click="activeTab = 'main'">
             {{ t('workflow.statusPanel.mainAgent') || 'Main' }}
           </button>
           <button
             class="tab-btn"
             :class="{ active: activeTab === 'sub' }"
-            @click="activeTab = 'sub'"
-          >
+            @click="activeTab = 'sub'">
             {{ t('workflow.statusPanel.subAgents') || 'Sub Agents' }}
-            <span v-if="childAgentSummaries.length > 0" class="tab-badge">{{ childAgentSummaries.length }}</span>
+            <span v-if="childAgentSummaries.length > 0" class="tab-badge">{{
+              childAgentSummaries.length
+            }}</span>
           </button>
         </div>
 
         <template v-if="activeTab === 'main'">
-        <!-- Context Usage section -->
-        <div class="section progress-section">
-          <div class="section-header">
-            <cs name="skill-piechart" size="14px" />
-            <span>{{ t('workflow.statusPanel.contextUsage') || 'Context Usage' }}</span>
-          </div>
-          <div class="progress-bar-container">
-            <div class="progress-bar">
-              <div class="progress-fill context-progress" :style="{ width: `${contextUsagePercent}%` }"
-                :class="contextUsageStatusClass" />
+          <!-- Context Usage section -->
+          <div class="section progress-section">
+            <div class="section-header">
+              <cs name="skill-piechart" size="14px" />
+              <span>{{ t('workflow.statusPanel.contextUsage') || 'Context Usage' }}</span>
             </div>
-            <span class="progress-text">{{ contextUsagePercent }}%</span>
-          </div>
-          <div class="usage-details" v-if="totalTokens > 0">
-            {{ formatNumber(totalTokens) }} / {{ formatNumber(maxContexts) }} tokens
-          </div>
-        </div>
-
-        <!-- Progress section -->
-        <div v-if="todoList.length > 0" class="section progress-section">
-          <div class="section-header">
-            <cs name="skill-terminal" size="14px" />
-            <span>{{ t('workflow.statusPanel.progress') }}</span>
-          </div>
-          <div class="progress-bar-container">
-            <div class="progress-bar">
-              <div class="progress-fill task-progress" :style="{ width: `${progressPercent}%` }" :class="progressStatusClass" />
-            </div>
-            <span class="progress-text">{{ progressPercent }}%</span>
-          </div>
-        </div>
-
-        <!-- Todo section -->
-        <div v-if="todoList.length > 0" class="section">
-          <div class="section-header">
-            <cs name="list" size="14px" />
-            <span>{{ t('workflow.statusPanel.todos') }}</span>
-          </div>
-          <ul class="todo-list">
-            <li v-for="item in displayedTodoList" :key="item.id" :class="['todo-item', item.status]">
-              <cs :name="getStatusIcon(item.status)" :class="{ 'cs-spin': item.status === 'in_progress' }" size="14px"
-                class="todo-icon" />
-              <span class="todo-text" :title="item.subject || item.title">
-                {{ item.subject || item.title }}
-              </span>
-            </li>
-          </ul>
-          <div v-if="todoList.length > 10" class="more-indicator clickable" @click="isTodoExpanded = !isTodoExpanded">
-            {{ isTodoExpanded ? t('common.collapse') : `+${todoList.length - 10} ${t('common.more')}` }}
-          </div>
-        </div>
-
-        <!-- Recent operations section -->
-        <div v-if="recentOperations.length > 0" class="section">
-          <div class="section-header">
-            <cs name="tool" size="14px" />
-            <span>{{ t('workflow.statusPanel.recentOps') }}</span>
-            <span class="section-meta">{{ t('workflow.statusPanel.totalCalls') || 'Total' }}: {{ totalToolCalls }}</span>
-          </div>
-          <ul class="operations-list">
-            <li v-for="(op, index) in recentOperations" :key="index" :class="['op-item', op.status, op.toolType]">
-              <div class="op-main">
-                <cs :name="op.icon" size="14px" class="op-icon" />
-                <span class="op-name" :title="op.fullText">{{ op.name }}</span>
+            <div class="progress-bar-container">
+              <div class="progress-bar">
+                <div
+                  class="progress-fill context-progress"
+                  :style="{ width: `${contextUsagePercent}%` }"
+                  :class="contextUsageStatusClass" />
               </div>
-              <cs v-if="op.status === 'running'" name="loading" size="12px" class="op-status cs-spin" />
-              <cs v-else-if="op.status === 'success'" name="check" size="12px" class="op-status success" />
-              <cs v-else-if="op.status === 'error'" name="error" size="12px" class="op-status error" />
-            </li>
-          </ul>
-        </div>
+              <span class="progress-text">{{ contextUsagePercent }}%</span>
+            </div>
+            <div class="usage-details" v-if="totalTokens > 0">
+              {{ formatNumber(totalTokens) }} / {{ formatNumber(maxContexts) }} tokens
+            </div>
+          </div>
+
+          <!-- Progress section -->
+          <div v-if="todoList.length > 0" class="section progress-section">
+            <div class="section-header">
+              <cs name="skill-terminal" size="14px" />
+              <span>{{ t('workflow.statusPanel.progress') }}</span>
+            </div>
+            <div class="progress-bar-container">
+              <div class="progress-bar">
+                <div
+                  class="progress-fill task-progress"
+                  :style="{ width: `${progressPercent}%` }"
+                  :class="progressStatusClass" />
+              </div>
+              <span class="progress-text">{{ progressPercent }}%</span>
+            </div>
+          </div>
+
+          <!-- Todo section -->
+          <div v-if="todoList.length > 0" class="section">
+            <div class="section-header">
+              <cs name="list" size="14px" />
+              <span>{{ t('workflow.statusPanel.todos') }}</span>
+            </div>
+            <ul class="todo-list">
+              <li
+                v-for="item in displayedTodoList"
+                :key="item.id"
+                :class="['todo-item', item.status]">
+                <cs
+                  :name="getStatusIcon(item.status)"
+                  :class="{ 'cs-spin': item.status === 'in_progress' }"
+                  size="14px"
+                  class="todo-icon" />
+                <span class="todo-text" :title="item.subject || item.title">
+                  {{ item.subject || item.title }}
+                </span>
+              </li>
+            </ul>
+            <div
+              v-if="todoList.length > 10"
+              class="more-indicator clickable"
+              @click="isTodoExpanded = !isTodoExpanded">
+              {{
+                isTodoExpanded
+                  ? t('common.collapse')
+                  : `+${todoList.length - 10} ${t('common.more')}`
+              }}
+            </div>
+          </div>
+
+          <!-- Recent operations section -->
+          <div v-if="recentOperations.length > 0" class="section">
+            <div class="section-header">
+              <cs name="tool" size="14px" />
+              <span>{{ t('workflow.statusPanel.recentOps') }}</span>
+              <span class="section-meta"
+                >{{ t('workflow.statusPanel.totalCalls') || 'Total' }}: {{ totalToolCalls }}</span
+              >
+            </div>
+            <ul class="operations-list">
+              <li
+                v-for="(op, index) in recentOperations"
+                :key="index"
+                :class="['op-item', op.status, op.toolType]">
+                <div class="op-main">
+                  <cs :name="op.icon" size="14px" class="op-icon" />
+                  <span class="op-name" :title="op.fullText">{{ op.name }}</span>
+                </div>
+                <cs
+                  v-if="op.status === 'running'"
+                  name="loading"
+                  size="12px"
+                  class="op-status cs-spin" />
+                <cs
+                  v-else-if="op.status === 'success'"
+                  name="check"
+                  size="12px"
+                  class="op-status success" />
+                <cs
+                  v-else-if="op.status === 'error'"
+                  name="error"
+                  size="12px"
+                  class="op-status error" />
+              </li>
+            </ul>
+          </div>
         </template>
 
         <!-- Sub agents tab -->
@@ -122,7 +163,11 @@
           <div class="section-header">
             <cs name="agent" size="14px" />
             <span>{{ t('workflow.statusPanel.childAgents') || 'Child Agents' }}</span>
-            <span class="section-meta">{{ childAgentTotalCount > childAgentSummaries.length ? `${childAgentSummaries.length}/${childAgentTotalCount}` : childAgentSummaries.length }}</span>
+            <span class="section-meta">{{
+              childAgentTotalCount > childAgentSummaries.length
+                ? `${childAgentSummaries.length}/${childAgentTotalCount}`
+                : childAgentSummaries.length
+            }}</span>
           </div>
           <ul class="child-agent-list">
             <li
@@ -137,11 +182,27 @@
                 <span class="child-summary" :title="child.summary">{{ child.summary }}</span>
               </div>
               <div class="child-right">
-                <span v-if="child.contextPercent !== null" class="child-context">{{ child.contextPercent }}%</span>
-                <span class="child-tools" :title="`${child.toolCalls} tool calls`">{{ child.toolCalls }}</span>
-                <cs v-if="child.status === 'running'" name="loading" size="12px" class="cs-spin child-status" />
-                <cs v-else-if="child.status === 'success'" name="check" size="12px" class="child-status success" />
-                <cs v-else-if="child.status === 'failed'" name="error" size="12px" class="child-status error" />
+                <span v-if="child.contextPercent !== null" class="child-context"
+                  >{{ child.contextPercent }}%</span
+                >
+                <span class="child-tools" :title="`${child.toolCalls} tool calls`">{{
+                  child.toolCalls
+                }}</span>
+                <cs
+                  v-if="child.status === 'running'"
+                  name="loading"
+                  size="12px"
+                  class="cs-spin child-status" />
+                <cs
+                  v-else-if="child.status === 'success'"
+                  name="check"
+                  size="12px"
+                  class="child-status success" />
+                <cs
+                  v-else-if="child.status === 'failed'"
+                  name="error"
+                  size="12px"
+                  class="child-status error" />
                 <cs v-else name="clock" size="12px" class="child-status" />
               </div>
             </li>
@@ -154,7 +215,9 @@
         </div>
 
         <!-- Empty state -->
-        <div v-if="activeTab === 'main' && todoList.length === 0 && recentOperations.length === 0" class="empty-state">
+        <div
+          v-if="activeTab === 'main' && todoList.length === 0 && recentOperations.length === 0"
+          class="empty-state">
           <cs name="file" size="32px" />
           <span>{{ t('workflow.statusPanel.empty') }}</span>
         </div>
@@ -162,9 +225,15 @@
     </div>
 
     <!-- Trigger button (small circle) -->
-    <div v-else-if="hasData" ref="triggerRef" class="status-panel-trigger" :style="triggerStyle"
+    <div
+      v-else-if="hasData"
+      ref="triggerRef"
+      class="status-panel-trigger"
+      :style="triggerStyle"
       @click="onTriggerClick">
-      <div class="trigger-drag-area" @mousedown.stop.prevent="startTriggerDrag"
+      <div
+        class="trigger-drag-area"
+        @mousedown.stop.prevent="startTriggerDrag"
         @touchstart.stop.prevent="startTriggerDrag"></div>
       <cs name="list" size="18px" />
       <span v-if="progressPercent > 0" class="trigger-badge">{{ progressPercent }}%</span>
@@ -241,14 +310,16 @@ const getSafeTopInset = () => {
 const progressPercent = computed(() => {
   if (todoList.value.length === 0) return 0
   const completed = todoList.value.filter(
-    item => item.status === 'completed' || item.status === 'failed' || item.status === 'data_missing'
+    item =>
+      item.status === 'completed' || item.status === 'failed' || item.status === 'data_missing'
   ).length
   return Math.round((completed / todoList.value.length) * 100)
 })
 
 const completedCount = computed(() => {
   return todoList.value.filter(
-    item => item.status === 'completed' || item.status === 'failed' || item.status === 'data_missing'
+    item =>
+      item.status === 'completed' || item.status === 'failed' || item.status === 'data_missing'
   ).length
 })
 
@@ -260,7 +331,7 @@ const progressStatusClass = computed(() => {
 })
 
 // Calculate Context Usage
-const getModelContextSize = (modelConfig) => {
+const getModelContextSize = modelConfig => {
   if (!modelConfig || typeof modelConfig !== 'object') return null
   const rawValue = modelConfig.contextSize ?? modelConfig.context_size
   return typeof rawValue === 'number' && rawValue > 0 ? rawValue : null
@@ -279,7 +350,8 @@ const maxContexts = computed(() => {
   const phaseLimit = getModelContextSize(phaseModel)
   if (phaseLimit) return phaseLimit
 
-  const fallbackLimit = getModelContextSize(workflowModels.act) || getModelContextSize(workflowModels.plan)
+  const fallbackLimit =
+    getModelContextSize(workflowModels.act) || getModelContextSize(workflowModels.plan)
   if (fallbackLimit) return fallbackLimit
 
   const agentId = workflowStore.currentWorkflow?.agentId
@@ -297,26 +369,37 @@ const totalTokens = computed(() => {
   // Find the most recent message with usage information
   const lastAssistantMsg = [...messages.value]
     .reverse()
-    .find(m => m.role === 'assistant' && (m.metadata?.usage || m.metadata?.tokens || m.metadata?.input_tokens || m.metadata?.prompt_tokens))
+    .find(
+      m =>
+        m.role === 'assistant' &&
+        (m.metadata?.usage ||
+          m.metadata?.tokens ||
+          m.metadata?.input_tokens ||
+          m.metadata?.prompt_tokens)
+    )
 
   if (!lastAssistantMsg) return 0
 
   const meta = lastAssistantMsg.metadata
   // 1. Try ChatMetadata style (nested tokens object)
   if (meta.tokens) {
-    return meta.tokens.total || (meta.tokens.prompt + meta.tokens.completion) || 0
+    return meta.tokens.total || meta.tokens.prompt + meta.tokens.completion || 0
   }
 
   // 2. Try usage object style
   if (meta.usage) {
     const u = meta.usage
-    return u.total_tokens || ((u.input_tokens || u.prompt_tokens || 0) + (u.output_tokens || u.completion_tokens || 0)) || 0
+    return (
+      u.total_tokens ||
+      (u.input_tokens || u.prompt_tokens || 0) + (u.output_tokens || u.completion_tokens || 0) ||
+      0
+    )
   }
 
   // 3. Fallback to flattened style
   const input = meta.input_tokens || meta.prompt_tokens || 0
   const output = meta.output_tokens || meta.completion_tokens || 0
-  const total = meta.total_tokens || (input + output)
+  const total = meta.total_tokens || input + output
   return total || 0
 })
 
@@ -333,37 +416,43 @@ const contextUsageStatusClass = computed(() => {
   return 'start'
 })
 
-const formatNumber = (num) => {
+const formatNumber = num => {
   if (!num) return '0'
   return new Intl.NumberFormat().format(num)
 }
 
 // Helper to remove <SYSTEM_REMINDER>...</SYSTEM_REMINDER> tags
-const removeSystemReminder = (content) => {
+const removeSystemReminder = content => {
   if (!content) return ''
   return content.replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '').trim()
 }
 
 const getToolInfo = (name, metadata = {}) => {
   const iconMap = {
-    'read_file': { icon: resolveWorkflowToolIcon('read_file', 'file'), toolType: 'tool-file' },
-    'write_file': { icon: resolveWorkflowToolIcon('write_file', 'file'), toolType: 'tool-file' },
-    'edit_file': { icon: resolveWorkflowToolIcon('edit_file', 'edit'), toolType: 'tool-file' },
-    'list_dir': { icon: resolveWorkflowToolIcon('list_dir', 'folder'), toolType: 'tool-file' },
-    'glob': { icon: resolveWorkflowToolIcon('glob', 'search'), toolType: 'tool-file' },
-    'grep': { icon: resolveWorkflowToolIcon('grep', 'search'), toolType: 'tool-file' },
-    'web_fetch': { icon: resolveWorkflowToolIcon('web_fetch', 'link'), toolType: 'tool-network' },
-    'web_search': { icon: resolveWorkflowToolIcon('web_search', 'search'), toolType: 'tool-network' },
-    'bash': { icon: resolveWorkflowToolIcon('bash', 'terminal'), toolType: 'tool-system' },
-    'todo_create': { icon: resolveWorkflowToolIcon('todo_create', 'add'), toolType: 'tool-todo' },
-    'todo_update': { icon: resolveWorkflowToolIcon('todo_update', 'check'), toolType: 'tool-todo' },
-    'todo_list': { icon: resolveWorkflowToolIcon('todo_list', 'list'), toolType: 'tool-todo' },
-    'todo_get': { icon: resolveWorkflowToolIcon('todo_get', 'list'), toolType: 'tool-todo' },
-    'submit_plan': { icon: resolveWorkflowToolIcon('submit_plan', 'skill-plan'), toolType: 'tool-todo' },
-    'finish_task': { icon: 'check-circle', toolType: 'tool-todo' }
+    read_file: { icon: resolveWorkflowToolIcon('read_file', 'file'), toolType: 'tool-file' },
+    write_file: { icon: resolveWorkflowToolIcon('write_file', 'file'), toolType: 'tool-file' },
+    edit_file: { icon: resolveWorkflowToolIcon('edit_file', 'edit'), toolType: 'tool-file' },
+    list_dir: { icon: resolveWorkflowToolIcon('list_dir', 'folder'), toolType: 'tool-file' },
+    glob: { icon: resolveWorkflowToolIcon('glob', 'search'), toolType: 'tool-file' },
+    grep: { icon: resolveWorkflowToolIcon('grep', 'search'), toolType: 'tool-file' },
+    web_fetch: { icon: resolveWorkflowToolIcon('web_fetch', 'link'), toolType: 'tool-network' },
+    web_search: { icon: resolveWorkflowToolIcon('web_search', 'search'), toolType: 'tool-network' },
+    bash: { icon: resolveWorkflowToolIcon('bash', 'terminal'), toolType: 'tool-system' },
+    todo_create: { icon: resolveWorkflowToolIcon('todo_create', 'add'), toolType: 'tool-todo' },
+    todo_update: { icon: resolveWorkflowToolIcon('todo_update', 'check'), toolType: 'tool-todo' },
+    todo_list: { icon: resolveWorkflowToolIcon('todo_list', 'list'), toolType: 'tool-todo' },
+    todo_get: { icon: resolveWorkflowToolIcon('todo_get', 'list'), toolType: 'tool-todo' },
+    submit_plan: {
+      icon: resolveWorkflowToolIcon('submit_plan', 'skill-plan'),
+      toolType: 'tool-todo'
+    },
+    complete_workflow_with_summary: { icon: 'check-circle', toolType: 'tool-todo' }
   }
 
-  const info = iconMap[name] || { icon: resolveWorkflowToolIcon(name, 'tool'), toolType: 'tool-system' }
+  const info = iconMap[name] || {
+    icon: resolveWorkflowToolIcon(name, 'tool'),
+    toolType: 'tool-system'
+  }
 
   return {
     ...info,
@@ -372,15 +461,15 @@ const getToolInfo = (name, metadata = {}) => {
 }
 
 const toolMessagesAll = computed(() => {
-  return messages.value.filter((m) => {
+  return messages.value.filter(m => {
     if (m.role !== 'tool') return false
     const name = (m.metadata?.tool_name || m.metadata?.tool_call?.name || '').toLowerCase()
-    if (name === 'finish_task' || name === 'answer_user') return false
+    if (name === 'complete_workflow_with_summary' || name === 'answer_user') return false
     return true
   })
 })
 
-const ledgerStatusToPanelStatus = (status) => {
+const ledgerStatusToPanelStatus = status => {
   if (status === 'final_error' || status === 'rejected') return 'error'
   if (status === 'final_success') return 'success'
   if (status === 'approved_running' || status === 'pending') return 'running'
@@ -393,7 +482,7 @@ const recentOperations = computed(() => {
     return toolLedger.value
       .slice(-3)
       .reverse()
-      .map((tool) => {
+      .map(tool => {
         const meta = {
           title: tool.title,
           summary: tool.summary
@@ -410,41 +499,49 @@ const recentOperations = computed(() => {
       })
   }
 
-  return toolMessagesAll.value.slice(-3).reverse().map(m => {
-    const meta = m.metadata || {}
-    const toolCall = meta.tool_call || {}
-    const func = toolCall.function || toolCall
-    const name = func.name || toolCall.name || meta.tool_name || 'Tool'
-    const executionStatus = meta.execution_status || ''
+  return toolMessagesAll.value
+    .slice(-3)
+    .reverse()
+    .map(m => {
+      const meta = m.metadata || {}
+      const toolCall = meta.tool_call || {}
+      const func = toolCall.function || toolCall
+      const name = func.name || toolCall.name || meta.tool_name || 'Tool'
+      const executionStatus = meta.execution_status || ''
 
-    let status = 'success'
-    if (m.isError || meta.is_error || executionStatus === 'failed' || executionStatus === 'rejected') {
-      status = 'error'
-    } else if (executionStatus === 'running' || executionStatus === 'pending_approval') {
-      status = 'running'
-    }
+      let status = 'success'
+      if (
+        m.isError ||
+        meta.is_error ||
+        executionStatus === 'failed' ||
+        executionStatus === 'rejected'
+      ) {
+        status = 'error'
+      } else if (executionStatus === 'running' || executionStatus === 'pending_approval') {
+        status = 'running'
+      }
 
-    const { icon, toolType, shortName } = getToolInfo(name, meta)
+      const { icon, toolType, shortName } = getToolInfo(name, meta)
 
-    return {
-      name: shortName,
-      fullText: removeSystemReminder(meta.summary || name),
-      icon,
-      toolType,
-      status,
-      raw: m
-    }
-  })
+      return {
+        name: shortName,
+        fullText: removeSystemReminder(meta.summary || name),
+        icon,
+        toolType,
+        status,
+        raw: m
+      }
+    })
 })
 
 const totalToolCalls = computed(() => {
   return toolLedger.value.length > 0 ? toolLedger.value.length : toolMessagesAll.value.length
 })
 
-const extractChildTaskIdFromMessage = (message) => {
+const extractSubAgentIdFromMessage = message => {
   const meta = message?.metadata || {}
-  if (meta.child_task_id || meta.childTaskId) return meta.child_task_id || meta.childTaskId
-  if ((meta.tool_name || '').toLowerCase() !== 'task') return null
+  if (meta.sub_agent_id || meta.subAgentId) return meta.sub_agent_id || meta.subAgentId
+  if ((meta.tool_name || '').toLowerCase() !== 'sub_agent_run') return null
 
   try {
     const parsed = JSON.parse(message.message || '{}')
@@ -462,66 +559,76 @@ const truncateSummary = (value, limit = 60) => {
 
 const normalizeChildPanelStatus = (status, isError = false) => {
   const normalized = String(status || '').toLowerCase()
-  if (isError || ['failed', 'error', 'cancelled', 'interrupted'].includes(normalized)) return 'failed'
+  if (isError || ['failed', 'error', 'cancelled', 'interrupted'].includes(normalized))
+    return 'failed'
   if (['completed', 'success'].includes(normalized)) return 'success'
-  if (['running', 'thinking', 'executing', 'waiting', 'pending'].includes(normalized)) return 'running'
+  if (['running', 'thinking', 'executing', 'waiting', 'pending'].includes(normalized))
+    return 'running'
   return 'pending'
 }
 
-const contextPercentFromProgress = (progress) => {
+const contextPercentFromProgress = progress => {
   const current = progress?.currentContextTokens ?? progress?.current_context_tokens
   const max = progress?.maxContextTokens ?? progress?.max_context_tokens
   if (typeof current !== 'number' || typeof max !== 'number' || max <= 0) return null
   return Math.min(100, Math.round((current / max) * 100))
 }
 
-const buildChildProgressFromSnapshot = (id, snapshot) => {
+const buildSubAgentProgressFromSnapshot = (id, snapshot) => {
   const ctx = snapshot?.executionContext || {}
   const workflow = snapshot?.workflow || {}
   const snapshotMessages = Array.isArray(snapshot?.messages) ? snapshot.messages : []
   const latest = [...snapshotMessages]
     .reverse()
-    .find((message) => message?.role === 'assistant' || message?.role === 'tool')
+    .find(message => message?.role === 'assistant' || message?.role === 'tool')
   const latestMeta = latest?.metadata || {}
   const status = ctx.state || workflow.status || 'pending'
   return {
-    childTaskId: id,
-    parentSessionId: workflow.parentSessionId || workflow.parent_session_id || workflowStore.currentWorkflowId,
+    subAgentId: id,
+    parentSessionId:
+      workflow.parentSessionId || workflow.parent_session_id || workflowStore.currentWorkflowId,
     status,
     workflowState: workflow.status || status,
     waitReason: ctx.waitReason || ctx.wait_reason || workflow.waitReason || null,
     title: workflow.title || workflow.userQuery || id,
     summary: latestMeta.summary || latest?.message || '',
-    toolCallsCount: snapshotMessages.filter((message) => message?.role === 'tool').length,
+    toolCallsCount: snapshotMessages.filter(message => message?.role === 'tool').length,
     currentContextTokens: ctx.currentContextTokens ?? ctx.current_context_tokens ?? null,
     maxContextTokens: ctx.maxContextTokens ?? ctx.max_context_tokens ?? null,
-    isError: latest?.isError || latest?.is_error || latestMeta.is_error || ['failed', 'error', 'cancelled'].includes(String(status).toLowerCase()),
+    isError:
+      latest?.isError ||
+      latest?.is_error ||
+      latestMeta.is_error ||
+      ['failed', 'error', 'cancelled'].includes(String(status).toLowerCase()),
     updatedAtMs: Date.now()
   }
 }
 
 const childSessionIdsFromSource = computed(() => {
   const ctx = workflowStore.currentWorkflow?.executionContext || {}
-  const sessionsFromContext = ctx.childSessions || ctx.child_sessions || []
-  const waitingTaskId = ctx.waitingOnTaskId || ctx.waiting_on_task_id || null
+  const sessionsFromContext = ctx.subAgentSessions || ctx.sub_agent_sessions || []
+  const waitingTaskId = ctx.waitingOnSubAgentId || ctx.waiting_on_sub_agent_id || null
   const sessionsFromMessages = messages.value
-    .map((m) => extractChildTaskIdFromMessage(m))
+    .map(m => extractSubAgentIdFromMessage(m))
     .filter(Boolean)
-  const sessionsFromProgress = Array.from(workflowStore.childTaskProgress?.keys?.() || [])
+  const sessionsFromProgress = Array.from(workflowStore.subAgentProgress?.keys?.() || [])
 
-  return Array.from(new Set([
-    waitingTaskId,
-    ...(Array.isArray(sessionsFromContext) ? sessionsFromContext : []),
-    ...sessionsFromMessages,
-    ...sessionsFromProgress
-  ].filter(Boolean)))
+  return Array.from(
+    new Set(
+      [
+        waitingTaskId,
+        ...(Array.isArray(sessionsFromContext) ? sessionsFromContext : []),
+        ...sessionsFromMessages,
+        ...sessionsFromProgress
+      ].filter(Boolean)
+    )
+  )
 })
 
 const childSessionIds = computed(() => {
-  return Array.from(new Set([
-    ...childSessionIdsFromSource.value,
-    ...Array.from(childSnapshotProgress.value.keys())
-  ]))
+  return Array.from(
+    new Set([...childSessionIdsFromSource.value, ...Array.from(childSnapshotProgress.value.keys())])
+  )
 })
 
 const childAgentTotalCount = computed(() => childSessionIds.value.length)
@@ -530,18 +637,18 @@ const childAgentSummariesAll = computed(() => {
   const ids = childSessionIds.value
   if (!ids.length) return []
 
-  return ids.map((id) => {
+  return ids.map(id => {
     const ctx = workflowStore.currentWorkflow?.executionContext || {}
-    const childWorkflow = workflowStore.workflows.find((w) => w.id === id)
-    const related = messages.value.filter((m) => {
-      return extractChildTaskIdFromMessage(m) === id
+    const childWorkflow = workflowStore.workflows.find(w => w.id === id)
+    const related = messages.value.filter(m => {
+      return extractSubAgentIdFromMessage(m) === id
     })
     const last = related[related.length - 1]
     const lastIndex = last ? messages.value.lastIndexOf(last) : -1
-    const eventProgress = workflowStore.childTaskProgress?.get?.(id)
+    const eventProgress = workflowStore.subAgentProgress?.get?.(id)
     const snapshotProgress = childSnapshotProgress.value.get(id)
     const progress = eventProgress || snapshotProgress || {}
-    let status = (ctx.waitingOnTaskId || ctx.waiting_on_task_id) === id ? 'running' : 'pending'
+    let status = (ctx.waitingOnSubAgentId || ctx.waiting_on_sub_agent_id) === id ? 'running' : 'pending'
     let summary = t('workflow.statusPanel.childRunning') || 'Running'
     let toolCalls = 0
 
@@ -549,8 +656,13 @@ const childAgentSummariesAll = computed(() => {
       const meta = last.metadata || {}
       const content = truncateSummary(last.message || '')
       if (content) summary = content
-      const executionStatus = meta.execution_status || meta.child_task_status || ''
-      if (last.isError || meta.is_error || executionStatus === 'failed' || executionStatus === 'cancelled') {
+      const executionStatus = meta.execution_status || meta.sub_agent_status || ''
+      if (
+        last.isError ||
+        meta.is_error ||
+        executionStatus === 'failed' ||
+        executionStatus === 'cancelled'
+      ) {
         status = 'failed'
       } else if (meta.result || executionStatus === 'completed') {
         status = 'success'
@@ -571,8 +683,11 @@ const childAgentSummariesAll = computed(() => {
       }
     }
 
-    if (progress.childTaskId || progress.child_task_id) {
-      status = normalizeChildPanelStatus(progress.status || progress.workflowState || progress.workflow_state, progress.isError || progress.is_error)
+    if (progress.subAgentId || progress.sub_agent_id) {
+      status = normalizeChildPanelStatus(
+        progress.status || progress.workflowState || progress.workflow_state,
+        progress.isError || progress.is_error
+      )
       toolCalls = progress.toolCallsCount ?? progress.tool_calls_count ?? toolCalls
       summary = truncateSummary(progress.summary) || summary
     }
@@ -611,23 +726,25 @@ const refreshChildSnapshots = async () => {
   }
 
   const next = new Map()
-  await Promise.all(ids.map(async (id) => {
-    try {
-      const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: id })
-      next.set(id, buildChildProgressFromSnapshot(id, snapshot))
-    } catch (error) {
-      console.warn(`[Workflow] Failed to load child task snapshot ${id}:`, error)
-    }
-  }))
+  await Promise.all(
+    ids.map(async id => {
+      try {
+        const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: id })
+        next.set(id, buildChildProgressFromSnapshot(id, snapshot))
+      } catch (error) {
+        console.warn(`[Workflow] Failed to load child task snapshot ${id}:`, error)
+      }
+    })
+  )
   childSnapshotProgress.value = next
 }
 
-const escapeSelectorValue = (value) => {
+const escapeSelectorValue = value => {
   if (window.CSS?.escape) return window.CSS.escape(value)
   return String(value).replace(/["\\]/g, '\\$&')
 }
 
-const jumpToChildMessage = (child) => {
+const jumpToChildMessage = child => {
   if (!child?.id) return
   const selector = `[data-child-task-id="${escapeSelectorValue(child.id)}"]`
   const matches = Array.from(document.querySelectorAll(selector))
@@ -635,25 +752,34 @@ const jumpToChildMessage = (child) => {
   if (!target) return
   target.scrollIntoView({ behavior: 'smooth', block: 'center' })
   if (typeof target.animate === 'function') {
-    target.animate([
-      { backgroundColor: 'rgba(64, 158, 255, 0.18)' },
-      { backgroundColor: 'transparent' }
-    ], { duration: 1200, easing: 'ease-out' })
+    target.animate(
+      [{ backgroundColor: 'rgba(64, 158, 255, 0.18)' }, { backgroundColor: 'transparent' }],
+      { duration: 1200, easing: 'ease-out' }
+    )
   }
 }
 
 // Hide panel when there's no data to show
 const hasData = computed(() => {
-  return todoList.value.length > 0 || recentOperations.value.length > 0 || childAgentSummaries.value.length > 0
+  return (
+    todoList.value.length > 0 ||
+    recentOperations.value.length > 0 ||
+    childAgentSummaries.value.length > 0
+  )
 })
 
-const getStatusIcon = (status) => {
+const getStatusIcon = status => {
   switch (status) {
-    case 'completed': return 'check'
-    case 'in_progress': return 'loading'
-    case 'failed': return 'error'
-    case 'data_missing': return 'error'
-    default: return 'uncheck'
+    case 'completed':
+      return 'check'
+    case 'in_progress':
+      return 'loading'
+    case 'failed':
+      return 'error'
+    case 'data_missing':
+      return 'error'
+    default:
+      return 'uncheck'
   }
 }
 
@@ -697,7 +823,7 @@ const triggerStyle = computed(() => {
 })
 
 // Large panel drag
-const startDrag = (e) => {
+const startDrag = e => {
   if (e.target.closest('.action-btn')) return
   e.preventDefault()
 
@@ -721,7 +847,7 @@ const startDrag = (e) => {
   document.addEventListener('touchend', stopDrag)
 }
 
-const onDrag = (e) => {
+const onDrag = e => {
   if (!isDragging.value) return
   e.preventDefault()
 
@@ -740,7 +866,7 @@ const onDrag = (e) => {
 
   // Use different dimensions based on current state
   const width = isCollapsed.value ? COLLAPSED_WIDTH : PANEL_WIDTH
-  const height = isCollapsed.value ? COLLAPSED_HEIGHT : (panelRef.value?.offsetHeight || 250)
+  const height = isCollapsed.value ? COLLAPSED_HEIGHT : panelRef.value?.offsetHeight || 250
   const bottomReserved = isCollapsed.value ? 0 : 150
   const topInset = getSafeTopInset()
 
@@ -765,7 +891,7 @@ const stopDrag = () => {
 
   // Calculate and save edge distance
   const width = isCollapsed.value ? COLLAPSED_WIDTH : PANEL_WIDTH
-  const height = isCollapsed.value ? COLLAPSED_HEIGHT : (panelRef.value?.offsetHeight || 250)
+  const height = isCollapsed.value ? COLLAPSED_HEIGHT : panelRef.value?.offsetHeight || 250
   edgeDistance.value = {
     right: window.innerWidth - position.value.x - width,
     bottom: window.innerHeight - position.value.y - height
@@ -775,7 +901,7 @@ const stopDrag = () => {
 }
 
 // Trigger button drag
-const startTriggerDrag = (e) => {
+const startTriggerDrag = e => {
   hasDragged.value = false
   e.preventDefault()
 
@@ -808,7 +934,7 @@ const startTriggerDrag = (e) => {
   document.addEventListener('touchend', stopTriggerDrag)
 }
 
-const onTriggerDrag = (e) => {
+const onTriggerDrag = e => {
   if (!isDragging.value) return
   e.preventDefault()
 
@@ -919,8 +1045,14 @@ const restorePosition = () => {
       const height = TRIGGER_SIZE
       const topInset = getSafeTopInset()
       position.value = {
-        x: Math.max(0, Math.min(window.innerWidth - savedEdgeDist.right - width, window.innerWidth - width)),
-        y: Math.max(topInset, Math.min(window.innerHeight - savedEdgeDist.bottom - height, window.innerHeight - height))
+        x: Math.max(
+          0,
+          Math.min(window.innerWidth - savedEdgeDist.right - width, window.innerWidth - width)
+        ),
+        y: Math.max(
+          topInset,
+          Math.min(window.innerHeight - savedEdgeDist.bottom - height, window.innerHeight - height)
+        )
       }
       isPositioned.value = true
     } else if (saved) {
@@ -1004,11 +1136,16 @@ onMounted(() => {
 
     // Constrain to viewport bounds with 20px margin
     targetLeft = Math.max(20, Math.min(targetLeft, window.innerWidth - panelWidth - 20))
-    targetTop = Math.max(getSafeTopInset(), Math.min(targetTop, window.innerHeight - panelHeight - 20))
+    targetTop = Math.max(
+      getSafeTopInset(),
+      Math.min(targetTop, window.innerHeight - panelHeight - 20)
+    )
 
     // If constrained position differs from default, we need to set it explicitly
-    if (targetLeft !== window.innerWidth - panelWidth - defaultRight ||
-      targetTop !== window.innerHeight - panelHeight - defaultBottom) {
+    if (
+      targetLeft !== window.innerWidth - panelWidth - defaultRight ||
+      targetTop !== window.innerHeight - panelHeight - defaultBottom
+    ) {
       position.value = { x: targetLeft, y: targetTop }
       isPositioned.value = true
       // Calculate edge distance for this position
@@ -1030,13 +1167,16 @@ onUnmounted(() => {
   window.removeEventListener('resize', constrainPosition)
 })
 
-watch(() => workflowStore.currentWorkflowId, (newId) => {
-  if (newId && isCollapsed.value) {
-    isCollapsed.value = false
+watch(
+  () => workflowStore.currentWorkflowId,
+  newId => {
+    if (newId && isCollapsed.value) {
+      isCollapsed.value = false
+    }
+    activeTab.value = 'main'
+    childSnapshotProgress.value = new Map()
   }
-  activeTab.value = 'main'
-  childSnapshotProgress.value = new Map()
-})
+)
 
 watch(
   () => childSessionIdsFromSource.value.join('|'),
@@ -1046,15 +1186,18 @@ watch(
   { immediate: true }
 )
 
-watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
-  // When data first appears (panel becomes visible), ensure it's within viewport
-  if (hasDataNow && !hadDataBefore) {
-    // Wait for DOM to render with actual content height
-    nextTick(() => {
-      constrainPosition()
-    })
+watch(
+  () => hasData.value,
+  (hasDataNow, hadDataBefore) => {
+    // When data first appears (panel becomes visible), ensure it's within viewport
+    if (hasDataNow && !hadDataBefore) {
+      // Wait for DOM to render with actual content height
+      nextTick(() => {
+        constrainPosition()
+      })
+    }
   }
-})
+)
 </script>
 
 <style lang="scss" scoped>
@@ -1068,7 +1211,9 @@ watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
   border-radius: var(--cs-border-radius-lg);
   box-shadow: var(--el-box-shadow-light);
   z-index: 1000;
-  transition: box-shadow 0.2s ease, transform 0.1s ease;
+  transition:
+    box-shadow 0.2s ease,
+    transform 0.1s ease;
   overflow: hidden;
 
   &.dragging {
@@ -1088,7 +1233,9 @@ watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
   }
 
   &:not(.dragging) {
-    transition: left 0.3s ease, top 0.3s ease;
+    transition:
+      left 0.3s ease,
+      top 0.3s ease;
   }
 }
 
@@ -1259,7 +1406,9 @@ watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
 
     &.clickable {
       cursor: pointer;
-      transition: background-color 0.2s ease, transform 0.2s ease;
+      transition:
+        background-color 0.2s ease,
+        transform 0.2s ease;
 
       &:hover {
         background: var(--cs-hover-bg-color);
@@ -1355,7 +1504,9 @@ watch(() => hasData.value, (hasDataNow, hadDataBefore) => {
       .progress-fill {
         height: 100%;
         border-radius: var(--cs-border-radius-xxl);
-        transition: width 0.3s ease, background-color 0.3s ease;
+        transition:
+          width 0.3s ease,
+          background-color 0.3s ease;
         background-color: var(--el-color-primary);
 
         // 任务进度条颜色（原来的）

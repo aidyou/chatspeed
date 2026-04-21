@@ -985,10 +985,10 @@ pub enum WorkflowSignal {
 
 建议策略：
 
-1. 以成功的 `finish_task` 作为已完成任务段的硬边界。
-2. 若当前存在 summary，则只压缩该 summary 之后、最后一个成功 `finish_task` 之前的消息，并把结果增量合并回最新 summary。
-3. 若当前不存在 summary，则查找最近一个成功 `finish_task`，将其之前的消息生成首个 summary。
-4. 当前活动任务段（最后一个 `finish_task` 之后的消息）默认完整保留，不参与首轮压缩。
+1. 以成功的 `complete_workflow_with_summary` 作为已完成任务段的硬边界。
+2. 若当前存在 summary，则只压缩该 summary 之后、最后一个成功 `complete_workflow_with_summary` 之前的消息，并把结果增量合并回最新 summary。
+3. 若当前不存在 summary，则查找最近一个成功 `complete_workflow_with_summary`，将其之前的消息生成首个 summary。
+4. 当前活动任务段（最后一个 `complete_workflow_with_summary` 之后的消息）默认完整保留，不参与首轮压缩。
 5. 当单个活动任务段本身过大时，再引入第二层压缩：
    - 优先压缩早期大体积 `observe` 消息
    - 保留用户输入、审批消息、todo 变更、错误、最近关键工具结果

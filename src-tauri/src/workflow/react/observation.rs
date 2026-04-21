@@ -1,7 +1,7 @@
 use crate::tools::{
-    ToolError, TOOL_BASH, TOOL_EDIT_FILE, TOOL_FINISH_TASK, TOOL_GLOB, TOOL_GREP, TOOL_LIST_DIR,
-    TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST,
-    TOOL_TODO_UPDATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+    ToolError, TOOL_BASH, TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_EDIT_FILE, TOOL_GLOB,
+    TOOL_GREP, TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_TODO_CREATE, TOOL_TODO_GET,
+    TOOL_TODO_LIST, TOOL_TODO_UPDATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
 
 use rust_i18n::t;
@@ -113,7 +113,7 @@ impl ObservationReinforcer {
                                 )
                             });
                             if all_terminal && !todos.is_empty() {
-                                list_str.push_str("<SYSTEM_REMINDER>All tasks have reached a terminal state (completed/data_missing/failed). You should now call 'finish_task' with a comprehensive summary, noting any data gaps.</SYSTEM_REMINDER>\n");
+                                list_str.push_str("<SYSTEM_REMINDER>All tasks have reached a terminal state (completed/data_missing/failed). You should now call 'complete_workflow_with_summary' with a comprehensive summary, noting any data gaps.</SYSTEM_REMINDER>\n");
                             }
                         }
                         raw_res = list_str;
@@ -434,13 +434,13 @@ impl ObservationReinforcer {
             TOOL_TODO_LIST => t!("workflow.summary.todo_list").to_string(),
             TOOL_TODO_GET => t!("workflow.summary.todo_get").to_string(),
             TOOL_SUBMIT_PLAN => "Submit Plan".to_string(),
-            TOOL_FINISH_TASK => "Finish Task".to_string(),
-            crate::tools::TOOL_TASK_OUTPUT => {
+            TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => "Complete Workflow with Summary".to_string(),
+            crate::tools::TOOL_SUB_AGENT_OUTPUT => {
                 let task_id = args["task_id"].as_str().unwrap_or("").trim();
                 if task_id.is_empty() {
-                    "Task Output".to_string()
+                    "Sub-agent Output".to_string()
                 } else {
-                    format!("Task Output {}", task_id)
+                    format!("Sub-agent Output {}", task_id)
                 }
             }
             crate::tools::TOOL_SKILL => {
@@ -492,7 +492,7 @@ impl ObservationReinforcer {
     fn generate_summary(tool_name: &str, content: &str, _args: &Value) -> String {
         match tool_name {
             TOOL_SUBMIT_PLAN => t!("workflow.summary.submit_plan").to_string(),
-            TOOL_FINISH_TASK => t!("workflow.task_finished").to_string(),
+            TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => t!("workflow.task_finished").to_string(),
             TOOL_READ_FILE => {
                 let lines = content.lines().count();
                 format!("Read {} lines", lines)

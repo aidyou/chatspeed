@@ -20,7 +20,7 @@ impl ToolDefinition for Glob {
         - Returns matching file paths sorted by modification time\n\
         - Automatically respects .gitignore and other ignore files\n\
         - Use this tool when you need to find files by name patterns\n\
-        - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the task tool instead\n\
+        - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the sub_agent_run tool instead\n\
         - You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful."
     }
     fn category(&self) -> ToolCategory {
@@ -117,7 +117,7 @@ impl ToolDefinition for Grep {
         - Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\")\n\
         - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\") or type parameter (e.g., \"js\", \"py\", \"rust\")\n\
         - Output modes: \"content\" shows matching lines, \"files_with_matches\" shows only file paths (default), \"count\" shows match counts\n\
-        - Use task tool for open-ended searches requiring multiple rounds\n\
+        - Use sub_agent_run for open-ended searches requiring multiple rounds\n\
         - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping (use `interface\\{\\}` to find `interface{}` in Go code)\n\
         - Multiline matching: By default patterns match within single lines only. For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`"
     }

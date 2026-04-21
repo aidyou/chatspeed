@@ -15,10 +15,10 @@ pub enum WorkflowEventType {
     ToolStarted,
     ToolCompleted,
     ToolFailed,
-    ChildTaskStarted,
-    ChildTaskCompleted,
-    ChildTaskFailed,
-    ChildTaskInterrupted,
+    SubAgentStarted,
+    SubAgentCompleted,
+    SubAgentFailed,
+    SubAgentInterrupted,
     WorkflowCompleted,
     WorkflowFailed,
     WorkflowCancelled,
@@ -36,10 +36,10 @@ impl WorkflowEventType {
             WorkflowEventType::ToolStarted => "tool_started",
             WorkflowEventType::ToolCompleted => "tool_completed",
             WorkflowEventType::ToolFailed => "tool_failed",
-            WorkflowEventType::ChildTaskStarted => "child_task_started",
-            WorkflowEventType::ChildTaskCompleted => "child_task_completed",
-            WorkflowEventType::ChildTaskFailed => "child_task_failed",
-            WorkflowEventType::ChildTaskInterrupted => "child_task_interrupted",
+            WorkflowEventType::SubAgentStarted => "sub_agent_started",
+            WorkflowEventType::SubAgentCompleted => "sub_agent_completed",
+            WorkflowEventType::SubAgentFailed => "sub_agent_failed",
+            WorkflowEventType::SubAgentInterrupted => "sub_agent_interrupted",
             WorkflowEventType::WorkflowCompleted => "workflow_completed",
             WorkflowEventType::WorkflowFailed => "workflow_failed",
             WorkflowEventType::WorkflowCancelled => "workflow_cancelled",
@@ -203,53 +203,49 @@ impl WorkflowEvent {
         )
     }
 
-    pub fn child_task_started(
+    pub fn sub_agent_started(
         session_id: String,
-        child_task_id: String,
+        sub_agent_id: String,
         execution_mode: String,
     ) -> Self {
         Self::new(
-            WorkflowEventType::ChildTaskStarted,
+            WorkflowEventType::SubAgentStarted,
             session_id,
             serde_json::json!({
-                "child_task_id": child_task_id,
+                "sub_agent_id": sub_agent_id,
                 "execution_mode": execution_mode
             }),
         )
     }
 
-    pub fn child_task_completed(
+    pub fn sub_agent_completed(
         session_id: String,
-        child_task_id: String,
+        sub_agent_id: String,
         status: String,
         result: Value,
     ) -> Self {
         let event_type = match status.as_str() {
-            "failed" | "cancelled" => WorkflowEventType::ChildTaskFailed,
-            "interrupted" => WorkflowEventType::ChildTaskInterrupted,
-            _ => WorkflowEventType::ChildTaskCompleted,
+            "failed" | "cancelled" => WorkflowEventType::SubAgentFailed,
+            "interrupted" => WorkflowEventType::SubAgentInterrupted,
+            _ => WorkflowEventType::SubAgentCompleted,
         };
         Self::new(
             event_type,
             session_id,
             serde_json::json!({
-                "child_task_id": child_task_id,
+                "sub_agent_id": sub_agent_id,
                 "status": status,
                 "result": result
             }),
         )
     }
 
-    pub fn child_task_interrupted(
-        session_id: String,
-        child_task_id: String,
-        reason: String,
-    ) -> Self {
+    pub fn sub_agent_interrupted(session_id: String, sub_agent_id: String, reason: String) -> Self {
         Self::new(
-            WorkflowEventType::ChildTaskInterrupted,
+            WorkflowEventType::SubAgentInterrupted,
             session_id,
             serde_json::json!({
-                "child_task_id": child_task_id,
+                "sub_agent_id": sub_agent_id,
                 "status": "interrupted",
                 "reason": reason
             }),

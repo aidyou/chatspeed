@@ -11,7 +11,6 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
 /// Decision levels for shell auditing
@@ -455,8 +454,7 @@ impl ToolDefinition for ShellExecute {
            - Capture the output of the command.\n\n\
         Usage notes:\n\
           - The command argument is required.\n\
-          - You can specify an optional timeout in milliseconds (max 600000ms).\n\
-          - You can use the `run_in_background` parameter to run the command in the background. Use `task_output` to read the output later."
+          - You can specify an optional timeout in milliseconds (max 600000ms)."
     }
 
     fn category(&self) -> ToolCategory {
@@ -476,8 +474,7 @@ impl ToolDefinition for ShellExecute {
                 "properties": {
                     "command": { "type": "string", "description": "The command to execute" },
                     "timeout": { "type": "number", "description": "Optional timeout in milliseconds" },
-                    "description": { "type": "string", "description": "Clear description of what this command does." },
-                    "run_in_background": { "type": "boolean", "description": "Run in background" }
+                    "description": { "type": "string", "description": "Clear description of what this command does." }
                 },
                 "required": ["command"]
             }),
@@ -502,102 +499,7 @@ impl ToolDefinition for ShellExecute {
         }
 
         let timeout_ms = params["timeout"].as_u64().unwrap_or(120_000).min(600_000);
-        let run_in_background = params["run_in_background"].as_bool().unwrap_or(false);
         let working_dir = self.default_working_dir();
-
-        if run_in_background {
-            let task_id = format!(
-                "shell_{}",
-                self.tsid_generator
-                    .generate()
-                    .map_err(|e| ToolError::ExecutionFailed(e))?
-            );
-            let cmd_to_run = command_str.to_string();
-            let stdout_arc = Arc::new(Mutex::new(String::new()));
-            let stderr_arc = Arc::new(Mutex::new(String::new()));
-            let status_arc = Arc::new(Mutex::new("Running".to_string()));
-            let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-            let stop_tx = Arc::new(Mutex::new(Some(stop_tx)));
-
-            use crate::workflow::react::orchestrator::{BackgroundTask, BACKGROUND_TASKS};
-            BACKGROUND_TASKS.insert(
-                task_id.clone(),
-                BackgroundTask::ShellCommand {
-                    owner_session_id: self.session_id.clone(),
-                    command: cmd_to_run.clone(),
-                    stdout: stdout_arc.clone(),
-                    stderr: stderr_arc.clone(),
-                    status: status_arc.clone(),
-                    stop_tx: stop_tx.clone(),
-                },
-            );
-
-            let working_dir_for_spawn = working_dir.clone();
-            tokio::spawn(async move {
-                let spawn_result = if cfg!(target_os = "windows") {
-                    let mut command = Command::new("cmd");
-                    command.args(["/C", &cmd_to_run]);
-                    if let Some(dir) = &working_dir_for_spawn {
-                        command.current_dir(dir);
-                    }
-                    command.kill_on_drop(true);
-                    command.spawn()
-                } else {
-                    let mut command = Command::new("sh");
-                    command.args(["-c", &cmd_to_run]);
-                    if let Some(dir) = &working_dir_for_spawn {
-                        command.current_dir(dir);
-                    }
-                    command.kill_on_drop(true);
-                    command.spawn()
-                };
-
-                let child = match spawn_result {
-                    Ok(child) => child,
-                    Err(e) => {
-                        *stderr_arc.lock().await = format!("Failed to spawn: {}", e);
-                        *status_arc.lock().await = "Error".into();
-                        return;
-                    }
-                };
-
-                let cmd_future =
-                    timeout(Duration::from_millis(timeout_ms), child.wait_with_output());
-
-                tokio::select! {
-                    res = cmd_future => match res {
-                        Ok(Ok(out)) => {
-                            *stdout_arc.lock().await = String::from_utf8_lossy(&out.stdout).to_string();
-                            *stderr_arc.lock().await = String::from_utf8_lossy(&out.stderr).to_string();
-                            *status_arc.lock().await = if out.status.success() {
-                                "Completed".into()
-                            } else {
-                                "Error".into()
-                            };
-                        }
-                        Ok(Err(e)) => {
-                            *stderr_arc.lock().await = format!("Failed to wait for command: {}", e);
-                            *status_arc.lock().await = "Error".into();
-                        }
-                        Err(_) => {
-                            *stderr_arc.lock().await =
-                                format!("Command timed out after {}ms", timeout_ms);
-                            *status_arc.lock().await = "Error".into();
-                        }
-                    },
-                    _ = stop_rx => {
-                        *stderr_arc.lock().await =
-                            "Command stopped by workflow cleanup".to_string();
-                        *status_arc.lock().await = "Stopped".into();
-                    }
-                }
-            });
-
-            return Ok(ToolCallResult::success(
-                Some(json!({ "task_id": task_id, "status": "Started" }).to_string()),
-                None,
-            ));
-        }
 
         // Use streaming execution if gateway is configured
         if self.gateway.is_some() && self.session_id.is_some() {

@@ -270,7 +270,7 @@ tools:
     function_not_found: "Funktion nicht gefunden"
     initialization: "Initialisierungsfehler"
     invalid_params: "Ungültige Parameter: %{details}"
-    io_error: "E/A-Fehler"
+    io_error: "E/A-Fehler: %{details}"
     mcp_server_not_found: "MCP-Server nicht gefunden"
     network_error: "Netzwerkfehler"
     serialization: "Serialisierungsfehler"

@@ -28,7 +28,7 @@
                 <el-option v-for="provider in modelStore.getAvailableProviders" :key="provider.id"
                   :label="provider.name" :value="provider.id" />
               </el-select>
-              <el-select v-model="currentModel.model" size="small" filterable :disabled="!currentModel.id" style="flex: 1">
+              <el-select v-model="currentModel.model" size="small" filterable :disabled="!currentModel.id" @change="onProviderModelChange" style="flex: 1">
                 <el-option v-for="model in getModelList()" :key="model.id" :label="model.name || model.id" :value="model.id" />
               </el-select>
             </template>
@@ -136,6 +136,27 @@ const getModelList = () => {
 
 const onModelIdChange = () => {
   currentModel.value.model = ''
+}
+
+const applyProviderModelOverrides = (modelId) => {
+  if (!modelId || modelModes[activeTab.value] !== 'provider') return
+
+  const selected = getModelList().find(model => model.id === modelId)
+  if (!selected) return
+
+  if (selected.temperature !== undefined && selected.temperature !== null) {
+    currentModel.value.temperature = selected.temperature
+  }
+  if (selected.contextSize !== undefined && selected.contextSize !== null) {
+    currentModel.value.contextSize = selected.contextSize
+  }
+  if (selected.maxTokens !== undefined && selected.maxTokens !== null) {
+    currentModel.value.maxTokens = selected.maxTokens
+  }
+}
+
+const onProviderModelChange = (value) => {
+  applyProviderModelOverrides(value)
 }
 
 const getProxyAliases = (groupName) => {

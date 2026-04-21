@@ -11,6 +11,13 @@ use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResul
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
 use crate::workflow::react::types::{GatewayPayload, WorkflowState};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SmartApprovalDecision {
+    AutoApprove,
+    ReviewWithAi,
+    ReviewByUser,
+}
+
 impl WorkflowExecutor {
     pub(crate) fn is_smart_mode_read_only_tool(name: &str) -> bool {
         matches!(
@@ -26,6 +33,26 @@ impl WorkflowExecutor {
 
     pub(crate) fn is_smart_mode_auto_approved_tool(name: &str) -> bool {
         Self::is_smart_mode_read_only_tool(name) || matches!(name, TOOL_EDIT_FILE | TOOL_WRITE_FILE)
+    }
+
+    pub(crate) fn smart_mode_approval_decision(
+        name: &str,
+        args: &serde_json::Value,
+    ) -> SmartApprovalDecision {
+        if Self::is_smart_mode_auto_approved_tool(name) {
+            return SmartApprovalDecision::AutoApprove;
+        }
+
+        if name == TOOL_BASH {
+            let command_str = args["command"].as_str().unwrap_or("").trim();
+            if Self::is_smart_mode_read_only_shell_command(command_str) {
+                return SmartApprovalDecision::AutoApprove;
+            }
+
+            return SmartApprovalDecision::ReviewByUser;
+        }
+
+        SmartApprovalDecision::ReviewWithAi
     }
 
     fn normalized_finish_task_summary(text_part: &str) -> String {
@@ -274,45 +301,36 @@ impl WorkflowExecutor {
 
         // Smart mode: allow read/write tools, intercept risky bash or unknown mutations
         if self.policy.approval_level == ApprovalLevel::Smart {
-            let is_safe_tool = Self::is_smart_mode_auto_approved_tool(name);
-
-            if is_safe_tool {
-                return false;
-            }
-
-            // Special handling for bash in Smart mode:
-            // Auto-approve common read-only commands ONLY IF they don't contain operators
-            if name == TOOL_BASH {
-                let command_str = args["command"].as_str().unwrap_or("").trim().to_lowercase();
-
-                // Security Guard: Any redirection, piping, or background execution MUST be reviewed
-                // to prevent attacks like 'cat secret.txt > malicious.sh'
-                let has_operators = command_str
-                    .chars()
-                    .any(|c| matches!(c, '>' | '<' | '|' | '&' | ';'));
-                if has_operators {
-                    log::info!(
-                        "WorkflowExecutor {}: Intercepting bash due to shell operators: {}",
-                        self.session_id,
-                        command_str
-                    );
+            match Self::smart_mode_approval_decision(name, args) {
+                SmartApprovalDecision::AutoApprove => {
+                    if name == TOOL_BASH {
+                        let command_str = args["command"].as_str().unwrap_or("").trim();
+                        log::info!(
+                            "WorkflowExecutor {}: Skipping approval for Smart-mode read-only bash command: {}",
+                            self.session_id,
+                            command_str
+                        );
+                    }
+                    return false;
+                }
+                SmartApprovalDecision::ReviewWithAi | SmartApprovalDecision::ReviewByUser => {
+                    if name == TOOL_BASH {
+                        let command_str =
+                            args["command"].as_str().unwrap_or("").trim().to_lowercase();
+                        let has_operators = command_str
+                            .chars()
+                            .any(|c| matches!(c, '>' | '<' | '|' | '&' | ';'));
+                        if has_operators {
+                            log::info!(
+                                "WorkflowExecutor {}: Intercepting bash due to shell operators: {}",
+                                self.session_id,
+                                command_str
+                            );
+                        }
+                    }
                     return true;
                 }
-
-                // Check exact match first (O(1) with perfect hash)
-                if READ_ONLY_BASH_CMDS_EXACT.contains(command_str.as_str()) {
-                    return false; // Don't intercept - it's read-only
-                }
-
-                // Check prefix match for commands with arguments (O(n) but small n)
-                let is_read_only_bash = READ_ONLY_BASH_PREFIXES
-                    .iter()
-                    .any(|&p| command_str.starts_with(p));
-                return !is_read_only_bash; // Intercept if NOT explicitly in the read-only whitelist
             }
-
-            // All other tools (delete_*, risky bash, unknown mutations, etc.) should be intercepted
-            return true;
         }
 
         // Default mode: intercept everything else
@@ -454,7 +472,7 @@ impl WorkflowExecutor {
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         if !Self::is_valid_finish_task_summary(text_part) {
             return Ok(Some(ReinforcedResult {
-                content: "<SYSTEM_REMINDER>Error: You called 'finish_task' without a valid user-visible completion report. Before calling 'finish_task', you MUST provide a concise but meaningful final summary in plain text that covers: 1) what was completed, 2) what you verified, and 3) any important remaining notes or limitations. A short placeholder such as 'done', 'completed', or hidden reasoning alone is not sufficient.</SYSTEM_REMINDER>".into(),
+                content: "<SYSTEM_REMINDER>Error: You called 'complete_workflow_with_summary' without a valid user-visible completion report. Do NOT retry complete_workflow_with_summary immediately. First, write a brief plain-text summary visible to the user that explicitly covers: 1) what was completed, 2) what you verified, and 3) any important remaining notes or limitations. A short placeholder such as 'done', 'completed', or hidden reasoning alone is not sufficient. After that summary is present, call complete_workflow_with_summary again.</SYSTEM_REMINDER>".into(),
                 title: "FinishTask Error".to_string(),
                 summary: "Invalid completion report".to_string(),
                 is_error: true,
@@ -473,12 +491,19 @@ impl WorkflowExecutor {
                         let s = t["status"].as_str().unwrap_or("");
                         s == "pending" || s == "in_progress"
                     })
-                    .map(|t| t["subject"].as_str().unwrap_or("Untitled").to_string())
+                    .map(|t| {
+                        format!(
+                            "[{}] {} (ID: {})",
+                            t["status"].as_str().unwrap_or("?"),
+                            t["subject"].as_str().unwrap_or("Untitled"),
+                            t["id"].as_str().unwrap_or("?")
+                        )
+                    })
                     .collect();
 
                 if !active_tasks.is_empty() {
                     return Ok(Some(ReinforcedResult {
-                        content: format!("<SYSTEM_REMINDER>Block: You still have active tasks: {}. You MUST either complete them, or mark them as 'failed' or 'data_missing' if they cannot be fulfilled, before calling finish_task.</SYSTEM_REMINDER>", active_tasks.join(", ")),
+                        content: format!("<SYSTEM_REMINDER>Block: You still have active tasks: {}. Do NOT retry complete_workflow_with_summary yet. You MUST either complete these todos, or mark them as 'failed' or 'data_missing' if they cannot be fulfilled, before calling complete_workflow_with_summary.</SYSTEM_REMINDER>", active_tasks.join(", ")),
                         title: "Tasks Pending".to_string(),
                         summary: "Incomplete todos".to_string(),
                         is_error: true,
@@ -504,7 +529,7 @@ impl WorkflowExecutor {
                 .await?
             {
                 return Ok(Some(ReinforcedResult {
-                    content: format!("<SYSTEM_REMINDER>Audit Rejected: Your conclusion was deemed incomplete. Feedback: {}\n\nYou MUST address these points before you can call finish_task.</SYSTEM_REMINDER>", audit_feedback),
+                    content: format!("<SYSTEM_REMINDER>Audit Rejected: Your conclusion was deemed incomplete. Feedback: {}\n\nYou MUST address these points before you can call complete_workflow_with_summary.</SYSTEM_REMINDER>", audit_feedback),
                     title: "Audit Rejected".to_string(),
                     summary: "Audit failed".to_string(),
                     is_error: true,
@@ -518,7 +543,7 @@ impl WorkflowExecutor {
 
         Ok(Some(ReinforcedResult {
             content: "Finished".into(),
-            title: "Finish Task".to_string(),
+            title: "Complete Workflow with Summary".to_string(),
             summary: rust_i18n::t!("workflow.task_finished").to_string(),
             is_error: false,
             error_type: None,
@@ -840,7 +865,9 @@ impl WorkflowExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::WorkflowExecutor;
+    use super::{SmartApprovalDecision, WorkflowExecutor};
+    use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_READ_FILE, TOOL_WRITE_FILE};
+    use serde_json::json;
 
     #[test]
     fn finish_task_summary_rejects_placeholder_text() {
@@ -856,5 +883,74 @@ mod tests {
         assert!(WorkflowExecutor::is_valid_finish_task_summary(
             "Implemented the workflow fix and verified it with cargo check.\nRemaining note: UI behavior still needs manual confirmation."
         ));
+    }
+
+    #[test]
+    fn smart_mode_auto_approves_read_only_tools_and_file_writes() {
+        assert_eq!(
+            WorkflowExecutor::smart_mode_approval_decision(TOOL_READ_FILE, &json!({})),
+            SmartApprovalDecision::AutoApprove
+        );
+        assert_eq!(
+            WorkflowExecutor::smart_mode_approval_decision(
+                TOOL_EDIT_FILE,
+                &json!({"file_path":"/tmp/test.rs"})
+            ),
+            SmartApprovalDecision::AutoApprove
+        );
+        assert_eq!(
+            WorkflowExecutor::smart_mode_approval_decision(
+                TOOL_WRITE_FILE,
+                &json!({"file_path":"/tmp/test.rs","content":"x"})
+            ),
+            SmartApprovalDecision::AutoApprove
+        );
+    }
+
+    #[test]
+    fn smart_mode_auto_approves_read_only_bash_diagnostics_with_chaining() {
+        assert_eq!(
+            WorkflowExecutor::smart_mode_approval_decision(
+                TOOL_BASH,
+                &json!({"command":"cd /repo && git status"})
+            ),
+            SmartApprovalDecision::AutoApprove
+        );
+        assert_eq!(
+            WorkflowExecutor::smart_mode_approval_decision(
+                TOOL_BASH,
+                &json!({"command":"git log --oneline | head -20"})
+            ),
+            SmartApprovalDecision::AutoApprove
+        );
+    }
+
+    #[test]
+    fn smart_mode_sends_unknown_mutations_to_ai_review() {
+        assert_eq!(
+            WorkflowExecutor::smart_mode_approval_decision(
+                "delete_file",
+                &json!({"file_path":"/tmp/test.rs"})
+            ),
+            SmartApprovalDecision::ReviewWithAi
+        );
+    }
+
+    #[test]
+    fn smart_mode_routes_non_read_only_bash_to_user_review() {
+        assert_eq!(
+            WorkflowExecutor::smart_mode_approval_decision(
+                TOOL_BASH,
+                &json!({"command":"cargo test"})
+            ),
+            SmartApprovalDecision::ReviewByUser
+        );
+        assert_eq!(
+            WorkflowExecutor::smart_mode_approval_decision(
+                TOOL_BASH,
+                &json!({"command":"cat secret.txt > out.txt"})
+            ),
+            SmartApprovalDecision::ReviewByUser
+        );
     }
 }

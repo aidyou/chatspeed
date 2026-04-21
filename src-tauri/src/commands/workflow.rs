@@ -1,7 +1,7 @@
 use crate::ai::interaction::chat_completion::ChatState;
-use crate::db::{AgentConfig, MainStore, Workflow, WorkflowMessage};
+use crate::db::{Agent, AgentConfig, MainStore, Workflow, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
-use crate::workflow::react::child_tasks::get_child_task_registry;
+use crate::workflow::react::child_tasks::get_sub_agent_registry;
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
@@ -13,7 +13,7 @@ use crate::workflow::react::orchestrator::{
 use crate::workflow::react::replay::{restore_execution_context, RecoveryResult};
 use crate::workflow::react::signals::SignalType;
 use crate::workflow::react::types::{
-    ChildTaskCompletion, ExecutionContext, RuntimeState, StepType, WaitReason, WorkflowSignal,
+    ExecutionContext, RuntimeState, StepType, SubAgentCompletion, WaitReason, WorkflowSignal,
     WorkflowState,
 };
 use chrono::{DateTime, Local};
@@ -329,6 +329,126 @@ pub struct CreateWorkflowRequest {
     pub inherited_agent_config: Option<String>,
 }
 
+fn build_agent_config_from_agent(
+    agent: &Agent,
+    allowed_paths: Option<&Value>,
+    final_audit: Option<bool>,
+) -> AgentConfig {
+    let mut config = AgentConfig::default();
+
+    config.models = agent.models.clone();
+    config.max_contexts = agent.max_contexts;
+
+    if let Some(policy_str) = &agent.shell_policy {
+        config.shell_policy = serde_json::from_str(policy_str).ok();
+    }
+
+    if let Some(val) = allowed_paths {
+        config.allowed_paths = serde_json::from_value::<Vec<String>>(val.clone()).ok();
+    } else if let Some(paths_str) = &agent.allowed_paths {
+        config.allowed_paths = serde_json::from_str(paths_str).ok();
+    }
+
+    config.final_audit = Some(final_audit.unwrap_or(agent.final_audit.unwrap_or(false)));
+
+    if let Some(approve_str) = &agent.auto_approve {
+        config.auto_approve = serde_json::from_str(approve_str).ok();
+    }
+
+    config.approval_level = agent.approval_level.clone();
+
+    if let Some(tools_str) = &agent.available_tools {
+        config.available_tools = serde_json::from_str(tools_str).ok();
+    }
+
+    config
+}
+
+fn agent_shell_policy_value(agent: &Agent) -> Option<Value> {
+    agent
+        .shell_policy
+        .as_deref()
+        .and_then(|policy| serde_json::from_str::<Value>(policy).ok())
+}
+
+fn agent_config_to_json_with_agent_shell_policy(
+    config: &AgentConfig,
+    agent: &Agent,
+) -> Result<String, String> {
+    let mut value = serde_json::to_value(config).map_err(|e| e.to_string())?;
+    if let Some(policy) = agent_shell_policy_value(agent) {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("shellPolicy".to_string(), policy);
+        }
+    }
+    serde_json::to_string(&value).map_err(|e| e.to_string())
+}
+
+fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> bool {
+    let defaults = build_agent_config_from_agent(agent, None, None);
+    let mut changed = false;
+
+    if config.allowed_paths.is_none() && defaults.allowed_paths.is_some() {
+        config.allowed_paths = defaults.allowed_paths;
+        changed = true;
+    }
+    if config.shell_policy.is_none() && defaults.shell_policy.is_some() {
+        config.shell_policy = defaults.shell_policy;
+        changed = true;
+    }
+    if config.auto_approve.is_none() && defaults.auto_approve.is_some() {
+        config.auto_approve = defaults.auto_approve;
+        changed = true;
+    }
+    if config.available_tools.is_none() && defaults.available_tools.is_some() {
+        config.available_tools = defaults.available_tools;
+        changed = true;
+    }
+    if config.models.is_none() && defaults.models.is_some() {
+        config.models = defaults.models;
+        changed = true;
+    }
+    if config.max_contexts.is_none() && defaults.max_contexts.is_some() {
+        config.max_contexts = defaults.max_contexts;
+        changed = true;
+    }
+
+    changed
+}
+
+fn normalize_workflow_agent_config(
+    store: &MainStore,
+    workflow: &mut Workflow,
+) -> Result<(), String> {
+    let agent = store
+        .get_agent(&workflow.agent_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
+
+    let mut config = workflow
+        .agent_config
+        .as_deref()
+        .and_then(AgentConfig::from_json)
+        .unwrap_or_default();
+
+    let shell_policy_missing =
+        config.shell_policy.is_none() && agent_shell_policy_value(&agent).is_some();
+    let missing_fields_filled = fill_missing_agent_config_fields(&mut config, &agent);
+
+    if missing_fields_filled || shell_policy_missing {
+        let normalized_config = agent_config_to_json_with_agent_shell_policy(&config, &agent)?;
+        store
+            .update_workflow_agent_config(
+                workflow.id.as_deref().unwrap_or_default(),
+                &normalized_config,
+            )
+            .map_err(|e| e.to_string())?;
+        workflow.agent_config = Some(normalized_config);
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn create_workflow(
     tsid_generator: State<'_, Arc<TsidGenerator>>,
@@ -357,45 +477,11 @@ pub async fn create_workflow(
         return Err("Child agents cannot be used as top-level workflow agents".to_string());
     }
 
-    // Build agent config from agent defaults
-    let mut config = AgentConfig::default();
+    // Build agent config from agent defaults.
+    let mut config =
+        build_agent_config_from_agent(&agent, request.allowed_paths.as_ref(), request.final_audit);
 
-    // 1. Load models
-    config.models = agent.models.clone();
-
-    // 2. Load shell_policy (parse from JSON string)
-    if let Some(policy_str) = &agent.shell_policy {
-        config.shell_policy = serde_json::from_str(policy_str).ok();
-    }
-
-    // 3. Load allowed_paths (Priority: Workflow input > Agent default)
-    if let Some(val) = &request.allowed_paths {
-        config.allowed_paths = serde_json::from_value::<Vec<String>>(val.clone()).ok();
-    } else if let Some(paths_str) = &agent.allowed_paths {
-        config.allowed_paths = serde_json::from_str(paths_str).ok();
-    }
-
-    // 4. Load final_audit (Priority: Workflow input > Agent default)
-    config.final_audit = Some(
-        request
-            .final_audit
-            .unwrap_or(agent.final_audit.unwrap_or(false)),
-    );
-
-    // 5. Load auto_approve (parse from JSON string)
-    if let Some(approve_str) = &agent.auto_approve {
-        config.auto_approve = serde_json::from_str(approve_str).ok();
-    }
-
-    // 6. Load approval_level
-    config.approval_level = agent.approval_level.clone();
-
-    // 7. Load available_tools (parse from JSON string)
-    if let Some(tools_str) = &agent.available_tools {
-        config.available_tools = serde_json::from_str(tools_str).ok();
-    }
-
-    // 8. Merge inherited config if provided
+    // Merge inherited config if provided.
     if let Some(inherited) = &request.inherited_agent_config {
         if let Some(inherited_config) = AgentConfig::from_json(inherited) {
             // Validate and merge models
@@ -506,20 +592,20 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                     max_context_tokens: None,
                     last_event_id: None,
                     version: ExecutionContext::CURRENT_VERSION.to_string(),
-                    waiting_on_task_id: None,
-                    child_sessions: Vec::new(),
-                    pending_child_completions: Vec::new(),
+                    waiting_on_sub_agent_id: None,
+                    sub_agent_sessions: Vec::new(),
+                    pending_sub_agent_completions: Vec::new(),
                 });
         context.state = RuntimeState::Cancelled;
         context.wait_reason = None;
         context.pending_tools.clear();
-        context.waiting_on_task_id = None;
+        context.waiting_on_sub_agent_id = None;
         context.last_action_summary =
-            Some("Child task interrupted by application restart.".to_string());
+            Some("Sub-agent interrupted by application restart.".to_string());
         store.upsert_execution_context(&context)?;
 
         if let Some(parent_session_id) = child.parent_session_id.clone() {
-            let event = WorkflowEvent::child_task_interrupted(
+            let event = WorkflowEvent::sub_agent_interrupted(
                 parent_session_id.clone(),
                 child_id.clone(),
                 "application_restart".to_string(),
@@ -527,7 +613,7 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
             store.append_workflow_event(&event)?;
 
             let message = format!(
-                "<SYSTEM_REMINDER>\nChild task {} was interrupted by application restart and marked as cancelled. If you still need to continue that delegated work, call the child agent again with a fresh task.\n</SYSTEM_REMINDER>",
+                "<SYSTEM_REMINDER>\nSub-agent {} was interrupted by application restart and marked as cancelled. If you still need to continue that delegated work, call the sub-agent again with a fresh task.\n</SYSTEM_REMINDER>",
                 child_id
             );
             let parent_message = WorkflowMessage {
@@ -538,44 +624,44 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                 reasoning: None,
                 metadata: Some(json!({
                     "message_kind": "runtime_observation",
-                    "observation_type": "child_task_interrupted",
-                    "child_task_id": child_id,
-                    "summary": "Child task interrupted",
+                    "observation_type": "sub_agent_interrupted",
+                    "sub_agent_id": child_id,
+                    "summary": "Sub-agent interrupted",
                     "result": {
                         "status": "interrupted",
                         "task_id": child_id,
-                        "error": "Child task interrupted by application restart",
+                        "error": "Sub-agent interrupted by application restart",
                         "tool_calls_count": context.pending_tools.len()
                     },
                     "execution_status": "interrupted",
                     "is_error": true,
-                    "error_type": "ChildTaskInterrupted"
+                    "error_type": "SubAgentInterrupted"
                 })),
                 attached_context: None,
                 step_type: Some(StepType::Observe.to_string()),
                 step_index: 0,
                 is_error: true,
-                error_type: Some("ChildTaskInterrupted".to_string()),
+                error_type: Some("SubAgentInterrupted".to_string()),
                 created_at: None,
             };
             let _ = store.add_workflow_message(&parent_message)?;
 
             if let Some(mut parent_context) = store.get_execution_context(&parent_session_id)? {
                 parent_context
-                    .child_sessions
+                    .sub_agent_sessions
                     .retain(|existing| existing != &child_id);
-                if parent_context.waiting_on_task_id.as_deref() == Some(&child_id) {
-                    parent_context.waiting_on_task_id = None;
+                if parent_context.waiting_on_sub_agent_id.as_deref() == Some(&child_id) {
+                    parent_context.waiting_on_sub_agent_id = None;
                     parent_context.wait_reason = None;
                     parent_context.state = RuntimeState::Pending;
                 }
                 parent_context
-                    .pending_child_completions
-                    .retain(|existing| existing.child_task_id != child_id);
+                    .pending_sub_agent_completions
+                    .retain(|existing| existing.sub_agent_id != child_id);
                 parent_context
-                    .pending_child_completions
-                    .push(ChildTaskCompletion {
-                        child_task_id: child_id.clone(),
+                    .pending_sub_agent_completions
+                    .push(SubAgentCompletion {
+                        sub_agent_id: child_id.clone(),
                         parent_session_id: parent_session_id.clone(),
                         status: "interrupted".to_string(),
                         summary: None,
@@ -628,9 +714,11 @@ pub async fn get_workflow_snapshot(
     let main_store = state.inner().clone();
     let snapshot = {
         let store = main_store.read().map_err(|e| e.to_string())?;
-        store
+        let mut snapshot = store
             .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        normalize_workflow_agent_config(&store, &mut snapshot.workflow)?;
+        snapshot
     };
     let merged_messages = merge_ui_workflow_messages(&snapshot.messages);
     let execution_context = restore_context_for_signal(main_store, &session_id);
@@ -780,7 +868,7 @@ async fn has_reconciled_live_session(
         | WorkflowState::AwaitingUser
         | WorkflowState::AwaitingApproval
         | WorkflowState::AwaitingAutoApproval
-        | WorkflowState::AwaitingChildTask => ManagedSessionStatus::Waiting,
+        | WorkflowState::AwaitingSubAgent => ManagedSessionStatus::Waiting,
         WorkflowState::Completed => ManagedSessionStatus::Completed,
         WorkflowState::Error => ManagedSessionStatus::Failed,
         WorkflowState::Cancelled => ManagedSessionStatus::Cancelled,
@@ -832,9 +920,9 @@ async fn interrupt_openai_session(chat_state: &Arc<ChatState>, session_id: &str)
 }
 
 async fn cleanup_owned_background_resources(root_session_id: &str, chat_state: &Arc<ChatState>) {
-    let registry = get_child_task_registry();
+    let registry = get_sub_agent_registry();
     let mut visited = std::collections::HashSet::new();
-    let mut pending_task_ids = registry.list_child_tasks_for_parent(root_session_id);
+    let mut pending_task_ids = registry.list_sub_agents_for_parent(root_session_id);
     pending_task_ids.extend(list_background_task_ids_for_owner(root_session_id));
 
     while let Some(task_id) = pending_task_ids.pop() {
@@ -842,7 +930,7 @@ async fn cleanup_owned_background_resources(root_session_id: &str, chat_state: &
             continue;
         }
 
-        pending_task_ids.extend(registry.list_child_tasks_for_parent(&task_id));
+        pending_task_ids.extend(registry.list_sub_agents_for_parent(&task_id));
         pending_task_ids.extend(list_background_task_ids_for_owner(&task_id));
 
         interrupt_openai_session(chat_state, &task_id).await;
@@ -865,18 +953,22 @@ async fn cleanup_workflow_resources(
 ) {
     interrupt_openai_session(chat_state, session_id).await;
     cleanup_owned_background_resources(session_id, chat_state).await;
-    let _ = gateway
-        .inject_input(session_id, "{\"type\": \"stop\"}".to_string())
-        .await;
+    if workflow_manager.has_session(session_id) {
+        let _ = gateway
+            .inject_input(session_id, "{\"type\": \"stop\"}".to_string())
+            .await;
+    }
 
     if let Some(executor) = workflow_manager.get_executor(session_id) {
         let mut guard = executor.lock().await;
         guard.set_state(WorkflowState::Cancelled);
     }
 
-    let _ = workflow_manager.update_session_status(session_id, ManagedSessionStatus::Cancelled);
+    if workflow_manager.has_session(session_id) {
+        let _ = workflow_manager.update_session_status(session_id, ManagedSessionStatus::Cancelled);
+        workflow_manager.remove_session(session_id);
+    }
     BACKGROUND_TASKS.remove(session_id);
-    workflow_manager.remove_session(session_id);
     WorkflowManager::unregister_session_signal_tx(session_id);
     gateway.unregister_session(session_id).await;
 }
@@ -888,7 +980,7 @@ fn legacy_wait_reason_from_status(status: &str) -> Option<WaitReason> {
         "awaiting_approval" | "awaitingapproval" | "awaiting_auto_approval" => {
             Some(WaitReason::Approval)
         }
-        "awaiting_child_task" => Some(WaitReason::ChildTask),
+        "awaiting_sub_agent" => Some(WaitReason::SubAgent),
         _ => None,
     }
 }
@@ -983,7 +1075,7 @@ pub async fn workflow_start(
         let agent_cfg = wf
             .agent_config
             .as_ref()
-            .and_then(|s| crate::db::AgentConfig::from_json(s))
+            .and_then(|s| AgentConfig::from_json(s))
             .unwrap_or_default();
 
         let paths: Vec<String> = agent_cfg.allowed_paths.unwrap_or_default();
@@ -1368,7 +1460,7 @@ pub async fn workflow_approve_plan(
         let agent_cfg = wf
             .agent_config
             .as_ref()
-            .and_then(|s| crate::db::AgentConfig::from_json(s))
+            .and_then(|s| AgentConfig::from_json(s))
             .unwrap_or_default();
 
         let paths: Vec<String> = agent_cfg.allowed_paths.unwrap_or_default();
@@ -1957,11 +2049,11 @@ pub async fn workflow_signal(
                 return Ok("Workflow resumed and approval processed".to_string());
             } else if matches!(
                 workflow_signal,
-                Some(WorkflowSignal::ChildTaskComplete { .. })
+                Some(WorkflowSignal::SubAgentComplete { .. })
             ) {
-                if effective_wait_reason != Some(WaitReason::ChildTask) {
+                if effective_wait_reason != Some(WaitReason::SubAgent) {
                     return Err(format!(
-                        "Cannot process child task completion: Workflow is in '{}' state.",
+                        "Cannot process sub-agent completion: Workflow is in '{}' state.",
                         workflow_snapshot.workflow.status
                     ));
                 }
@@ -1991,7 +2083,7 @@ pub async fn workflow_signal(
                             last_error = Some(e);
                             retries -= 1;
                             log::warn!(
-                                "[Workflow] Failed to inject child_task_complete signal, retries left: {}",
+                                "[Workflow] Failed to inject sub_agent_complete signal, retries left: {}",
                                 retries
                             );
                         }
@@ -2002,12 +2094,12 @@ pub async fn workflow_signal(
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "Unknown error".into());
                     return Err(format!(
-                        "Failed to inject child_task_complete after resuming: {}",
+                        "Failed to inject sub_agent_complete after resuming: {}",
                         err_msg
                     ));
                 }
 
-                return Ok("Workflow resumed and child task completion processed".to_string());
+                return Ok("Workflow resumed and sub-agent completion processed".to_string());
             }
         }
     }
@@ -2325,13 +2417,17 @@ pub async fn update_workflow_agent_id(
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     agent_id: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let store = state.read().map_err(|e| e.to_string())?;
 
-    store
+    let agent = store
         .get_agent(&agent_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent {} not found", agent_id))?;
+
+    if agent.role.as_deref() == Some("child") {
+        return Err("Child agents cannot be used as top-level workflow agents".to_string());
+    }
 
     let snapshot = store
         .get_workflow_snapshot(&session_id)
@@ -2355,7 +2451,21 @@ pub async fn update_workflow_agent_id(
         .update_workflow_agent_id(&session_id, &agent_id)
         .map_err(|e| e.to_string())?;
 
-    Ok(())
+    let current_config = snapshot
+        .workflow
+        .agent_config
+        .as_deref()
+        .and_then(AgentConfig::from_json)
+        .unwrap_or_default();
+    let mut agent_config = build_agent_config_from_agent(&agent, None, None);
+    agent_config.approval_level = current_config.approval_level;
+    agent_config.final_audit = current_config.final_audit;
+    let agent_config_json = agent_config_to_json_with_agent_shell_policy(&agent_config, &agent)?;
+    store
+        .update_workflow_agent_config(&session_id, &agent_config_json)
+        .map_err(|e| e.to_string())?;
+
+    Ok(agent_config_json)
 }
 
 #[tauri::command]
@@ -2517,8 +2627,8 @@ mod tests {
             Some(WaitReason::Confirmation)
         );
         assert_eq!(
-            legacy_wait_reason_from_status("awaiting_child_task"),
-            Some(WaitReason::ChildTask)
+            legacy_wait_reason_from_status("awaiting_sub_agent"),
+            Some(WaitReason::SubAgent)
         );
         assert_eq!(legacy_wait_reason_from_status("thinking"), None);
     }

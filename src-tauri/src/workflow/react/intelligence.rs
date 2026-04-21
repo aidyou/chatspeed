@@ -2,7 +2,7 @@ use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::{ChatMetadata, MessageType};
 use crate::db::WorkflowMessage;
-use crate::tools::{TOOL_FINISH_TASK, TOOL_TODO_CREATE, TOOL_WEB_SEARCH};
+use crate::tools::{TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_TODO_CREATE, TOOL_WEB_SEARCH};
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::prompts::{CONTENT_FILTERING_PROMPT, SELF_REFLECTION_AUDIT_PROMPT};
@@ -377,17 +377,18 @@ impl IntelligenceManager {
             })),
         ];
 
-        // 3. Add the Target Conclusion (The Assistant message calling finish_task)
+        // 3. Add the Target Conclusion (The Assistant message calling complete_workflow_with_summary)
         if let Some(target_msg) = messages.iter().rev().find(|m| {
             m.role == "assistant"
-                && (m.message.contains(TOOL_FINISH_TASK)
+                && (m.message.contains(TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
                     || m.metadata.as_ref().map_or(false, |meta| {
                         meta.get("tool_calls")
                             .and_then(|tc| tc.as_array())
                             .map_or(false, |arr| {
                                 arr.iter().any(|call| {
-                                    call["name"] == TOOL_FINISH_TASK
-                                        || call["function"]["name"] == TOOL_FINISH_TASK
+                                    call["name"] == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                                        || call["function"]["name"]
+                                            == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
                                 })
                             })
                     }))
@@ -511,8 +512,8 @@ impl IntelligenceManager {
             tool_name
         );
 
-        let current_goal = context.current_user_request_since_last_finish_task();
-        let work_messages = context.messages_since_last_finish_task();
+        let current_goal = context.current_user_request_since_last_completion();
+        let work_messages = context.messages_since_last_completion();
         let recent_messages = Self::format_recent_messages(&work_messages, 10, 700);
         let args_text =
             serde_json::to_string_pretty(tool_args).unwrap_or_else(|_| "{}".to_string());

@@ -61,8 +61,8 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             version TEXT NOT NULL,
             state TEXT,
             wait_reason TEXT,
-            waiting_on_task_id TEXT,
-            child_sessions TEXT DEFAULT '[]',
+            waiting_on_sub_agent_id TEXT,
+            sub_agent_sessions TEXT DEFAULT '[]',
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )"
     ),
@@ -71,8 +71,8 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "CREATE INDEX IF NOT EXISTS idx_workflow_snapshots_updated_at ON workflow_snapshots(updated_at DESC)"
     ),
     (
-        "idx_workflow_snapshots_waiting_on_task_id",
-        "CREATE INDEX IF NOT EXISTS idx_workflow_snapshots_waiting_on_task_id ON workflow_snapshots(waiting_on_task_id)"
+        "idx_workflow_snapshots_waiting_on_sub_agent_id",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_snapshots_waiting_on_sub_agent_id ON workflow_snapshots(waiting_on_sub_agent_id)"
     ),
     // Workflow events table for structured event auditing
     (

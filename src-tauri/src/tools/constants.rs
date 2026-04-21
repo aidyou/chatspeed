@@ -12,9 +12,9 @@ pub const TOOL_WEB_SEARCH: &str = "web_search";
 pub const TOOL_WEB_FETCH: &str = "web_fetch";
 
 // These tools are internal tools for the agent, usually do not require review
-pub const TOOL_TASK: &str = "task";
-pub const TOOL_TASK_OUTPUT: &str = "task_output";
-pub const TOOL_TASK_STOP: &str = "task_stop";
+pub const TOOL_SUB_AGENT_RUN: &str = "sub_agent_run";
+pub const TOOL_SUB_AGENT_OUTPUT: &str = "sub_agent_output";
+pub const TOOL_SUB_AGENT_STOP: &str = "sub_agent_stop";
 
 // todo tools
 pub const TOOL_TODO_CREATE: &str = "todo_create";
@@ -26,7 +26,7 @@ pub const TOOL_TODO_GET: &str = "todo_get";
 pub const TOOL_SKILL: &str = "skill";
 
 pub const TOOL_ASK_USER: &str = "ask_user";
-pub const TOOL_FINISH_TASK: &str = "finish_task";
+pub const TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY: &str = "complete_workflow_with_summary";
 pub const TOOL_SUBMIT_PLAN: &str = "submit_plan";
 
 pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";
@@ -36,15 +36,15 @@ use phf::{phf_set, Set};
 pub fn is_auto_execute_workflow_tool(name: &str) -> bool {
     matches!(
         name,
-        TOOL_TASK
-            | TOOL_TASK_OUTPUT
-            | TOOL_TASK_STOP
+        TOOL_SUB_AGENT_RUN
+            | TOOL_SUB_AGENT_OUTPUT
+            | TOOL_SUB_AGENT_STOP
             | TOOL_TODO_CREATE
             | TOOL_TODO_LIST
             | TOOL_TODO_UPDATE
             | TOOL_TODO_GET
             | TOOL_ASK_USER
-            | TOOL_FINISH_TASK
+            | TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
             | TOOL_SKILL
     )
 }

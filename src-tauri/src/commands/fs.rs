@@ -145,6 +145,53 @@ pub async fn read_text_file(file_path: &str) -> Result<String> {
     Ok(content)
 }
 
+#[tauri::command]
+pub async fn open_path_in_file_manager(path: &str) -> Result<()> {
+    let target = Path::new(path);
+
+    if !target.exists() {
+        return Err(AppError::General {
+            message: format!("Path does not exist: {}", path),
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+
+    let status = command.status().map_err(|e| AppError::General {
+        message: format!("Failed to open path '{}': {}", path, e),
+    })?;
+
+    if !status.success() {
+        return Err(AppError::General {
+            message: format!(
+                "Failed to open path '{}': command exited with {}",
+                path, status
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 /// Read and process an image file
 ///
 /// Reads an image file from the given path, resizes it to 200x200px while maintaining aspect ratio,

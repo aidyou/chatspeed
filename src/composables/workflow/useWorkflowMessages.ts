@@ -193,7 +193,7 @@ export function useWorkflowMessages() {
         // Standard visibility logic
         if (m.role === 'tool') {
           const name = m.metadata?.tool_call?.name || m.metadata?.tool_call?.function?.name || ''
-          if (name === 'answer_user' || name === 'finish_task') return false
+          if (name === 'answer_user' || name === 'complete_workflow_with_summary') return false
           if (
             m.metadata?.execution_status === 'running' &&
             !workflowStore.getToolStream(m.metadata?.tool_call_id).length
@@ -289,39 +289,74 @@ export function useWorkflowMessages() {
         } else if (offset !== undefined) {
           suffix = ` @${offset}`
         }
-        return { icon: resolveWorkflowToolIcon(name, 'file'), toolType: 'tool-file', action: 'Read', target: `${path}${suffix}` }
+        return {
+          icon: resolveWorkflowToolIcon(name, 'file'),
+          toolType: 'tool-file',
+          action: 'Read',
+          target: `${path}${suffix}`
+        }
       },
 
       write_file: args => {
         const path = args.file_path || args.path || ''
-        return { icon: resolveWorkflowToolIcon(name, 'file'), toolType: 'tool-file', action: 'Write', target: path }
+        return {
+          icon: resolveWorkflowToolIcon(name, 'file'),
+          toolType: 'tool-file',
+          action: 'Write',
+          target: path
+        }
       },
 
       edit_file: args => {
         const path = args.file_path || args.path || ''
-        return { icon: resolveWorkflowToolIcon(name, 'edit'), toolType: 'tool-file', action: `Edit ${path}`, target: '' }
+        return {
+          icon: resolveWorkflowToolIcon(name, 'edit'),
+          toolType: 'tool-file',
+          action: `Edit ${path}`,
+          target: ''
+        }
       },
 
       list_dir: args => {
         const path = args.path || args.dir || '.'
-        return { icon: resolveWorkflowToolIcon(name, 'folder'), toolType: 'tool-file', action: 'List', target: path }
+        return {
+          icon: resolveWorkflowToolIcon(name, 'folder'),
+          toolType: 'tool-file',
+          action: 'List',
+          target: path
+        }
       },
 
       glob: args => {
         const pattern = args.pattern || args.glob || ''
-        return { icon: resolveWorkflowToolIcon(name, 'search'), toolType: 'tool-file', action: `Glob ${pattern}`, target: '' }
+        return {
+          icon: resolveWorkflowToolIcon(name, 'search'),
+          toolType: 'tool-file',
+          action: `Glob ${pattern}`,
+          target: ''
+        }
       },
 
       grep: args => {
         const pattern = args.pattern || args.query || ''
         const path = args.path || ''
         const action = path ? `Grep "${pattern}" in ${path}` : `Grep "${pattern}"`
-        return { icon: resolveWorkflowToolIcon(name, 'search'), toolType: 'tool-file', action, target: '' }
+        return {
+          icon: resolveWorkflowToolIcon(name, 'search'),
+          toolType: 'tool-file',
+          action,
+          target: ''
+        }
       },
 
       web_fetch: args => {
         const url = args.url || ''
-        return { icon: resolveWorkflowToolIcon(name, 'link'), toolType: 'tool-network', action: `Fetch ${url}`, target: '' }
+        return {
+          icon: resolveWorkflowToolIcon(name, 'link'),
+          toolType: 'tool-network',
+          action: `Fetch ${url}`,
+          target: ''
+        }
       },
 
       web_search: args => {
@@ -331,7 +366,12 @@ export function useWorkflowMessages() {
           numResults !== undefined
             ? `Search "${query}" (Count: ${numResults})`
             : `Search "${query}"`
-        return { icon: resolveWorkflowToolIcon(name, 'search'), toolType: 'tool-network', action, target: '' }
+        return {
+          icon: resolveWorkflowToolIcon(name, 'search'),
+          toolType: 'tool-network',
+          action,
+          target: ''
+        }
       },
 
       bash: args => {
@@ -343,6 +383,28 @@ export function useWorkflowMessages() {
           target: ''
         }
       },
+      sub_agent_run: args => {
+        const childAgent = args.child_agent_name || args.child_agent_id || ''
+        const mode = args.execution_mode || 'call'
+        return {
+          icon: resolveWorkflowToolIcon(name, 'task'),
+          toolType: 'tool-system',
+          action: mode === 'background' ? 'Run Sub-agent in Background' : 'Run Sub-agent',
+          target: childAgent
+        }
+      },
+      sub_agent_output: args => ({
+        icon: resolveWorkflowToolIcon(name, 'task'),
+        toolType: 'tool-system',
+        action: 'Read Sub-agent Output',
+        target: args.task_id || ''
+      }),
+      sub_agent_stop: args => ({
+        icon: resolveWorkflowToolIcon(name, 'stop'),
+        toolType: 'tool-system',
+        action: 'Stop Sub-agent',
+        target: args.task_id || ''
+      }),
 
       todo_create: args => {
         // Handle single todo creation
@@ -365,7 +427,12 @@ export function useWorkflowMessages() {
             target: `${tasks.length}项`
           }
         }
-        return { icon: resolveWorkflowToolIcon(name, 'add'), toolType: 'tool-todo', action: t('workflow.todo.create'), target: '' }
+        return {
+          icon: resolveWorkflowToolIcon(name, 'add'),
+          toolType: 'tool-todo',
+          action: t('workflow.todo.create'),
+          target: ''
+        }
       },
 
       todo_update: args => {
@@ -404,7 +471,7 @@ export function useWorkflowMessages() {
         action: t('workflow.todo.view'),
         target: ''
       }),
-      finish_task: () => ({
+      complete_workflow_with_summary: () => ({
         icon: resolveWorkflowToolIcon(name, 'check-circle'),
         toolType: 'tool-todo',
         action: t('workflow.finishTask'),
@@ -419,7 +486,12 @@ export function useWorkflowMessages() {
 
     // Default handling - just show the tool name
     const defaultName = name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-    return { icon: resolveWorkflowToolIcon(name, 'tool'), toolType: 'tool-system', action: defaultName, target: '' }
+    return {
+      icon: resolveWorkflowToolIcon(name, 'tool'),
+      toolType: 'tool-system',
+      action: defaultName,
+      target: ''
+    }
   }
 
   // Standardize tool display info from metadata
@@ -456,7 +528,10 @@ export function useWorkflowMessages() {
     let finalIcon = formatted.icon
     let finalToolType = formatted.toolType
 
-    if (meta.title && meta.title.trim()) {
+    if (name === 'complete_workflow_with_summary') {
+      finalAction = t('workflow.finishTask')
+      finalTarget = ''
+    } else if (meta.title && meta.title.trim()) {
       finalAction = removeSystemReminder(meta.title)
       finalTarget = '' // Target is usually embedded in the title
     }
@@ -469,7 +544,10 @@ export function useWorkflowMessages() {
 
     return {
       title: finalAction + (finalTarget ? ` ${finalTarget}` : ''),
-      summary: removeSystemReminder(meta.summary || (isError ? 'Failed' : 'Executing...')),
+      summary:
+        name === 'complete_workflow_with_summary'
+          ? ''
+          : removeSystemReminder(meta.summary || (isError ? 'Failed' : 'Executing...')),
       isError: isError,
       displayType: meta.display_type || 'text',
       icon: finalIcon,
@@ -668,7 +746,7 @@ export function useWorkflowMessages() {
         // Filter out internal tools
         parsedToolCalls = parsedToolCalls.filter(call => {
           const name = call?.function?.name || call?.name
-          return name !== 'finish_task' && name !== 'answer_user'
+          return name !== 'complete_workflow_with_summary' && name !== 'answer_user'
         })
 
         // If assistant Think step, hide tool calls

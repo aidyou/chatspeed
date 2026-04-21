@@ -91,7 +91,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const autoApprovedTools = ref([]);
   const shellPolicy = ref([]);
   const toolStreams = ref(new Map()); // tool_id -> string[] (max 100 lines)
-  const childTaskProgress = ref(new Map()); // child_task_id -> lightweight parent UI projection
+  const subAgentProgress = ref(new Map()); // sub_agent_id -> lightweight parent UI projection
 
   // ==================== Task Ledger State ====================
   /**
@@ -185,8 +185,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       currentContextTokens: ctx.currentContextTokens ?? ctx.current_context_tokens ?? null,
       maxContextTokens: ctx.maxContextTokens ?? ctx.max_context_tokens ?? null,
       pendingTools: ctx.pendingTools ?? ctx.pending_tools ?? [],
-      waitingOnTaskId: ctx.waitingOnTaskId ?? ctx.waiting_on_task_id ?? null,
-      childSessions: ctx.childSessions ?? ctx.child_sessions ?? []
+      waitingOnSubAgentId: ctx.waitingOnSubAgentId ?? ctx.waiting_on_sub_agent_id ?? null,
+      subAgentSessions: ctx.subAgentSessions ?? ctx.sub_agent_sessions ?? []
     };
   };
 
@@ -204,20 +204,20 @@ export const useWorkflowStore = defineStore('workflow', () => {
     };
   };
 
-  const upsertChildTaskProgress = (progress = {}) => {
-    const childTaskId = progress.childTaskId ?? progress.child_task_id;
-    if (!childTaskId) return;
+  const upsertSubAgentProgress = (progress = {}) => {
+    const subAgentId = progress.subAgentId ?? progress.sub_agent_id;
+    if (!subAgentId) return;
 
     const currentWorkflow = currentWorkflowId.value;
     const parentSessionId = progress.parentSessionId ?? progress.parent_session_id ?? currentWorkflow;
     if (currentWorkflow && parentSessionId && parentSessionId !== currentWorkflow) return;
 
-    const nextProgress = new Map(childTaskProgress.value);
-    const existing = nextProgress.get(childTaskId) || {};
-    nextProgress.set(childTaskId, {
+    const nextProgress = new Map(subAgentProgress.value);
+    const existing = nextProgress.get(subAgentId) || {};
+    nextProgress.set(subAgentId, {
       ...existing,
       ...progress,
-      childTaskId,
+      subAgentId,
       parentSessionId,
       status: progress.status ?? existing.status ?? null,
       workflowState: progress.workflowState ?? progress.workflow_state ?? existing.workflowState ?? null,
@@ -228,11 +228,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
       isError: progress.isError ?? progress.is_error ?? existing.isError ?? false,
       updatedAtMs: progress.updatedAtMs ?? progress.updated_at_ms ?? Date.now()
     });
-    childTaskProgress.value = nextProgress;
+    subAgentProgress.value = nextProgress;
   };
 
-  const clearChildTaskProgress = () => {
-    childTaskProgress.value = new Map();
+  const clearSubAgentProgress = () => {
+    subAgentProgress.value = new Map();
   };
 
   const findLatestPendingApprovalMessage = (list = []) => {
@@ -463,19 +463,19 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
 
     const existing = currentTaskLedger.value?.tools.get(toolId);
-    if (!existing) return;
+    if (existing) {
+      // 如果已经是终态，不再更新
+      if (['final_success', 'final_error', 'rejected'].includes(existing.status)) {
+        return;
+      }
 
-    // 如果已经是终态，不再更新
-    if (['final_success', 'final_error', 'rejected'].includes(existing.status)) {
-      return;
+      upsertToolViewState({
+        toolCallId: toolId,
+        status: 'approved_running',
+        approvalStatus: 'approved',
+        summary: existing.summary === 'Awaiting approval' ? 'Executing...' : existing.summary
+      });
     }
-
-    upsertToolViewState({
-      toolCallId: toolId,
-      status: 'approved_running',
-      approvalStatus: 'approved',
-      summary: existing.summary === 'Awaiting approval' ? 'Executing...' : existing.summary
-    });
 
     // 同时更新旧的消息元数据以保持兼容
     patchToolMessage(toolId, (existing, meta) => ({
@@ -619,16 +619,20 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const patchToolMessage = (toolId, patcher) => {
     if (!toolId) return;
-    const index = messages.value.findIndex(
-      (m) => m?.metadata?.tool_call_id === toolId
-    );
-    if (index === -1) return;
+    let changed = false;
+    messages.value = messages.value.map((message) => {
+      if (message?.metadata?.tool_call_id !== toolId) {
+        return message;
+      }
 
-    const existing = messages.value[index];
-    const existingMeta = existing.metadata || {};
-    const next = patcher(existing, existingMeta);
-    if (!next) return;
-    messages.value[index] = next;
+      const existingMeta = message.metadata || {};
+      const next = patcher(message, existingMeta);
+      if (!next) return message;
+      changed = true;
+      return next;
+    });
+
+    if (!changed) return;
   };
 
   const clearToolStream = (toolId) => {
@@ -693,7 +697,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     currentWorkflowId.value = workflowId;
     messageQueue.value = [];
     error.value = null;
-    clearChildTaskProgress();
+    clearSubAgentProgress();
 
     try {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
@@ -1065,7 +1069,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     autoApprovedTools.value = [];
     shellPolicy.value = [];
     messageQueue.value = [];
-    clearChildTaskProgress();
+    clearSubAgentProgress();
   };
 
   return {
@@ -1083,7 +1087,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     autoApprovedTools,
     shellPolicy,
     toolStreams,
-    childTaskProgress,
+    subAgentProgress,
 
     // Task Ledger State
     taskLedgerMap,
@@ -1140,8 +1144,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     setHasLiveSession,
     updateWorkflowStatus,
     setCurrentContextTokens,
-    upsertChildTaskProgress,
-    clearChildTaskProgress,
+    upsertSubAgentProgress,
+    clearSubAgentProgress,
     updateWorkflowAllowedPaths,
     updateWorkflowFinalAudit,
     loadMessages,

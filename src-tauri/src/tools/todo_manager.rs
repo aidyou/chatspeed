@@ -5,6 +5,26 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+fn format_todo_list_summary(list: &[Value]) -> String {
+    if list.is_empty() {
+        "You currently don't have a todo list.".to_string()
+    } else {
+        let items = list
+            .iter()
+            .map(|item| {
+                format!(
+                    "[{}] {} (ID: {})",
+                    item["status"].as_str().unwrap_or("?"),
+                    item["subject"].as_str().unwrap_or("Untitled"),
+                    item["id"].as_str().unwrap_or("?")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!("Current To Do List: {}", items)
+    }
+}
+
 /// Helper to get and set todo list in DB
 async fn get_db_todo_list(
     store: &Arc<std::sync::RwLock<MainStore>>,
@@ -325,8 +345,9 @@ impl ToolDefinition for TodoUpdateTool {
 
         if !found {
             return Err(ToolError::ExecutionFailed(format!(
-                "Todo item {} not found",
-                todo_id
+                "Todo item {} not found. {}",
+                todo_id,
+                format_todo_list_summary(&list)
             )));
         }
 
@@ -386,7 +407,13 @@ impl ToolDefinition for TodoGetTool {
         let item = list
             .iter()
             .find(|i| i["id"].as_str().map_or(false, |id| id == todo_id))
-            .ok_or_else(|| ToolError::ExecutionFailed(format!("Todo {} not found", todo_id)))?;
+            .ok_or_else(|| {
+                ToolError::ExecutionFailed(format!(
+                    "Todo {} not found. {}",
+                    todo_id,
+                    format_todo_list_summary(&list)
+                ))
+            })?;
         Ok(ToolCallResult::success(
             Some(serde_json::to_string_pretty(item).unwrap()),
             None,
@@ -514,5 +541,73 @@ mod tests {
         // Verify empty list
         let res = list_tool.call(json!({})).await.unwrap();
         assert!(res.content.unwrap().contains("Todo list is empty."));
+    }
+
+    #[tokio::test]
+    async fn test_todo_get_not_found_includes_current_list() {
+        let (store, session_id) = setup_test_db().await;
+
+        let create_tool = TodoCreateTool {
+            session_id: session_id.clone(),
+            main_store: store.clone(),
+        };
+        create_tool
+            .call(json!({
+                "tasks": [
+                    { "subject": "Task 1", "description": "First" },
+                    { "subject": "Task 2", "description": "Second" }
+                ]
+            }))
+            .await
+            .unwrap();
+
+        let get_tool = TodoGetTool {
+            session_id,
+            main_store: store,
+        };
+        let error = get_tool
+            .call(json!({ "todo_id": "999" }))
+            .await
+            .expect_err("missing todo should return error");
+
+        let message = error.to_string();
+        assert!(message.contains("Todo 999 not found"));
+        assert!(message.contains("Current To Do List:"));
+        assert!(message.contains("Task 1"));
+        assert!(message.contains("Task 2"));
+    }
+
+    #[tokio::test]
+    async fn test_todo_update_not_found_includes_current_list() {
+        let (store, session_id) = setup_test_db().await;
+
+        let create_tool = TodoCreateTool {
+            session_id: session_id.clone(),
+            main_store: store.clone(),
+        };
+        create_tool
+            .call(json!({
+                "subject": "Task 1",
+                "description": "First task description"
+            }))
+            .await
+            .unwrap();
+
+        let update_tool = TodoUpdateTool {
+            session_id,
+            main_store: store,
+        };
+        let error = update_tool
+            .call(json!({
+                "todo_id": "999",
+                "status": "completed"
+            }))
+            .await
+            .expect_err("missing todo should return error");
+
+        let message = error.to_string();
+        assert!(message.contains("Todo item 999 not found"));
+        assert!(message.contains("Current To Do List:"));
+        assert!(message.contains("Task 1"));
     }
 }

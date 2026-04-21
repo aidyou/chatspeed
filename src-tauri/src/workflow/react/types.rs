@@ -13,7 +13,7 @@ pub enum WorkflowState {
     AwaitingUser,
     AwaitingApproval,
     AwaitingAutoApproval,
-    AwaitingChildTask,
+    AwaitingSubAgent,
     Completed,
     Error,
     Cancelled,
@@ -80,9 +80,10 @@ pub enum GatewayPayload {
     ContextUsage {
         total_tokens: usize,
     },
-    /// Lightweight projection of a child task for the parent session UI.
-    ChildTaskProgress {
-        child_task_id: String,
+    /// Lightweight projection of a sub-agent for the parent session UI.
+    #[serde(rename = "sub_agent_progress")]
+    SubAgentProgress {
+        sub_agent_id: String,
         parent_session_id: String,
         status: RuntimeState,
         workflow_state: WorkflowState,
@@ -148,7 +149,7 @@ impl From<&WorkflowState> for RuntimeState {
             | WorkflowState::AwaitingUser
             | WorkflowState::AwaitingApproval
             | WorkflowState::AwaitingAutoApproval
-            | WorkflowState::AwaitingChildTask => RuntimeState::Waiting,
+            | WorkflowState::AwaitingSubAgent => RuntimeState::Waiting,
             WorkflowState::Completed => RuntimeState::Completed,
             WorkflowState::Error => RuntimeState::Failed,
             WorkflowState::Cancelled => RuntimeState::Cancelled,
@@ -163,7 +164,7 @@ pub enum WaitReason {
     Confirmation,
     UserInput,
     Approval,
-    ChildTask,
+    SubAgent,
 }
 
 /// Structured signal types for workflow control.
@@ -213,9 +214,10 @@ pub enum WorkflowSignal {
     RemoveAutoApprovedTool { tool_name: String },
     /// Remove a pattern from shell policy
     RemoveShellPolicyItem { pattern: String },
-    /// Child task completed (for ChildTask waiting state)
-    ChildTaskComplete {
-        child_task_id: String,
+    /// Sub-agent completed (for SubAgent waiting state)
+    #[serde(rename = "sub_agent_complete")]
+    SubAgentComplete {
+        sub_agent_id: String,
         result: serde_json::Value,
     },
     /// Background context compression completed and is ready to be persisted.
@@ -258,8 +260,8 @@ impl WorkflowSignal {
             (WorkflowSignal::ApprovalDecision { .. }, Some(WaitReason::Approval)) => true,
             // Continue is valid for Confirmation waiting
             (WorkflowSignal::Continue, Some(WaitReason::Confirmation)) => true,
-            // ChildTaskComplete is valid for ChildTask waiting
-            (WorkflowSignal::ChildTaskComplete { .. }, Some(WaitReason::ChildTask)) => true,
+            // SubAgentComplete is valid for SubAgent waiting
+            (WorkflowSignal::SubAgentComplete { .. }, Some(WaitReason::SubAgent)) => true,
             // Everything else is invalid
             _ => false,
         }
@@ -279,7 +281,7 @@ impl WorkflowSignal {
             WorkflowSignal::UpdateModelConfig { .. } => "update_model_config",
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",
             WorkflowSignal::RemoveShellPolicyItem { .. } => "remove_shell_policy_item",
-            WorkflowSignal::ChildTaskComplete { .. } => "child_task_complete",
+            WorkflowSignal::SubAgentComplete { .. } => "sub_agent_complete",
             WorkflowSignal::CompressionReady { .. } => "compression_ready",
             WorkflowSignal::CompressionFailed { .. } => "compression_failed",
         }
@@ -297,8 +299,8 @@ pub struct PendingTool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ChildTaskCompletion {
-    pub child_task_id: String,
+pub struct SubAgentCompletion {
+    pub sub_agent_id: String,
     pub parent_session_id: String,
     pub status: String,
     pub summary: Option<String>,
@@ -310,11 +312,11 @@ pub struct ChildTaskCompletion {
     pub consumed: bool,
 }
 
-impl ChildTaskCompletion {
+impl SubAgentCompletion {
     pub fn to_signal_result(&self) -> serde_json::Value {
         let mut result = serde_json::json!({
             "status": self.status,
-            "task_id": self.child_task_id,
+            "task_id": self.sub_agent_id,
             "tool_calls_count": self.tool_calls_count,
         });
         if let Some(summary) = &self.summary {
@@ -344,15 +346,15 @@ pub struct ExecutionContext {
     pub last_event_id: Option<i64>,
     pub version: String,
     #[serde(default)]
-    pub waiting_on_task_id: Option<String>,
+    pub waiting_on_sub_agent_id: Option<String>,
     #[serde(default)]
-    pub child_sessions: Vec<String>,
+    pub sub_agent_sessions: Vec<String>,
     #[serde(default)]
-    pub pending_child_completions: Vec<ChildTaskCompletion>,
+    pub pending_sub_agent_completions: Vec<SubAgentCompletion>,
 }
 
 impl ExecutionContext {
-    pub const CURRENT_VERSION: &'static str = "1.1.0";
+    pub const CURRENT_VERSION: &'static str = "1.2.0";
 
     #[cfg(test)]
     pub fn new(session_id: String) -> Self {
@@ -368,9 +370,9 @@ impl ExecutionContext {
             max_context_tokens: None,
             last_event_id: None,
             version: Self::CURRENT_VERSION.to_string(),
-            waiting_on_task_id: None,
-            child_sessions: Vec::new(),
-            pending_child_completions: Vec::new(),
+            waiting_on_sub_agent_id: None,
+            sub_agent_sessions: Vec::new(),
+            pending_sub_agent_completions: Vec::new(),
         }
     }
 }
@@ -387,10 +389,10 @@ mod tests {
         assert!(ctx.wait_reason.is_none());
         assert!(ctx.pending_tools.is_empty());
         assert!(ctx.last_event_id.is_none());
-        assert_eq!(ctx.version, "1.1.0");
-        assert!(ctx.waiting_on_task_id.is_none());
-        assert!(ctx.child_sessions.is_empty());
-        assert!(ctx.pending_child_completions.is_empty());
+        assert_eq!(ctx.version, "1.2.0");
+        assert!(ctx.waiting_on_sub_agent_id.is_none());
+        assert!(ctx.sub_agent_sessions.is_empty());
+        assert!(ctx.pending_sub_agent_completions.is_empty());
     }
 
     #[test]
@@ -523,7 +525,7 @@ mod tests {
         assert!(stop.is_valid_for(Some(&WaitReason::UserInput)));
         assert!(stop.is_valid_for(Some(&WaitReason::Approval)));
         assert!(stop.is_valid_for(Some(&WaitReason::Confirmation)));
-        assert!(stop.is_valid_for(Some(&WaitReason::ChildTask)));
+        assert!(stop.is_valid_for(Some(&WaitReason::SubAgent)));
 
         // UserMessage is only valid for UserInput waiting
         let user_msg = WorkflowSignal::UserMessage {
@@ -551,11 +553,11 @@ mod tests {
         assert!(!cont.is_valid_for(Some(&WaitReason::UserInput)));
         assert!(!cont.is_valid_for(Some(&WaitReason::Approval)));
 
-        let child_complete = WorkflowSignal::ChildTaskComplete {
-            child_task_id: "child_1".to_string(),
+        let child_complete = WorkflowSignal::SubAgentComplete {
+            sub_agent_id: "subagent_1".to_string(),
             result: serde_json::json!({"status": "completed"}),
         };
-        assert!(child_complete.is_valid_for(Some(&WaitReason::ChildTask)));
+        assert!(child_complete.is_valid_for(Some(&WaitReason::SubAgent)));
         assert!(!child_complete.is_valid_for(Some(&WaitReason::Approval)));
 
         let update_paths = WorkflowSignal::UpdateAllowedPaths {

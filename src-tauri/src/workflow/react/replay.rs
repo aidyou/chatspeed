@@ -86,8 +86,8 @@ pub struct EventReducer {
     pending_tools: Vec<PendingTool>,
     last_action_summary: Option<String>,
     last_event_id: Option<i64>,
-    waiting_on_task_id: Option<String>,
-    child_sessions: Vec<String>,
+    waiting_on_sub_agent_id: Option<String>,
+    sub_agent_sessions: Vec<String>,
 }
 
 impl EventReducer {
@@ -100,12 +100,13 @@ impl EventReducer {
             pending_tools: Vec::new(),
             last_action_summary: None,
             last_event_id: None,
-            waiting_on_task_id: None,
-            child_sessions: Vec::new(),
+            waiting_on_sub_agent_id: None,
+            sub_agent_sessions: Vec::new(),
         }
     }
 
     pub fn apply_event(&mut self, event: &WorkflowEventRecord) -> Result<(), RecoveryError> {
+        #[cfg(debug_assertions)]
         log::debug!(
             "[Workflow][session={}] replay.apply_event - type={}, id={}",
             self.session_id,
@@ -123,10 +124,10 @@ impl EventReducer {
             "tool_started" => WorkflowEventType::ToolStarted,
             "tool_completed" => WorkflowEventType::ToolCompleted,
             "tool_failed" => WorkflowEventType::ToolFailed,
-            "child_task_started" => WorkflowEventType::ChildTaskStarted,
-            "child_task_completed" => WorkflowEventType::ChildTaskCompleted,
-            "child_task_failed" => WorkflowEventType::ChildTaskFailed,
-            "child_task_interrupted" => WorkflowEventType::ChildTaskInterrupted,
+            "sub_agent_started" => WorkflowEventType::SubAgentStarted,
+            "sub_agent_completed" => WorkflowEventType::SubAgentCompleted,
+            "sub_agent_failed" => WorkflowEventType::SubAgentFailed,
+            "sub_agent_interrupted" => WorkflowEventType::SubAgentInterrupted,
             "workflow_completed" => WorkflowEventType::WorkflowCompleted,
             "workflow_failed" => WorkflowEventType::WorkflowFailed,
             "workflow_cancelled" => WorkflowEventType::WorkflowCancelled,
@@ -247,38 +248,36 @@ impl EventReducer {
                     }
                 }
             }
-            WorkflowEventType::ChildTaskStarted => {
-                let child_task_id =
-                    event.event_data["child_task_id"].as_str().ok_or_else(|| {
-                        RecoveryError::MissingEventData {
-                            event_type: "child_task_started".to_string(),
-                            field: "child_task_id".to_string(),
-                        }
-                    })?;
-                if !self.child_sessions.iter().any(|id| id == child_task_id) {
-                    self.child_sessions.push(child_task_id.to_string());
+            WorkflowEventType::SubAgentStarted => {
+                let sub_agent_id = event.event_data["sub_agent_id"].as_str().ok_or_else(|| {
+                    RecoveryError::MissingEventData {
+                        event_type: "sub_agent_started".to_string(),
+                        field: "sub_agent_id".to_string(),
+                    }
+                })?;
+                if !self.sub_agent_sessions.iter().any(|id| id == sub_agent_id) {
+                    self.sub_agent_sessions.push(sub_agent_id.to_string());
                 }
-                self.waiting_on_task_id = Some(child_task_id.to_string());
-                self.wait_reason = Some(WaitReason::ChildTask);
+                self.waiting_on_sub_agent_id = Some(sub_agent_id.to_string());
+                self.wait_reason = Some(WaitReason::SubAgent);
                 self.state = RuntimeState::Waiting;
             }
-            WorkflowEventType::ChildTaskCompleted
-            | WorkflowEventType::ChildTaskFailed
-            | WorkflowEventType::ChildTaskInterrupted => {
-                let child_task_id =
-                    event.event_data["child_task_id"].as_str().ok_or_else(|| {
-                        RecoveryError::MissingEventData {
-                            event_type: event.event_type.clone(),
-                            field: "child_task_id".to_string(),
-                        }
-                    })?;
-                self.child_sessions.retain(|id| id != child_task_id);
-                if self.waiting_on_task_id.as_deref() == Some(child_task_id) {
-                    self.waiting_on_task_id = None;
+            WorkflowEventType::SubAgentCompleted
+            | WorkflowEventType::SubAgentFailed
+            | WorkflowEventType::SubAgentInterrupted => {
+                let sub_agent_id = event.event_data["sub_agent_id"].as_str().ok_or_else(|| {
+                    RecoveryError::MissingEventData {
+                        event_type: event.event_type.clone(),
+                        field: "sub_agent_id".to_string(),
+                    }
+                })?;
+                self.sub_agent_sessions.retain(|id| id != sub_agent_id);
+                if self.waiting_on_sub_agent_id.as_deref() == Some(sub_agent_id) {
+                    self.waiting_on_sub_agent_id = None;
                     self.wait_reason = None;
                 }
                 self.state = match event_type {
-                    WorkflowEventType::ChildTaskInterrupted => RuntimeState::Pending,
+                    WorkflowEventType::SubAgentInterrupted => RuntimeState::Pending,
                     _ => RuntimeState::Running,
                 };
                 if let Some(summary) = event
@@ -330,9 +329,9 @@ impl EventReducer {
             max_context_tokens: None,
             last_event_id: self.last_event_id,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
-            waiting_on_task_id: self.waiting_on_task_id,
-            child_sessions: self.child_sessions,
-            pending_child_completions: Vec::new(),
+            waiting_on_sub_agent_id: self.waiting_on_sub_agent_id,
+            sub_agent_sessions: self.sub_agent_sessions,
+            pending_sub_agent_completions: Vec::new(),
         }
     }
 }
@@ -359,7 +358,7 @@ fn parse_wait_reason(s: &str) -> Option<WaitReason> {
         "confirmation" => Some(WaitReason::Confirmation),
         "user_input" => Some(WaitReason::UserInput),
         "approval" => Some(WaitReason::Approval),
-        "child_task" => Some(WaitReason::ChildTask),
+        "sub_agent" => Some(WaitReason::SubAgent),
         _ => {
             log::warn!("Unknown wait reason '{}' parsing to None", s);
             None
@@ -855,7 +854,7 @@ mod tests {
         );
         assert_eq!(parse_wait_reason("user_input"), Some(WaitReason::UserInput));
         assert_eq!(parse_wait_reason("approval"), Some(WaitReason::Approval));
-        assert_eq!(parse_wait_reason("child_task"), Some(WaitReason::ChildTask));
+        assert_eq!(parse_wait_reason("sub_agent"), Some(WaitReason::SubAgent));
         assert_eq!(parse_wait_reason("unknown"), None);
     }
 

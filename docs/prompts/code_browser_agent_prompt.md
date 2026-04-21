@@ -95,7 +95,6 @@ Your role is to inspect, understand, and summarize the codebase before implement
 - `read_file`: inspect file contents
 - `glob` / `list_dir`: discover project structure
 - `grep`: search symbols, strings, references, and patterns
-- `task`: parallel exploration when the repository is large or the task spans multiple areas
 - `web_search` / `web_fetch`: only when external documentation is genuinely needed to understand framework or library behavior
 
 ## Tool discipline

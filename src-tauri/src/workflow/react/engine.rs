@@ -12,8 +12,8 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
-    ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER, TOOL_FINISH_TASK, TOOL_SUBMIT_PLAN,
-    TOOL_WEB_FETCH,
+    ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
+    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
@@ -37,7 +37,7 @@ use crate::workflow::react::{
     sinks::{DBSink, Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
     types::{
-        ChildTaskCompletion, ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType,
+        ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType, SubAgentCompletion,
         WaitReason, WorkflowSignal, WorkflowState,
     },
 };
@@ -96,6 +96,7 @@ pub struct WorkflowExecutor {
     pub last_compression_step: usize,
     pub last_compression_boundary_id: Option<i64>,
     pub background_compression_boundary_id: Option<i64>,
+    pub background_compression_retry_state: HashMap<i64, (u32, usize)>,
     /// Rules and permissions for this ReAct session.
     pub policy: ExecutionPolicy,
     /// Memory manager for reading/writing memory files
@@ -107,6 +108,9 @@ pub struct WorkflowExecutor {
     /// One-shot cache of bash commands approved by Smart AI review to prevent
     /// the generic approval path from re-intercepting the same command.
     pub(crate) smart_approved_bash_commands: HashSet<String>,
+    /// One-shot cache of tool call ids approved by Smart AI review to prevent
+    /// the generic approval path from re-intercepting the same tool call.
+    pub(crate) smart_approved_tool_call_ids: HashSet<String>,
     /// Flag indicating recovery failed - session is in safe-failed read-only state.
     pub(crate) recovery_failed: bool,
     /// Error message if recovery failed.
@@ -115,12 +119,12 @@ pub struct WorkflowExecutor {
     pub dispatcher: Option<Arc<Dispatcher>>,
     /// Buffered user messages received during non-waiting execution stages.
     pub queued_user_messages: VecDeque<(String, String)>,
-    /// Phase 7: ID of child task this session is waiting for (Call model)
-    pub child_task_id: Option<String>,
-    /// Phase 7: All child task session IDs created by this parent session.
-    pub child_sessions: Vec<String>,
-    /// Durable child completions restored from snapshot but not yet consumed.
-    pub pending_child_completions: Vec<ChildTaskCompletion>,
+    /// Phase 7: ID of sub-agent this session is waiting for (Call model)
+    pub sub_agent_id: Option<String>,
+    /// Phase 7: All sub-agent session IDs created by this parent session.
+    pub sub_agent_sessions: Vec<String>,
+    /// Durable sub-agent completions restored from snapshot but not yet consumed.
+    pub pending_sub_agent_completions: Vec<SubAgentCompletion>,
 }
 
 impl WorkflowExecutor {
@@ -306,6 +310,8 @@ impl WorkflowExecutor {
     ) -> Result<(), WorkflowEngineError> {
         if self.last_compression_boundary_id == Some(compressed_until_message_id) {
             self.background_compression_boundary_id = None;
+            self.background_compression_retry_state
+                .remove(&compressed_until_message_id);
             return Ok(());
         }
 
@@ -319,6 +325,8 @@ impl WorkflowExecutor {
             return Ok(());
         }
 
+        self.background_compression_retry_state
+            .remove(&compressed_until_message_id);
         self.persist_compression_summary(summary, compressed_until_message_id)
             .await
     }
@@ -327,6 +335,33 @@ impl WorkflowExecutor {
         if self.background_compression_boundary_id == Some(compressed_until_message_id) {
             self.background_compression_boundary_id = None;
         }
+    }
+
+    fn should_retry_background_compression(&self, compressed_until_message_id: i64) -> bool {
+        self.background_compression_retry_state
+            .get(&compressed_until_message_id)
+            .map(|(_, next_retry_step)| self.current_step >= *next_retry_step)
+            .unwrap_or(true)
+    }
+
+    fn record_background_compression_failure(&mut self, compressed_until_message_id: i64) {
+        let (failures, _) = self
+            .background_compression_retry_state
+            .get(&compressed_until_message_id)
+            .copied()
+            .unwrap_or((0, self.current_step));
+        let next_failures = failures.saturating_add(1);
+        let cooldown_steps = match next_failures {
+            1 => 2,
+            2 => 4,
+            3 => 8,
+            _ => 16,
+        };
+        let next_retry_step = self.current_step.saturating_add(cooldown_steps);
+        self.background_compression_retry_state.insert(
+            compressed_until_message_id,
+            (next_failures, next_retry_step),
+        );
     }
 }
 
@@ -527,6 +562,7 @@ impl WorkflowExecutor {
             last_compression_step: 0,
             last_compression_boundary_id: None,
             background_compression_boundary_id: None,
+            background_compression_retry_state: HashMap::new(),
             policy,
             memory_manager: {
                 let project_root = allowed_paths.first().cloned();
@@ -535,13 +571,14 @@ impl WorkflowExecutor {
             loop_detector: LoopDetector::new(),
             pending_approvals: Arc::new(dashmap::DashMap::new()),
             smart_approved_bash_commands: HashSet::new(),
+            smart_approved_tool_call_ids: HashSet::new(),
             recovery_failed: false,
             recovery_error: None,
             dispatcher: None,
             queued_user_messages: VecDeque::new(),
-            child_task_id: None,
-            child_sessions: Vec::new(),
-            pending_child_completions: Vec::new(),
+            sub_agent_id: None,
+            sub_agent_sessions: Vec::new(),
+            pending_sub_agent_completions: Vec::new(),
         };
 
         // Phase 6: wire default dispatcher with UI + DB sinks for all executors.
@@ -592,13 +629,13 @@ impl WorkflowExecutor {
         }
     }
 
-    async fn dispatch_child_task_progress(&self) {
+    async fn dispatch_sub_agent_progress(&self) {
         let parent_session_id = {
             let store = match self.context.main_store.read() {
                 Ok(store) => store,
                 Err(e) => {
                     log::warn!(
-                        "[Workflow][session={}][phase=child_progress] Cannot read store: {}",
+                        "[Workflow][session={}][phase=sub_agent_progress] Cannot read store: {}",
                         self.session_id,
                         e
                     );
@@ -610,7 +647,7 @@ impl WorkflowExecutor {
                 Ok(snapshot) => snapshot.workflow.parent_session_id,
                 Err(e) => {
                     log::warn!(
-                        "[Workflow][session={}][phase=child_progress] Cannot read child workflow: {}",
+                        "[Workflow][session={}][phase=sub_agent_progress] Cannot read sub-agent workflow: {}",
                         self.session_id,
                         e
                     );
@@ -629,7 +666,7 @@ impl WorkflowExecutor {
             WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
                 Some(WaitReason::Approval)
             }
-            WorkflowState::AwaitingChildTask => Some(WaitReason::ChildTask),
+            WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
             _ => None,
         };
         let latest_summary = self
@@ -652,8 +689,8 @@ impl WorkflowExecutor {
             .iter()
             .filter(|message| message.role == "tool")
             .count();
-        let payload = GatewayPayload::ChildTaskProgress {
-            child_task_id: self.session_id.clone(),
+        let payload = GatewayPayload::SubAgentProgress {
+            sub_agent_id: self.session_id.clone(),
             parent_session_id: parent_session_id.clone(),
             status: RuntimeState::from(&self.state),
             workflow_state: self.state.clone(),
@@ -677,14 +714,14 @@ impl WorkflowExecutor {
 
         if let Err(e) = dispatch_result {
             log::warn!(
-                "[Workflow][session={}][parent={}][phase=child_progress] Dispatcher failed: {}, falling back to gateway",
+                "[Workflow][session={}][parent={}][phase=sub_agent_progress] Dispatcher failed: {}, falling back to gateway",
                 self.session_id,
                 parent_session_id,
                 e
             );
             if let Err(e) = self.gateway.send(&parent_session_id, payload).await {
                 log::warn!(
-                    "[Workflow][session={}][parent={}][phase=child_progress] Gateway fallback failed: {}",
+                    "[Workflow][session={}][parent={}][phase=sub_agent_progress] Gateway fallback failed: {}",
                     self.session_id,
                     parent_session_id,
                     e
@@ -796,7 +833,7 @@ impl WorkflowExecutor {
                 );
             } else if self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::AwaitingApproval
-                || self.state == WorkflowState::AwaitingChildTask
+                || self.state == WorkflowState::AwaitingSubAgent
             {
                 // Use the new recovery mechanism for AwaitingUser and AwaitingApproval states
                 let recovery_result = crate::workflow::react::replay::restore_execution_context(
@@ -815,9 +852,10 @@ impl WorkflowExecutor {
                             context.pending_tools.len()
                         );
 
-                        self.child_task_id = context.waiting_on_task_id.clone();
-                        self.child_sessions = context.child_sessions.clone();
-                        self.pending_child_completions = context.pending_child_completions.clone();
+                        self.sub_agent_id = context.waiting_on_sub_agent_id.clone();
+                        self.sub_agent_sessions = context.sub_agent_sessions.clone();
+                        self.pending_sub_agent_completions =
+                            context.pending_sub_agent_completions.clone();
 
                         if self.state == WorkflowState::AwaitingApproval
                             && context.pending_tools.is_empty()
@@ -853,31 +891,31 @@ impl WorkflowExecutor {
                             }
                         }
 
-                        if self.state == WorkflowState::AwaitingChildTask {
+                        if self.state == WorkflowState::AwaitingSubAgent {
                             log::info!(
-                                "[Workflow][session={}][phase=restore] Restored child-task waiting: waiting_on_task_id={:?}, child_sessions={}",
+                                "[Workflow][session={}][phase=restore] Restored sub-agent waiting: waiting_on_sub_agent_id={:?}, sub_agent_sessions={}",
                                 self.session_id,
-                                self.child_task_id,
-                                self.child_sessions.len()
+                                self.sub_agent_id,
+                                self.sub_agent_sessions.len()
                             );
                             if let Some(completion) = self
-                                .pending_child_completions
+                                .pending_sub_agent_completions
                                 .iter()
                                 .find(|completion| {
                                     !completion.consumed
-                                        && Some(completion.child_task_id.as_str())
-                                            == self.child_task_id.as_deref()
+                                        && Some(completion.sub_agent_id.as_str())
+                                            == self.sub_agent_id.as_deref()
                                 })
                                 .cloned()
                             {
                                 log::info!(
-                                    "[Workflow][session={}][phase=restore][event=child_completion_replay] Replaying durable child completion {}",
+                                    "[Workflow][session={}][phase=restore][event=sub_agent_completion_replay] Replaying durable sub-agent completion {}",
                                     self.session_id,
-                                    completion.child_task_id
+                                    completion.sub_agent_id
                                 );
                                 let _ = self
-                                    .apply_child_task_completion(
-                                        completion.child_task_id.clone(),
+                                    .apply_sub_agent_completion(
+                                        completion.sub_agent_id.clone(),
                                         completion.to_signal_result(),
                                     )
                                     .await?;
@@ -1068,7 +1106,9 @@ impl WorkflowExecutor {
             if is_allowed(TOOL_SUBMIT_PLAN) {
                 tm.register_tool(Arc::new(SubmitPlan)).await?;
             }
-            if self.policy.phase != ExecutionPhase::Planning && is_allowed(TOOL_FINISH_TASK) {
+            if self.policy.phase != ExecutionPhase::Planning
+                && is_allowed(TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
+            {
                 tm.register_tool(Arc::new(FinishTask)).await?;
             }
         }
@@ -1108,11 +1148,13 @@ impl WorkflowExecutor {
             }
 
             tm.register_tool(Arc::new(
-                crate::workflow::react::orchestrator::TaskOutputTool,
+                crate::workflow::react::orchestrator::TaskOutputTool::new(self.session_id.clone()),
             ))
             .await?;
-            tm.register_tool(Arc::new(crate::workflow::react::orchestrator::TaskStopTool))
-                .await?;
+            tm.register_tool(Arc::new(
+                crate::workflow::react::orchestrator::TaskStopTool::new(self.session_id.clone()),
+            ))
+            .await?;
         }
 
         // 5. Todo Manager Tools (Session Persistent)
@@ -1183,35 +1225,166 @@ impl WorkflowExecutor {
         Ok(())
     }
 
-    /// Generates a wildcard pattern from a shell command for auto-approval
-    /// Uses conservative heuristics to avoid over-permissive rules
-    ///
-    /// Note: Hard-denied commands (sudo, dd, mkfs, etc.) are already blocked in shell.rs
-    /// This function only handles commands that passed shell policy and reached approval stage
-    ///
-    /// Examples:
-    /// - "git status" -> "^git status($| .*)"  (specific subcommand)
-    /// - "git log --oneline" -> "^git log($| .*)"  (subcommand only)
-    /// - "pnpm dev" -> "^pnpm dev($| .*)"  (package manager subcommand)
-    /// - "cat file.txt" -> "^cat file\\.txt$"  (exact file match only)
-    /// - "ls -la" -> "^ls($| .*)"  (safe command, allow all args)
-    /// - "rm file.txt" -> NO WILDCARD  (destructive, require approval each time)
-    fn generate_wildcard_pattern(&self, command: &str) -> String {
-        let trimmed = command.trim();
+    fn split_shell_command_segments(command: &str) -> Vec<String> {
+        let mut segments = Vec::new();
+        let mut current = String::new();
+        let mut chars = command.chars().peekable();
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut escaped = false;
 
-        // Split by spaces to get the command parts
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        while let Some(ch) = chars.next() {
+            if escaped {
+                current.push(ch);
+                escaped = false;
+                continue;
+            }
 
-        if parts.is_empty() {
-            return "^.*$".to_string();
+            if ch == '\\' && !in_single_quote {
+                current.push(ch);
+                escaped = true;
+                continue;
+            }
+
+            if ch == '\'' && !in_double_quote {
+                in_single_quote = !in_single_quote;
+                current.push(ch);
+                continue;
+            }
+
+            if ch == '"' && !in_single_quote {
+                in_double_quote = !in_double_quote;
+                current.push(ch);
+                continue;
+            }
+
+            if !in_single_quote && !in_double_quote {
+                match ch {
+                    ';' => {
+                        if !current.trim().is_empty() {
+                            segments.push(current.trim().to_string());
+                        }
+                        current.clear();
+                        continue;
+                    }
+                    '&' | '|' => {
+                        if chars.peek() == Some(&ch) {
+                            let _ = chars.next();
+                            if !current.trim().is_empty() {
+                                segments.push(current.trim().to_string());
+                            }
+                            current.clear();
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            current.push(ch);
         }
 
-        // Get the base command (first part)
-        let base_cmd = parts[0];
+        if !current.trim().is_empty() {
+            segments.push(current.trim().to_string());
+        }
 
-        // Destructive commands that should NEVER get wildcard patterns
-        // These are in shell.rs's needs_review list and require explicit approval each time
-        // Note: sudo, dd, mkfs etc. are already hard-denied in shell.rs and won't reach here
+        segments
+    }
+
+    fn contains_unquoted_shell_redirection(command: &str) -> bool {
+        let mut chars = command.chars().peekable();
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut escaped = false;
+
+        while let Some(ch) = chars.next() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+
+            if ch == '\\' && !in_single_quote {
+                escaped = true;
+                continue;
+            }
+
+            if ch == '\'' && !in_double_quote {
+                in_single_quote = !in_single_quote;
+                continue;
+            }
+
+            if ch == '"' && !in_single_quote {
+                in_double_quote = !in_double_quote;
+                continue;
+            }
+
+            if !in_single_quote && !in_double_quote && matches!(ch, '>' | '<') {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn extract_approvable_shell_stage(command: &str) -> Option<Vec<String>> {
+        let trimmed = command.trim();
+        if trimmed.is_empty() || trimmed.contains('\n') {
+            return None;
+        }
+        if Self::contains_unquoted_shell_redirection(trimmed) {
+            return None;
+        }
+
+        let tokens = shlex::split(trimmed)?;
+        if tokens.is_empty() {
+            return None;
+        }
+
+        let mut index = 0;
+        while index < tokens.len() {
+            let token = tokens[index].as_str();
+            if token.contains('=') && !token.starts_with('=') && !token.ends_with('=') {
+                let mut parts = token.splitn(2, '=');
+                let key = parts.next().unwrap_or("");
+                if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    index += 1;
+                    continue;
+                }
+            }
+            break;
+        }
+
+        if index >= tokens.len() {
+            return None;
+        }
+
+        let base = tokens[index].as_str();
+        if matches!(base, "cd" | "pushd" | "popd") {
+            return None;
+        }
+
+        let args = &tokens[index + 1..];
+        let inline_script_runners = [
+            "python", "python3", "node", "bash", "sh", "zsh", "ruby", "perl",
+        ];
+        if inline_script_runners.contains(&base)
+            && args
+                .iter()
+                .any(|arg| matches!(arg.as_str(), "-c" | "-e" | "-"))
+        {
+            return None;
+        }
+
+        Some(tokens[index..].to_vec())
+    }
+
+    fn approvable_shell_pattern_for_stage(stage_tokens: &[String]) -> Option<String> {
+        if stage_tokens.is_empty() {
+            return None;
+        }
+
+        let base_cmd = stage_tokens[0].as_str();
+
         let destructive_commands = [
             "rm",
             "rmdir",
@@ -1227,73 +1400,83 @@ impl WorkflowExecutor {
             "ln",
             "crontab",
             "curl",
-            "wget", // Could download and execute malicious scripts
+            "wget",
             "apt",
             "apt-get",
             "yum",
             "dnf",
             "pacman",
-            "brew", // Package managers
+            "brew",
             "docker",
             "podman",
             "systemctl",
             "service",
         ];
-
         if destructive_commands.contains(&base_cmd) {
-            // Return a pattern that only matches the EXACT command
-            // This way, "approve all" only applies to this specific invocation
-            let escaped = regex::escape(trimmed);
-            return format!("^{}$", escaped);
+            return None;
         }
 
-        // Safe read-only commands that can have broad wildcards
-        let safe_commands = [
+        let simple_safe_commands = [
             "ls", "dir", "tree", "pwd", "whoami", "id", "groups", "hostname", "date", "uptime",
-            "uname", "arch", "env", "printenv", "ps", "df", "free", "mount", "lsblk", "git", "npm",
-            "yarn", "pnpm", "node", "python", "python3", "cargo", "rustc", "go", "java", "javac",
+            "uname", "arch", "env", "printenv", "ps", "df", "free", "mount", "lsblk", "cat",
+            "head", "tail", "less", "more", "stat", "file", "wc", "du",
         ];
+        if simple_safe_commands.contains(&base_cmd) {
+            return Some(format!("^{}($| .*)", regex::escape(base_cmd)));
+        }
 
-        // For git and package managers, be smart about subcommands
-        let is_git_or_pkg_manager =
-            ["git", "npm", "yarn", "pnpm", "cargo", "go"].contains(&base_cmd);
+        let allow_base_with_subcommand = ["git", "cargo", "go", "pnpm", "npm", "yarn"];
+        if allow_base_with_subcommand.contains(&base_cmd) {
+            let subcommand = stage_tokens
+                .iter()
+                .skip(1)
+                .find(|token| !token.starts_with('-'))
+                .map(|token| token.as_str());
+            if let Some(subcommand) = subcommand {
+                return Some(format!(
+                    "^{} {}($| .*)",
+                    regex::escape(base_cmd),
+                    regex::escape(subcommand)
+                ));
+            }
+            return Some(format!("^{}($| .*)", regex::escape(base_cmd)));
+        }
 
-        if is_git_or_pkg_manager && parts.len() > 1 {
-            let second_part = parts[1];
+        None
+    }
 
-            // Check if second part is a subcommand (not a flag)
-            let is_subcommand = !second_part.starts_with('-');
+    fn generate_shell_approval_patterns(command: &str) -> Vec<String> {
+        let mut patterns = Vec::new();
+        for segment in Self::split_shell_command_segments(command) {
+            let Some(stage_tokens) = Self::extract_approvable_shell_stage(&segment) else {
+                continue;
+            };
 
-            if is_subcommand {
-                // Allow the specific subcommand with any arguments
-                // e.g., "git log --oneline" -> "^git log($| .*)"
-                return format!("^{} {}($| .*)", base_cmd, second_part);
-            } else {
-                // Has flags but no subcommand, allow base command only
-                return format!("^{}($| .*)", base_cmd);
+            if let Some(pattern) = Self::approvable_shell_pattern_for_stage(&stage_tokens) {
+                if !patterns.iter().any(|existing| existing == &pattern) {
+                    patterns.push(pattern);
+                }
             }
         }
+        patterns
+    }
 
-        // For safe commands, allow broad wildcards
-        if safe_commands.contains(&base_cmd) {
-            return format!("^{}($| .*)", base_cmd);
+    fn build_shell_policy_with_patterns(
+        existing_policy: &[crate::tools::ShellPolicyRule],
+        patterns: &[String],
+    ) -> Vec<crate::tools::ShellPolicyRule> {
+        let mut updated_policy = existing_policy.to_vec();
+        for pattern in patterns {
+            if updated_policy.iter().any(|item| item.pattern == *pattern) {
+                continue;
+            }
+            updated_policy.push(crate::tools::ShellPolicyRule {
+                pattern: pattern.clone(),
+                decision: crate::tools::ShellDecision::Allow,
+                description: None,
+            });
         }
-
-        // For file operation commands (cat, head, tail, less, etc.)
-        // User requested these to have broad wildcards like 'cat *'
-        let file_commands = [
-            "cat", "head", "tail", "less", "more", "stat", "file", "wc", "du",
-        ];
-
-        if file_commands.contains(&base_cmd) {
-            // Return a broad pattern that matches the command with ANY arguments
-            // e.g., "cat file.txt" -> "^cat($| .*)"
-            return format!("^{}($| .*)", base_cmd);
-        }
-
-        // Default: conservative approach - only match exact command
-        let escaped = regex::escape(trimmed);
-        format!("^{}$", escaped)
+        updated_policy
     }
 
     pub(crate) async fn run_loop_internal(&mut self) -> Result<(), WorkflowEngineError> {
@@ -1322,7 +1505,7 @@ impl WorkflowExecutor {
             let is_waiting_state = self.state == WorkflowState::Paused
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::AwaitingApproval
-                || self.state == WorkflowState::AwaitingChildTask;
+                || self.state == WorkflowState::AwaitingSubAgent;
             if !is_waiting_state {
                 // Check stop/config/user-message queue signals at loop start (non-waiting only)
                 if self.check_stop_signal(&mut signal_rx).await? {
@@ -1334,13 +1517,13 @@ impl WorkflowExecutor {
             if self.state == WorkflowState::Paused
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::AwaitingApproval
-                || self.state == WorkflowState::AwaitingChildTask
+                || self.state == WorkflowState::AwaitingSubAgent
             {
                 let wait_reason_enum = match &self.state {
                     WorkflowState::Paused => Some(WaitReason::Confirmation),
                     WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
                     WorkflowState::AwaitingApproval => Some(WaitReason::Approval),
-                    WorkflowState::AwaitingChildTask => Some(WaitReason::ChildTask),
+                    WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
                     _ => None,
                 };
 
@@ -1574,116 +1757,133 @@ impl WorkflowExecutor {
                                 );
 
                                 if approve_all {
-                                    self.auto_approve.insert(tool_name.to_string());
-
-                                    // Send update event to frontend
-                                    let tools = self.get_auto_approved_tools();
-                                    if let Err(e) = self
-                                        .dispatch_ui_payload(
-                                            GatewayPayload::AutoApprovedToolsUpdated {
-                                                tools: tools.clone(),
-                                            },
-                                        )
-                                        .await
-                                    {
-                                        log::error!(
-                                            "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
-                                            self.session_id,
-                                            e
-                                        );
-                                    }
-
-                                    // Persist auto_approve list to database
-                                    if let Ok(store) = self.context.main_store.write() {
-                                        if let Ok(snapshot) =
-                                            store.get_workflow_snapshot(&self.session_id)
-                                        {
-                                            let mut agent_config: serde_json::Value = snapshot
-                                                .workflow
-                                                .agent_config
-                                                .and_then(|s| serde_json::from_str(&s).ok())
-                                                .unwrap_or(serde_json::json!({}));
-
-                                            agent_config["auto_approve"] =
-                                                serde_json::to_value(&tools)
-                                                    .unwrap_or(serde_json::json!([]));
-
-                                            if let Ok(config_str) =
-                                                serde_json::to_string(&agent_config)
-                                            {
-                                                let _ = store.update_workflow_agent_config(
-                                                    &self.session_id,
-                                                    &config_str,
-                                                );
-                                            }
-                                        }
-                                    }
-
-                                    // Generate wildcard rule for bash commands and persist to workflow
                                     if tool_name == "bash" {
                                         if let Some(cmd) =
                                             tool_args.get("command").and_then(|v| v.as_str())
                                         {
-                                            let wildcard_pattern =
-                                                self.generate_wildcard_pattern(cmd);
+                                            let wildcard_patterns =
+                                                Self::generate_shell_approval_patterns(cmd);
                                             log::info!(
-                                                "WorkflowExecutor {}: Generated wildcard pattern '{}' for command '{}'",
-                                                self.session_id, wildcard_pattern, cmd
+                                                "WorkflowExecutor {}: Generated shell approval patterns {:?} for command '{}'",
+                                                self.session_id, wildcard_patterns, cmd
                                             );
 
-                                            // Update agent_config.shell_policy in database
-                                            if let Ok(store) = self.context.main_store.write() {
-                                                if let Ok(snapshot) =
-                                                    store.get_workflow_snapshot(&self.session_id)
-                                                {
-                                                    let mut agent_config: serde_json::Value =
-                                                        snapshot
-                                                            .workflow
-                                                            .agent_config
-                                                            .and_then(|s| {
-                                                                serde_json::from_str(&s).ok()
-                                                            })
-                                                            .unwrap_or(serde_json::json!({}));
+                                            if wildcard_patterns.is_empty() {
+                                                log::info!(
+                                                    "WorkflowExecutor {}: No safe reusable shell approval pattern extracted from '{}'",
+                                                    self.session_id,
+                                                    cmd
+                                                );
+                                            }
 
-                                                    let shell_policy = agent_config
-                                                        .get("shell_policy")
-                                                        .and_then(|v| v.as_array())
-                                                        .cloned()
-                                                        .unwrap_or_default();
-
-                                                    // Add new wildcard rule
-                                                    let mut updated_policy = shell_policy;
-                                                    updated_policy.push(serde_json::json!({
-                                                        "pattern": wildcard_pattern,
-                                                        "decision": "allow"
-                                                    }));
-
-                                                    agent_config["shell_policy"] =
-                                                        serde_json::Value::Array(
-                                                            updated_policy.clone(),
-                                                        );
-
-                                                    // Persist to database
-                                                    if let Ok(config_str) =
-                                                        serde_json::to_string(&agent_config)
+                                            let mut shell_policy_payload: Option<
+                                                Vec<crate::tools::ShellPolicyRule>,
+                                            > = None;
+                                            if !wildcard_patterns.is_empty() {
+                                                if let Ok(store) = self.context.main_store.write() {
+                                                    if let Ok(snapshot) = store
+                                                        .get_workflow_snapshot(&self.session_id)
                                                     {
-                                                        let _ = store.update_workflow_agent_config(
-                                                            &self.session_id,
-                                                            &config_str,
-                                                        );
-                                                    }
+                                                        let mut agent_config: serde_json::Value =
+                                                            snapshot
+                                                                .workflow
+                                                                .agent_config
+                                                                .and_then(|s| {
+                                                                    serde_json::from_str(&s).ok()
+                                                                })
+                                                                .unwrap_or(serde_json::json!({}));
 
-                                                    // Update in-memory agent_config
-                                                    if let Ok(policy_rules) = serde_json::from_value::<
-                                                        Vec<crate::tools::ShellPolicyRule>,
-                                                    >(
-                                                        serde_json::Value::Array(updated_policy),
-                                                    ) {
-                                                        self.agent_config.shell_policy = Some(
-                                                            serde_json::to_string(&policy_rules)
-                                                                .unwrap_or_default(),
-                                                        );
+                                                        let existing_policy = agent_config
+                                                            .get("shell_policy")
+                                                            .and_then(|v| {
+                                                                serde_json::from_value::<
+                                                            Vec<crate::tools::ShellPolicyRule>,
+                                                        >(v.clone()).ok()
+                                                            })
+                                                            .unwrap_or_default();
+
+                                                        let updated_policy =
+                                                            Self::build_shell_policy_with_patterns(
+                                                                &existing_policy,
+                                                                &wildcard_patterns,
+                                                            );
+
+                                                        agent_config["shell_policy"] =
+                                                            serde_json::to_value(&updated_policy)
+                                                                .unwrap_or(serde_json::json!([]));
+
+                                                        if let Ok(config_str) =
+                                                            serde_json::to_string(&agent_config)
+                                                        {
+                                                            let _ = store
+                                                                .update_workflow_agent_config(
+                                                                    &self.session_id,
+                                                                    &config_str,
+                                                                );
+                                                        }
+                                                        shell_policy_payload = Some(updated_policy);
                                                     }
+                                                }
+                                            }
+                                            if let Some(policy) = shell_policy_payload {
+                                                self.agent_config.shell_policy =
+                                                    serde_json::to_string(&policy).ok();
+                                                if let Err(e) = self
+                                                    .dispatch_ui_payload(
+                                                        GatewayPayload::ShellPolicyUpdated {
+                                                            policy,
+                                                        },
+                                                    )
+                                                    .await
+                                                {
+                                                    log::error!(
+                                                        "WorkflowExecutor {}: Failed to send shell policy update: {}",
+                                                        self.session_id,
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        self.auto_approve.insert(tool_name.to_string());
+
+                                        let tools = self.get_auto_approved_tools();
+                                        if let Err(e) = self
+                                            .dispatch_ui_payload(
+                                                GatewayPayload::AutoApprovedToolsUpdated {
+                                                    tools: tools.clone(),
+                                                },
+                                            )
+                                            .await
+                                        {
+                                            log::error!(
+                                                "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
+                                                self.session_id,
+                                                e
+                                            );
+                                        }
+
+                                        if let Ok(store) = self.context.main_store.write() {
+                                            if let Ok(snapshot) =
+                                                store.get_workflow_snapshot(&self.session_id)
+                                            {
+                                                let mut agent_config: serde_json::Value = snapshot
+                                                    .workflow
+                                                    .agent_config
+                                                    .and_then(|s| serde_json::from_str(&s).ok())
+                                                    .unwrap_or(serde_json::json!({}));
+
+                                                agent_config["auto_approve"] =
+                                                    serde_json::to_value(&tools)
+                                                        .unwrap_or(serde_json::json!([]));
+
+                                                if let Ok(config_str) =
+                                                    serde_json::to_string(&agent_config)
+                                                {
+                                                    let _ = store.update_workflow_agent_config(
+                                                        &self.session_id,
+                                                        &config_str,
+                                                    );
                                                 }
                                             }
                                         }
@@ -1847,26 +2047,26 @@ impl WorkflowExecutor {
                             self.update_state(WorkflowState::Thinking).await?;
                             continue;
                         }
-                        WorkflowSignal::ChildTaskComplete {
-                            child_task_id,
+                        WorkflowSignal::SubAgentComplete {
+                            sub_agent_id,
                             result,
                         } => {
                             log::info!(
-                                "[Workflow][session={}][phase=wait][event=child_task_complete] Child task {} completed with result {:?}",
+                                "[Workflow][session={}][phase=wait][event=sub_agent_complete] Sub-agent {} completed with result {:?}",
                                 self.session_id,
-                                child_task_id,
+                                sub_agent_id,
                                 result
                             );
 
                             if !self
-                                .apply_child_task_completion(child_task_id.clone(), result)
+                                .apply_sub_agent_completion(sub_agent_id.clone(), result)
                                 .await?
                             {
                                 log::warn!(
-                                    "[Workflow][session={}][phase=wait][event=child_task_mismatch] Received completion for unexpected child task {}. Expected: {:?}",
+                                    "[Workflow][session={}][phase=wait][event=sub_agent_mismatch] Received completion for unexpected sub-agent {}. Expected: {:?}",
                                     self.session_id,
-                                    child_task_id,
-                                    self.child_task_id
+                                    sub_agent_id,
+                                    self.sub_agent_id
                                 );
                             }
                             continue;
@@ -1982,103 +2182,125 @@ impl WorkflowExecutor {
                         );
 
                         if approve_all {
-                            self.auto_approve.insert(tool_name.to_string());
-
-                            // Send update event to frontend
-                            let tools = self.get_auto_approved_tools();
-                            if let Err(e) = self
-                                .dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated {
-                                    tools: tools.clone(),
-                                })
-                                .await
-                            {
-                                log::error!(
-                                    "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
-                                    self.session_id,
-                                    e
-                                );
-                            }
-
-                            // Persist auto_approve list to database
-                            if let Ok(store) = self.context.main_store.write() {
-                                if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id)
-                                {
-                                    let mut agent_config: serde_json::Value = snapshot
-                                        .workflow
-                                        .agent_config
-                                        .and_then(|s| serde_json::from_str(&s).ok())
-                                        .unwrap_or(serde_json::json!({}));
-
-                                    agent_config["auto_approve"] = serde_json::to_value(&tools)
-                                        .unwrap_or(serde_json::json!([]));
-
-                                    if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                                        let _ = store.update_workflow_agent_config(
-                                            &self.session_id,
-                                            &config_str,
-                                        );
-                                    }
-                                }
-                            }
-
-                            // Generate wildcard rule for bash commands and persist to workflow
                             if tool_name == "bash" {
                                 if let Some(cmd) = tool_args.get("command").and_then(|v| v.as_str())
                                 {
-                                    let wildcard_pattern = self.generate_wildcard_pattern(cmd);
+                                    let wildcard_patterns =
+                                        Self::generate_shell_approval_patterns(cmd);
                                     log::info!(
-                                        "WorkflowExecutor {}: Generated wildcard pattern '{}' for command '{}'",
-                                        self.session_id, wildcard_pattern, cmd
+                                        "WorkflowExecutor {}: Generated shell approval patterns {:?} for command '{}'",
+                                        self.session_id, wildcard_patterns, cmd
                                     );
 
-                                    // Update agent_config.shell_policy in database
-                                    if let Ok(store) = self.context.main_store.write() {
-                                        if let Ok(snapshot) =
-                                            store.get_workflow_snapshot(&self.session_id)
-                                        {
-                                            let mut agent_config: serde_json::Value = snapshot
-                                                .workflow
-                                                .agent_config
-                                                .and_then(|s| serde_json::from_str(&s).ok())
-                                                .unwrap_or(serde_json::json!({}));
+                                    if wildcard_patterns.is_empty() {
+                                        log::info!(
+                                            "WorkflowExecutor {}: No safe reusable shell approval pattern extracted from '{}'",
+                                            self.session_id,
+                                            cmd
+                                        );
+                                    }
 
-                                            let shell_policy = agent_config
-                                                .get("shell_policy")
-                                                .and_then(|v| v.as_array())
-                                                .cloned()
-                                                .unwrap_or_default();
-
-                                            // Add new wildcard rule
-                                            let mut updated_policy = shell_policy;
-                                            updated_policy.push(serde_json::json!({
-                                                "pattern": wildcard_pattern,
-                                                "decision": "allow"
-                                            }));
-
-                                            agent_config["shell_policy"] =
-                                                serde_json::Value::Array(updated_policy.clone());
-
-                                            // Persist to database
-                                            if let Ok(config_str) =
-                                                serde_json::to_string(&agent_config)
+                                    let mut shell_policy_payload: Option<
+                                        Vec<crate::tools::ShellPolicyRule>,
+                                    > = None;
+                                    if !wildcard_patterns.is_empty() {
+                                        if let Ok(store) = self.context.main_store.write() {
+                                            if let Ok(snapshot) =
+                                                store.get_workflow_snapshot(&self.session_id)
                                             {
-                                                let _ = store.update_workflow_agent_config(
-                                                    &self.session_id,
-                                                    &config_str,
-                                                );
-                                            }
+                                                let mut agent_config: serde_json::Value = snapshot
+                                                    .workflow
+                                                    .agent_config
+                                                    .and_then(|s| serde_json::from_str(&s).ok())
+                                                    .unwrap_or(serde_json::json!({}));
 
-                                            // Update in-memory agent_config
-                                            if let Ok(policy_rules) = serde_json::from_value::<
-                                                Vec<crate::tools::ShellPolicyRule>,
-                                            >(
-                                                serde_json::Value::Array(updated_policy),
-                                            ) {
-                                                self.agent_config.shell_policy = Some(
-                                                    serde_json::to_string(&policy_rules)
-                                                        .unwrap_or_default(),
-                                                );
+                                                let existing_policy = agent_config
+                                                    .get("shell_policy")
+                                                    .and_then(|v| {
+                                                        serde_json::from_value::<
+                                                            Vec<crate::tools::ShellPolicyRule>,
+                                                        >(
+                                                            v.clone()
+                                                        )
+                                                        .ok()
+                                                    })
+                                                    .unwrap_or_default();
+
+                                                let updated_policy =
+                                                    Self::build_shell_policy_with_patterns(
+                                                        &existing_policy,
+                                                        &wildcard_patterns,
+                                                    );
+
+                                                agent_config["shell_policy"] =
+                                                    serde_json::to_value(&updated_policy)
+                                                        .unwrap_or(serde_json::json!([]));
+
+                                                if let Ok(config_str) =
+                                                    serde_json::to_string(&agent_config)
+                                                {
+                                                    let _ = store.update_workflow_agent_config(
+                                                        &self.session_id,
+                                                        &config_str,
+                                                    );
+                                                }
+                                                shell_policy_payload = Some(updated_policy);
                                             }
+                                        }
+                                    }
+                                    if let Some(policy) = shell_policy_payload {
+                                        self.agent_config.shell_policy =
+                                            serde_json::to_string(&policy).ok();
+                                        if let Err(e) = self
+                                            .dispatch_ui_payload(
+                                                GatewayPayload::ShellPolicyUpdated { policy },
+                                            )
+                                            .await
+                                        {
+                                            log::error!(
+                                                "WorkflowExecutor {}: Failed to send shell policy update: {}",
+                                                self.session_id,
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                            } else {
+                                self.auto_approve.insert(tool_name.to_string());
+
+                                let tools = self.get_auto_approved_tools();
+                                if let Err(e) = self
+                                    .dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated {
+                                        tools: tools.clone(),
+                                    })
+                                    .await
+                                {
+                                    log::error!(
+                                        "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
+                                        self.session_id,
+                                        e
+                                    );
+                                }
+
+                                if let Ok(store) = self.context.main_store.write() {
+                                    if let Ok(snapshot) =
+                                        store.get_workflow_snapshot(&self.session_id)
+                                    {
+                                        let mut agent_config: serde_json::Value = snapshot
+                                            .workflow
+                                            .agent_config
+                                            .and_then(|s| serde_json::from_str(&s).ok())
+                                            .unwrap_or(serde_json::json!({}));
+
+                                        agent_config["auto_approve"] = serde_json::to_value(&tools)
+                                            .unwrap_or(serde_json::json!([]));
+
+                                        if let Ok(config_str) = serde_json::to_string(&agent_config)
+                                        {
+                                            let _ = store.update_workflow_agent_config(
+                                                &self.session_id,
+                                                &config_str,
+                                            );
                                         }
                                     }
                                 }
@@ -2673,18 +2895,18 @@ impl WorkflowExecutor {
                     metadata["observation_kind"] =
                         serde_json::to_value(observation_kind).unwrap_or(serde_json::Value::Null);
                 }
-                if tool_name == crate::tools::TOOL_TASK {
+                if tool_name == crate::tools::TOOL_SUB_AGENT_RUN {
                     if let Ok(task_result) =
                         serde_json::from_str::<serde_json::Value>(&reinforced.content)
                     {
                         if let Some(task_id) = task_result.get("task_id").and_then(|v| v.as_str()) {
-                            metadata["child_task_id"] = serde_json::json!(task_id);
+                            metadata["sub_agent_id"] = serde_json::json!(task_id);
                         }
                         if let Some(status) = task_result.get("status").and_then(|v| v.as_str()) {
-                            metadata["child_task_status"] = serde_json::json!(status);
+                            metadata["sub_agent_status"] = serde_json::json!(status);
                         }
                         if let Some(mode) = task_result.get("mode").and_then(|v| v.as_str()) {
-                            metadata["child_task_mode"] = serde_json::json!(mode);
+                            metadata["sub_agent_mode"] = serde_json::json!(mode);
                         }
                     }
                 }
@@ -2733,11 +2955,11 @@ impl WorkflowExecutor {
                     format!(
                         "<SYSTEM_REMINDER>NO TOOL CALLS DETECTED: You have not called any tools for {} consecutive responses. \
                         This is wasting your limited step budget ({}/{} steps used, {} remaining). \
-                        If you are truly finished, provide a summary and call 'finish_task'.</SYSTEM_REMINDER>",
+                        If you are truly finished, provide a summary and call 'complete_workflow_with_summary'.</SYSTEM_REMINDER>",
                         self.consecutive_no_tool_calls, self.current_step, self.max_steps, remaining
                     )
                 } else {
-                    "<SYSTEM_REMINDER>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your task, call 'finish_task' AFTER providing a summary in plain text.</SYSTEM_REMINDER>".to_string()
+                    "<SYSTEM_REMINDER>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your task, call 'complete_workflow_with_summary' AFTER providing a summary in plain text.</SYSTEM_REMINDER>".to_string()
                 };
                 let _ = self
                     .add_message_and_notify_internal(
@@ -2777,7 +2999,7 @@ impl WorkflowExecutor {
                         .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
                         .and_then(|v| v.as_str())
                         .unwrap_or_default();
-                    tool_name == TOOL_FINISH_TASK
+                    tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
                         && reinforced.approval_status.as_deref() != Some("pending")
                         && reinforced.approval_status.as_deref() != Some("rejected")
                 });
@@ -2860,7 +3082,7 @@ impl WorkflowExecutor {
                         }
                     } else {
                         log::info!(
-                            "[Workflow][session={}][phase=compression] Skip blocking compression because no completed finish_task segment is available",
+                            "[Workflow][session={}][phase=compression] Skip blocking compression because no completed complete_workflow_with_summary segment is available",
                             self.session_id
                         );
                     }
@@ -2874,6 +3096,23 @@ impl WorkflowExecutor {
                                 self.session_id,
                                 compressed_until_message_id
                             );
+                        } else if !self
+                            .should_retry_background_compression(compressed_until_message_id)
+                        {
+                            if let Some((failures, next_retry_step)) = self
+                                .background_compression_retry_state
+                                .get(&compressed_until_message_id)
+                                .copied()
+                            {
+                                log::info!(
+                                    "[Workflow][session={}][phase=compression] Backing off background rollup for boundary {} after {} failures; retry at step {} (current step {})",
+                                    self.session_id,
+                                    compressed_until_message_id,
+                                    failures,
+                                    next_retry_step,
+                                    self.current_step
+                                );
+                            }
                         } else {
                             log::info!(
                                 "[Workflow][session={}][phase=compression] Starting background rollup compression through boundary {}",
@@ -3156,7 +3395,7 @@ impl WorkflowExecutor {
             if self.state == WorkflowState::AwaitingApproval
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::Paused
-                || self.state == WorkflowState::AwaitingChildTask
+                || self.state == WorkflowState::AwaitingSubAgent
             {
                 log::info!(
                     "WorkflowExecutor {}: Postponing tool '{}' due to Turn-Level block (Causality)",
@@ -3186,7 +3425,7 @@ impl WorkflowExecutor {
                 }
                 Ok(None) => {
                     // Safe to proceed to physical execution!
-                    if name.starts_with("todo_") || name == crate::tools::TOOL_TASK {
+                    if name.starts_with("todo_") || name == crate::tools::TOOL_SUB_AGENT_RUN {
                         has_todo_call = true;
                         sequential_execution_queue.push((id, name, args, call));
                     } else {
@@ -3266,7 +3505,7 @@ impl WorkflowExecutor {
                 .await?;
             result_map.insert(id, (reinforced, call));
 
-            if self.state == WorkflowState::AwaitingChildTask
+            if self.state == WorkflowState::AwaitingSubAgent
                 || self.state == WorkflowState::AwaitingApproval
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::Paused
@@ -3296,7 +3535,7 @@ impl WorkflowExecutor {
         tool_call: &serde_json::Value,
         result: Result<serde_json::Value, crate::tools::ToolError>,
     ) -> Result<ReinforcedResult, WorkflowEngineError> {
-        if name == crate::tools::TOOL_TASK {
+        if name == crate::tools::TOOL_SUB_AGENT_RUN {
             if let Ok(val) = &result {
                 let structured = val.get("structured_content");
                 let status = structured
@@ -3304,7 +3543,7 @@ impl WorkflowExecutor {
                     .and_then(|s| s.as_str());
 
                 if status == Some("waiting") {
-                    let child_task_id = structured
+                    let sub_agent_id = structured
                         .and_then(|s| s.get("task_id"))
                         .and_then(|s| s.as_str())
                         .or_else(|| val.get("content").and_then(|c| c.as_str()))
@@ -3318,22 +3557,22 @@ impl WorkflowExecutor {
                                 })
                         });
 
-                    if let Some(child_task_id) = child_task_id {
-                        self.child_task_id = Some(child_task_id.clone());
-                        if !self.child_sessions.iter().any(|id| id == &child_task_id) {
-                            self.child_sessions.push(child_task_id.clone());
+                    if let Some(sub_agent_id) = sub_agent_id {
+                        self.sub_agent_id = Some(sub_agent_id.clone());
+                        if !self.sub_agent_sessions.iter().any(|id| id == &sub_agent_id) {
+                            self.sub_agent_sessions.push(sub_agent_id.clone());
                         }
-                        self.update_state(WorkflowState::AwaitingChildTask).await?;
+                        self.update_state(WorkflowState::AwaitingSubAgent).await?;
                     }
                 }
             }
         }
 
-        // 1. Finish Task Early Return
-        if name == TOOL_FINISH_TASK {
+        // 1. Complete Workflow Early Return
+        if name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY {
             return Ok(ReinforcedResult {
                 content: "Finished".into(),
-                title: "Finish Task".to_string(),
+                title: "Complete Workflow with Summary".to_string(),
                 summary: t!("workflow.task_finished").to_string(),
                 is_error: false,
                 error_type: None,
@@ -3422,7 +3661,9 @@ impl WorkflowExecutor {
         // --- 1. Workflow Control Interception (Submit, Finish, Ask) ---
         match name {
             TOOL_SUBMIT_PLAN => return self.handle_submit_plan_intercept(text_part).await,
-            TOOL_FINISH_TASK => return self.handle_finish_task_intercept(text_part).await,
+            TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => {
+                return self.handle_finish_task_intercept(text_part).await
+            }
             TOOL_ASK_USER => return self.handle_ask_user_intercept(args).await,
             _ => {}
         }
@@ -3475,15 +3716,18 @@ impl WorkflowExecutor {
 
         // 2.4 Smart approval AI review
         if self.policy.approval_level == ApprovalLevel::Smart
-            && name != crate::tools::TOOL_BASH
             && !crate::tools::is_auto_execute_workflow_tool(name)
-            && !Self::is_smart_mode_read_only_tool(name)
+            && matches!(
+                Self::smart_mode_approval_decision(name, args),
+                crate::workflow::react::interceptors::SmartApprovalDecision::ReviewWithAi
+            )
         {
             if let Some(review) = self
                 .review_tool_call_for_smart_mode(name, args, text_part)
                 .await?
             {
                 if review.approved {
+                    self.smart_approved_tool_call_ids.insert(id.to_string());
                     log::info!(
                         "WorkflowExecutor {}: AI approved tool '{}' in Smart mode (risk: {}, reason: {})",
                         self.session_id,
@@ -3506,6 +3750,16 @@ impl WorkflowExecutor {
 
         // --- 3. Approval Policy Enforcement ---
         // Only if security checks pass do we consider asking the user for permission.
+        if self.smart_approved_tool_call_ids.remove(id) {
+            log::info!(
+                "WorkflowExecutor {}: Skipping approval for Smart-AI-approved tool call '{}' ({})",
+                self.session_id,
+                id,
+                name
+            );
+            return Ok(None);
+        }
+
         if self.should_intercept_for_approval(name, args) {
             return self
                 .handle_approval_interception(id, name, args, None)
@@ -3536,41 +3790,41 @@ impl WorkflowExecutor {
         reinforced.observation_kind == Some(ObservationKind::TurnBlockedPostponed)
     }
 
-    async fn apply_child_task_completion(
+    async fn apply_sub_agent_completion(
         &mut self,
-        child_task_id: String,
+        sub_agent_id: String,
         result: serde_json::Value,
     ) -> Result<bool, WorkflowEngineError> {
-        if let Some(resolution) = crate::workflow::react::child_tasks::resolve_child_task_completion(
-            &mut self.child_task_id,
-            &mut self.child_sessions,
-            &child_task_id,
+        if let Some(resolution) = crate::workflow::react::child_tasks::resolve_sub_agent_completion(
+            &mut self.sub_agent_id,
+            &mut self.sub_agent_sessions,
+            &sub_agent_id,
             &result,
         ) {
-            self.pending_child_completions
-                .retain(|completion| completion.child_task_id != child_task_id);
+            self.pending_sub_agent_completions
+                .retain(|completion| completion.sub_agent_id != sub_agent_id);
 
             self.add_message_and_notify_internal(
                 "user".to_string(),
                 format!(
-                    "<SYSTEM_REMINDER>\nChild task {} {}: {}\n</SYSTEM_REMINDER>",
-                    resolution.child_task_id, resolution.status, resolution.content
+                    "<SYSTEM_REMINDER>\nSub-agent {} {}: {}\n</SYSTEM_REMINDER>",
+                    resolution.sub_agent_id, resolution.status, resolution.content
                 ),
                 None,
                 None,
                 Some(StepType::Observe),
                 resolution.is_error,
-                resolution.is_error.then(|| "ChildTaskFailed".to_string()),
+                resolution.is_error.then(|| "SubAgentFailed".to_string()),
                 Some(json!({
                     "message_kind": "runtime_observation",
-                    "observation_type": "child_task_completion",
-                    "child_task_id": child_task_id,
+                    "observation_type": "sub_agent_completion",
+                    "sub_agent_id": sub_agent_id,
                     "result": result,
-                    "title": format!("Child task {}", resolution.child_task_id),
+                    "title": format!("Sub-agent {}", resolution.sub_agent_id),
                     "summary": resolution.content,
                     "execution_status": resolution.status,
                     "is_error": resolution.is_error,
-                    "error_type": if resolution.is_error { "ChildTaskFailed" } else { "" }
+                    "error_type": if resolution.is_error { "SubAgentFailed" } else { "" }
                 })),
             )
             .await?;
@@ -3655,7 +3909,7 @@ impl WorkflowExecutor {
             WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
                 Some(WaitReason::Approval)
             }
-            WorkflowState::AwaitingChildTask => Some(WaitReason::ChildTask),
+            WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
             _ => None,
         };
 
@@ -3719,7 +3973,7 @@ impl WorkflowExecutor {
             wait_reason,
         })
         .await?;
-        self.dispatch_child_task_progress().await;
+        self.dispatch_sub_agent_progress().await;
 
         {
             let store_res = self
@@ -3739,7 +3993,7 @@ impl WorkflowExecutor {
                 | WorkflowState::AwaitingUser
                 | WorkflowState::AwaitingApproval
                 | WorkflowState::AwaitingAutoApproval
-                | WorkflowState::AwaitingChildTask
+                | WorkflowState::AwaitingSubAgent
                 | WorkflowState::Completed
                 | WorkflowState::Error
                 | WorkflowState::Cancelled
@@ -3908,7 +4162,7 @@ impl WorkflowExecutor {
         .await?;
 
         self.dispatch_context_usage().await?;
-        self.dispatch_child_task_progress().await;
+        self.dispatch_sub_agent_progress().await;
 
         // Summary messages should not trigger compression - they are the result of compression
         let is_summary = msg
@@ -4203,11 +4457,17 @@ impl WorkflowExecutor {
             }) = WorkflowSignal::parse(&s)
             {
                 self.clear_background_compression_if_matches(compressed_until_message_id);
+                self.record_background_compression_failure(compressed_until_message_id);
+                let retry_state = self
+                    .background_compression_retry_state
+                    .get(&compressed_until_message_id)
+                    .copied();
                 log::warn!(
-                    "[Workflow][session={}][phase=compression] Background rollup compression failed for boundary {}: {}",
+                    "[Workflow][session={}][phase=compression] Background rollup compression failed for boundary {}: {}. retry_state={:?}",
                     self.session_id,
                     compressed_until_message_id,
-                    error
+                    error,
+                    retry_state
                 );
                 continue;
             }
@@ -4265,7 +4525,7 @@ impl WorkflowExecutor {
                 | WorkflowState::AwaitingUser
                 | WorkflowState::AwaitingApproval
                 | WorkflowState::AwaitingAutoApproval
-                | WorkflowState::AwaitingChildTask
+                | WorkflowState::AwaitingSubAgent
         ) {
             log::debug!(
                 "[Workflow][session={}][phase=queue] Skip flushing queued user messages while state={:?}",
@@ -4400,7 +4660,7 @@ impl WorkflowExecutor {
             WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
                 Some(WaitReason::Approval)
             }
-            WorkflowState::AwaitingChildTask => Some(WaitReason::ChildTask),
+            WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
             _ => None,
         };
 
@@ -4447,9 +4707,9 @@ impl WorkflowExecutor {
             max_context_tokens: Some(self.context.max_tokens),
             last_event_id: None,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
-            waiting_on_task_id: self.child_task_id.clone(),
-            child_sessions: self.child_sessions.clone(),
-            pending_child_completions: self.pending_child_completions.clone(),
+            waiting_on_sub_agent_id: self.sub_agent_id.clone(),
+            sub_agent_sessions: self.sub_agent_sessions.clone(),
+            pending_sub_agent_completions: self.pending_sub_agent_completions.clone(),
         }
     }
 
@@ -4616,5 +4876,42 @@ mod recovery_tests {
         let state = WorkflowState::Error;
         let runtime_state = RuntimeState::from(&state);
         assert_eq!(runtime_state, RuntimeState::Failed);
+    }
+
+    #[test]
+    fn test_generate_shell_approval_patterns_ignores_cd_prefix() {
+        let patterns = WorkflowExecutor::generate_shell_approval_patterns(
+            "cd /a/b/c && cargo check --workspace",
+        );
+        assert_eq!(patterns, vec!["^cargo check($| .*)".to_string()]);
+    }
+
+    #[test]
+    fn test_generate_shell_approval_patterns_ignores_redirection() {
+        let patterns =
+            WorkflowExecutor::generate_shell_approval_patterns("cat /dev/null>xxx && cargo check");
+        assert_eq!(patterns, vec!["^cargo check($| .*)".to_string()]);
+    }
+
+    #[test]
+    fn test_generate_shell_approval_patterns_ignores_inline_python() {
+        let patterns = WorkflowExecutor::generate_shell_approval_patterns(
+            "python -c \"print('hello')\" && cargo check",
+        );
+        assert_eq!(patterns, vec!["^cargo check($| .*)".to_string()]);
+    }
+
+    #[test]
+    fn test_generate_shell_approval_patterns_extracts_multiple_safe_subcommands() {
+        let patterns = WorkflowExecutor::generate_shell_approval_patterns(
+            "cd /repo && cargo check --workspace && git status | head -20 && python -c \"print('x')\"",
+        );
+        assert_eq!(
+            patterns,
+            vec![
+                "^cargo check($| .*)".to_string(),
+                "^git status($| .*)".to_string()
+            ]
+        );
     }
 }
