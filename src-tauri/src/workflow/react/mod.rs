@@ -23,6 +23,7 @@ pub mod policy;
 pub mod prompts;
 pub mod replay;
 pub mod runners;
+pub mod runtime_observation;
 pub mod security;
 pub mod signals;
 pub mod sinks;

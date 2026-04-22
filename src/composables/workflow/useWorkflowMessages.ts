@@ -79,15 +79,20 @@ export function useWorkflowMessages() {
 
       const payload = parseSubAgentRunPayload(message)
       const completion = payload.taskId ? subAgentCompletions.get(payload.taskId) : null
-      const completionResult = completion?.result || {}
+      const completionResult = completion?.result || completion?.data?.result || {}
       const completionStatus =
         completion?.execution_status ||
+        completion?.data?.execution_status ||
         completionResult.status ||
         meta.sub_agent_status ||
         meta.execution_status ||
         'running'
       const resultContent =
-        completionResult.result || completionResult.error || completion?.summary || ''
+        completionResult.result ||
+        completionResult.error ||
+        completion?.summary ||
+        completion?.data?.summary ||
+        ''
 
       return {
         taskId: payload.taskId,
@@ -155,11 +160,14 @@ export function useWorkflowMessages() {
         }
       }
 
-      if (meta?.observation_type === 'sub_agent_completion' && meta?.sub_agent_id) {
-        subAgentCompletions.set(meta.sub_agent_id, {
+      const completionId =
+        meta?.sub_agent_id || meta?.subAgentId || meta?.data?.sub_agent_id || meta?.data?.subAgentId
+      if (meta?.observation_type === 'sub_agent_completion' && completionId) {
+        subAgentCompletions.set(completionId, {
           summary: meta.summary || '',
           execution_status: meta.execution_status || '',
-          result: meta.result || {}
+          result: meta.result || {},
+          data: meta.data || {}
         })
       }
       return { ...m, metadata: meta } // Cache parsed meta for Pass 2
@@ -184,6 +192,10 @@ export function useWorkflowMessages() {
         // Hide user messages with stepType 'observe' (internal system messages)
         // BUT keep rejected messages which have tool_call_id
         if (m.role === 'user' && m.stepType === 'observe' && !m.metadata?.tool_call_id) {
+          if (m.metadata?.ui_visibility === 'show' || m.metadata?.ui_visibility === 'card') {
+            return true
+          }
+          if (m.metadata?.ui_visibility === 'hide') return false
           return false
         }
 
@@ -271,6 +283,7 @@ export function useWorkflowMessages() {
         }
       })
       .filter(m => {
+        if (m.metadata?.ui_visibility === 'hide') return false
         // Standard visibility logic
         if (m.role === 'tool') {
           const name = m.metadata?.tool_call?.name || m.metadata?.tool_call?.function?.name || ''

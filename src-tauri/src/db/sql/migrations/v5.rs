@@ -90,53 +90,35 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "idx_workflow_events_session_id_id",
         "CREATE INDEX IF NOT EXISTS idx_workflow_events_session_id_id ON workflow_events(session_id, id)"
     ),
-    // Add unified models JSON column to agents
-    (
-        "agents_v5_models",
-        "ALTER TABLE agents ADD COLUMN models TEXT"
-    ),
-    // Add shell_policy JSON column to agents
-    (
-        "agents_v5_shell_policy",
-        "ALTER TABLE agents ADD COLUMN shell_policy TEXT"
-    ),
-    // Add allowed_paths JSON column to agents
-    (
-        "agents_v5_allowed_paths",
-        "ALTER TABLE agents ADD COLUMN allowed_paths TEXT"
-    ),
-    // Add final_audit boolean column to agents
-    (
-        "agents_v5_final_audit",
-        "ALTER TABLE agents ADD COLUMN final_audit BOOLEAN DEFAULT 0"
-    ),
-    // Add approval_level column to agents
-    (
-        "agents_v5_approval_level",
-        "ALTER TABLE agents ADD COLUMN approval_level TEXT DEFAULT 'default'"
-    ),
-    // Add skill_enabled column to agents
-    (
-        "agents_v5_skill_enabled",
-        "ALTER TABLE agents ADD COLUMN skill_enabled BOOLEAN DEFAULT 1"
-    ),
-    // Add role column to agents for primary/child hierarchy
-    (
-        "agents_v5_role",
-        "ALTER TABLE agents ADD COLUMN role TEXT DEFAULT 'primary'"
-    ),
-    // Add parent_agent_id column to agents for parent-child ownership
-    (
-        "agents_v5_parent_agent_id",
-        "ALTER TABLE agents ADD COLUMN parent_agent_id TEXT REFERENCES agents(id)"
-    ),
-    (
-        "idx_agents_parent_agent_id",
-        "CREATE INDEX IF NOT EXISTS idx_agents_parent_agent_id ON agents(parent_agent_id)"
-    ),
 ];
 
 fn ensure_agent_hierarchy_columns(conn: &Connection) -> Result<(), StoreError> {
+    if !column_exists(conn, "agents", "models")? {
+        conn.execute("ALTER TABLE agents ADD COLUMN models TEXT", [])?;
+    }
+
+    if !column_exists(conn, "agents", "shell_policy")? {
+        conn.execute("ALTER TABLE agents ADD COLUMN shell_policy TEXT", [])?;
+    }
+
+    if !column_exists(conn, "agents", "allowed_paths")? {
+        conn.execute("ALTER TABLE agents ADD COLUMN allowed_paths TEXT", [])?;
+    }
+
+    if !column_exists(conn, "agents", "final_audit")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN final_audit BOOLEAN DEFAULT 0",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "agents", "approval_level")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN approval_level TEXT DEFAULT 'default'",
+            [],
+        )?;
+    }
+
     if !column_exists(conn, "agents", "role")? {
         conn.execute(
             "ALTER TABLE agents ADD COLUMN role TEXT DEFAULT 'primary'",

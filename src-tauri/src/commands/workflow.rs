@@ -11,6 +11,9 @@ use crate::workflow::react::orchestrator::{
     BACKGROUND_TASKS,
 };
 use crate::workflow::react::replay::{restore_execution_context, RecoveryResult};
+use crate::workflow::react::runtime_observation::{
+    runtime_observation_metadata, RuntimeObservationType,
+};
 use crate::workflow::react::signals::SignalType;
 use crate::workflow::react::types::{
     ExecutionContext, RuntimeState, StepType, SubAgentCompletion, WaitReason, WorkflowSignal,
@@ -622,21 +625,33 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                 role: "user".to_string(),
                 message: message.clone(),
                 reasoning: None,
-                metadata: Some(json!({
-                    "message_kind": "runtime_observation",
-                    "observation_type": "sub_agent_interrupted",
-                    "sub_agent_id": child_id,
-                    "summary": "Sub-agent interrupted",
-                    "result": {
+                metadata: Some({
+                    let mut metadata = runtime_observation_metadata(
+                        RuntimeObservationType::SubAgentInterrupted,
+                        json!({
+                            "sub_agent_id": child_id.clone(),
+                            "summary": "Sub-agent interrupted",
+                            "result": {
+                                "status": "interrupted",
+                                "task_id": child_id.clone(),
+                                "error": "Sub-agent interrupted by application restart",
+                                "tool_calls_count": context.pending_tools.len()
+                            },
+                        }),
+                    );
+                    metadata["sub_agent_id"] = json!(child_id.clone());
+                    metadata["summary"] = json!("Sub-agent interrupted");
+                    metadata["result"] = json!({
                         "status": "interrupted",
-                        "task_id": child_id,
+                        "task_id": child_id.clone(),
                         "error": "Sub-agent interrupted by application restart",
                         "tool_calls_count": context.pending_tools.len()
-                    },
-                    "execution_status": "interrupted",
-                    "is_error": true,
-                    "error_type": "SubAgentInterrupted"
-                })),
+                    });
+                    metadata["execution_status"] = json!("interrupted");
+                    metadata["is_error"] = json!(true);
+                    metadata["error_type"] = json!("SubAgentInterrupted");
+                    metadata
+                }),
                 attached_context: None,
                 step_type: Some(StepType::Observe.to_string()),
                 step_index: 0,

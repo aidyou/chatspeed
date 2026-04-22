@@ -8,6 +8,9 @@ use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::memory::{MemoryManager, MemoryScope};
 use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
+use crate::workflow::react::runtime_observation::{
+    render_runtime_observation_for_llm, RuntimeObservationPlacement,
+};
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::signals::{parse_runtime_signal, stash_user_message, RuntimeSignal};
 use crate::workflow::react::skills::SkillManifest;
@@ -661,28 +664,19 @@ impl LlmProcessor {
                 continue;
             }
 
-            let is_runtime_observation = m
-                .metadata
-                .as_ref()
-                .and_then(|meta| meta.get("message_kind"))
-                .and_then(|value| value.as_str())
-                == Some("runtime_observation");
-            let is_sub_agent_completion_observation = m
-                .metadata
-                .as_ref()
-                .and_then(|meta| meta.get("observation_type"))
-                .and_then(|value| value.as_str())
-                == Some("sub_agent_completion");
-            let is_internal_system_observation = m.role == "user"
-                && m.step_type.as_deref() == Some("observe")
-                && (is_runtime_observation || m.message.contains("<SYSTEM_REMINDER>"));
-            if is_internal_system_observation
-                && !is_sub_agent_completion_observation
-                && !m.message.contains("<tool_result")
-            {
-                deferred_system_observations.push(m.message.clone());
-                continue;
-            }
+            let runtime_observation_content =
+                if let Some(rendered) = render_runtime_observation_for_llm(&m) {
+                    match rendered.placement {
+                        RuntimeObservationPlacement::Preserve => Some(rendered.content),
+                        RuntimeObservationPlacement::Defer => {
+                            deferred_system_observations.push(rendered.content);
+                            continue;
+                        }
+                        RuntimeObservationPlacement::Hide => continue,
+                    }
+                } else {
+                    None
+                };
 
             if m.role == "tool" {
                 if let Some(meta) = &m.metadata {
@@ -703,7 +697,7 @@ impl LlmProcessor {
             }
 
             let role = m.role.clone();
-            let mut content = m.message.clone();
+            let mut content = runtime_observation_content.unwrap_or_else(|| m.message.clone());
             let tool_calls = m
                 .metadata
                 .as_ref()

@@ -545,6 +545,7 @@ const totalToolCalls = computed(() => {
 const extractSubAgentIdFromMessage = message => {
   const meta = message?.metadata || {}
   if (meta.sub_agent_id || meta.subAgentId) return meta.sub_agent_id || meta.subAgentId
+  if (meta.data?.sub_agent_id || meta.data?.subAgentId) return meta.data.sub_agent_id || meta.data.subAgentId
   if ((meta.tool_name || '').toLowerCase() !== 'sub_agent_run') return null
 
   try {
@@ -681,11 +682,14 @@ const childAgentSummariesAll = computed(() => {
 
     if (last) {
       const meta = last.metadata || {}
+      const observationData = meta.data || {}
       const content = truncateSummary(last.message || '')
       if (content) summary = content
       agentName =
         meta.sub_agent_name ||
         meta.subAgentName ||
+        observationData.sub_agent_name ||
+        observationData.subAgentName ||
         progress.agentName ||
         progress.agent_name ||
         workflowAgentName ||
@@ -693,28 +697,35 @@ const childAgentSummariesAll = computed(() => {
       task =
         meta.sub_agent_task ||
         meta.subAgentTask ||
+        observationData.sub_agent_task ||
+        observationData.subAgentTask ||
         progress.task ||
         childWorkflow?.userQuery ||
         childWorkflow?.user_query ||
         childWorkflow?.title ||
         task
-      const executionStatus = meta.execution_status || meta.sub_agent_status || ''
+      const executionStatus =
+        meta.execution_status ||
+        meta.sub_agent_status ||
+        observationData.execution_status ||
+        ''
       if (
         last.isError ||
         meta.is_error ||
+        observationData.is_error ||
         executionStatus === 'failed' ||
         executionStatus === 'cancelled'
       ) {
         status = 'failed'
-      } else if (meta.result || executionStatus === 'completed') {
+      } else if (meta.result || observationData.result || executionStatus === 'completed') {
         status = 'success'
       } else if (executionStatus === 'waiting' || executionStatus === 'running') {
         status = 'running'
       }
-      if (meta.summary) {
-        summary = truncateSummary(meta.summary)
+      if (meta.summary || observationData.summary) {
+        summary = truncateSummary(meta.summary || observationData.summary)
       }
-      const resultObj = meta.result
+      const resultObj = meta.result || observationData.result
       if (resultObj && typeof resultObj === 'object') {
         toolCalls =
           resultObj.tool_calls_count ||

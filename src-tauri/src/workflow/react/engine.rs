@@ -32,6 +32,9 @@ use crate::workflow::react::{
     observation::{ObservationKind, ObservationReinforcer, ReinforcedResult},
     orchestrator::SubAgentFactory,
     policy::{ExecutionPhase, ExecutionPolicy},
+    runtime_observation::{
+        enrich_runtime_observation_metadata, runtime_observation_metadata, RuntimeObservationType,
+    },
     security::PathGuard,
     signals::{parse_runtime_signal, take_stashed_user_messages, RuntimeSignal, SignalType},
     sinks::{DBSink, Sink, TauriSink},
@@ -3030,6 +3033,23 @@ impl WorkflowExecutor {
                     metadata["observation_kind"] =
                         serde_json::to_value(observation_kind).unwrap_or(serde_json::Value::Null);
                 }
+                if let Some(observation_type) =
+                    Self::runtime_observation_type_for_reinforced(reinforced)
+                {
+                    enrich_runtime_observation_metadata(
+                        &mut metadata,
+                        observation_type,
+                        serde_json::json!({
+                            "tool_call_id": id,
+                            "tool_name": tool_name,
+                            "title": reinforced.title,
+                            "summary": reinforced.summary,
+                            "is_error": reinforced.is_error,
+                            "error_type": reinforced.error_type,
+                            "llm_content": reinforced.content,
+                        }),
+                    );
+                }
                 Self::enrich_tool_observation_metadata(tool_name, &mut metadata, reinforced);
                 if tool_name == crate::tools::TOOL_SUB_AGENT_RUN {
                     if let Ok(task_result) =
@@ -3103,9 +3123,12 @@ impl WorkflowExecutor {
                     self.session_id,
                     self.consecutive_no_tool_calls
                 );
+                let mut runtime_observation_type = RuntimeObservationType::NoToolCall;
                 let error_msg = if let Some(warning) = repeated_no_tool_warning {
+                    runtime_observation_type = RuntimeObservationType::LoopDetected;
                     warning
                 } else if let Some(invalid_tool_call_error) = invalid_tool_call_error {
+                    runtime_observation_type = RuntimeObservationType::InvalidToolCall;
                     format!(
                         "<SYSTEM_REMINDER>Error: {}. You must call exactly one of the available tools exposed in this session. Re-read the tool list and try again with a valid tool name and valid arguments.</SYSTEM_REMINDER>",
                         invalid_tool_call_error
@@ -3133,13 +3156,21 @@ impl WorkflowExecutor {
                 let _ = self
                     .add_message_and_notify_internal(
                         "user".to_string(),
-                        error_msg,
+                        error_msg.clone(),
                         None,
                         None,
                         Some(StepType::Observe),
                         false,
                         None,
-                        None,
+                        Some(runtime_observation_metadata(
+                            runtime_observation_type,
+                            serde_json::json!({
+                                "consecutive_no_tool_calls": self.consecutive_no_tool_calls,
+                                "current_step": self.current_step,
+                                "max_steps": self.max_steps,
+                                "llm_content": error_msg,
+                            }),
+                        )),
                     )
                     .await?;
                 if self.flush_queued_user_messages().await? {
@@ -3535,17 +3566,29 @@ impl WorkflowExecutor {
             }
             let sub_agent_id = metadata
                 .get("sub_agent_id")
+                .or_else(|| {
+                    metadata
+                        .get("data")
+                        .and_then(|data| data.get("sub_agent_id"))
+                })
                 .and_then(|value| value.as_str())?;
             if !matching_task_ids.contains(sub_agent_id) {
                 return None;
             }
-            let result = metadata.get("result")?;
+            let result = metadata
+                .get("result")
+                .or_else(|| metadata.get("data").and_then(|data| data.get("result")))?;
             let status = result
                 .get("status")
                 .and_then(|value| value.as_str())
                 .or_else(|| {
                     metadata
                         .get("execution_status")
+                        .or_else(|| {
+                            metadata
+                                .get("data")
+                                .and_then(|data| data.get("execution_status"))
+                        })
                         .and_then(|value| value.as_str())
                 })
                 .unwrap_or("completed");
@@ -4116,6 +4159,26 @@ impl WorkflowExecutor {
         reinforced.observation_kind == Some(ObservationKind::TurnBlockedPostponed)
     }
 
+    fn runtime_observation_type_for_reinforced(
+        reinforced: &ReinforcedResult,
+    ) -> Option<RuntimeObservationType> {
+        if reinforced.observation_kind == Some(ObservationKind::TurnBlockedPostponed) {
+            return Some(RuntimeObservationType::TurnBlockedPostponed);
+        }
+
+        match reinforced.error_type.as_deref() {
+            Some("InvalidFinishSummary") => Some(RuntimeObservationType::CompletionRejected),
+            Some("PendingTodos") => Some(RuntimeObservationType::ActiveTodosBlocked),
+            Some("AuditRejected") => Some(RuntimeObservationType::AuditRejected),
+            Some("LoopDetected") => Some(RuntimeObservationType::LoopDetected),
+            Some("InvalidToolCall") => Some(RuntimeObservationType::InvalidToolCall),
+            Some("NoSummary") | Some("InvalidAskUserPayload") | Some("InvalidSubmitResult") => {
+                Some(RuntimeObservationType::GenericReminder)
+            }
+            _ => None,
+        }
+    }
+
     async fn apply_sub_agent_completion(
         &mut self,
         sub_agent_id: String,
@@ -4171,17 +4234,29 @@ impl WorkflowExecutor {
                 Some(StepType::Observe),
                 resolution.is_error,
                 resolution.is_error.then(|| "SubAgentFailed".to_string()),
-                Some(json!({
-                    "message_kind": "runtime_observation",
-                    "observation_type": "sub_agent_completion",
-                    "sub_agent_id": sub_agent_id,
-                    "result": result,
-                    "title": format!("Sub-agent {}", resolution.sub_agent_id),
-                    "summary": resolution.content,
-                    "execution_status": resolution.status,
-                    "is_error": resolution.is_error,
-                    "error_type": if resolution.is_error { "SubAgentFailed" } else { "" }
-                })),
+                Some({
+                    let mut metadata = runtime_observation_metadata(
+                        RuntimeObservationType::SubAgentCompletion,
+                        json!({
+                            "sub_agent_id": sub_agent_id.clone(),
+                            "result": result.clone(),
+                            "title": format!("Sub-agent {}", resolution.sub_agent_id),
+                            "summary": resolution.content.clone(),
+                            "execution_status": resolution.status.clone(),
+                            "is_error": resolution.is_error,
+                            "error_type": if resolution.is_error { "SubAgentFailed" } else { "" }
+                        }),
+                    );
+                    metadata["sub_agent_id"] = json!(sub_agent_id.clone());
+                    metadata["result"] = json!(result.clone());
+                    metadata["title"] = json!(format!("Sub-agent {}", resolution.sub_agent_id));
+                    metadata["summary"] = json!(resolution.content.clone());
+                    metadata["execution_status"] = json!(resolution.status.clone());
+                    metadata["is_error"] = json!(resolution.is_error);
+                    metadata["error_type"] =
+                        json!(if resolution.is_error { "SubAgentFailed" } else { "" });
+                    metadata
+                }),
             )
             .await?;
 
