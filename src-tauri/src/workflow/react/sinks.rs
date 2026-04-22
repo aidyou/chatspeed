@@ -24,6 +24,11 @@ pub enum SinkDeliveryGuarantee {
 /// A sink receives events from the dispatcher and handles them appropriately.
 #[async_trait]
 pub trait Sink: Send + Sync {
+    /// Return whether this sink consumes the event.
+    fn accepts(&self, _event: &DispatchEvent) -> bool {
+        true
+    }
+
     /// Accept and process an event envelope.
     async fn accept(&self, envelope: EventEnvelope) -> Result<(), WorkflowEngineError>;
 
@@ -49,6 +54,13 @@ impl TauriSink {
 
 #[async_trait]
 impl Sink for TauriSink {
+    fn accepts(&self, event: &DispatchEvent) -> bool {
+        matches!(
+            event,
+            DispatchEvent::Ui { .. } | DispatchEvent::Terminal { .. }
+        )
+    }
+
     async fn accept(&self, envelope: EventEnvelope) -> Result<(), WorkflowEngineError> {
         match envelope.event {
             DispatchEvent::Ui {
@@ -116,6 +128,15 @@ impl DBSink {
 
 #[async_trait]
 impl Sink for DBSink {
+    fn accepts(&self, event: &DispatchEvent) -> bool {
+        matches!(
+            event,
+            DispatchEvent::Audit { .. }
+                | DispatchEvent::Snapshot { .. }
+                | DispatchEvent::Terminal { .. }
+        )
+    }
+
     async fn accept(&self, envelope: EventEnvelope) -> Result<(), WorkflowEngineError> {
         match envelope.event {
             DispatchEvent::Audit { event } => {

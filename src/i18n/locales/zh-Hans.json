@@ -216,6 +216,7 @@
       "selectAutoApproveTools": "选择自动批准工具",
       "selectAvailableTools": "选择可用工具",
       "selectDirectory": "选择目录",
+      "skillEnabled": "启用 Skills",
       "shellDecisionAllow": "允许 (Allow)",
       "shellDecisionDeny": "拒绝 (Deny)",
       "shellDecisionReview": "需审核 (Review)",

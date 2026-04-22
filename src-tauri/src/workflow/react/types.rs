@@ -90,6 +90,10 @@ pub enum GatewayPayload {
         #[serde(skip_serializing_if = "Option::is_none")]
         wait_reason: Option<WaitReason>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        agent_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<String>,
@@ -303,6 +307,8 @@ pub struct SubAgentCompletion {
     pub sub_agent_id: String,
     pub parent_session_id: String,
     pub status: String,
+    #[serde(default)]
+    pub result: Option<String>,
     pub summary: Option<String>,
     pub error: Option<String>,
     #[serde(default)]
@@ -319,6 +325,9 @@ impl SubAgentCompletion {
             "task_id": self.sub_agent_id,
             "tool_calls_count": self.tool_calls_count,
         });
+        if let Some(content) = &self.result {
+            result["result"] = serde_json::json!(content);
+        }
         if let Some(summary) = &self.summary {
             result["summary"] = serde_json::json!(summary);
         }

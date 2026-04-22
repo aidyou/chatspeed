@@ -218,6 +218,14 @@ impl OpenAIChat {
                         // If finish_reason is tool_calls, send accumulated tool calls
                         if chunk.finish_reason == Some("tool_calls".to_string()) {
                             if !accumulated_tool_calls.is_empty() {
+                                if self.should_stop().await {
+                                    log::info!(
+                                        "Skipping tool call processing for chat_id {} because stop_flag is set",
+                                        chat_id
+                                    );
+                                    accumulated_tool_calls.clear();
+                                    break;
+                                }
                                 finish_reason = FinishReason::ToolCalls;
                                 self.process_and_send_tool_calls(
                                     &mut accumulated_tool_calls,
@@ -258,19 +266,27 @@ impl OpenAIChat {
         }
 
         if !accumulated_tool_calls.is_empty() {
-            log::debug!(
-                "Manually triggering tool call processing after stream end for chat_id: {}",
-                chat_id
-            );
-            finish_reason = FinishReason::ToolCalls;
-            self.process_and_send_tool_calls(
-                &mut accumulated_tool_calls,
-                &full_response,
-                &chat_id,
-                &metadata_option,
-                &provider_name,
-                &callback,
-            );
+            if self.should_stop().await {
+                log::info!(
+                    "Skipping trailing tool call processing for chat_id {} because stop_flag is set",
+                    chat_id
+                );
+                accumulated_tool_calls.clear();
+            } else {
+                log::debug!(
+                    "Manually triggering tool call processing after stream end for chat_id: {}",
+                    chat_id
+                );
+                finish_reason = FinishReason::ToolCalls;
+                self.process_and_send_tool_calls(
+                    &mut accumulated_tool_calls,
+                    &full_response,
+                    &chat_id,
+                    &metadata_option,
+                    &provider_name,
+                    &callback,
+                );
+            }
         }
 
         #[cfg(debug_assertions)]
@@ -403,7 +419,13 @@ impl OpenAIChat {
         provider_name: &str,
         callback: &F,
     ) {
-        let assistant_tool_requests: Vec<Value> = accumulated_tool_calls
+        let mut ordered_tool_calls: Vec<(u32, ToolCallDeclaration)> = accumulated_tool_calls
+            .iter()
+            .map(|(idx, tcd)| (*idx, tcd.clone()))
+            .collect();
+        ordered_tool_calls.sort_by_key(|(idx, _)| *idx);
+
+        let assistant_tool_requests: Vec<Value> = ordered_tool_calls
             .iter()
             .map(|(idx, tcd)| {
                 let arguments_str = tcd
@@ -460,7 +482,7 @@ impl OpenAIChat {
             }
         }
 
-        for tcd in accumulated_tool_calls.values() {
+        for (_, tcd) in &ordered_tool_calls {
             let mut trimmed_tcd = tcd.clone();
             if let Some(args) = trimmed_tcd.arguments.as_mut() {
                 *args = Self::normalize_tool_arguments(args);
@@ -474,12 +496,12 @@ impl OpenAIChat {
                         metadata_option.as_ref().and_then(|m| m.to_value()),
                         None,
                     ));
-                    log::info!("tool call: {}", tcd.name);
+                    log::info!("tool call: {}", trimmed_tcd.name);
                     #[cfg(debug_assertions)]
                     {
                         log::debug!(
                             "tool_call: {}",
-                            serde_json::to_string_pretty(tcd).unwrap_or_default()
+                            serde_json::to_string_pretty(&trimmed_tcd).unwrap_or_default()
                         );
                     }
                 }
@@ -490,7 +512,7 @@ impl OpenAIChat {
                     log::error!(
                         "{} tool call serialization error for tool {:?}: {}",
                         provider_name,
-                        tcd.name,
+                        trimmed_tcd.name,
                         err
                     );
                     let error_payload = JsonErrorPayload {

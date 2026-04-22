@@ -23,6 +23,52 @@ use super::sinks::Sink;
 use super::sinks::SinkDeliveryGuarantee;
 use super::types::{ExecutionContext, GatewayPayload};
 
+fn gateway_payload_name(payload: &GatewayPayload) -> &'static str {
+    match payload {
+        GatewayPayload::Chunk { .. } => "chunk",
+        GatewayPayload::ReasoningChunk { .. } => "reasoning_chunk",
+        GatewayPayload::Message { .. } => "message",
+        GatewayPayload::State { .. } => "state",
+        GatewayPayload::Confirm { .. } => "confirm",
+        GatewayPayload::SyncTodo { .. } => "sync_todo",
+        GatewayPayload::RetryStatus { .. } => "retry_status",
+        GatewayPayload::CompressionStatus { .. } => "compression_status",
+        GatewayPayload::ContextUsage { .. } => "context_usage",
+        GatewayPayload::SubAgentProgress { .. } => "sub_agent_progress",
+        GatewayPayload::Notification { .. } => "notification",
+        GatewayPayload::AutoApprovedToolsUpdated { .. } => "auto_approved_tools_updated",
+        GatewayPayload::ShellPolicyUpdated { .. } => "shell_policy_updated",
+        GatewayPayload::ToolStream { .. } => "tool_stream",
+        GatewayPayload::Error { .. } => "error",
+    }
+}
+
+fn summarize_dispatch_event(event: &DispatchEvent) -> String {
+    match event {
+        DispatchEvent::Ui {
+            session_id,
+            payload,
+        } => format!(
+            "Ui(session={}, payload={})",
+            session_id,
+            gateway_payload_name(payload)
+        ),
+        DispatchEvent::Audit { event } => {
+            format!(
+                "Audit(session={}, type={:?})",
+                event.session_id, event.event_type
+            )
+        }
+        DispatchEvent::Snapshot { context } => format!(
+            "Snapshot(session={}, state={:?}, wait_reason={:?})",
+            context.session_id, context.state, context.wait_reason
+        ),
+        DispatchEvent::Terminal { session_id, state } => {
+            format!("Terminal(session={}, state={})", session_id, state)
+        }
+    }
+}
+
 /// Categories of events that can be dispatched to sinks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DispatchEvent {
@@ -194,7 +240,7 @@ impl Default for DispatcherConfig {
             channel_capacity: 1000,
             sink_channel_capacity: 1000,
             log_lag_warnings: true,
-            lag_warning_threshold_ms: 500,
+            lag_warning_threshold_ms: 2000,
         }
     }
 }
@@ -220,6 +266,7 @@ struct SinkTarget {
     metrics: Arc<SinkMetrics>,
     delivery_guarantee: SinkDeliveryGuarantee,
     channel_capacity: usize,
+    accepts: Arc<dyn Fn(&DispatchEvent) -> bool + Send + Sync>,
 }
 
 lazy_static::lazy_static! {
@@ -257,10 +304,10 @@ impl Dispatcher {
                         let elapsed = envelope.created_at.elapsed().as_millis() as u64;
                         if elapsed > lag_threshold_ms {
                             log::warn!(
-                                "[Dispatcher] sink lag detected - sink={}, elapsed={}ms, event_type={:?}",
+                                "[Dispatcher] sink lag detected - sink={}, elapsed={}ms, event={}",
                                 sink_clone.name(),
                                 elapsed,
-                                envelope.event
+                                summarize_dispatch_event(&envelope.event)
                             );
                         }
                     }
@@ -297,6 +344,10 @@ impl Dispatcher {
                 metrics: sink_metrics,
                 delivery_guarantee: sink.delivery_guarantee(),
                 channel_capacity: config.sink_channel_capacity,
+                accepts: {
+                    let sink = sink.clone();
+                    Arc::new(move |event| sink.accepts(event))
+                },
             });
         }
 
@@ -311,9 +362,9 @@ impl Dispatcher {
                     let elapsed = envelope.created_at.elapsed().as_millis() as u64;
                     if elapsed > lag_threshold_ms {
                         log::warn!(
-                            "[Dispatcher] event lag detected - elapsed={}ms, event_type={:?}",
+                            "[Dispatcher] event lag detected - elapsed={}ms, event={}",
                             elapsed,
-                            envelope.event
+                            summarize_dispatch_event(&envelope.event)
                         );
                     }
                 }
@@ -322,15 +373,22 @@ impl Dispatcher {
                 metrics_clone.set_queue_depth(queue_depth);
 
                 for sink_target in &sink_targets {
+                    if !(sink_target.accepts)(&envelope.event) {
+                        continue;
+                    }
+
+                    let mut sink_envelope = envelope.clone();
+                    sink_envelope.created_at = Instant::now();
+
                     let send_result = match sink_target.delivery_guarantee {
                         SinkDeliveryGuarantee::Reliable => sink_target
                             .tx
-                            .send(envelope.clone())
+                            .send(sink_envelope)
                             .await
                             .map_err(|_| WorkflowEngineError::DispatcherClosed),
                         SinkDeliveryGuarantee::BestEffort => sink_target
                             .tx
-                            .try_send(envelope.clone())
+                            .try_send(sink_envelope)
                             .map_err(|err| match err {
                                 mpsc::error::TrySendError::Full(_) => {
                                     WorkflowEngineError::DispatcherChannelFull
@@ -356,9 +414,9 @@ impl Dispatcher {
                             metrics_clone.increment_dropped();
                             sink_target.metrics.dropped.fetch_add(1, Ordering::Relaxed);
                             log::warn!(
-                                "[Dispatcher] sink queue full, event dropped - sink={}, event_type={:?}",
+                                "[Dispatcher] sink queue full, event dropped - sink={}, event={}",
                                 sink_target.name,
-                                envelope.event
+                                summarize_dispatch_event(&envelope.event)
                             );
                         }
                         Err(e) => {

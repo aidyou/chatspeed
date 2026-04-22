@@ -9,7 +9,7 @@ use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::intelligence::ToolApprovalReview;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
-use crate::workflow::react::types::{GatewayPayload, WorkflowState};
+use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SmartApprovalDecision {
@@ -92,6 +92,16 @@ impl WorkflowExecutor {
             || normalized.contains(':');
 
         meaningful_lines >= 2 || has_sentence_shape
+    }
+
+    fn finish_task_summary_from_args(args: &serde_json::Value) -> Option<String> {
+        let summary = args
+            .get("summary")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+
+        Self::is_valid_finish_task_summary(summary).then(|| summary.to_string())
     }
 
     fn is_read_only_shell_stage(stage: &str) -> bool {
@@ -469,10 +479,13 @@ impl WorkflowExecutor {
     pub(crate) async fn handle_finish_task_intercept(
         &mut self,
         text_part: &str,
+        args: &serde_json::Value,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        if !Self::is_valid_finish_task_summary(text_part) {
+        let text_summary_valid = Self::is_valid_finish_task_summary(text_part);
+        let argument_summary = Self::finish_task_summary_from_args(args);
+        if !text_summary_valid && argument_summary.is_none() {
             return Ok(Some(ReinforcedResult {
-                content: "<SYSTEM_REMINDER>Error: You called 'complete_workflow_with_summary' without a valid user-visible completion report. Do NOT retry complete_workflow_with_summary immediately. First, write a brief plain-text summary visible to the user that explicitly covers: 1) what was completed, 2) what you verified, and 3) any important remaining notes or limitations. A short placeholder such as 'done', 'completed', or hidden reasoning alone is not sufficient. After that summary is present, call complete_workflow_with_summary again.</SYSTEM_REMINDER>".into(),
+                content: "<SYSTEM_REMINDER>Error: You called 'complete_workflow_with_summary' without a valid user-visible completion report. Reasoning/thinking text does NOT count. Provide the report either as normal assistant content before the tool call or in the `summary` argument of complete_workflow_with_summary. Do NOT call sub_agent_output to retrieve call-mode sub-agent results; call-mode results are already delivered as sub-agent completion observations. First, provide a brief user-visible summary that explicitly covers: 1) what was completed, 2) what was verified, and 3) any important remaining notes or limitations. If a sub-agent produced findings, synthesize those findings into your own response instead of copying them as the final answer. After that valid report is present, call complete_workflow_with_summary again.</SYSTEM_REMINDER>".into(),
                 title: "FinishTask Error".to_string(),
                 summary: "Invalid completion report".to_string(),
                 is_error: true,
@@ -503,7 +516,7 @@ impl WorkflowExecutor {
 
                 if !active_tasks.is_empty() {
                     return Ok(Some(ReinforcedResult {
-                        content: format!("<SYSTEM_REMINDER>Block: You still have active tasks: {}. Do NOT retry complete_workflow_with_summary yet. You MUST either complete these todos, or mark them as 'failed' or 'data_missing' if they cannot be fulfilled, before calling complete_workflow_with_summary.</SYSTEM_REMINDER>", active_tasks.join(", ")),
+                        content: format!("<SYSTEM_REMINDER>Block: You still have active tasks: {}. Do NOT retry complete_workflow_with_summary yet. Do NOT call sub_agent_output for call-mode sub-agents; their results are delivered directly as observations. You MUST either complete these todos, or mark them as 'failed' or 'data_missing' if they cannot be fulfilled, before calling complete_workflow_with_summary.</SYSTEM_REMINDER>", active_tasks.join(", ")),
                         title: "Tasks Pending".to_string(),
                         summary: "Incomplete todos".to_string(),
                         is_error: true,
@@ -529,7 +542,7 @@ impl WorkflowExecutor {
                 .await?
             {
                 return Ok(Some(ReinforcedResult {
-                    content: format!("<SYSTEM_REMINDER>Audit Rejected: Your conclusion was deemed incomplete. Feedback: {}\n\nYou MUST address these points before you can call complete_workflow_with_summary.</SYSTEM_REMINDER>", audit_feedback),
+                    content: format!("<SYSTEM_REMINDER>Audit Rejected: Your conclusion was deemed incomplete. Feedback: {}\n\nYou MUST address these points before you can call complete_workflow_with_summary. Do NOT call sub_agent_output for call-mode sub-agent results; use the sub-agent completion observations already in context.</SYSTEM_REMINDER>", audit_feedback),
                     title: "Audit Rejected".to_string(),
                     summary: "Audit failed".to_string(),
                     is_error: true,
@@ -541,10 +554,71 @@ impl WorkflowExecutor {
             }
         }
 
+        let completion_summary = if text_summary_valid {
+            Self::normalized_finish_task_summary(text_part)
+        } else {
+            let summary = argument_summary.unwrap_or_default();
+            self.add_message_and_notify_internal(
+                "assistant".to_string(),
+                summary.clone(),
+                None,
+                None,
+                Some(StepType::Think),
+                false,
+                None,
+                Some(json!({
+                    "message_kind": "completion_report",
+                    "source": "complete_workflow_with_summary.summary"
+                })),
+            )
+            .await?;
+            summary
+        };
+
         Ok(Some(ReinforcedResult {
             content: "Finished".into(),
             title: "Complete Workflow with Summary".to_string(),
-            summary: rust_i18n::t!("workflow.task_finished").to_string(),
+            summary: completion_summary,
+            is_error: false,
+            error_type: None,
+            display_type: "text".to_string(),
+            approval_status: None,
+            observation_kind: None,
+        }))
+    }
+
+    pub(crate) async fn handle_submit_result_intercept(
+        &mut self,
+        args: &serde_json::Value,
+    ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
+        let result = args
+            .get("result")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+        let summary = args
+            .get("summary")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+
+        if result.is_empty() || summary.is_empty() {
+            return Ok(Some(ReinforcedResult {
+                content: "<SYSTEM_REMINDER>Error: `submit_result` requires both a non-empty `result` and a non-empty `summary`. Put the full delegated output in `result` and a short notification-safe summary in `summary`, then call `submit_result` again.</SYSTEM_REMINDER>".into(),
+                title: "Submit Result Error".to_string(),
+                summary: "Missing result payload".to_string(),
+                is_error: true,
+                error_type: Some("InvalidSubmitResult".into()),
+                display_type: "text".to_string(),
+                approval_status: None,
+                observation_kind: None,
+            }));
+        }
+
+        Ok(Some(ReinforcedResult {
+            content: result.to_string(),
+            title: "Submit Result".to_string(),
+            summary: summary.to_string(),
             is_error: false,
             error_type: None,
             display_type: "text".to_string(),
@@ -883,6 +957,27 @@ mod tests {
         assert!(WorkflowExecutor::is_valid_finish_task_summary(
             "Implemented the workflow fix and verified it with cargo check.\nRemaining note: UI behavior still needs manual confirmation."
         ));
+    }
+
+    #[test]
+    fn finish_task_summary_accepts_meaningful_tool_argument() {
+        let args = json!({
+            "summary": "Committed the requested code and pushed it to origin/main.\nVerified the push completed without errors."
+        });
+
+        assert_eq!(
+            WorkflowExecutor::finish_task_summary_from_args(&args).as_deref(),
+            Some(
+                "Committed the requested code and pushed it to origin/main.\nVerified the push completed without errors."
+            )
+        );
+    }
+
+    #[test]
+    fn finish_task_summary_rejects_placeholder_tool_argument() {
+        let args = json!({ "summary": "done" });
+
+        assert!(WorkflowExecutor::finish_task_summary_from_args(&args).is_none());
     }
 
     #[test]

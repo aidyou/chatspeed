@@ -1,7 +1,8 @@
 use crate::tools::{
     ToolError, TOOL_BASH, TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_EDIT_FILE, TOOL_GLOB,
-    TOOL_GREP, TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_TODO_CREATE, TOOL_TODO_GET,
-    TOOL_TODO_LIST, TOOL_TODO_UPDATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+    TOOL_GREP, TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
+    TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST, TOOL_TODO_UPDATE, TOOL_WEB_FETCH,
+    TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
 
 use rust_i18n::t;
@@ -25,6 +26,13 @@ pub struct ReinforcedResult {
     pub display_type: String,            // "default", "diff", "text"
     pub approval_status: Option<String>, // "pending", "approved", "rejected", None
     pub observation_kind: Option<ObservationKind>,
+}
+
+fn value_to_text(value: &Value) -> String {
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| serde_json::to_string(value).unwrap_or_default())
 }
 
 impl ObservationReinforcer {
@@ -118,6 +126,17 @@ impl ObservationReinforcer {
                         }
                         raw_res = list_str;
                     }
+                } else if tool_name == TOOL_SUBMIT_RESULT {
+                    let structured = val
+                        .get("structured_content")
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    let explicit_result = structured
+                        .get("result")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| value_to_text(val));
+                    raw_res = explicit_result;
                 }
 
                 // --- Custom Logic for File Tools (Formatting for UI Diff) ---
@@ -435,6 +454,7 @@ impl ObservationReinforcer {
             TOOL_TODO_GET => t!("workflow.summary.todo_get").to_string(),
             TOOL_SUBMIT_PLAN => "Submit Plan".to_string(),
             TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => "Complete Workflow with Summary".to_string(),
+            TOOL_SUBMIT_RESULT => "Submit Result".to_string(),
             crate::tools::TOOL_SUB_AGENT_OUTPUT => {
                 let task_id = args["task_id"].as_str().unwrap_or("").trim();
                 if task_id.is_empty() {
@@ -493,6 +513,16 @@ impl ObservationReinforcer {
         match tool_name {
             TOOL_SUBMIT_PLAN => t!("workflow.summary.submit_plan").to_string(),
             TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => t!("workflow.task_finished").to_string(),
+            TOOL_SUBMIT_RESULT => {
+                if let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(content) {
+                    obj.get("summary")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("Result submitted")
+                        .to_string()
+                } else {
+                    "Result submitted".to_string()
+                }
+            }
             TOOL_READ_FILE => {
                 let lines = content.lines().count();
                 format!("Read {} lines", lines)

@@ -97,6 +97,7 @@ pub struct SubAgentResolution {
     pub sub_agent_id: String,
     pub status: String,
     pub content: String,
+    pub summary: Option<String>,
     pub is_error: bool,
 }
 
@@ -116,11 +117,16 @@ pub fn resolve_sub_agent_completion(
         .unwrap_or("completed")
         .to_string();
     let content = result
-        .get("summary")
+        .get("result")
         .and_then(|s| s.as_str())
+        .or_else(|| result.get("summary").and_then(|s| s.as_str()))
         .or_else(|| result.get("error").and_then(|e| e.as_str()))
         .unwrap_or("Sub-agent completed")
         .to_string();
+    let summary = result
+        .get("summary")
+        .and_then(|s| s.as_str())
+        .map(str::to_string);
     let is_error = matches!(status.as_str(), "failed" | "cancelled" | "interrupted");
 
     sub_agent_sessions.retain(|id| id != incoming_sub_agent_id);
@@ -130,6 +136,7 @@ pub fn resolve_sub_agent_completion(
         sub_agent_id: incoming_sub_agent_id.to_string(),
         status,
         content,
+        summary,
         is_error,
     })
 }

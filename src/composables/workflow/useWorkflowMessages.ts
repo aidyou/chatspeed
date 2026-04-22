@@ -29,6 +29,78 @@ export function useWorkflowMessages() {
     const toolStates = new Map() // tool_call_id -> { isFinal: bool, isRejected: bool, hasError: bool, isRunning: bool }
     const toolHasWaitingMsg = new Set() // tool_call_id that has an 'Awaiting' message
     const toolMessageIds = new Set() // tool_call_id with dedicated tool/user-observe messages
+    const subAgentCompletions = new Map()
+
+    const extractSubAgentTask = content => {
+      if (!content || typeof content !== 'string') return ''
+      const patterns = [
+        /Task '([^']+)' has been spawned/i,
+        /Sub-agent '([^']+)' has been started/i
+      ]
+      for (const pattern of patterns) {
+        const match = content.match(pattern)
+        if (match?.[1]) return match[1]
+      }
+      return ''
+    }
+
+    const parseSubAgentRunPayload = message => {
+      const meta = message?.metadata || {}
+      let parsed = {}
+      try {
+        parsed = JSON.parse(message?.message || '{}')
+      } catch {
+        parsed = {}
+      }
+
+      const taskId = meta.sub_agent_id || meta.subAgentId || parsed.task_id || parsed.taskId || ''
+      const mode = meta.sub_agent_mode || meta.subAgentMode || parsed.mode || ''
+      const task =
+        meta.sub_agent_task ||
+        meta.subAgentTask ||
+        parsed.task ||
+        extractSubAgentTask(parsed.message || message?.message || '')
+      return {
+        taskId,
+        mode,
+        task,
+        agent:
+          meta.sub_agent_name ||
+          meta.subAgentName ||
+          parsed.agent_name ||
+          parsed.agentName ||
+          ''
+      }
+    }
+
+    const buildSubAgentCard = message => {
+      const meta = message?.metadata || {}
+      if (String(meta.tool_name || '').toLowerCase() !== 'sub_agent_run') return null
+
+      const payload = parseSubAgentRunPayload(message)
+      const completion = payload.taskId ? subAgentCompletions.get(payload.taskId) : null
+      const completionResult = completion?.result || {}
+      const completionStatus =
+        completion?.execution_status ||
+        completionResult.status ||
+        meta.sub_agent_status ||
+        meta.execution_status ||
+        'running'
+      const resultContent =
+        completionResult.result || completionResult.error || completion?.summary || ''
+
+      return {
+        taskId: payload.taskId,
+        agent: payload.agent || 'Sub-agent',
+        task: payload.task || 'Delegated task',
+        taskMarkdown: payload.task || 'Delegated task',
+        mode: payload.mode || 'call',
+        status: completionStatus,
+        result: resultContent,
+        resultMarkdown: resultContent,
+        hasResult: Boolean(resultContent)
+      }
+    }
 
     // --- PASS 1: Single scan to collect all states (O(N)) ---
     const processedMsgs = rawMsgs.map(m => {
@@ -81,6 +153,14 @@ export function useWorkflowMessages() {
           const isError = m.isError || m.is_error || meta.is_error || false
           toolStates.set(id, { isFinal: true, isRejected: false, hasError: isError })
         }
+      }
+
+      if (meta?.observation_type === 'sub_agent_completion' && meta?.sub_agent_id) {
+        subAgentCompletions.set(meta.sub_agent_id, {
+          summary: meta.summary || '',
+          execution_status: meta.execution_status || '',
+          result: meta.result || {}
+        })
       }
       return { ...m, metadata: meta } // Cache parsed meta for Pass 2
     })
@@ -184,6 +264,7 @@ export function useWorkflowMessages() {
           ...message,
           displayId,
           toolDisplay,
+          subAgentCard: buildSubAgentCard(message),
           pendingToolCalls,
           isRejected,
           isApproved
@@ -396,7 +477,7 @@ export function useWorkflowMessages() {
       sub_agent_output: args => ({
         icon: resolveWorkflowToolIcon(name, 'task'),
         toolType: 'tool-system',
-        action: 'Read Sub-agent Output',
+        action: 'Get Sub-agent Output',
         target: args.task_id || ''
       }),
       sub_agent_stop: args => ({

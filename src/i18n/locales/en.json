@@ -216,6 +216,7 @@
       "selectAutoApproveTools": "Select Auto-Approve Tools",
       "selectAvailableTools": "Select Available Tools",
       "selectDirectory": "Select Directory",
+      "skillEnabled": "Enable Skills",
       "shellDecisionAllow": "Allow",
       "shellDecisionDeny": "Deny",
       "shellDecisionReview": "Review",

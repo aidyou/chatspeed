@@ -664,6 +664,7 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                         sub_agent_id: child_id.clone(),
                         parent_session_id: parent_session_id.clone(),
                         status: "interrupted".to_string(),
+                        result: None,
                         summary: None,
                         error: Some(message.clone()),
                         tool_calls_count: 0,
@@ -1294,6 +1295,7 @@ pub async fn workflow_start(
         BackgroundTask::SubAgent {
             owner_session_id: None,
             executor: shared_executor.clone(),
+            output_accessible: false,
         },
     );
 
@@ -1569,6 +1571,7 @@ pub async fn workflow_approve_plan(
         BackgroundTask::SubAgent {
             owner_session_id: None,
             executor: shared_executor.clone(),
+            output_accessible: false,
         },
     );
 
@@ -2114,18 +2117,35 @@ pub async fn workflow_signal(
 pub async fn workflow_stop(
     chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<(), String> {
     interrupt_openai_session(chat_state.inner(), &session_id).await;
+    cleanup_owned_background_resources(&session_id, chat_state.inner()).await;
 
     // Keep stop as a runtime signal only.
     // Terminal persistence and session cleanup should happen on the executor's
     // normal shutdown path after it processes the stop signal.
     let gateway_arc = gateway.inner().clone();
-    gateway_arc
+    match gateway_arc
         .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
         .await
-        .map_err(|e| e.to_string())
+    {
+        Ok(_) => Ok(()),
+        Err(e) if workflow_manager.has_session(&session_id) => {
+            if let Some(executor) = workflow_manager.get_executor(&session_id) {
+                let mut guard = executor.lock().await;
+                guard.set_state(WorkflowState::Cancelled);
+            }
+            let _ = workflow_manager
+                .update_session_status(&session_id, ManagedSessionStatus::Cancelled);
+            workflow_manager.remove_session(&session_id);
+            WorkflowManager::unregister_session_signal_tx(&session_id);
+            gateway_arc.unregister_session(&session_id).await;
+            Err(e.to_string())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[tauri::command]

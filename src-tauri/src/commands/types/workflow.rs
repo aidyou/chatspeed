@@ -18,6 +18,7 @@ pub struct AgentPayload {
     pub allowed_paths: Option<String>,
     pub final_audit: Option<bool>,
     pub approval_level: Option<String>,
+    pub skill_enabled: Option<bool>,
     pub max_contexts: Option<i32>,
 }
 
@@ -38,6 +39,7 @@ impl From<AgentPayload> for Agent {
             payload.allowed_paths,
             payload.final_audit,
             payload.approval_level,
+            payload.skill_enabled,
             payload.max_contexts,
         )
     }

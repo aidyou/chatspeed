@@ -505,6 +505,7 @@ mod tests {
             None,
             Some(false),
             Some("default".to_string()),
+            Some(false),
             Some(4096),
         );
 

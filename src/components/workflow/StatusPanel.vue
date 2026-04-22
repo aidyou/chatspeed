@@ -42,7 +42,7 @@
             class="tab-btn"
             :class="{ active: activeTab === 'sub' }"
             @click="activeTab = 'sub'">
-            {{ t('workflow.statusPanel.subAgents') || 'Sub Agents' }}
+            {{ t('workflow.statusPanel.subAgents') || 'Sub-agents' }}
             <span v-if="childAgentSummaries.length > 0" class="tab-badge">{{
               childAgentSummaries.length
             }}</span>
@@ -177,33 +177,32 @@
               :class="child.status"
               @click="jumpToChildMessage(child)">
               <div class="child-main">
-                <span class="child-title" :title="child.title">{{ child.title }}</span>
-                <span class="child-id" :title="child.id">{{ child.shortId }}</span>
-                <span class="child-summary" :title="child.summary">{{ child.summary }}</span>
-              </div>
-              <div class="child-right">
-                <span v-if="child.contextPercent !== null" class="child-context"
-                  >{{ child.contextPercent }}%</span
-                >
-                <span class="child-tools" :title="`${child.toolCalls} tool calls`">{{
-                  child.toolCalls
-                }}</span>
-                <cs
-                  v-if="child.status === 'running'"
-                  name="loading"
-                  size="12px"
-                  class="cs-spin child-status" />
-                <cs
-                  v-else-if="child.status === 'success'"
-                  name="check"
-                  size="12px"
-                  class="child-status success" />
-                <cs
-                  v-else-if="child.status === 'failed'"
-                  name="error"
-                  size="12px"
-                  class="child-status error" />
-                <cs v-else name="clock" size="12px" class="child-status" />
+                <div class="child-header">
+                  <span class="child-agent" :title="child.agentName">{{ child.agentName }}</span>
+                  <span class="child-status-pill" :class="child.status">
+                    <cs
+                      v-if="child.status === 'running'"
+                      name="loading"
+                      size="10px"
+                      class="cs-spin child-status-pill-icon" />
+                    {{ getChildStatusLabel(child.status) }}
+                  </span>
+                </div>
+                <span class="child-task" :title="child.task">{{ child.task }}</span>
+                <div class="child-metrics">
+                <span class="child-metric-label">{{
+                    translateOrFallback('workflow.statusPanel.latestDynamic', 'Latest')
+                  }}</span>
+                  <span class="child-summary" :title="child.summary">{{ child.summary }}</span>
+                </div>
+                <div class="child-metrics child-stats">
+                  <span class="child-tools" :title="`${child.toolCalls} tool calls`"
+                    >Tools {{ child.toolCalls }}</span
+                  >
+                  <span v-if="child.contextPercent !== null" class="child-context"
+                    >Ctx {{ child.contextPercent }}%</span
+                  >
+                </div>
               </div>
             </li>
           </ul>
@@ -211,7 +210,7 @@
 
         <div v-if="activeTab === 'sub' && childAgentSummaries.length === 0" class="empty-state">
           <cs name="agent" size="28px" />
-          <span>{{ t('workflow.statusPanel.noSubAgents') || 'No sub agents yet' }}</span>
+          <span>{{ t('workflow.statusPanel.noSubAgents') || 'No sub-agents yet' }}</span>
         </div>
 
         <!-- Empty state -->
@@ -421,6 +420,11 @@ const formatNumber = num => {
   return new Intl.NumberFormat().format(num)
 }
 
+const translateOrFallback = (key, fallback) => {
+  const translated = t(key)
+  return !translated || translated === key ? fallback : translated
+}
+
 // Helper to remove <SYSTEM_REMINDER>...</SYSTEM_REMINDER> tags
 const removeSystemReminder = content => {
   if (!content) return ''
@@ -574,6 +578,14 @@ const contextPercentFromProgress = progress => {
   return Math.min(100, Math.round((current / max) * 100))
 }
 
+const getChildStatusLabel = status => {
+  const normalized = String(status || '').toLowerCase()
+  if (normalized === 'success') return 'Done'
+  if (normalized === 'failed') return 'Failed'
+  if (normalized === 'running') return 'Running'
+  return 'Pending'
+}
+
 const buildSubAgentProgressFromSnapshot = (id, snapshot) => {
   const ctx = snapshot?.executionContext || {}
   const workflow = snapshot?.workflow || {}
@@ -587,6 +599,12 @@ const buildSubAgentProgressFromSnapshot = (id, snapshot) => {
     subAgentId: id,
     parentSessionId:
       workflow.parentSessionId || workflow.parent_session_id || workflowStore.currentWorkflowId,
+    agentName:
+      workflow.agentName ||
+      workflow.agent_name ||
+      agentStore.agents.find(agent => agent.id === (workflow.agentId || workflow.agent_id))?.name ||
+      null,
+    task: workflow.userQuery || workflow.user_query || workflow.title || null,
     status,
     workflowState: workflow.status || status,
     waitReason: ctx.waitReason || ctx.wait_reason || workflow.waitReason || null,
@@ -647,15 +665,39 @@ const childAgentSummariesAll = computed(() => {
     const lastIndex = last ? messages.value.lastIndexOf(last) : -1
     const eventProgress = workflowStore.subAgentProgress?.get?.(id)
     const snapshotProgress = childSnapshotProgress.value.get(id)
-    const progress = eventProgress || snapshotProgress || {}
+    const progress = {
+      ...(snapshotProgress || {}),
+      ...(eventProgress || {})
+    }
     let status = (ctx.waitingOnSubAgentId || ctx.waiting_on_sub_agent_id) === id ? 'running' : 'pending'
     let summary = t('workflow.statusPanel.childRunning') || 'Running'
     let toolCalls = 0
+    const workflowAgentName = childWorkflow?.agentName
+      || childWorkflow?.agent_name
+      || agentStore.agents.find(agent => agent.id === (childWorkflow?.agentId || childWorkflow?.agent_id))?.name
+      || null
+    let agentName = progress.agentName || progress.agent_name || workflowAgentName || 'Sub-agent'
+    let task = progress.task || childWorkflow?.userQuery || childWorkflow?.user_query || childWorkflow?.title || id
 
     if (last) {
       const meta = last.metadata || {}
       const content = truncateSummary(last.message || '')
       if (content) summary = content
+      agentName =
+        meta.sub_agent_name ||
+        meta.subAgentName ||
+        progress.agentName ||
+        progress.agent_name ||
+        workflowAgentName ||
+        agentName
+      task =
+        meta.sub_agent_task ||
+        meta.subAgentTask ||
+        progress.task ||
+        childWorkflow?.userQuery ||
+        childWorkflow?.user_query ||
+        childWorkflow?.title ||
+        task
       const executionStatus = meta.execution_status || meta.sub_agent_status || ''
       if (
         last.isError ||
@@ -689,6 +731,8 @@ const childAgentSummariesAll = computed(() => {
         progress.isError || progress.is_error
       )
       toolCalls = progress.toolCallsCount ?? progress.tool_calls_count ?? toolCalls
+      agentName = progress.agentName || progress.agent_name || agentName
+      task = progress.task || task
       summary = truncateSummary(progress.summary) || summary
     }
 
@@ -700,8 +744,8 @@ const childAgentSummariesAll = computed(() => {
 
     return {
       id,
-      shortId: id.length > 14 ? `${id.slice(0, 7)}...${id.slice(-4)}` : id,
-      title: progress.title || childWorkflow?.title || childWorkflow?.userQuery || id,
+      agentName,
+      task,
       status,
       summary,
       toolCalls,
@@ -730,7 +774,7 @@ const refreshChildSnapshots = async () => {
     ids.map(async id => {
       try {
         const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: id })
-        next.set(id, buildChildProgressFromSnapshot(id, snapshot))
+        next.set(id, buildSubAgentProgressFromSnapshot(id, snapshot))
       } catch (error) {
         console.warn(`[Workflow] Failed to load child task snapshot ${id}:`, error)
       }
@@ -1394,15 +1438,16 @@ watch(
 
   .child-agent-item {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    gap: 8px;
-    padding: 6px 10px;
+    gap: 10px;
+    padding: 10px 12px;
     font-size: var(--cs-font-size-xs);
     background: var(--cs-bg-color-light);
     border-radius: var(--cs-border-radius-sm);
-    margin-bottom: 4px;
-    border-left: 2px solid var(--cs-border-color);
+    margin-bottom: 6px;
+    border: 1px solid var(--cs-border-color);
+    border-left-width: 3px;
 
     &.clickable {
       cursor: pointer;
@@ -1434,22 +1479,97 @@ watch(
       min-width: 0;
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 6px;
       flex: 1;
     }
 
-    .child-title {
-      font-size: var(--cs-font-size-xs);
+    .child-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .child-agent {
+      font-size: 12px;
       color: var(--cs-text-color-primary);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      font-weight: 600;
     }
 
-    .child-id {
-      font-family: var(--cs-font-family-mono, monospace);
+    .child-status-pill {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      min-width: 58px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      line-height: 1.4;
+      background: var(--cs-bg-color);
       color: var(--cs-text-color-secondary);
-      white-space: nowrap;
+
+      &.running {
+        color: var(--el-color-primary);
+      }
+
+      &.success {
+        color: var(--el-color-success);
+      }
+
+      &.failed {
+        color: var(--el-color-danger);
+      }
+    }
+
+    .child-status-pill-icon {
+      flex-shrink: 0;
+    }
+
+    .child-task {
+      color: var(--cs-text-color-primary);
+      line-height: 1.45;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    .child-metrics {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .child-metric-label {
+      flex-shrink: 0;
+      font-size: 10px;
+      color: var(--cs-text-color-placeholder);
+      text-transform: uppercase;
+    }
+
+    .child-stats {
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .child-tools,
+    .child-context {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-family: var(--cs-font-family-mono, monospace);
+      font-size: 10px;
+      line-height: 1.5;
+      background: var(--cs-bg-color);
+      color: var(--cs-text-color-secondary);
     }
 
     .child-summary {
@@ -1457,33 +1577,8 @@ watch(
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-    }
-
-    .child-right {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-shrink: 0;
-    }
-
-    .child-tools {
-      font-family: var(--cs-font-family-mono, monospace);
-      color: var(--cs-text-color-placeholder);
-      min-width: 14px;
-      text-align: right;
-    }
-
-    .child-context {
-      font-family: var(--cs-font-family-mono, monospace);
-      color: var(--el-color-primary);
-      font-size: 10px;
-    }
-
-    .child-status.success {
-      color: var(--el-color-success);
-    }
-    .child-status.error {
-      color: var(--el-color-danger);
+      min-width: 0;
+      flex: 1;
     }
   }
 }

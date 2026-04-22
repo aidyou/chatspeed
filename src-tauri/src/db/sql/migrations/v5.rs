@@ -115,6 +115,11 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "agents_v5_approval_level",
         "ALTER TABLE agents ADD COLUMN approval_level TEXT DEFAULT 'default'"
     ),
+    // Add skill_enabled column to agents
+    (
+        "agents_v5_skill_enabled",
+        "ALTER TABLE agents ADD COLUMN skill_enabled BOOLEAN DEFAULT 1"
+    ),
     // Add role column to agents for primary/child hierarchy
     (
         "agents_v5_role",
@@ -142,6 +147,13 @@ fn ensure_agent_hierarchy_columns(conn: &Connection) -> Result<(), StoreError> {
     if !column_exists(conn, "agents", "parent_agent_id")? {
         conn.execute(
             "ALTER TABLE agents ADD COLUMN parent_agent_id TEXT REFERENCES agents(id)",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "agents", "skill_enabled")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN skill_enabled BOOLEAN DEFAULT 1",
             [],
         )?;
     }
@@ -178,7 +190,7 @@ pub fn ensure(conn: &Connection) -> Result<(), StoreError> {
 
 pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     version: 5,
-    description: "v5 migration: Add workflows table, and models/shell_policy columns to agents",
+    description: "v5 migration: Add workflows table and unified agent configuration columns",
     sql: MIGRATION_SQL,
     ensure: Some(ensure),
 };

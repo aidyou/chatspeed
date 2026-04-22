@@ -214,7 +214,7 @@ function generateTitle(toolName: string, args?: Record<string, any>): string {
     todo_create: () => 'Create Todo',
     todo_update: () => 'Update Todo',
     sub_agent_run: () => 'Run Sub-agent',
-    sub_agent_output: () => 'Sub-agent Output',
+    sub_agent_output: () => 'Get Sub-agent Output',
     sub_agent_stop: () => 'Stop Sub-agent',
     complete_workflow_with_summary: () => 'Complete Workflow with Summary',
     ask_user: () => 'Ask User'

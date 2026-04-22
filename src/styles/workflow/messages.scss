@@ -452,6 +452,172 @@
               }
             }
           }
+
+          .sub-agent-card {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 12px;
+            border: 1px solid var(--cs-border-color);
+            border-radius: 8px;
+            background: var(--cs-bg-color-light);
+            font-family: inherit;
+
+            &__header {
+              display: flex;
+              flex-direction: column;
+              gap: 10px;
+            }
+
+            &__title-wrap {
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 12px;
+              min-width: 0;
+            }
+
+            &__title {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              min-width: 0;
+              color: var(--cs-text-color-primary);
+              font-weight: 600;
+              font-size: 13px;
+            }
+
+            &__icon {
+              color: var(--el-color-warning);
+              flex-shrink: 0;
+            }
+
+            &__status {
+              flex-shrink: 0;
+              padding: 2px 8px;
+              border-radius: 999px;
+              font-size: 11px;
+              line-height: 1.6;
+              border: 1px solid transparent;
+
+              &.is-running {
+                color: var(--el-color-primary);
+                background: color-mix(in srgb, var(--el-color-primary) 10%, transparent);
+                border-color: color-mix(in srgb, var(--el-color-primary) 20%, transparent);
+              }
+
+              &.is-completed {
+                color: var(--el-color-success);
+                background: color-mix(in srgb, var(--el-color-success) 10%, transparent);
+                border-color: color-mix(in srgb, var(--el-color-success) 20%, transparent);
+              }
+
+              &.is-failed,
+              &.is-stopped {
+                color: var(--el-color-danger);
+                background: color-mix(in srgb, var(--el-color-danger) 10%, transparent);
+                border-color: color-mix(in srgb, var(--el-color-danger) 20%, transparent);
+              }
+            }
+
+            &__meta {
+              display: grid;
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+              gap: 10px 12px;
+            }
+
+            &__row,
+            &__task {
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
+              min-width: 0;
+            }
+
+            &__label {
+              font-size: 11px;
+              color: var(--cs-text-color-secondary);
+              text-transform: uppercase;
+              letter-spacing: 0;
+            }
+
+            &__value,
+            &__task-preview,
+            &__result-preview {
+              color: var(--cs-text-color-primary);
+              font-size: 13px;
+              line-height: 1.6;
+              word-break: break-word;
+            }
+
+            &__value.mode {
+              text-transform: lowercase;
+            }
+
+            &__task {
+              padding: 10px 12px;
+              border-radius: 6px;
+              background: var(--cs-bg-color);
+            }
+
+            &__task-toggle,
+            &__result {
+              min-width: 0;
+            }
+
+            &__result {
+              border-top: 1px solid var(--cs-border-color);
+              padding-top: 10px;
+            }
+
+            &__task-toggle,
+            &__result-toggle {
+              display: flex;
+              align-items: flex-start;
+              justify-content: space-between;
+              gap: 12px;
+              cursor: pointer;
+              user-select: none;
+            }
+
+            &__task-heading,
+            &__result-heading {
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
+              min-width: 0;
+            }
+
+            &__task-preview,
+            &__result-preview {
+              font-size: 12px;
+              line-height: 1.6;
+              color: var(--cs-text-color-secondary);
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+
+            &__task-chevron,
+            &__result-chevron {
+              color: var(--cs-text-color-secondary);
+              margin-top: 2px;
+              flex-shrink: 0;
+            }
+
+            &__task-body,
+            &__result-body {
+              margin-top: 10px;
+              padding: 10px 12px;
+              border-radius: 6px;
+              background: var(--cs-bg-color-light);
+
+              .markdown-body {
+                font-size: 13px;
+                line-height: 1.7;
+              }
+            }
+          }
         }
 
         // Thoughts - collapsible reasoning container

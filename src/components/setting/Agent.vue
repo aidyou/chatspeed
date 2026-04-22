@@ -244,6 +244,9 @@
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools">
+          <el-form-item :label="$t('settings.agent.skillEnabled')" prop="skillEnabled">
+            <el-switch v-model="agentForm.skillEnabled" />
+          </el-form-item>
           <el-form-item :label="$t('settings.agent.approvalLevel')" prop="approvalLevel">
             <el-select v-model="agentForm.approvalLevel" style="width: 100%">
               <el-option :label="$t('settings.agent.approvalLevelDefault')" value="default" />
@@ -427,6 +430,7 @@ const defaultFormData = {
   planningPrompt: '',
   availableTools: [],
   autoApprove: [],
+  skillEnabled: true,
   shellPolicy: [],
   allowedPaths: [],
   planModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
@@ -455,7 +459,9 @@ const sortedAvailableTools = computed(() => {
 const autoApproveOptions = computed(() => {
   if (!agentForm.value || !agentForm.value.availableTools) return []
   return sortedAvailableTools.value.filter(
-    t => agentForm.value.availableTools.includes(t.id) && t.id !== 'bash'
+    t =>
+      agentForm.value.availableTools.includes(t.id) &&
+      t.id !== 'bash'
   )
 })
 
@@ -746,11 +752,13 @@ const normalizeAgentFormForSave = form => {
     normalized.shellPolicy = []
     normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
     normalized.autoApprove = normalized.autoApprove.filter(tool => tool !== 'bash')
+    normalized.skillEnabled = false
   } else {
     normalized.parentAgentId = null
     normalized.shellPolicy = Array.isArray(normalized.shellPolicy)
       ? normalized.shellPolicy.filter(rule => rule.pattern && rule.pattern.trim() !== '')
       : []
+    normalized.skillEnabled = normalized.skillEnabled !== false
   }
 
   normalized.finalAudit = false
@@ -874,6 +882,11 @@ const editAgent = async id => {
         agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
       }
 
+      agentForm.value.skillEnabled =
+        agentData.skillEnabled !== undefined
+          ? Boolean(agentData.skillEnabled)
+          : (agentForm.value.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD
+
       // Unpack 'allowedPaths' JSON field if it exists
       const rawPaths = agentData.allowed_paths || agentData.allowedPaths
       if (rawPaths) {
@@ -910,6 +923,7 @@ const editAgent = async id => {
     agentForm.value.allowedPaths = []
     agentForm.value.role = AGENT_ROLE.PRIMARY
     agentForm.value.parentAgentId = null
+    agentForm.value.skillEnabled = true
   }
 
   agentDialogVisible.value = true
@@ -973,6 +987,11 @@ const copyAgent = async id => {
     } else {
       agentForm.value.allowedPaths = []
     }
+
+    agentForm.value.skillEnabled =
+      agentData.skillEnabled !== undefined
+        ? Boolean(agentData.skillEnabled)
+        : (agentForm.value.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD
 
     if (
       !agentForm.value.parentAgentId &&
@@ -1058,11 +1077,13 @@ watch(
   role => {
     if (role !== AGENT_ROLE.CHILD) {
       agentForm.value.parentAgentId = null
+      agentForm.value.skillEnabled = true
       return
     }
 
     agentForm.value.allowedPaths = []
     agentForm.value.shellPolicy = []
+    agentForm.value.skillEnabled = false
     agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
       tool => tool !== 'bash'
     )
@@ -1075,6 +1096,7 @@ watch(
     }
   }
 )
+
 </script>
 
 <style lang="scss">

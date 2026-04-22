@@ -1,6 +1,6 @@
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
-use crate::db::{Agent, AgentConfig, MainStore};
+use crate::db::{Agent, AgentConfig, MainStore, WorkflowMessage};
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::child_tasks::get_sub_agent_registry;
 use crate::workflow::react::engine::ReActExecutor;
@@ -22,6 +22,7 @@ pub enum BackgroundTask {
     SubAgent {
         owner_session_id: Option<String>,
         executor: Arc<Mutex<dyn ReActExecutor>>,
+        output_accessible: bool,
     },
 }
 
@@ -29,6 +30,8 @@ pub enum BackgroundTask {
 pub struct CompletedTaskSnapshot {
     pub owner_session_id: Option<String>,
     pub output: String,
+    pub output_accessible: bool,
+    pub consumed: bool,
 }
 
 impl BackgroundTask {
@@ -39,6 +42,14 @@ impl BackgroundTask {
             } => owner_session_id.as_deref(),
         }
     }
+
+    pub fn output_accessible(&self) -> bool {
+        match self {
+            BackgroundTask::SubAgent {
+                output_accessible, ..
+            } => *output_accessible,
+        }
+    }
 }
 
 lazy_static::lazy_static! {
@@ -47,20 +58,103 @@ lazy_static::lazy_static! {
     /// Terminal snapshots allow sub_agent_output to inspect sub-agents after they leave the active registry.
     pub static ref COMPLETED_BACKGROUND_TASKS: Arc<DashMap<String, CompletedTaskSnapshot>> = Arc::new(DashMap::new());
     static ref TASK_OUTPUT_THROTTLE: Arc<DashMap<String, (i64, String)>> = Arc::new(DashMap::new());
+    static ref PENDING_TASK_OUTPUT_WAITS: Arc<DashMap<String, usize>> = Arc::new(DashMap::new());
 }
 
 fn remember_completed_task(
     task_id: impl Into<String>,
     owner_session_id: Option<String>,
     output: impl Into<String>,
+    output_accessible: bool,
 ) {
     COMPLETED_BACKGROUND_TASKS.insert(
         task_id.into(),
         CompletedTaskSnapshot {
             owner_session_id,
             output: output.into(),
+            output_accessible,
+            consumed: false,
         },
     );
+}
+
+fn register_task_output_wait(task_id: &str) {
+    PENDING_TASK_OUTPUT_WAITS
+        .entry(task_id.to_string())
+        .and_modify(|count| *count += 1)
+        .or_insert(1);
+}
+
+fn unregister_task_output_wait(task_id: &str) {
+    if let Some(mut entry) = PENDING_TASK_OUTPUT_WAITS.get_mut(task_id) {
+        if *entry <= 1 {
+            drop(entry);
+            PENDING_TASK_OUTPUT_WAITS.remove(task_id);
+        } else {
+            *entry -= 1;
+        }
+    }
+}
+
+fn has_pending_task_output_wait(task_id: &str) -> bool {
+    PENDING_TASK_OUTPUT_WAITS.contains_key(task_id)
+}
+
+fn mark_completed_task_consumed(task_id: &str) {
+    if let Some(mut snapshot) = COMPLETED_BACKGROUND_TASKS.get_mut(task_id) {
+        snapshot.consumed = true;
+    }
+}
+
+fn sync_sub_agent_completion_consumed(
+    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    session_id: &str,
+    task_id: &str,
+) -> Result<(), WorkflowEngineError> {
+    let store = main_store
+        .read()
+        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    let Some(mut context) = store
+        .get_execution_context(session_id)
+        .map_err(WorkflowEngineError::Db)?
+    else {
+        return Ok(());
+    };
+
+    let mut changed = false;
+    for completion in &mut context.pending_sub_agent_completions {
+        if completion.sub_agent_id == task_id && !completion.consumed {
+            completion.consumed = true;
+            changed = true;
+        }
+    }
+
+    if changed {
+        store
+            .upsert_execution_context(&context)
+            .map_err(WorkflowEngineError::Db)?;
+    }
+
+    Ok(())
+}
+
+fn find_durable_sub_agent_completion(
+    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    session_id: &str,
+    task_id: &str,
+) -> Result<Option<SubAgentCompletion>, WorkflowEngineError> {
+    let store = main_store
+        .read()
+        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    Ok(store
+        .get_execution_context(session_id)
+        .map_err(WorkflowEngineError::Db)?
+        .and_then(|context| {
+            context
+                .pending_sub_agent_completions
+                .into_iter()
+                .find(|completion| completion.sub_agent_id == task_id)
+        }))
 }
 
 fn build_sub_agent_completion(
@@ -76,6 +170,10 @@ fn build_sub_agent_completion(
             .and_then(|value| value.as_str())
             .unwrap_or("completed")
             .to_string(),
+        result: result
+            .get("result")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
         summary: result
             .get("summary")
             .and_then(|value| value.as_str())
@@ -130,6 +228,102 @@ fn persist_sub_agent_completion(
     Ok(())
 }
 
+fn extract_submit_result_payload(messages: &[WorkflowMessage]) -> Option<(String, String)> {
+    messages.iter().rev().find_map(|message| {
+        if message.role != "tool" {
+            return None;
+        }
+
+        let metadata = message.metadata.as_ref()?;
+        if metadata.get("tool_name").and_then(|value| value.as_str())
+            != Some(crate::tools::TOOL_SUBMIT_RESULT)
+        {
+            return None;
+        }
+
+        let structured = metadata.get("structured_content")?;
+        let result = structured.get("result").and_then(|value| value.as_str())?;
+        let summary = structured
+            .get("summary")
+            .and_then(|value| value.as_str())
+            .unwrap_or(result);
+
+        Some((result.to_string(), summary.to_string()))
+    })
+}
+
+fn build_terminal_sub_agent_result(
+    task_id: &str,
+    final_state: crate::workflow::react::types::WorkflowState,
+    run_result: &Result<(), WorkflowEngineError>,
+    messages: &[WorkflowMessage],
+) -> Value {
+    let tool_calls_count = messages
+        .iter()
+        .filter(|message| message.role == "tool")
+        .count();
+
+    match run_result {
+        Ok(_) => {
+            let status = if final_state == crate::workflow::react::types::WorkflowState::Cancelled {
+                "cancelled"
+            } else {
+                "completed"
+            };
+            let (result, summary) = extract_submit_result_payload(messages).unwrap_or_else(|| {
+                (
+                    "Sub-agent completed".to_string(),
+                    "Sub-agent completed".to_string(),
+                )
+            });
+            json!({
+                "status": status,
+                "task_id": task_id,
+                "result": result,
+                "summary": summary,
+                "tool_calls_count": tool_calls_count
+            })
+        }
+        Err(error) => {
+            let status = if matches!(error, WorkflowEngineError::Cancelled(_))
+                || final_state == crate::workflow::react::types::WorkflowState::Cancelled
+            {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            json!({
+                "status": status,
+                "task_id": task_id,
+                "error": error.to_string(),
+                "tool_calls_count": tool_calls_count
+            })
+        }
+    }
+}
+
+fn render_task_output(result: &Value) -> String {
+    match result.get("status").and_then(|value| value.as_str()) {
+        Some("completed") => result
+            .get("result")
+            .and_then(|value| value.as_str())
+            .or_else(|| result.get("summary").and_then(|value| value.as_str()))
+            .unwrap_or("Sub-agent completed")
+            .to_string(),
+        Some("failed" | "cancelled" | "interrupted") => result
+            .get("error")
+            .and_then(|value| value.as_str())
+            .or_else(|| result.get("summary").and_then(|value| value.as_str()))
+            .unwrap_or("Sub-agent did not complete successfully")
+            .to_string(),
+        _ => result
+            .get("summary")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Sub-agent completed")
+            .to_string(),
+    }
+}
+
 fn append_sub_agent_event(
     main_store: &Arc<std::sync::RwLock<MainStore>>,
     event: WorkflowEvent,
@@ -143,6 +337,17 @@ fn append_sub_agent_event(
     Ok(())
 }
 
+fn filter_sub_agent_tool_ids(tools_json: Option<&str>) -> Option<String> {
+    let mut tools = tools_json.and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())?;
+    tools.retain(|tool| {
+        tool != crate::tools::TOOL_BASH
+            && tool != crate::tools::TOOL_SUB_AGENT_RUN
+            && tool != crate::tools::TOOL_SUB_AGENT_OUTPUT
+            && tool != crate::tools::TOOL_SUB_AGENT_STOP
+    });
+    serde_json::to_string(&tools).ok()
+}
+
 fn is_task_output_id(task_id: &str) -> bool {
     task_id.starts_with("subagent_")
 }
@@ -151,14 +356,18 @@ fn format_available_task_ids_for_owner(owner_session_id: &str) -> String {
     let mut task_ids: Vec<String> = BACKGROUND_TASKS
         .iter()
         .filter_map(|entry| {
-            if entry.value().owner_session_id() == Some(owner_session_id) {
+            if entry.value().owner_session_id() == Some(owner_session_id)
+                && entry.value().output_accessible()
+            {
                 Some(format!("{} (active)", entry.key()))
             } else {
                 None
             }
         })
         .chain(COMPLETED_BACKGROUND_TASKS.iter().filter_map(|entry| {
-            if entry.value().owner_session_id.as_deref() == Some(owner_session_id) {
+            if entry.value().owner_session_id.as_deref() == Some(owner_session_id)
+                && entry.value().output_accessible
+            {
                 Some(format!("{} (completed)", entry.key()))
             } else {
                 None
@@ -182,7 +391,9 @@ pub fn list_background_task_ids_for_owner(owner_session_id: &str) -> Vec<String>
     BACKGROUND_TASKS
         .iter()
         .filter_map(|entry| {
-            if entry.value().owner_session_id() == Some(owner_session_id) {
+            if entry.value().owner_session_id() == Some(owner_session_id)
+                && entry.value().output_accessible()
+            {
                 Some(entry.key().clone())
             } else {
                 None
@@ -202,6 +413,12 @@ fn validate_task_access(current_session_id: &str, task_id: &str) -> Result<(), T
         if task.value().owner_session_id() == Some(current_session_id) {
             return Ok(());
         }
+        if !task.value().output_accessible() {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Task {} is not accessible from the current session.",
+                task_id
+            )));
+        }
         return Err(ToolError::ExecutionFailed(format!(
             "Task {} is not accessible from the current session.",
             task_id
@@ -211,6 +428,12 @@ fn validate_task_access(current_session_id: &str, task_id: &str) -> Result<(), T
     if let Some(snapshot) = COMPLETED_BACKGROUND_TASKS.get(task_id) {
         if snapshot.owner_session_id.as_deref() == Some(current_session_id) {
             return Ok(());
+        }
+        if !snapshot.output_accessible {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Task {} is not accessible from the current session.",
+                task_id
+            )));
         }
         return Err(ToolError::ExecutionFailed(format!(
             "Task {} is not accessible from the current session.",
@@ -227,7 +450,11 @@ pub async fn stop_background_task(task_id: &str, chat_state: Option<&Arc<ChatSta
     };
 
     match task {
-        BackgroundTask::SubAgent { executor, .. } => {
+        BackgroundTask::SubAgent {
+            owner_session_id,
+            output_accessible,
+            ..
+        } => {
             if let Some(chat_state) = chat_state {
                 let mut chats = chat_state.chats.lock().await;
                 if let Some(protocol_chats) = chats.get_mut(&crate::ccproxy::ChatProtocol::OpenAI) {
@@ -237,12 +464,24 @@ pub async fn stop_background_task(task_id: &str, chat_state: Option<&Arc<ChatSta
                 }
             }
 
-            let mut guard = executor.lock().await;
-            guard.set_state(crate::workflow::react::types::WorkflowState::Cancelled);
+            if let Err(error) =
+                crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
+                    task_id,
+                    serde_json::json!({ "type": "stop" }).to_string(),
+                )
+            {
+                log::warn!(
+                    "[Workflow][session={}][phase=cleanup] Failed to send stop signal to sub-agent session: {}",
+                    task_id,
+                    error
+                );
+            }
+            crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(task_id);
             remember_completed_task(
                 task_id,
-                None,
+                owner_session_id,
                 format!("Sub-agent {} has been cancelled.", task_id),
+                output_accessible,
             );
             get_sub_agent_registry().unregister_sub_agent(task_id);
             true
@@ -290,6 +529,9 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 WorkflowEngineError::General(format!("Agent config {} not found", agent_id))
             })?
         };
+        agent_config.available_tools =
+            filter_sub_agent_tool_ids(agent_config.available_tools.as_deref());
+        agent_config.auto_approve = filter_sub_agent_tool_ids(agent_config.auto_approve.as_deref());
 
         let inherited_allowed_paths = if let Some(parent_session_id) = parent_session_id {
             let store = self.main_store.read().map_err(|e| {
@@ -309,13 +551,21 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             agent_config.allowed_paths = serde_json::to_string(&paths).ok();
         }
 
+        let workflow_allowed_paths = inherited_allowed_paths.or_else(|| {
+            agent_config
+                .allowed_paths
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+        });
+        let runtime_allowed_paths = workflow_allowed_paths
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+
         let workflow_config = AgentConfig {
-            allowed_paths: inherited_allowed_paths.or_else(|| {
-                agent_config
-                    .allowed_paths
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str(s).ok())
-            }),
+            allowed_paths: workflow_allowed_paths,
             shell_policy: agent_config
                 .shell_policy
                 .as_deref()
@@ -345,9 +595,31 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 Some(workflow_config.to_json()),
                 parent_session_id,
             )?;
+            store.add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: task.to_string(),
+                reasoning: None,
+                metadata: Some(json!({
+                    "type": "delegated_task",
+                    "parentSessionId": parent_session_id,
+                    "subagentType": subagent_type
+                })),
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })?;
         }
 
-        let (_signal_tx, signal_rx) = tokio::sync::mpsc::channel(32);
+        let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(32);
+        crate::workflow::react::manager::WorkflowManager::register_session_signal_tx(
+            session_id.to_string(),
+            signal_tx,
+        );
 
         let policy = if subagent_type == "Planning" {
             crate::workflow::react::policy::ExecutionPolicy::planning()
@@ -370,7 +642,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                         tsid_generator: self.tsid_generator.clone(),
                     }),
                     agent_config,
-                    vec![],
+                    runtime_allowed_paths,
                     self.app_data_dir.clone(),
                     Some(subagent_type.to_string()),
                     Some(signal_rx),
@@ -394,7 +666,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                         tsid_generator: self.tsid_generator.clone(),
                     }),
                     agent_config,
-                    vec![],
+                    runtime_allowed_paths,
                     self.app_data_dir.clone(),
                     Some(subagent_type.to_string()),
                     Some(signal_rx),
@@ -411,6 +683,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
 pub struct TaskTool {
     executor_factory: Arc<dyn SubAgentFactory>,
     main_store: Arc<std::sync::RwLock<MainStore>>,
+    gateway: Arc<dyn Gateway>,
     tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     parent_session_id: Option<String>,
     child_agents: Vec<Agent>,
@@ -420,11 +693,13 @@ impl TaskTool {
     pub fn new(
         factory: Arc<dyn SubAgentFactory>,
         main_store: Arc<std::sync::RwLock<MainStore>>,
+        gateway: Arc<dyn Gateway>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     ) -> Self {
         Self {
             executor_factory: factory,
             main_store,
+            gateway,
             tsid_generator,
             parent_session_id: None,
             child_agents: Vec::new(),
@@ -589,8 +864,7 @@ impl ToolDefinition for TaskTool {
 
         // Use TSID for unique time-sorted IDs
         let task_id = format!(
-            "subagent_{}_{}",
-            child_agent.name.to_lowercase().replace(' ', "_"),
+            "subagent_{}",
             self.tsid_generator
                 .generate()
                 .map_err(|e| ToolError::ExecutionFailed(e))?
@@ -639,11 +913,14 @@ impl ToolDefinition for TaskTool {
             let exec_clone = sub_executor.clone();
             let task_id_clone = task_id.clone();
             let owner_session_id = self.parent_session_id.clone();
+            let main_store = self.main_store.clone();
+            let gateway = self.gateway.clone();
             BACKGROUND_TASKS.insert(
                 task_id.clone(),
                 BackgroundTask::SubAgent {
                     owner_session_id: self.parent_session_id.clone(),
                     executor: sub_executor,
+                    output_accessible: true,
                 },
             );
 
@@ -652,51 +929,69 @@ impl ToolDefinition for TaskTool {
                 let result = guard.run_loop().await;
                 let final_state = guard.state();
                 let messages = guard.messages();
-                let tool_calls_count = messages
-                    .iter()
-                    .filter(|message| message.role == "tool")
-                    .count();
-                let latest_output = messages
-                    .iter()
-                    .rev()
-                    .find(|message| message.role == "assistant")
-                    .map(|message| message.message.clone())
-                    .unwrap_or_default();
-
-                let output = match result {
-                    Ok(_) => {
-                        let status = if final_state
-                            == crate::workflow::react::types::WorkflowState::Cancelled
-                        {
-                            "cancelled"
-                        } else {
-                            "completed"
-                        };
-                        format!(
-                            "Status: {}. Tool Calls: {}. Latest Output: {}",
-                            status, tool_calls_count, latest_output
-                        )
+                if let Err(error) = &result {
+                    log::error!("Background task {} failed: {}", guard.session_id(), error);
+                }
+                let completion_result = build_terminal_sub_agent_result(
+                    &task_id_clone,
+                    final_state.clone(),
+                    &result,
+                    &messages,
+                );
+                let output = render_task_output(&completion_result);
+                remember_completed_task(
+                    task_id_clone.clone(),
+                    owner_session_id.clone(),
+                    output,
+                    true,
+                );
+                if let Some(parent_session_id) = owner_session_id.clone() {
+                    let completion = build_sub_agent_completion(
+                        &parent_session_id,
+                        &task_id_clone,
+                        &completion_result,
+                    );
+                    if let Err(e) = persist_sub_agent_completion(&main_store, completion) {
+                        log::warn!(
+                            "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist background sub-agent completion: {}",
+                            task_id_clone,
+                            parent_session_id,
+                            e
+                        );
                     }
-                    Err(e) => {
-                        log::error!("Background task {} failed: {}", guard.session_id(), e);
-                        format!(
-                            "Status: failed. Tool Calls: {}. Latest Output: {}",
-                            tool_calls_count, e
-                        )
+                    if !has_pending_task_output_wait(&task_id_clone) {
+                        let _ = gateway
+                            .send(
+                                &parent_session_id,
+                                crate::workflow::react::types::GatewayPayload::Notification {
+                                    message: format!(
+                                        "Sub-agent {} has completed. If you have not already retrieved the result, use sub_agent_output with task_id {}. If you already received it, do not call sub_agent_output again.",
+                                        task_id_clone, task_id_clone
+                                    ),
+                                    category: Some("info".to_string()),
+                                },
+                            )
+                            .await;
                     }
-                };
-                remember_completed_task(task_id_clone.clone(), owner_session_id, output);
+                }
                 TASK_OUTPUT_THROTTLE.remove(&task_id_clone);
+                crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(
+                    &task_id_clone,
+                );
                 BACKGROUND_TASKS.remove(&task_id_clone);
             });
 
             return Ok(ToolCallResult::success(Some(json!({
                 "task_id": task_id,
                 "status": "Running",
+                "agent_name": child_agent.name,
+                "task": prompt,
                 "message": format!("Sub-agent '{}' has been started in the background. Use 'sub_agent_output' with the task_id to retrieve results later.", description)
             }).to_string()), Some(json!({
                 "task_id": task_id,
                 "status": "running",
+                "agent_name": child_agent.name,
+                "task": prompt,
                 "mode": "background"
             }))));
         }
@@ -730,6 +1025,7 @@ impl ToolDefinition for TaskTool {
             BackgroundTask::SubAgent {
                 owner_session_id: Some(parent_id.clone()),
                 executor: sub_executor,
+                output_accessible: false,
             },
         );
 
@@ -740,55 +1036,13 @@ impl ToolDefinition for TaskTool {
             let mut guard = exec_clone.lock().await;
             let result = guard.run_loop().await;
             let final_state = guard.state();
-
-            let completion_result = match result {
-                Ok(_) => {
-                    let messages = guard.messages();
-                    let tool_calls_count = messages
-                        .iter()
-                        .filter(|message| message.role == "tool")
-                        .count();
-                    let mut summary = None;
-                    for msg in messages.iter().rev() {
-                        if msg.role == "assistant" {
-                            summary = Some(msg.message.clone());
-                            break;
-                        }
-                    }
-                    let status =
-                        if final_state == crate::workflow::react::types::WorkflowState::Cancelled {
-                            "cancelled"
-                        } else {
-                            "completed"
-                        };
-                    json!({
-                        "status": status,
-                        "task_id": task_id_clone,
-                        "summary": summary.unwrap_or_default(),
-                        "tool_calls_count": tool_calls_count
-                    })
-                }
-                Err(e) => {
-                    let messages = guard.messages();
-                    let tool_calls_count = messages
-                        .iter()
-                        .filter(|message| message.role == "tool")
-                        .count();
-                    let status = if matches!(e, WorkflowEngineError::Cancelled(_))
-                        || final_state == crate::workflow::react::types::WorkflowState::Cancelled
-                    {
-                        "cancelled"
-                    } else {
-                        "failed"
-                    };
-                    json!({
-                        "status": status,
-                        "task_id": task_id_clone,
-                        "error": e.to_string(),
-                        "tool_calls_count": tool_calls_count
-                    })
-                }
-            };
+            let messages = guard.messages();
+            let completion_result = build_terminal_sub_agent_result(
+                &task_id_clone,
+                final_state.clone(),
+                &result,
+                &messages,
+            );
 
             let completion_status = completion_result
                 .get("status")
@@ -840,43 +1094,25 @@ impl ToolDefinition for TaskTool {
                 );
             }
 
-            let output = match completion_result
-                .get("status")
-                .and_then(|value| value.as_str())
-            {
-                Some("completed") => format!(
-                    "Status: completed. Latest Output: {}",
-                    completion_result
-                        .get("summary")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or_default()
-                ),
-                Some(status) => format!(
-                    "Status: {}. Latest Output: {}",
-                    status,
-                    completion_result
-                        .get("error")
-                        .and_then(|value| value.as_str())
-                        .or_else(|| completion_result
-                            .get("summary")
-                            .and_then(|value| value.as_str()))
-                        .unwrap_or_default()
-                ),
-                None => "Status: completed.".to_string(),
-            };
-            remember_completed_task(task_id_clone.clone(), Some(parent_id.clone()), output);
             get_sub_agent_registry().unregister_sub_agent(&task_id_clone);
             TASK_OUTPUT_THROTTLE.remove(&task_id_clone);
+            crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(
+                &task_id_clone,
+            );
             BACKGROUND_TASKS.remove(&task_id_clone);
         });
 
         Ok(ToolCallResult::success(Some(json!({
             "status": "waiting",
             "task_id": task_id,
+            "agent_name": child_agent.name,
+            "task": prompt,
             "message": format!("Task '{}' has been spawned. Parent workflow will wait for completion.", description)
         }).to_string()), Some(json!({
             "status": "waiting",
             "task_id": task_id,
+            "agent_name": child_agent.name,
+            "task": prompt,
             "mode": "call"
         }))))
     }
@@ -885,11 +1121,15 @@ impl ToolDefinition for TaskTool {
 /// Tool to retrieve results from background tasks (Full Spec Clone)
 pub struct TaskOutputTool {
     session_id: String,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
 }
 
 impl TaskOutputTool {
-    pub fn new(session_id: String) -> Self {
-        Self { session_id }
+    pub fn new(session_id: String, main_store: Arc<std::sync::RwLock<MainStore>>) -> Self {
+        Self {
+            session_id,
+            main_store,
+        }
     }
 }
 
@@ -900,8 +1140,9 @@ impl ToolDefinition for TaskOutputTool {
     }
 
     fn description(&self) -> &str {
-        "- Retrieves output from a running or completed background sub-agent\n\
+        "- Retrieves output from a running or completed sub-agent\n\
         - Takes a task_id parameter identifying the sub-agent\n\
+        - Background sub-agents can be checked while running; call-mode sub-agents normally deliver results automatically, but this tool can return the already-delivered result again if needed\n\
         - Returns the latest sub-agent output along with status information\n\
         - Set wait_until_complete=true only when the next step depends on the final child result; the tool will wait until the sub-agent finishes, fails, or is stopped\n\
         - Leave wait_until_complete=false when you only need a non-blocking status check. Do not poll running sub-agents repeatedly; continue other work or wait for the automatic completion notification."
@@ -937,6 +1178,16 @@ impl ToolDefinition for TaskOutputTool {
     }
 
     async fn call(&self, params: Value) -> NativeToolResult {
+        struct TaskOutputWaitGuard<'a> {
+            task_id: &'a str,
+        }
+
+        impl Drop for TaskOutputWaitGuard<'_> {
+            fn drop(&mut self) {
+                unregister_task_output_wait(self.task_id);
+            }
+        }
+
         let task_id = params["task_id"]
             .as_str()
             .ok_or(ToolError::InvalidParams("task_id required".into()))?;
@@ -944,9 +1195,19 @@ impl ToolDefinition for TaskOutputTool {
         validate_task_access(&self.session_id, task_id)?;
 
         if wait_until_complete {
+            register_task_output_wait(task_id);
+            let _wait_guard = TaskOutputWaitGuard { task_id };
             loop {
                 if let Some(snapshot) = COMPLETED_BACKGROUND_TASKS.get(task_id) {
-                    return Ok(ToolCallResult::success(Some(snapshot.output.clone()), None));
+                    let output = snapshot.output.clone();
+                    drop(snapshot);
+                    mark_completed_task_consumed(task_id);
+                    let _ = sync_sub_agent_completion_consumed(
+                        &self.main_store,
+                        &self.session_id,
+                        task_id,
+                    );
+                    return Ok(ToolCallResult::success(Some(output), None));
                 }
 
                 let Some(task) = BACKGROUND_TASKS.get(task_id) else {
@@ -965,17 +1226,9 @@ impl ToolDefinition for TaskOutputTool {
                                 | crate::workflow::react::types::WorkflowState::Error
                                 | crate::workflow::react::types::WorkflowState::Cancelled
                         ) {
-                            let mut result = format!("Status: {:?}. ", state);
-                            if let Some(last_msg) = guard
-                                .messages()
-                                .iter()
-                                .rev()
-                                .find(|m| m.role == "assistant" || m.role == "tool")
-                            {
-                                result.push_str("Latest Output: ");
-                                result.push_str(&last_msg.message);
-                            }
-                            return Ok(ToolCallResult::success(Some(result), None));
+                            drop(guard);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                            continue;
                         }
                     }
                 }
@@ -1032,12 +1285,43 @@ impl ToolDefinition for TaskOutputTool {
         }
 
         if let Some(snapshot) = COMPLETED_BACKGROUND_TASKS.get(task_id) {
-            return Ok(ToolCallResult::success(Some(snapshot.output.clone()), None));
+            let output = snapshot.output.clone();
+            drop(snapshot);
+            mark_completed_task_consumed(task_id);
+            let _ = sync_sub_agent_completion_consumed(&self.main_store, &self.session_id, task_id);
+            return Ok(ToolCallResult::success(Some(output), None));
+        }
+
+        if let Ok(Some(completion)) =
+            find_durable_sub_agent_completion(&self.main_store, &self.session_id, task_id)
+        {
+            let delivered = completion
+                .result
+                .as_deref()
+                .or(completion.summary.as_deref())
+                .or(completion.error.as_deref())
+                .unwrap_or("Sub-agent completed")
+                .to_string();
+            let _ = sync_sub_agent_completion_consumed(&self.main_store, &self.session_id, task_id);
+            mark_completed_task_consumed(task_id);
+            return Ok(ToolCallResult::success(
+                Some(format!(
+                    "<tool_result tool=\"sub_agent_run\" id=\"{}\" mode=\"call\" status=\"{}\">\n{}\n</tool_result>",
+                    task_id, completion.status, delivered
+                )),
+                Some(json!({
+                    "task_id": task_id,
+                    "status": completion.status,
+                    "result": delivered,
+                    "mode": "call",
+                    "already_delivered": true
+                })),
+            ));
         }
 
         let available_tasks = format_available_task_ids_for_owner(&self.session_id);
         Err(ToolError::ExecutionFailed(format!(
-            "Sub-agent {} not found in active or completed background sub-agents for this session.\n<SYSTEM_REMINDER>Before calling sub_agent_output, make sure you created a background sub-agent in this same session, then use the exact task_id returned by that tool. {} Do not use sub_agent_output as a generic final-answer tool or with a main session ID.</SYSTEM_REMINDER>",
+            "Sub-agent {} not found in active or completed background sub-agents for this session.\n<SYSTEM_REMINDER>sub_agent_output only retrieves background sub-agent outputs. If this task was launched with execution_mode='call', its result is delivered directly to the parent workflow as a sub-agent completion observation and must not be fetched. Use any delivered observation you already have; otherwise continue without polling this task_id. {} Do not use sub_agent_output as a generic final-answer tool or with a main session ID.</SYSTEM_REMINDER>",
             task_id,
             available_tasks
         )))
@@ -1098,18 +1382,7 @@ impl ToolDefinition for TaskStopTool {
             .as_str()
             .ok_or(ToolError::InvalidParams("task_id required".into()))?;
         validate_task_access(&self.session_id, task_id)?;
-        if let Some((_, task)) = BACKGROUND_TASKS.remove(task_id) {
-            match task {
-                BackgroundTask::SubAgent { executor, .. } => {
-                    let mut guard = executor.lock().await;
-                    guard.set_state(crate::workflow::react::types::WorkflowState::Cancelled);
-                    remember_completed_task(
-                        task_id,
-                        Some(self.session_id.clone()),
-                        format!("Sub-agent {} has been terminated.", task_id),
-                    );
-                }
-            }
+        if stop_background_task(task_id, None).await {
             Ok(ToolCallResult::success(
                 Some(format!("Sub-agent {} has been terminated.", task_id)),
                 None,
@@ -1126,7 +1399,8 @@ impl ToolDefinition for TaskStopTool {
 #[cfg(test)]
 mod tests {
     use super::{
-        remember_completed_task, DefaultSubAgentFactory, SubAgentFactory, TaskOutputTool, TaskTool,
+        remember_completed_task, stop_background_task, BackgroundTask, CompletedTaskSnapshot,
+        DefaultSubAgentFactory, SubAgentFactory, TaskOutputTool, TaskTool, BACKGROUND_TASKS,
         COMPLETED_BACKGROUND_TASKS,
     };
     use crate::ai::interaction::chat_completion::ChatState;
@@ -1137,7 +1411,10 @@ mod tests {
     use crate::workflow::react::engine::ReActExecutor;
     use crate::workflow::react::error::WorkflowEngineError;
     use crate::workflow::react::gateway::Gateway;
-    use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
+    use crate::workflow::react::manager::WorkflowManager;
+    use crate::workflow::react::types::{
+        ExecutionContext, GatewayPayload, RuntimeState, StepType, SubAgentCompletion, WorkflowState,
+    };
     use async_trait::async_trait;
     use serde_json::json;
     use std::path::PathBuf;
@@ -1293,21 +1570,89 @@ mod tests {
     async fn sub_agent_output_reads_completed_snapshot() {
         let task_id = "subagent_test_completed_snapshot";
         COMPLETED_BACKGROUND_TASKS.remove(task_id);
-        remember_completed_task(
-            task_id,
-            Some("session_a".to_string()),
-            "Status: completed. Latest Output: done",
-        );
+        remember_completed_task(task_id, Some("session_a".to_string()), "done", true);
 
-        let tool = TaskOutputTool::new("session_a".to_string());
+        let (_dir, store) = test_store();
+        let tool = TaskOutputTool::new("session_a".to_string(), store);
         let result = tool
             .call(json!({ "task_id": task_id }))
             .await
             .expect("sub_agent_output should read completed snapshot");
 
         let content = result.content.unwrap_or_default();
-        assert!(content.contains("Status: completed"));
-        assert!(content.contains("done"));
+        assert_eq!(content, "done");
+
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+    }
+
+    #[tokio::test]
+    async fn sub_agent_output_wait_until_complete_marks_result_consumed() {
+        let task_id = "subagent_test_consumed_snapshot";
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+        let (_dir, store) = test_store();
+        {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .upsert_execution_context(&ExecutionContext {
+                    session_id: "session_a".to_string(),
+                    state: RuntimeState::Running,
+                    wait_reason: None,
+                    current_step: 0,
+                    max_steps: 0,
+                    pending_tools: Vec::new(),
+                    last_action_summary: None,
+                    current_context_tokens: None,
+                    max_context_tokens: None,
+                    last_event_id: None,
+                    version: ExecutionContext::CURRENT_VERSION.to_string(),
+                    waiting_on_sub_agent_id: None,
+                    sub_agent_sessions: vec![task_id.to_string()],
+                    pending_sub_agent_completions: vec![SubAgentCompletion {
+                        sub_agent_id: task_id.to_string(),
+                        parent_session_id: "session_a".to_string(),
+                        status: "completed".to_string(),
+                        result: Some("done".to_string()),
+                        summary: Some("done".to_string()),
+                        error: None,
+                        tool_calls_count: 1,
+                        completed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        consumed: false,
+                    }],
+                })
+                .expect("failed to upsert execution context");
+        }
+
+        remember_completed_task(task_id, Some("session_a".to_string()), "done", true);
+
+        let tool = TaskOutputTool::new("session_a".to_string(), store.clone());
+        let result = tool
+            .call(json!({ "task_id": task_id, "wait_until_complete": true }))
+            .await
+            .expect("sub_agent_output should read and consume completed snapshot");
+
+        let content = result.content.unwrap_or_default();
+        assert_eq!(content, "done");
+
+        let snapshot_consumed = COMPLETED_BACKGROUND_TASKS
+            .get(task_id)
+            .map(|entry| entry.consumed)
+            .unwrap_or(false);
+        assert!(snapshot_consumed);
+
+        let context_consumed = {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .get_execution_context("session_a")
+                .expect("failed to get execution context")
+                .and_then(|ctx| {
+                    ctx.pending_sub_agent_completions
+                        .into_iter()
+                        .find(|completion| completion.sub_agent_id == task_id)
+                })
+                .map(|completion| completion.consumed)
+                .unwrap_or(false)
+        };
+        assert!(context_consumed);
 
         COMPLETED_BACKGROUND_TASKS.remove(task_id);
     }
@@ -1317,8 +1662,8 @@ mod tests {
         let task_id = "subagent_test_snapshot_overwrite";
         COMPLETED_BACKGROUND_TASKS.remove(task_id);
 
-        remember_completed_task(task_id, Some("session_a".to_string()), "first");
-        remember_completed_task(task_id, Some("session_a".to_string()), "second");
+        remember_completed_task(task_id, Some("session_a".to_string()), "first", true);
+        remember_completed_task(task_id, Some("session_a".to_string()), "second", true);
 
         let snapshot = COMPLETED_BACKGROUND_TASKS
             .get(task_id)
@@ -1331,7 +1676,8 @@ mod tests {
 
     #[tokio::test]
     async fn sub_agent_output_rejects_non_subagent_prefix() {
-        let tool = TaskOutputTool::new("session_a".to_string());
+        let (_dir, store) = test_store();
+        let tool = TaskOutputTool::new("session_a".to_string(), store);
         let error = tool
             .call(json!({ "task_id": "0q508dwjw0400" }))
             .await
@@ -1348,9 +1694,11 @@ mod tests {
             task_id,
             Some("session_b".to_string()),
             "Status: completed. Latest Output: hidden",
+            true,
         );
 
-        let tool = TaskOutputTool::new("session_a".to_string());
+        let (_dir, store) = test_store();
+        let tool = TaskOutputTool::new("session_a".to_string(), store);
         let error = tool
             .call(json!({ "task_id": task_id }))
             .await
@@ -1361,6 +1709,118 @@ mod tests {
             .contains("is not accessible from the current session"));
 
         COMPLETED_BACKGROUND_TASKS.remove(task_id);
+    }
+
+    #[tokio::test]
+    async fn sub_agent_output_reads_call_mode_snapshot() {
+        let task_id = "subagent_test_call_mode_snapshot";
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+        COMPLETED_BACKGROUND_TASKS.insert(
+            task_id.to_string(),
+            CompletedTaskSnapshot {
+                owner_session_id: Some("session_a".to_string()),
+                output: "done".to_string(),
+                output_accessible: false,
+                consumed: false,
+            },
+        );
+
+        let (_dir, store) = test_store();
+        let tool = TaskOutputTool::new("session_a".to_string(), store);
+        let result = tool
+            .call(json!({ "task_id": task_id }))
+            .await
+            .expect("call-mode snapshot should be readable");
+
+        assert_eq!(result.content.as_deref(), Some("done"));
+
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+    }
+
+    #[tokio::test]
+    async fn sub_agent_output_reads_durable_call_mode_completion() {
+        let task_id = "subagent_test_durable_call_mode";
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+        let (_dir, store) = test_store();
+        {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .upsert_execution_context(&ExecutionContext {
+                    session_id: "session_a".to_string(),
+                    state: RuntimeState::Running,
+                    wait_reason: None,
+                    current_step: 0,
+                    max_steps: 0,
+                    pending_tools: Vec::new(),
+                    last_action_summary: None,
+                    current_context_tokens: None,
+                    max_context_tokens: None,
+                    last_event_id: None,
+                    version: ExecutionContext::CURRENT_VERSION.to_string(),
+                    waiting_on_sub_agent_id: None,
+                    sub_agent_sessions: Vec::new(),
+                    pending_sub_agent_completions: vec![SubAgentCompletion {
+                        sub_agent_id: task_id.to_string(),
+                        parent_session_id: "session_a".to_string(),
+                        status: "completed".to_string(),
+                        result: Some("OCR findings".to_string()),
+                        summary: Some("OCR summary".to_string()),
+                        error: None,
+                        tool_calls_count: 2,
+                        completed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        consumed: false,
+                    }],
+                })
+                .expect("failed to upsert execution context");
+        }
+
+        let tool = TaskOutputTool::new("session_a".to_string(), store);
+        let result = tool
+            .call(json!({ "task_id": task_id }))
+            .await
+            .expect("durable call-mode completion should be readable");
+
+        let message = result.content.unwrap_or_default();
+        assert!(message.contains("<tool_result"));
+        assert!(message.contains("mode=\"call\""));
+        assert!(message.contains("OCR findings"));
+    }
+
+    #[tokio::test]
+    async fn stop_background_task_sends_stop_and_preserves_owner() {
+        let task_id = "subagent_test_stop_signal";
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+        BACKGROUND_TASKS.remove(task_id);
+        WorkflowManager::unregister_session_signal_tx(task_id);
+
+        let (tx, mut rx) = mpsc::channel(1);
+        WorkflowManager::register_session_signal_tx(task_id.to_string(), tx);
+        BACKGROUND_TASKS.insert(
+            task_id.to_string(),
+            BackgroundTask::SubAgent {
+                owner_session_id: Some("session_a".to_string()),
+                executor: Arc::new(Mutex::new(DiagnosticMockExecutor::new(task_id.to_string()))),
+                output_accessible: true,
+            },
+        );
+
+        assert!(stop_background_task(task_id, None).await);
+
+        let signal = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+            .await
+            .expect("stop signal should be delivered before timeout")
+            .expect("stop signal channel should yield a message");
+        assert_eq!(signal, serde_json::json!({ "type": "stop" }).to_string());
+
+        let snapshot = COMPLETED_BACKGROUND_TASKS
+            .get(task_id)
+            .expect("completed snapshot should be retained");
+        assert_eq!(snapshot.owner_session_id.as_deref(), Some("session_a"));
+        assert!(snapshot.output_accessible);
+
+        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+        BACKGROUND_TASKS.remove(task_id);
+        WorkflowManager::unregister_session_signal_tx(task_id);
     }
 
     #[tokio::test]
@@ -1381,6 +1841,7 @@ mod tests {
             None,
             Some(false),
             None,
+            Some(false),
             None,
         );
         let parent_session_id = "diagnostic_parent_session";
@@ -1405,7 +1866,7 @@ mod tests {
             captured: captured.clone(),
         });
         let tsid_generator = Arc::new(TsidGenerator::new(7).expect("failed to create tsid"));
-        let tool = TaskTool::new(factory, store, tsid_generator)
+        let tool = TaskTool::new(factory, store, Arc::new(NoopGateway), tsid_generator)
             .with_parent_session(parent_session_id.to_string())
             .with_child_agents(vec![crate::db::Agent::new(
                 "0q0xff0pm0400".to_string(),
@@ -1422,6 +1883,7 @@ mod tests {
                 None,
                 Some(false),
                 None,
+                Some(false),
                 None,
             )]);
 
@@ -1440,7 +1902,7 @@ mod tests {
 
         let content = result.content.unwrap_or_default();
         assert!(content.contains("\"status\":\"waiting\""));
-        assert!(content.contains("subagent_code_browse_"));
+        assert!(content.contains("\"task_id\":\"subagent_"));
         let task_id = result
             .structured_content
             .as_ref()
@@ -1448,11 +1910,27 @@ mod tests {
             .and_then(|value| value.as_str())
             .expect("sub_agent_run result should include task_id")
             .to_string();
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|value| value.get("agent_name"))
+                .and_then(|value| value.as_str()),
+            Some("Code Browse")
+        );
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|value| value.get("task"))
+                .and_then(|value| value.as_str()),
+            Some(prompt)
+        );
 
         let captured = captured.lock().await;
         let captured = captured.as_ref().expect("factory should be called");
         assert_eq!(captured.agent_id, "0q0xff0pm0400");
-        assert!(captured.session_id.starts_with("subagent_code_browse_"));
+        assert!(captured.session_id.starts_with("subagent_"));
         assert_eq!(captured.subagent_type, "Code Browse");
         assert_eq!(
             captured.parent_session_id.as_deref(),
@@ -1467,6 +1945,138 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
         COMPLETED_BACKGROUND_TASKS.remove(&task_id);
+    }
+
+    #[tokio::test]
+    async fn default_factory_persists_child_user_message_and_parent_workspace() {
+        let (dir, store) = test_store();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("failed to create workspace");
+        let workspace = workspace
+            .canonicalize()
+            .expect("failed to canonicalize workspace");
+
+        let parent_agent = crate::db::Agent::new(
+            "parent-agent".to_string(),
+            "Parent Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "Parent prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(true),
+            None,
+        );
+        let child_agent = crate::db::Agent::new(
+            "child-agent".to_string(),
+            "Code Browse".to_string(),
+            None,
+            Some("child".to_string()),
+            Some(parent_agent.id.clone()),
+            "Child prompt".to_string(),
+            None,
+            Some(
+                serde_json::to_string(&vec![
+                    crate::tools::TOOL_READ_FILE,
+                    crate::tools::TOOL_BASH,
+                    crate::tools::TOOL_SUB_AGENT_RUN,
+                ])
+                .expect("tools json"),
+            ),
+            Some(
+                serde_json::to_string(&vec![crate::tools::TOOL_READ_FILE, crate::tools::TOOL_BASH])
+                    .expect("auto approve json"),
+            ),
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+        );
+        let parent_session_id = "parent-session";
+        let child_session_id = "subagent_child_test";
+        let task = "Inspect the workflow module and report the key risks.";
+        let parent_config = AgentConfig {
+            allowed_paths: Some(vec![workspace.to_string_lossy().to_string()]),
+            ..AgentConfig::default()
+        };
+
+        {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .add_agent(&parent_agent)
+                .expect("failed to add parent agent");
+            store_guard
+                .add_agent(&child_agent)
+                .expect("failed to add child agent");
+            store_guard
+                .create_workflow(
+                    parent_session_id,
+                    "Parent workflow",
+                    &parent_agent.id,
+                    Some(parent_config.to_json()),
+                    None,
+                )
+                .expect("failed to create parent workflow");
+        }
+
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let factory = DefaultSubAgentFactory {
+            main_store: store.clone(),
+            chat_state,
+            gateway: Arc::new(NoopGateway),
+            app_data_dir: dir.path().to_path_buf(),
+            tsid_generator: Arc::new(TsidGenerator::new(7).expect("failed to create tsid")),
+        };
+
+        let _executor = factory
+            .create_executor(
+                &child_agent.id,
+                child_session_id,
+                task,
+                &child_agent.name,
+                Some(parent_session_id),
+            )
+            .await
+            .expect("failed to create child executor");
+
+        let snapshot = {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .get_workflow_snapshot(child_session_id)
+                .expect("failed to read child snapshot")
+        };
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages[0].role, "user");
+        assert_eq!(snapshot.messages[0].message, task);
+
+        let config = snapshot
+            .workflow
+            .agent_config
+            .as_deref()
+            .and_then(AgentConfig::from_json)
+            .expect("child workflow config should parse");
+        assert_eq!(
+            config.allowed_paths,
+            Some(vec![workspace.to_string_lossy().to_string()])
+        );
+        assert_eq!(
+            config.available_tools,
+            Some(vec![crate::tools::TOOL_READ_FILE.to_string()])
+        );
+        assert_eq!(
+            config.auto_approve,
+            Some(vec![crate::tools::TOOL_READ_FILE.to_string()])
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1532,6 +2142,7 @@ mod tests {
             None,
             Some(false),
             None,
+            Some(false),
             None,
         );
         let parent_config = AgentConfig {
@@ -1564,7 +2175,7 @@ mod tests {
             tsid_generator: tsid_generator.clone(),
         });
 
-        let tool = TaskTool::new(factory, main_store, tsid_generator)
+        let tool = TaskTool::new(factory, main_store, Arc::new(NoopGateway), tsid_generator)
             .with_parent_session(parent_session_id.clone())
             .with_child_agents(vec![code_browse_agent]);
 

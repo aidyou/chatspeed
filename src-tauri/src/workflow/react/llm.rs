@@ -20,8 +20,8 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 
 use crate::workflow::react::prompts::{
-    CHILD_AGENT_DIRECTORY_PROMPT, CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT,
-    PLANNING_MODE_PROMPT,
+    CHILD_AGENT_COMPLETION_PROMPT, CHILD_AGENT_CORE_SYSTEM_PROMPT, CHILD_AGENT_DIRECTORY_PROMPT,
+    CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT, PLANNING_MODE_PROMPT,
 };
 
 pub struct LlmProcessor {
@@ -419,7 +419,14 @@ impl LlmProcessor {
                             .to_string();
                     }
 
-                    if plain_text.trim().is_empty() && tool_calls_json.trim().is_empty() {
+                    let has_invalid_tool_call = final_metadata
+                        .as_ref()
+                        .and_then(|meta| meta.get("invalid_tool_call_error"))
+                        .is_some();
+                    if plain_text.trim().is_empty()
+                        && tool_calls_json.trim().is_empty()
+                        && !has_invalid_tool_call
+                    {
                         let e = WorkflowEngineError::General(
                             "LLM returned empty content and no tool calls".to_string(),
                         );
@@ -617,6 +624,10 @@ impl LlmProcessor {
     }
 
     fn normalize_history(&self, raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
+        Self::normalize_history_messages(raw_history)
+    }
+
+    fn normalize_history_messages(raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
         let mut history: Vec<serde_json::Value> = Vec::new();
         let mut deferred_system_observations: Vec<String> = Vec::new();
 
@@ -656,10 +667,19 @@ impl LlmProcessor {
                 .and_then(|meta| meta.get("message_kind"))
                 .and_then(|value| value.as_str())
                 == Some("runtime_observation");
+            let is_sub_agent_completion_observation = m
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("observation_type"))
+                .and_then(|value| value.as_str())
+                == Some("sub_agent_completion");
             let is_internal_system_observation = m.role == "user"
                 && m.step_type.as_deref() == Some("observe")
                 && (is_runtime_observation || m.message.contains("<SYSTEM_REMINDER>"));
-            if is_internal_system_observation {
+            if is_internal_system_observation
+                && !is_sub_agent_completion_observation
+                && !m.message.contains("<tool_result")
+            {
                 deferred_system_observations.push(m.message.clone());
                 continue;
             }
@@ -829,7 +849,11 @@ impl LlmProcessor {
         let mut system_parts = Vec::new();
 
         // 1. Core System Prompt
-        system_parts.push(CORE_SYSTEM_PROMPT.to_string());
+        if self.agent_config.role.as_deref() == Some("child") {
+            system_parts.push(CHILD_AGENT_CORE_SYSTEM_PROMPT.to_string());
+        } else {
+            system_parts.push(CORE_SYSTEM_PROMPT.to_string());
+        }
 
         // 2. Agent Specific Instructions
         if !self.agent_config.system_prompt.is_empty() {
@@ -859,6 +883,10 @@ impl LlmProcessor {
 
             system_parts
                 .push(CHILD_AGENT_DIRECTORY_PROMPT.replace("{{child_agents}}", &child_agent_lines));
+        }
+
+        if self.agent_config.role.as_deref() == Some("child") {
+            system_parts.push(CHILD_AGENT_COMPLETION_PROMPT.to_string());
         }
 
         // 3. Drafting for non-reasoning models
@@ -1001,6 +1029,7 @@ impl LlmProcessor {
 
     fn build_extend_tools_prompt(&self) -> String {
         let mut reminders = String::new();
+        let skills_enabled = self.agent_config.skill_enabled.unwrap_or(true);
 
         // MCP tools (before skills)
         if !self.mcp_tool_summaries.is_empty() {
@@ -1016,7 +1045,7 @@ impl LlmProcessor {
         }
 
         // Skills
-        if !self.available_skills.is_empty() {
+        if skills_enabled && !self.available_skills.is_empty() {
             reminders.push_str("## AVAILABLE SKILLS:\n");
             for skill in self.available_skills.values() {
                 reminders.push_str(&format!(
@@ -1205,7 +1234,11 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
             "<SYSTEM_REMINDER>Check the tool's input schema and ensure all required fields are provided with correct types.</SYSTEM_REMINDER>".to_string()
         }
         "NoToolCall" => {
-            "<SYSTEM_REMINDER>CRITICAL: You MUST call a tool in every response. Review the available tools and select the appropriate one for your current step. If you need to communicate with the user, use 'answer_user'. If the task is complete, use 'complete_workflow_with_summary'.</SYSTEM_REMINDER>".to_string()
+            if tool_name == crate::tools::TOOL_SUBMIT_RESULT {
+                "<SYSTEM_REMINDER>CRITICAL: You MUST call a tool in every response. For a child-agent workflow, when the delegated task is complete, call 'submit_result' with both a full `result` and a concise `summary`.</SYSTEM_REMINDER>".to_string()
+            } else {
+                "<SYSTEM_REMINDER>CRITICAL: You MUST call a tool in every response. Review the available tools and select the appropriate one for your current step. If you need to communicate with the user, use 'answer_user'. If the task is complete, use 'complete_workflow_with_summary'.</SYSTEM_REMINDER>".to_string()
+            }
         }
         "Timeout" => {
             "<SYSTEM_REMINDER>Operation timed out. Consider breaking the task into smaller steps or using a less resource-intensive approach.</SYSTEM_REMINDER>".to_string()
@@ -1257,5 +1290,129 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
                 _ => "<SYSTEM_REMINDER>Analyze this error to decide your next step.</SYSTEM_REMINDER>".to_string()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LlmProcessor;
+    use crate::db::WorkflowMessage;
+    use serde_json::json;
+
+    fn message(
+        role: &str,
+        content: &str,
+        step_type: Option<&str>,
+        metadata: Option<serde_json::Value>,
+    ) -> WorkflowMessage {
+        WorkflowMessage {
+            id: None,
+            session_id: "test-session".to_string(),
+            role: role.to_string(),
+            message: content.to_string(),
+            reasoning: None,
+            metadata,
+            attached_context: None,
+            step_type: step_type.map(str::to_string),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn normalize_history_defers_internal_runtime_observation_until_after_tool_result() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Fix the bug", None, None),
+            message(
+                "assistant",
+                "",
+                Some("think"),
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool_1",
+                        "type": "function",
+                        "function": { "name": "read_file", "arguments": "{}" }
+                    }]
+                })),
+            ),
+            message(
+                "user",
+                "<SYSTEM_REMINDER>Internal runtime note</SYSTEM_REMINDER>",
+                Some("observe"),
+                Some(json!({ "message_kind": "runtime_observation" })),
+            ),
+            message(
+                "tool",
+                "file content",
+                Some("observe"),
+                Some(json!({
+                    "tool_call_id": "tool_1",
+                    "tool_name": "read_file"
+                })),
+            ),
+        ]);
+
+        assert_eq!(history[1]["role"], "assistant");
+        assert_eq!(history[2]["role"], "tool");
+        assert_eq!(history[2]["tool_call_id"], "tool_1");
+        assert_eq!(history[3]["role"], "user");
+        assert!(history[3]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Internal runtime note"));
+    }
+
+    #[test]
+    fn normalize_history_keeps_sub_agent_tool_result_in_original_order() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Investigate the issue", None, None),
+            message(
+                "assistant",
+                "",
+                Some("think"),
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool_sub",
+                        "type": "function",
+                        "function": { "name": "sub_agent_run", "arguments": "{}" }
+                    }]
+                })),
+            ),
+            message(
+                "tool",
+                "{\"status\":\"waiting\",\"task_id\":\"subagent_test\"}",
+                Some("observe"),
+                Some(json!({
+                    "tool_call_id": "tool_sub",
+                    "tool_name": "sub_agent_run"
+                })),
+            ),
+            message(
+                "user",
+                "<tool_result tool=\"sub_agent_run\" id=\"subagent_test\" mode=\"call\" status=\"completed\">\nResult:\nSub-agent findings\n</tool_result>\n<SYSTEM_REMINDER>Use the result.</SYSTEM_REMINDER>",
+                Some("observe"),
+                Some(json!({
+                    "message_kind": "runtime_observation",
+                    "observation_type": "sub_agent_completion",
+                    "sub_agent_id": "subagent_test"
+                })),
+            ),
+            message(
+                "assistant",
+                "I will apply the findings.",
+                Some("think"),
+                None,
+            ),
+        ]);
+
+        assert_eq!(history[2]["role"], "tool");
+        assert_eq!(history[3]["role"], "user");
+        assert!(history[3]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("<tool_result tool=\"sub_agent_run\""));
+        assert_eq!(history[4]["role"], "assistant");
     }
 }

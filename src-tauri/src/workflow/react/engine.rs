@@ -13,7 +13,7 @@ use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
     ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
-    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_SUBMIT_PLAN, TOOL_WEB_FETCH,
+    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_WEB_FETCH,
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
@@ -128,6 +128,68 @@ pub struct WorkflowExecutor {
 }
 
 impl WorkflowExecutor {
+    fn extract_call_mode_sub_agent_task_id(
+        args: &serde_json::Value,
+        result: &serde_json::Value,
+    ) -> Option<String> {
+        if args
+            .get("execution_mode")
+            .and_then(|value| value.as_str())
+            .unwrap_or("call")
+            != "call"
+        {
+            return None;
+        }
+
+        let parsed_content = result
+            .get("content")
+            .and_then(|value| value.as_str())
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok());
+        let structured = result.get("structured_content");
+        let status = structured
+            .and_then(|value| value.get("status"))
+            .and_then(|value| value.as_str())
+            .or_else(|| {
+                parsed_content
+                    .as_ref()
+                    .and_then(|value| value.get("status"))
+                    .and_then(|value| value.as_str())
+            });
+
+        if status.is_some() && status != Some("waiting") {
+            return None;
+        }
+
+        structured
+            .and_then(|value| value.get("task_id"))
+            .and_then(|value| value.as_str())
+            .or_else(|| {
+                parsed_content
+                    .as_ref()
+                    .and_then(|value| value.get("task_id"))
+                    .and_then(|value| value.as_str())
+            })
+            .map(|task_id| task_id.to_string())
+    }
+
+    fn is_child_agent_workflow(&self) -> bool {
+        self.agent_config.role.as_deref() == Some("child")
+    }
+
+    fn enrich_tool_observation_metadata(
+        tool_name: &str,
+        metadata: &mut serde_json::Value,
+        reinforced: &ReinforcedResult,
+    ) {
+        if tool_name == TOOL_SUBMIT_RESULT {
+            metadata["structured_content"] = serde_json::json!({
+                "status": "completed",
+                "result": reinforced.content,
+                "summary": reinforced.summary,
+            });
+        }
+    }
+
     fn build_rejection_observation(tool_name: &str, rejection_message: Option<&str>) -> String {
         let user_prefix = rejection_message
             .map(str::trim)
@@ -689,12 +751,15 @@ impl WorkflowExecutor {
             .iter()
             .filter(|message| message.role == "tool")
             .count();
+        let delegated_task = self.context.get_initial_query();
         let payload = GatewayPayload::SubAgentProgress {
             sub_agent_id: self.session_id.clone(),
             parent_session_id: parent_session_id.clone(),
             status: RuntimeState::from(&self.state),
             workflow_state: self.state.clone(),
             wait_reason,
+            agent_name: self.subagent_type.clone(),
+            task: (!delegated_task.is_empty()).then_some(delegated_task),
             title: self.subagent_type.clone(),
             summary: latest_summary,
             tool_calls_count,
@@ -1018,26 +1083,60 @@ impl WorkflowExecutor {
             .global_tool_manager
             .get_all_native_tool_metadata()
             .await;
+        let configured_tools = self
+            .agent_config
+            .available_tools
+            .as_deref()
+            .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())
+            .map(|tools| tools.into_iter().collect::<HashSet<_>>());
+        let is_sub_agent = self.subagent_type.is_some();
 
         // Helper to check if a tool is allowed in Workflow scope
         let is_allowed = |name: &str| {
-            all_meta
+            if is_sub_agent
+                && matches!(
+                    name,
+                    TOOL_BASH | TOOL_SUB_AGENT_RUN | TOOL_SUB_AGENT_OUTPUT | TOOL_SUB_AGENT_STOP
+                )
+            {
+                return false;
+            }
+
+            let scope_allowed = all_meta
                 .iter()
                 .find(|m| m["id"] == name)
                 .map(|m| {
                     let scope = m["scope"].as_str().unwrap_or(ToolScope::Both.as_str());
                     scope == ToolScope::Workflow.as_str() || scope == ToolScope::Both.as_str()
                 })
-                .unwrap_or(true) // Default to allowed for safety if not found in meta
+                .unwrap_or(true); // Default to allowed for safety if not found in meta
+
+            let config_allowed = configured_tools.as_ref().map_or(true, |tools| {
+                matches!(
+                    name,
+                    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                        | TOOL_SUB_AGENT_RUN
+                        | TOOL_SUB_AGENT_OUTPUT
+                        | TOOL_SUB_AGENT_STOP
+                ) || tools.contains(name)
+                    || (name == "mcp_tool_load"
+                        && tools.iter().any(|tool| tool.contains(MCP_TOOL_NAME_SPLIT)))
+            });
+
+            scope_allowed && config_allowed
         };
 
         // 1. Register Web tool
         if self.policy.allowed_categories.contains(&ToolCategory::Web) {
-            if let Ok(ws) = self.global_tool_manager.get_tool(TOOL_WEB_SEARCH).await {
-                tm.register_tool(ws.clone()).await?;
+            if is_allowed(TOOL_WEB_SEARCH) {
+                if let Ok(ws) = self.global_tool_manager.get_tool(TOOL_WEB_SEARCH).await {
+                    tm.register_tool(ws.clone()).await?;
+                }
             }
-            if let Ok(wf) = self.global_tool_manager.get_tool(TOOL_WEB_FETCH).await {
-                tm.register_tool(wf.clone()).await?;
+            if is_allowed(TOOL_WEB_FETCH) {
+                if let Ok(wf) = self.global_tool_manager.get_tool(TOOL_WEB_FETCH).await {
+                    tm.register_tool(wf.clone()).await?;
+                }
             }
         }
 
@@ -1106,10 +1205,12 @@ impl WorkflowExecutor {
             if is_allowed(TOOL_SUBMIT_PLAN) {
                 tm.register_tool(Arc::new(SubmitPlan)).await?;
             }
-            if self.policy.phase != ExecutionPhase::Planning
-                && is_allowed(TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
-            {
-                tm.register_tool(Arc::new(FinishTask)).await?;
+            if self.policy.phase != ExecutionPhase::Planning {
+                if self.is_child_agent_workflow() {
+                    tm.register_tool(Arc::new(SubmitResult)).await?;
+                } else if is_allowed(TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY) {
+                    tm.register_tool(Arc::new(FinishTask)).await?;
+                }
             }
         }
 
@@ -1119,12 +1220,14 @@ impl WorkflowExecutor {
             .allowed_categories
             .contains(&ToolCategory::System)
         {
-            tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
-                .await?;
+            if self.agent_config.skill_enabled.unwrap_or(true) {
+                tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
+                    .await?;
+            }
 
             // CRITICAL: Prevent infinite recursion by only allowing the TaskTool (Sub-agent creation)
             // if the current executor is NOT itself a sub-agent.
-            if self.subagent_type.is_none() {
+            if self.subagent_type.is_none() && is_allowed(TOOL_SUB_AGENT_RUN) {
                 let child_agents = self
                     .context
                     .main_store
@@ -1138,6 +1241,7 @@ impl WorkflowExecutor {
                         crate::workflow::react::orchestrator::TaskTool::new(
                             self.sub_agent_factory.clone(),
                             self.context.main_store.clone(),
+                            self.gateway.clone(),
                             self.tsid_generator.clone(),
                         )
                         .with_parent_session(self.session_id.clone())
@@ -1147,14 +1251,23 @@ impl WorkflowExecutor {
                 }
             }
 
-            tm.register_tool(Arc::new(
-                crate::workflow::react::orchestrator::TaskOutputTool::new(self.session_id.clone()),
-            ))
-            .await?;
-            tm.register_tool(Arc::new(
-                crate::workflow::react::orchestrator::TaskStopTool::new(self.session_id.clone()),
-            ))
-            .await?;
+            if is_allowed(TOOL_SUB_AGENT_OUTPUT) {
+                tm.register_tool(Arc::new(
+                    crate::workflow::react::orchestrator::TaskOutputTool::new(
+                        self.session_id.clone(),
+                        self.context.main_store.clone(),
+                    ),
+                ))
+                .await?;
+            }
+            if is_allowed(TOOL_SUB_AGENT_STOP) {
+                tm.register_tool(Arc::new(
+                    crate::workflow::react::orchestrator::TaskStopTool::new(
+                        self.session_id.clone(),
+                    ),
+                ))
+                .await?;
+            }
         }
 
         // 5. Todo Manager Tools (Session Persistent)
@@ -1163,26 +1276,34 @@ impl WorkflowExecutor {
             .allowed_categories
             .contains(&ToolCategory::System)
         {
-            tm.register_tool(Arc::new(TodoCreateTool {
-                session_id: self.session_id.clone(),
-                main_store: self.context.main_store.clone(),
-            }))
-            .await?;
-            tm.register_tool(Arc::new(TodoListTool {
-                session_id: self.session_id.clone(),
-                main_store: self.context.main_store.clone(),
-            }))
-            .await?;
-            tm.register_tool(Arc::new(TodoUpdateTool {
-                session_id: self.session_id.clone(),
-                main_store: self.context.main_store.clone(),
-            }))
-            .await?;
-            tm.register_tool(Arc::new(TodoGetTool {
-                session_id: self.session_id.clone(),
-                main_store: self.context.main_store.clone(),
-            }))
-            .await?;
+            if is_allowed(TOOL_TODO_CREATE) {
+                tm.register_tool(Arc::new(TodoCreateTool {
+                    session_id: self.session_id.clone(),
+                    main_store: self.context.main_store.clone(),
+                }))
+                .await?;
+            }
+            if is_allowed(TOOL_TODO_LIST) {
+                tm.register_tool(Arc::new(TodoListTool {
+                    session_id: self.session_id.clone(),
+                    main_store: self.context.main_store.clone(),
+                }))
+                .await?;
+            }
+            if is_allowed(TOOL_TODO_UPDATE) {
+                tm.register_tool(Arc::new(TodoUpdateTool {
+                    session_id: self.session_id.clone(),
+                    main_store: self.context.main_store.clone(),
+                }))
+                .await?;
+            }
+            if is_allowed(TOOL_TODO_GET) {
+                tm.register_tool(Arc::new(TodoGetTool {
+                    session_id: self.session_id.clone(),
+                    main_store: self.context.main_store.clone(),
+                }))
+                .await?;
+            }
         }
 
         // 7. MCP Tool Loader (if MCP tools are available)
@@ -1199,7 +1320,7 @@ impl WorkflowExecutor {
                 .map(|specs| specs.iter().any(|s| s.name.contains(MCP_TOOL_NAME_SPLIT)))
                 .unwrap_or(false);
 
-            if has_mcp_tools {
+            if has_mcp_tools && is_allowed("mcp_tool_load") {
                 tm.register_tool(Arc::new(McpToolLoad {
                     tool_manager: self.global_tool_manager.clone(),
                 }))
@@ -1932,6 +2053,22 @@ impl WorkflowExecutor {
                                     .await?;
 
                                 // Mark as approved since this went through user approval
+                                let mut metadata = serde_json::json!({
+                                    "tool_call_id": tool_call_id,
+                                    "tool_name": tool_name,
+                                    "title": reinforced.title,
+                                    "summary": reinforced.summary,
+                                    "execution_status": if reinforced.is_error { "failed" } else { "completed" },
+                                    "is_error": reinforced.is_error,
+                                    "error_type": reinforced.error_type,
+                                    "display_type": reinforced.display_type,
+                                    "approval_status": "approved"
+                                });
+                                Self::enrich_tool_observation_metadata(
+                                    &tool_name,
+                                    &mut metadata,
+                                    &reinforced,
+                                );
                                 self.add_message_and_notify_internal(
                                     "tool".to_string(),
                                     reinforced.content,
@@ -1940,17 +2077,7 @@ impl WorkflowExecutor {
                                     Some(StepType::Observe),
                                     reinforced.is_error,
                                     reinforced.error_type.clone(),
-                                    Some(serde_json::json!({
-                                        "tool_call_id": tool_call_id,
-                                        "tool_name": tool_name,
-                                        "title": reinforced.title,
-                                        "summary": reinforced.summary,
-                                        "execution_status": if reinforced.is_error { "failed" } else { "completed" },
-                                        "is_error": reinforced.is_error,
-                                        "error_type": reinforced.error_type,
-                                        "display_type": reinforced.display_type,
-                                        "approval_status": "approved"
-                                    })),
+                                    Some(metadata),
                                 )
                                 .await?;
 
@@ -2348,6 +2475,22 @@ impl WorkflowExecutor {
                             .await?;
 
                         // Mark as approved since this went through user approval
+                        let mut metadata = serde_json::json!({
+                            "tool_call_id": signal_id,
+                            "tool_name": tool_name,
+                            "title": reinforced.title,
+                            "summary": reinforced.summary,
+                            "execution_status": if reinforced.is_error { "failed" } else { "completed" },
+                            "is_error": reinforced.is_error,
+                            "error_type": reinforced.error_type,
+                            "display_type": reinforced.display_type,
+                            "approval_status": "approved"
+                        });
+                        Self::enrich_tool_observation_metadata(
+                            &tool_name,
+                            &mut metadata,
+                            &reinforced,
+                        );
                         self.add_message_and_notify_internal(
                             "tool".to_string(),
                             reinforced.content,
@@ -2356,17 +2499,7 @@ impl WorkflowExecutor {
                             Some(StepType::Observe),
                             reinforced.is_error,
                             reinforced.error_type.clone(),
-                            Some(serde_json::json!({
-                                "tool_call_id": signal_id,
-                                "tool_name": tool_name,
-                                "title": reinforced.title,
-                                "summary": reinforced.summary,
-                                "execution_status": if reinforced.is_error { "failed" } else { "completed" },
-                                "is_error": reinforced.is_error,
-                                "error_type": reinforced.error_type,
-                                "display_type": reinforced.display_type,
-                                "approval_status": "approved"
-                            })),
+                            Some(metadata),
                         )
                         .await?;
                     } else {
@@ -2868,20 +3001,22 @@ impl WorkflowExecutor {
                     .unwrap_or("unknown");
 
                 // Build metadata with approval_status if present
+                let mut execution_status = if reinforced.is_error {
+                    "failed".to_string()
+                } else if reinforced.approval_status.as_deref() == Some("pending") {
+                    "pending_approval".to_string()
+                } else if reinforced.approval_status.as_deref() == Some("rejected") {
+                    "rejected".to_string()
+                } else {
+                    "completed".to_string()
+                };
+
                 let mut metadata = serde_json::json!({
                     "tool_call_id": id,
                     "tool_name": tool_name, // CRITICAL: Added for LlmProcessor's recovery logic
                     "title": reinforced.title,
                     "summary": reinforced.summary,
-                    "execution_status": if reinforced.is_error {
-                        "failed"
-                    } else if reinforced.approval_status.as_deref() == Some("pending") {
-                        "pending_approval"
-                    } else if reinforced.approval_status.as_deref() == Some("rejected") {
-                        "rejected"
-                    } else {
-                        "completed"
-                    },
+                    "execution_status": execution_status,
                     "is_error": reinforced.is_error,
                     "error_type": reinforced.error_type,
                     "display_type": reinforced.display_type
@@ -2895,6 +3030,7 @@ impl WorkflowExecutor {
                     metadata["observation_kind"] =
                         serde_json::to_value(observation_kind).unwrap_or(serde_json::Value::Null);
                 }
+                Self::enrich_tool_observation_metadata(tool_name, &mut metadata, reinforced);
                 if tool_name == crate::tools::TOOL_SUB_AGENT_RUN {
                     if let Ok(task_result) =
                         serde_json::from_str::<serde_json::Value>(&reinforced.content)
@@ -2902,13 +3038,28 @@ impl WorkflowExecutor {
                         if let Some(task_id) = task_result.get("task_id").and_then(|v| v.as_str()) {
                             metadata["sub_agent_id"] = serde_json::json!(task_id);
                         }
+                        if let Some(agent_name) =
+                            task_result.get("agent_name").and_then(|v| v.as_str())
+                        {
+                            metadata["sub_agent_name"] = serde_json::json!(agent_name);
+                        }
+                        if let Some(task) = task_result.get("task").and_then(|v| v.as_str()) {
+                            metadata["sub_agent_task"] = serde_json::json!(task);
+                        }
                         if let Some(status) = task_result.get("status").and_then(|v| v.as_str()) {
                             metadata["sub_agent_status"] = serde_json::json!(status);
+                            if status == "waiting" {
+                                execution_status = "waiting".to_string();
+                            }
                         }
                         if let Some(mode) = task_result.get("mode").and_then(|v| v.as_str()) {
                             metadata["sub_agent_mode"] = serde_json::json!(mode);
+                            if mode == "call" && execution_status == "completed" {
+                                execution_status = "waiting".to_string();
+                            }
                         }
                     }
+                    metadata["execution_status"] = serde_json::json!(execution_status);
                 }
 
                 let _ = self
@@ -2933,6 +3084,15 @@ impl WorkflowExecutor {
                 self.loop_detector.reset_no_tool_response_history();
             }
 
+            if self.state == WorkflowState::AwaitingSubAgent {
+                log::info!(
+                    "[Workflow][session={}][phase=run_loop] Child call is pending; entering wait branch",
+                    self.session_id
+                );
+                sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+
             if results.is_empty() {
                 let repeated_no_tool_warning = self
                     .loop_detector
@@ -2952,14 +3112,23 @@ impl WorkflowExecutor {
                     )
                 } else if self.consecutive_no_tool_calls >= 3 {
                     let remaining = self.max_steps.saturating_sub(self.current_step);
+                    let finish_tool = if self.is_child_agent_workflow() {
+                        "submit_result"
+                    } else {
+                        "complete_workflow_with_summary"
+                    };
                     format!(
                         "<SYSTEM_REMINDER>NO TOOL CALLS DETECTED: You have not called any tools for {} consecutive responses. \
                         This is wasting your limited step budget ({}/{} steps used, {} remaining). \
-                        If you are truly finished, provide a summary and call 'complete_workflow_with_summary'.</SYSTEM_REMINDER>",
-                        self.consecutive_no_tool_calls, self.current_step, self.max_steps, remaining
+                        If you are truly finished, provide a summary and call '{}'.</SYSTEM_REMINDER>",
+                        self.consecutive_no_tool_calls, self.current_step, self.max_steps, remaining, finish_tool
                     )
                 } else {
-                    "<SYSTEM_REMINDER>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your task, call 'complete_workflow_with_summary' AFTER providing a summary in plain text.</SYSTEM_REMINDER>".to_string()
+                    if self.is_child_agent_workflow() {
+                        "<SYSTEM_REMINDER>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your delegated task, call 'submit_result' with both result and summary.</SYSTEM_REMINDER>".to_string()
+                    } else {
+                        "<SYSTEM_REMINDER>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your task, call 'complete_workflow_with_summary' with a valid `summary` argument or after providing a visible summary in plain text.</SYSTEM_REMINDER>".to_string()
+                    }
                 };
                 let _ = self
                     .add_message_and_notify_internal(
@@ -2999,7 +3168,12 @@ impl WorkflowExecutor {
                         .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
                         .and_then(|v| v.as_str())
                         .unwrap_or_default();
-                    tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                    let is_terminal_tool = if self.is_child_agent_workflow() {
+                        tool_name == TOOL_SUBMIT_RESULT
+                    } else {
+                        tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                    };
+                    is_terminal_tool
                         && reinforced.approval_status.as_deref() != Some("pending")
                         && reinforced.approval_status.as_deref() != Some("rejected")
                 });
@@ -3296,6 +3470,99 @@ impl WorkflowExecutor {
         }
     }
 
+    fn enrich_tool_arguments_with_call_id(
+        args: &serde_json::Value,
+        tool_call_id: &str,
+    ) -> serde_json::Value {
+        let mut enriched_args = match args {
+            serde_json::Value::Object(map) => serde_json::Value::Object(map.clone()),
+            other => serde_json::json!({
+                "__raw_arguments": other.clone()
+            }),
+        };
+        enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
+            serde_json::json!(tool_call_id);
+        enriched_args
+    }
+
+    fn find_completed_sub_agent_result_for_prompt(
+        &self,
+        prompt: &str,
+    ) -> Option<(String, String, String)> {
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            return None;
+        }
+
+        let matching_task_ids: HashSet<String> = self
+            .context
+            .messages
+            .iter()
+            .filter_map(|message| {
+                let metadata = message.metadata.as_ref()?;
+                if metadata.get("tool_name").and_then(|value| value.as_str())
+                    != Some(crate::tools::TOOL_SUB_AGENT_RUN)
+                {
+                    return None;
+                }
+                if metadata
+                    .get("sub_agent_task")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    != Some(prompt)
+                {
+                    return None;
+                }
+                metadata
+                    .get("sub_agent_id")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+
+        if matching_task_ids.is_empty() {
+            return None;
+        }
+
+        self.context.messages.iter().rev().find_map(|message| {
+            let metadata = message.metadata.as_ref()?;
+            if metadata
+                .get("observation_type")
+                .and_then(|value| value.as_str())
+                != Some("sub_agent_completion")
+            {
+                return None;
+            }
+            let sub_agent_id = metadata
+                .get("sub_agent_id")
+                .and_then(|value| value.as_str())?;
+            if !matching_task_ids.contains(sub_agent_id) {
+                return None;
+            }
+            let result = metadata.get("result")?;
+            let status = result
+                .get("status")
+                .and_then(|value| value.as_str())
+                .or_else(|| {
+                    metadata
+                        .get("execution_status")
+                        .and_then(|value| value.as_str())
+                })
+                .unwrap_or("completed");
+            let content = result
+                .get("result")
+                .and_then(|value| value.as_str())
+                .or_else(|| result.get("summary").and_then(|value| value.as_str()))
+                .or_else(|| result.get("error").and_then(|value| value.as_str()))
+                .or_else(|| metadata.get("summary").and_then(|value| value.as_str()))?;
+            Some((
+                sub_agent_id.to_string(),
+                status.to_string(),
+                content.to_string(),
+            ))
+        })
+    }
+
     async fn execute_tools(
         &mut self,
         text_part: String,
@@ -3355,6 +3622,7 @@ impl WorkflowExecutor {
         }
 
         let mut has_todo_call = false;
+        let mut predicted_turn_block = false;
 
         // Use a map to collect results and a list to maintain original AI call order
         let mut result_map: HashMap<String, (ReinforcedResult, serde_json::Value)> = HashMap::new();
@@ -3392,7 +3660,8 @@ impl WorkflowExecutor {
             // If a PREVIOUS tool in this TURN has already transitioned the engine to a blocking state
             // (like AwaitingApproval, AwaitingUser or Paused), we MUST NOT run or even audit subsequent tools.
             // They are simply postponed until the previous turn's block is resolved.
-            if self.state == WorkflowState::AwaitingApproval
+            if predicted_turn_block
+                || self.state == WorkflowState::AwaitingApproval
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::Paused
                 || self.state == WorkflowState::AwaitingSubAgent
@@ -3424,12 +3693,36 @@ impl WorkflowExecutor {
                     // the next iterations will hit the 'CAUSAL BLOCKING CHECK' above.
                 }
                 Ok(None) => {
+                    let blocks_following_tools =
+                        matches!(name.as_str(), crate::tools::TOOL_SUB_AGENT_RUN)
+                            && args
+                                .get("execution_mode")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("call")
+                                == "call"
+                            || matches!(name.as_str(), crate::tools::TOOL_SUB_AGENT_OUTPUT)
+                                && args
+                                    .get("wait_until_complete")
+                                    .and_then(|value| value.as_bool())
+                                    .unwrap_or(false);
+
                     // Safe to proceed to physical execution!
-                    if name.starts_with("todo_") || name == crate::tools::TOOL_SUB_AGENT_RUN {
+                    if name.starts_with("todo_")
+                        || matches!(
+                            name.as_str(),
+                            crate::tools::TOOL_SUB_AGENT_RUN
+                                | crate::tools::TOOL_SUB_AGENT_OUTPUT
+                                | crate::tools::TOOL_SUB_AGENT_STOP
+                        )
+                    {
                         has_todo_call = true;
                         sequential_execution_queue.push((id, name, args, call));
                     } else {
                         parallel_execution_queue.push((id, name, args, call));
+                    }
+
+                    if blocks_following_tools {
+                        predicted_turn_block = true;
                     }
                 }
                 Err(e) => return Err(e),
@@ -3460,9 +3753,7 @@ impl WorkflowExecutor {
                 let semaphore_clone = semaphore.clone();
 
                 // Inject internal tool_call_id for streaming tools
-                let mut enriched_args = args.clone();
-                enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
-                    serde_json::json!(id);
+                let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
 
                 tool_futures.push_back(async move {
                     let _permit = semaphore_clone.acquire().await.ok();
@@ -3489,8 +3780,7 @@ impl WorkflowExecutor {
         // Phase B: Sequential Batch (State-sensitive tools like todo_*)
         for (id, name, args, call) in sequential_execution_queue {
             // Inject internal tool_call_id for streaming tools
-            let mut enriched_args = args.clone();
-            enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] = serde_json::json!(id);
+            let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
 
             let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                 self.global_tool_manager
@@ -3537,43 +3827,51 @@ impl WorkflowExecutor {
     ) -> Result<ReinforcedResult, WorkflowEngineError> {
         if name == crate::tools::TOOL_SUB_AGENT_RUN {
             if let Ok(val) = &result {
-                let structured = val.get("structured_content");
-                let status = structured
-                    .and_then(|s| s.get("status"))
-                    .and_then(|s| s.as_str());
-
-                if status == Some("waiting") {
-                    let sub_agent_id = structured
-                        .and_then(|s| s.get("task_id"))
-                        .and_then(|s| s.as_str())
-                        .or_else(|| val.get("content").and_then(|c| c.as_str()))
-                        .and_then(|content| {
-                            serde_json::from_str::<serde_json::Value>(content)
-                                .ok()
-                                .and_then(|v| {
-                                    v.get("task_id")
-                                        .and_then(|task_id| task_id.as_str())
-                                        .map(|s| s.to_string())
-                                })
-                        });
-
-                    if let Some(sub_agent_id) = sub_agent_id {
-                        self.sub_agent_id = Some(sub_agent_id.clone());
-                        if !self.sub_agent_sessions.iter().any(|id| id == &sub_agent_id) {
-                            self.sub_agent_sessions.push(sub_agent_id.clone());
-                        }
-                        self.update_state(WorkflowState::AwaitingSubAgent).await?;
+                if let Some(sub_agent_id) = Self::extract_call_mode_sub_agent_task_id(args, val) {
+                    self.sub_agent_id = Some(sub_agent_id.clone());
+                    if !self.sub_agent_sessions.iter().any(|id| id == &sub_agent_id) {
+                        self.sub_agent_sessions.push(sub_agent_id.clone());
                     }
+                    self.update_state(WorkflowState::AwaitingSubAgent).await?;
                 }
             }
         }
 
         // 1. Complete Workflow Early Return
         if name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY {
+            let default_summary = t!("workflow.task_finished").to_string();
+            let summary = args
+                .get("summary")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .unwrap_or(default_summary);
             return Ok(ReinforcedResult {
                 content: "Finished".into(),
                 title: "Complete Workflow with Summary".to_string(),
-                summary: t!("workflow.task_finished").to_string(),
+                summary,
+                is_error: false,
+                error_type: None,
+                display_type: "text".to_string(),
+                approval_status: None,
+                observation_kind: None,
+            });
+        }
+
+        if name == TOOL_SUBMIT_RESULT {
+            return Ok(ReinforcedResult {
+                content: args
+                    .get("result")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                title: "Submit Result".to_string(),
+                summary: args
+                    .get("summary")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("Result submitted")
+                    .to_string(),
                 is_error: false,
                 error_type: None,
                 display_type: "text".to_string(),
@@ -3662,8 +3960,9 @@ impl WorkflowExecutor {
         match name {
             TOOL_SUBMIT_PLAN => return self.handle_submit_plan_intercept(text_part).await,
             TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => {
-                return self.handle_finish_task_intercept(text_part).await
+                return self.handle_finish_task_intercept(text_part, args).await
             }
+            TOOL_SUBMIT_RESULT => return self.handle_submit_result_intercept(args).await,
             TOOL_ASK_USER => return self.handle_ask_user_intercept(args).await,
             _ => {}
         }
@@ -3671,6 +3970,33 @@ impl WorkflowExecutor {
         // --- 2. Security & Runtime Checks (Bash, FS, Loops) ---
         // CRITICAL: These must happen BEFORE approval checks to ensure hard security boundaries
         // are never bypassed by user approval (especially in sensitive phases like Planning).
+        if name == crate::tools::TOOL_SUB_AGENT_RUN
+            && args
+                .get("execution_mode")
+                .and_then(|value| value.as_str())
+                .unwrap_or("call")
+                == "call"
+        {
+            if let Some(prompt) = args.get("prompt").and_then(|value| value.as_str()) {
+                if let Some((sub_agent_id, status, content)) =
+                    self.find_completed_sub_agent_result_for_prompt(prompt)
+                {
+                    return Ok(Some(ReinforcedResult {
+                        content: format!(
+                            "<tool_result tool=\"sub_agent_run\" id=\"{}\" mode=\"call\" status=\"{}\" reused=\"true\">\nTask:\n{}\n\nResult:\n{}\n</tool_result>\n<SYSTEM_REMINDER>An identical call-mode sub-agent task already completed in this workflow, so the previous result was reused instead of spawning another sub-agent. Use this result as context and continue the original user request.</SYSTEM_REMINDER>",
+                            sub_agent_id, status, prompt, content
+                        ),
+                        title: "Sub Agent Run".to_string(),
+                        summary: "Reused completed sub-agent result".to_string(),
+                        is_error: false,
+                        error_type: None,
+                        display_type: "text".to_string(),
+                        approval_status: None,
+                        observation_kind: None,
+                    }));
+                }
+            }
+        }
 
         // 2.1 Loop Detection
         if let Some(warning) = self.loop_detector.record_and_check(name, args) {
@@ -3801,14 +4127,44 @@ impl WorkflowExecutor {
             &sub_agent_id,
             &result,
         ) {
-            self.pending_sub_agent_completions
-                .retain(|completion| completion.sub_agent_id != sub_agent_id);
+            for completion in &mut self.pending_sub_agent_completions {
+                if completion.sub_agent_id == sub_agent_id {
+                    completion.consumed = true;
+                }
+            }
 
+            let summary_section = resolution
+                .summary
+                .as_deref()
+                .filter(|summary| !summary.trim().is_empty() && *summary != resolution.content)
+                .map(|summary| format!("\n\nSummary:\n{}", summary))
+                .unwrap_or_default();
+            let task_section = self
+                .context
+                .messages
+                .iter()
+                .rev()
+                .filter_map(|message| message.metadata.as_ref())
+                .find(|metadata| {
+                    metadata
+                        .get("sub_agent_id")
+                        .and_then(|value| value.as_str())
+                        == Some(resolution.sub_agent_id.as_str())
+                })
+                .and_then(|metadata| metadata.get("sub_agent_task"))
+                .and_then(|value| value.as_str())
+                .filter(|task| !task.trim().is_empty())
+                .map(|task| format!("Task:\n{}\n\n", task))
+                .unwrap_or_default();
             self.add_message_and_notify_internal(
                 "user".to_string(),
                 format!(
-                    "<SYSTEM_REMINDER>\nSub-agent {} {}: {}\n</SYSTEM_REMINDER>",
-                    resolution.sub_agent_id, resolution.status, resolution.content
+                    "<tool_result tool=\"sub_agent_run\" id=\"{}\" mode=\"call\" status=\"{}\">\n{}Result:\n{}\n{}\n</tool_result>\n<SYSTEM_REMINDER>The call-mode sub-agent result above has already been delivered. Treat it as context for the user's original request, then choose the appropriate next action: continue implementation, inspect more context, verify, ask a blocking question, answer the user, or finish only if the original request is fully addressed. Do not copy the sub-agent result verbatim as the final answer.</SYSTEM_REMINDER>",
+                    resolution.sub_agent_id,
+                    resolution.status,
+                    task_section,
+                    resolution.content,
+                    summary_section
                 ),
                 None,
                 None,
@@ -4913,5 +5269,33 @@ mod recovery_tests {
                 "^git status($| .*)".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn test_extract_call_mode_sub_agent_task_id_from_structured_content() {
+        let args = serde_json::json!({ "execution_mode": "call" });
+        let result = serde_json::json!({
+            "content": "{\"status\":\"waiting\",\"task_id\":\"subagent_structured\"}",
+            "structured_content": {
+                "status": "waiting",
+                "task_id": "subagent_structured"
+            },
+            "is_error": false
+        });
+
+        let task_id = WorkflowExecutor::extract_call_mode_sub_agent_task_id(&args, &result);
+        assert_eq!(task_id.as_deref(), Some("subagent_structured"));
+    }
+
+    #[test]
+    fn test_extract_call_mode_sub_agent_task_id_falls_back_to_content_payload() {
+        let args = serde_json::json!({ "execution_mode": "call" });
+        let result = serde_json::json!({
+            "content": "{\"status\":\"waiting\",\"task_id\":\"subagent_content_only\"}",
+            "is_error": false
+        });
+
+        let task_id = WorkflowExecutor::extract_call_mode_sub_agent_task_id(&args, &result);
+        assert_eq!(task_id.as_deref(), Some("subagent_content_only"));
     }
 }

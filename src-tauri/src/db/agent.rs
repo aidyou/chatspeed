@@ -113,6 +113,8 @@ pub struct Agent {
     pub final_audit: Option<bool>,
     /// Approval level for tool calls (default, smart, full)
     pub approval_level: Option<String>,
+    /// Whether skills are enabled for this agent
+    pub skill_enabled: Option<bool>,
     /// Maximum context length (in tokens)
     pub max_contexts: Option<i32>,
     /// Creation timestamp
@@ -139,6 +141,7 @@ impl Agent {
         allowed_paths: Option<String>,
         final_audit: Option<bool>,
         approval_level: Option<String>,
+        skill_enabled: Option<bool>,
         max_contexts: Option<i32>,
     ) -> Self {
         Self {
@@ -156,6 +159,7 @@ impl Agent {
             allowed_paths,
             final_audit,
             approval_level,
+            skill_enabled,
             max_contexts,
             created_at: None,
             updated_at: None,
@@ -234,6 +238,7 @@ impl From<&Row<'_>> for Agent {
             allowed_paths: row.get("allowed_paths").ok(),
             final_audit: row.get("final_audit").ok(),
             approval_level: row.get("approval_level").ok(),
+            skill_enabled: row.get("skill_enabled").ok(),
             max_contexts: row.get("max_contexts").ok(),
             created_at: row.get("created_at").ok(),
             updated_at: row.get("updated_at").ok(),
@@ -276,8 +281,8 @@ impl MainStore {
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 agent.id,
                 agent.name,
@@ -293,6 +298,7 @@ impl MainStore {
                 allowed_paths_json,
                 agent.final_audit,
                 agent.approval_level,
+                agent.skill_enabled,
                 agent.max_contexts,
             ],
         )?;
@@ -349,9 +355,10 @@ impl MainStore {
                 allowed_paths = ?11,
                 final_audit = ?12,
                 approval_level = ?13,
-                max_contexts = ?14,
+                skill_enabled = ?14,
+                max_contexts = ?15,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?15",
+             WHERE id = ?16",
             params![
                 agent.name,
                 agent.description,
@@ -366,6 +373,7 @@ impl MainStore {
                 allowed_paths_json,
                 agent.final_audit,
                 agent.approval_level,
+                agent.skill_enabled,
                 agent.max_contexts,
                 agent.id,
             ],

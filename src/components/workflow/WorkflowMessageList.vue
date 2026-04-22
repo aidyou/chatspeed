@@ -41,8 +41,83 @@
               message.toolDisplay.toolType || 'tool-system',
               message.toolDisplay.isError ? 'status-error' : 'status-success'
             ]">
+            <template v-if="isSubAgentRunMessage(message) && message.subAgentCard">
+              <div class="sub-agent-card">
+                <div class="sub-agent-card__header">
+                  <div class="sub-agent-card__title-wrap">
+                    <div class="sub-agent-card__title">
+                      <cs name="task" size="15px" class="sub-agent-card__icon" />
+                      <span>Delegated Task</span>
+                    </div>
+                    <div class="sub-agent-card__status" :class="subAgentStatusClass(message)">
+                      {{ getSubAgentStatusLabel(message) }}
+                    </div>
+                  </div>
+                  <div class="sub-agent-card__meta">
+                    <div class="sub-agent-card__row">
+                      <span class="sub-agent-card__label">Agent</span>
+                      <span class="sub-agent-card__value">{{ message.subAgentCard.agent }}</span>
+                    </div>
+                    <div class="sub-agent-card__row">
+                      <span class="sub-agent-card__label">Mode</span>
+                      <span class="sub-agent-card__value mode">{{ message.subAgentCard.mode }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  class="sub-agent-card__task"
+                  :class="{ expanded: isSubAgentTaskExpanded(message) }">
+                  <div
+                    class="sub-agent-card__task-toggle"
+                    @click="$emit('toggle-expand', getSubAgentTaskExpandId(message))">
+                    <div class="sub-agent-card__task-heading">
+                      <span class="sub-agent-card__label">Task</span>
+                      <span
+                        v-if="!isSubAgentTaskExpanded(message)"
+                        class="sub-agent-card__task-preview"
+                        >{{ getSubAgentTaskPreview(message) }}</span
+                      >
+                    </div>
+                    <cs
+                      :name="isSubAgentTaskExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                      size="14px"
+                      class="sub-agent-card__task-chevron" />
+                  </div>
+                  <div v-if="isSubAgentTaskExpanded(message)" class="sub-agent-card__task-body">
+                    <MarkdownSimple :content="message.subAgentCard.taskMarkdown" />
+                  </div>
+                </div>
+
+                <div
+                  v-if="message.subAgentCard.hasResult"
+                  class="sub-agent-card__result"
+                  :class="{ expanded: isMessageExpanded(message) }">
+                  <div
+                    class="sub-agent-card__result-toggle"
+                    @click="$emit('toggle-expand', message.displayId)">
+                    <div class="sub-agent-card__result-heading">
+                      <span class="sub-agent-card__label">Result</span>
+                      <span
+                        v-if="!isMessageExpanded(message)"
+                        class="sub-agent-card__result-preview"
+                        >{{ getSubAgentResultPreview(message) }}</span
+                      >
+                    </div>
+                    <cs
+                      :name="isMessageExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                      size="14px"
+                      class="sub-agent-card__result-chevron" />
+                  </div>
+                  <div v-if="isMessageExpanded(message)" class="sub-agent-card__result-body">
+                    <MarkdownSimple :content="message.subAgentCard.resultMarkdown" />
+                  </div>
+                </div>
+              </div>
+            </template>
+
             <!-- complete_workflow_with_summary special display -->
-            <template v-if="isFinishTaskMessage(message)">
+            <template v-else-if="isFinishTaskMessage(message)">
               <div class="tool-line finish-task-display">
                 <cs
                   :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
@@ -617,6 +692,48 @@ const getMessageSubAgentId = message => {
 
 const getChoiceGroups = message =>
   props.parseChoiceContent(props.removeSystemReminder(message.message || '')).groups || []
+
+const isSubAgentRunMessage = message =>
+  String(message?.metadata?.tool_name || '').toLowerCase() === 'sub_agent_run' &&
+  !!message?.subAgentCard
+
+const getSubAgentStatusLabel = message => {
+  const status = String(message?.subAgentCard?.status || 'running').toLowerCase()
+  if (status === 'completed') return 'Completed'
+  if (status === 'failed') return 'Failed'
+  if (status === 'cancelled' || status === 'interrupted') return 'Stopped'
+  return 'Running'
+}
+
+const subAgentStatusClass = message => {
+  const status = String(message?.subAgentCard?.status || 'running').toLowerCase()
+  if (status === 'completed') return 'is-completed'
+  if (status === 'failed') return 'is-failed'
+  if (status === 'cancelled' || status === 'interrupted') return 'is-stopped'
+  return 'is-running'
+}
+
+const getSubAgentResultPreview = message => {
+  const result = props.removeSystemReminder(message?.subAgentCard?.result || '').replace(/\s+/g, ' ')
+  if (!result) return ''
+  return result.length > 96 ? `${result.slice(0, 96)}...` : result
+}
+
+const getSubAgentTaskExpandId = message => `${message?.displayId || message?.id || ''}:task`
+
+const isSubAgentTaskExpanded = message => {
+  return props.isMessageExpanded({
+    displayId: getSubAgentTaskExpandId(message),
+    metadata: {},
+    toolDisplay: {}
+  })
+}
+
+const getSubAgentTaskPreview = message => {
+  const task = props.removeSystemReminder(message?.subAgentCard?.task || '').replace(/\s+/g, ' ')
+  if (!task) return ''
+  return task.length > 96 ? `${task.slice(0, 96)}...` : task
+}
 
 const ensureAskUserDraft = message => {
   const key = getChoiceKey(message)

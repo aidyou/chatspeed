@@ -219,6 +219,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       ...progress,
       subAgentId,
       parentSessionId,
+      agentName: progress.agentName ?? progress.agent_name ?? existing.agentName ?? null,
+      task: progress.task ?? existing.task ?? null,
       status: progress.status ?? existing.status ?? null,
       workflowState: progress.workflowState ?? progress.workflow_state ?? existing.workflowState ?? null,
       waitReason: progress.waitReason ?? progress.wait_reason ?? existing.waitReason ?? null,
