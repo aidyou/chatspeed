@@ -63,6 +63,18 @@
                 size="small" controls-position="right" style="width: 100%" />
             </div>
           </div>
+
+          <div v-if="supportsThinking(activeTab)" class="params-row compact-params" style="margin-top: 8px; display: flex; gap: 10px;">
+            <div class="param-item" style="flex: 1;">
+              <span class="param-label" style="display: block; margin-bottom: 4px;">{{ $t('settings.model.reasoning') }}</span>
+              <el-switch v-model="currentModel.thinkingEnabled" size="small" />
+            </div>
+            <div class="param-item" v-if="currentModel.thinkingEnabled" style="flex: 1;">
+              <span class="param-label" style="display: block; margin-bottom: 4px;">{{ $t('settings.model.thinkingBudgetTokens') }}</span>
+              <el-input-number v-model="currentModel.thinkingBudgetTokens" :min="256" :max="131072" :step="256"
+                size="small" controls-position="right" style="width: 100%" />
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -114,6 +126,9 @@ const defaultModelConfig = () => ({
   id: '',
   model: '',
   temperature: -0.1,
+  thinking: null,
+  thinkingEnabled: false,
+  thinkingBudgetTokens: 1024,
   contextSize: 128000,
   maxTokens: 0
 })
@@ -138,6 +153,14 @@ const onModelIdChange = () => {
   currentModel.value.model = ''
 }
 
+const normalizeModelDraft = (model) => ({
+  ...defaultModelConfig(),
+  ...(model || {}),
+  thinking: model?.thinking || null,
+  thinkingEnabled: !!model?.thinking,
+  thinkingBudgetTokens: model?.thinking?.budgetTokens || 1024
+})
+
 const applyProviderModelOverrides = (modelId) => {
   if (!modelId || modelModes[activeTab.value] !== 'provider') return
 
@@ -147,6 +170,9 @@ const applyProviderModelOverrides = (modelId) => {
   if (selected.temperature !== undefined && selected.temperature !== null) {
     currentModel.value.temperature = selected.temperature
   }
+  currentModel.value.thinking = selected.thinking || null
+  currentModel.value.thinkingEnabled = !!selected.thinking
+  currentModel.value.thinkingBudgetTokens = selected.thinking?.budgetTokens || 1024
   if (selected.contextSize !== undefined && selected.contextSize !== null) {
     currentModel.value.contextSize = selected.contextSize
   }
@@ -173,6 +199,15 @@ const onProxyAliasChange = (value) => {
   currentModel.value.model = `${proxyGroups[activeTab.value]}@${value}`
 }
 
+const supportsThinking = (key) => {
+  if (modelModes[key] !== 'provider') return !!agentModels[key]?.thinkingEnabled
+  const selected = (agentModels[key]?.id
+    ? modelStore.getModelProviderById(agentModels[key].id)?.models || []
+    : []
+  ).find(model => model.id === agentModels[key]?.model)
+  return !!selected?.reasoning || !!agentModels[key]?.thinkingEnabled
+}
+
 const parseModelField = (field, key) => {
   if (field && field.id === 0 && field.model?.includes('@')) {
     modelModes[key] = 'proxy'
@@ -193,6 +228,16 @@ const handleClose = (done) => {
 
 const handleSave = () => {
   const result = JSON.parse(JSON.stringify(agentModels))
+  for (const key of ['plan', 'act']) {
+    result[key].thinking = result[key].thinkingEnabled
+      ? {
+        type: 'enabled',
+        budgetTokens: Number(result[key].thinkingBudgetTokens) || 1024
+      }
+      : null
+    delete result[key].thinkingEnabled
+    delete result[key].thinkingBudgetTokens
+  }
   if (modelModes.plan === 'proxy') result.plan.id = 0
   if (modelModes.act === 'proxy') result.act.id = 0
   
@@ -215,8 +260,8 @@ const initFromStore = () => {
   const currentWf = workflowStore.currentWorkflow
   if (currentWf?.agentConfig?.models) {
     const wfModels = currentWf.agentConfig.models
-    if (wfModels.plan) agentModels.plan = { ...defaultModelConfig(), ...wfModels.plan }
-    if (wfModels.act) agentModels.act = { ...defaultModelConfig(), ...wfModels.act }
+    if (wfModels.plan) agentModels.plan = normalizeModelDraft(wfModels.plan)
+    if (wfModels.act) agentModels.act = normalizeModelDraft(wfModels.act)
   } else if (!refAgent && workflowStore.workflows.length > 0) {
     // 1b. Fallback to last workflow's agent
     const lastWf = workflowStore.workflows[0]
@@ -227,8 +272,8 @@ const initFromStore = () => {
   if (!workflowStore.currentWorkflow?.agentConfig?.models && refAgent && refAgent.models) {
     try {
       const modelsObj = typeof refAgent.models === 'string' ? JSON.parse(refAgent.models) : refAgent.models
-      if (modelsObj.plan) agentModels.plan = { ...defaultModelConfig(), ...modelsObj.plan }
-      if (modelsObj.act) agentModels.act = { ...defaultModelConfig(), ...modelsObj.act }
+      if (modelsObj.plan) agentModels.plan = normalizeModelDraft(modelsObj.plan)
+      if (modelsObj.act) agentModels.act = normalizeModelDraft(modelsObj.act)
     } catch (e) {
       console.error('Failed to parse agent models:', e)
     }

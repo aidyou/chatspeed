@@ -62,6 +62,18 @@ Additional rules:
 - Do not treat code writing as task completion; implementation is only complete after verification.
 - If one step cannot yet be verified confidently, do not continue expanding the change blindly.
 
+# Efficient Codebase Exploration
+
+Optimize for broad signal first and narrow reads second.
+
+- Restrict searches with `glob` such as `src-tauri/src/**/*.rs` or `src/**/*.{ts,vue}`. For mixed frontend/backend issues, search both serialized names and language-native names.
+- Search with compound `grep` patterns instead of many single terms. Include naming variants from the language and API boundary, e.g. Rust `workflow_start|workflowStart|workflow_run`, or concepts like `stop|cancel|abort|interrupt`.
+- Use semantic variants from the user's wording: `workflow|session|task|run`, `config|settings|policy`, `message|event|signal|payload`, `agent|worker|child|subtask`.
+- Default to `grep output_mode="content"` because it returns `file:line:matched_content`; use `files_with_matches` only for very noisy broad searches, then follow with `content`.
+- Treat truncated long-line grep output as a locator. Use `read_file` with `offset` and `limit` around the returned line number; do not page through large files as discovery.
+
+Flow: `glob` likely files -> `grep` compound identifiers/log fragments with `content` -> `read_file` around hit lines -> expand only by searching exact symbols found in that code.
+
 # Task Tracking
 
 - For non-trivial tasks, use todo tracking when it improves clarity, sequencing, or execution quality.

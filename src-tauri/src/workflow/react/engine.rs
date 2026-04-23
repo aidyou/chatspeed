@@ -17,6 +17,7 @@ use crate::tools::{
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
+    child_tasks::render_call_mode_sub_agent_tool_result,
     compression::ContextCompressor,
     context::ContextManager,
     dispatcher::{Dispatcher, DispatcherConfig},
@@ -190,6 +191,13 @@ impl WorkflowExecutor {
                 "result": reinforced.content,
                 "summary": reinforced.summary,
             });
+            return;
+        }
+
+        if tool_name == crate::tools::TOOL_SUB_AGENT_RUN
+            && reinforced.content.contains("reused=\"true\"")
+        {
+            metadata["ui_visibility"] = serde_json::json!("hide");
         }
     }
 
@@ -877,6 +885,14 @@ impl WorkflowExecutor {
         // Sync TODO list on initialization
         let _ = self.sync_todo_list().await;
 
+        if let Ok(store) = self.context.main_store.read() {
+            if let Ok(Some(context)) = store.get_execution_context(&self.session_id) {
+                self.sub_agent_id = context.waiting_on_sub_agent_id.clone();
+                self.sub_agent_sessions = context.sub_agent_sessions.clone();
+                self.pending_sub_agent_completions = context.pending_sub_agent_completions.clone();
+            }
+        }
+
         if let Some(last_msg) = self.context.messages.last() {
             if self.state == WorkflowState::Completed || self.state == WorkflowState::Error {
                 log::info!(
@@ -966,28 +982,7 @@ impl WorkflowExecutor {
                                 self.sub_agent_id,
                                 self.sub_agent_sessions.len()
                             );
-                            if let Some(completion) = self
-                                .pending_sub_agent_completions
-                                .iter()
-                                .find(|completion| {
-                                    !completion.consumed
-                                        && Some(completion.sub_agent_id.as_str())
-                                            == self.sub_agent_id.as_deref()
-                                })
-                                .cloned()
-                            {
-                                log::info!(
-                                    "[Workflow][session={}][phase=restore][event=sub_agent_completion_replay] Replaying durable sub-agent completion {}",
-                                    self.session_id,
-                                    completion.sub_agent_id
-                                );
-                                let _ = self
-                                    .apply_sub_agent_completion(
-                                        completion.sub_agent_id.clone(),
-                                        completion.to_signal_result(),
-                                    )
-                                    .await?;
-                            }
+                            let _ = self.apply_startup_pending_sub_agent_completion().await?;
                         }
                     }
                     crate::workflow::react::replay::RecoveryResult::SafeFailed {
@@ -1624,6 +1619,10 @@ impl WorkflowExecutor {
             && self.state != WorkflowState::Error
             && self.state != WorkflowState::Cancelled
         {
+            if self.apply_startup_pending_sub_agent_completion().await? {
+                continue;
+            }
+
             // IMPORTANT: Do NOT pre-drain user_message while already in waiting states.
             // Waiting states must resume only through the unified wait branch below.
             let is_waiting_state = self.state == WorkflowState::Paused
@@ -3516,6 +3515,58 @@ impl WorkflowExecutor {
         enriched_args
     }
 
+    fn append_tool_started_event(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) {
+        let event = WorkflowEvent::tool_started(
+            self.session_id.clone(),
+            tool_call_id.to_string(),
+            tool_name.to_string(),
+            arguments.clone(),
+        );
+        if let Err(e) = self.append_event(&event) {
+            log::error!(
+                "[Workflow][session={}] workflow.event.append_failed - tool_started {}: {}",
+                self.session_id,
+                tool_call_id,
+                e
+            );
+        }
+    }
+
+    fn append_tool_terminal_event(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        result: &Result<serde_json::Value, crate::tools::ToolError>,
+    ) {
+        let event = match result {
+            Ok(value) => WorkflowEvent::tool_completed(
+                self.session_id.clone(),
+                tool_call_id.to_string(),
+                tool_name.to_string(),
+                Some(value.clone()),
+            ),
+            Err(error) => WorkflowEvent::tool_failed(
+                self.session_id.clone(),
+                tool_call_id.to_string(),
+                tool_name.to_string(),
+                error.to_string(),
+            ),
+        };
+        if let Err(e) = self.append_event(&event) {
+            log::error!(
+                "[Workflow][session={}] workflow.event.append_failed - tool_terminal {}: {}",
+                self.session_id,
+                tool_call_id,
+                e
+            );
+        }
+    }
+
     fn find_completed_sub_agent_result_for_prompt(
         &self,
         prompt: &str,
@@ -3791,6 +3842,8 @@ impl WorkflowExecutor {
             let semaphore = self.context.semaphore.clone();
 
             for (id, name, args, call) in parallel_execution_queue {
+                self.append_tool_started_event(&id, &name, &args);
+
                 let tm_clone = tm.clone();
                 let gtm_clone = gtm.clone();
                 let semaphore_clone = semaphore.clone();
@@ -3813,6 +3866,7 @@ impl WorkflowExecutor {
             }
 
             while let Some((id, name, args, call, res)) = tool_futures.next().await {
+                self.append_tool_terminal_event(&id, &name, &res);
                 let reinforced = self
                     .post_process_tool_result(&name, &args, &call, res)
                     .await?;
@@ -3822,6 +3876,8 @@ impl WorkflowExecutor {
 
         // Phase B: Sequential Batch (State-sensitive tools like todo_*)
         for (id, name, args, call) in sequential_execution_queue {
+            self.append_tool_started_event(&id, &name, &args);
+
             // Inject internal tool_call_id for streaming tools
             let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
 
@@ -3833,6 +3889,7 @@ impl WorkflowExecutor {
                 self.tool_manager.tool_call(&name, enriched_args).await
             };
 
+            self.append_tool_terminal_event(&id, &name, &final_res);
             let reinforced = self
                 .post_process_tool_result(&name, &args, &call, final_res)
                 .await?;
@@ -4026,8 +4083,15 @@ impl WorkflowExecutor {
                 {
                     return Ok(Some(ReinforcedResult {
                         content: format!(
-                            "<tool_result tool=\"sub_agent_run\" id=\"{}\" mode=\"call\" status=\"{}\" reused=\"true\">\nTask:\n{}\n\nResult:\n{}\n</tool_result>\n<SYSTEM_REMINDER>An identical call-mode sub-agent task already completed in this workflow, so the previous result was reused instead of spawning another sub-agent. Use this result as context and continue the original user request.</SYSTEM_REMINDER>",
-                            sub_agent_id, status, prompt, content
+                            "{}\n<SYSTEM_REMINDER>An identical call-mode sub-agent task already completed in this workflow, so the previous result was reused instead of spawning another sub-agent. Use this result as context and continue the original user request.</SYSTEM_REMINDER>",
+                            render_call_mode_sub_agent_tool_result(
+                                &sub_agent_id,
+                                &status,
+                                Some(prompt),
+                                &content,
+                                None,
+                                true,
+                            )
                         ),
                         title: "Sub Agent Run".to_string(),
                         summary: "Reused completed sub-agent result".to_string(),
@@ -4196,13 +4260,12 @@ impl WorkflowExecutor {
                 }
             }
 
-            let summary_section = resolution
+            let summary = resolution
                 .summary
                 .as_deref()
                 .filter(|summary| !summary.trim().is_empty() && *summary != resolution.content)
-                .map(|summary| format!("\n\nSummary:\n{}", summary))
-                .unwrap_or_default();
-            let task_section = self
+                .map(str::trim);
+            let task = self
                 .context
                 .messages
                 .iter()
@@ -4217,17 +4280,19 @@ impl WorkflowExecutor {
                 .and_then(|metadata| metadata.get("sub_agent_task"))
                 .and_then(|value| value.as_str())
                 .filter(|task| !task.trim().is_empty())
-                .map(|task| format!("Task:\n{}\n\n", task))
-                .unwrap_or_default();
+                .map(str::trim);
             self.add_message_and_notify_internal(
                 "user".to_string(),
                 format!(
-                    "<tool_result tool=\"sub_agent_run\" id=\"{}\" mode=\"call\" status=\"{}\">\n{}Result:\n{}\n{}\n</tool_result>\n<SYSTEM_REMINDER>The call-mode sub-agent result above has already been delivered. Treat it as context for the user's original request, then choose the appropriate next action: continue implementation, inspect more context, verify, ask a blocking question, answer the user, or finish only if the original request is fully addressed. Do not copy the sub-agent result verbatim as the final answer.</SYSTEM_REMINDER>",
-                    resolution.sub_agent_id,
-                    resolution.status,
-                    task_section,
-                    resolution.content,
-                    summary_section
+                    "{}\n<SYSTEM_REMINDER>The call-mode sub-agent result above has already been delivered. Treat it as context for the user's original request, then choose the appropriate next action: continue implementation, inspect more context, verify, ask a blocking question, answer the user, or finish only if the original request is fully addressed. Do not copy the sub-agent result verbatim as the final answer.</SYSTEM_REMINDER>",
+                    render_call_mode_sub_agent_tool_result(
+                        &resolution.sub_agent_id,
+                        &resolution.status,
+                        task,
+                        &resolution.content,
+                        summary,
+                        false,
+                    )
                 ),
                 None,
                 None,
@@ -4443,11 +4508,7 @@ impl WorkflowExecutor {
 
     pub(crate) fn append_event(&self, event: &WorkflowEvent) -> Result<(), WorkflowEngineError> {
         if let Some(ref dispatcher) = self.dispatcher {
-            if let Err(e) =
-                dispatcher.dispatch_now(crate::workflow::react::dispatcher::DispatchEvent::Audit {
-                    event: event.clone(),
-                })
-            {
+            if let Err(e) = dispatcher.dispatch_audit_now(event.clone()) {
                 log::warn!(
                     "[Workflow][session={}][phase=dispatcher] audit dispatch failed: {}, falling back to direct DB write",
                     self.session_id,
@@ -4862,7 +4923,41 @@ impl WorkflowExecutor {
                     self.enqueue_user_message(content, queued_user_message_id)
                         .await?;
                 }
-                RuntimeSignal::Other => {}
+                RuntimeSignal::Other {
+                    signal,
+                    signal_type,
+                } => {
+                    if let Some(signal) = signal {
+                        let current_wait_reason = self.current_wait_reason();
+                        if !signal.is_valid_for(current_wait_reason.as_ref()) {
+                            log::warn!(
+                                "[Workflow][session={}][phase=signal][event=signal_rejected_non_waiting] Signal '{}' arrived while state={:?}, wait_reason={:?}; ignoring until the workflow reaches a compatible wait state",
+                                self.session_id,
+                                signal.type_name(),
+                                self.state,
+                                current_wait_reason
+                            );
+                        } else {
+                            log::info!(
+                                "[Workflow][session={}][phase=signal][event=signal_observed_non_waiting] Signal '{}' is valid but the executor is currently active; normal handlers will consume it when appropriate",
+                                self.session_id,
+                                signal.type_name()
+                            );
+                        }
+                    } else {
+                        log::warn!(
+                            "[Workflow][session={}][phase=signal][event=signal_unknown_non_waiting] Unknown signal type '{}' received during active execution",
+                            self.session_id,
+                            sig_type_str
+                        );
+                    }
+
+                    if matches!(signal_type, Some(SignalType::SubAgentComplete))
+                        && self.apply_startup_pending_sub_agent_completion().await?
+                    {
+                        continue;
+                    }
+                }
             }
 
             if self
@@ -4910,6 +5005,63 @@ impl WorkflowExecutor {
         }
 
         Ok(false)
+    }
+
+    fn current_wait_reason(&self) -> Option<WaitReason> {
+        match self.state {
+            WorkflowState::Paused => Some(WaitReason::Confirmation),
+            WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
+            WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
+                Some(WaitReason::Approval)
+            }
+            WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
+            _ => None,
+        }
+    }
+
+    async fn apply_startup_pending_sub_agent_completion(
+        &mut self,
+    ) -> Result<bool, WorkflowEngineError> {
+        let pending_completion = if let Some(expected_sub_agent_id) = self.sub_agent_id.as_deref() {
+            self.pending_sub_agent_completions
+                .iter()
+                .find(|completion| {
+                    !completion.consumed && completion.sub_agent_id == expected_sub_agent_id
+                })
+                .cloned()
+        } else {
+            let mut pending = self
+                .pending_sub_agent_completions
+                .iter()
+                .filter(|completion| !completion.consumed);
+            let first = pending.next().cloned();
+            if pending.next().is_some() {
+                log::warn!(
+                    "[Workflow][session={}][phase=restore] Multiple unconsumed sub-agent completions exist without an active waiting target; leaving them durable until a matching wait state is restored",
+                    self.session_id
+                );
+                None
+            } else {
+                first
+            }
+        };
+
+        let Some(completion) = pending_completion else {
+            return Ok(false);
+        };
+
+        log::info!(
+            "[Workflow][session={}][phase=restore][event=sub_agent_completion_apply] Applying durable sub-agent completion {} while state={:?}",
+            self.session_id,
+            completion.sub_agent_id,
+            self.state
+        );
+
+        self.apply_sub_agent_completion(
+            completion.sub_agent_id.clone(),
+            completion.to_signal_result(),
+        )
+        .await
     }
 
     async fn enqueue_user_message(
@@ -5199,6 +5351,11 @@ impl WorkflowExecutor {
         ctx.last_event_id = store
             .get_last_event_id(&self.session_id)
             .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+        log::debug!(
+            "[Workflow][session={}][phase=snapshot] last_event_id captured as {:?}; dispatcher writes are asynchronous so this value may lag events that were just enqueued",
+            self.session_id,
+            ctx.last_event_id
+        );
         Ok(())
     }
 }

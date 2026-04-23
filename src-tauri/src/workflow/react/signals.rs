@@ -11,7 +11,10 @@ pub enum RuntimeSignal {
         content: String,
         queued_user_message_id: Option<String>,
     },
-    Other,
+    Other {
+        signal: Option<crate::workflow::react::types::WorkflowSignal>,
+        signal_type: Option<SignalType>,
+    },
 }
 
 /// Parses a raw signal JSON payload into a runtime classification.
@@ -19,6 +22,7 @@ pub fn parse_runtime_signal(raw: &str) -> RuntimeSignal {
     let parsed: Value = serde_json::from_str(raw).unwrap_or_default();
     let signal_type = parsed["type"].as_str().unwrap_or_default();
     let signal_type_enum = SignalType::from_str(signal_type);
+    let workflow_signal = crate::workflow::react::types::WorkflowSignal::parse(raw);
 
     if signal_type_enum == Some(SignalType::Stop) || raw.to_lowercase().contains("stop") {
         return RuntimeSignal::Stop;
@@ -41,7 +45,10 @@ pub fn parse_runtime_signal(raw: &str) -> RuntimeSignal {
         };
     }
 
-    RuntimeSignal::Other
+    RuntimeSignal::Other {
+        signal: workflow_signal,
+        signal_type: signal_type_enum,
+    }
 }
 
 /// Canonical signal types used by the workflow runtime.

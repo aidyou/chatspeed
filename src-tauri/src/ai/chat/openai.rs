@@ -733,6 +733,10 @@ impl AiChatTrait for OpenAIChat {
                 }
             }
 
+            if let Some(thinking) = &merged_metadata.thinking {
+                obj.insert("thinking".to_string(), json!(thinking));
+            }
+
             // temperature: OpenAI range is typically 0.0 to 2.0
             if let Some(v) = merged_metadata.temperature {
                 if v >= 0.0 && v <= 2.0 {

@@ -1,5 +1,5 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
-use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition};
+use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -68,10 +68,37 @@ impl ToolDefinition for AskUser {
             scope: Some(self.scope()),
         }
     }
-    async fn call(&self, _params: Value) -> NativeToolResult {
+    async fn call(&self, params: Value) -> NativeToolResult {
+        let items = params
+            .get("items")
+            .and_then(|value| value.as_array())
+            .ok_or_else(|| ToolError::InvalidParams("items must be a non-empty array".into()))?;
+        if items.is_empty() {
+            return Err(ToolError::InvalidParams(
+                "items must be a non-empty array".into(),
+            ));
+        }
+        for item in items {
+            let title = item.get("title").and_then(|value| value.as_str());
+            let options = item.get("options").and_then(|value| value.as_array());
+            if title
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+                || options.map_or(true, |values| values.is_empty())
+            {
+                return Err(ToolError::InvalidParams(
+                    "Each ask_user item must include a non-empty title and at least one option"
+                        .into(),
+                ));
+            }
+        }
         Ok(ToolCallResult::success(
             Some("Waiting for user response".into()),
-            None,
+            Some(json!({
+                "status": "waiting_for_user",
+                "items_count": items.len()
+            })),
         ))
     }
 }
@@ -110,10 +137,19 @@ impl ToolDefinition for SubmitPlan {
             scope: Some(self.scope()),
         }
     }
-    async fn call(&self, _params: Value) -> NativeToolResult {
+    async fn call(&self, params: Value) -> NativeToolResult {
+        let plan = params
+            .get("plan")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ToolError::InvalidParams("plan must be a non-empty string".into()))?;
         Ok(ToolCallResult::success(
             Some("Plan submitted for review. Entering 'Awaiting Approval' state.".into()),
-            None,
+            Some(json!({
+                "status": "awaiting_approval",
+                "plan_length": plan.len()
+            })),
         ))
     }
 }
@@ -165,8 +201,20 @@ impl ToolDefinition for FinishTask {
             scope: Some(self.scope()),
         }
     }
-    async fn call(&self, _params: Value) -> NativeToolResult {
-        Ok(ToolCallResult::success(Some("Task finished".into()), None))
+    async fn call(&self, params: Value) -> NativeToolResult {
+        let summary = params
+            .get("summary")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ToolError::InvalidParams("summary must be a non-empty string".into()))?;
+        Ok(ToolCallResult::success(
+            Some("Task finished".into()),
+            Some(json!({
+                "status": "completed",
+                "summary_length": summary.len()
+            })),
+        ))
     }
 }
 
@@ -220,12 +268,16 @@ impl ToolDefinition for SubmitResult {
         let result = params
             .get("result")
             .and_then(|value| value.as_str())
-            .unwrap_or_default()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ToolError::InvalidParams("result must be a non-empty string".into()))?
             .to_string();
         let summary = params
             .get("summary")
             .and_then(|value| value.as_str())
-            .unwrap_or_default()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ToolError::InvalidParams("summary must be a non-empty string".into()))?
             .to_string();
 
         Ok(ToolCallResult::success(
@@ -263,17 +315,18 @@ mod tests {
     #[tokio::test]
     async fn test_ask_user_with_empty_params() {
         let tool = AskUser;
-        // Tool doesn't validate, so empty params should work
-        let params = json!([]);
+        let params = json!({});
 
-        let result = tool.call(params).await.unwrap();
-        assert_eq!(result.content.unwrap(), "Waiting for user response");
+        let result = tool.call(params).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_finish_task() {
         let tool = FinishTask;
-        let params = json!({});
+        let params = json!({
+            "summary": "Completed the task, verified the result, and no known limitations remain."
+        });
 
         let result = tool.call(params).await.unwrap();
         assert_eq!(result.content.unwrap(), "Task finished");
@@ -287,12 +340,25 @@ mod tests {
             Box::new(FinishTask),
             Box::new(SubmitResult),
         ];
+        let params_by_name = |name: &str| match name {
+            crate::tools::TOOL_ASK_USER => json!({
+                "items": [{"title": "Choose", "options": ["A", "B"]}]
+            }),
+            crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => json!({
+                "summary": "Completed the task, verified the result, and no known limitations remain."
+            }),
+            crate::tools::TOOL_SUBMIT_RESULT => json!({
+                "result": "Result",
+                "summary": "Summary"
+            }),
+            _ => json!({}),
+        };
 
         for tool in tools {
-            let params = json!({});
+            let params = params_by_name(tool.name());
             let result = tool.call(params).await.unwrap();
             assert!(result.content.is_some());
-            assert!(result.structured_content.is_none());
+            assert!(result.structured_content.is_some());
         }
     }
 

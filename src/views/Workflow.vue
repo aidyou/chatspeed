@@ -166,7 +166,7 @@ const osType = ref('')
 // ============================================================
 const selectedAgent = ref(null)
 const approvalLevel = ref('default')
-const finalAuditMode = ref('on')
+const finalAuditMode = ref('off')
 const planningMode = ref(false)
 
 const showPlanningModeToggle = computed(() => {
@@ -465,6 +465,16 @@ const onSelectedAgentChange = async (agent) => {
       workflowStore.setShellPolicy(agentConfig?.shellPolicy || [])
       workflowStore.setAutoApprovedTools(agentConfig?.autoApprove || [])
     }
+
+    if (agentConfig?.approvalLevel) {
+      approvalLevel.value = agentConfig.approvalLevel
+    }
+    if (agentConfig?.finalAudit !== undefined && agentConfig?.finalAudit !== null) {
+      finalAuditMode.value = agentConfig.finalAudit ? 'on' : 'off'
+    }
+    if (agentConfig?.phase) {
+      planningMode.value = String(agentConfig.phase).toLowerCase() === 'planning'
+    }
   } catch (error) {
     console.error('Failed to update workflow agent:', error)
   }
@@ -540,24 +550,6 @@ watch(
     })
   },
   { deep: true }
-)
-
-// Watch for current workflow changes to sync approvalLevel
-watch(
-  () => workflowStore.currentWorkflow?.agentConfig,
-  (newConfig) => {
-    if (newConfig) {
-      // Sync approvalLevel from workflow config
-      if (newConfig.approvalLevel) {
-        approvalLevel.value = newConfig.approvalLevel
-      }
-      // Sync finalAuditMode from workflow config
-      if (newConfig.finalAudit !== undefined && newConfig.finalAudit !== null) {
-        finalAuditMode.value = newConfig.finalAudit ? 'on' : 'off'
-      }
-    }
-  },
-  { immediate: true }
 )
 
 onMounted(async () => {

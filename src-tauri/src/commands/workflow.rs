@@ -367,6 +367,34 @@ fn build_agent_config_from_agent(
     config
 }
 
+fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
+    let mut inherited_config = AgentConfig::from_json(inherited)?;
+
+    if let Some(models) = &inherited_config.models {
+        let mut validated_models = models.clone();
+        for model in [&mut validated_models.plan, &mut validated_models.act] {
+            if let Some(m) = model {
+                if let Some(temp) = m.temperature {
+                    m.temperature = Some(if temp < 0.0 {
+                        -0.1
+                    } else {
+                        temp.clamp(0.0, 2.0)
+                    });
+                }
+                if let Some(ctx) = m.context_size {
+                    m.context_size = Some(ctx.clamp(1024, 2_000_000));
+                }
+                if let Some(max_tokens) = m.max_tokens {
+                    m.max_tokens = Some(max_tokens.max(0));
+                }
+            }
+        }
+        inherited_config.models = Some(validated_models);
+    }
+
+    Some(inherited_config)
+}
+
 fn agent_shell_policy_value(agent: &Agent) -> Option<Value> {
     agent
         .shell_policy
@@ -485,36 +513,10 @@ pub async fn create_workflow(
         build_agent_config_from_agent(&agent, request.allowed_paths.as_ref(), request.final_audit);
 
     // Merge inherited config if provided.
+    // Workflow/session overrides take precedence over agent defaults here.
     if let Some(inherited) = &request.inherited_agent_config {
-        if let Some(inherited_config) = AgentConfig::from_json(inherited) {
-            // Validate and merge models
-            if let Some(models) = &inherited_config.models {
-                let mut validated_models = models.clone();
-                // Preserve per-role model parameters from the inherited config.
-                // `temperature < 0` and `max_tokens <= 0` are valid sentinels in this
-                // codebase for "off/unset", so do not erase them during merge.
-                for model in [&mut validated_models.plan, &mut validated_models.act] {
-                    if let Some(m) = model {
-                        if let Some(temp) = m.temperature {
-                            m.temperature = Some(if temp < 0.0 {
-                                -0.1
-                            } else {
-                                temp.clamp(0.0, 2.0)
-                            });
-                        }
-                        if let Some(ctx) = m.context_size {
-                            m.context_size = Some(ctx.clamp(1024, 2_000_000));
-                        }
-                        if let Some(max_tokens) = m.max_tokens {
-                            m.max_tokens = Some(max_tokens.max(0));
-                        }
-                    }
-                }
-                config.models = Some(validated_models);
-            }
-
-            // Merge other fields from inherited config
-            config.merge_from(&inherited_config);
+        if let Some(inherited_config) = validated_inherited_agent_config(inherited) {
+            config.apply_overrides(&inherited_config);
         }
     }
 
@@ -1742,7 +1744,8 @@ pub async fn workflow_signal(
             true
         } else {
             // Route signal through manager
-            if let Err(e) = workflow_manager_arc.route_signal(&session_id, &signal_type) {
+            if let Err(e) = workflow_manager_arc.validate_signal_routing(&session_id, &signal_type)
+            {
                 let allow_recovery_for_terminal_user_message = matches!(
                     signal_type_enum,
                     Some(SignalType::UserMessage | SignalType::LegacyUserInput)
@@ -1767,7 +1770,7 @@ pub async fn workflow_signal(
                 }
             } else {
                 log::info!(
-                    "[WorkflowManager][session={}][event=signal_routed] Signal '{}' routed successfully",
+                    "[Workflow][session={}][phase=signal][event=signal_injection_start] Signal '{}' validated; injecting through gateway",
                     session_id,
                     signal_type
                 );
@@ -1831,6 +1834,8 @@ pub async fn workflow_signal(
             ) {
                 if let Some(content) = val["content"].as_str() {
                     let status_lower = workflow_snapshot.workflow.status.to_lowercase();
+                    // When recovery_context is None (for example a brand-new workflow with no
+                    // persisted execution history yet), fall back to the durable workflow status.
                     let is_resumable =
                         is_resumable_from_context_for_user_message(recovery_context.as_ref())
                             || matches!(
@@ -2493,8 +2498,8 @@ pub async fn update_workflow_agent_id(
         .and_then(AgentConfig::from_json)
         .unwrap_or_default();
     let mut agent_config = build_agent_config_from_agent(&agent, None, None);
-    agent_config.approval_level = current_config.approval_level;
     agent_config.final_audit = current_config.final_audit;
+    agent_config.phase = current_config.phase;
     let agent_config_json = agent_config_to_json_with_agent_shell_policy(&agent_config, &agent)?;
     store
         .update_workflow_agent_config(&session_id, &agent_config_json)

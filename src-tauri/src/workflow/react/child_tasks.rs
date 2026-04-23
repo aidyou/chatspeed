@@ -141,6 +141,43 @@ pub fn resolve_sub_agent_completion(
     })
 }
 
+pub fn render_call_mode_sub_agent_tool_result(
+    sub_agent_id: &str,
+    status: &str,
+    task: Option<&str>,
+    result: &str,
+    summary: Option<&str>,
+    reused: bool,
+) -> String {
+    let mut output = format!(
+        "<tool_result tool=\"sub_agent_run\" id=\"{}\" mode=\"call\" status=\"{}\"",
+        sub_agent_id, status
+    );
+    if reused {
+        output.push_str(" reused=\"true\"");
+    }
+    output.push_str(">\n");
+
+    if let Some(task) = task.filter(|task| !task.trim().is_empty()) {
+        output.push_str("<Task>\n");
+        output.push_str(task.trim());
+        output.push_str("\n</Task>\n");
+    }
+
+    output.push_str("<Result>\n");
+    output.push_str(result.trim());
+    output.push_str("\n</Result>\n");
+
+    if let Some(summary) = summary.filter(|summary| !summary.trim().is_empty()) {
+        output.push_str("<Summary>\n");
+        output.push_str(summary.trim());
+        output.push_str("\n</Summary>\n");
+    }
+
+    output.push_str("</tool_result>");
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +332,24 @@ mod tests {
             sub_agent_sessions,
             vec!["subagent_1".to_string(), "subagent_2".to_string()]
         );
+    }
+
+    #[test]
+    fn test_render_call_mode_sub_agent_tool_result_uses_xml_sections() {
+        let output = render_call_mode_sub_agent_tool_result(
+            "subagent_1",
+            "completed",
+            Some("Inspect OCR module"),
+            "Found the issue",
+            Some("OCR path confirmed"),
+            true,
+        );
+
+        assert!(output.contains("reused=\"true\""));
+        assert!(output.contains("<Task>\nInspect OCR module\n</Task>"));
+        assert!(output.contains("<Result>\nFound the issue\n</Result>"));
+        assert!(output.contains("<Summary>\nOCR path confirmed\n</Summary>"));
+        assert!(!output.contains("Task:\n"));
+        assert!(!output.contains("Result:\n"));
     }
 }

@@ -265,9 +265,30 @@
 
           <!-- Regular Assistant Content -->
           <div v-else>
+            <div v-if="isContextSnapshotMessage(message)" class="context-snapshot-card">
+              <div
+                class="context-snapshot-card__header"
+                @click="$emit('toggle-expand', getContextSnapshotExpandId(message))">
+                <cs name="archive" size="14px" class="context-snapshot-card__icon" />
+                <span class="context-snapshot-card__title">Previous Context Snapshot</span>
+                <span
+                  v-if="!isContextSnapshotExpanded(message)"
+                  class="context-snapshot-card__preview">
+                  {{ getContextSnapshotPreview(message) }}
+                </span>
+                <cs
+                  :name="isContextSnapshotExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                  size="14px"
+                  class="context-snapshot-card__chevron" />
+              </div>
+              <div v-if="isContextSnapshotExpanded(message)" class="context-snapshot-card__body">
+                <MarkdownSimple :content="formatContextSnapshotForDisplay(message)" />
+              </div>
+            </div>
+
             <!-- Thought/Content FIRST (Separate reasoning field has priority) -->
             <div
-              v-if="message.reasoning || message.stepType === 'Think'"
+              v-else-if="message.reasoning || message.stepType === 'Think'"
               class="reasoning-container">
               <div class="reasoning-header" @click="$emit('toggle-reasoning', message.displayId)">
                 <cs
@@ -306,7 +327,7 @@
               </div>
             </div>
             <MarkdownSimple
-              v-if="getParsedMessage(message).content"
+              v-if="!isContextSnapshotMessage(message) && getParsedMessage(message).content"
               :content="getParsedMessage(message).content" />
 
             <!-- Tool Call Indicators SECOND (Only pending ones) -->
@@ -512,14 +533,94 @@ const approvalDrafts = ref({})
 const askUserDrafts = ref({})
 
 const isHiddenSystemObservation = message => {
-  if (message?.metadata?.message_kind === 'runtime_observation') return true
-  if (message?.metadata?.messageKind === 'runtime_observation') return true
+  const uiVisibility = message?.metadata?.ui_visibility || message?.metadata?.uiVisibility
+  if (uiVisibility === 'hide') return true
+  if (
+    message?.metadata?.message_kind === 'runtime_observation' ||
+    message?.metadata?.messageKind === 'runtime_observation'
+  ) {
+    return false
+  }
   if (message?.metadata?.error_type === 'SubAgentInterrupted') return true
   if (message?.metadata?.errorType === 'SubAgentInterrupted') return true
   if (message?.role !== 'user') return false
   if ((message.stepType || '').toLowerCase() !== 'observe') return false
   if (getAskUserResponseItems(message).length > 0) return false
   return props.removeSystemReminder(message.message || '').trim() === ''
+}
+
+const isContextSnapshotMessage = message =>
+  message?.role === 'system' && message?.metadata?.type === 'summary'
+
+const getContextSnapshotContent = message => {
+  const content = props.removeSystemReminder(message?.message || '')
+  const normalized = content.replace(/^##\s*Previous Context Snapshot\s*/i, '').trim()
+
+  try {
+    const parsed = JSON.parse(normalized)
+    if (typeof parsed?.content === 'string' && parsed.content.trim()) {
+      return parsed.content.trim()
+    }
+  } catch {
+    // Fall back to raw content when the snapshot is already plain text/XML.
+  }
+
+  return normalized
+}
+
+const xmlNodeText = (parent, tagName) => {
+  const node = parent?.getElementsByTagName?.(tagName)?.[0]
+  return node?.textContent?.trim() || ''
+}
+
+const formatContextSnapshotForDisplay = message => {
+  const content = getContextSnapshotContent(message)
+  if (!content || !content.includes('<state_snapshot')) return content
+
+  try {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(content, 'application/xml')
+    if (doc.querySelector('parsererror')) return content
+
+    const root = doc.getElementsByTagName('state_snapshot')[0]
+    if (!root) return content
+
+    const sections = [
+      ['Overall Goal', xmlNodeText(root, 'overall_goal')],
+      ['Key Knowledge', xmlNodeText(root, 'key_knowledge')],
+      ['Error Log', xmlNodeText(root, 'error_log')],
+      ['File System State', xmlNodeText(root, 'file_system_state')],
+      ['Recent Actions', xmlNodeText(root, 'recent_actions')],
+      ['Task State', xmlNodeText(root, 'task_state')]
+    ].filter(([, value]) => value)
+
+    return sections
+      .map(([title, value]) => `### ${title}\n\n${value}`)
+      .join('\n\n')
+      .trim()
+  } catch {
+    return content
+  }
+}
+
+const getContextSnapshotExpandId = message =>
+  `${message?.displayId || message?.id || 'snapshot'}:snapshot`
+
+const isContextSnapshotExpanded = message =>
+  props.isMessageExpanded({
+    displayId: getContextSnapshotExpandId(message),
+    metadata: {},
+    toolDisplay: {}
+  })
+
+const getContextSnapshotPreview = message => {
+  const content = formatContextSnapshotForDisplay(message)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!content) return ''
+  return content.length > 96 ? `${content.slice(0, 96)}...` : content
 }
 
 const getMessageToolName = message => {
@@ -594,9 +695,44 @@ const collapseRepeatedFinishTaskErrors = messages => {
   return collapsed
 }
 
+const isCompletionReportMessage = message =>
+  message?.role === 'assistant' &&
+  (message?.metadata?.message_kind === 'completion_report' ||
+    message?.metadata?.messageKind === 'completion_report')
+
+const isThinkOnlyAssistantMessage = message => {
+  if (message?.role !== 'assistant') return false
+  const content = props.removeSystemReminder(message?.message || '').trim()
+  const reasoning = String(message?.reasoning || '').trim()
+  return !content && !!reasoning
+}
+
+const collapseAssistantCompletionPairs = messages => {
+  const collapsed = []
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const current = messages[index]
+    const next = messages[index + 1]
+
+    if (
+      isThinkOnlyAssistantMessage(current) &&
+      isCompletionReportMessage(next) &&
+      String(current.stepIndex || '') === String(next.stepIndex || '')
+    ) {
+      continue
+    }
+
+    collapsed.push(current)
+  }
+
+  return collapsed
+}
+
 const visibleMessages = computed(() =>
-  collapseRepeatedFinishTaskErrors(
-    props.messages.filter(message => !isHiddenSystemObservation(message))
+  collapseAssistantCompletionPairs(
+    collapseRepeatedFinishTaskErrors(
+      props.messages.filter(message => !isHiddenSystemObservation(message))
+    )
   )
 )
 const lastVisibleMessage = computed(
@@ -628,6 +764,14 @@ const hasThoughtCompleted = message => {
   if (props.getParsedMessage(message).content) return true
   if ((message.metadata?.tool_calls?.length || 0) > 0) return true
   if ((message.pendingToolCalls?.length || 0) > 0) return true
+  if (
+    message === lastVisibleMessage.value &&
+    props.isRunning &&
+    !props.isChatting &&
+    !!(message.reasoning || message.message)
+  ) {
+    return true
+  }
   if (hasSubsequentVisibleOutput(message)) return true
   return false
 }
@@ -897,3 +1041,56 @@ defineExpose({
   messagesRef
 })
 </script>
+
+<style scoped lang="scss">
+.context-snapshot-card {
+  margin-bottom: 12px;
+  border: 1px solid var(--cs-border-color);
+  border-radius: var(--cs-border-radius-md);
+  background: var(--cs-bg-color-light);
+  overflow: hidden;
+}
+
+.context-snapshot-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: var(--cs-space-sm) var(--cs-space);
+  cursor: pointer;
+  color: var(--cs-text-color-primary);
+  background: var(--cs-bg-color);
+}
+
+.context-snapshot-card__header:hover {
+  background: var(--cs-hover-bg-color);
+}
+
+.context-snapshot-card__icon {
+  color: var(--el-color-primary);
+}
+
+.context-snapshot-card__title {
+  font-size: var(--cs-font-size-sm);
+  font-weight: 600;
+}
+
+.context-snapshot-card__preview {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--cs-font-size-xs);
+  color: var(--cs-text-color-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-snapshot-card__chevron {
+  flex-shrink: 0;
+  color: var(--cs-text-color-secondary);
+}
+
+.context-snapshot-card__body {
+  padding: var(--cs-space-sm) var(--cs-space);
+  border-top: 1px solid var(--cs-border-color);
+}
+</style>

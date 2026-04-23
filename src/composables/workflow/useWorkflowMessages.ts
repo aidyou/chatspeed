@@ -170,12 +170,17 @@ export function useWorkflowMessages() {
           data: meta.data || {}
         })
       }
+
       return { ...m, metadata: meta } // Cache parsed meta for Pass 2
     })
 
     // --- PASS 2: Filter and Transform (O(N)) ---
     return processedMsgs
       .filter(m => {
+        if (m.metadata?.ui_visibility === 'hide' || m.metadata?.uiVisibility === 'hide') {
+          return false
+        }
+
         // Hide redundancy for tool-related messages
         if (m.metadata?.tool_call_id) {
           const id = m.metadata.tool_call_id
@@ -377,11 +382,11 @@ export function useWorkflowMessages() {
         const offset = args.offset
         let suffix = ''
         if (limit !== undefined && offset !== undefined) {
-          suffix = ` L${limit}-${offset}`
+          suffix = ` L${offset + 1}-${offset + limit}`
         } else if (limit !== undefined) {
-          suffix = ` L${limit}`
+          suffix = ` L1-${limit}`
         } else if (offset !== undefined) {
-          suffix = ` @${offset}`
+          suffix = ` from L${offset + 1}`
         }
         return {
           icon: resolveWorkflowToolIcon(name, 'file'),
@@ -668,6 +673,14 @@ export function useWorkflowMessages() {
     return true
   }
 
+  const appendContextDiffMarkdown = (parts, lines, startLine) => {
+    if (!Array.isArray(lines) || !lines.length) return
+    lines.forEach((line, index) => {
+      const lineNum = (startLine + index).toString().padStart(4, ' ')
+      parts.push(`  ${lineNum} | ${line}`)
+    })
+  }
+
   // Get diff markdown for file edits
   const getDiffMarkdown = content => {
     try {
@@ -697,7 +710,12 @@ export function useWorkflowMessages() {
       // if (data.start_line) {
       //     diffContent += `Range: L${startLine} - L${startLine + Math.max(oldLinesCount, newLinesCount) - 1}\n`
       // }
-      let diffContent = `\`\`\`diff\n`
+      const diffParts = ['```diff']
+      appendContextDiffMarkdown(
+        diffParts,
+        data.context_before,
+        data.context_before_start_line || Math.max(1, startLine - (data.context_before?.length || 0))
+      )
 
       const UI_LINE_LIMIT = 3000 // Limit lines shown in UI for performance
 
@@ -724,15 +742,15 @@ export function useWorkflowMessages() {
             const lineNumStr = lineNumDisplay.toString().padStart(4, ' ')
 
             if (change.added) {
-              diffContent += `+ ${lineNumStr} | ${line}\n`
+              diffParts.push(`+ ${lineNumStr} | ${line}`)
               currentLineNew++
               lineCount++
             } else if (change.removed) {
-              diffContent += `- ${lineNumStr} | ${line}\n`
+              diffParts.push(`- ${lineNumStr} | ${line}`)
               currentLineOld++
               lineCount++
             } else {
-              diffContent += `  ${lineNumStr} | ${line}\n`
+              diffParts.push(`  ${lineNumStr} | ${line}`)
               currentLineOld++
               currentLineNew++
               lineCount++
@@ -741,21 +759,33 @@ export function useWorkflowMessages() {
         })
 
         if (lineCount >= UI_LINE_LIMIT) {
-          diffContent += `... (truncated for preview)\n`
+          diffParts.push('... (truncated for preview)')
         }
+        appendContextDiffMarkdown(
+          diffParts,
+          data.context_after,
+          data.context_after_start_line || currentLineOld
+        )
       } else {
-        diffContent += `- (empty)\n`
+        diffParts.push(`- ${startLine.toString().padStart(4, ' ')} | (empty)`)
         const newLines = newStr.split('\n')
         const displayLines = newLines.slice(0, UI_LINE_LIMIT)
 
-        displayLines.forEach((line: string) => (diffContent += `+ ${line}\n`))
+        displayLines.forEach((line: string, index: number) =>
+          diffParts.push(`+ ${(startLine + index).toString().padStart(4, ' ')} | ${line}`)
+        )
         if (newLines.length > UI_LINE_LIMIT) {
-          diffContent += `+ ... (${newLines.length - UI_LINE_LIMIT} lines truncated)\n`
+          diffParts.push(`+ ... (${newLines.length - UI_LINE_LIMIT} lines truncated)`)
         }
+        appendContextDiffMarkdown(
+          diffParts,
+          data.context_after,
+          data.context_after_start_line || startLine + displayLines.length
+        )
       }
 
-      diffContent += '```'
-      return diffContent
+      diffParts.push('```')
+      return diffParts.join('\n')
     } catch (e) {
       return typeof content === 'string' ? content : JSON.stringify(content)
     }

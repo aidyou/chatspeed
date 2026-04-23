@@ -2,6 +2,7 @@
 //!
 //! This module provides database operations for managing ReAct agents.
 
+use crate::db::ThinkingConfig;
 use crate::db::{MainStore, StoreError};
 use rusqlite::{params, OptionalExtension, Row};
 use rust_i18n::t;
@@ -20,6 +21,7 @@ pub struct AgentConfig {
     pub auto_approve: Option<Vec<String>>,
     pub available_tools: Option<Vec<String>>,
     pub final_audit: Option<bool>,
+    pub phase: Option<String>,
     pub models: Option<AgentModels>,
     pub max_contexts: Option<i32>,
 }
@@ -33,29 +35,32 @@ impl AgentConfig {
         serde_json::to_string(self).unwrap_or_default()
     }
 
-    pub fn merge_from(&mut self, other: &AgentConfig) {
-        if self.allowed_paths.is_none() && other.allowed_paths.is_some() {
+    pub fn apply_overrides(&mut self, other: &AgentConfig) {
+        if other.allowed_paths.is_some() {
             self.allowed_paths = other.allowed_paths.clone();
         }
-        if self.shell_policy.is_none() && other.shell_policy.is_some() {
+        if other.shell_policy.is_some() {
             self.shell_policy = other.shell_policy.clone();
         }
-        if self.approval_level.is_none() && other.approval_level.is_some() {
+        if other.approval_level.is_some() {
             self.approval_level = other.approval_level.clone();
         }
-        if self.auto_approve.is_none() && other.auto_approve.is_some() {
+        if other.auto_approve.is_some() {
             self.auto_approve = other.auto_approve.clone();
         }
-        if self.available_tools.is_none() && other.available_tools.is_some() {
+        if other.available_tools.is_some() {
             self.available_tools = other.available_tools.clone();
         }
-        if self.final_audit.is_none() && other.final_audit.is_some() {
+        if other.final_audit.is_some() {
             self.final_audit = other.final_audit;
         }
-        if self.models.is_none() && other.models.is_some() {
+        if other.phase.is_some() {
+            self.phase = other.phase.clone();
+        }
+        if other.models.is_some() {
             self.models = other.models.clone();
         }
-        if self.max_contexts.is_none() && other.max_contexts.is_some() {
+        if other.max_contexts.is_some() {
             self.max_contexts = other.max_contexts;
         }
     }
@@ -69,6 +74,8 @@ pub struct ModelConfig {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_size: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]

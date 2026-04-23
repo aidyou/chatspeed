@@ -500,6 +500,17 @@
       <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
         <el-switch v-model="modelConfigForm.reasoning" />
       </el-form-item>
+      <el-form-item
+        v-if="modelConfigForm.reasoning"
+        :label="$t('settings.model.thinkingBudgetTokens')">
+        <el-input-number
+          v-model="modelConfigForm.thinkingBudgetTokens"
+          :min="256"
+          :max="131072"
+          :step="256"
+          controls-position="right"
+          style="width: 100%" />
+      </el-form-item>
       <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
         <el-switch v-model="modelConfigForm.functionCall" />
       </el-form-item>
@@ -1148,6 +1159,8 @@ const defaultModelConfig = {
   group: '',
   functionCall: false,
   reasoning: false,
+  thinking: null,
+  thinkingBudgetTokens: 1024,
   imageInput: false,
   contextSize: 128000,
   temperature: -0.1,
@@ -1181,7 +1194,9 @@ const onModelConfig = model => {
     modelConfigForm.value = {
       ...defaultModelConfig,
       ...model,
-      customParams: model.customParams || []
+      customParams: model.customParams || [],
+      thinking: model.thinking || null,
+      thinkingBudgetTokens: model.thinking?.budgetTokens || 1024
     }
   } else {
     prevModelConfigId.value = ''
@@ -1219,8 +1234,16 @@ const updateModelConfig = () => {
   const updatedModelConfig = {
     ...modelConfigForm.value,
     id: trimmedId,
+    thinking:
+      modelConfigForm.value.reasoning
+        ? {
+          type: 'enabled',
+          budgetTokens: Number(modelConfigForm.value.thinkingBudgetTokens) || 1024
+        }
+        : null,
     customParams: modelConfigForm.value.customParams.filter(p => p.key.trim() !== '')
   }
+  delete updatedModelConfig.thinkingBudgetTokens
 
   if (index !== -1) {
     if (prevModelConfigId.value && prevModelConfigId.value === modelForm.value.defaultModel) {
@@ -1414,6 +1437,7 @@ const onProviderModelSave = () => {
       name: model.name,
       group: model.family || t('settings.model.ungrouped'),
       reasoning: model.reasoning || false,
+      thinking: null,
       functionCall: model.functionCall || false,
       imageInput: model.imageInput || false,
       contextSize: model.contextSize ?? 128000,

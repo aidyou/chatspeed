@@ -4,7 +4,9 @@
 
 use crate::db::MainStore;
 use crate::workflow::react::events::{WorkflowEventRecord, WorkflowEventType};
-use crate::workflow::react::types::{ExecutionContext, PendingTool, RuntimeState, WaitReason};
+use crate::workflow::react::types::{
+    ExecutionContext, PendingTool, RuntimeState, SubAgentCompletion, WaitReason,
+};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -88,6 +90,7 @@ pub struct EventReducer {
     last_event_id: Option<i64>,
     waiting_on_sub_agent_id: Option<String>,
     sub_agent_sessions: Vec<String>,
+    pending_sub_agent_completions: Vec<SubAgentCompletion>,
 }
 
 impl EventReducer {
@@ -102,6 +105,7 @@ impl EventReducer {
             last_event_id: None,
             waiting_on_sub_agent_id: None,
             sub_agent_sessions: Vec::new(),
+            pending_sub_agent_completions: Vec::new(),
         }
     }
 
@@ -272,14 +276,56 @@ impl EventReducer {
                     }
                 })?;
                 self.sub_agent_sessions.retain(|id| id != sub_agent_id);
-                if self.waiting_on_sub_agent_id.as_deref() == Some(sub_agent_id) {
-                    self.waiting_on_sub_agent_id = None;
-                    self.wait_reason = None;
-                }
-                self.state = match event_type {
-                    WorkflowEventType::SubAgentInterrupted => RuntimeState::Pending,
-                    _ => RuntimeState::Running,
+
+                let status = event
+                    .event_data
+                    .get("status")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(match event_type {
+                        WorkflowEventType::SubAgentInterrupted => "interrupted",
+                        WorkflowEventType::SubAgentFailed => "failed",
+                        _ => "completed",
+                    })
+                    .to_string();
+                let result_payload = event
+                    .event_data
+                    .get("result")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let completion = SubAgentCompletion {
+                    sub_agent_id: sub_agent_id.to_string(),
+                    parent_session_id: self.session_id.clone(),
+                    status: status.clone(),
+                    result: result_payload
+                        .get("result")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string),
+                    summary: result_payload
+                        .get("summary")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string),
+                    error: result_payload
+                        .get("error")
+                        .or_else(|| event.event_data.get("reason"))
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string),
+                    tool_calls_count: result_payload
+                        .get("tool_calls_count")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0) as usize,
+                    completed_at_ms: 0,
+                    consumed: false,
                 };
+                self.pending_sub_agent_completions
+                    .retain(|existing| existing.sub_agent_id != sub_agent_id);
+                self.pending_sub_agent_completions.push(completion);
+
+                if self.waiting_on_sub_agent_id.as_deref() == Some(sub_agent_id) {
+                    self.wait_reason = Some(WaitReason::SubAgent);
+                    self.state = RuntimeState::Waiting;
+                } else {
+                    self.state = RuntimeState::Running;
+                }
                 if let Some(summary) = event
                     .event_data
                     .get("result")
@@ -331,7 +377,7 @@ impl EventReducer {
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_sub_agent_id: self.waiting_on_sub_agent_id,
             sub_agent_sessions: self.sub_agent_sessions,
-            pending_sub_agent_completions: Vec::new(),
+            pending_sub_agent_completions: self.pending_sub_agent_completions,
         }
     }
 }
@@ -340,9 +386,11 @@ fn map_ui_state_to_runtime(ui_state: &str) -> RuntimeState {
     match ui_state {
         "pending" => RuntimeState::Pending,
         "thinking" | "executing" | "auditing" => RuntimeState::Running,
-        "paused" | "awaiting_user" | "awaiting_approval" | "awaiting_auto_approval" => {
-            RuntimeState::Waiting
-        }
+        "paused"
+        | "awaiting_user"
+        | "awaiting_approval"
+        | "awaiting_auto_approval"
+        | "awaiting_sub_agent" => RuntimeState::Waiting,
         "completed" => RuntimeState::Completed,
         "error" => RuntimeState::Failed,
         "cancelled" => RuntimeState::Cancelled,
@@ -836,6 +884,10 @@ mod tests {
             RuntimeState::Waiting
         );
         assert_eq!(
+            map_ui_state_to_runtime("awaiting_sub_agent"),
+            RuntimeState::Waiting
+        );
+        assert_eq!(
             map_ui_state_to_runtime("completed"),
             RuntimeState::Completed
         );
@@ -996,6 +1048,55 @@ mod tests {
         assert!(ctx.pending_tools.is_empty());
         assert_eq!(ctx.current_step, 1);
         assert_eq!(ctx.last_event_id, Some(7));
+    }
+
+    #[test]
+    fn test_reducer_keeps_pending_sub_agent_completion_for_restore() {
+        let mut reducer = EventReducer::new("test-session".to_string());
+
+        let events = vec![
+            WorkflowEventRecord {
+                id: 1,
+                session_id: "test-session".to_string(),
+                event_type: "sub_agent_started".to_string(),
+                event_version: "1.0.0".to_string(),
+                event_data: serde_json::json!({
+                    "sub_agent_id": "subagent_1",
+                    "execution_mode": "call"
+                }),
+                created_at: "2026-01-01 00:00:00".to_string(),
+            },
+            WorkflowEventRecord {
+                id: 2,
+                session_id: "test-session".to_string(),
+                event_type: "sub_agent_completed".to_string(),
+                event_version: "1.0.0".to_string(),
+                event_data: serde_json::json!({
+                    "sub_agent_id": "subagent_1",
+                    "status": "completed",
+                    "result": {
+                        "result": "analysis done",
+                        "summary": "done",
+                        "tool_calls_count": 3
+                    }
+                }),
+                created_at: "2026-01-01 00:00:01".to_string(),
+            },
+        ];
+
+        for event in &events {
+            reducer.apply_event(event).unwrap();
+        }
+
+        let ctx = reducer.build();
+        assert_eq!(ctx.state, RuntimeState::Waiting);
+        assert_eq!(ctx.wait_reason, Some(WaitReason::SubAgent));
+        assert_eq!(ctx.waiting_on_sub_agent_id.as_deref(), Some("subagent_1"));
+        assert_eq!(ctx.pending_sub_agent_completions.len(), 1);
+        assert_eq!(
+            ctx.pending_sub_agent_completions[0].result.as_deref(),
+            Some("analysis done")
+        );
     }
 
     #[test]

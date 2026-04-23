@@ -51,6 +51,8 @@ pub enum GatewayPayload {
         metadata: Option<serde_json::Value>,
     },
     State {
+        // Kept for compatibility with existing UI consumers.
+        // Newer consumers should prefer `wait_reason` for interaction decisions.
         state: WorkflowState,
         #[serde(skip_serializing_if = "Option::is_none")]
         wait_reason: Option<WaitReason>,

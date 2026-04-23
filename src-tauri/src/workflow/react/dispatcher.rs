@@ -486,10 +486,9 @@ impl Dispatcher {
         .await
     }
 
-    /// Dispatch an audit event (convenience method).
-    #[cfg(test)]
-    pub async fn dispatch_audit(&self, event: WorkflowEvent) -> Result<(), WorkflowEngineError> {
-        self.dispatch(DispatchEvent::Audit { event }).await
+    /// Dispatch an audit event from synchronous runtime paths.
+    pub fn dispatch_audit_now(&self, event: WorkflowEvent) -> Result<(), WorkflowEngineError> {
+        self.dispatch_now(DispatchEvent::Audit { event })
     }
 
     /// Dispatch a snapshot (convenience method).
@@ -730,7 +729,7 @@ mod tests {
         );
 
         let event = super::WorkflowEvent::workflow_completed("test-session".to_string(), None);
-        dispatcher.dispatch_audit(event).await.unwrap();
+        dispatcher.dispatch_audit_now(event).unwrap();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 

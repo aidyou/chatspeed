@@ -43,6 +43,23 @@ pub struct LlmProcessor {
 }
 
 impl LlmProcessor {
+    fn preview_for_log(value: &str, max_chars: usize) -> String {
+        let sanitized = value.replace('\n', "\\n").replace('\r', "\\r");
+        let mut preview = sanitized.chars().take(max_chars).collect::<String>();
+        let total_chars = sanitized.chars().count();
+        if total_chars > max_chars {
+            preview.push_str(&format!("... [truncated, chars={}]", total_chars));
+        }
+        preview
+    }
+
+    fn usage_for_log(metadata: Option<&serde_json::Value>) -> String {
+        metadata
+            .and_then(|meta| meta.get("tokens"))
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_else(|| "null".to_string())
+    }
+
     fn normalize_and_validate_tool_calls(
         raw: &str,
         allowed_tool_names: &HashSet<String>,
@@ -296,6 +313,7 @@ impl LlmProcessor {
             // Negative temperature is the project-wide sentinel for "unset/off".
             let mut temperature = None;
             let mut max_tokens = None;
+            let mut thinking = None;
 
             // Search through configured workflow model roles to find the active model.
             if let Some(ref models) = self.agent_config.models {
@@ -316,6 +334,7 @@ impl LlmProcessor {
                                 max_tokens = Some(mt as u32);
                             }
                         }
+                        thinking = model_config.thinking.clone();
                         break;
                     }
                 }
@@ -330,6 +349,7 @@ impl LlmProcessor {
                     Some(tools.clone()),
                     Some(ChatMetadata {
                         reasoning: Some(self.reasoning),
+                        thinking,
                         custom_headers: Some(custom_headers),
                         temperature,
                         max_tokens,
@@ -430,6 +450,21 @@ impl LlmProcessor {
                         && tool_calls_json.trim().is_empty()
                         && !has_invalid_tool_call
                     {
+                        log::warn!(
+                            "[Workflow][session={}][phase=llm][event=empty_response_diagnostic] content_chars={}, reasoning_chars={}, tool_calls_chars={}, has_invalid_tool_call={}, token_usage={}, reasoning_preview=\"{}\", metadata={}",
+                            self.session_id,
+                            plain_text.chars().count(),
+                            full_reasoning.chars().count(),
+                            tool_calls_json.chars().count(),
+                            has_invalid_tool_call,
+                            Self::usage_for_log(final_metadata.as_ref()),
+                            Self::preview_for_log(&full_reasoning, 800),
+                            final_metadata
+                                .as_ref()
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "null".to_string())
+                        );
+
                         let e = WorkflowEngineError::General(
                             "LLM returned empty content and no tool calls".to_string(),
                         );
@@ -505,7 +540,7 @@ impl LlmProcessor {
                                                     },
                                                 ).await;
                                             }
-                                            RuntimeSignal::Other => {}
+                                            RuntimeSignal::Other { .. } => {}
                                         }
                                     }
                                 }
@@ -609,7 +644,7 @@ impl LlmProcessor {
                                                 },
                                             ).await;
                                         }
-                                        RuntimeSignal::Other => {}
+                                        RuntimeSignal::Other { .. } => {}
                                     }
                                 }
                             }
@@ -628,6 +663,24 @@ impl LlmProcessor {
 
     fn normalize_history(&self, raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
         Self::normalize_history_messages(raw_history)
+    }
+
+    fn combine_message_and_reasoning(role: &str, message: &str, reasoning: Option<&str>) -> String {
+        let trimmed_message = message.trim();
+        let trimmed_reasoning = reasoning.map(str::trim).unwrap_or("");
+
+        if role != "assistant" || trimmed_reasoning.is_empty() {
+            return message.to_string();
+        }
+
+        if trimmed_message.is_empty() {
+            return format!("<think>\n{}\n</think>", trimmed_reasoning);
+        }
+
+        format!(
+            "<think>\n{}\n</think>\n\n{}",
+            trimmed_reasoning, trimmed_message
+        )
     }
 
     fn normalize_history_messages(raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
@@ -697,7 +750,9 @@ impl LlmProcessor {
             }
 
             let role = m.role.clone();
-            let mut content = runtime_observation_content.unwrap_or_else(|| m.message.clone());
+            let mut content = runtime_observation_content.unwrap_or_else(|| {
+                Self::combine_message_and_reasoning(&role, &m.message, m.reasoning.as_deref())
+            });
             let tool_calls = m
                 .metadata
                 .as_ref()
@@ -1315,6 +1370,29 @@ mod tests {
         }
     }
 
+    fn message_with_reasoning(
+        role: &str,
+        content: &str,
+        reasoning: &str,
+        step_type: Option<&str>,
+        metadata: Option<serde_json::Value>,
+    ) -> WorkflowMessage {
+        WorkflowMessage {
+            id: None,
+            session_id: "test-session".to_string(),
+            role: role.to_string(),
+            message: content.to_string(),
+            reasoning: Some(reasoning.to_string()),
+            metadata,
+            attached_context: None,
+            step_type: step_type.map(str::to_string),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        }
+    }
+
     #[test]
     fn normalize_history_defers_internal_runtime_observation_until_after_tool_result() {
         let history = LlmProcessor::normalize_history_messages(vec![
@@ -1385,7 +1463,7 @@ mod tests {
             ),
             message(
                 "user",
-                "<tool_result tool=\"sub_agent_run\" id=\"subagent_test\" mode=\"call\" status=\"completed\">\nResult:\nSub-agent findings\n</tool_result>\n<SYSTEM_REMINDER>Use the result.</SYSTEM_REMINDER>",
+                "<tool_result tool=\"sub_agent_run\" id=\"subagent_test\" mode=\"call\" status=\"completed\">\n<Result>\nSub-agent findings\n</Result>\n</tool_result>\n<SYSTEM_REMINDER>Use the result.</SYSTEM_REMINDER>",
                 Some("observe"),
                 Some(json!({
                     "message_kind": "runtime_observation",
@@ -1408,5 +1486,31 @@ mod tests {
             .unwrap_or_default()
             .contains("<tool_result tool=\"sub_agent_run\""));
         assert_eq!(history[4]["role"], "assistant");
+    }
+
+    #[test]
+    fn normalize_history_replays_assistant_reasoning_inside_think_block() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Implement the fix", None, None),
+            message_with_reasoning(
+                "assistant",
+                "",
+                "I already have enough context. Next I should edit main.rs.",
+                Some("think"),
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool_edit",
+                        "type": "function",
+                        "function": { "name": "edit_file", "arguments": "{}" }
+                    }]
+                })),
+            ),
+        ]);
+
+        assert_eq!(history[1]["role"], "assistant");
+        let content = history[1]["content"].as_str().unwrap_or_default();
+        assert!(content.contains("<think>"));
+        assert!(content.contains("enough context"));
+        assert!(history[1]["tool_calls"].is_array());
     }
 }

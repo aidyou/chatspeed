@@ -153,6 +153,12 @@ fn default_visibility(
             RuntimeObservationLlmVisibility::PreservePosition,
             RuntimeObservationUiVisibility::Card,
         ),
+        RuntimeObservationType::AuditRejected
+        | RuntimeObservationType::CompletionRejected
+        | RuntimeObservationType::ActiveTodosBlocked => (
+            RuntimeObservationLlmVisibility::Defer,
+            RuntimeObservationUiVisibility::Show,
+        ),
         RuntimeObservationType::SkillActivated | RuntimeObservationType::FileContextAttached => (
             RuntimeObservationLlmVisibility::PreservePosition,
             RuntimeObservationUiVisibility::Hide,

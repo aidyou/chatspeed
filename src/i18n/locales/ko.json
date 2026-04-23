@@ -479,6 +479,7 @@
       "proxyServerRequired": "프록시 서버 주소를 입력하십시오.",
       "restrictedHeader": "제한된 헤더가 포함되어 있습니다: {headers}",
       "reasoning": "추론 모델",
+      "thinkingBudgetTokens": "사고 예산",
       "searchByIdOrName": "ID 또는 이름으로 검색",
       "stop": "중지 토큰",
       "stopPlaceholder": "모델이 텍스트 생성을 중지할 토큰을 설정합니다. 여러 개는 줄 바꿈으로 구분합니다.",

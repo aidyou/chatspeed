@@ -6,6 +6,7 @@ use crate::tools::{
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::events::WorkflowEvent;
+use crate::workflow::react::file_preview::attach_display_context;
 use crate::workflow::react::intelligence::ToolApprovalReview;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
@@ -769,6 +770,7 @@ impl WorkflowExecutor {
                 TOOL_EDIT_FILE | TOOL_WRITE_FILE => {
                     display_type = "diff".to_string();
                     let mut preview_args = args.clone();
+                    attach_display_context(&mut preview_args, false);
                     let preview_limit = 100_000;
 
                     // Truncate large fields for UI preview to prevent IPC/Rendering lag

@@ -162,7 +162,9 @@ impl WorkflowManager {
         }
     }
 
-    pub fn route_signal(
+    /// Validates whether a signal may be routed to a live session.
+    /// This only checks session liveness/status; actual injection happens through the gateway.
+    pub fn validate_signal_routing(
         &self,
         session_id: &str,
         signal_type: &str,
@@ -173,7 +175,7 @@ impl WorkflowManager {
             match session.status {
                 ManagedSessionStatus::Active | ManagedSessionStatus::Waiting => {
                     log::info!(
-                        "[WorkflowManager][session={}][event=signal_routed] Signal '{}' routed successfully",
+                        "[WorkflowManager][session={}][event=signal_routing_validated] Signal '{}' accepted for gateway injection",
                         session_id,
                         signal_type
                     );
@@ -243,18 +245,42 @@ lazy_static::lazy_static! {
 }
 
 impl WorkflowManager {
+    fn lock_global_signal_tx() -> Option<
+        std::sync::MutexGuard<
+            'static,
+            std::collections::HashMap<String, tokio::sync::mpsc::Sender<String>>,
+        >,
+    > {
+        match GLOBAL_SIGNAL_TX.lock() {
+            Ok(map) => Some(map),
+            Err(error) => {
+                log::error!(
+                    "[WorkflowManager][event=global_signal_tx_poisoned] Failed to acquire GLOBAL_SIGNAL_TX: {}",
+                    error
+                );
+                None
+            }
+        }
+    }
+
     pub fn register_session_signal_tx(session_id: String, tx: tokio::sync::mpsc::Sender<String>) {
-        let mut map = GLOBAL_SIGNAL_TX.lock().unwrap();
+        let Some(mut map) = Self::lock_global_signal_tx() else {
+            return;
+        };
         map.insert(session_id, tx);
     }
 
     pub fn unregister_session_signal_tx(session_id: &str) {
-        let mut map = GLOBAL_SIGNAL_TX.lock().unwrap();
+        let Some(mut map) = Self::lock_global_signal_tx() else {
+            return;
+        };
         map.remove(session_id);
     }
 
     pub fn send_signal_to_session(session_id: &str, signal: String) -> Result<(), String> {
-        let map = GLOBAL_SIGNAL_TX.lock().unwrap();
+        let Some(map) = Self::lock_global_signal_tx() else {
+            return Err("GLOBAL_SIGNAL_TX poisoned".to_string());
+        };
         if let Some(tx) = map.get(session_id) {
             tx.try_send(signal).map_err(|e| e.to_string())
         } else {
@@ -429,11 +455,11 @@ mod tests {
     }
 
     #[test]
-    fn test_route_signal() {
+    fn test_validate_signal_routing() {
         let manager = WorkflowManager::new();
         let executor = Arc::new(Mutex::new(MockExecutor::new()));
 
-        let result = manager.route_signal("non-existent", "user_input");
+        let result = manager.validate_signal_routing("non-existent", "user_input");
         assert!(result.is_err());
 
         manager
@@ -444,12 +470,12 @@ mod tests {
             )
             .unwrap();
 
-        let result = manager.route_signal("test-session-1", "user_input");
+        let result = manager.validate_signal_routing("test-session-1", "user_input");
         assert!(result.is_ok());
 
         manager.update_session_status("test-session-1", ManagedSessionStatus::Completed);
 
-        let result = manager.route_signal("test-session-1", "user_input");
+        let result = manager.validate_signal_routing("test-session-1", "user_input");
         assert!(result.is_err());
     }
 }

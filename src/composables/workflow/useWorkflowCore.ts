@@ -159,6 +159,59 @@ export function useWorkflowCore({
         return `update_${snake}`
     }
     const isSyncingWorkflowConfig = ref(false)
+    const currentPhaseValue = () => (planningMode.value ? 'planning' : 'standard')
+
+    const applyWorkflowConfigToLocalStore = (nextConfig) => {
+        const workflowIndex = workflowStore.workflows.findIndex((w) => w.id === currentWorkflowId.value)
+        if (workflowIndex === -1) return
+
+        const existingConfig = workflowStore.workflows[workflowIndex].agentConfig || {}
+        workflowStore.workflows[workflowIndex].agentConfig = {
+            ...existingConfig,
+            ...nextConfig
+        }
+
+        if (
+            workflowStore.currentWorkflow &&
+            workflowStore.currentWorkflow.id === currentWorkflowId.value
+        ) {
+            workflowStore.currentWorkflow.agentConfig = {
+                ...(workflowStore.currentWorkflow.agentConfig || {}),
+                ...nextConfig
+            }
+        }
+    }
+
+    const mergeLocalUiOverrides = (baseConfig = {}) => ({
+        ...baseConfig,
+        approvalLevel: approvalLevel.value,
+        finalAudit: finalAuditMode.value === 'on',
+        phase: currentPhaseValue()
+    })
+
+    const persistCurrentWorkflowUiConfigBeforeStart = async () => {
+        if (!currentWorkflowId.value) return
+
+        const snapshot = await invokeWrapper('get_workflow_snapshot', {
+            sessionId: currentWorkflowId.value
+        })
+
+        let agentConfig = {}
+        if (snapshot.workflow?.agentConfig) {
+            agentConfig = typeof snapshot.workflow.agentConfig === 'string'
+                ? JSON.parse(snapshot.workflow.agentConfig)
+                : snapshot.workflow.agentConfig
+        }
+
+        const nextConfig = mergeLocalUiOverrides(agentConfig)
+
+        await invokeWrapper('update_workflow_agent_config', {
+            sessionId: currentWorkflowId.value,
+            agentConfig: JSON.stringify(nextConfig)
+        })
+
+        applyWorkflowConfigToLocalStore(nextConfig)
+    }
 
     // Unified function to update workflow config
     const updateWorkflowConfig = async (key, value) => {
@@ -186,7 +239,17 @@ export function useWorkflowCore({
 
             // 2. Signal engine if workflow is active, including structured waiting states.
             const status = currentWorkflow.value?.status
-            if (status && [WORKFLOW_STATUSES.THINKING, WORKFLOW_STATUSES.EXECUTING, WORKFLOW_STATUSES.PAUSED, WORKFLOW_STATUSES.AWAITING_USER, WORKFLOW_STATUSES.AWAITING_APPROVAL].includes(status)) {
+            if (
+                signalMapping[key] &&
+                status &&
+                [
+                    WORKFLOW_STATUSES.THINKING,
+                    WORKFLOW_STATUSES.EXECUTING,
+                    WORKFLOW_STATUSES.PAUSED,
+                    WORKFLOW_STATUSES.AWAITING_USER,
+                    WORKFLOW_STATUSES.AWAITING_APPROVAL
+                ].includes(status)
+            ) {
                 try {
                     const signalType = toSignalType(key)
                     await invokeWrapper('workflow_signal', {
@@ -202,14 +265,7 @@ export function useWorkflowCore({
             }
 
             // 3. Update local workflow store state (don't call selectWorkflow to avoid recursion)
-            const workflowIndex = workflowStore.workflows.findIndex(w => w.id === currentWorkflowId.value)
-            if (workflowIndex !== -1) {
-                const existingConfig = workflowStore.workflows[workflowIndex].agentConfig || {}
-                workflowStore.workflows[workflowIndex].agentConfig = {
-                    ...existingConfig,
-                    [key]: value
-                }
-            }
+            applyWorkflowConfigToLocalStore({ [key]: value })
         } catch (error) {
             console.error(`Failed to update ${key}:`, error)
         }
@@ -738,6 +794,9 @@ export function useWorkflowCore({
                         userQuery: prompt
                     })
 
+                    // Persist any unsaved local UI config toggles before engine startup.
+                    await persistCurrentWorkflowUiConfigBeforeStart()
+
                     // Ensure event listener is attached before starting runtime,
                     // otherwise early UI events (e.g. approval confirm) can be missed.
                     await setupWorkflowEvents(currentWorkflowId.value)
@@ -767,7 +826,11 @@ export function useWorkflowCore({
                         sessionId: currentWorkflowId.value
                     })
                     if (snapshot.workflow?.agentConfig) {
-                        inheritedAgentConfig = JSON.stringify(snapshot.workflow.agentConfig)
+                        const baseConfig =
+                            typeof snapshot.workflow.agentConfig === 'string'
+                                ? JSON.parse(snapshot.workflow.agentConfig)
+                                : snapshot.workflow.agentConfig
+                        inheritedAgentConfig = JSON.stringify(mergeLocalUiOverrides(baseConfig || {}))
                         inheritedAgentId = snapshot.workflow.agentId
                     }
                 } catch (error) {
@@ -1217,7 +1280,9 @@ export function useWorkflowCore({
             let inheritedApprovalLevel = null
 
             if (workflowStore.currentWorkflow?.agentConfig) {
-                inheritedAgentConfig = JSON.stringify(workflowStore.currentWorkflow.agentConfig)
+                inheritedAgentConfig = JSON.stringify(
+                    mergeLocalUiOverrides(workflowStore.currentWorkflow.agentConfig)
+                )
                 inheritedAgentId = workflowStore.currentWorkflow.agentId
                 // Inherit allowed paths from current workflow's agentConfig
                 const config = workflowStore.currentWorkflow.agentConfig
@@ -1232,6 +1297,12 @@ export function useWorkflowCore({
                 if (config.approvalLevel) {
                     inheritedApprovalLevel = config.approvalLevel
                 }
+            } else {
+                inheritedAgentConfig = JSON.stringify(
+                    mergeLocalUiOverrides({
+                        allowedPaths: pendingPaths.value.length > 0 ? [...pendingPaths.value] : undefined
+                    })
+                )
             }
 
             // 2. Get allowed paths - prioritize inherited paths
@@ -1308,6 +1379,11 @@ export function useWorkflowCore({
     watch(finalAuditMode, async (newVal) => {
         if (isSyncingWorkflowConfig.value) return
         await updateWorkflowConfig('finalAudit', newVal === 'on')
+    })
+
+    watch(planningMode, async (newVal) => {
+        if (isSyncingWorkflowConfig.value) return
+        await updateWorkflowConfig('phase', newVal ? 'planning' : 'standard')
     })
 
     watch(

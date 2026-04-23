@@ -29,7 +29,7 @@ impl ToolDefinition for McpToolLoad {
     }
 
     fn description(&self) -> &str {
-        "Load detailed parameter schema for a specific MCP tool. MUST be called before invoking any MCP tool that doesn't display detailed parameter information. For tools already showing full schemas, this is not needed."
+        "Load the full tool declaration, including detailed parameter schema, for a specific MCP tool. MUST be called before invoking any MCP tool that does not display detailed parameter information. For tools already showing full schemas, this is not needed. The result is returned as structured JSON."
     }
 
     fn category(&self) -> ToolCategory {
@@ -71,7 +71,7 @@ impl ToolDefinition for McpToolLoad {
             .await?;
 
         Ok(ToolCallResult::success(
-            None,
+            Some(format!("Loaded MCP tool declaration for '{}'.", tool_name)),
             Some(serde_json::to_value(declaration).unwrap_or_default()),
         ))
     }

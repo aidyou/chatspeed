@@ -2,7 +2,9 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::db::{Agent, AgentConfig, MainStore, WorkflowMessage};
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
-use crate::workflow::react::child_tasks::get_sub_agent_registry;
+use crate::workflow::react::child_tasks::{
+    get_sub_agent_registry, render_call_mode_sub_agent_tool_result,
+};
 use crate::workflow::react::engine::ReActExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::events::WorkflowEvent;
@@ -580,6 +582,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
             final_audit: agent_config.final_audit,
+            phase: None,
             models: agent_config.models.clone(),
             max_contexts: agent_config.max_contexts,
         };
@@ -726,11 +729,11 @@ impl ToolDefinition for TaskTool {
     fn description(&self) -> &str {
         "Launch one of the pre-configured child agents owned by the current primary agent. \
         Each child agent has its own prompt, model setup, and tool permissions. \
-        Use the child_agent_id that best matches the requested task. \
+        Prefer child_agent_name when selecting the child agent; use child_agent_id only as a fallback. \
         The prompt must contain a clear objective, the exact scope to investigate or implement, relevant constraints, \
         and the expected output format or success criteria. \
         If the child agent must return structured findings, explicitly state which facts, files, risks, or conclusions must be included. \
-        Use execution_mode='call' when the parent cannot continue until the child finishes. \
+        execution_mode defaults to 'call'. Use execution_mode='call' when the parent cannot continue until the child finishes; the parent pauses and receives the result automatically. \
         Use execution_mode='background' when the child can run in parallel while the parent continues other work; completion will be reported automatically, and sub_agent_output can be used later if the result is explicitly needed."
     }
 
@@ -798,6 +801,7 @@ impl ToolDefinition for TaskTool {
                     "execution_mode": {
                         "type": "string",
                         "enum": ["call", "background"],
+                        "default": "call",
                         "description": "Execution mode for the child agent. Use 'call' if you must wait for the child to finish before continuing; the parent workflow will pause and resume with the final child result. Use 'background' if you can continue other work in parallel; the system will report completion automatically, and you may inspect the result later with sub_agent_output when needed."
                     }
                 },
@@ -1305,9 +1309,13 @@ impl ToolDefinition for TaskOutputTool {
             let _ = sync_sub_agent_completion_consumed(&self.main_store, &self.session_id, task_id);
             mark_completed_task_consumed(task_id);
             return Ok(ToolCallResult::success(
-                Some(format!(
-                    "<tool_result tool=\"sub_agent_run\" id=\"{}\" mode=\"call\" status=\"{}\">\n{}\n</tool_result>",
-                    task_id, completion.status, delivered
+                Some(render_call_mode_sub_agent_tool_result(
+                    task_id,
+                    &completion.status,
+                    None,
+                    &delivered,
+                    None,
+                    false,
                 )),
                 Some(json!({
                     "task_id": task_id,
@@ -1321,7 +1329,7 @@ impl ToolDefinition for TaskOutputTool {
 
         let available_tasks = format_available_task_ids_for_owner(&self.session_id);
         Err(ToolError::ExecutionFailed(format!(
-            "Sub-agent {} not found in active or completed background sub-agents for this session.\n<SYSTEM_REMINDER>sub_agent_output only retrieves background sub-agent outputs. If this task was launched with execution_mode='call', its result is delivered directly to the parent workflow as a sub-agent completion observation and must not be fetched. Use any delivered observation you already have; otherwise continue without polling this task_id. {} Do not use sub_agent_output as a generic final-answer tool or with a main session ID.</SYSTEM_REMINDER>",
+            "Sub-agent {} not found in active, completed, or durable sub-agent records for this session.\n<SYSTEM_REMINDER>sub_agent_output retrieves accessible background sub-agent outputs and can re-read durable call-mode completions only when they exist for this parent session. If this task was launched with execution_mode='call', its result is normally delivered directly to the parent workflow as a sub-agent completion observation. Use any delivered observation you already have; otherwise continue without polling this task_id. {} Do not use sub_agent_output as a generic final-answer tool or with a main session ID.</SYSTEM_REMINDER>",
             task_id,
             available_tasks
         )))
@@ -1346,10 +1354,11 @@ impl ToolDefinition for TaskStopTool {
     }
 
     fn description(&self) -> &str {
-        "- Stops a running background sub-agent by its ID\n\
+        "- Stops a currently running sub-agent owned by this workflow by its task_id\n\
+        - Works for active sub-agents that are still registered in this workflow, including background runs and any still-running child sessions\n\
         - Takes a task_id parameter identifying the sub-agent to stop\n\
-        - Returns a success or failure status\n\
-        - Use this tool when you need to terminate a long-running sub-agent"
+        - Returns success only when the stop signal was issued to an active sub-agent\n\
+        - Use this tool when the sub-agent is no longer needed, is stuck, or is taking too long. Do not use it for already completed tasks."
     }
 
     fn category(&self) -> ToolCategory {

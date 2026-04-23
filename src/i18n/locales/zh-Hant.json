@@ -481,6 +481,7 @@
       "proxyServerRequired": "請輸入代理伺服器位址",
       "restrictedHeader": "包含受限的請求頭：{headers}",
       "reasoning": "推理模型",
+      "thinkingBudgetTokens": "思考預算",
       "searchByIdOrName": "按 ID 或名稱搜尋",
       "stop": "終止標記",
       "stopPlaceholder": "設置模型生成文本時遇到即停止的標記。多個請用換行符分隔。",

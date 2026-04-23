@@ -238,6 +238,26 @@
                       style="width: 120px" />
                   </div>
                 </div>
+                <div
+                  v-if="supportsThinking(role.key)"
+                  class="params-row compact-params"
+                  style="margin-top: 6px">
+                  <div class="param-item">
+                    <span class="param-label">{{ $t('settings.model.reasoning') }}</span>
+                    <el-switch v-model="agentForm[role.key + 'Model'].thinkingEnabled" size="small" />
+                  </div>
+                  <div class="param-item" v-if="agentForm[role.key + 'Model'].thinkingEnabled">
+                    <span class="param-label">{{ $t('settings.model.thinkingBudgetTokens') }}</span>
+                    <el-input-number
+                      v-model="agentForm[role.key + 'Model'].thinkingBudgetTokens"
+                      :min="256"
+                      :max="131072"
+                      :step="256"
+                      size="small"
+                      controls-position="right"
+                      style="width: 120px" />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -421,6 +441,17 @@ const CORE_MANAGEMENT_TOOLS = [
   'submit_plan'
 ]
 
+const defaultAgentModelConfig = () => ({
+  id: '',
+  model: '',
+  temperature: -0.1,
+  thinking: null,
+  thinkingEnabled: false,
+  thinkingBudgetTokens: 1024,
+  contextSize: 128000,
+  maxTokens: 0
+})
+
 const defaultFormData = {
   name: '',
   description: '',
@@ -433,8 +464,8 @@ const defaultFormData = {
   skillEnabled: true,
   shellPolicy: [],
   allowedPaths: [],
-  planModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
-  actModel: { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 },
+  planModel: defaultAgentModelConfig(),
+  actModel: defaultAgentModelConfig(),
   maxContexts: 128000,
   approvalLevel: 'default'
 }
@@ -730,6 +761,20 @@ const agentRules = {
 const normalizeAgentFormForSave = form => {
   const normalized = JSON.parse(JSON.stringify(form))
 
+  allModelRoles.forEach(role => {
+    const key = role.key + 'Model'
+    const model = normalized[key]
+    if (!model) return
+    model.thinking = model.thinkingEnabled
+      ? {
+        type: 'enabled',
+        budgetTokens: Number(model.thinkingBudgetTokens) || 1024
+      }
+      : null
+    delete model.thinkingEnabled
+    delete model.thinkingBudgetTokens
+  })
+
   normalized.availableTools = Array.isArray(normalized.availableTools)
     ? [...new Set(normalized.availableTools)]
     : []
@@ -741,13 +786,7 @@ const normalizeAgentFormForSave = form => {
 
   if (normalized.role === AGENT_ROLE.CHILD) {
     normalized.planningPrompt = ''
-    normalized.planModel = {
-      id: '',
-      model: '',
-      temperature: -0.1,
-      contextSize: 128000,
-      maxTokens: 0
-    }
+    normalized.planModel = defaultAgentModelConfig()
     normalized.allowedPaths = []
     normalized.shellPolicy = []
     normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
@@ -784,6 +823,9 @@ const applyProviderModelOverrides = (key, modelId) => {
   if (selected.temperature !== undefined && selected.temperature !== null) {
     currentModel.temperature = selected.temperature
   }
+  currentModel.thinking = selected.thinking || null
+  currentModel.thinkingEnabled = !!selected.thinking
+  currentModel.thinkingBudgetTokens = selected.thinking?.budgetTokens || 1024
   if (selected.contextSize !== undefined && selected.contextSize !== null) {
     currentModel.contextSize = selected.contextSize
   }
@@ -794,6 +836,12 @@ const applyProviderModelOverrides = (key, modelId) => {
 
 const onProviderModelChange = (key, value) => {
   applyProviderModelOverrides(key, value)
+}
+
+const supportsThinking = key => {
+  if (modelModes[key] !== 'provider') return !!agentForm.value[key + 'Model']?.thinkingEnabled
+  const selected = getModelList(key).find(model => model.id === agentForm.value[key + 'Model']?.model)
+  return !!selected?.reasoning || !!agentForm.value[key + 'Model']?.thinkingEnabled
 }
 
 const getProxyAliases = groupName => {
@@ -809,6 +857,14 @@ const onProxyGroupChange = key => {
 const onProxyAliasChange = (key, value) => {
   agentForm.value[key + 'Model'].model = `${proxyGroups[key]}@${value}`
 }
+
+const normalizeModelDraft = model => ({
+  ...defaultAgentModelConfig(),
+  ...(model || {}),
+  thinking: model?.thinking || null,
+  thinkingEnabled: !!model?.thinking,
+  thinkingBudgetTokens: model?.thinking?.budgetTokens || 1024
+})
 
 const parseModelField = (field, key) => {
   if (field && field.id === 0 && field.model?.includes('@')) {
@@ -848,7 +904,7 @@ const editAgent = async id => {
           const modelsObj = JSON.parse(agentData.models)
           allModelRoles.forEach(role => {
             if (modelsObj[role.key]) {
-              agentForm.value[role.key + 'Model'] = modelsObj[role.key]
+              agentForm.value[role.key + 'Model'] = normalizeModelDraft(modelsObj[role.key])
               if (agentForm.value[role.key + 'Model'].temperature === undefined) {
                 agentForm.value[role.key + 'Model'].temperature = -0.1
               }
@@ -924,6 +980,9 @@ const editAgent = async id => {
     agentForm.value.role = AGENT_ROLE.PRIMARY
     agentForm.value.parentAgentId = null
     agentForm.value.skillEnabled = true
+    allModelRoles.forEach(role => {
+      agentForm.value[role.key + 'Model'] = normalizeModelDraft(agentForm.value[role.key + 'Model'])
+    })
   }
 
   agentDialogVisible.value = true
@@ -939,7 +998,9 @@ const copyAgent = async id => {
       try {
         const modelsObj = JSON.parse(agentData.models)
         allModelRoles.forEach(role => {
-          if (modelsObj[role.key]) agentForm.value[role.key + 'Model'] = modelsObj[role.key]
+          if (modelsObj[role.key]) {
+            agentForm.value[role.key + 'Model'] = normalizeModelDraft(modelsObj[role.key])
+          }
         })
       } catch (e) {
         console.error(e)

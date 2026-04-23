@@ -1,10 +1,16 @@
 use std::collections::VecDeque;
 
 /// Window size for the repetition detector (number of recent tool calls to inspect).
-const LOOP_DETECT_WINDOW: usize = 8;
+const LOOP_DETECT_WINDOW: usize = 18;
 
 /// Minimum repeat count within the window that triggers a loop warning.
 const LOOP_REPEAT_THRESHOLD: usize = 3;
+
+/// Minimum consecutive repeated tool-call sequence count before surfacing a warning.
+const LOOP_SEQUENCE_REPEAT_THRESHOLD: usize = 3;
+
+/// Maximum sequence length to consider when detecting repeated tool-call patterns.
+const LOOP_SEQUENCE_MAX_LEN: usize = 6;
 
 /// Minimum consecutive identical no-tool responses before surfacing a loop warning.
 const NO_TOOL_RESPONSE_REPEAT_THRESHOLD: usize = 3;
@@ -112,7 +118,7 @@ impl LoopDetector {
                 tool_name
             ))
         } else {
-            None
+            self.detect_repeated_sequence()
         }
     }
 
@@ -147,6 +153,43 @@ impl LoopDetector {
     pub fn reset_no_tool_response_history(&mut self) {
         self.last_no_tool_response = None;
         self.consecutive_no_tool_responses = 0;
+    }
+
+    fn detect_repeated_sequence(&self) -> Option<String> {
+        let calls: Vec<_> = self.recent_calls.iter().cloned().collect();
+        let max_sequence_len =
+            LOOP_SEQUENCE_MAX_LEN.min(calls.len() / LOOP_SEQUENCE_REPEAT_THRESHOLD);
+
+        for sequence_len in 2..=max_sequence_len {
+            let total_len = sequence_len * LOOP_SEQUENCE_REPEAT_THRESHOLD;
+            let tail = &calls[calls.len() - total_len..];
+            let pattern = &tail[..sequence_len];
+
+            let repeated = (1..LOOP_SEQUENCE_REPEAT_THRESHOLD)
+                .all(|index| &tail[index * sequence_len..(index + 1) * sequence_len] == pattern);
+            if !repeated {
+                continue;
+            }
+
+            let tool_summary = pattern
+                .iter()
+                .map(|(tool_name, _)| tool_name.as_str())
+                .collect::<Vec<_>>()
+                .join(" -> ");
+
+            return Some(format!(
+                "ERROR: LOOP DETECTED\n<SYSTEM_REMINDER>You are repeating the same tool-call sequence {} times in a row: {}.\n\
+                This indicates you are re-gathering the same context without making progress. You MUST change strategy now:\n\
+                1. Stop repeating the same search/fetch/read cycle.\n\
+                2. Use the information already gathered to implement, answer, verify, or explain a real blocker.\n\
+                3. Only call additional tools if they gather genuinely new information.\n\
+                Do NOT repeat this same tool sequence again.</SYSTEM_REMINDER>",
+                LOOP_SEQUENCE_REPEAT_THRESHOLD,
+                tool_summary
+            ));
+        }
+
+        None
     }
 }
 
@@ -209,5 +252,34 @@ mod tests {
         assert!(detector
             .record_no_tool_response_and_check("same reply")
             .is_none());
+    }
+
+    #[test]
+    fn detects_repeated_tool_sequence() {
+        let mut detector = LoopDetector::new();
+        let search_args = json!({"query":"single instance"});
+        let fetch_args = json!({"url":"https://v2.tauri.app/plugin/single-instance/"});
+        let main_args = json!({"file_path":"src-tauri/src/main.rs"});
+        let cargo_args = json!({"file_path":"src-tauri/Cargo.toml"});
+
+        let pattern = [
+            ("web_search", &search_args),
+            ("web_fetch", &fetch_args),
+            ("read_file", &main_args),
+            ("read_file", &cargo_args),
+        ];
+
+        for _ in 0..2 {
+            for (tool, args) in &pattern {
+                assert!(detector.record_and_check(tool, args).is_none());
+            }
+        }
+
+        let mut warning = None;
+        for (tool, args) in &pattern {
+            warning = detector.record_and_check(tool, args);
+        }
+
+        assert!(warning.is_some(), "expected repeated tool sequence warning");
     }
 }

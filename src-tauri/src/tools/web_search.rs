@@ -222,6 +222,7 @@ impl ToolDefinition for WebSearch {
         **Best Practices:**\n\
         - Use specific, targeted queries. Avoid vague or overly broad searches.\n\
         - For Chinese topics, prefer searching in Chinese for better results.\n\
+        - `query` may be a string or an array of strings. Arrays are searched as quoted exact phrases joined with spaces.\n\
         - ALWAYS analyze search results before deciding on next action.\n\
         - After reviewing results, use web_fetch on the 1-3 most relevant URLs.\n\
         - If results are insufficient, try completely different keywords before searching again.\n\
@@ -237,13 +238,17 @@ impl ToolDefinition for WebSearch {
                     "type": "object",
                     "properties": {
                         "query": {
-                            "type": "string",
-                            "description": "The search query or keyword. For best results, use specific and concise language. Can also be an array of strings for exact phrase matching."
+                            "oneOf": [
+                                { "type": "string" },
+                                { "type": "array", "items": { "type": "string" } }
+                            ],
+                            "description": "The search query or keywords. Use a string for normal search. Use an array of strings for exact phrase matching; phrases are quoted and joined with spaces."
                         },
                         "page": {
                             "type": "integer",
                             "default": 1,
-                            "description": "The page number of the search results to return. Use this in conjunction with the 'number' parameter to paginate through more than 10 results. Defaults to 1."
+                            "minimum": 1,
+                            "description": "Starting page number for search results. Defaults to 1. The tool may fetch up to 3 pages from this starting page to satisfy the requested number of results."
                         },
                         "number": {
                             "type": "integer",
@@ -262,6 +267,10 @@ impl ToolDefinition for WebSearch {
                             "enum": ["json", "xml"],
                             "default": "json",
                             "description": "The format of the response data. Defaults to 'json'."
+                        },
+                        "provider": {
+                            "type": "string",
+                            "description": "Optional search provider override. If omitted, the configured default search engine is used."
                         }
                     },
                     "required": ["query"]
@@ -287,6 +296,7 @@ impl ToolDefinition for WebSearch {
             .map(String::from);
         let query = Self::extract_keywords(&params)?;
         let desired_count = params["number"].as_u64().unwrap_or(5).min(30).max(1) as usize;
+        let start_page = params["page"].as_u64().unwrap_or(1).max(1);
         let time_period = params["time_period"].as_str().unwrap_or("");
         let response_format = params["response_format"].as_str().unwrap_or("json");
 
@@ -301,12 +311,13 @@ impl ToolDefinition for WebSearch {
         // 2. Setup for pagination loop
         let (searcher, search_provider_name) = self.create_searcher(provider_param)?;
         let mut final_results: Vec<crate::search::SearchResult> = Vec::with_capacity(desired_count);
-        let mut current_page = 1;
+        let mut current_page = start_page;
         const MAX_PAGES_TO_FETCH: u64 = 3; // Limit to prevent excessive requests
         const PAGE_SIZE: u64 = 10; // Most engines default to 10
+        let max_page = start_page.saturating_add(MAX_PAGES_TO_FETCH - 1);
 
         // 3. Pagination-Pipeline Loop
-        while final_results.len() < desired_count && current_page <= MAX_PAGES_TO_FETCH {
+        while final_results.len() < desired_count && current_page <= max_page {
             let search_params = json!({
                 "query": query.clone(),
                 "count": PAGE_SIZE,

@@ -117,6 +117,42 @@ impl ContextCompressor {
             .await
             .map_err(WorkflowEngineError::Ai)?;
 
-        Ok(result.trim().to_string())
+        Ok(Self::normalize_summary_result(&result))
+    }
+
+    fn normalize_summary_result(result: &str) -> String {
+        let trimmed = result.trim();
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(content) = parsed.get("content").and_then(|value| value.as_str()) {
+                let content = content.trim();
+                if !content.is_empty() {
+                    return content.to_string();
+                }
+            }
+        }
+
+        trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ContextCompressor;
+
+    #[test]
+    fn normalize_summary_result_extracts_content_field_from_json() {
+        let raw = r#"{"content":"<state_snapshot>\n  <overall_goal>goal</overall_goal>\n</state_snapshot>","reasoning":"ignored"}"#;
+        let normalized = ContextCompressor::normalize_summary_result(raw);
+        assert_eq!(
+            normalized,
+            "<state_snapshot>\n  <overall_goal>goal</overall_goal>\n</state_snapshot>"
+        );
+    }
+
+    #[test]
+    fn normalize_summary_result_preserves_plain_xml() {
+        let raw = "<state_snapshot><overall_goal>goal</overall_goal></state_snapshot>";
+        let normalized = ContextCompressor::normalize_summary_result(raw);
+        assert_eq!(normalized, raw);
     }
 }

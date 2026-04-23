@@ -99,7 +99,7 @@ impl ToolDefinition for TodoCreateTool {
         ## Task Fields\n\
         - **subject**: A brief, actionable title in imperative form (e.g., \"Fix authentication bug in login flow\")\n\
         - **description**: Detailed description of what needs to be done, including context and acceptance criteria\n\
-        - **activeForm**: Present continuous form shown in spinner when task is in_progress (e.g., \"Fixing authentication bug\"). This is displayed to the user while you work on the task."
+        - New tasks are created with status `pending` and numeric string IDs assigned in list order."
     }
 
     fn category(&self) -> ToolCategory {
@@ -187,14 +187,20 @@ impl ToolDefinition for TodoCreateTool {
         }
 
         save_db_todo_list(&self.main_store, &self.session_id, list).await?;
+        let created_count = created_ids.len();
         Ok(ToolCallResult::success(
             Some(format!(
                 "Successfully created {} todo item(s) in {} mode. IDs: {}",
-                created_ids.len(),
+                created_count,
                 mode,
                 created_ids.join(", ")
             )),
-            None,
+            Some(json!({
+                "status": "created",
+                "mode": mode,
+                "created_count": created_count,
+                "created_ids": created_ids
+            })),
         ))
     }
 }
@@ -212,15 +218,14 @@ impl ToolDefinition for TodoListTool {
     fn description(&self) -> &str {
         "Use this tool to list all tasks in the current session's todo list.\n\n\
         ## When to Use This Tool\n\
-        - To see what tasks are available to work on (status: 'pending', no owner, not blocked)\n\
+        - To see what tasks are available to work on\n\
         - To check overall progress on the project\n\
-        - To find tasks that are blocked and need dependencies resolved\n\
-        - After completing a task, to check for newly unblocked work or claim the next available task\n\n\
+        - After completing a task, to check whether any pending work remains\n\n\
         ## Output\n\
-        Returns a summary of each task:\n\
+        Returns one line per task in this format: `[status] subject (ID: id)`.\n\
         - **id**: Task identifier (use with todo_get, todo_update)\n\
         - **subject**: Brief description of the task\n\
-        - **status**: 'pending', 'in_progress', or 'completed'"
+        - **status**: `pending`, `in_progress`, `completed`, `deleted`, `failed`, or `data_missing`"
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::System
@@ -245,7 +250,10 @@ impl ToolDefinition for TodoListTool {
         if list.is_empty() {
             return Ok(ToolCallResult::success(
                 Some("Todo list is empty.".into()),
-                None,
+                Some(json!({
+                    "items": [],
+                    "count": 0
+                })),
             ));
         }
         let output = list
@@ -260,7 +268,14 @@ impl ToolDefinition for TodoListTool {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        Ok(ToolCallResult::success(Some(output), None))
+        let count = list.len();
+        Ok(ToolCallResult::success(
+            Some(output),
+            Some(json!({
+                "items": list,
+                "count": count
+            })),
+        ))
     }
 }
 
@@ -284,15 +299,14 @@ impl ToolDefinition for TodoUpdateTool {
         **Delete tasks:**\n\
         - When a task is no longer relevant or was created in error\n\
         - Setting status to `deleted` permanently removes the task\n\n\
-        **Update task details:**\n\
-        - When requirements change or become clearer\n\n\
         ## Status Workflow\n\
         Status progresses: `pending` → `in_progress` → `completed`.\n\
         Use `data_missing` when the required data could not be obtained but the task can be skipped.\n\
         Use `failed` when the task encountered an unrecoverable error.\n\
         Use `deleted` to permanently remove a task.\n\n\
         **Important**: When a task's data cannot be obtained after reasonable attempts, \
-        mark it as `data_missing` rather than retrying indefinitely."
+        mark it as `data_missing` rather than retrying indefinitely.\n\n\
+        This tool only updates task status. It does not edit subject or description."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::System
@@ -326,6 +340,15 @@ impl ToolDefinition for TodoUpdateTool {
         let status = params["status"]
             .as_str()
             .ok_or(ToolError::InvalidParams("status required".into()))?;
+        if !matches!(
+            status,
+            "pending" | "in_progress" | "completed" | "deleted" | "failed" | "data_missing"
+        ) {
+            return Err(ToolError::InvalidParams(format!(
+                "status must be one of pending, in_progress, completed, deleted, failed, or data_missing; got '{}'",
+                status
+            )));
+        }
 
         let mut list = get_db_todo_list(&self.main_store, &self.session_id).await?;
         let mut found = false;
@@ -354,7 +377,10 @@ impl ToolDefinition for TodoUpdateTool {
         save_db_todo_list(&self.main_store, &self.session_id, list).await?;
         Ok(ToolCallResult::success(
             Some(format!("Updated todo item {} to {}", todo_id, status)),
-            None,
+            Some(json!({
+                "todo_id": todo_id,
+                "status": status
+            })),
         ))
     }
 }
@@ -373,8 +399,9 @@ impl ToolDefinition for TodoGetTool {
         "Use this tool to retrieve a task by its ID from the todo list.\n\n\
         ## When to Use This Tool\n\
         - When you need the full description and context before starting work on a task\n\
-        - To understand task dependencies\n\
-        - After being assigned a task, to get complete requirements"
+        - After selecting a task from todo_list, to get complete requirements\n\n\
+        ## Output\n\
+        Returns the full todo item as pretty-printed JSON."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::System
@@ -416,7 +443,7 @@ impl ToolDefinition for TodoGetTool {
             })?;
         Ok(ToolCallResult::success(
             Some(serde_json::to_string_pretty(item).unwrap()),
-            None,
+            Some(item.clone()),
         ))
     }
 }
@@ -610,5 +637,38 @@ mod tests {
         assert!(message.contains("Todo item 999 not found"));
         assert!(message.contains("Current To Do List:"));
         assert!(message.contains("Task 1"));
+    }
+
+    #[tokio::test]
+    async fn test_todo_update_rejects_invalid_status() {
+        let (store, session_id) = setup_test_db().await;
+
+        let create_tool = TodoCreateTool {
+            session_id: session_id.clone(),
+            main_store: store.clone(),
+        };
+        create_tool
+            .call(json!({
+                "subject": "Task 1",
+                "description": "First task description"
+            }))
+            .await
+            .unwrap();
+
+        let update_tool = TodoUpdateTool {
+            session_id,
+            main_store: store,
+        };
+        let error = update_tool
+            .call(json!({
+                "todo_id": "1",
+                "status": "done"
+            }))
+            .await
+            .expect_err("invalid status should return error");
+
+        let message = error.to_string();
+        assert!(message.contains("status must be one of"));
+        assert!(message.contains("done"));
     }
 }

@@ -479,6 +479,7 @@
       "proxyServerRequired": "プロキシサーバーのアドレスを入力してください",
       "restrictedHeader": "制限されたヘッダーが含まれています: {headers}",
       "reasoning": "推論モデル",
+      "thinkingBudgetTokens": "思考予算",
       "searchByIdOrName": "IDまたは名前で検索",
       "stop": "停止トークン",
       "stopPlaceholder": "モデルがテキストの生成を停止するトークンを設定します。複数ある場合は改行で区切ってください。",

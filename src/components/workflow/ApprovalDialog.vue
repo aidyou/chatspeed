@@ -221,7 +221,7 @@ const diffLines = computed(() => {
   const oldStr = data.old_string ?? ''
   const newStr = data.new_string ?? data.content ?? ''
   const startLine = data.start_line || 1
-  return generateDiffLines(oldStr, newStr, startLine)
+  return generateDiffLines(oldStr, newStr, startLine, data)
 })
 
 const createDiffLine = (prefix, lineNumber, content, type) => ({
@@ -232,26 +232,54 @@ const createDiffLine = (prefix, lineNumber, content, type) => ({
 })
 
 // Use diff library to generate proper line-by-line diff
-const generateDiffLines = (oldStr, newStr, startLine = 1) => {
+const appendContextLines = (diff, lines, startLine, type = 'context') => {
+  if (!Array.isArray(lines) || !lines.length) return
+  lines.forEach((line, index) => {
+    diff.push(createDiffLine(' ', (startLine + index).toString(), line, type))
+  })
+}
+
+const generateDiffLines = (oldStr, newStr, startLine = 1, contextData = {}) => {
+  const diff = []
+  appendContextLines(
+    diff,
+    contextData.context_before,
+    contextData.context_before_start_line || Math.max(1, startLine - (contextData.context_before?.length || 0)),
+    'context'
+  )
+
   if (oldStr === newStr) {
-    return [createDiffLine(' ', '', '(No visible changes)', 'context')]
+    diff.push(createDiffLine(' ', '', '(No visible changes)', 'context'))
+    appendContextLines(
+      diff,
+      contextData.context_after,
+      contextData.context_after_start_line || startLine,
+      'context'
+    )
+    return diff
   }
 
   if (!oldStr && newStr) {
-    const diff = [createDiffLine('-', '1', '(empty)', 'removed')]
+    const insertionLine = startLine.toString()
+    diff.push(createDiffLine('-', insertionLine, '(empty)', 'removed'))
     const lines = newStr.split('\n')
     if (lines[lines.length - 1] === '') {
       lines.pop()
     }
     lines.forEach((line, index) => {
-      const lineNum = index + 1
+      const lineNum = startLine + index
       diff.push(createDiffLine('+', lineNum.toString(), line, 'added'))
     })
+    appendContextLines(
+      diff,
+      contextData.context_after,
+      contextData.context_after_start_line || startLine + lines.length,
+      'context'
+    )
     return diff
   }
 
   const changes = Diff.diffLines(oldStr, newStr)
-  const diff = []
   let currentLineOld = startLine
   let currentLineNew = startLine
 
@@ -278,7 +306,16 @@ const generateDiffLines = (oldStr, newStr, startLine = 1) => {
     })
   })
 
-  return diff.length > 0 ? diff : [createDiffLine(' ', '', '(No visible changes)', 'context')]
+  if (diff.length === 0) {
+    diff.push(createDiffLine(' ', '', '(No visible changes)', 'context'))
+  }
+  appendContextLines(
+    diff,
+    contextData.context_after,
+    contextData.context_after_start_line || currentLineOld,
+    'context'
+  )
+  return diff
 }
 
 const visible = computed({

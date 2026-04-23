@@ -34,7 +34,14 @@ const _transformFromBackend = (backendAgent) => {
   if (!backendAgent) return null;
 
   // Default model config
-  const defaultModel = { id: '', model: '', temperature: -0.1, contextSize: 128000, maxTokens: 0 };
+  const defaultModel = {
+    id: '',
+    model: '',
+    temperature: -0.1,
+    thinking: null,
+    contextSize: 128000,
+    maxTokens: 0
+  };
 
   // models field is already an object (struct AgentModels), not a JSON string
   // Tauri IPC auto-serializes Rust structs to JS objects
@@ -95,6 +102,7 @@ const _transformToBackend = (frontendAgent) => {
         id: typeof modelObj.id === 'string' ? parseInt(modelObj.id, 10) : modelObj.id,
         model: modelObj.model,
         temperature: modelObj.temperature ?? -0.1,
+        thinking: modelObj.thinking || null,
         contextSize: modelObj.contextSize ?? 128000,
         maxTokens: modelObj.maxTokens ?? 0
       };

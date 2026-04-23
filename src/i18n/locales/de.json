@@ -480,6 +480,7 @@
       "proxyServerRequired": "Bitte geben Sie die Proxy-Server-Adresse ein",
       "restrictedHeader": "Enthält eingeschränkte Header: {headers}",
       "reasoning": "Inferenzmodell",
+      "thinkingBudgetTokens": "Thinking-Budget",
       "searchByIdOrName": "Nach ID oder Name suchen",
       "stop": "Stoppzeichen",
       "stopPlaceholder": "Legt die Zeichen fest, bei denen das Modell die Textgenerierung beenden soll. Mehrere durch Zeilenumbrüche trennen.",

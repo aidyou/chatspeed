@@ -167,7 +167,10 @@ impl ToolDefinition for WebFetch {
             )
         };
 
-        let empty_prompt = format!("<webpage><url>{}</url><content><!--Not Results--></content></webpage>\n<SYSTEM_REMINDER>Failed to fetch content from the URL. The page might be empty, protected, or a dynamic web application. Please verify the URL and try again.</SYSTEM_REMINDER>", &url);
+        let empty_prompt = format!(
+            "<webpage><url>{}</url><content><!--Not Results--></content></webpage>\n<SYSTEM_REMINDER>Failed to fetch content from this URL. Do NOT retry the same URL immediately. The page may be empty, protected, or a dynamic web application. Try a different source URL if available; otherwise treat the data as unavailable and continue.</SYSTEM_REMINDER>",
+            &url
+        );
 
         let content_formated = if content.is_empty() {
             empty_prompt

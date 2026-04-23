@@ -4,6 +4,9 @@ use crate::tools::{
     TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST, TOOL_TODO_UPDATE, TOOL_WEB_FETCH,
     TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
+use crate::workflow::react::file_preview::{
+    attach_display_context, merge_tool_result_into_preview_args,
+};
 
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -142,6 +145,12 @@ impl ObservationReinforcer {
                 // --- Custom Logic for File Tools (Formatting for UI Diff) ---
                 if tool_name == TOOL_EDIT_FILE || tool_name == TOOL_WRITE_FILE {
                     let mut preview_args = args.clone();
+                    merge_tool_result_into_preview_args(
+                        &mut preview_args,
+                        val.get("structured_content"),
+                        val.get("content").and_then(|value| value.as_str()),
+                    );
+                    attach_display_context(&mut preview_args, true);
                     let preview_limit = 100_000;
 
                     // Truncate large fields for UI history to prevent DB bloat and rendering lag
@@ -204,7 +213,7 @@ impl ObservationReinforcer {
                         approval_status: None,
                         observation_kind: None,
                     }
-                } else if raw_res.len() > 20000 {
+                } else if tool_name != TOOL_READ_FILE && raw_res.len() > 20000 {
                     let truncated = match raw_res.char_indices().nth(20000) {
                         Some((idx, _)) => &raw_res[..idx],
                         None => &raw_res,
@@ -325,11 +334,11 @@ impl ObservationReinforcer {
                 let offset = args["offset"].as_i64();
                 let mut suffix = String::new();
                 if let (Some(l), Some(o)) = (limit, offset) {
-                    suffix = format!(" L{}-{}", l, o);
+                    suffix = format!(" L{}-{}", o.saturating_add(1), o.saturating_add(l));
                 } else if let Some(l) = limit {
-                    suffix = format!(" L{}", l);
+                    suffix = format!(" L1-{}", l);
                 } else if let Some(o) = offset {
-                    suffix = format!(" @{}", o);
+                    suffix = format!(" from L{}", o.saturating_add(1));
                 }
                 format!("Read {}{}", display_path, suffix)
             }
@@ -527,6 +536,7 @@ impl ObservationReinforcer {
                 let lines = content.lines().count();
                 format!("Read {} lines", lines)
             }
+            TOOL_GREP if content.trim() == "[No matches found]" => "No matches found".to_string(),
             TOOL_LIST_DIR | TOOL_GLOB => {
                 if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(content) {
                     format!("Found {} entries", arr.len())
@@ -568,5 +578,38 @@ impl ObservationReinforcer {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reinforce_read_file_does_not_apply_generic_second_truncation() {
+        let long_content = format!(
+            "<truncated_content>\n{}\n</truncated_content>\n<SYSTEM_REMINDER>File size: 12345 bytes; total lines: 999.</SYSTEM_REMINDER>",
+            "x".repeat(25_000)
+        );
+        let tool_call = json!({
+            "function": {
+                "name": TOOL_READ_FILE,
+                "arguments": "{\"file_path\":\"/tmp/demo.txt\"}"
+            }
+        });
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(json!(long_content)),
+            None,
+            None,
+        );
+
+        assert!(reinforced.content.contains("<truncated_content>"));
+        assert!(reinforced.content.contains("total lines: 999"));
+        assert!(!reinforced
+            .content
+            .contains("Output truncated to 20000 chars"));
     }
 }

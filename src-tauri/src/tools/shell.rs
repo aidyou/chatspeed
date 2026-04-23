@@ -444,17 +444,20 @@ impl ToolDefinition for ShellExecute {
     }
 
     fn description(&self) -> &str {
-        "Executes a given bash command with optional timeout. Working directory persists between commands.\n\n\
+        "Executes a shell command with an optional timeout.\n\n\
         IMPORTANT: This tool is for terminal operations like git, npm, docker, etc. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use the specialized tools for this instead.\n\n\
         Before executing the command, please follow these steps:\n\n\
         1. Directory Verification:\n\
-           - If the command will create new directories or files, first use `ls` to verify the parent directory exists and is the correct location\n\n\
+           - If the command will create new directories or files, first verify the parent directory exists and is the correct location using the appropriate file-system tool or a safe terminal command\n\n\
         2. Command Execution:\n\
            - Always quote file paths that contain spaces with double quotes (e.g., cd \"path with spaces/file.txt\")\n\
            - Capture the output of the command.\n\n\
         Usage notes:\n\
           - The command argument is required.\n\
-          - You can specify an optional timeout in milliseconds (max 600000ms)."
+          - Commands run in the workflow's primary allowed root when available; shell state such as `cd` does not persist between tool calls.\n\
+          - If you need a different working directory, include it in the command itself (for example: `cd \"path\" && npm test`).\n\
+          - You can specify an optional timeout in milliseconds. Defaults to 120000ms and is capped at 600000ms.\n\
+          - Successful output is returned as stdout only and is truncated after 30000 characters. Non-zero exits return stderr as an error."
     }
 
     fn category(&self) -> ToolCategory {
@@ -473,7 +476,7 @@ impl ToolDefinition for ShellExecute {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "The command to execute" },
-                    "timeout": { "type": "number", "description": "Optional timeout in milliseconds" },
+                    "timeout": { "type": "number", "description": "Optional timeout in milliseconds. Defaults to 120000 and is capped at 600000." },
                     "description": { "type": "string", "description": "Clear description of what this command does." }
                 },
                 "required": ["command"]

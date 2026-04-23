@@ -7,6 +7,7 @@ use crate::{
         },
     },
     ccproxy::ChatProtocol,
+    db::ThinkingConfig,
     tools::ToolScope,
 };
 
@@ -384,6 +385,7 @@ pub struct ChatMetadata {
     pub user_id: Option<String>,
     pub tool_choice: Option<Value>,
     pub reasoning: Option<bool>,
+    pub thinking: Option<ThinkingConfig>,
 
     // --- Custom Extensions ---
     pub custom_headers: Option<Vec<CustomHeader>>,

@@ -47,12 +47,15 @@ impl ToolDefinition for ReadFile {
         Usage:\n\
         - The file_path parameter must be an absolute path, not a relative path\n\
         - By default, it reads up to 2000 lines starting from the beginning of the file\n\
-        - You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters\n\
-        - Any lines longer than 2000 characters will be truncated\n\
-        - Results are returned using cat -n format, with line numbers starting at 1\n\
-        - This tool can only read text files, not directories. To read a directory, use an ls command via the bash tool.\n\
+        - Use offset and limit for long files or after grep finds a relevant line. offset is zero-based: offset=0 starts at line 1, offset=200 starts at line 201\n\
+        - Any single line longer than 10000 characters returns an error instead of being truncated\n\
+        - Total returned file content is capped below the workflow observation truncation threshold; if exceeded, the tool returns <truncated_content> plus a SYSTEM_REMINDER with file size, total lines, and the next suggested offset\n\
+        - Results are returned using cat -n style format: right-aligned 1-based line number, tab, then line content\n\
+        - If output stops because limit was reached, a SYSTEM_REMINDER tells you the next offset to continue from\n\
+        - If output reaches EOF before the limit, a SYSTEM_REMINDER tells you not to reread the same offset\n\
+        - This tool can only read text files, not directories. To inspect a directory, use list_dir.\n\
         - You can call multiple tools in a single response. It is always better to speculatively read multiple potentially useful files in parallel.\n\
-        - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents."
+        - If no content is returned, the tool will explicitly say whether the file appears empty or the offset is beyond EOF."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::FileSystem
@@ -70,8 +73,8 @@ impl ToolDefinition for ReadFile {
                 "type": "object",
                 "properties": {
                     "file_path": { "type": "string", "description": "The absolute path to the file to read" },
-                    "offset": { "type": "integer", "description": "The line number to start reading from. Only provide if the file is too large to read at once", "default": 0 },
-                    "limit": { "type": "integer", "description": "The number of lines to read. Only provide if the file is too large to read at once.", "default": 2000 }
+                    "offset": { "type": "integer", "description": "Zero-based line offset to start reading from. offset=0 starts at line 1; offset=200 starts at line 201. Only provide if the file is too large to read at once.", "default": 0, "minimum": 0 },
+                    "limit": { "type": "integer", "description": "Maximum number of lines to read. Defaults to 2000. Use smaller ranges for large files.", "default": 2000, "minimum": 1 }
                 },
                 "required": ["file_path"]
             }),
@@ -88,9 +91,14 @@ impl ToolDefinition for ReadFile {
             ))?;
         let offset = params["offset"].as_u64().unwrap_or(0) as usize;
         let limit = params["limit"].as_u64().unwrap_or(2000) as usize;
+        if limit == 0 {
+            return Err(ToolError::InvalidParams(
+                "limit must be greater than 0".to_string(),
+            ));
+        }
 
         const MAX_LINE_LENGTH: usize = 10_000;
-        const MAX_TOTAL_SIZE: usize = 1_024_000;
+        const MAX_OUTPUT_CHARS: usize = 18_000;
         let path = Path::new(path_str);
 
         if path.is_dir() {
@@ -104,15 +112,26 @@ impl ToolDefinition for ReadFile {
             fs::File::open(path_str).map_err(|e| format_read_file_open_error(path_str, &e))?;
         let reader = BufReader::new(file);
 
+        let file_size_bytes = fs::metadata(path_str)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
         let mut lines = Vec::new();
-        let mut total_size = 0;
+        let mut total_chars = 0usize;
+        let end_offset = offset.saturating_add(limit);
+        let mut truncated_by_limit = false;
+        let mut truncated_by_size = false;
+        let mut total_lines = 0usize;
+        let mut next_offset: Option<usize> = None;
 
         for (i, line) in reader.lines().enumerate() {
+            total_lines = i + 1;
             if i < offset {
                 continue;
             }
-            if i >= offset + limit {
-                break;
+            if i >= end_offset {
+                truncated_by_limit = true;
+                next_offset = Some(end_offset);
+                continue;
             }
             let content = line.map_err(|e| {
                 ToolError::IoError(format!(
@@ -122,21 +141,106 @@ impl ToolDefinition for ReadFile {
                     e
                 ))
             })?;
+            if truncated_by_size {
+                continue;
+            }
             if content.len() > MAX_LINE_LENGTH {
                 return Err(ToolError::ExecutionFailed(format!(
-                    "Line {} is too long. Use 'grep' or 'edit_file'.",
+                    "Line {} is too long. Use 'grep' or read_file with a smaller targeted range.",
                     i + 1
                 )));
             }
-            total_size += content.len();
-            if total_size > MAX_TOTAL_SIZE {
-                return Err(ToolError::ExecutionFailed(
-                    "Total content size exceeds 1MB limit.".to_string(),
-                ));
+            let rendered_line = format!("{:>6}\t{}", i + 1, content);
+            let rendered_len = rendered_line.chars().count() + 1;
+            if total_chars + rendered_len > MAX_OUTPUT_CHARS {
+                truncated_by_size = true;
+                next_offset = Some(i);
+                continue;
             }
-            lines.push(format!("{:>6}\t{}", i + 1, content));
+            total_chars += rendered_len;
+            lines.push(rendered_line);
         }
-        Ok(ToolCallResult::success(Some(lines.join("\n")), None))
+
+        let lines_returned = lines.len();
+        if lines.is_empty() {
+            return Ok(ToolCallResult::success(
+                Some("[No content returned. The file is empty or the requested offset is beyond EOF.]".into()),
+                Some(json!({
+                    "file_path": path_str,
+                    "offset": offset,
+                    "limit": limit,
+                    "lines_returned": 0,
+                    "truncated": false,
+                    "file_size_bytes": file_size_bytes,
+                    "total_lines": total_lines
+                })),
+            ));
+        }
+
+        let truncated = truncated_by_limit || truncated_by_size;
+        let last_line_number = offset + lines_returned;
+
+        if truncated {
+            let truncated_body = lines.join("\n");
+            let resume_offset = next_offset.unwrap_or(end_offset);
+            let reminder = if truncated_by_size {
+                format!(
+                    "<SYSTEM_REMINDER>Read output was truncated before workflow observation limits. File size: {} bytes; total lines: {}. This response includes content through line {}. Use read_file with offset={} and a smaller limit to continue precisely.</SYSTEM_REMINDER>",
+                    file_size_bytes,
+                    total_lines,
+                    last_line_number,
+                    resume_offset
+                )
+            } else {
+                format!(
+                    "<SYSTEM_REMINDER>Read output stopped at the requested limit. File size: {} bytes; total lines: {}. This response includes content through line {}. To continue reading this file, call read_file with offset={} and a suitable smaller limit if needed.</SYSTEM_REMINDER>",
+                    file_size_bytes,
+                    total_lines,
+                    last_line_number,
+                    resume_offset
+                )
+            };
+            return Ok(ToolCallResult::success(
+                Some(format!(
+                    "<truncated_content>\n{}\n</truncated_content>\n{}",
+                    truncated_body, reminder
+                )),
+                Some(json!({
+                    "file_path": path_str,
+                    "offset": offset,
+                    "limit": limit,
+                    "lines_returned": lines_returned,
+                    "truncated": true,
+                    "truncated_by_size": truncated_by_size,
+                    "truncated_by_limit": truncated_by_limit,
+                    "next_offset": resume_offset,
+                    "file_size_bytes": file_size_bytes,
+                    "total_lines": total_lines
+                })),
+            ));
+        } else if offset > 0 {
+            lines.push(format!(
+                "<SYSTEM_REMINDER>Reached EOF after line {}. File size: {} bytes; total lines: {}. Do NOT call read_file with the same offset={} again. If you need earlier context, use a lower offset or grep for a specific symbol.</SYSTEM_REMINDER>",
+                offset + lines_returned,
+                file_size_bytes,
+                total_lines,
+                offset
+            ));
+        }
+
+        Ok(ToolCallResult::success(
+            Some(lines.join("\n")),
+            Some(json!({
+                "file_path": path_str,
+                "offset": offset,
+                "limit": limit,
+                "lines_returned": lines_returned,
+                "truncated": truncated,
+                "next_offset": Value::Null,
+                "file_size_bytes": file_size_bytes,
+                "total_lines": total_lines
+            })),
+        ))
     }
 }
 
@@ -151,7 +255,9 @@ impl ToolDefinition for WriteFile {
         "Writes a file to the local filesystem.\n\n\
         Usage:\n\
         - This tool is only for creating brand-new files.\n\
-        - If a file already exists at the provided path, DO NOT use this tool. Use `edit_file` instead.\n\
+        - If a file already exists at the provided path, this tool fails; use `edit_file` instead.\n\
+        - Parent directories are created automatically when they do not already exist.\n\
+        - Prefer absolute paths. Relative paths are resolved by the process working directory and should be avoided in workflows.\n\
         - ALWAYS prefer editing existing files in the codebase. Only use this tool when you are creating a new file that does not already exist.\n\
         - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the user.\n\
         - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked."
@@ -171,7 +277,7 @@ impl ToolDefinition for WriteFile {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "file_path": { "type": "string", "description": "The absolute path to the file to write (must be absolute, not relative)" },
+                    "file_path": { "type": "string", "description": "Path to the new file. Prefer an absolute path; parent directories are created automatically." },
                     "content": { "type": "string", "description": "The content to write to the file" }
                 },
                 "required": ["file_path", "content"]
@@ -208,7 +314,10 @@ impl ToolDefinition for WriteFile {
 
         Ok(ToolCallResult::success(
             Some("New file created successfully.".to_string()),
-            None,
+            Some(json!({
+                "file_path": path_str,
+                "bytes_written": content.len()
+            })),
         ))
     }
 }
@@ -228,7 +337,8 @@ impl ToolDefinition for EditFile {
         - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n\
         - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n\
         - The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.\n\
-        - Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance."
+        - Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.\n\
+        - The tool preserves existing CRLF/LF line endings when possible. If an exact match fails because of line-ending differences, it tries a normalized fallback."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::FileSystem
@@ -399,7 +509,7 @@ impl ToolDefinition for EditFile {
 
         Ok(ToolCallResult::success(
             Some(serde_json::to_string(&result_json).unwrap_or_default()),
-            None,
+            Some(result_json),
         ))
     }
 }
@@ -412,7 +522,14 @@ impl ToolDefinition for ListDir {
         crate::tools::TOOL_LIST_DIR
     }
     fn description(&self) -> &str {
-        "Lists files and directories in a given path. To read a file, use the read_file tool instead."
+        "Lists files and directories in a given directory path. To read file contents, use read_file instead.\n\n\
+        Usage:\n\
+        - Returns one path per line.\n\
+        - By default, lists only the immediate children of the directory.\n\
+        - Set recursive=true to walk descendants recursively.\n\
+        - Respects .gitignore and standard ignore filters, while still showing hidden files unless skipped explicitly.\n\
+        - Skips common noisy entries such as node_modules, .git, __pycache__, .pyc, .DS_Store, and thumbs.db.\n\
+        - Output is capped at 1000 entries."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::FileSystem
@@ -429,8 +546,8 @@ impl ToolDefinition for ListDir {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Path to list." },
-                    "recursive": { "type": "boolean", "default": false }
+                    "path": { "type": "string", "description": "Directory path to list." },
+                    "recursive": { "type": "boolean", "description": "When true, recursively lists descendant entries. Defaults to false.", "default": false }
                 },
                 "required": ["path"]
             }),
@@ -445,6 +562,20 @@ impl ToolDefinition for ListDir {
             .ok_or(ToolError::InvalidParams("path is required".to_string()))?;
         let recursive = params["recursive"].as_bool().unwrap_or(false);
         let mut entries = vec![];
+        let path = Path::new(path_str);
+
+        if !path.exists() {
+            return Err(ToolError::IoError(format!(
+                "Directory not found: {}",
+                path_str
+            )));
+        }
+        if !path.is_dir() {
+            return Err(ToolError::InvalidParams(format!(
+                "Path is a file, not a directory: {}. Use 'read_file' to read file contents.",
+                path_str
+            )));
+        }
 
         // Use ignore crate to respect .gitignore
         let mut builder = ignore::WalkBuilder::new(path_str);
@@ -477,11 +608,25 @@ impl ToolDefinition for ListDir {
 
         if entries.is_empty() {
             Ok(ToolCallResult::success(
-                Some("Directory is empty or not found.".into()),
-                None,
+                Some("Directory is empty.".into()),
+                Some(json!({
+                    "path": path_str,
+                    "recursive": recursive,
+                    "count": 0,
+                    "truncated": false
+                })),
             ))
         } else {
-            Ok(ToolCallResult::success(Some(entries.join("\n")), None))
+            let count = entries.len();
+            Ok(ToolCallResult::success(
+                Some(entries.join("\n")),
+                Some(json!({
+                    "path": path_str,
+                    "recursive": recursive,
+                    "count": count,
+                    "truncated": count >= 1000
+                })),
+            ))
         }
     }
 }
@@ -536,9 +681,69 @@ mod tests {
         // Should contain lines 3-7
         assert!(output.contains("line 3"));
         assert!(output.contains("line 7"));
+        assert!(output.contains("offset=7"));
         // Should NOT contain lines 1-2 or 8-10
         assert!(!output.contains("line 1"));
         assert!(!output.contains("line 10"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_with_offset_reports_eof() {
+        let tool = ReadFile;
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        fs::write(&path, "line 1\nline 2\nline 3").unwrap();
+
+        let params = json!({
+            "file_path": path,
+            "offset": 2,
+            "limit": 10
+        });
+        let result = tool.call(params).await.unwrap();
+        let output = result.content.unwrap();
+
+        assert!(output.contains("line 3"));
+        assert!(output.contains("Reached EOF after line 3"));
+        assert!(output.contains("same offset=2"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_empty_file_returns_clear_message() {
+        let tool = ReadFile;
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        fs::write(&path, "").unwrap();
+
+        let params = json!({
+            "file_path": path
+        });
+        let result = tool.call(params).await.unwrap();
+        let output = result.content.unwrap();
+
+        assert!(output.contains("No content returned"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_rejects_zero_limit() {
+        let tool = ReadFile;
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        fs::write(&path, "line1").unwrap();
+
+        let params = json!({
+            "file_path": path,
+            "limit": 0
+        });
+        let result = tool.call(params).await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ToolError::InvalidParams(msg) => assert!(msg.contains("limit")),
+            other => panic!("Expected InvalidParams, got {:?}", other),
+        }
     }
 
     #[tokio::test]
@@ -565,27 +770,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_file_total_size_limit() {
+    async fn test_read_file_total_size_limit_returns_truncated_content() {
         let tool = ReadFile;
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
-        // Write content that exceeds MAX_TOTAL_SIZE (1,024,000)
-        let line = "x".repeat(1000);
-        let content: Vec<String> = (0..1500).map(|_| line.clone()).collect(); // 1,500,000 bytes
+        let line = "x".repeat(400);
+        let content: Vec<String> = (0..120).map(|_| line.clone()).collect();
         fs::write(&path, content.join("\n")).unwrap();
 
         let params = json!({
             "file_path": path
         });
-        let result = tool.call(params).await;
-        assert!(result.is_err());
-        if let Err(e) = result {
-            match e {
-                ToolError::ExecutionFailed(msg) => assert!(msg.contains("exceeds 1MB limit")),
-                _ => panic!("Expected ExecutionFailed error"),
-            }
-        }
+        let result = tool.call(params).await.unwrap();
+        let output = result.content.unwrap();
+        let structured = result.structured_content.unwrap();
+
+        assert!(output.contains("<truncated_content>"));
+        assert!(output.contains("File size:"));
+        assert!(output.contains("total lines:"));
+        assert_eq!(structured["truncated_by_size"].as_bool(), Some(true));
+        assert!(structured["next_offset"].as_u64().is_some());
+        assert_eq!(structured["total_lines"].as_u64(), Some(120));
     }
 
     #[tokio::test]
@@ -638,6 +844,12 @@ mod tests {
 
         let result = tool.call(params).await.unwrap();
         assert_eq!(result.content.unwrap(), "New file created successfully.");
+        assert_eq!(
+            result.structured_content.unwrap()["bytes_written"]
+                .as_u64()
+                .unwrap(),
+            content.len() as u64
+        );
 
         // Verify file was written
         let actual_content = fs::read_to_string(&path).unwrap();
@@ -693,7 +905,7 @@ mod tests {
         });
 
         let result = tool.call(params).await.unwrap();
-        assert_eq!(result.content.unwrap(), "File edited successfully.");
+        assert!(result.content.unwrap().contains("\"start_line\""));
 
         let new_content = fs::read_to_string(&path).unwrap();
         assert_eq!(new_content, "New content\nMore old content");
@@ -717,7 +929,7 @@ mod tests {
         });
 
         let result = tool.call(params).await.unwrap();
-        assert_eq!(result.content.unwrap(), "File edited successfully.");
+        assert!(result.content.unwrap().contains("\"start_line\""));
 
         let new_content = fs::read_to_string(&path).unwrap();
         assert_eq!(new_content, "orange orange orange");
@@ -958,6 +1170,12 @@ mod tests {
             .collect();
         assert!(path_strs.contains(&"file1.txt".to_string()));
         assert!(path_strs.contains(&"file2.txt".to_string()));
+        assert_eq!(
+            result.structured_content.unwrap()["count"]
+                .as_u64()
+                .unwrap(),
+            entries.len() as u64
+        );
     }
 
     #[tokio::test]
@@ -991,9 +1209,12 @@ mod tests {
             "path": "/nonexistent/directory"
         });
 
-        let result = tool.call(params).await.unwrap();
-        let content = result.content.unwrap();
-        assert_eq!(content, "Directory is empty or not found.");
+        let result = tool.call(params).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ToolError::IoError(msg) => assert!(msg.contains("Directory not found")),
+            other => panic!("Expected IoError, got {:?}", other),
+        }
     }
 
     #[tokio::test]

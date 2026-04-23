@@ -479,6 +479,7 @@
       "proxyServerRequired": "Veuillez entrer l'adresse du serveur proxy",
       "restrictedHeader": "Contient des en-têtes restreints : {headers}",
       "reasoning": "Modèle de raisonnement",
+      "thinkingBudgetTokens": "Budget de raisonnement",
       "searchByIdOrName": "Rechercher par ID ou nom",
       "stop": "Jeton d'arrêt",
       "stopPlaceholder": "Définit les jetons auxquels le modèle arrêtera de générer du texte. Séparez plusieurs jetons par des sauts de ligne.",

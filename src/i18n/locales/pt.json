@@ -479,6 +479,7 @@
       "proxyServerRequired": "Por favor, insira o endereço do servidor proxy",
       "restrictedHeader": "Contém cabeçalhos restritos: {headers}",
       "reasoning": "Modelo de raciocínio",
+      "thinkingBudgetTokens": "Orçamento de raciocínio",
       "searchByIdOrName": "Pesquisar por ID ou nome",
       "stop": "Token de parada",
       "stopPlaceholder": "Define os tokens nos quais o modelo irá parar de gerar texto. Separe vários com novas linhas.",

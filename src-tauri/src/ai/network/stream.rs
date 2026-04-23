@@ -14,6 +14,27 @@ pub struct TokenUsage {
     pub tokens_per_second: f64,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::StreamParser;
+    use bytes::Bytes;
+
+    #[test]
+    fn parse_openai_usage_only_chunk() {
+        let chunk = Bytes::from(
+            "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"prompt_tokens\":168,\"completion_tokens\":2408,\"total_tokens\":2576}}\n\n",
+        );
+
+        let chunks = StreamParser::parse_openai(chunk).expect("usage-only chunk should parse");
+
+        assert_eq!(chunks.len(), 1);
+        let usage = chunks[0].usage.as_ref().expect("usage should be preserved");
+        assert_eq!(usage.prompt_tokens, 168);
+        assert_eq!(usage.completion_tokens, 2408);
+        assert_eq!(usage.total_tokens, 2576);
+    }
+}
+
 /// Stream chunk parsing result
 #[derive(Debug)]
 pub struct StreamChunk {
@@ -88,14 +109,27 @@ impl StreamParser {
                 } else {
                     match serde_json::from_str::<OpenAIStreamResponse>(data) {
                         Ok(response) => {
-                            for choice in response.choices {
-                                let usage = response.usage.as_ref().map(|usage| TokenUsage {
-                                    total_tokens: usage.total_tokens,
-                                    prompt_tokens: usage.prompt_tokens,
-                                    completion_tokens: usage.completion_tokens,
-                                    tokens_per_second: 0.0,
-                                });
+                            let usage = response.usage.as_ref().map(|usage| TokenUsage {
+                                total_tokens: usage.total_tokens,
+                                prompt_tokens: usage.prompt_tokens,
+                                completion_tokens: usage.completion_tokens,
+                                tokens_per_second: 0.0,
+                            });
 
+                            if response.choices.is_empty() && usage.is_some() {
+                                chunks.push(StreamChunk {
+                                    role: None,
+                                    reasoning_content: None,
+                                    content: None,
+                                    usage,
+                                    msg_type: None,
+                                    tool_calls: None,
+                                    finish_reason: None,
+                                });
+                                continue;
+                            }
+
+                            for choice in response.choices {
                                 // `choice.delta` is OpenAIStreamDelta
                                 let delta = choice.delta;
 
@@ -136,7 +170,7 @@ impl StreamParser {
                                     role: delta.role.clone(),
                                     reasoning_content: delta.reasoning_content,
                                     content: chunk_content,
-                                    usage,
+                                    usage: usage.clone(),
                                     // If tool_calls are present, they take precedence for msg_type
                                     msg_type: chunk_msg_type,
                                     tool_calls,

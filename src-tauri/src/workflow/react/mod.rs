@@ -8,6 +8,7 @@ pub mod dispatcher;
 pub mod engine;
 pub mod error;
 pub mod events;
+pub mod file_preview;
 pub mod gateway;
 pub mod intelligence;
 pub mod interceptors;
