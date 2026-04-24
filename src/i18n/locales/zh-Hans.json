@@ -797,6 +797,13 @@
     "edited": "已编辑",
     "planningModeTooltip": "计划模式：在执行前进行 AI 调研和方案设计",
     "approvePlan": "批准计划",
+    "exploration": {
+      "reads": "读取 {count} 次",
+      "searches": "搜索 {count} 次",
+      "thought": "思考",
+      "thoughts": "思考 {count} 次",
+      "title": "代码探索"
+    },
     "thinkingExpanded": "思考过程",
     "thoughtCompleted": "已思考",
     "thinking": "思考中...",

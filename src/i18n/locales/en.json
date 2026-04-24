@@ -797,6 +797,13 @@
     "edited": "Edited",
     "planningModeTooltip": "Planning Mode: AI research and strategy before execution",
     "approvePlan": "Approve Plan",
+    "exploration": {
+      "reads": "{count} reads",
+      "searches": "{count} searches",
+      "thought": "Thought",
+      "thoughts": "{count} thoughts",
+      "title": "Code Exploration"
+    },
     "approval": {
       "backgroundMessage": "\"{workflow}\" is waiting for approval: {action}",
       "backgroundTitle": "Background Approval Needed",
