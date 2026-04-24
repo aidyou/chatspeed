@@ -315,7 +315,16 @@ impl ContextManager {
     }
 
     pub fn get_messages_for_llm(&self) -> Vec<WorkflowMessage> {
-        let mut llm_messages = self.messages.clone();
+        let start_index = Self::latest_successful_completion_index(&self.messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let mut llm_messages = self
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(index, message)| message.role == "system" || *index >= start_index)
+            .map(|(_, message)| message.clone())
+            .collect::<Vec<_>>();
         let mut wrapped_initial_user_query = false;
 
         for msg in llm_messages.iter_mut() {
@@ -1230,5 +1239,89 @@ mod tests {
             context.build_blocking_compression_candidate().is_none(),
             "rejected completion must not be treated as a successful compression boundary"
         );
+    }
+
+    #[tokio::test]
+    async fn get_messages_for_llm_excludes_previous_completion_segment() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-llm-segment-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "First task".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add first task");
+
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "First completion report".to_string(),
+                None,
+                None,
+                Some(crate::workflow::react::types::StepType::Think),
+                1,
+                false,
+                None,
+                Some(json!({ "message_kind": "completion_report" })),
+            )
+            .await
+            .expect("failed to add first completion report");
+
+        let _ = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add finish task");
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Second task".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add second task");
+
+        let llm_messages = context.get_messages_for_llm();
+        let llm_contents = llm_messages
+            .iter()
+            .map(|message| message.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(llm_contents
+            .iter()
+            .any(|content| content.contains("Second task")));
+        assert!(!llm_contents
+            .iter()
+            .any(|content| content.contains("First completion report")));
     }
 }

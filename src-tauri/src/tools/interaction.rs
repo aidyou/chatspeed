@@ -111,7 +111,8 @@ impl ToolDefinition for SubmitPlan {
         crate::tools::TOOL_SUBMIT_PLAN
     }
     fn description(&self) -> &str {
-        "Submits a proposed plan for user review. This tool is only available in Planning Mode. \
+        "Submits a proposed plan for user review before implementation begins. \
+        The authoritative approval payload MUST be provided in the structured `plan` argument. Do not rely on surrounding assistant text as the plan source. \
         The plan should be a detailed Markdown document outlining the research findings and implementation steps you intend to take. \
         Once submitted, the session will enter an 'Awaiting Approval' state where the user can review and approve your plan before you begin execution."
     }
@@ -128,7 +129,7 @@ impl ToolDefinition for SubmitPlan {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "plan": { "type": "string", "description": "The detailed Markdown plan." }
+                    "plan": { "type": "string", "description": "The complete detailed Markdown plan that the user should approve. This field is required and is the only authoritative plan payload." }
                 },
                 "required": ["plan"]
             }),

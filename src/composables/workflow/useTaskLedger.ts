@@ -1,4 +1,5 @@
 import { ref, computed, type Ref } from 'vue'
+import { getToolStatusSummary } from './toolDisplay'
 
 export type ToolViewStatus =
   | 'pending'
@@ -154,7 +155,11 @@ export function useTaskLedger() {
       toolCallId,
       status: 'approved_running',
       approvalStatus: 'approved',
-      summary: existing.summary === 'Awaiting approval' ? 'Executing...' : existing.summary
+      summary: getToolStatusSummary(
+        existing.toolName,
+        'running',
+        existing.summary === 'Awaiting approval' ? 'Executing...' : existing.summary
+      )
     })
   }
 
@@ -170,7 +175,7 @@ export function useTaskLedger() {
       toolCallId,
       status: 'rejected',
       approvalStatus: 'rejected',
-      summary: 'User rejected'
+      summary: getToolStatusSummary(existing.toolName, 'rejected', 'User rejected')
     })
   }
 

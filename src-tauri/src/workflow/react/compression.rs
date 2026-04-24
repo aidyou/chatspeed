@@ -1,4 +1,5 @@
 use crate::ai::chat::openai::OpenAIChat;
+use crate::ai::error::AiError;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::ChatMetadata;
 use crate::db::WorkflowMessage;
@@ -7,6 +8,7 @@ use crate::workflow::react::prompts::CONTEXT_COMPRESSION_PROMPT;
 
 use serde_json::json;
 use std::sync::Arc;
+use tokio::time::{sleep, Duration};
 
 #[derive(Clone)]
 pub struct ContextCompressor {
@@ -51,13 +53,13 @@ impl ContextCompressor {
         // 3. Layer 1: Purification (Filter out noise)
         let purified_history: Vec<serde_json::Value> = incremental_messages
             .iter()
-            .filter(|m| {
-                let content = m.message.trim();
-                !content.is_empty()
+            .filter_map(|m| {
+                let content = Self::sanitize_message_content_for_compression(&m.message);
+                let keep = !content.is_empty()
                     && content != "Finished"
-                    && !content.contains("Waiting for user")
+                    && !content.contains("Waiting for user");
+                keep.then(|| serde_json::json!({ "role": m.role, "content": content }))
             })
-            .map(|m| serde_json::json!({ "role": m.role, "content": m.message }))
             .collect();
 
         if purified_history.is_empty() {
@@ -82,10 +84,18 @@ impl ContextCompressor {
         history_json: Vec<serde_json::Value>,
         user_prompt: &str,
     ) -> Result<String, WorkflowEngineError> {
-        let mut full_history =
-            vec![json!({ "role": "system", "content": CONTEXT_COMPRESSION_PROMPT })];
-        full_history.extend(history_json);
-        full_history.push(json!({ "role": "user", "content": user_prompt }));
+        let transcript = Self::render_history_as_transcript(&history_json);
+        let full_history = vec![
+            json!({ "role": "system", "content": CONTEXT_COMPRESSION_PROMPT }),
+            json!({
+                "role": "user",
+                "content": format!(
+                    "<conversation_history>\n{}\n</conversation_history>\n\n{}",
+                    transcript,
+                    user_prompt
+                )
+            }),
+        ];
 
         let chat_interface = {
             let mut chats_guard = self.chat_state.chats.lock().await;
@@ -101,23 +111,132 @@ impl ContextCompressor {
 
         log::info!("ContextCompressor: Executing incremental compression...");
 
-        let result = chat_interface
-            .chat(
-                self.provider_id,
-                &self.model,
-                "compressor_session".to_string(),
-                full_history,
-                None,
-                Some(ChatMetadata {
-                    stream: Some(false),
-                    ..Default::default()
-                }),
-                |_| {},
-            )
-            .await
-            .map_err(WorkflowEngineError::Ai)?;
+        let max_attempts = 3;
+        let mut attempt = 0;
+        let result = loop {
+            attempt += 1;
+            match chat_interface
+                .chat(
+                    self.provider_id,
+                    &self.model,
+                    "compressor_session".to_string(),
+                    full_history.clone(),
+                    None,
+                    Some(ChatMetadata {
+                        stream: Some(false),
+                        ..Default::default()
+                    }),
+                    |_| {},
+                )
+                .await
+            {
+                Ok(result) => break result,
+                Err(err)
+                    if attempt < max_attempts && Self::should_retry_compression_error(&err) =>
+                {
+                    let wait_secs = 2u64.pow(attempt - 1);
+                    log::warn!(
+                        "ContextCompressor: compression attempt {}/{} failed, retrying in {}s: {}",
+                        attempt,
+                        max_attempts,
+                        wait_secs,
+                        err
+                    );
+                    sleep(Duration::from_secs(wait_secs)).await;
+                }
+                Err(err) => return Err(WorkflowEngineError::Ai(err)),
+            }
+        };
 
         Ok(Self::normalize_summary_result(&result))
+    }
+
+    fn sanitize_message_content_for_compression(content: &str) -> String {
+        const SPECIAL_TOKENS: [&str; 33] = [
+            "<｜end▁of▁sentence｜>",
+            "<|end_of_sentence|>",
+            "<｜begin▁of▁sentence｜>",
+            "<|begin_of_sentence|>",
+            "<｜endoftext｜>",
+            "<|endoftext|>",
+            "<｜end_of_text｜>",
+            "<|end_of_text|>",
+            "<｜begin_of_text｜>",
+            "<|begin_of_text|>",
+            "<｜im_start｜>",
+            "<|im_start|>",
+            "<｜im_end｜>",
+            "<|im_end|>",
+            "<｜im_middle｜>",
+            "<|im_middle|>",
+            "<｜system｜>",
+            "<|system|>",
+            "<｜user｜>",
+            "<|user|>",
+            "<｜assistant｜>",
+            "<|assistant|>",
+            "<｜observation｜>",
+            "<|observation|>",
+            "<|SYSTEM|>",
+            "<|USER|>",
+            "<|ASSISTANT|>",
+            "<|OBSERVATION|>",
+            "<|EOT|>",
+            "<|eot|>",
+            "[gMASK]",
+            "[MASK]",
+            "[sMASK]",
+        ];
+
+        let mut sanitized = content.to_string();
+        for token in SPECIAL_TOKENS {
+            sanitized = sanitized.replace(token, "");
+        }
+        sanitized = sanitized
+            .split_whitespace()
+            .filter(|part| !matches!(*part, "gMASK" | "sop" | "eop"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        sanitized.trim().to_string()
+    }
+
+    fn should_retry_compression_error(error: &AiError) -> bool {
+        match error {
+            AiError::ApiRequestFailed { status_code, .. } => {
+                *status_code == 408 || *status_code == 429 || *status_code >= 500
+            }
+            AiError::InitFailed(_)
+            | AiError::InvalidInput(_)
+            | AiError::ToolCallSerializationFailed { .. } => false,
+            AiError::ResponseParseFailed { .. }
+            | AiError::StreamProcessingFailed { .. }
+            | AiError::FailedToGetOrCreateWindowChannel(_) => true,
+        }
+    }
+
+    fn render_history_as_transcript(history_json: &[serde_json::Value]) -> String {
+        history_json
+            .iter()
+            .filter_map(|message| {
+                let role = message
+                    .get("role")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown");
+                let content = message
+                    .get("content")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .trim();
+                if content.is_empty() {
+                    return None;
+                }
+                Some(format!(
+                    "<message role=\"{}\">\n{}\n</message>",
+                    role, content
+                ))
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
     }
 
     fn normalize_summary_result(result: &str) -> String {
@@ -154,5 +273,25 @@ mod tests {
         let raw = "<state_snapshot><overall_goal>goal</overall_goal></state_snapshot>";
         let normalized = ContextCompressor::normalize_summary_result(raw);
         assert_eq!(normalized, raw);
+    }
+
+    #[test]
+    fn sanitize_message_content_for_compression_removes_provider_special_tokens() {
+        let sanitized = ContextCompressor::sanitize_message_content_for_compression(
+            "用户请求<｜end▁of▁sentence｜><|endoftext|><|im_end|>[gMASK] sop",
+        );
+        assert_eq!(sanitized, "用户请求");
+    }
+
+    #[test]
+    fn render_history_as_transcript_preserves_roles_without_replaying_chat_roles() {
+        let transcript = ContextCompressor::render_history_as_transcript(&[
+            serde_json::json!({"role":"user","content":"task"}),
+            serde_json::json!({"role":"tool","content":"result"}),
+        ]);
+
+        assert!(transcript.contains("<message role=\"user\">"));
+        assert!(transcript.contains("<message role=\"tool\">"));
+        assert!(transcript.contains("result"));
     }
 }

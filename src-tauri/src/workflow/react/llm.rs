@@ -12,7 +12,9 @@ use crate::workflow::react::runtime_observation::{
     render_runtime_observation_for_llm, RuntimeObservationPlacement,
 };
 use crate::workflow::react::security::PathGuard;
-use crate::workflow::react::signals::{parse_runtime_signal, stash_user_message, RuntimeSignal};
+use crate::workflow::react::signals::{
+    parse_runtime_signal, stash_runtime_signal, stash_user_message, RuntimeSignal,
+};
 use crate::workflow::react::skills::SkillManifest;
 use crate::workflow::react::types::GatewayPayload;
 
@@ -24,7 +26,8 @@ use tokio::time::{sleep, Duration};
 
 use crate::workflow::react::prompts::{
     CHILD_AGENT_COMPLETION_PROMPT, CHILD_AGENT_CORE_SYSTEM_PROMPT, CHILD_AGENT_DIRECTORY_PROMPT,
-    CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT, PLANNING_MODE_PROMPT,
+    CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT,
+    FINAL_AUDIT_COMPLETION_REPORT_PROMPT, PLANNING_MODE_PROMPT,
 };
 
 pub struct LlmProcessor {
@@ -58,6 +61,34 @@ impl LlmProcessor {
             .and_then(|meta| meta.get("tokens"))
             .map(|tokens| tokens.to_string())
             .unwrap_or_else(|| "null".to_string())
+    }
+
+    fn drain_stop_signal_for_retry_boundary(
+        session_id: &str,
+        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+    ) -> bool {
+        let mut should_stop = false;
+        while let Ok(signal) = signal_rx.try_recv() {
+            match parse_runtime_signal(&signal) {
+                RuntimeSignal::Stop => {
+                    log::info!(
+                        "WorkflowExecutor {}: Stop signal received before retry notification",
+                        session_id
+                    );
+                    should_stop = true;
+                }
+                RuntimeSignal::UserMessage {
+                    content,
+                    queued_user_message_id,
+                } => {
+                    let queued_id = queued_user_message_id
+                        .unwrap_or_else(|| format!("queued_{}", crate::ccproxy::get_tool_id()));
+                    stash_user_message(session_id, queued_id, content);
+                }
+                RuntimeSignal::Other { .. } => stash_runtime_signal(session_id, signal),
+            }
+        }
+        should_stop
     }
 
     fn normalize_and_validate_tool_calls(
@@ -450,6 +481,12 @@ impl LlmProcessor {
                         && tool_calls_json.trim().is_empty()
                         && !has_invalid_tool_call
                     {
+                        if Self::drain_stop_signal_for_retry_boundary(&self.session_id, signal_rx) {
+                            return Err(WorkflowEngineError::Cancelled(
+                                "Stopped before empty-response retry notification".into(),
+                            ));
+                        }
+
                         log::warn!(
                             "[Workflow][session={}][phase=llm][event=empty_response_diagnostic] content_chars={}, reasoning_chars={}, tool_calls_chars={}, has_invalid_tool_call={}, token_usage={}, reasoning_preview=\"{}\", metadata={}",
                             self.session_id,
@@ -540,7 +577,9 @@ impl LlmProcessor {
                                                     },
                                                 ).await;
                                             }
-                                            RuntimeSignal::Other { .. } => {}
+                                            RuntimeSignal::Other { .. } => {
+                                                stash_runtime_signal(&self.session_id, sig_str);
+                                            }
                                         }
                                     }
                                 }
@@ -564,6 +603,12 @@ impl LlmProcessor {
                     return Ok((plain_text, tool_calls_json, full_reasoning, final_metadata));
                 }
                 Err(e) => {
+                    if Self::drain_stop_signal_for_retry_boundary(&self.session_id, signal_rx) {
+                        return Err(WorkflowEngineError::Cancelled(
+                            "Stopped before LLM error retry notification".into(),
+                        ));
+                    }
+
                     let should_retry = match &e {
                         AiError::ApiRequestFailed { status_code, .. } => {
                             // Do NOT retry on auth/not-found errors.
@@ -644,7 +689,9 @@ impl LlmProcessor {
                                                 },
                                             ).await;
                                         }
-                                        RuntimeSignal::Other { .. } => {}
+                                        RuntimeSignal::Other { .. } => {
+                                            stash_runtime_signal(&self.session_id, sig_str);
+                                        }
                                     }
                                 }
                             }
@@ -941,6 +988,10 @@ impl LlmProcessor {
         // 3. Drafting for non-reasoning models
         if !self.reasoning {
             system_parts.push(DRAFTING_PROMPT.to_string());
+        }
+
+        if self.agent_config.final_audit.unwrap_or(false) {
+            system_parts.push(FINAL_AUDIT_COMPLETION_REPORT_PROMPT.to_string());
         }
 
         // === NEW: AGENTS.md and Memory ===

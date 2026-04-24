@@ -10,6 +10,7 @@ import { useSettingStore } from '@/stores/setting'
 import { ElMessageBox } from 'element-plus'
 import notificationSoundUrl from '../../../src-tauri/assets/sound/notification.mp3'
 import {
+    RUNNING_STATUSES,
     SIGNAL_TYPES,
     TERMINAL_STATUSES,
     WAITING_STATUSES,
@@ -100,7 +101,6 @@ export function useWorkflowCore({
     }
 
     const activeModelName = computed(() => {
-        // 1. Try to get from current configs (reflected in settings/workflow)
         const tab = planningMode.value ? 'plan' : 'act'
         const workflow =
             workflowStore.currentWorkflow ||
@@ -115,6 +115,17 @@ export function useWorkflowCore({
             if (model) {
                 providerId = model.id
                 modelName = model.model
+            }
+        }
+
+        if (!modelName && selectedAgent.value) {
+            const fallbackModel =
+                tab === 'plan'
+                    ? selectedAgent.value.planModel || selectedAgent.value.actModel
+                    : selectedAgent.value.actModel || selectedAgent.value.planModel
+            if (fallbackModel) {
+                providerId = fallbackModel.id
+                modelName = fallbackModel.model
             }
         }
 
@@ -365,6 +376,20 @@ export function useWorkflowCore({
         }
     }
 
+    const getPendingApprovalEntry = (sessionId, approvalId) => {
+        if (!sessionId || !approvalId) return null
+        return pendingApprovalEntries.value[`${sessionId}:${approvalId}`] || null
+    }
+
+    const clearPendingApprovalEntry = (sessionId, approvalId) => {
+        if (!sessionId || !approvalId) return
+        const key = `${sessionId}:${approvalId}`
+        if (!pendingApprovalEntries.value[key]) return
+        const nextEntries = { ...pendingApprovalEntries.value }
+        delete nextEntries[key]
+        pendingApprovalEntries.value = nextEntries
+    }
+
     const showBackgroundApprovalNotification = (sessionId, payload) => {
         if (!payload?.id) return
 
@@ -550,14 +575,17 @@ export function useWorkflowCore({
                         })
                     }
                 } else if (payload.type === 'chunk') {
+                    if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Direct text chunk from LLM or StreamParser
                     processChunk(payload.content)
                     scrollToBottom()
                 } else if (payload.type === 'reasoning_chunk') {
+                    if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Thinking chunk
                     processReasoningChunk(payload.content)
                     scrollToBottom()
                 } else if (payload.type === 'message') {
+                    if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // ReAct engine sends incremental messages or chunks
                     workflowStore.addMessage({
                         sessionId: sessionId,
@@ -574,28 +602,48 @@ export function useWorkflowCore({
                     // Message finalized, clear chatting buffer (including reasoning)
                     resetChatState()
 
-                    // Force scroll for new full messages
-                    scrollToBottom(true)
+                    // Only auto-scroll when the user is still pinned near the bottom.
+                    scrollToBottom()
                 } else if (payload.type === 'confirm') {
                     // Current-session approvals are rendered inline in tool messages.
                     upsertPendingApprovalEntry(sessionId, payload)
                     playApprovalNotificationSound()
                 } else if (payload.type === 'retry_status') {
+                    if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Handle 429 retry status
                     setRetryStatus(payload)
                 } else if (payload.type === 'sync_todo') {
                     workflowStore.setTodoList(payload.todo_list)
+                } else if (payload.type === 'agent_config_updated') {
+                    const nextConfig = payload.agent_config || {}
+                    applyWorkflowConfigToLocalStore(nextConfig)
+                    if (workflowStore.currentWorkflow?.id === sessionId) {
+                        workflowStore.currentWorkflow.allowedPaths = nextConfig.allowedPaths || []
+                        workflowStore.currentWorkflow.shellPolicy = nextConfig.shellPolicy || []
+                        workflowStore.setShellPolicy(nextConfig.shellPolicy || [])
+                        workflowStore.setAutoApprovedTools(nextConfig.autoApprove || [])
+
+                        isSyncingWorkflowConfig.value = true
+                        planningMode.value =
+                            String(nextConfig.phase || '').toLowerCase() === 'planning'
+                        isSyncingWorkflowConfig.value = false
+                    }
                 } else if (payload.type === 'compression_status') {
                     // Handle context compression status
                     setCompressionStatus(payload.is_compressing, payload.message)
                     if (payload.is_compressing) {
-                        scrollToBottom(true)
+                        scrollToBottom()
                     }
                 } else if (payload.type === 'context_usage') {
-                    workflowStore.setCurrentContextTokens(sessionId, payload.total_tokens)
+                    workflowStore.setCurrentContextTokens(
+                        sessionId,
+                        payload.current_context_tokens ?? payload.total_tokens,
+                        payload.max_context_tokens
+                    )
                 } else if (payload.type === 'sub_agent_progress') {
                     workflowStore.upsertSubAgentProgress(payload)
                 } else if (payload.type === 'notification') {
+                    if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     workflowStore.setNotification(payload.message, payload.category)
                 } else if (payload.type === 'auto_approved_tools_updated') {
                     workflowStore.setAutoApprovedTools(payload.tools)
@@ -1152,9 +1200,15 @@ export function useWorkflowCore({
                     agentConfig: JSON.stringify(agentConfig)
                 })
 
-                // Signal the engine to update runtime config (only if workflow is active)
-                const status = currentWorkflow.value?.status
-                if (status && [WORKFLOW_STATUSES.THINKING, WORKFLOW_STATUSES.EXECUTING, WORKFLOW_STATUSES.PAUSED, WORKFLOW_STATUSES.AWAITING_USER, WORKFLOW_STATUSES.AWAITING_APPROVAL].includes(status)) {
+                // Signal the live executor to update runtime config. Use the backend
+                // liveness flag instead of a hand-maintained status allowlist so waiting
+                // states such as AwaitingSubAgent are covered.
+                const status = String(currentWorkflow.value?.status || snapshot.workflow?.status || '').toLowerCase()
+                const isLiveSession = !!snapshot.hasLiveSession || workflowStore.hasLiveSession
+                const isRuntimeState =
+                    (RUNNING_STATUSES as readonly string[]).includes(status) ||
+                    (WAITING_STATUSES as readonly string[]).includes(status)
+                if (isLiveSession && isRuntimeState) {
                     try {
                         await invokeWrapper('workflow_signal', {
                             sessionId: currentWorkflowId.value,
@@ -1423,6 +1477,8 @@ export function useWorkflowCore({
         canApprovePlan,
         isAwaitingApproval,
         pendingApprovalList,
+        getPendingApprovalEntry,
+        clearPendingApprovalEntry,
         activeModelName,
         canSwitchWorkflow,
         setupWorkflowEvents,

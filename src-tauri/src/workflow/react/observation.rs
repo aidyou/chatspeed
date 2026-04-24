@@ -1,8 +1,8 @@
 use crate::tools::{
     ToolError, TOOL_BASH, TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_EDIT_FILE, TOOL_GLOB,
-    TOOL_GREP, TOOL_LIST_DIR, TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
-    TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST, TOOL_TODO_UPDATE, TOOL_WEB_FETCH,
-    TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+    TOOL_GREP, TOOL_LIST_DIR, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE,
+    TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_TODO_CREATE, TOOL_TODO_GET,
+    TOOL_TODO_LIST, TOOL_TODO_UPDATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::file_preview::{
     attach_display_context, merge_tool_result_into_preview_args,
@@ -143,7 +143,10 @@ impl ObservationReinforcer {
                 }
 
                 // --- Custom Logic for File Tools (Formatting for UI Diff) ---
-                if tool_name == TOOL_EDIT_FILE || tool_name == TOOL_WRITE_FILE {
+                if matches!(
+                    tool_name,
+                    TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE
+                ) {
                     let mut preview_args = args.clone();
                     merge_tool_result_into_preview_args(
                         &mut preview_args,
@@ -191,7 +194,10 @@ impl ObservationReinforcer {
                     raw_res = serde_json::to_string(&preview_args).unwrap_or(raw_res);
                 }
 
-                let display_type = if tool_name == TOOL_EDIT_FILE || tool_name == TOOL_WRITE_FILE {
+                let display_type = if matches!(
+                    tool_name,
+                    TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE
+                ) {
                     "diff"
                 } else {
                     "text"
@@ -213,7 +219,9 @@ impl ObservationReinforcer {
                         approval_status: None,
                         observation_kind: None,
                     }
-                } else if tool_name != TOOL_READ_FILE && raw_res.len() > 20000 {
+                } else if !matches!(tool_name, TOOL_READ_FILE | TOOL_PLAN_READ_NOTE)
+                    && raw_res.len() > 20000
+                {
                     let truncated = match raw_res.char_indices().nth(20000) {
                         Some((idx, _)) => &raw_res[..idx],
                         None => &raw_res,
@@ -357,6 +365,18 @@ impl ObservationReinforcer {
                     .unwrap_or("");
                 let display_path = get_relative_path(path);
                 format!("Edit {}", display_path)
+            }
+            TOOL_PLAN_READ_NOTE => {
+                let note_name = args["note_name"].as_str().unwrap_or("");
+                format!("Read plan note {}", note_name)
+            }
+            TOOL_PLAN_WRITE_NOTE => {
+                let note_name = args["note_name"].as_str().unwrap_or("");
+                format!("Write plan note {}", note_name)
+            }
+            TOOL_PLAN_EDIT_NOTE => {
+                let note_name = args["note_name"].as_str().unwrap_or("");
+                format!("Edit plan note {}", note_name)
             }
             TOOL_LIST_DIR => {
                 let path = args["path"]
@@ -559,7 +579,14 @@ impl ObservationReinforcer {
                 // Return success immediately, handled by reinforcement usually
                 "Fetched content".to_string()
             }
-            TOOL_EDIT_FILE | TOOL_WRITE_FILE => content.to_string(),
+            TOOL_EDIT_FILE => t!("workflow.summary.edit_file").to_string(),
+            TOOL_PLAN_EDIT_NOTE => t!("workflow.summary.edit_file").to_string(),
+            TOOL_PLAN_WRITE_NOTE => t!("workflow.summary.write_file").to_string(),
+            TOOL_PLAN_READ_NOTE => {
+                let lines = content.lines().count();
+                format!("Read {} lines", lines)
+            }
+            TOOL_WRITE_FILE => t!("workflow.summary.write_file").to_string(),
             TOOL_BASH => {
                 let last_line = content.lines().last().unwrap_or("Done");
                 match last_line.char_indices().nth(30) {

@@ -13,7 +13,8 @@ use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
     ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
-    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_WEB_FETCH,
+    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
+    TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_WEB_FETCH,
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
@@ -37,7 +38,10 @@ use crate::workflow::react::{
         enrich_runtime_observation_metadata, runtime_observation_metadata, RuntimeObservationType,
     },
     security::PathGuard,
-    signals::{parse_runtime_signal, take_stashed_user_messages, RuntimeSignal, SignalType},
+    signals::{
+        parse_runtime_signal, take_stashed_runtime_signals, take_stashed_user_messages,
+        RuntimeSignal, SignalType,
+    },
     sinks::{DBSink, Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
     types::{
@@ -97,6 +101,7 @@ pub struct WorkflowExecutor {
     pub signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     pub tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     pub subagent_type: Option<String>,
+    pub planning_root: PathBuf,
     pub last_compression_step: usize,
     pub last_compression_boundary_id: Option<i64>,
     pub background_compression_boundary_id: Option<i64>,
@@ -215,6 +220,26 @@ impl WorkflowExecutor {
         )
     }
 
+    fn build_plan_rejection_observation(rejection_message: Option<&str>) -> String {
+        let rejection_message = rejection_message
+            .map(str::trim)
+            .filter(|msg| !msg.is_empty());
+        match rejection_message {
+            Some(message) => format!(
+                "Plan rejection reason from user:\n{}\n<SYSTEM_REMINDER>\nThe user rejected your plan. Carefully re-check the user's original request, your proposed plan, and the rejection reason above. You MUST seriously account for the user's rejection feedback before continuing. If you need more information to revise the plan, use the 'ask_user' tool to ask the user a focused question. Otherwise, revise and resubmit a complete plan with 'submit_plan.plan'.\n</SYSTEM_REMINDER>",
+                message
+            ),
+            None => "<SYSTEM_REMINDER>\nThe user rejected your plan but did not provide a rejection reason. Your next action MUST be to use the 'ask_user' tool to ask the user what they want changed or clarified in the plan. Do NOT guess the missing feedback, do NOT immediately resubmit another plan, and do NOT proceed to implementation until the user provides guidance and a revised plan is approved.\n</SYSTEM_REMINDER>".to_string(),
+        }
+    }
+
+    fn is_planning_note_tool(name: &str) -> bool {
+        matches!(
+            name,
+            TOOL_PLAN_READ_NOTE | TOOL_PLAN_WRITE_NOTE | TOOL_PLAN_EDIT_NOTE
+        )
+    }
+
     fn sanitize_assistant_metadata_for_storage(
         metadata: Option<serde_json::Value>,
     ) -> serde_json::Value {
@@ -267,11 +292,7 @@ impl WorkflowExecutor {
     }
 
     fn effective_max_steps(agent_config: &Agent, phase: &ExecutionPhase) -> usize {
-        if *phase == ExecutionPhase::Planning {
-            10
-        } else {
-            (Self::effective_context_limit(agent_config, phase) / 2000).clamp(20, 200)
-        }
+        (Self::effective_context_limit(agent_config, phase) / 2000).clamp(20, 200)
     }
 
     fn sync_runtime_limits(&mut self) {
@@ -295,6 +316,8 @@ impl WorkflowExecutor {
         self.last_compression_step = self.current_step;
         self.last_compression_boundary_id = Some(compressed_until_message_id);
         self.background_compression_boundary_id = None;
+        self.background_compression_retry_state
+            .remove(&compressed_until_message_id);
         log::info!(
             "[Workflow][session={}][phase=compression] Persisted summary through boundary {}. current_context_tokens={}",
             self.session_id,
@@ -517,7 +540,8 @@ impl WorkflowExecutor {
         let skill_paths: Vec<PathBuf> = skill_scanner.get_search_paths();
 
         // Build sandbox_paths
-        let mut sandbox_paths = vec![app_data_dir.join("planning").join(&session_id)];
+        let planning_root = app_data_dir.join("planning").join(&session_id);
+        let mut sandbox_paths = vec![planning_root.clone()];
         sandbox_paths.push(std::env::temp_dir());
         if let Some(home) = dirs::home_dir() {
             sandbox_paths.push(home.join(".chatspeed"));
@@ -554,6 +578,11 @@ impl WorkflowExecutor {
                     auto_approve.insert(tool);
                 }
             }
+        }
+        if policy.is_strict_manual_planning() {
+            auto_approve.insert(crate::tools::TOOL_PLAN_READ_NOTE.to_string());
+            auto_approve.insert(crate::tools::TOOL_PLAN_WRITE_NOTE.to_string());
+            auto_approve.insert(crate::tools::TOOL_PLAN_EDIT_NOTE.to_string());
         }
 
         // Extract model configs from AgentModels structure
@@ -619,6 +648,8 @@ impl WorkflowExecutor {
             intelligence_manager: IntelligenceManager::new(
                 session_id_clone3,
                 chat_state_clone3,
+                initial_provider_id,
+                initial_model_name.clone(),
                 audit_provider_id,
                 audit_model_name,
             ),
@@ -632,6 +663,7 @@ impl WorkflowExecutor {
             signal_rx,
             tsid_generator,
             subagent_type,
+            planning_root,
             last_compression_step: 0,
             last_compression_boundary_id: None,
             background_compression_boundary_id: None,
@@ -962,7 +994,10 @@ impl WorkflowExecutor {
                                 let details_value = tool
                                     .details
                                     .as_ref()
-                                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                                    .map(|s| {
+                                        serde_json::from_str::<serde_json::Value>(s)
+                                            .unwrap_or_else(|_| json!(s))
+                                    })
                                     .unwrap_or(serde_json::Value::Null);
                                 let _ = self
                                     .dispatch_ui_payload(GatewayPayload::Confirm {
@@ -1040,6 +1075,8 @@ impl WorkflowExecutor {
                     self.chat_state.clone(),
                     self.llm_processor.active_provider_id,
                     self.llm_processor.active_model_name.clone(),
+                    self.llm_processor.active_provider_id,
+                    self.llm_processor.active_model_name.clone(),
                 );
                 tokio::spawn(async move {
                     let _ = im.generate_workflow_title(&user_query).await;
@@ -1065,8 +1102,11 @@ impl WorkflowExecutor {
     }
 
     async fn dispatch_context_usage(&self) -> Result<(), WorkflowEngineError> {
+        let current_context_tokens = self.context.current_token_estimate();
         self.dispatch_ui_payload(GatewayPayload::ContextUsage {
-            total_tokens: self.context.current_token_estimate(),
+            total_tokens: current_context_tokens,
+            current_context_tokens: Some(current_context_tokens),
+            max_context_tokens: Some(self.context.max_tokens),
         })
         .await
     }
@@ -1113,10 +1153,18 @@ impl WorkflowExecutor {
                 matches!(
                     name,
                     TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                        | TOOL_SUBMIT_PLAN
                         | TOOL_SUB_AGENT_RUN
                         | TOOL_SUB_AGENT_OUTPUT
                         | TOOL_SUB_AGENT_STOP
-                ) || tools.contains(name)
+                ) || (self.policy.allows_planning_note_tools()
+                    && matches!(
+                        name,
+                        crate::tools::TOOL_PLAN_READ_NOTE
+                            | crate::tools::TOOL_PLAN_WRITE_NOTE
+                            | crate::tools::TOOL_PLAN_EDIT_NOTE
+                    ))
+                    || tools.contains(name)
                     || (name == "mcp_tool_load"
                         && tools.iter().any(|tool| tool.contains(MCP_TOOL_NAME_SPLIT)))
             });
@@ -1148,10 +1196,11 @@ impl WorkflowExecutor {
                 tm.register_tool(Arc::new(ReadFile)).await?;
             }
 
-            if is_allowed(TOOL_WRITE_FILE) {
+            if self.policy.allows_generic_workspace_mutation_tools() && is_allowed(TOOL_WRITE_FILE)
+            {
                 tm.register_tool(Arc::new(WriteFile)).await?;
             }
-            if is_allowed(TOOL_EDIT_FILE) {
+            if self.policy.allows_generic_workspace_mutation_tools() && is_allowed(TOOL_EDIT_FILE) {
                 tm.register_tool(Arc::new(EditFile)).await?;
             }
             if is_allowed(TOOL_LIST_DIR) {
@@ -1163,10 +1212,31 @@ impl WorkflowExecutor {
             if is_allowed(TOOL_GREP) {
                 tm.register_tool(Arc::new(Grep)).await?;
             }
+            if self.policy.allows_planning_note_tools() {
+                if is_allowed(crate::tools::TOOL_PLAN_READ_NOTE) {
+                    tm.register_tool(Arc::new(crate::tools::PlanReadNote::new(
+                        self.planning_root.clone(),
+                    )))
+                    .await?;
+                }
+                if is_allowed(crate::tools::TOOL_PLAN_WRITE_NOTE) {
+                    tm.register_tool(Arc::new(crate::tools::PlanWriteNote::new(
+                        self.planning_root.clone(),
+                    )))
+                    .await?;
+                }
+                if is_allowed(crate::tools::TOOL_PLAN_EDIT_NOTE) {
+                    tm.register_tool(Arc::new(crate::tools::PlanEditNote::new(
+                        self.planning_root.clone(),
+                    )))
+                    .await?;
+                }
+            }
         }
 
         // 3. Shell Tool (With session-aware policy)
-        if is_allowed(TOOL_BASH)
+        if self.policy.allows_generic_bash()
+            && is_allowed(TOOL_BASH)
             && self
                 .policy
                 .allowed_categories
@@ -1200,7 +1270,7 @@ impl WorkflowExecutor {
             if is_allowed(TOOL_ASK_USER) {
                 tm.register_tool(Arc::new(AskUser)).await?;
             }
-            if is_allowed(TOOL_SUBMIT_PLAN) {
+            if self.policy.phase != ExecutionPhase::Implementation && is_allowed(TOOL_SUBMIT_PLAN) {
                 tm.register_tool(Arc::new(SubmitPlan)).await?;
             }
             if self.policy.phase != ExecutionPhase::Planning {
@@ -1342,6 +1412,98 @@ impl WorkflowExecutor {
         // }
 
         Ok(())
+    }
+
+    async fn transition_approved_plan(
+        &mut self,
+        tool_call_id: &str,
+        tool_args: &Value,
+    ) -> Result<(), WorkflowEngineError> {
+        let parsed_args = if tool_args.is_string() {
+            serde_json::from_str::<Value>(tool_args.as_str().unwrap_or("{}"))
+                .unwrap_or_else(|_| tool_args.clone())
+        } else {
+            tool_args.clone()
+        };
+        let plan = parsed_args
+            .get("plan")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                WorkflowEngineError::General(
+                    "Approved submit_plan is missing structured plan payload".to_string(),
+                )
+            })?
+            .to_string();
+
+        log::info!(
+            "WorkflowExecutor {}: Plan approved, transitioning to Implementation phase",
+            self.session_id
+        );
+
+        let approved_plan = plan.clone();
+        self.context.prune_for_execution(plan).await?;
+        if self.planning_root.exists() {
+            let _ = std::fs::remove_dir_all(&self.planning_root);
+        }
+        let _ = std::fs::create_dir_all(&self.planning_root);
+
+        let mut new_policy = ExecutionPolicy::implementation();
+        new_policy.approval_level = self.policy.approval_level.clone();
+        self.policy = new_policy;
+        self.sync_runtime_limits();
+
+        let mut updated_agent_config: Option<Value> = None;
+        if let Ok(store) = self.context.main_store.write() {
+            if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                let mut agent_config: Value = snapshot
+                    .workflow
+                    .agent_config
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or(json!({}));
+                agent_config["phase"] = json!(self.policy.phase.to_string());
+                if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                    let _ = store.update_workflow_agent_config(&self.session_id, &config_str);
+                }
+                updated_agent_config = Some(agent_config);
+            }
+        }
+
+        self.current_step = 0;
+        self.consecutive_no_tool_calls = 0;
+        self.register_foundation_tools().await?;
+        self.dispatch_context_usage().await?;
+        if let Some(agent_config) = updated_agent_config {
+            self.dispatch_ui_payload(GatewayPayload::AgentConfigUpdated { agent_config })
+                .await?;
+        }
+
+        self.add_message_and_notify_internal(
+            "tool".to_string(),
+            format!(
+                "# Approved Plan\n\n{}\n\n<SYSTEM_REMINDER>The plan has been approved and the workflow has switched to implementation. Use the approved plan as execution guidance and do not use planning note tools in implementation.</SYSTEM_REMINDER>",
+                approved_plan
+            ),
+            None,
+            None,
+            Some(StepType::Observe),
+            false,
+            None,
+            Some(json!({
+                "tool_call_id": tool_call_id,
+                "tool_name": TOOL_SUBMIT_PLAN,
+                "title": "Submit Plan",
+                "summary": "Plan approved",
+                "execution_status": "completed",
+                "is_error": false,
+                "display_type": "markdown",
+                "approval_status": "approved"
+            })),
+        )
+        .await?;
+
+        self.update_state(WorkflowState::Thinking).await
     }
 
     fn split_shell_command_segments(command: &str) -> Vec<String> {
@@ -1809,7 +1971,10 @@ impl WorkflowExecutor {
                                         .get("details")
                                         .and_then(|v| {
                                             if let Some(s) = v.as_str() {
-                                                serde_json::from_str::<serde_json::Value>(s).ok()
+                                                Some(
+                                                    serde_json::from_str::<serde_json::Value>(s)
+                                                        .unwrap_or_else(|_| json!(s)),
+                                                )
                                             } else {
                                                 Some(v.clone())
                                             }
@@ -1878,6 +2043,13 @@ impl WorkflowExecutor {
                                     if approve_all { " (Approve All)" } else { "" },
                                     tool_call_id
                                 );
+
+                                if tool_name == TOOL_SUBMIT_PLAN {
+                                    self.transition_approved_plan(&tool_call_id, &tool_args)
+                                        .await?;
+                                    self.pending_approvals.remove(&tool_call_id);
+                                    continue;
+                                }
 
                                 if approve_all {
                                     if tool_name == "bash" {
@@ -2107,10 +2279,16 @@ impl WorkflowExecutor {
                                     None,
                                     None,
                                 );
-                                let observation = Self::build_rejection_observation(
-                                    &tool_name,
-                                    rejection_message.as_deref(),
-                                );
+                                let observation = if tool_name == TOOL_SUBMIT_PLAN {
+                                    Self::build_plan_rejection_observation(
+                                        rejection_message.as_deref(),
+                                    )
+                                } else {
+                                    Self::build_rejection_observation(
+                                        &tool_name,
+                                        rejection_message.as_deref(),
+                                    )
+                                };
 
                                 self.add_message_and_notify_internal(
                                     "user".to_string(),
@@ -2248,7 +2426,10 @@ impl WorkflowExecutor {
                                 .get("details")
                                 .and_then(|v| {
                                     if let Some(s) = v.as_str() {
-                                        serde_json::from_str::<serde_json::Value>(s).ok()
+                                        Some(
+                                            serde_json::from_str::<serde_json::Value>(s)
+                                                .unwrap_or_else(|_| json!(s)),
+                                        )
                                     } else {
                                         Some(v.clone())
                                     }
@@ -2309,6 +2490,12 @@ impl WorkflowExecutor {
                             if approve_all { " (Approve All)" } else { "" },
                             signal_id
                         );
+
+                        if tool_name == TOOL_SUBMIT_PLAN {
+                            self.transition_approved_plan(signal_id, &tool_args).await?;
+                            self.pending_approvals.remove(signal_id);
+                            continue;
+                        }
 
                         if approve_all {
                             if tool_name == "bash" {
@@ -2543,10 +2730,14 @@ impl WorkflowExecutor {
                                 primary_root.as_deref(),
                             )
                         };
-                        let observation = Self::build_rejection_observation(
-                            &tool_name,
-                            rejection_message.as_deref(),
-                        );
+                        let observation = if tool_name == TOOL_SUBMIT_PLAN {
+                            Self::build_plan_rejection_observation(rejection_message.as_deref())
+                        } else {
+                            Self::build_rejection_observation(
+                                &tool_name,
+                                rejection_message.as_deref(),
+                            )
+                        };
 
                         self.add_message_and_notify_internal(
                             "user".to_string(),
@@ -2705,6 +2896,10 @@ impl WorkflowExecutor {
 
                     // A. Context Pruning: Keep only Initial Query + Final Plan + Todo List
                     self.context.prune_for_execution(plan).await?;
+                    if self.planning_root.exists() {
+                        let _ = std::fs::remove_dir_all(&self.planning_root);
+                    }
+                    let _ = std::fs::create_dir_all(&self.planning_root);
 
                     // B. Policy & State Reset
                     let mut new_policy = ExecutionPolicy::implementation();
@@ -2713,6 +2908,7 @@ impl WorkflowExecutor {
                     self.sync_runtime_limits();
 
                     // Persist phase change to database
+                    let mut updated_agent_config: Option<Value> = None;
                     if let Ok(store) = self.context.main_store.write() {
                         if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
                             let mut agent_config: serde_json::Value = snapshot
@@ -2726,6 +2922,7 @@ impl WorkflowExecutor {
                                 let _ = store
                                     .update_workflow_agent_config(&self.session_id, &config_str);
                             }
+                            updated_agent_config = Some(agent_config);
                         }
                     }
 
@@ -2735,6 +2932,13 @@ impl WorkflowExecutor {
 
                     // C. Toolset Refresh: CRITICAL for giving the AI the right tools for the new phase
                     self.register_foundation_tools().await?;
+                    self.dispatch_context_usage().await?;
+                    if let Some(agent_config) = updated_agent_config {
+                        self.dispatch_ui_payload(GatewayPayload::AgentConfigUpdated {
+                            agent_config,
+                        })
+                        .await?;
+                    }
 
                     self.update_state(WorkflowState::Thinking).await?;
                     continue;
@@ -2866,6 +3070,17 @@ impl WorkflowExecutor {
             self.intelligence_manager.active_provider_id = self.llm_processor.active_provider_id;
             self.intelligence_manager.active_model_name =
                 self.llm_processor.active_model_name.clone();
+            self.intelligence_manager.approval_provider_id = self.llm_processor.active_provider_id;
+            self.intelligence_manager.approval_model_name =
+                self.llm_processor.active_model_name.clone();
+            if let Some(audit_model) = plan_model.or(selected_model) {
+                self.intelligence_manager.audit_provider_id = audit_model.id;
+                self.intelligence_manager.audit_model_name = audit_model.model.clone();
+            } else {
+                self.intelligence_manager.audit_provider_id = self.llm_processor.active_provider_id;
+                self.intelligence_manager.audit_model_name =
+                    self.llm_processor.active_model_name.clone();
+            }
             self.compressor.provider_id = self.llm_processor.active_provider_id;
             self.compressor.model = self.llm_processor.active_model_name.clone();
 
@@ -3232,6 +3447,23 @@ impl WorkflowExecutor {
                             );
                             continue;
                         }
+                        if !self.should_retry_background_compression(compressed_until_message_id) {
+                            if let Some((failures, next_retry_step)) = self
+                                .background_compression_retry_state
+                                .get(&compressed_until_message_id)
+                                .copied()
+                            {
+                                log::info!(
+                                    "[Workflow][session={}][phase=compression] Backing off blocking compression for boundary {} after {} failures; retry at step {} (current step {})",
+                                    self.session_id,
+                                    compressed_until_message_id,
+                                    failures,
+                                    next_retry_step,
+                                    self.current_step
+                                );
+                            }
+                            continue;
+                        }
 
                         self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
                             is_compressing: true,
@@ -3277,6 +3509,9 @@ impl WorkflowExecutor {
                                 }
                             }
                             Err(err) => {
+                                self.record_background_compression_failure(
+                                    compressed_until_message_id,
+                                );
                                 log::warn!(
                                     "[Workflow][session={}][phase=compression] Compression request failed: {}",
                                     self.session_id,
@@ -4058,7 +4293,21 @@ impl WorkflowExecutor {
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         // --- 1. Workflow Control Interception (Submit, Finish, Ask) ---
         match name {
-            TOOL_SUBMIT_PLAN => return self.handle_submit_plan_intercept(text_part).await,
+            TOOL_SUBMIT_PLAN => {
+                if self.policy.phase == ExecutionPhase::Implementation {
+                    return Ok(Some(ReinforcedResult {
+                        content: "<SYSTEM_REMINDER>submit_plan is only available before an approved plan enters implementation. This workflow is already in implementation mode. Continue executing the approved plan with implementation tools, and use complete_workflow_with_summary when the work is finished.</SYSTEM_REMINDER>".to_string(),
+                        title: "Tool unavailable: submit_plan".to_string(),
+                        summary: "submit_plan unavailable during implementation".to_string(),
+                        display_type: "text".to_string(),
+                        is_error: true,
+                        error_type: Some("ToolUnavailable".to_string()),
+                        approval_status: None,
+                        observation_kind: None,
+                    }));
+                }
+                return self.handle_submit_plan_intercept(id, args, text_part).await;
+            }
             TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => {
                 return self.handle_finish_task_intercept(text_part, args).await
             }
@@ -4118,6 +4367,23 @@ impl WorkflowExecutor {
                 summary: "Loop detected".to_string(),
                 is_error: true,
                 error_type: Some("LoopDetected".to_string()),
+                display_type: "text".to_string(),
+                approval_status: None,
+                observation_kind: None,
+            }));
+        }
+
+        if Self::is_planning_note_tool(name) {
+            if self.policy.allows_planning_note_tools() {
+                return Ok(None);
+            }
+
+            return Ok(Some(ReinforcedResult {
+                content: "<SYSTEM_REMINDER>Planning note tools are only available in strict/manual Plan Mode before the plan is approved. The workflow is now in implementation, so use `todo_create`, `todo_update`, and `todo_get` for task tracking instead of planning notes.</SYSTEM_REMINDER>".to_string(),
+                title: format!("Tool unavailable: {}", name),
+                summary: "Planning note tool unavailable".to_string(),
+                is_error: true,
+                error_type: Some("ToolUnavailable".to_string()),
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
@@ -4320,6 +4586,7 @@ impl WorkflowExecutor {
                     metadata["is_error"] = json!(resolution.is_error);
                     metadata["error_type"] =
                         json!(if resolution.is_error { "SubAgentFailed" } else { "" });
+                    metadata["ui_visibility"] = json!("hide");
                     metadata
                 }),
             )
@@ -4849,6 +5116,27 @@ impl WorkflowExecutor {
                     serde_json::from_value::<crate::db::agent::AgentModels>(configs.clone())
                 {
                     self.agent_config.models = Some(models);
+                    self.llm_processor.agent_config = self.agent_config.clone();
+                    if let Some(act_model) = self
+                        .agent_config
+                        .models
+                        .as_ref()
+                        .and_then(|models| models.act.as_ref())
+                    {
+                        self.intelligence_manager.approval_provider_id = act_model.id;
+                        self.intelligence_manager.approval_model_name = act_model.model.clone();
+                    }
+                    if let Some(audit_model) = self
+                        .agent_config
+                        .models
+                        .as_ref()
+                        .and_then(|models| models.plan.as_ref().or(models.act.as_ref()))
+                    {
+                        self.intelligence_manager.audit_provider_id = audit_model.id;
+                        self.intelligence_manager.audit_model_name = audit_model.model.clone();
+                    }
+                    self.sync_runtime_limits();
+                    self.dispatch_context_usage().await?;
                 }
             }
             return Ok(true);
@@ -4899,7 +5187,10 @@ impl WorkflowExecutor {
         &mut self,
         rx: &mut tokio::sync::mpsc::Receiver<String>,
     ) -> Result<bool, WorkflowEngineError> {
-        while let Ok(s) = rx.try_recv() {
+        let mut stashed_signals: std::collections::VecDeque<String> =
+            take_stashed_runtime_signals(&self.session_id).into();
+
+        while let Some(s) = stashed_signals.pop_front().or_else(|| rx.try_recv().ok()) {
             let sig_json: Value = serde_json::from_str(&s).unwrap_or_default();
             let sig_type_str = sig_json["type"].as_str().unwrap_or_default();
             let sig_type_enum = SignalType::from_str(sig_type_str);

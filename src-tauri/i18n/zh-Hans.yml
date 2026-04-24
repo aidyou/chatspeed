@@ -354,6 +354,7 @@ workflow:
   validation: "验证错误: %{details}"
   task_finished: "任务已完成"
   summary:
+    edit_file: "已编辑"
     submit_plan: "提交计划"
     todo_create: "创建任务"
     todo_update: "更新任务：%{subject} -> %{status}"
@@ -363,6 +364,7 @@ workflow:
     todo_status_in_progress: "进行中"
     todo_status_pending: "等待中"
     todo_status_failed: "执行失败"
+    write_file: "已写入"
     todo_status_data_missing: "数据缺失"
   error:
     cancelled: "操作已被用户取消"

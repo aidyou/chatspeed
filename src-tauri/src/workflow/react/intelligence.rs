@@ -2,7 +2,7 @@ use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::{ChatMetadata, MessageType};
 use crate::db::WorkflowMessage;
-use crate::tools::{TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_TODO_CREATE, TOOL_WEB_SEARCH};
+use crate::tools::{TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_WEB_SEARCH};
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::prompts::{CONTENT_FILTERING_PROMPT, SELF_REFLECTION_AUDIT_PROMPT};
@@ -17,6 +17,10 @@ pub struct IntelligenceManager {
     pub chat_state: Arc<ChatState>,
     pub active_provider_id: i64,
     pub active_model_name: String,
+    pub audit_provider_id: i64,
+    pub audit_model_name: String,
+    pub approval_provider_id: i64,
+    pub approval_model_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +31,87 @@ pub struct ToolApprovalReview {
 }
 
 impl IntelligenceManager {
+    fn extract_completion_summary(message: &WorkflowMessage) -> String {
+        let visible_content = message.message.trim();
+        let tool_summary = message
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("tool_calls"))
+            .and_then(|tool_calls| tool_calls.as_array())
+            .and_then(|tool_calls| {
+                tool_calls.iter().rev().find_map(|call| {
+                    let tool_name = call
+                        .get("name")
+                        .or_else(|| {
+                            call.get("function")
+                                .and_then(|function| function.get("name"))
+                        })
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default();
+                    if tool_name != TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY {
+                        return None;
+                    }
+
+                    let args_value = call.get("arguments").or_else(|| {
+                        call.get("function")
+                            .and_then(|function| function.get("arguments"))
+                    })?;
+                    let parsed_args = if let Some(args_text) = args_value.as_str() {
+                        serde_json::from_str::<serde_json::Value>(args_text).ok()
+                    } else {
+                        Some(args_value.clone())
+                    }?;
+                    parsed_args
+                        .get("summary")
+                        .and_then(|summary| summary.as_str())
+                        .map(str::trim)
+                        .filter(|summary| !summary.is_empty())
+                        .map(str::to_string)
+                })
+            });
+
+        match (visible_content.is_empty(), tool_summary) {
+            (true, Some(summary)) => summary,
+            (false, Some(summary)) => format!("{}\n\n{}", visible_content, summary),
+            (false, None) => visible_content.to_string(),
+            (true, None) => String::new(),
+        }
+    }
+
+    fn is_user_authored_message(message: &WorkflowMessage) -> bool {
+        message.role == "user" && message.step_type.as_deref().unwrap_or_default() != "observe"
+    }
+
+    fn approved_plan_text(messages: &[WorkflowMessage]) -> String {
+        messages
+            .iter()
+            .rev()
+            .find_map(|message| {
+                message.metadata.as_ref().and_then(|meta| {
+                    if meta.get("subtype").and_then(|value| value.as_str()) == Some("approved_plan")
+                    {
+                        meta.get("plan_content")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_else(|| "No approved plan was provided for this workflow.".to_string())
+    }
+
+    fn todo_status_json(context: &ContextManager) -> String {
+        let Ok(store) = context.main_store.read() else {
+            return "[]".to_string();
+        };
+        store
+            .get_todo_list_for_workflow(&context.session_id)
+            .ok()
+            .and_then(|todos| serde_json::to_string_pretty(&todos).ok())
+            .unwrap_or_else(|| "[]".to_string())
+    }
+
     fn truncate_text(value: &str, max_chars: usize) -> String {
         let mut text: String = value.chars().take(max_chars).collect();
         if value.chars().count() > max_chars {
@@ -129,12 +214,18 @@ impl IntelligenceManager {
         chat_state: Arc<ChatState>,
         active_provider_id: i64,
         active_model_name: String,
+        audit_provider_id: i64,
+        audit_model_name: String,
     ) -> Self {
         Self {
             session_id,
             chat_state,
             active_provider_id,
-            active_model_name,
+            active_model_name: active_model_name.clone(),
+            audit_provider_id,
+            audit_model_name,
+            approval_provider_id: active_provider_id,
+            approval_model_name: active_model_name,
         }
     }
 
@@ -315,28 +406,14 @@ impl IntelligenceManager {
         let messages = context.get_messages_for_llm();
 
         // 1. Consolidate Mission Context
-        let user_queries: Vec<String> = messages
+        let user_messages: Vec<String> = messages
             .iter()
-            .filter(|m| m.role == "user" && m.step_type.as_deref().unwrap_or_default() != "observe")
+            .filter(|message| Self::is_user_authored_message(message))
             .map(|m| m.message.clone())
             .collect();
 
-        let plan_text = messages
-            .iter()
-            .find(|m| {
-                m.step_type.as_deref() == Some("Plan") || m.message.contains(TOOL_TODO_CREATE)
-            })
-            .map(|m| m.message.as_str())
-            .unwrap_or("No initial plan provided.");
-
-        let todo_json = if let Ok(store) = context.main_store.read() {
-            store
-                .get_todo_list_for_workflow(&self.session_id)
-                .map(|t| serde_json::to_string_pretty(&t).unwrap_or_default())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        let plan_text = Self::approved_plan_text(&messages);
+        let todo_json = Self::todo_status_json(context);
 
         // 2. Extract Audit Rejection History to ensure consistency
         let mut audit_history = String::new();
@@ -364,12 +441,12 @@ impl IntelligenceManager {
                 "content": format!(
                     "{}\n\n\
                     AUDIT CONTEXT:\n\n\
-                    <user_missions>\n{}\n</user_missions>\n\n\
-                    <initial_plan>\n{}\n</initial_plan>\n\n\
-                    <current_todo_status>\n{}\n</current_todo_status>\n\n\
+                    <user_messages>\n{}\n</user_messages>\n\n\
+                    <approved_plan>\n{}\n</approved_plan>\n\n\
+                    <todo_status>\n{}\n</todo_status>\n\n\
                     <previous_audit_feedback>\n{}\n</previous_audit_feedback>",
                     SELF_REFLECTION_AUDIT_PROMPT,
-                    user_queries.join("\n---\n"),
+                    user_messages.join("\n---\n"),
                     plan_text,
                     todo_json,
                     if audit_history.is_empty() { "None".to_string() } else { audit_history }
@@ -395,14 +472,14 @@ impl IntelligenceManager {
         }) {
             history.push(serde_json::json!({
                 "role": "user",
-                "content": format!("<proposed_conclusion>\n{}\n</proposed_conclusion>", target_msg.message)
+                "content": format!("<proposed_conclusion>\n{}\n</proposed_conclusion>", Self::extract_completion_summary(target_msg))
             }));
         } else {
             // Fallback: If we can't find it exactly, use the very last assistant message
             if let Some(last_msg) = messages.iter().rev().find(|m| m.role == "assistant") {
                 history.push(serde_json::json!({
                     "role": "user",
-                    "content": format!("<proposed_conclusion>\n{}\n</proposed_conclusion>", last_msg.message)
+                    "content": format!("<proposed_conclusion>\n{}\n</proposed_conclusion>", Self::extract_completion_summary(last_msg))
                 }));
             }
         }
@@ -421,8 +498,8 @@ impl IntelligenceManager {
 
         // Spawn the LLM call in a separate task so we can process the stream concurrently
         let session_id_audit = self.session_id.clone() + "_auditor";
-        let provider_id = self.active_provider_id;
-        let model_name = self.active_model_name.clone();
+        let provider_id = self.audit_provider_id;
+        let model_name = self.audit_model_name.clone();
 
         tokio::spawn(async move {
             if let Err(e) = chat_interface
@@ -565,8 +642,8 @@ impl IntelligenceManager {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(100);
         let session_id_review = self.session_id.clone() + "_approval_reviewer";
-        let provider_id = self.active_provider_id;
-        let model_name = self.active_model_name.clone();
+        let provider_id = self.approval_provider_id;
+        let model_name = self.approval_model_name.clone();
 
         tokio::spawn(async move {
             if let Err(e) = chat_interface

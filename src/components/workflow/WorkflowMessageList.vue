@@ -1,5 +1,5 @@
 <template>
-  <div class="messages" ref="messagesRef">
+  <div class="messages" ref="messagesRef" @scroll.passive="handleScroll">
     <div
       v-for="(message, index) in visibleMessages"
       :key="message.displayId"
@@ -231,6 +231,13 @@
                     </el-button>
                   </div>
                 </div>
+                <MarkdownSimple
+                  v-else-if="
+                    message.metadata?.approval_status !== 'pending' &&
+                    shouldShowToolRawContent(message) &&
+                    message.toolDisplay.displayType === 'markdown'
+                  "
+                  :content="removeSystemReminder(message.message)" />
                 <pre
                   v-else-if="
                     message.metadata?.approval_status !== 'pending' &&
@@ -348,6 +355,11 @@
                 <div class="tool-line summary">
                   <span class="corner-icon">⎿</span>
                   <span class="summary-text">{{ call.summary }}</span>
+                </div>
+                <div
+                  v-if="call.toolName === 'complete_workflow_with_summary' && call.completionSummary"
+                  class="finish-task-summary markdown-body">
+                  <MarkdownSimple :content="call.completionSummary" />
                 </div>
               </div>
             </div>
@@ -531,6 +543,17 @@ const emit = defineEmits([
 const messagesRef = ref(null)
 const approvalDrafts = ref({})
 const askUserDrafts = ref({})
+const AUTO_SCROLL_THRESHOLD = 64
+const shouldAutoScroll = ref(true)
+
+const isNearBottom = el => {
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= AUTO_SCROLL_THRESHOLD
+}
+
+const handleScroll = () => {
+  shouldAutoScroll.value = isNearBottom(messagesRef.value)
+}
 
 const isHiddenSystemObservation = message => {
   const uiVisibility = message?.metadata?.ui_visibility || message?.metadata?.uiVisibility
@@ -1024,13 +1047,10 @@ const submitAskUserResponse = message => {
 const scrollToBottom = (force = false) => {
   if (messagesRef.value) {
     const el = messagesRef.value
-    // Increase threshold to 300px to handle tall tool call blocks
-    // If 'force' is true, we scroll regardless of current position
-    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 300
-
-    if (force || isAtBottom) {
+    if (force || shouldAutoScroll.value || isNearBottom(el)) {
       nextTick(() => {
         el.scrollTop = el.scrollHeight
+        shouldAutoScroll.value = true
       })
     }
   }

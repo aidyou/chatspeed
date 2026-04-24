@@ -794,6 +794,7 @@
   },
   "workflow": {
     "awaiting_approval": "Awaiting approval",
+    "edited": "Edited",
     "planningModeTooltip": "Planning Mode: AI research and strategy before execution",
     "approvePlan": "Approve Plan",
     "approval": {
@@ -828,8 +829,10 @@
     "confirmationWaiting": "Step budget exhausted. Do you want to continue?",
     "tools": "Tools",
     "editWorkflowTitle": "Edit Workflow Title",
+    "executing": "Executing...",
     "muteApprovalNotifications": "Mute approval sound",
     "newWorkflow": "New Workflow",
+    "rejected": "Rejected",
     "retrying": "Request too fast, retrying (attempt {attempt}/{total}), waiting {seconds} seconds...",
     "startFailed": "Failed to start workflow: {error}",
     "noAgentError": "No agent available. Please create an agent in Settings first.",
@@ -853,6 +856,7 @@
       "statusPending": "pending"
     },
     "submit_plan": "Submit plan",
+    "written": "Written",
     "finishTask": "Finish task",
     "finalAuditTooltip": "Final audit mode: AI automatically performs quality review before task completion",
     "historyTab": "Conversation",

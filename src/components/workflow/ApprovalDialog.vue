@@ -1,7 +1,7 @@
 <template>
   <div v-if="inline" class="approval-inline-panel" :class="{ 'diff-dialog': isEditAction }">
     <div class="approval-content">
-      <div class="details-box">
+      <div class="details-box" :class="{ 'plan-details-box': isPlanApproval }">
         <div v-if="isEditAction" class="diff-view">
           <div class="diff-text">
             <div
@@ -18,6 +18,9 @@
         </div>
         <div v-else-if="isShellAction" class="shell-view">
           <MarkdownSimple :content="shellMarkdown" class-name="approval-markdown" />
+        </div>
+        <div v-else-if="isMarkdownAction" class="markdown-view">
+          <MarkdownSimple :content="detailPayload.detailsText" class-name="approval-markdown" />
         </div>
         <pre v-else class="details-text">{{ detailPayload.detailsText }}</pre>
       </div>
@@ -36,7 +39,7 @@
         <el-button type="primary" @click="onApprove" :loading="loading" round>{{
           $t('common.approve')
         }}</el-button>
-        <el-button type="success" @click="onApproveAll" :loading="loading" round>{{
+        <el-button v-if="!isPlanApproval" type="success" @click="onApproveAll" :loading="loading" round>{{
           $t('common.approveAll')
         }}</el-button>
       </div>
@@ -54,7 +57,7 @@
     :modal-class="isEditAction ? 'diff-dialog-overlay' : ''"
     custom-class="approval-dialog">
     <div class="approval-content">
-      <div class="details-box">
+      <div class="details-box" :class="{ 'plan-details-box': isPlanApproval }">
         <div v-if="isEditAction" class="diff-view">
           <div v-if="filePath" class="diff-file-path">File: {{ filePath }}</div>
           <div class="diff-text">
@@ -73,6 +76,9 @@
         <div v-else-if="isShellAction" class="shell-view">
           <MarkdownSimple :content="shellMarkdown" class-name="approval-markdown" />
         </div>
+        <div v-else-if="isMarkdownAction" class="markdown-view">
+          <MarkdownSimple :content="detailPayload.detailsText" class-name="approval-markdown" />
+        </div>
         <pre v-else class="details-text">{{ detailPayload.detailsText }}</pre>
       </div>
       <div class="rejection-note-box">
@@ -90,7 +96,7 @@
         <el-button type="primary" @click="onApprove" :loading="loading" round>{{
           $t('common.approve')
         }}</el-button>
-        <el-button type="success" @click="onApproveAll" :loading="loading" round>{{
+        <el-button v-if="!isPlanApproval" type="success" @click="onApproveAll" :loading="loading" round>{{
           $t('common.approveAll')
         }}</el-button>
       </div>
@@ -197,6 +203,13 @@ const isEditAction = computed(() => {
 })
 
 const isShellAction = computed(() => normalizedAction.value === 'bash')
+const isPlanApproval = computed(() => normalizedAction.value === 'submit_plan')
+const isMarkdownAction = computed(() => {
+  if (props.displayType === 'markdown') {
+    return true
+  }
+  return isPlanApproval.value
+})
 
 const filePath = computed(() => {
   if (!isEditAction.value) return ''
@@ -410,7 +423,8 @@ const onReject = () => {
       overflow-y: auto;
     }
 
-    .shell-view {
+    .shell-view,
+    .markdown-view {
       max-height: min(36vh, 320px);
       overflow: auto;
 
@@ -427,6 +441,13 @@ const onReject = () => {
         overflow-wrap: anywhere;
         background: none;
         padding: var(--cs-space-sm);
+      }
+    }
+
+    &.plan-details-box {
+      .markdown-view {
+        max-height: none;
+        overflow: visible;
       }
     }
 

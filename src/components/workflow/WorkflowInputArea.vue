@@ -39,7 +39,7 @@
               " :disabled="!canEditAgent" @update:model-value="$emit('update-selected-agent', $event)" />
           </div>
           <div class="selector-wrap model-selector-trigger" @click="$emit('open-model-selector')">
-            <span class="model-name">{{ activeModelName }} ({{ planningMode ? 'plan' : 'act' }})</span>
+            <span class="model-name">{{ activeModelName }}</span>
             <cs name="arrow-down" size="12px" />
           </div>
 

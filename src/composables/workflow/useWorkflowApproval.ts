@@ -9,7 +9,12 @@ import { SIGNAL_TYPES } from '@/composables/workflow/signalTypes'
  * Composable for managing workflow approval actions.
  * Approval UI is rendered inline in the message list.
  */
-export function useWorkflowApproval({ currentWorkflowId }) {
+export function useWorkflowApproval({
+  currentWorkflowId,
+  getPendingApprovalEntry,
+  clearPendingApprovalEntry,
+  upsertPendingApprovalEntry
+}) {
   const { t } = useI18n()
   const workflowStore = useWorkflowStore()
 
@@ -28,6 +33,14 @@ export function useWorkflowApproval({ currentWorkflowId }) {
     }
     approvalLoading.value = true
     activeApprovalId.value = toolCallId
+    const pendingEntry = getPendingApprovalEntry?.(sessionId, toolCallId) || null
+    if (approved) {
+      workflowStore.markToolApprovedRunning(toolCallId)
+    } else {
+      workflowStore.markToolRejected(toolCallId)
+    }
+    clearPendingApprovalEntry?.(sessionId, toolCallId)
+
     try {
       const signal = JSON.stringify({
         type: SIGNAL_TYPES.APPROVAL,
@@ -44,11 +57,16 @@ export function useWorkflowApproval({ currentWorkflowId }) {
 
       if (approved) {
         workflowStore.updateWorkflowStatus(sessionId, 'thinking', null)
-        workflowStore.markToolApprovedRunning(toolCallId)
-      } else {
-        workflowStore.markToolRejected(toolCallId)
       }
     } catch (error) {
+      workflowStore.markToolPendingApproval(toolCallId)
+      if (pendingEntry) {
+        upsertPendingApprovalEntry?.(sessionId, {
+          id: pendingEntry.id,
+          kind: pendingEntry.kind,
+          action: pendingEntry.action
+        })
+      }
       console.error('Failed to resolve approval action:', error)
       if (
         String(error).includes('No sender') ||

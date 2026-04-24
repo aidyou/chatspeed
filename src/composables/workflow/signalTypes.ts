@@ -32,6 +32,7 @@ export const WORKFLOW_STATUSES = {
   AWAITING_USER: 'awaiting_user',
   AWAITING_APPROVAL: 'awaiting_approval',
   AWAITING_AUTO_APPROVAL: 'awaiting_auto_approval',
+  AWAITING_SUB_AGENT: 'awaiting_sub_agent',
   COMPLETED: 'completed',
   ERROR: 'error',
   FAILED: 'failed',
@@ -50,6 +51,7 @@ export const WAITING_STATUSES = [
   WORKFLOW_STATUSES.AWAITING_USER,
   WORKFLOW_STATUSES.AWAITING_APPROVAL,
   WORKFLOW_STATUSES.AWAITING_AUTO_APPROVAL,
+  WORKFLOW_STATUSES.AWAITING_SUB_AGENT,
 ] as const
 
 export const APPROVAL_WAITING_STATUSES = [

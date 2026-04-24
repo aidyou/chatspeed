@@ -953,7 +953,10 @@ async fn cleanup_owned_background_resources(root_session_id: &str, chat_state: &
 
         interrupt_openai_session(chat_state, &task_id).await;
         if stop_background_task(&task_id, Some(chat_state)).await {
-            WorkflowManager::unregister_session_signal_tx(&task_id);
+            WorkflowManager::unregister_session_signal_tx_with_source(
+                &task_id,
+                "cleanup_owned_background_resources.reclaim_sub_agent",
+            );
             log::info!(
                 "[Workflow][session={}][phase=cleanup] Reclaimed owned background task {}",
                 root_session_id,
@@ -987,8 +990,13 @@ async fn cleanup_workflow_resources(
         workflow_manager.remove_session(session_id);
     }
     BACKGROUND_TASKS.remove(session_id);
-    WorkflowManager::unregister_session_signal_tx(session_id);
-    gateway.unregister_session(session_id).await;
+    WorkflowManager::unregister_session_signal_tx_with_source(
+        session_id,
+        "cleanup_workflow_resources.finalize",
+    );
+    gateway
+        .unregister_session_with_source(session_id, "cleanup_workflow_resources.finalize")
+        .await;
 }
 
 fn legacy_wait_reason_from_status(status: &str) -> Option<WaitReason> {
@@ -1155,9 +1163,13 @@ pub async fn workflow_start(
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
     gateway_arc
-        .register_session_tx(session_id.clone(), signal_tx.clone())
+        .register_session_tx_with_source(session_id.clone(), signal_tx.clone(), "workflow_start")
         .await;
-    WorkflowManager::register_session_signal_tx(session_id.clone(), signal_tx);
+    WorkflowManager::register_session_signal_tx_with_source(
+        session_id.clone(),
+        signal_tx,
+        "workflow_start",
+    );
 
     let global_tool_manager = chat_state_arc.tool_manager.clone();
 
@@ -1173,30 +1185,35 @@ pub async fn workflow_start(
         })
         .collect();
 
-    // Build execution policy with phase from overrides or default
-    let mut policy = if planning_mode {
-        crate::workflow::react::policy::ExecutionPolicy::planning()
-    } else {
-        // Try to load phase from overrides
-        if let Some(p_str) = agent_config_json.get("phase").and_then(|v| v.as_str()) {
+    // Persisted phase is authoritative for existing workflows. This prevents a stale
+    // frontend planning toggle from re-entering strict planning after a plan was approved.
+    let persisted_phase = agent_config_json
+        .get("phase")
+        .and_then(|v| v.as_str())
+        .and_then(|p_str| {
             use std::str::FromStr;
-            if let Ok(p) = crate::workflow::react::policy::ExecutionPhase::from_str(p_str) {
-                match p {
-                    crate::workflow::react::policy::ExecutionPhase::Planning => {
-                        crate::workflow::react::policy::ExecutionPolicy::planning()
-                    }
-                    crate::workflow::react::policy::ExecutionPhase::Implementation => {
-                        crate::workflow::react::policy::ExecutionPolicy::implementation()
-                    }
-                    crate::workflow::react::policy::ExecutionPhase::Standard => {
-                        crate::workflow::react::policy::ExecutionPolicy::standard()
-                    }
-                }
+            crate::workflow::react::policy::ExecutionPhase::from_str(p_str).ok()
+        });
+    let mut policy = match persisted_phase {
+        Some(crate::workflow::react::policy::ExecutionPhase::Planning) => {
+            if planning_mode {
+                crate::workflow::react::policy::ExecutionPolicy::planning_strict()
+            } else {
+                crate::workflow::react::policy::ExecutionPolicy::planning()
+            }
+        }
+        Some(crate::workflow::react::policy::ExecutionPhase::Implementation) => {
+            crate::workflow::react::policy::ExecutionPolicy::implementation()
+        }
+        Some(crate::workflow::react::policy::ExecutionPhase::Standard) => {
+            crate::workflow::react::policy::ExecutionPolicy::standard()
+        }
+        None => {
+            if planning_mode {
+                crate::workflow::react::policy::ExecutionPolicy::planning_strict()
             } else {
                 crate::workflow::react::policy::ExecutionPolicy::standard()
             }
-        } else {
-            crate::workflow::react::policy::ExecutionPolicy::standard()
         }
     };
 
@@ -1335,9 +1352,15 @@ pub async fn workflow_start(
                     session_id_for_spawn
                 );
                 BACKGROUND_TASKS.remove(&session_id_for_spawn);
-                WorkflowManager::unregister_session_signal_tx(&session_id_for_spawn);
+                WorkflowManager::unregister_session_signal_tx_with_source(
+                    &session_id_for_spawn,
+                    "workflow_start.run_loop.cancelled",
+                );
                 gateway_for_spawn
-                    .unregister_session(&session_id_for_spawn)
+                    .unregister_session_with_source(
+                        &session_id_for_spawn,
+                        "workflow_start.run_loop.cancelled",
+                    )
                     .await;
                 manager_for_spawn.remove_session(&session_id_for_spawn);
                 return;
@@ -1386,9 +1409,15 @@ pub async fn workflow_start(
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Completed);
         }
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
-        WorkflowManager::unregister_session_signal_tx(&session_id_for_spawn);
+        WorkflowManager::unregister_session_signal_tx_with_source(
+            &session_id_for_spawn,
+            "workflow_start.run_loop.finalize",
+        );
         gateway_for_spawn
-            .unregister_session(&session_id_for_spawn)
+            .unregister_session_with_source(
+                &session_id_for_spawn,
+                "workflow_start.run_loop.finalize",
+            )
             .await;
         manager_for_spawn.remove_session(&session_id_for_spawn);
     });
@@ -1465,9 +1494,17 @@ pub async fn workflow_approve_plan(
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
     gateway_arc
-        .register_session_tx(session_id.clone(), signal_tx.clone())
+        .register_session_tx_with_source(
+            session_id.clone(),
+            signal_tx.clone(),
+            "workflow_approve_plan",
+        )
         .await;
-    WorkflowManager::register_session_signal_tx(session_id.clone(), signal_tx);
+    WorkflowManager::register_session_signal_tx_with_source(
+        session_id.clone(),
+        signal_tx,
+        "workflow_approve_plan",
+    );
 
     let allowed_paths = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
@@ -1607,9 +1644,15 @@ pub async fn workflow_approve_plan(
                 );
                 manager_for_spawn.remove_session(&session_id_for_spawn);
                 BACKGROUND_TASKS.remove(&session_id_for_spawn);
-                WorkflowManager::unregister_session_signal_tx(&session_id_for_spawn);
+                WorkflowManager::unregister_session_signal_tx_with_source(
+                    &session_id_for_spawn,
+                    "workflow_approve_plan.run_loop.cancelled",
+                );
                 gateway_for_spawn
-                    .unregister_session(&session_id_for_spawn)
+                    .unregister_session_with_source(
+                        &session_id_for_spawn,
+                        "workflow_approve_plan.run_loop.cancelled",
+                    )
                     .await;
                 return;
             }
@@ -1658,9 +1701,15 @@ pub async fn workflow_approve_plan(
         }
         manager_for_spawn.remove_session(&session_id_for_spawn);
         BACKGROUND_TASKS.remove(&session_id_for_spawn);
-        WorkflowManager::unregister_session_signal_tx(&session_id_for_spawn);
+        WorkflowManager::unregister_session_signal_tx_with_source(
+            &session_id_for_spawn,
+            "workflow_approve_plan.run_loop.finalize",
+        );
         gateway_for_spawn
-            .unregister_session(&session_id_for_spawn)
+            .unregister_session_with_source(
+                &session_id_for_spawn,
+                "workflow_approve_plan.run_loop.finalize",
+            )
             .await;
     });
 
@@ -1740,7 +1789,16 @@ pub async fn workflow_signal(
                 workflow_snapshot.workflow.status
             );
             workflow_manager_arc.remove_session(&session_id);
-            gateway_arc.unregister_session(&session_id).await;
+            WorkflowManager::unregister_session_signal_tx_with_source(
+                &session_id,
+                "workflow_signal.recovery.snapshot_terminal_user_message",
+            );
+            gateway_arc
+                .unregister_session_with_source(
+                    &session_id,
+                    "workflow_signal.recovery.snapshot_terminal_user_message",
+                )
+                .await;
             true
         } else {
             // Route signal through manager
@@ -1757,7 +1815,16 @@ pub async fn workflow_signal(
                         e
                     );
                     workflow_manager_arc.remove_session(&session_id);
-                    gateway_arc.unregister_session(&session_id).await;
+                    WorkflowManager::unregister_session_signal_tx_with_source(
+                        &session_id,
+                        "workflow_signal.recovery.signal_rejected_user_message",
+                    );
+                    gateway_arc
+                        .unregister_session_with_source(
+                            &session_id,
+                            "workflow_signal.recovery.signal_rejected_user_message",
+                        )
+                        .await;
                     true
                 } else {
                     log::warn!(
@@ -1793,7 +1860,16 @@ pub async fn workflow_signal(
                                 e
                             );
                             workflow_manager_arc.remove_session(&session_id);
-                            gateway_arc.unregister_session(&session_id).await;
+                            WorkflowManager::unregister_session_signal_tx_with_source(
+                                &session_id,
+                                "workflow_signal.recovery.gateway_injection_stale",
+                            );
+                            gateway_arc
+                                .unregister_session_with_source(
+                                    &session_id,
+                                    "workflow_signal.recovery.gateway_injection_stale",
+                                )
+                                .await;
                             true
                         } else {
                             log::warn!(
@@ -2160,8 +2236,16 @@ pub async fn workflow_stop(
             let _ = workflow_manager
                 .update_session_status(&session_id, ManagedSessionStatus::Cancelled);
             workflow_manager.remove_session(&session_id);
-            WorkflowManager::unregister_session_signal_tx(&session_id);
-            gateway_arc.unregister_session(&session_id).await;
+            WorkflowManager::unregister_session_signal_tx_with_source(
+                &session_id,
+                "workflow_stop.gateway_injection_failed",
+            );
+            gateway_arc
+                .unregister_session_with_source(
+                    &session_id,
+                    "workflow_stop.gateway_injection_failed",
+                )
+                .await;
             Err(e.to_string())
         }
         Err(e) => Err(e.to_string()),

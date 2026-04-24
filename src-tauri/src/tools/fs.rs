@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+const PLANNING_NOTE_FILES: &[&str] = &["notes.md", "plan.md", "research.md"];
 
 fn format_read_file_open_error(path_str: &str, error: &std::io::Error) -> ToolError {
     match error.kind() {
@@ -31,6 +33,299 @@ fn should_skip_list_dir_entry(name: &str) -> bool {
         || name_lower.ends_with(".pyc")
         || name_lower == "thumbs.db"
         || name_lower == ".ds_store"
+}
+
+fn validate_planning_note_name(note_name: &str) -> Result<&str, ToolError> {
+    let trimmed = note_name.trim();
+    if PLANNING_NOTE_FILES.contains(&trimmed) {
+        Ok(trimmed)
+    } else {
+        Err(ToolError::InvalidParams(format!(
+            "Invalid planning note '{}'. Allowed note_name values: {}",
+            note_name,
+            PLANNING_NOTE_FILES.join(", ")
+        )))
+    }
+}
+
+fn planning_note_path(planning_root: &Path, note_name: &str) -> Result<PathBuf, ToolError> {
+    Ok(planning_root.join(validate_planning_note_name(note_name)?))
+}
+
+fn execute_read_file(path_str: &str, offset: usize, limit: usize) -> NativeToolResult {
+    if limit == 0 {
+        return Err(ToolError::InvalidParams(
+            "limit must be greater than 0".to_string(),
+        ));
+    }
+
+    const MAX_LINE_LENGTH: usize = 10_000;
+    const MAX_OUTPUT_CHARS: usize = 18_000;
+    let path = Path::new(path_str);
+
+    if path.is_dir() {
+        return Err(ToolError::InvalidParams(format!(
+            "Path is a directory, not a file: {}. Use 'list_dir' to inspect directories.",
+            path_str
+        )));
+    }
+
+    let file = fs::File::open(path_str).map_err(|e| format_read_file_open_error(path_str, &e))?;
+    let reader = BufReader::new(file);
+
+    let file_size_bytes = fs::metadata(path_str)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let mut lines = Vec::new();
+    let mut total_chars = 0usize;
+    let end_offset = offset.saturating_add(limit);
+    let mut truncated_by_limit = false;
+    let mut truncated_by_size = false;
+    let mut total_lines = 0usize;
+    let mut next_offset: Option<usize> = None;
+
+    for (i, line) in reader.lines().enumerate() {
+        total_lines = i + 1;
+        if i < offset {
+            continue;
+        }
+        if i >= end_offset {
+            truncated_by_limit = true;
+            next_offset = Some(end_offset);
+            continue;
+        }
+        let content = line.map_err(|e| {
+            ToolError::IoError(format!(
+                "Failed to read line {} from {}: {}",
+                i + 1,
+                path_str,
+                e
+            ))
+        })?;
+        if truncated_by_size {
+            continue;
+        }
+        if content.len() > MAX_LINE_LENGTH {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Line {} is too long. Use 'grep' or read_file with a smaller targeted range.",
+                i + 1
+            )));
+        }
+        let rendered_line = format!("{:>6}\t{}", i + 1, content);
+        let rendered_len = rendered_line.chars().count() + 1;
+        if total_chars + rendered_len > MAX_OUTPUT_CHARS {
+            truncated_by_size = true;
+            next_offset = Some(i);
+            continue;
+        }
+        total_chars += rendered_len;
+        lines.push(rendered_line);
+    }
+
+    let lines_returned = lines.len();
+    if lines.is_empty() {
+        return Ok(ToolCallResult::success(
+            Some(
+                "[No content returned. The file is empty or the requested offset is beyond EOF.]"
+                    .into(),
+            ),
+            Some(json!({
+                "file_path": path_str,
+                "offset": offset,
+                "limit": limit,
+                "lines_returned": 0,
+                "truncated": false,
+                "file_size_bytes": file_size_bytes,
+                "total_lines": total_lines
+            })),
+        ));
+    }
+
+    let truncated = truncated_by_limit || truncated_by_size;
+    let last_line_number = offset + lines_returned;
+
+    if truncated {
+        let truncated_body = lines.join("\n");
+        let resume_offset = next_offset.unwrap_or(end_offset);
+        let reminder = if truncated_by_size {
+            format!(
+                "<SYSTEM_REMINDER>Read output was truncated before workflow observation limits. File size: {} bytes; total lines: {}. This response includes content through line {}. Use read_file with offset={} and a smaller limit to continue precisely.</SYSTEM_REMINDER>",
+                file_size_bytes,
+                total_lines,
+                last_line_number,
+                resume_offset
+            )
+        } else {
+            format!(
+                "<SYSTEM_REMINDER>Read output stopped at the requested limit. File size: {} bytes; total lines: {}. This response includes content through line {}. To continue reading this file, call read_file with offset={} and a suitable smaller limit if needed.</SYSTEM_REMINDER>",
+                file_size_bytes,
+                total_lines,
+                last_line_number,
+                resume_offset
+            )
+        };
+        return Ok(ToolCallResult::success(
+            Some(format!(
+                "<truncated_content>\n{}\n</truncated_content>\n{}",
+                truncated_body, reminder
+            )),
+            Some(json!({
+                "file_path": path_str,
+                "offset": offset,
+                "limit": limit,
+                "lines_returned": lines_returned,
+                "truncated": true,
+                "truncated_by_size": truncated_by_size,
+                "truncated_by_limit": truncated_by_limit,
+                "next_offset": resume_offset,
+                "file_size_bytes": file_size_bytes,
+                "total_lines": total_lines
+            })),
+        ));
+    } else if offset > 0 {
+        lines.push(format!(
+            "<SYSTEM_REMINDER>Reached EOF after line {}. File size: {} bytes; total lines: {}. Do NOT call read_file with the same offset={} again. If you need earlier context, use a lower offset or grep for a specific symbol.</SYSTEM_REMINDER>",
+            offset + lines_returned,
+            file_size_bytes,
+            total_lines,
+            offset
+        ));
+    }
+
+    Ok(ToolCallResult::success(
+        Some(lines.join("\n")),
+        Some(json!({
+            "file_path": path_str,
+            "offset": offset,
+            "limit": limit,
+            "lines_returned": lines_returned,
+            "truncated": truncated,
+            "next_offset": Value::Null,
+            "file_size_bytes": file_size_bytes,
+            "total_lines": total_lines
+        })),
+    ))
+}
+
+fn execute_edit_file(
+    path_str: &str,
+    old_str_unix: &str,
+    new_str_unix: &str,
+    replace_all: bool,
+) -> NativeToolResult {
+    if old_str_unix == new_str_unix {
+        return Err(ToolError::InvalidParams(
+            "old_string and new_string are identical. No changes performed.".into(),
+        ));
+    }
+
+    let raw_content = fs::read_to_string(path_str).map_err(|e| {
+        ToolError::IoError(format!(
+            "Read failed: {}. Ensure the file exists and is readable.",
+            e
+        ))
+    })?;
+
+    let mut final_content = String::new();
+    let mut match_found = false;
+    let old_str_win = old_str_unix.replace("\n", "\r\n");
+    let new_str_win = new_str_unix.replace("\n", "\r\n");
+    let mut start_line = 0;
+
+    if raw_content.contains(&old_str_win) {
+        let matches: Vec<usize> = raw_content
+            .match_indices(&old_str_win)
+            .map(|(i, _)| i)
+            .collect();
+        if !replace_all && matches.len() > 1 {
+            return Err(ToolError::ExecutionFailed(format!(
+                "The old_string is not unique (found {} matches with Windows line endings). Please provide more surrounding context to uniquely identify the location.",
+                matches.len()
+            )));
+        }
+
+        start_line = raw_content[..matches[0]].lines().count();
+        final_content = if replace_all {
+            raw_content.replace(&old_str_win, &new_str_win)
+        } else {
+            raw_content.replacen(&old_str_win, &new_str_win, 1)
+        };
+        match_found = true;
+    } else if raw_content.contains(old_str_unix) {
+        let matches: Vec<usize> = raw_content
+            .match_indices(old_str_unix)
+            .map(|(i, _)| i)
+            .collect();
+        if !replace_all && matches.len() > 1 {
+            return Err(ToolError::ExecutionFailed(format!(
+                "The old_string is not unique (found {} matches with Unix line endings). Please provide more surrounding context to uniquely identify the location.",
+                matches.len()
+            )));
+        }
+
+        start_line = raw_content[..matches[0]].lines().count();
+        final_content = if replace_all {
+            raw_content.replace(old_str_unix, new_str_unix)
+        } else {
+            raw_content.replacen(old_str_unix, new_str_unix, 1)
+        };
+        match_found = true;
+    }
+
+    if !match_found {
+        let normalized_file = raw_content.replace("\r\n", "\n");
+        if normalized_file.contains(old_str_unix) {
+            let matches: Vec<usize> = normalized_file
+                .match_indices(old_str_unix)
+                .map(|(i, _)| i)
+                .collect();
+            if !replace_all && matches.len() > 1 {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "The old_string is not unique (found {} matches after normalization). Please provide more surrounding context.",
+                    matches.len()
+                )));
+            }
+
+            start_line = normalized_file[..matches[0]].lines().count();
+            let replaced_normalized = if replace_all {
+                normalized_file.replace(old_str_unix, new_str_unix)
+            } else {
+                normalized_file.replacen(old_str_unix, new_str_unix, 1)
+            };
+
+            final_content = if raw_content.contains("\r\n") {
+                replaced_normalized.replace("\n", "\r\n")
+            } else {
+                replaced_normalized
+            };
+            match_found = true;
+        }
+    }
+
+    if !match_found {
+        let lines_count = raw_content.lines().count();
+        return Err(ToolError::ExecutionFailed(format!(
+            "The old_string was not found in the file (checked {} lines). Please ensure you copied the text EXACTLY, including all whitespace and indentation.",
+            lines_count
+        )));
+    }
+
+    fs::write(path_str, &final_content).map_err(|e| {
+        ToolError::IoError(format!("Edit write failed: {}. Check file permissions.", e))
+    })?;
+
+    let result_json = json!({
+        "file_path": path_str,
+        "old_string": old_str_unix,
+        "new_string": new_str_unix,
+        "replace_all": replace_all,
+        "start_line": start_line + 1,
+    });
+
+    Ok(ToolCallResult::success(
+        Some(serde_json::to_string(&result_json).unwrap_or_default()),
+        Some(result_json),
+    ))
 }
 
 pub struct ReadFile;
@@ -91,156 +386,7 @@ impl ToolDefinition for ReadFile {
             ))?;
         let offset = params["offset"].as_u64().unwrap_or(0) as usize;
         let limit = params["limit"].as_u64().unwrap_or(2000) as usize;
-        if limit == 0 {
-            return Err(ToolError::InvalidParams(
-                "limit must be greater than 0".to_string(),
-            ));
-        }
-
-        const MAX_LINE_LENGTH: usize = 10_000;
-        const MAX_OUTPUT_CHARS: usize = 18_000;
-        let path = Path::new(path_str);
-
-        if path.is_dir() {
-            return Err(ToolError::InvalidParams(format!(
-                "Path is a directory, not a file: {}. Use 'list_dir' to inspect directories.",
-                path_str
-            )));
-        }
-
-        let file =
-            fs::File::open(path_str).map_err(|e| format_read_file_open_error(path_str, &e))?;
-        let reader = BufReader::new(file);
-
-        let file_size_bytes = fs::metadata(path_str)
-            .map(|metadata| metadata.len())
-            .unwrap_or(0);
-        let mut lines = Vec::new();
-        let mut total_chars = 0usize;
-        let end_offset = offset.saturating_add(limit);
-        let mut truncated_by_limit = false;
-        let mut truncated_by_size = false;
-        let mut total_lines = 0usize;
-        let mut next_offset: Option<usize> = None;
-
-        for (i, line) in reader.lines().enumerate() {
-            total_lines = i + 1;
-            if i < offset {
-                continue;
-            }
-            if i >= end_offset {
-                truncated_by_limit = true;
-                next_offset = Some(end_offset);
-                continue;
-            }
-            let content = line.map_err(|e| {
-                ToolError::IoError(format!(
-                    "Failed to read line {} from {}: {}",
-                    i + 1,
-                    path_str,
-                    e
-                ))
-            })?;
-            if truncated_by_size {
-                continue;
-            }
-            if content.len() > MAX_LINE_LENGTH {
-                return Err(ToolError::ExecutionFailed(format!(
-                    "Line {} is too long. Use 'grep' or read_file with a smaller targeted range.",
-                    i + 1
-                )));
-            }
-            let rendered_line = format!("{:>6}\t{}", i + 1, content);
-            let rendered_len = rendered_line.chars().count() + 1;
-            if total_chars + rendered_len > MAX_OUTPUT_CHARS {
-                truncated_by_size = true;
-                next_offset = Some(i);
-                continue;
-            }
-            total_chars += rendered_len;
-            lines.push(rendered_line);
-        }
-
-        let lines_returned = lines.len();
-        if lines.is_empty() {
-            return Ok(ToolCallResult::success(
-                Some("[No content returned. The file is empty or the requested offset is beyond EOF.]".into()),
-                Some(json!({
-                    "file_path": path_str,
-                    "offset": offset,
-                    "limit": limit,
-                    "lines_returned": 0,
-                    "truncated": false,
-                    "file_size_bytes": file_size_bytes,
-                    "total_lines": total_lines
-                })),
-            ));
-        }
-
-        let truncated = truncated_by_limit || truncated_by_size;
-        let last_line_number = offset + lines_returned;
-
-        if truncated {
-            let truncated_body = lines.join("\n");
-            let resume_offset = next_offset.unwrap_or(end_offset);
-            let reminder = if truncated_by_size {
-                format!(
-                    "<SYSTEM_REMINDER>Read output was truncated before workflow observation limits. File size: {} bytes; total lines: {}. This response includes content through line {}. Use read_file with offset={} and a smaller limit to continue precisely.</SYSTEM_REMINDER>",
-                    file_size_bytes,
-                    total_lines,
-                    last_line_number,
-                    resume_offset
-                )
-            } else {
-                format!(
-                    "<SYSTEM_REMINDER>Read output stopped at the requested limit. File size: {} bytes; total lines: {}. This response includes content through line {}. To continue reading this file, call read_file with offset={} and a suitable smaller limit if needed.</SYSTEM_REMINDER>",
-                    file_size_bytes,
-                    total_lines,
-                    last_line_number,
-                    resume_offset
-                )
-            };
-            return Ok(ToolCallResult::success(
-                Some(format!(
-                    "<truncated_content>\n{}\n</truncated_content>\n{}",
-                    truncated_body, reminder
-                )),
-                Some(json!({
-                    "file_path": path_str,
-                    "offset": offset,
-                    "limit": limit,
-                    "lines_returned": lines_returned,
-                    "truncated": true,
-                    "truncated_by_size": truncated_by_size,
-                    "truncated_by_limit": truncated_by_limit,
-                    "next_offset": resume_offset,
-                    "file_size_bytes": file_size_bytes,
-                    "total_lines": total_lines
-                })),
-            ));
-        } else if offset > 0 {
-            lines.push(format!(
-                "<SYSTEM_REMINDER>Reached EOF after line {}. File size: {} bytes; total lines: {}. Do NOT call read_file with the same offset={} again. If you need earlier context, use a lower offset or grep for a specific symbol.</SYSTEM_REMINDER>",
-                offset + lines_returned,
-                file_size_bytes,
-                total_lines,
-                offset
-            ));
-        }
-
-        Ok(ToolCallResult::success(
-            Some(lines.join("\n")),
-            Some(json!({
-                "file_path": path_str,
-                "offset": offset,
-                "limit": limit,
-                "lines_returned": lines_returned,
-                "truncated": truncated,
-                "next_offset": Value::Null,
-                "file_size_bytes": file_size_bytes,
-                "total_lines": total_lines
-            })),
-        ))
+        execute_read_file(path_str, offset, limit)
     }
 }
 
@@ -383,134 +529,234 @@ impl ToolDefinition for EditFile {
             .ok_or(ToolError::InvalidParams(
                 "new_string is required".to_string(),
             ))?;
-
-        if old_str_unix == new_str_unix {
-            return Err(ToolError::InvalidParams(
-                "old_string and new_string are identical. No changes performed.".into(),
-            ));
-        }
-
         let replace_all = params["replace_all"].as_bool().unwrap_or(false);
-        let raw_content = fs::read_to_string(path_str).map_err(|e| {
-            ToolError::IoError(format!(
-                "Read failed: {}. Ensure the file exists and is readable.",
-                e
-            ))
-        })?;
+        execute_edit_file(path_str, old_str_unix, new_str_unix, replace_all)
+    }
+}
 
-        // 1. Try exact match with original line endings
-        let mut final_content = String::new();
-        let mut match_found = false;
+pub struct PlanReadNote {
+    planning_root: PathBuf,
+}
 
-        // Create the Windows variant of the search/replace strings
-        let old_str_win = old_str_unix.replace("\n", "\r\n");
-        let new_str_win = new_str_unix.replace("\n", "\r\n");
+impl PlanReadNote {
+    pub fn new(planning_root: PathBuf) -> Self {
+        Self { planning_root }
+    }
+}
 
-        // Strategy:
-        // A. If the Windows variant matches, use it (preserves \r\n)
-        // B. If the Unix variant matches, use it (preserves \n)
-        // C. If neither matches, try normalization as a fallback
-        let mut start_line = 0;
-        if raw_content.contains(&old_str_win) {
-            let matches: Vec<usize> = raw_content
-                .match_indices(&old_str_win)
-                .map(|(i, _)| i)
-                .collect();
-            if !replace_all && matches.len() > 1 {
-                return Err(ToolError::ExecutionFailed(format!(
-                    "The old_string is not unique (found {} matches with Windows line endings). \
-                    Please provide more surrounding context to uniquely identify the location.",
-                    matches.len()
-                )));
-            }
+#[async_trait]
+impl ToolDefinition for PlanReadNote {
+    fn name(&self) -> &str {
+        crate::tools::TOOL_PLAN_READ_NOTE
+    }
 
-            start_line = raw_content[..matches[0]].lines().count();
-            final_content = if replace_all {
-                raw_content.replace(&old_str_win, &new_str_win)
-            } else {
-                raw_content.replacen(&old_str_win, &new_str_win, 1)
-            };
-            match_found = true;
-        } else if raw_content.contains(old_str_unix) {
-            let matches: Vec<usize> = raw_content
-                .match_indices(old_str_unix)
-                .map(|(i, _)| i)
-                .collect();
-            if !replace_all && matches.len() > 1 {
-                return Err(ToolError::ExecutionFailed(format!(
-                    "The old_string is not unique (found {} matches with Unix line endings). \
-                    Please provide more surrounding context to uniquely identify the location.",
-                    matches.len()
-                )));
-            }
+    fn description(&self) -> &str {
+        "Reads a planning note from the session-scoped planning directory used by strict manual plan mode.\n\
+        This tool can only access fixed planning files and cannot read arbitrary workspace files.\n\
+        Allowed note_name values: notes.md, plan.md, research.md.\n\
+        Use this tool to review your planning drafts or research notes before calling `submit_plan`."
+    }
 
-            start_line = raw_content[..matches[0]].lines().count();
-            final_content = if replace_all {
-                raw_content.replace(old_str_unix, new_str_unix)
-            } else {
-                raw_content.replacen(old_str_unix, new_str_unix, 1)
-            };
-            match_found = true;
+    fn category(&self) -> ToolCategory {
+        ToolCategory::FileSystem
+    }
+
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Workflow
+    }
+
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        MCPToolDeclaration {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "note_name": {
+                        "type": "string",
+                        "description": "Planning note file to read",
+                        "enum": PLANNING_NOTE_FILES
+                    },
+                    "offset": { "type": "integer", "default": 0, "minimum": 0 },
+                    "limit": { "type": "integer", "default": 2000, "minimum": 1 }
+                },
+                "required": ["note_name"]
+            }),
+            output_schema: None,
+            disabled: false,
+            scope: Some(self.scope()),
         }
+    }
 
-        if !match_found {
-            // D. Extreme Fallback: Normalization (Handles mixed endings within the matched block)
-            let normalized_file = raw_content.replace("\r\n", "\n");
-            if normalized_file.contains(old_str_unix) {
-                let matches: Vec<usize> = normalized_file
-                    .match_indices(old_str_unix)
-                    .map(|(i, _)| i)
-                    .collect();
-                if !replace_all && matches.len() > 1 {
-                    return Err(ToolError::ExecutionFailed(format!(
-                        "The old_string is not unique (found {} matches after normalization). \
-                        Please provide more surrounding context.",
-                        matches.len()
-                    )));
-                }
+    async fn call(&self, params: Value) -> NativeToolResult {
+        let note_name = params["note_name"]
+            .as_str()
+            .ok_or(ToolError::InvalidParams(
+                "note_name is required".to_string(),
+            ))?;
+        let offset = params["offset"].as_u64().unwrap_or(0) as usize;
+        let limit = params["limit"].as_u64().unwrap_or(2000) as usize;
+        let path = planning_note_path(&self.planning_root, note_name)?;
+        execute_read_file(&path.to_string_lossy(), offset, limit)
+    }
+}
 
-                start_line = normalized_file[..matches[0]].lines().count();
-                let replaced_normalized = if replace_all {
-                    normalized_file.replace(old_str_unix, new_str_unix)
-                } else {
-                    normalized_file.replacen(old_str_unix, new_str_unix, 1)
-                };
+pub struct PlanWriteNote {
+    planning_root: PathBuf,
+}
 
-                // Restore style based on majority
-                let use_win = raw_content.contains("\r\n");
-                final_content = if use_win {
-                    replaced_normalized.replace("\n", "\r\n")
-                } else {
-                    replaced_normalized
-                };
-                match_found = true;
-            }
+impl PlanWriteNote {
+    pub fn new(planning_root: PathBuf) -> Self {
+        Self { planning_root }
+    }
+}
+
+#[async_trait]
+impl ToolDefinition for PlanWriteNote {
+    fn name(&self) -> &str {
+        crate::tools::TOOL_PLAN_WRITE_NOTE
+    }
+
+    fn description(&self) -> &str {
+        "Creates or fully replaces a planning note in the strict manual planning directory.\n\
+        This tool is only for planning artifacts, not workspace implementation.\n\
+        Allowed note_name values: notes.md, plan.md, research.md.\n\
+        Use it to capture structured notes, draft the proposed plan, or persist investigation output."
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::FileSystem
+    }
+
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Workflow
+    }
+
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        MCPToolDeclaration {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "note_name": {
+                        "type": "string",
+                        "description": "Planning note file to write",
+                        "enum": PLANNING_NOTE_FILES
+                    },
+                    "content": { "type": "string", "description": "Complete file content to store in the planning note" }
+                },
+                "required": ["note_name", "content"]
+            }),
+            output_schema: None,
+            disabled: false,
+            scope: Some(self.scope()),
         }
+    }
 
-        if !match_found {
-            let lines_count = raw_content.lines().count();
-            return Err(ToolError::ExecutionFailed(format!(
-                "The old_string was not found in the file (checked {} lines). \
-                Please ensure you copied the text EXACTLY, including all whitespace and indentation.",
-                lines_count
-            )));
+    async fn call(&self, params: Value) -> NativeToolResult {
+        let note_name = params["note_name"]
+            .as_str()
+            .ok_or(ToolError::InvalidParams(
+                "note_name is required".to_string(),
+            ))?;
+        let content = params["content"]
+            .as_str()
+            .ok_or(ToolError::InvalidParams("content is required".to_string()))?;
+        let path = planning_note_path(&self.planning_root, note_name)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                ToolError::IoError(format!("Failed to prepare planning directory: {}", e))
+            })?;
         }
-
-        fs::write(path_str, final_content).map_err(|e| {
-            ToolError::IoError(format!("Edit write failed: {}. Check file permissions.", e))
-        })?;
-
-        let result_json = json!({
-            "file_path": path_str,
-            "old_string": old_str_unix,
-            "new_string": new_str_unix,
-            "start_line": start_line + 1,
-        });
+        fs::write(&path, content)
+            .map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
 
         Ok(ToolCallResult::success(
-            Some(serde_json::to_string(&result_json).unwrap_or_default()),
-            Some(result_json),
+            Some("Planning note written successfully.".to_string()),
+            Some(json!({
+                "file_path": path.to_string_lossy(),
+                "note_name": note_name,
+                "bytes_written": content.len()
+            })),
         ))
+    }
+}
+
+pub struct PlanEditNote {
+    planning_root: PathBuf,
+}
+
+impl PlanEditNote {
+    pub fn new(planning_root: PathBuf) -> Self {
+        Self { planning_root }
+    }
+}
+
+#[async_trait]
+impl ToolDefinition for PlanEditNote {
+    fn name(&self) -> &str {
+        crate::tools::TOOL_PLAN_EDIT_NOTE
+    }
+
+    fn description(&self) -> &str {
+        "Edits an existing planning note in the strict manual planning directory using exact string replacement.\n\
+        This tool cannot touch arbitrary workspace files.\n\
+        Allowed note_name values: notes.md, plan.md, research.md.\n\
+        Use this after `plan_read_note` when you need a precise update to an existing planning document."
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::FileSystem
+    }
+
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Workflow
+    }
+
+    fn tool_calling_spec(&self) -> MCPToolDeclaration {
+        MCPToolDeclaration {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "note_name": {
+                        "type": "string",
+                        "description": "Planning note file to edit",
+                        "enum": PLANNING_NOTE_FILES
+                    },
+                    "old_string": { "type": "string", "description": "The exact existing text to replace" },
+                    "new_string": { "type": "string", "description": "The replacement text" },
+                    "replace_all": { "type": "boolean", "default": false }
+                },
+                "required": ["note_name", "old_string", "new_string"]
+            }),
+            output_schema: None,
+            disabled: false,
+            scope: Some(self.scope()),
+        }
+    }
+
+    async fn call(&self, params: Value) -> NativeToolResult {
+        let note_name = params["note_name"]
+            .as_str()
+            .ok_or(ToolError::InvalidParams(
+                "note_name is required".to_string(),
+            ))?;
+        let old_string = params["old_string"]
+            .as_str()
+            .ok_or(ToolError::InvalidParams(
+                "old_string is required".to_string(),
+            ))?;
+        let new_string = params["new_string"]
+            .as_str()
+            .ok_or(ToolError::InvalidParams(
+                "new_string is required".to_string(),
+            ))?;
+        let replace_all = params["replace_all"].as_bool().unwrap_or(false);
+        let path = planning_note_path(&self.planning_root, note_name)?;
+        execute_edit_file(&path.to_string_lossy(), old_string, new_string, replace_all)
     }
 }
 

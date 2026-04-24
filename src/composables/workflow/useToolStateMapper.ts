@@ -7,6 +7,12 @@
 
 import type { ToolViewState, ToolViewStatus } from './useTaskLedger'
 import { isAutoExecuteWorkflowTool } from './toolApproval'
+import {
+  formatDisplayPath,
+  getToolStatusSummary,
+  normalizeShellCommandForDisplay,
+  normalizeToolDisplayText
+} from './toolDisplay'
 
 /** Raw message interface */
 export interface RawMessage {
@@ -202,13 +208,19 @@ function determineStatus(message: RawMessage): ToolViewStatus | null {
  */
 function generateTitle(toolName: string, args?: Record<string, any>): string {
   const formatters: Record<string, (args: Record<string, any>) => string> = {
-    read_file: a => `Read ${a.file_path || a.path || 'file'}`,
-    write_file: a => `Write ${a.file_path || a.path || 'file'}`,
-    edit_file: a => `Edit ${a.file_path || a.path || 'file'}`,
-    list_dir: a => `List ${a.path || a.dir || '.'}`,
-    glob: a => `Glob ${a.pattern || a.glob || ''}`,
-    grep: a => `Grep "${a.pattern || a.query || ''}"`,
-    bash: a => `Bash: ${(a.command || '').substring(0, 40)}`,
+    read_file: a => `Read ${formatDisplayPath(a.file_path || a.path || 'file')}`,
+    write_file: a => `Write ${formatDisplayPath(a.file_path || a.path || 'file')}`,
+    edit_file: a => `Edit ${formatDisplayPath(a.file_path || a.path || 'file')}`,
+    list_dir: a => `List ${formatDisplayPath(a.path || a.dir || '.')}`,
+    glob: a => {
+      const path = formatDisplayPath(a.path || '')
+      return path ? `Glob ${a.pattern || a.glob || ''} in ${path}` : `Glob ${a.pattern || a.glob || ''}`
+    },
+    grep: a => {
+      const path = formatDisplayPath(a.path || '')
+      return path ? `Grep "${a.pattern || a.query || ''}" in ${path}` : `Grep "${a.pattern || a.query || ''}"`
+    },
+    bash: a => `Bash: ${normalizeShellCommandForDisplay(a.command || '')}`,
     web_fetch: a => `Fetch ${a.url || ''}`,
     web_search: a => `Search "${a.query || ''}"`,
     todo_create: () => 'Create Todo',
@@ -222,7 +234,7 @@ function generateTitle(toolName: string, args?: Record<string, any>): string {
 
   const formatter = formatters[toolName]
   if (formatter && args) {
-    return formatter(args)
+    return normalizeToolDisplayText(formatter(args))
   }
 
   return toolName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
@@ -256,18 +268,23 @@ export function deriveToolViewState(
           if (isInternalTool(toolName)) continue
           const args = safeParseArguments(call.arguments || call.function?.arguments)
 
-          const existing = result.get(id)
-          if (!existing) {
-            const autoExecute = isAutoExecuteWorkflowTool(toolName)
-            result.set(id, {
-              toolCallId: id,
-              toolName,
-              status: autoExecute ? 'approved_running' : 'pending',
-              title: generateTitle(toolName, args),
-              summary: autoExecute ? 'Executing...' : 'Awaiting approval',
-              arguments: args,
-              approvalStatus: autoExecute ? 'approved' : 'pending',
-              createdAt: message.createdAt || now,
+            const existing = result.get(id)
+            if (!existing) {
+              const autoExecute = isAutoExecuteWorkflowTool(toolName)
+              const pendingSummary = getToolStatusSummary(
+                toolName,
+                autoExecute ? 'running' : 'pending',
+                autoExecute ? 'Executing...' : 'Awaiting approval'
+              )
+              result.set(id, {
+                toolCallId: id,
+                toolName,
+                status: autoExecute ? 'approved_running' : 'pending',
+                title: generateTitle(toolName, args),
+                summary: pendingSummary,
+                arguments: args,
+                approvalStatus: autoExecute ? 'approved' : 'pending',
+                createdAt: message.createdAt || now,
               updatedAt: now,
               workflowId,
               streamOutput: [],
@@ -303,8 +320,22 @@ export function deriveToolViewState(
 
     // Update only when new status priority >= existing priority
     if (!existing || newPriority >= existingPriority) {
-      const title = meta.title || generateTitle(toolName, args)
-      const summary = meta.summary || (status === 'rejected' ? 'User rejected' : 'Executing...')
+      const title = normalizeToolDisplayText(meta.title || generateTitle(toolName, args))
+      const summary = getToolStatusSummary(
+        toolName,
+        status === 'pending'
+          ? 'pending'
+          : status === 'approved_running'
+            ? 'running'
+            : status === 'rejected'
+              ? 'rejected'
+              : status === 'final_success'
+                ? 'success'
+                : status === 'final_error'
+                  ? 'failed'
+                  : undefined,
+        meta.summary || (status === 'rejected' ? 'User rejected' : 'Executing...')
+      )
 
       result.set(toolCallId, {
         toolCallId,

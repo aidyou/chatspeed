@@ -209,7 +209,7 @@
             display: flex;
             flex-direction: row; // Explicit horizontal
             align-items: flex-start;
-            white-space: nowrap;
+            white-space: normal;
             width: 100%;
             gap: var(--cs-space-sm);
 
@@ -238,21 +238,18 @@
               .tool-name {
                 font-weight: 600;
                 color: var(--cs-text-color-primary);
-                flex: 1;
+                flex: 0 1 auto;
                 min-width: 0;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
+                overflow-wrap: anywhere;
+                white-space: normal;
               }
 
               .tool-target {
                 flex: 0 1 auto;
-                max-width: 50%;
                 color: var(--cs-text-color-secondary);
                 font-size: var(--cs-font-size-sm);
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
+                overflow-wrap: anywhere;
+                white-space: normal;
               }
             }
 
@@ -322,6 +319,12 @@
               font-weight: 600;
               font-size: 14px;
             }
+          }
+
+          .finish-task-summary {
+            margin: var(--cs-space-xs) 0 0 28px;
+            font-family: var(--cs-font-family);
+            color: var(--cs-text-color-primary);
           }
 
           .tool-detail {

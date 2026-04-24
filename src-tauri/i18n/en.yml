@@ -354,6 +354,7 @@ workflow:
   validation: "Validation error: %{details}"
   task_finished: "Task completed"
   summary:
+    edit_file: "Edited"
     submit_plan: "Submit plan"
     todo_create: "Create task"
     todo_update: "Update task: %{subject} -> %{status}"
@@ -363,6 +364,7 @@ workflow:
     todo_status_in_progress: "In Progress"
     todo_status_pending: "Pending"
     todo_status_failed: "Failed"
+    write_file: "Written"
     todo_status_data_missing: "Data missing"
   error:
     cancelled: "Operation cancelled by user"

@@ -4,6 +4,12 @@ import { resolveWorkflowToolIcon } from './toolIcons'
 import { isAutoExecuteWorkflowTool } from './toolApproval'
 import { useI18n } from 'vue-i18n'
 import * as Diff from 'diff'
+import {
+  formatDisplayPath,
+  getToolStatusSummary,
+  normalizeShellCommandForDisplay,
+  normalizeToolDisplayText
+} from './toolDisplay'
 
 /**
  * Composable for managing message processing and display
@@ -253,6 +259,10 @@ export function useWorkflowMessages() {
               const isRejected =
                 ledgerState?.status === 'rejected' || (!!state?.isFinal && !!state?.isRejected)
               const isRunning = ledgerState?.status === 'approved_running' || !!state?.isRunning
+              const completionSummary =
+                name === 'complete_workflow_with_summary' && typeof args.summary === 'string'
+                  ? args.summary.trim()
+                  : ''
               return {
                 id: call.id,
                 icon,
@@ -260,13 +270,21 @@ export function useWorkflowMessages() {
                 action,
                 target,
                 isRejected,
-                summary: isRejected
-                  ? 'User rejected'
-                  : isRunning
-                    ? 'Executing...'
-                    : isAutoExecuteWorkflowTool(name)
+                toolName: name,
+                completionSummary,
+                summary: getToolStatusSummary(
+                  name,
+                  isRejected
+                    ? 'rejected'
+                    : isRunning || isAutoExecuteWorkflowTool(name)
+                      ? 'running'
+                      : 'pending',
+                  isRejected
+                    ? 'User rejected'
+                    : isRunning || isAutoExecuteWorkflowTool(name)
                       ? 'Executing...'
                       : 'Awaiting approval'
+                )
               }
             })
             .filter(call => {
@@ -373,11 +391,20 @@ export function useWorkflowMessages() {
     return '.../' + fileName
   }
 
+  const displayRoots = () => {
+    const workflow = workflowStore.currentWorkflow
+    const roots = [
+      ...(Array.isArray(workflow?.allowedPaths) ? workflow.allowedPaths : []),
+      ...(Array.isArray(workflow?.agentConfig?.allowedPaths) ? workflow.agentConfig.allowedPaths : [])
+    ]
+    return [...new Set(roots.filter(Boolean))]
+  }
+
   // Format tool title with icon, tool type class, and display text
   const formatToolTitle = (name, args) => {
     const toolFormatters = {
       read_file: args => {
-        const path = args.file_path || args.path || ''
+        const path = formatDisplayPath(args.file_path || args.path || '', displayRoots())
         const limit = args.limit
         const offset = args.offset
         let suffix = ''
@@ -386,7 +413,7 @@ export function useWorkflowMessages() {
         } else if (limit !== undefined) {
           suffix = ` L1-${limit}`
         } else if (offset !== undefined) {
-          suffix = ` from L${offset + 1}`
+          suffix = ` L${offset + 1}`
         }
         return {
           icon: resolveWorkflowToolIcon(name, 'file'),
@@ -397,7 +424,7 @@ export function useWorkflowMessages() {
       },
 
       write_file: args => {
-        const path = args.file_path || args.path || ''
+        const path = formatDisplayPath(args.file_path || args.path || '', displayRoots())
         return {
           icon: resolveWorkflowToolIcon(name, 'file'),
           toolType: 'tool-file',
@@ -407,17 +434,17 @@ export function useWorkflowMessages() {
       },
 
       edit_file: args => {
-        const path = args.file_path || args.path || ''
+        const path = formatDisplayPath(args.file_path || args.path || '', displayRoots())
         return {
           icon: resolveWorkflowToolIcon(name, 'edit'),
           toolType: 'tool-file',
-          action: `Edit ${path}`,
-          target: ''
+          action: 'Edit',
+          target: path
         }
       },
 
       list_dir: args => {
-        const path = args.path || args.dir || '.'
+        const path = formatDisplayPath(args.path || args.dir || '.', displayRoots())
         return {
           icon: resolveWorkflowToolIcon(name, 'folder'),
           toolType: 'tool-file',
@@ -428,17 +455,18 @@ export function useWorkflowMessages() {
 
       glob: args => {
         const pattern = args.pattern || args.glob || ''
+        const path = formatDisplayPath(args.path || '', displayRoots())
         return {
           icon: resolveWorkflowToolIcon(name, 'search'),
           toolType: 'tool-file',
           action: `Glob ${pattern}`,
-          target: ''
+          target: path
         }
       },
 
       grep: args => {
         const pattern = args.pattern || args.query || ''
-        const path = args.path || ''
+        const path = formatDisplayPath(args.path || '', displayRoots())
         const action = path ? `Grep "${pattern}" in ${path}` : `Grep "${pattern}"`
         return {
           icon: resolveWorkflowToolIcon(name, 'search'),
@@ -474,11 +502,11 @@ export function useWorkflowMessages() {
       },
 
       bash: args => {
-        const cmd = args.command || ''
+        const cmd = normalizeShellCommandForDisplay(args.command || '', displayRoots())
         return {
           icon: resolveWorkflowToolIcon(name, 'terminal'),
           toolType: 'tool-system',
-          action: `Bash: ${truncateText(cmd, 60)}`,
+          action: `Bash: ${cmd}`,
           target: ''
         }
       },
@@ -631,7 +659,7 @@ export function useWorkflowMessages() {
       finalAction = t('workflow.finishTask')
       finalTarget = ''
     } else if (meta.title && meta.title.trim()) {
-      finalAction = removeSystemReminder(meta.title)
+      finalAction = normalizeToolDisplayText(removeSystemReminder(meta.title), displayRoots())
       finalTarget = '' // Target is usually embedded in the title
     }
 
@@ -641,12 +669,36 @@ export function useWorkflowMessages() {
       finalAction = t('chat.toolResult') || 'Result'
     }
 
+    const fallbackSummary = removeSystemReminder(meta.summary || (isError ? 'Failed' : 'Executing...'))
+    const summaryStatus =
+      executionStatus === 'pending_approval'
+        ? 'pending'
+        : executionStatus === 'running'
+          ? 'running'
+          : executionStatus === 'rejected'
+            ? 'rejected'
+            : executionStatus === 'completed'
+              ? isError
+                ? 'failed'
+                : 'success'
+              : executionStatus === 'failed'
+                ? 'failed'
+                : meta.approval_status === 'pending'
+                  ? 'pending'
+                  : meta.approval_status === 'approved'
+                    ? 'running'
+                    : meta.approval_status === 'rejected'
+                      ? 'rejected'
+                      : isError
+                        ? 'failed'
+                        : undefined
+
     return {
       title: finalAction + (finalTarget ? ` ${finalTarget}` : ''),
       summary:
         name === 'complete_workflow_with_summary'
           ? ''
-          : removeSystemReminder(meta.summary || (isError ? 'Failed' : 'Executing...')),
+          : getToolStatusSummary(name, summaryStatus, fallbackSummary),
       isError: isError,
       displayType: meta.display_type || 'text',
       icon: finalIcon,

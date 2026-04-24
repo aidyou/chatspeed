@@ -1449,8 +1449,6 @@ mod tests {
         ) -> Result<(), WorkflowEngineError> {
             Ok(())
         }
-
-        async fn register_session_tx(&self, _session_id: String, _tx: mpsc::Sender<String>) {}
     }
 
     struct DiagnosticMockExecutor {

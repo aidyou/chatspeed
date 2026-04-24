@@ -14,6 +14,7 @@ import {
 } from '@/composables/workflow/signalTypes';
 import { deriveToolViewState } from '@/composables/workflow/useToolStateMapper';
 import { isAutoExecuteWorkflowTool } from '@/composables/workflow/toolApproval';
+import { getToolStatusSummary } from '@/composables/workflow/toolDisplay';
 
 /**
  * Task Ledger - 统一任务账本模型
@@ -456,9 +457,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
         metadata: {
           ...meta,
           approval_status: 'approved',
-          summary: meta.summary && meta.summary !== 'Awaiting approval'
-            ? meta.summary
-            : 'Executing...'
+          execution_status: 'running',
+          hide_approval_details: true,
+          summary: getToolStatusSummary(
+            meta.tool_name || meta.tool_call?.function?.name || meta.tool_call?.name,
+            'running',
+            'Executing...'
+          )
         }
       }));
       return;
@@ -475,7 +480,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
         toolCallId: toolId,
         status: 'approved_running',
         approvalStatus: 'approved',
-        summary: existing.summary === 'Awaiting approval' ? 'Executing...' : existing.summary
+        summary: getToolStatusSummary(
+          existing.toolName,
+          'running',
+          'Executing...'
+        )
       });
     }
 
@@ -488,22 +497,25 @@ export const useWorkflowStore = defineStore('workflow', () => {
         approval_status: 'approved',
         execution_status: 'running',
         hide_approval_details: true,
-        summary: meta.summary && meta.summary !== 'Awaiting approval'
-          ? meta.summary
-          : 'Executing...'
+        summary: getToolStatusSummary(
+          meta.tool_name || meta.tool_call?.function?.name || meta.tool_call?.name,
+          'running',
+          'Executing...'
+        )
       }
     }));
   };
 
   const markToolRejected = (toolId) => {
     if (!toolId) return;
+    const existing = currentTaskLedger.value?.tools.get(toolId);
 
     if (taskLedgerEnabled.value) {
       upsertToolViewState({
         toolCallId: toolId,
         status: 'rejected',
         approvalStatus: 'rejected',
-        summary: 'User rejected'
+        summary: getToolStatusSummary(existing?.toolName, 'rejected', 'User rejected')
       });
     }
 
@@ -513,7 +525,41 @@ export const useWorkflowStore = defineStore('workflow', () => {
         ...meta,
         approval_status: 'rejected',
         execution_status: 'rejected',
-        summary: 'User rejected'
+        summary: getToolStatusSummary(
+          meta.tool_name || meta.tool_call?.function?.name || meta.tool_call?.name,
+          'rejected',
+          'User rejected'
+        )
+      }
+    }));
+  };
+
+  const markToolPendingApproval = (toolId) => {
+    if (!toolId) return;
+    const existing = currentTaskLedger.value?.tools.get(toolId);
+
+    if (taskLedgerEnabled.value) {
+      upsertToolViewState({
+        toolCallId: toolId,
+        status: 'pending',
+        approvalStatus: 'pending',
+        summary: getToolStatusSummary(existing?.toolName, 'pending', 'Awaiting approval'),
+        force: true
+      });
+    }
+
+    patchToolMessage(toolId, (existing, meta) => ({
+      ...existing,
+      metadata: {
+        ...meta,
+        approval_status: 'pending',
+        execution_status: 'pending_approval',
+        hide_approval_details: false,
+        summary: getToolStatusSummary(
+          meta.tool_name || meta.tool_call?.function?.name || meta.tool_call?.name,
+          'pending',
+          'Awaiting approval'
+        )
       }
     }));
   };
@@ -938,7 +984,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
           toolName: message.metadata?.tool_name || message.metadata?.tool_call?.name,
           status: isError ? 'final_error' : 'final_success',
           title: message.metadata?.title,
-          summary: message.metadata?.summary || (isError ? 'Failed' : 'Completed'),
+          summary: getToolStatusSummary(
+            message.metadata?.tool_name || message.metadata?.tool_call?.name,
+            isError ? 'failed' : 'success',
+            message.metadata?.summary || (isError ? 'Failed' : 'Completed')
+          ),
           result: message.message,
           errorType: isError ? 'execution_error' : undefined,
           approvalStatus: status || 'approved'
@@ -957,7 +1007,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
             toolName,
             status: isAutoExecuteWorkflowTool(toolName) ? 'approved_running' : 'pending',
             title: message.metadata?.title || toolName,
-            summary: isAutoExecuteWorkflowTool(toolName) ? 'Executing...' : 'Awaiting approval',
+            summary: getToolStatusSummary(
+              toolName,
+              isAutoExecuteWorkflowTool(toolName) ? 'running' : 'pending',
+              isAutoExecuteWorkflowTool(toolName) ? 'Executing...' : 'Awaiting approval'
+            ),
             arguments: args,
             approvalStatus: isAutoExecuteWorkflowTool(toolName) ? 'approved' : 'pending'
           });
@@ -996,7 +1050,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
-  const setCurrentContextTokens = (workflowId, totalTokens) => {
+  const setCurrentContextTokens = (workflowId, totalTokens, maxTokens = null) => {
     if (!workflowId) return;
     const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
     if (workflowIndex === -1) return;
@@ -1005,7 +1059,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const executionContext = normalizeExecutionContext(workflow.executionContext) || {};
     workflows.value[workflowIndex].executionContext = {
       ...executionContext,
-      currentContextTokens: typeof totalTokens === 'number' ? totalTokens : null
+      currentContextTokens: typeof totalTokens === 'number' ? totalTokens : null,
+      maxContextTokens: typeof maxTokens === 'number'
+        ? maxTokens
+        : executionContext.maxContextTokens ?? null
     };
   };
 
@@ -1121,6 +1178,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     removeShellPolicyItem,
     markToolApprovedRunning,
     markToolRejected,
+    markToolPendingApproval,
     appendToolStream,
     clearToolStream,
     getToolStream,

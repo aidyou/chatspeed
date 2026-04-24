@@ -264,17 +264,55 @@ impl WorkflowManager {
     }
 
     pub fn register_session_signal_tx(session_id: String, tx: tokio::sync::mpsc::Sender<String>) {
+        Self::register_session_signal_tx_with_source(session_id, tx, "unspecified");
+    }
+
+    pub fn register_session_signal_tx_with_source(
+        session_id: String,
+        tx: tokio::sync::mpsc::Sender<String>,
+        source: &str,
+    ) {
         let Some(mut map) = Self::lock_global_signal_tx() else {
             return;
         };
-        map.insert(session_id, tx);
+        let replaced = map.insert(session_id.clone(), tx).is_some();
+        if replaced {
+            log::warn!(
+                "[WorkflowManager][session={}][event=signal_channel_replaced] Replaced existing GLOBAL_SIGNAL_TX entry, source={}",
+                session_id,
+                source
+            );
+        } else {
+            log::info!(
+                "[WorkflowManager][session={}][event=signal_channel_registered] Registered GLOBAL_SIGNAL_TX entry, source={}",
+                session_id,
+                source
+            );
+        }
     }
 
     pub fn unregister_session_signal_tx(session_id: &str) {
+        Self::unregister_session_signal_tx_with_source(session_id, "unspecified");
+    }
+
+    pub fn unregister_session_signal_tx_with_source(session_id: &str, source: &str) {
         let Some(mut map) = Self::lock_global_signal_tx() else {
             return;
         };
-        map.remove(session_id);
+        let existed = map.remove(session_id).is_some();
+        if existed {
+            log::info!(
+                "[WorkflowManager][session={}][event=signal_channel_unregistered] Removed GLOBAL_SIGNAL_TX entry, source={}",
+                session_id,
+                source
+            );
+        } else {
+            log::warn!(
+                "[WorkflowManager][session={}][event=signal_channel_unregister_miss] GLOBAL_SIGNAL_TX entry already missing, source={}",
+                session_id,
+                source
+            );
+        }
     }
 
     pub fn send_signal_to_session(session_id: &str, signal: String) -> Result<(), String> {

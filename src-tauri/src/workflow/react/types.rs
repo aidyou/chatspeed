@@ -81,6 +81,10 @@ pub enum GatewayPayload {
     /// Current runtime context token estimate after compaction/rebuild.
     ContextUsage {
         total_tokens: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_context_tokens: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_context_tokens: Option<usize>,
     },
     /// Lightweight projection of a sub-agent for the parent session UI.
     #[serde(rename = "sub_agent_progress")]
@@ -116,6 +120,10 @@ pub enum GatewayPayload {
     /// Auto-approved tools list updated
     AutoApprovedToolsUpdated {
         tools: Vec<String>,
+    },
+    /// Workflow agent configuration changed at runtime.
+    AgentConfigUpdated {
+        agent_config: serde_json::Value,
     },
     /// Shell policy updated
     ShellPolicyUpdated {

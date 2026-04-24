@@ -1,7 +1,8 @@
 use serde_json::json;
 
 use crate::tools::{
-    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_EDIT_FILE, TOOL_WRITE_FILE,
+    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_EDIT_FILE,
+    TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
@@ -46,7 +47,9 @@ impl WorkflowExecutor {
 
         if name == TOOL_BASH {
             let command_str = args["command"].as_str().unwrap_or("").trim();
-            if Self::is_smart_mode_read_only_shell_command(command_str) {
+            if Self::is_smart_mode_read_only_shell_command(command_str)
+                || Self::is_smart_mode_safe_build_shell_command(command_str)
+            {
                 return SmartApprovalDecision::AutoApprove;
             }
 
@@ -130,6 +133,19 @@ impl WorkflowExecutor {
                 .any(|&prefix| stage.starts_with(prefix))
     }
 
+    fn has_shell_redirection(stage: &str) -> bool {
+        let stage = stage
+            .replace("2>&1", " ")
+            .replace("1>&2", " ")
+            .replace("2>/dev/null", " ")
+            .replace("2> /dev/null", " ")
+            .replace("1>/dev/null", " ")
+            .replace("1> /dev/null", " ")
+            .replace("&>/dev/null", " ");
+
+        stage.contains('>') || stage.contains('<')
+    }
+
     fn is_safe_shell_filter(stage: &str) -> bool {
         let stage = stage.trim().to_lowercase();
         if stage.is_empty() {
@@ -146,13 +162,8 @@ impl WorkflowExecutor {
             .any(|&prefix| stage.starts_with(prefix))
     }
 
-    fn is_smart_mode_read_only_shell_command(command_str: &str) -> bool {
+    fn strip_workspace_navigation_prefix(command_str: &str) -> String {
         let mut candidate = command_str.trim().to_lowercase();
-        if candidate.is_empty() {
-            return false;
-        }
-
-        // Allow workspace navigation prepended to an otherwise read-only diagnostic command.
         if let Some(rest) = candidate
             .strip_prefix("cd ")
             .or_else(|| candidate.strip_prefix("pushd "))
@@ -164,7 +175,26 @@ impl WorkflowExecutor {
                 }
             }
         }
+        candidate
+    }
 
+    fn is_safe_package_build_stage(stage: &str) -> bool {
+        let tokens = match shlex::split(stage) {
+            Some(tokens) => tokens,
+            None => return false,
+        };
+        if tokens.is_empty() {
+            return false;
+        }
+
+        match tokens[0].as_str() {
+            "npm" | "pnpm" | "yarn" => tokens.get(1).map(String::as_str) == Some("build"),
+            _ => false,
+        }
+    }
+
+    fn is_smart_mode_safe_build_shell_command(command_str: &str) -> bool {
+        let candidate = Self::strip_workspace_navigation_prefix(command_str);
         if candidate.is_empty() {
             return false;
         }
@@ -179,11 +209,55 @@ impl WorkflowExecutor {
 
                     let mut stage_iter = segment.split('|');
                     let first_stage = stage_iter.next().unwrap_or("").trim();
+                    if Self::has_shell_redirection(first_stage) {
+                        return false;
+                    }
+                    if !Self::is_safe_package_build_stage(first_stage) {
+                        return false;
+                    }
+
+                    for stage in stage_iter {
+                        if Self::has_shell_redirection(stage) {
+                            return false;
+                        }
+                        if !Self::is_safe_shell_filter(stage) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
+    fn is_smart_mode_read_only_shell_command(command_str: &str) -> bool {
+        let candidate = Self::strip_workspace_navigation_prefix(command_str);
+        if candidate.is_empty() {
+            return false;
+        }
+
+        for segment in candidate.split("&&") {
+            for segment in segment.split("||") {
+                for segment in segment.split(';') {
+                    let segment = segment.trim();
+                    if segment.is_empty() {
+                        continue;
+                    }
+
+                    let mut stage_iter = segment.split('|');
+                    let first_stage = stage_iter.next().unwrap_or("").trim();
+                    if Self::has_shell_redirection(first_stage) {
+                        return false;
+                    }
                     if !Self::is_read_only_shell_stage(first_stage) {
                         return false;
                     }
 
                     for stage in stage_iter {
+                        if Self::has_shell_redirection(stage) {
+                            return false;
+                        }
                         if !Self::is_safe_shell_filter(stage) {
                             return false;
                         }
@@ -350,15 +424,23 @@ impl WorkflowExecutor {
 
     pub(crate) async fn handle_submit_plan_intercept(
         &mut self,
-        text_part: &str,
+        id: &str,
+        args: &serde_json::Value,
+        _text_part: &str,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        if text_part.trim().is_empty() {
+        let plan_from_args = args
+            .get("plan")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .trim();
+
+        if plan_from_args.is_empty() {
             return Ok(Some(ReinforcedResult {
-                content: "<SYSTEM_REMINDER>Error: You called 'submit_plan' but your plain text response was empty. You MUST provide a summary of your findings and why this plan is recommended in plain text BEFORE the tool call block.</SYSTEM_REMINDER>".into(),
+                content: "<SYSTEM_REMINDER>Error: You called 'submit_plan' without a non-empty `plan` argument. The approved plan MUST come from the structured tool argument `submit_plan.plan`, not from free-form assistant text. Put the complete plan in `plan` and call `submit_plan` again.</SYSTEM_REMINDER>".into(),
                 title: "SubmitPlan Error".to_string(),
-                summary: "Missing summary".to_string(),
+                summary: "Missing plan payload".to_string(),
                 is_error: true,
-                error_type: Some("NoSummary".into()),
+                error_type: Some("MissingPlan".into()),
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
@@ -377,20 +459,8 @@ impl WorkflowExecutor {
             return Ok(None);
         }
 
-        self.update_state(WorkflowState::AwaitingApproval).await?;
-
-        let plan_str = text_part.to_string();
-
-        Ok(Some(ReinforcedResult {
-            content: format!("Proposed Plan:\n\n{}", plan_str),
-            title: "Submit Plan".to_string(),
-            summary: "Awaiting approval".to_string(),
-            is_error: false,
-            error_type: None,
-            display_type: "text".to_string(),
-            approval_status: None,
-            observation_kind: None,
-        }))
+        self.handle_approval_interception(id, TOOL_SUBMIT_PLAN, args, None)
+            .await
     }
 
     pub(crate) async fn handle_ask_user_intercept(
@@ -670,9 +740,11 @@ impl WorkflowExecutor {
                     } else if self.policy.approval_level == ApprovalLevel::Smart {
                         // In Smart mode, allow read-only diagnostic commands even if they use
                         // command chaining or output shaping to trim noisy output.
-                        if Self::is_smart_mode_read_only_shell_command(command_str) {
+                        if Self::is_smart_mode_read_only_shell_command(command_str)
+                            || Self::is_smart_mode_safe_build_shell_command(command_str)
+                        {
                             log::info!(
-                                "WorkflowExecutor {}: Auto-approving read-only diagnostic bash command in Smart mode: {}",
+                                "WorkflowExecutor {}: Auto-approving low-risk bash command in Smart mode: {}",
                                 self.session_id, command_str
                             );
                             return Ok(None);
@@ -767,7 +839,7 @@ impl WorkflowExecutor {
             (custom.clone(), serde_json::json!(custom))
         } else {
             match name {
-                TOOL_EDIT_FILE | TOOL_WRITE_FILE => {
+                TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE => {
                     display_type = "diff".to_string();
                     let mut preview_args = args.clone();
                     attach_display_context(&mut preview_args, false);
@@ -833,6 +905,21 @@ impl WorkflowExecutor {
                         }),
                     )
                 }
+                TOOL_SUBMIT_PLAN => {
+                    display_type = "markdown".to_string();
+                    let plan = args
+                        .get("plan")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    let preview = if plan.is_empty() {
+                        serde_json::to_string_pretty(args).unwrap_or_default()
+                    } else {
+                        plan
+                    };
+                    (preview.clone(), serde_json::json!(preview))
+                }
                 _ => {
                     let msg = format!(
                         "Tool: {}\nArguments: {}",
@@ -848,7 +935,8 @@ impl WorkflowExecutor {
         let stash_obj = json!({
             "name": name,
             "arguments": args,
-            "details": content_str.clone()
+            "details": content_str.clone(),
+            "display_type": display_type.clone()
         });
         self.pending_approvals.insert(id.to_string(), stash_obj);
 
@@ -1020,6 +1108,46 @@ mod tests {
             ),
             SmartApprovalDecision::AutoApprove
         );
+    }
+
+    #[test]
+    fn smart_mode_auto_approves_common_package_build_commands() {
+        for command in [
+            "npm build",
+            "pnpm build",
+            "yarn build",
+            "cd /repo && pnpm build | tail -20",
+        ] {
+            assert_eq!(
+                WorkflowExecutor::smart_mode_approval_decision(
+                    TOOL_BASH,
+                    &json!({ "command": command })
+                ),
+                SmartApprovalDecision::AutoApprove,
+                "command should be auto-approved: {}",
+                command
+            );
+        }
+
+        for command in [
+            "npm run build",
+            "npm run -s build",
+            "npm run-script build",
+            "pnpm run build",
+            "yarn run build",
+            "pnpm tauri dev",
+            "pnpm dev",
+        ] {
+            assert_eq!(
+                WorkflowExecutor::smart_mode_approval_decision(
+                    TOOL_BASH,
+                    &json!({ "command": command })
+                ),
+                SmartApprovalDecision::ReviewByUser,
+                "command should require user approval: {}",
+                command
+            );
+        }
     }
 
     #[test]

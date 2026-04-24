@@ -37,6 +37,7 @@ fn gateway_payload_name(payload: &GatewayPayload) -> &'static str {
         GatewayPayload::SubAgentProgress { .. } => "sub_agent_progress",
         GatewayPayload::Notification { .. } => "notification",
         GatewayPayload::AutoApprovedToolsUpdated { .. } => "auto_approved_tools_updated",
+        GatewayPayload::AgentConfigUpdated { .. } => "agent_config_updated",
         GatewayPayload::ShellPolicyUpdated { .. } => "shell_policy_updated",
         GatewayPayload::ToolStream { .. } => "tool_stream",
         GatewayPayload::Error { .. } => "error",

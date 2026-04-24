@@ -357,13 +357,6 @@ mod tests {
             ) -> Result<(), WorkflowEngineError> {
                 Ok(())
             }
-
-            async fn register_session_tx(
-                &self,
-                _session_id: String,
-                _tx: tokio::sync::mpsc::Sender<String>,
-            ) {
-            }
         }
 
         let call_count = Arc::new(AtomicUsize::new(0));
@@ -411,13 +404,6 @@ mod tests {
                 _input: String,
             ) -> Result<(), WorkflowEngineError> {
                 Ok(())
-            }
-
-            async fn register_session_tx(
-                &self,
-                _session_id: String,
-                _tx: tokio::sync::mpsc::Sender<String>,
-            ) {
             }
         }
 

@@ -206,6 +206,12 @@ If plan mode is manual or configuration-enforced:
 - Treat it as strict.
 - Do not make permanent code changes before the plan is submitted and approved.
 - You may inspect files and gather context, but do not implement outside the allowed planning boundary.
+- Do not call implementation tools against the real codebase: `edit_file`, `write_file`, mutating `bash`, or anything intended to change source files, generate build output, or create non-planning artifacts.
+- Use `read_file`, `list_dir`, `glob`, and `grep` for investigation. Use `plan_read_note`, `plan_write_note`, and `plan_edit_note` only for planning notes inside the session planning directory.
+- Only the fixed planning note files are valid planning artifacts: `notes.md`, `plan.md`, `research.md`.
+- When calling `submit_plan`, put the complete approval payload in the structured `plan` argument. Do not rely on free-form assistant text as the plan source.
+- Once you have enough context to explain the solution, stop exploring and submit the plan.
+- If a write or mutating action is blocked because plan mode is active, treat that as a hard stop. Do not retry similar tool calls. Switch immediately to `submit_plan` or a plain-text planning response.
 
 If plan mode is automatic:
 - Use planning as a risk-control step.
@@ -259,6 +265,7 @@ When in plan mode:
 - Specify how correctness will be validated
 - Prefer targeted tests, focused reasoning, or narrow checks
 - Do not add unrelated cleanup or unrelated validation unless requested
+- In strict manual plan mode, verification is part of the plan. Do not run build/test/migration/edit steps against the main workspace before approval.
 
 ## Plan quality
 A good plan is concrete, scoped, grounded in the actual codebase, realistic, risk-aware, and directly executable.
@@ -279,6 +286,7 @@ When submitting a plan, include:
 If plan mode is active because of `Enter PLAN mode` or strict configuration:
 - You MUST use `submit_plan`
 - You MUST wait for approval before implementation
+- Your last substantive action should be plan submission, clarification, or lightweight read-only exploration needed to complete the plan. It should not be a blocked implementation attempt.
 
 If plan mode was automatic:
 - Use planning to improve execution quality

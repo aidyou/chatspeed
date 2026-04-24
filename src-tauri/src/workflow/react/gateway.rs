@@ -23,9 +23,6 @@ pub trait Gateway: Send + Sync {
         session_id: &str,
         input: String,
     ) -> Result<(), WorkflowEngineError>;
-
-    /// Registers a sender for a specific session to receive external signals
-    async fn register_session_tx(&self, session_id: String, tx: mpsc::Sender<String>);
 }
 
 /// A Gateway implementation specifically for Tauri with throttling and batching
@@ -150,9 +147,47 @@ impl TauriGateway {
         tx
     }
 
-    pub async fn unregister_session(&self, session_id: &str) {
-        self.input_senders.lock().await.remove(session_id);
-        self.event_senders.lock().await.remove(session_id);
+    pub async fn unregister_session_with_source(&self, session_id: &str, source: &str) {
+        let input_removed = self.input_senders.lock().await.remove(session_id).is_some();
+        let event_removed = self.event_senders.lock().await.remove(session_id).is_some();
+        if input_removed || event_removed {
+            log::info!(
+                "[Workflow][session={}][phase=gateway][event=session_unregistered] Removed gateway channels, input_removed={}, event_removed={}, source={}",
+                session_id,
+                input_removed,
+                event_removed,
+                source
+            );
+        } else {
+            log::warn!(
+                "[Workflow][session={}][phase=gateway][event=session_unregister_miss] Gateway channels already missing, source={}",
+                session_id,
+                source
+            );
+        }
+    }
+
+    pub async fn register_session_tx_with_source(
+        &self,
+        session_id: String,
+        tx: mpsc::Sender<String>,
+        source: &str,
+    ) {
+        let mut senders = self.input_senders.lock().await;
+        let replaced = senders.insert(session_id.clone(), tx).is_some();
+        if replaced {
+            log::warn!(
+                "[Workflow][session={}][phase=gateway][event=signal_channel_replaced] Replaced existing gateway input sender, source={}",
+                session_id,
+                source
+            );
+        } else {
+            log::info!(
+                "[Workflow][session={}][phase=gateway][event=signal_channel_registered] Registered gateway input sender, source={}",
+                session_id,
+                source
+            );
+        }
     }
 }
 
@@ -204,14 +239,5 @@ impl Gateway for TauriGateway {
             );
             Err(WorkflowEngineError::GatewayInputChannelMissing)
         }
-    }
-
-    async fn register_session_tx(&self, session_id: String, tx: mpsc::Sender<String>) {
-        log::info!(
-            "[Workflow][session={}][phase=gateway] Registering signal channel",
-            session_id
-        );
-        let mut senders = self.input_senders.lock().await;
-        senders.insert(session_id, tx);
     }
 }

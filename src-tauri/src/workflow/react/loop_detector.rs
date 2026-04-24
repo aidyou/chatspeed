@@ -3,8 +3,8 @@ use std::collections::VecDeque;
 /// Window size for the repetition detector (number of recent tool calls to inspect).
 const LOOP_DETECT_WINDOW: usize = 18;
 
-/// Minimum repeat count within the window that triggers a loop warning.
-const LOOP_REPEAT_THRESHOLD: usize = 3;
+/// Minimum consecutive identical tool calls that trigger a loop warning.
+const LOOP_IDENTICAL_CONSECUTIVE_THRESHOLD: usize = 3;
 
 /// Minimum consecutive repeated tool-call sequence count before surfacing a warning.
 const LOOP_SEQUENCE_REPEAT_THRESHOLD: usize = 3;
@@ -87,33 +87,35 @@ impl LoopDetector {
         let args_hash = hasher.finish();
 
         let key = (tool_name.to_string(), args_hash);
-        let repeat_count = self
-            .recent_calls
-            .iter()
-            .filter(|c| c.0 == key.0 && c.1 == key.1)
-            .count();
-
         self.recent_calls.push_back(key);
         if self.recent_calls.len() > LOOP_DETECT_WINDOW {
             self.recent_calls.pop_front();
         }
 
-        if repeat_count >= LOOP_REPEAT_THRESHOLD {
+        let consecutive_count = self
+            .recent_calls
+            .iter()
+            .rev()
+            .take_while(|(recent_tool_name, recent_args_hash)| {
+                recent_tool_name == tool_name && *recent_args_hash == args_hash
+            })
+            .count();
+
+        if consecutive_count >= LOOP_IDENTICAL_CONSECUTIVE_THRESHOLD {
             let task_output_guidance = if tool_name == crate::tools::TOOL_SUB_AGENT_OUTPUT {
                 "\nFor sub_agent_output specifically: do NOT call sub_agent_output again for the same missing or unavailable task_id. sub_agent_output only retrieves results for sub-agent IDs returned by sub_agent_run; it is not a final-answer/output tool. If no valid sub-agent exists, continue with another appropriate tool or report the limitation."
             } else {
                 ""
             };
             Some(format!(
-                "ERROR: LOOP DETECTED\n<SYSTEM_REMINDER>You have called '{}' with identical arguments {} times \
-                in the last {} steps. This is unproductive repetition. You MUST change your approach NOW:\n\
+                "ERROR: LOOP DETECTED\n<SYSTEM_REMINDER>You have called '{}' with identical arguments {} times consecutively. \
+                This is unproductive repetition. You MUST change your approach NOW:\n\
                 1. If searching the web: try completely different keywords or a different data source.\n\
                 2. If fetching a URL: the content may be unavailable — mark the task as 'data_missing' and continue.\n\
                 3. If all alternatives are exhausted: accept the limitation and move to the next task.{}\n\
                 Do NOT call '{}' with the same parameters again.</SYSTEM_REMINDER>",
                 tool_name,
-                repeat_count + 1,
-                LOOP_DETECT_WINDOW,
+                consecutive_count,
                 task_output_guidance,
                 tool_name
             ))
@@ -170,6 +172,12 @@ impl LoopDetector {
             if !repeated {
                 continue;
             }
+            if !pattern
+                .iter()
+                .all(|(tool_name, _)| is_context_gathering_tool(tool_name))
+            {
+                continue;
+            }
 
             let tool_summary = pattern
                 .iter()
@@ -193,11 +201,24 @@ impl LoopDetector {
     }
 }
 
+fn is_context_gathering_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        crate::tools::TOOL_GREP
+            | crate::tools::TOOL_GLOB
+            | crate::tools::TOOL_LIST_DIR
+            | crate::tools::TOOL_READ_FILE
+            | crate::tools::TOOL_WEB_FETCH
+            | crate::tools::TOOL_WEB_SEARCH
+            | crate::tools::TOOL_SUB_AGENT_OUTPUT
+    )
+}
+
 fn normalize_response_text(response_text: &str) -> Option<String> {
     let normalized = response_text
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+        .chars()
+        .filter(|value| !value.is_whitespace())
+        .collect::<String>();
     if normalized.is_empty() {
         None
     } else {
@@ -217,10 +238,30 @@ mod tests {
 
         assert!(detector.record_and_check("read_file", &args).is_none());
         assert!(detector.record_and_check("read_file", &args).is_none());
-        assert!(detector.record_and_check("read_file", &args).is_none());
-
         let warning = detector.record_and_check("read_file", &args);
         assert!(warning.is_some(), "expected repeated tool call warning");
+    }
+
+    #[test]
+    fn does_not_count_interleaved_identical_calls_as_identical_loop() {
+        let mut detector = LoopDetector::new();
+        let bash_args = json!({"command":"cargo check --manifest-path src-tauri/Cargo.toml"});
+        let edit_a = json!({
+            "file_path":"/tmp/demo.rs",
+            "old_string":"let a = 1;",
+            "new_string":"let a = 2;"
+        });
+        let edit_b = json!({
+            "file_path":"/tmp/demo.rs",
+            "old_string":"let b = 1;",
+            "new_string":"let b = 2;"
+        });
+
+        assert!(detector.record_and_check("bash", &bash_args).is_none());
+        assert!(detector.record_and_check("edit_file", &edit_a).is_none());
+        assert!(detector.record_and_check("bash", &bash_args).is_none());
+        assert!(detector.record_and_check("edit_file", &edit_b).is_none());
+        assert!(detector.record_and_check("bash", &bash_args).is_none());
     }
 
     #[test]
@@ -281,5 +322,21 @@ mod tests {
         }
 
         assert!(warning.is_some(), "expected repeated tool sequence warning");
+    }
+
+    #[test]
+    fn does_not_flag_edit_verify_cycles_as_repeated_sequence() {
+        let mut detector = LoopDetector::new();
+        let bash_args = json!({"command":"cargo check --manifest-path src-tauri/Cargo.toml"});
+        let edit_args = json!({
+            "file_path":"/tmp/demo.rs",
+            "old_string":"old",
+            "new_string":"new"
+        });
+
+        for _ in 0..3 {
+            assert!(detector.record_and_check("edit_file", &edit_args).is_none());
+            assert!(detector.record_and_check("bash", &bash_args).is_none());
+        }
     }
 }

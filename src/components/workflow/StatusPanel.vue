@@ -246,6 +246,7 @@ import { useI18n } from 'vue-i18n'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
 import { resolveWorkflowToolIcon } from '@/composables/workflow/toolIcons'
+import { normalizeToolDisplayText } from '@/composables/workflow/toolDisplay'
 import { invokeWrapper } from '@/libs/tauri'
 
 const { t } = useI18n()
@@ -292,6 +293,8 @@ const PANEL_HEIGHT = 200
 const COLLAPSED_WIDTH = 140
 const COLLAPSED_HEIGHT = 40
 const TRIGGER_SIZE = 44
+const DEFAULT_RIGHT = 20
+const DEFAULT_TOP = 200
 const CHILD_AGENT_LIMIT = 5
 const childSnapshotProgress = ref(new Map())
 const MIN_TOP_GAP = 5
@@ -460,7 +463,7 @@ const getToolInfo = (name, metadata = {}) => {
 
   return {
     ...info,
-    shortName: metadata.title || name.replace(/_/g, ' ')
+    shortName: normalizeToolDisplayText(metadata.title || name.replace(/_/g, ' '))
   }
 }
 
@@ -842,10 +845,10 @@ const getStatusIcon = status => {
 const panelStyle = computed(() => {
   if (!isPositioned.value) {
     return {
-      right: '20px',
-      bottom: '220px',
+      right: `${DEFAULT_RIGHT}px`,
+      top: `${DEFAULT_TOP}px`,
       left: 'auto',
-      top: 'auto'
+      bottom: 'auto'
     }
   }
 
@@ -862,10 +865,10 @@ const panelStyle = computed(() => {
 const triggerStyle = computed(() => {
   if (!isPositioned.value) {
     return {
-      right: '20px',
-      bottom: '220px',
+      right: `${DEFAULT_RIGHT}px`,
+      top: `${DEFAULT_TOP}px`,
       left: 'auto',
-      top: 'auto'
+      bottom: 'auto'
     }
   }
 
@@ -955,6 +958,90 @@ const stopDrag = () => {
   savePosition()
 }
 
+const getPanelMode = () => {
+  if (!isVisible.value) return 'hidden'
+  return isCollapsed.value ? 'collapsed' : 'expanded'
+}
+
+const getModeDimensions = (mode = getPanelMode()) => {
+  if (mode === 'hidden') {
+    return { width: TRIGGER_SIZE, height: TRIGGER_SIZE }
+  }
+  if (mode === 'collapsed') {
+    return { width: COLLAPSED_WIDTH, height: COLLAPSED_HEIGHT }
+  }
+  return { width: PANEL_WIDTH, height: panelRef.value?.offsetHeight || PANEL_HEIGHT }
+}
+
+const constrainPoint = (point, mode = getPanelMode()) => {
+  const { width, height } = getModeDimensions(mode)
+  const topInset = getSafeTopInset()
+  const bottomReserved = mode === 'expanded' ? 150 : 0
+  return {
+    x: Math.max(0, Math.min(point.x, window.innerWidth - width)),
+    y: Math.max(topInset, Math.min(point.y, window.innerHeight - height - bottomReserved))
+  }
+}
+
+const defaultPositionForMode = (mode = getPanelMode()) => {
+  const { width } = getModeDimensions(mode)
+  return constrainPoint(
+    {
+      x: window.innerWidth - width - DEFAULT_RIGHT,
+      y: DEFAULT_TOP
+    },
+    mode
+  )
+}
+
+const storageKeyForMode = (mode, suffix) => `status-panel-${mode}-${suffix}`
+
+const savePositionForMode = (mode = getPanelMode()) => {
+  const { width, height } = getModeDimensions(mode)
+  const constrained = constrainPoint(position.value, mode)
+  position.value = constrained
+  edgeDistance.value = {
+    right: window.innerWidth - constrained.x - width,
+    bottom: window.innerHeight - constrained.y - height
+  }
+  localStorage.setItem(storageKeyForMode(mode, 'position'), JSON.stringify(constrained))
+  localStorage.setItem(storageKeyForMode(mode, 'edge-distance'), JSON.stringify(edgeDistance.value))
+  localStorage.setItem('status-panel-position', JSON.stringify(constrained))
+  localStorage.setItem('status-panel-edge-distance', JSON.stringify(edgeDistance.value))
+}
+
+const restorePositionForMode = (mode = getPanelMode()) => {
+  const saved = localStorage.getItem(storageKeyForMode(mode, 'position'))
+  const savedEdge = localStorage.getItem(storageKeyForMode(mode, 'edge-distance'))
+  const legacySaved = localStorage.getItem('status-panel-position')
+  const legacyEdge = localStorage.getItem('status-panel-edge-distance')
+  const { width, height } = getModeDimensions(mode)
+
+  if (savedEdge || (!saved && legacyEdge)) {
+    const parsedEdge = JSON.parse(savedEdge || legacyEdge)
+    edgeDistance.value = parsedEdge
+    position.value = constrainPoint(
+      {
+        x: window.innerWidth - parsedEdge.right - width,
+        y: window.innerHeight - parsedEdge.bottom - height
+      },
+      mode
+    )
+    isPositioned.value = true
+    return
+  }
+
+  if (saved || legacySaved) {
+    const parsedPosition = JSON.parse(saved || legacySaved)
+    position.value = constrainPoint(parsedPosition, mode)
+    isPositioned.value = true
+    return
+  }
+
+  position.value = defaultPositionForMode(mode)
+  isPositioned.value = true
+}
+
 // Trigger button drag
 const startTriggerDrag = e => {
   hasDragged.value = false
@@ -1021,10 +1108,6 @@ const stopTriggerDrag = () => {
 
   // Save position and edge distance
   if (hasDragged.value) {
-    edgeDistance.value = {
-      right: window.innerWidth - position.value.x - TRIGGER_SIZE,
-      bottom: window.innerHeight - position.value.y - TRIGGER_SIZE
-    }
     savePosition()
   }
 
@@ -1041,91 +1124,41 @@ const onTriggerClick = () => {
 
 // Toggle collapse state (maximize -> minimize)
 const toggleCollapse = () => {
+  savePositionForMode(getPanelMode())
   if (isCollapsed.value) {
-    // Expand: reset to default position
     isCollapsed.value = false
-    isPositioned.value = false
-    localStorage.removeItem('status-panel-position')
     localStorage.setItem('status-panel-collapsed', 'false')
   } else {
-    // Collapse: reset to default position
     isCollapsed.value = true
-    isPositioned.value = false
-    localStorage.removeItem('status-panel-position')
     localStorage.setItem('status-panel-collapsed', 'true')
   }
+  nextTick(() => restorePositionForMode(getPanelMode()))
 }
 
 // Hide panel (becomes small circle)
 const hidePanel = () => {
+  savePositionForMode(getPanelMode())
   isVisible.value = false
   localStorage.setItem('status-panel-visible', 'false')
-  // Reset to default position (bottom-right)
-  isPositioned.value = false
-  localStorage.removeItem('status-panel-position')
+  nextTick(() => restorePositionForMode('hidden'))
 }
 
 // Show panel (restore to maximized)
 const showPanel = () => {
+  savePositionForMode('hidden')
   isVisible.value = true
   isCollapsed.value = false
   localStorage.setItem('status-panel-visible', 'true')
   localStorage.setItem('status-panel-collapsed', 'false')
-
-  // Always use default position when restoring (bottom-right, above input box)
-  // Since position is reset when closing
-  isPositioned.value = false
-  localStorage.removeItem('status-panel-position')
+  nextTick(() => restorePositionForMode('expanded'))
 }
 
 const savePosition = () => {
-  localStorage.setItem('status-panel-position', JSON.stringify(position.value))
-  localStorage.setItem('status-panel-edge-distance', JSON.stringify(edgeDistance.value))
+  savePositionForMode(getPanelMode())
 }
 
 const restorePosition = () => {
   try {
-    const saved = localStorage.getItem('status-panel-position')
-    const savedEdge = localStorage.getItem('status-panel-edge-distance')
-
-    if (saved && savedEdge) {
-      const savedPos = JSON.parse(saved)
-      const savedEdgeDist = JSON.parse(savedEdge)
-
-      // Restore edge distance
-      edgeDistance.value = savedEdgeDist
-
-      // Calculate position from edge distance
-      const width = TRIGGER_SIZE
-      const height = TRIGGER_SIZE
-      const topInset = getSafeTopInset()
-      position.value = {
-        x: Math.max(
-          0,
-          Math.min(window.innerWidth - savedEdgeDist.right - width, window.innerWidth - width)
-        ),
-        y: Math.max(
-          topInset,
-          Math.min(window.innerHeight - savedEdgeDist.bottom - height, window.innerHeight - height)
-        )
-      }
-      isPositioned.value = true
-    } else if (saved) {
-      // Fallback to old position format (backward compatibility)
-      const savedPos = JSON.parse(saved)
-      const topInset = getSafeTopInset()
-      position.value = {
-        x: Math.max(0, Math.min(savedPos.x, window.innerWidth - TRIGGER_SIZE)),
-        y: Math.max(topInset, Math.min(savedPos.y, window.innerHeight - TRIGGER_SIZE))
-      }
-      // Calculate edge distance from absolute position
-      edgeDistance.value = {
-        right: window.innerWidth - position.value.x - TRIGGER_SIZE,
-        bottom: window.innerHeight - position.value.y - TRIGGER_SIZE
-      }
-      isPositioned.value = true
-    }
-
     const savedCollapsed = localStorage.getItem('status-panel-collapsed')
     if (savedCollapsed !== null) {
       isCollapsed.value = savedCollapsed === 'true'
@@ -1135,6 +1168,8 @@ const restorePosition = () => {
     if (savedVisible !== null) {
       isVisible.value = savedVisible === 'true'
     }
+
+    restorePositionForMode(getPanelMode())
   } catch (e) {
     console.error('Failed to restore panel state:', e)
   }
@@ -1180,36 +1215,7 @@ onMounted(() => {
   // Ensure panel stays within viewport on initial load
   // If not positioned yet, we need to verify default position doesn't overflow
   if (!isPositioned.value) {
-    const panelHeight = PANEL_HEIGHT
-    const panelWidth = PANEL_WIDTH
-    const defaultRight = 20
-    const defaultBottom = 220
-
-    // Calculate what left/top would be for default right/bottom positioning
-    let targetLeft = window.innerWidth - panelWidth - defaultRight
-    let targetTop = window.innerHeight - panelHeight - defaultBottom
-
-    // Constrain to viewport bounds with 20px margin
-    targetLeft = Math.max(20, Math.min(targetLeft, window.innerWidth - panelWidth - 20))
-    targetTop = Math.max(
-      getSafeTopInset(),
-      Math.min(targetTop, window.innerHeight - panelHeight - 20)
-    )
-
-    // If constrained position differs from default, we need to set it explicitly
-    if (
-      targetLeft !== window.innerWidth - panelWidth - defaultRight ||
-      targetTop !== window.innerHeight - panelHeight - defaultBottom
-    ) {
-      position.value = { x: targetLeft, y: targetTop }
-      isPositioned.value = true
-      // Calculate edge distance for this position
-      edgeDistance.value = {
-        right: window.innerWidth - position.value.x - panelWidth,
-        bottom: window.innerHeight - position.value.y - panelHeight
-      }
-      savePosition()
-    }
+    restorePositionForMode(getPanelMode())
   } else {
     // Already positioned (from localStorage), ensure it's still valid
     constrainPosition()

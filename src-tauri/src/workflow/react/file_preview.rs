@@ -123,6 +123,7 @@ pub fn attach_display_context(preview_args: &mut Value, prefer_updated_content: 
     };
 
     preview_obj.insert("context_before".to_string(), json!(before_lines));
+    preview_obj.insert("start_line".to_string(), json!(safe_start_line));
     preview_obj.insert(
         "context_before_start_line".to_string(),
         json!(before_start_line.max(1)),

@@ -236,17 +236,6 @@ const {
   shouldShowToolRawContent
 } = useWorkflowMessages()
 
-// Approval composable
-const {
-  approvalLoading,
-  activeApprovalId,
-  onApproveAction,
-  onApproveAllAction,
-  onRejectAction
-} = useWorkflowApproval({
-  currentWorkflowId: computed(() => workflowStore.currentWorkflowId)
-})
-
 // ============================================================
 // Composables that DEPEND on local state
 // ============================================================
@@ -326,6 +315,9 @@ const {
   canContinue,
   activeModelName,
   pendingApprovalList,
+  getPendingApprovalEntry,
+  clearPendingApprovalEntry,
+  upsertPendingApprovalEntry,
   canSwitchWorkflow,
   selectWorkflow,
   startNewWorkflow,
@@ -342,6 +334,20 @@ const {
   createNewWorkflow: coreCreateNewWorkflow,
   toggleFinalAuditMode
 } = core
+
+// Approval composable
+const {
+  approvalLoading,
+  activeApprovalId,
+  onApproveAction,
+  onApproveAllAction,
+  onRejectAction
+} = useWorkflowApproval({
+  currentWorkflowId: computed(() => workflowStore.currentWorkflowId),
+  getPendingApprovalEntry,
+  clearPendingApprovalEntry,
+  upsertPendingApprovalEntry
+})
 
 // Set up the onSendMessage callback for the input composable
 inputComposable.onSendMessage.value = async () => {

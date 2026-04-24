@@ -47,6 +47,9 @@ pub struct ExecutionPolicy {
     pub phase: ExecutionPhase,
     /// Level of automatic approval for tool calls
     pub approval_level: ApprovalLevel,
+    /// True only for user-activated strict planning mode.
+    #[serde(default)]
+    pub strict_manual_planning: bool,
 }
 
 impl ExecutionPolicy {
@@ -64,7 +67,32 @@ impl ExecutionPolicy {
             path_restriction: PathRestriction::SandboxOnly,
             phase: ExecutionPhase::Planning,
             approval_level: ApprovalLevel::Default,
+            strict_manual_planning: false,
         }
+    }
+
+    /// Strict policy for user-activated planning mode.
+    pub fn planning_strict() -> Self {
+        let mut policy = Self::planning();
+        policy.strict_manual_planning = true;
+        policy.name = "PlanningStrict".to_string();
+        policy
+    }
+
+    pub fn is_strict_manual_planning(&self) -> bool {
+        self.phase == ExecutionPhase::Planning && self.strict_manual_planning
+    }
+
+    pub fn allows_generic_bash(&self) -> bool {
+        !self.is_strict_manual_planning()
+    }
+
+    pub fn allows_generic_workspace_mutation_tools(&self) -> bool {
+        !self.is_strict_manual_planning()
+    }
+
+    pub fn allows_planning_note_tools(&self) -> bool {
+        self.is_strict_manual_planning()
     }
 
     /// Policy for the Execution phase (following a plan)
@@ -82,6 +110,7 @@ impl ExecutionPolicy {
             path_restriction: PathRestriction::FullAuthorized,
             phase: ExecutionPhase::Implementation,
             approval_level: ApprovalLevel::Default,
+            strict_manual_planning: false,
         }
     }
 
@@ -100,6 +129,7 @@ impl ExecutionPolicy {
             path_restriction: PathRestriction::FullAuthorized,
             phase: ExecutionPhase::Standard,
             approval_level: ApprovalLevel::Default,
+            strict_manual_planning: false,
         }
     }
 }
