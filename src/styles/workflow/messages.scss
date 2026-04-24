@@ -563,14 +563,18 @@
               background: var(--cs-bg-color);
             }
 
-            &__task-toggle,
-            &__result {
+            &__result,
+            &__task-toggle {
               min-width: 0;
             }
 
             &__result {
-              border-top: 1px solid var(--cs-border-color);
-              padding-top: 10px;
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
+              padding: 10px 12px;
+              border-radius: 6px;
+              background: var(--cs-bg-color);
             }
 
             &__task-toggle,
@@ -606,6 +610,12 @@
               color: var(--cs-text-color-secondary);
               margin-top: 2px;
               flex-shrink: 0;
+              transition: transform 0.2s ease;
+            }
+
+            &__task-chevron.expanded,
+            &__result-chevron.expanded {
+              transform: rotate(180deg);
             }
 
             &__task-body,

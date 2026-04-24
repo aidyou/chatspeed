@@ -34,7 +34,9 @@
         </div>
         <div v-else class="ai-content chat">
           <div v-if="isExplorationBatchMessage(message)" class="exploration-card">
-            <div class="exploration-card__header" @click="$emit('toggle-expand', message.displayId)">
+            <div
+              class="exploration-card__header"
+              @click="$emit('toggle-expand', message.displayId)">
               <div class="exploration-card__title-wrap">
                 <div class="exploration-card__title">
                   <cs name="search" size="15px" class="exploration-card__icon" />
@@ -48,33 +50,66 @@
                 {{ getExplorationBatchPreview(message) }}
               </span>
               <cs
-                :name="isMessageExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                name="double-arrow-down"
                 size="14px"
-                class="exploration-card__chevron" />
+                class="exploration-card__chevron"
+                :class="{ expanded: isMessageExpanded(message) }" />
             </div>
 
             <div v-if="isMessageExpanded(message)" class="exploration-card__body">
               <div
-                v-for="(step, stepIndex) in message.explorationBatch.steps"
-                :key="`${message.displayId}_${step.kind}_${stepIndex}`"
-                class="exploration-card__step"
-                :class="`is-${step.kind}`">
-                <template v-if="step.kind === 'thought'">
-                  <div class="exploration-card__thought-label">
-                    {{ $t('workflow.exploration.thought') }}
+                v-for="(group, groupIndex) in message.explorationBatch.groups"
+                :key="`${message.displayId}_group_${groupIndex}`"
+                class="exploration-card__step-card">
+                <template v-if="group.thought">
+                  <div class="reasoning-container exploration-card__reasoning">
+                    <div
+                      class="reasoning-header"
+                      @click="
+                        $emit(
+                          'toggle-reasoning',
+                          getExplorationGroupReasoningId(message, groupIndex)
+                        )
+                      ">
+                      <cs name="reasoning" size="14px" class="reasoning-icon" />
+                      <span
+                        class="reasoning-text"
+                        :class="{
+                          expanded: isExplorationGroupReasoningExpanded(message, groupIndex)
+                        }">
+                        {{
+                          isExplorationGroupReasoningExpanded(message, groupIndex)
+                            ? $t('workflow.thinkingExpanded') || 'Thinking Process'
+                            : $t('workflow.thoughtCompleted') || 'Thought Complete'
+                        }}
+                      </span>
+                      <span class="reasoning-toggle">
+                        {{ isExplorationGroupReasoningExpanded(message, groupIndex) ? '▲' : '▼' }}
+                      </span>
+                    </div>
+                    <div
+                      v-if="isExplorationGroupReasoningExpanded(message, groupIndex)"
+                      class="reasoning-content">
+                      {{ group.thought }}
+                    </div>
                   </div>
-                  <div class="exploration-card__thought-text">{{ step.text }}</div>
                 </template>
-                <template v-else>
-                  <div class="exploration-card__tool-line">
-                    <cs :name="step.icon || 'tool'" size="14px" class="tool-type-icon" />
-                    <span class="tool-name">{{ step.action }}</span>
-                    <span class="tool-target">{{ step.target }}</span>
+
+                <div
+                  v-for="(tool, toolIndex) in group.tools"
+                  :key="`${message.displayId}_group_${groupIndex}_tool_${toolIndex}`"
+                  class="cli-tool-call exploration-card__tool"
+                  :class="[tool.toolType || 'tool-system']">
+                  <div class="tool-line title-wrap">
+                    <cs :name="tool.icon || 'tool'" size="14px" class="tool-type-icon" />
+                    <span class="tool-name">{{ tool.action }}</span>
+                    <span class="tool-target">{{ tool.target }}</span>
                   </div>
-                  <div v-if="step.summary" class="exploration-card__tool-summary">
-                    {{ step.summary }}
+                  <div v-if="tool.summary" class="tool-line summary">
+                    <span class="corner-icon">⎿</span>
+                    <span class="summary-text">{{ tool.summary }}</span>
                   </div>
-                </template>
+                </div>
               </div>
             </div>
           </div>
@@ -96,6 +131,10 @@
                       <span>Delegated Task</span>
                     </div>
                     <div class="sub-agent-card__status" :class="subAgentStatusClass(message)">
+                      <cs
+                        name="loading"
+                        class="cs-spin"
+                        v-if="getSubAgentStatusLabel(message) === 'Running'" />
                       {{ getSubAgentStatusLabel(message) }}
                     </div>
                   </div>
@@ -106,7 +145,9 @@
                     </div>
                     <div class="sub-agent-card__row">
                       <span class="sub-agent-card__label">Mode</span>
-                      <span class="sub-agent-card__value mode">{{ message.subAgentCard.mode }}</span>
+                      <span class="sub-agent-card__value mode">{{
+                        message.subAgentCard.mode
+                      }}</span>
                     </div>
                   </div>
                 </div>
@@ -126,9 +167,10 @@
                       >
                     </div>
                     <cs
-                      :name="isSubAgentTaskExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                      name="double-arrow-down"
                       size="14px"
-                      class="sub-agent-card__task-chevron" />
+                      class="sub-agent-card__task-chevron"
+                      :class="{ expanded: isSubAgentTaskExpanded(message) }" />
                   </div>
                   <div v-if="isSubAgentTaskExpanded(message)" class="sub-agent-card__task-body">
                     <MarkdownSimple :content="message.subAgentCard.taskMarkdown" />
@@ -151,9 +193,10 @@
                       >
                     </div>
                     <cs
-                      :name="isMessageExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                      name="double-arrow-down"
                       size="14px"
-                      class="sub-agent-card__result-chevron" />
+                      class="sub-agent-card__result-chevron"
+                      :class="{ expanded: isMessageExpanded(message) }" />
                   </div>
                   <div v-if="isMessageExpanded(message)" class="sub-agent-card__result-body">
                     <MarkdownSimple :content="message.subAgentCard.resultMarkdown" />
@@ -330,9 +373,10 @@
                   {{ getContextSnapshotPreview(message) }}
                 </span>
                 <cs
-                  :name="isContextSnapshotExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                  name="double-arrow-down"
                   size="14px"
-                  class="context-snapshot-card__chevron" />
+                  class="context-snapshot-card__chevron"
+                  :class="{ expanded: isContextSnapshotExpanded(message) }" />
               </div>
               <div v-if="isContextSnapshotExpanded(message)" class="context-snapshot-card__body">
                 <MarkdownSimple :content="formatContextSnapshotForDisplay(message)" />
@@ -403,7 +447,9 @@
                   <span class="summary-text">{{ call.summary }}</span>
                 </div>
                 <div
-                  v-if="call.toolName === 'complete_workflow_with_summary' && call.completionSummary"
+                  v-if="
+                    call.toolName === 'complete_workflow_with_summary' && call.completionSummary
+                  "
                   class="finish-task-summary markdown-body">
                   <MarkdownSimple :content="call.completionSummary" />
                 </div>
@@ -702,8 +748,7 @@ const getMessageToolName = message => {
 }
 
 const isFinishTaskMessage = message => {
-  const metaToolName =
-    getMessageToolName(message)
+  const metaToolName = getMessageToolName(message)
   const action = message?.toolDisplay?.action || ''
   return (
     metaToolName === 'complete_workflow_with_summary' ||
@@ -774,8 +819,26 @@ const READ_ONLY_EXPLORATION_TOOLS = new Set([
   'grep',
   'glob',
   'list_dir',
+  'skill',
   'web_fetch',
   'web_search'
+])
+
+const READ_ONLY_BASH_SEGMENTS = new Set([
+  'cd',
+  'cat',
+  'find',
+  'grep',
+  'head',
+  'ls',
+  'pwd',
+  'readlink',
+  'rg',
+  'sed',
+  'sort',
+  'tail',
+  'tree',
+  'which'
 ])
 
 const isThinkOnlyAssistantMessage = message => {
@@ -785,13 +848,54 @@ const isThinkOnlyAssistantMessage = message => {
   return !content && !!reasoning
 }
 
+const getToolArguments = message => {
+  const rawArgs =
+    message?.metadata?.tool_call?.function?.arguments ||
+    message?.metadata?.tool_call?.arguments ||
+    message?.metadata?.arguments ||
+    {}
+
+  if (typeof rawArgs === 'string') {
+    try {
+      return JSON.parse(rawArgs)
+    } catch {
+      return {}
+    }
+  }
+
+  return rawArgs && typeof rawArgs === 'object' ? rawArgs : {}
+}
+
+const isReadOnlyBashCommand = command => {
+  const normalized = String(command || '').trim()
+  if (!normalized) return false
+
+  const segments = normalized
+    .split(/(?:&&|\|\||;|\|)/)
+    .map(segment => segment.trim())
+    .filter(Boolean)
+
+  if (!segments.length) return false
+
+  return segments.every(segment => {
+    const token = segment.split(/\s+/)[0]?.toLowerCase() || ''
+    return READ_ONLY_BASH_SEGMENTS.has(token)
+  })
+}
+
 const isReadOnlyExplorationToolMessage = message => {
   if (message?.role !== 'tool') return false
   if (message?.metadata?.approval_status === 'pending') return false
   if (message?.metadata?.execution_status === 'running') return false
   if (message?.isRejected || message?.toolDisplay?.isError) return false
   if (isSubAgentRunMessage(message) || isFinishTaskMessage(message)) return false
-  return READ_ONLY_EXPLORATION_TOOLS.has(getMessageToolName(message))
+  if (message?.toolDisplay?.hasStreamOutput) return false
+
+  const toolName = getMessageToolName(message)
+  if (toolName === 'bash') {
+    return isReadOnlyBashCommand(getToolArguments(message)?.command)
+  }
+  return READ_ONLY_EXPLORATION_TOOLS.has(toolName)
 }
 
 const getExplorationToolSubject = message => {
@@ -803,9 +907,26 @@ const getExplorationToolSubject = message => {
     const match = action.match(/\sin\s(.+)$/)
     if (match?.[1]) return match[1].trim()
   }
+  if (toolName === 'skill') return target || action.replace(/^Activate Skill\s*/i, '').trim()
   if (toolName === 'web_fetch') return action.replace(/^Fetch\s+/i, '').trim()
   if (toolName === 'web_search') return action.replace(/^Search\s+/i, '').trim()
+  if (toolName === 'bash') {
+    return normalizeBashSubject(getToolArguments(message)?.command || action)
+  }
   return action
+}
+
+const normalizeBashSubject = command => {
+  const normalized = String(command || '').trim()
+  if (!normalized) return ''
+
+  const fileLikeMatch = normalized.match(/([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+)/g)
+  if (fileLikeMatch?.length) {
+    const lastPath = fileLikeMatch[fileLikeMatch.length - 1]
+    return lastPath.split('/').filter(Boolean).pop() || lastPath
+  }
+
+  return normalized.length > 48 ? `${normalized.slice(0, 48)}...` : normalized
 }
 
 const buildExplorationBatchMessage = (messages, startIndex) => {
@@ -826,6 +947,35 @@ const buildExplorationBatchMessage = (messages, startIndex) => {
   const firstId = messages[0]?.displayId || messages[0]?.id || `exploration_${startIndex}`
   const lastId =
     messages[messages.length - 1]?.displayId || messages[messages.length - 1]?.id || firstId
+  const groups = []
+  let currentGroup = null
+
+  for (const item of messages) {
+    if (isThinkOnlyAssistantMessage(item)) {
+      currentGroup = {
+        thought: item.reasoning || item.message,
+        tools: []
+      }
+      groups.push(currentGroup)
+      continue
+    }
+
+    if (!currentGroup) {
+      currentGroup = {
+        thought: '',
+        tools: []
+      }
+      groups.push(currentGroup)
+    }
+
+    currentGroup.tools.push({
+      icon: item?.toolDisplay?.icon || 'tool',
+      toolType: item?.toolDisplay?.toolType || 'tool-system',
+      action: item?.toolDisplay?.action || '',
+      target: item?.toolDisplay?.target || '',
+      summary: item?.toolDisplay?.summary || ''
+    })
+  }
 
   return {
     role: 'tool',
@@ -840,21 +990,7 @@ const buildExplorationBatchMessage = (messages, startIndex) => {
       readCount,
       searchCount,
       files: uniqueFiles,
-      steps: messages.map(item => {
-        if (isThinkOnlyAssistantMessage(item)) {
-          return {
-            kind: 'thought',
-            text: props.getReasoningPreview(item.reasoning || item.message)
-          }
-        }
-        return {
-          kind: 'tool',
-          icon: item?.toolDisplay?.icon || 'tool',
-          action: item?.toolDisplay?.action || '',
-          target: item?.toolDisplay?.target || '',
-          summary: item?.toolDisplay?.summary || ''
-        }
-      })
+      groups
     }
   }
 }
@@ -877,10 +1013,7 @@ const collapseExplorationBatches = messages => {
     let cursor = index
     while (cursor < messages.length) {
       const candidate = messages[cursor]
-      if (
-        !isThinkOnlyAssistantMessage(candidate) &&
-        !isReadOnlyExplorationToolMessage(candidate)
-      ) {
+      if (!isThinkOnlyAssistantMessage(candidate) && !isReadOnlyExplorationToolMessage(candidate)) {
         break
       }
       batch.push(candidate)
@@ -1027,8 +1160,20 @@ const getExplorationBatchSummary = message => {
 const getExplorationBatchPreview = message => {
   const files = message?.explorationBatch?.files || []
   if (files.length === 0) return ''
-  return files.join(', ')
+  return files
+    .map(file => {
+      const normalized = String(file || '').replace(/\\/g, '/')
+      const name = normalized.split('/').filter(Boolean).pop() || normalized
+      return `Read ${name}`
+    })
+    .join(', ')
 }
+
+const getExplorationGroupReasoningId = (message, groupIndex) =>
+  `${message?.displayId || message?.id || 'exploration'}:group_reasoning:${groupIndex}`
+
+const isExplorationGroupReasoningExpanded = (message, groupIndex) =>
+  props.isReasoningExpanded(getExplorationGroupReasoningId(message, groupIndex))
 
 const getVisibleUserContent = message => props.removeSystemReminder(message?.message || '')
 
@@ -1069,7 +1214,9 @@ const subAgentStatusClass = message => {
 }
 
 const getSubAgentResultPreview = message => {
-  const result = props.removeSystemReminder(message?.subAgentCard?.result || '').replace(/\s+/g, ' ')
+  const result = props
+    .removeSystemReminder(message?.subAgentCard?.result || '')
+    .replace(/\s+/g, ' ')
   if (!result) return ''
   return result.length > 96 ? `${result.slice(0, 96)}...` : result
 }
@@ -1277,6 +1424,7 @@ defineExpose({
   align-items: baseline;
   gap: 10px;
   min-width: 0;
+  flex: 0 1 auto;
 }
 
 .exploration-card__title {
@@ -1311,70 +1459,41 @@ defineExpose({
 
 .exploration-card__chevron {
   flex-shrink: 0;
+  margin-left: auto;
   color: var(--cs-text-color-secondary);
+  transition: transform 0.2s ease;
+}
+
+.exploration-card__chevron.expanded {
+  transform: rotate(180deg);
 }
 
 .exploration-card__body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--cs-space-sm);
   padding: var(--cs-space-sm) var(--cs-space);
   border-top: 1px solid var(--cs-border-color);
 }
 
-.exploration-card__step {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.exploration-card__step-card {
   min-width: 0;
-}
-
-.exploration-card__step.is-thought {
   padding: 8px 10px;
-  border-radius: var(--cs-border-radius-sm);
-  background: var(--cs-bg-color);
+  border-radius: var(--cs-border-radius);
 }
 
-.exploration-card__thought-label {
-  text-transform: uppercase;
-}
+.exploration-card__reasoning {
+  margin-bottom: 0;
 
-.exploration-card__thought-text {
-  color: var(--cs-text-color-primary);
-  font-size: var(--cs-font-size-sm);
-  line-height: 1.6;
-  word-break: break-word;
-}
-
-.exploration-card__tool-line {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--cs-space-sm);
-  min-width: 0;
-  font-family: var(--cs-font-family-mono, monospace);
-
-  .tool-type-icon {
-    flex-shrink: 0;
-    color: var(--el-color-primary);
-  }
-
-  .tool-name {
-    color: var(--cs-text-color-primary);
-    font-size: var(--cs-font-size-sm);
-    font-weight: 600;
-    word-break: break-word;
-  }
-
-  .tool-target {
-    color: var(--cs-text-color-secondary);
-    font-size: var(--cs-font-size-xs);
-    word-break: break-word;
+  .reasoning-content {
+    background: none !important;
   }
 }
 
-.exploration-card__tool-summary {
-  margin-left: 22px;
-  line-height: 1.5;
+.exploration-card__tool {
+  margin-bottom: 0;
+  padding-left: 0;
+  border-left: none;
 }
 
 .context-snapshot-card {
@@ -1420,7 +1539,13 @@ defineExpose({
 
 .context-snapshot-card__chevron {
   flex-shrink: 0;
+  margin-left: auto;
   color: var(--cs-text-color-secondary);
+  transition: transform 0.2s ease;
+}
+
+.context-snapshot-card__chevron.expanded {
+  transform: rotate(180deg);
 }
 
 .context-snapshot-card__body {

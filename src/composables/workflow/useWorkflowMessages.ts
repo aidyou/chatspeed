@@ -510,6 +510,12 @@ export function useWorkflowMessages() {
           target: ''
         }
       },
+      skill: args => ({
+        icon: resolveWorkflowToolIcon(name, 'skill'),
+        toolType: 'tool-system',
+        action: 'Activate Skill',
+        target: args.skill || ''
+      }),
       sub_agent_run: args => {
         const childAgent = args.child_agent_name || args.child_agent_id || ''
         const mode = args.execution_mode || 'call'
