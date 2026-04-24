@@ -53,10 +53,10 @@ export const formatDisplayPath = (path: string, roots?: string[]) => {
 
 export const normalizeToolDisplayText = (text: string, roots?: string[]) => {
   if (!text || typeof text !== 'string') return text
-  const pathPattern = /(?:[A-Za-z]:)?\/[^\s"'`<>),:;]+/g
+  const pathPattern = /(^|[\s("'`])((?:[A-Za-z]:)?\/[^\s"'`<>),:;]+)/g
 
   return text
-    .replace(pathPattern, match => formatDisplayPath(match, roots))
+    .replace(pathPattern, (_, prefix, match) => `${prefix}${formatDisplayPath(match, roots)}`)
     .replace(/\bfrom L(\d+)\b/g, 'L$1')
 }
 

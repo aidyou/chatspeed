@@ -9,7 +9,11 @@
           </div>
         </el-tooltip>
       </template>
-      <template #center></template>
+      <template #center>
+        <div v-if="displayAllowedPathTitle" class="workflow-titlebar-primary-path" :title="displayAllowedPathTitle">
+          {{ displayAllowedPathTitle }}
+        </div>
+      </template>
       <template #right>
         <el-dropdown v-if="pendingApprovalList.length > 0" trigger="click" @command="handleApprovalCommand">
           <div class="icon-btn upperLayer approval-queue-btn blinking">
@@ -245,6 +249,7 @@ const {
   pendingPaths,
   currentPaths,
   canEditPaths,
+  displayAllowedPath,
   onAddPathFromTree,
   onRemovePathFromTree
 } = useWorkflowPaths({
@@ -397,6 +402,11 @@ const workflowApprovalMuted = computed(() => !!settingStore.settings.workflowApp
 const approvalQueueCount = computed(() => {
   const count = pendingApprovalList.value.length
   return count > 9 ? '9+' : String(count)
+})
+
+const displayAllowedPathTitle = computed(() => {
+  if (!currentPaths.value?.length) return ''
+  return displayAllowedPath.value || ''
 })
 
 const getWorkflowSortTime = (workflow) => {
@@ -610,4 +620,14 @@ onBeforeUnmount(() => {
 
 <style lang="scss">
 @use '@/styles/workflow/index' as *;
+
+.workflow-titlebar-primary-path {
+  max-width: min(40vw, 360px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--cs-font-size-sm);
+  font-weight: 500;
+  color: var(--cs-text-primary);
+}
 </style>

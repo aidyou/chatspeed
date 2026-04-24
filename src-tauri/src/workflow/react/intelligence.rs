@@ -31,7 +31,7 @@ pub struct ToolApprovalReview {
 }
 
 impl IntelligenceManager {
-    fn extract_completion_summary(message: &WorkflowMessage) -> String {
+    pub(crate) fn extract_completion_summary(message: &WorkflowMessage) -> String {
         let visible_content = message.message.trim();
         let tool_summary = message
             .metadata

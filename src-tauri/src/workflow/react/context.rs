@@ -19,6 +19,32 @@ pub struct ContextManager {
 }
 
 impl ContextManager {
+    pub(crate) fn sanitize_reasoning_content(reasoning: Option<String>) -> Option<String> {
+        let reasoning = reasoning?;
+        let trimmed = reasoning.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let sanitized = trimmed
+            .trim_start_matches("<think>")
+            .trim_start_matches("<THINK>")
+            .trim_start_matches("<thought>")
+            .trim_start_matches("<THOUGHT>")
+            .trim_end_matches("</think>")
+            .trim_end_matches("</THINK>")
+            .trim_end_matches("</thought>")
+            .trim_end_matches("</THOUGHT>")
+            .trim()
+            .to_string();
+
+        if sanitized.is_empty() {
+            None
+        } else {
+            Some(sanitized)
+        }
+    }
+
     fn is_summary_message(message: &WorkflowMessage) -> bool {
         message
             .metadata
@@ -238,6 +264,7 @@ impl ContextManager {
             .tsid_generator
             .generate_u64()
             .map_err(|e| WorkflowEngineError::General(e))?;
+        let reasoning = Self::sanitize_reasoning_content(reasoning);
         let msg = WorkflowMessage {
             id: Some(msg_id as i64),
             session_id: self.session_id.clone(),
@@ -1323,5 +1350,21 @@ mod tests {
         assert!(!llm_contents
             .iter()
             .any(|content| content.contains("First completion report")));
+    }
+
+    #[test]
+    fn sanitize_reasoning_content_removes_incomplete_think_wrappers() {
+        let sanitized = ContextManager::sanitize_reasoning_content(Some(
+            "<think>  analyze this first\nthen continue".to_string(),
+        ));
+        assert_eq!(
+            sanitized.as_deref(),
+            Some("analyze this first\nthen continue")
+        );
+
+        let sanitized_closed = ContextManager::sanitize_reasoning_content(Some(
+            "<think>\nwrapped\n</think>".to_string(),
+        ));
+        assert_eq!(sanitized_closed.as_deref(), Some("wrapped"));
     }
 }

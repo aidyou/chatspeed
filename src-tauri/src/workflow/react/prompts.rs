@@ -101,7 +101,14 @@ Your goal is to maintain and update a structured <state_snapshot> XML block that
 2. **Snapshot Update**: The transcript may contain the LAST `<state_snapshot>` plus newer messages. You MUST merge the new progress into one unified `<state_snapshot>`.
 3. **Role Awareness**: Use the `role` attribute to interpret intent and evidence. User messages define requests, assistant messages describe plans/actions, tool messages contain observations/results, and system summary messages contain prior compressed state.
 4. **Goal Preservation**: Always keep the user's primary objective. Update it only if the intent has shifted.
-5. **Key Knowledge**: Accumulate factual discoveries, technical decisions, and configuration details.
+5. **Completed Task Preservation**:
+    - You will receive a `<completed_tasks>` block that contains every task completed since the last snapshot boundary.
+    - You MUST preserve completed tasks in `<prev_tasks>`.
+    - For every finished task, keep one `<task>` entry with:
+      - `<user_query>`: the user question/request that was resolved
+      - `<result_summary>`: the final solution, conclusion, or handling points
+    - When updating an existing snapshot, merge old and new completed tasks instead of dropping earlier ones.
+6. **Key Knowledge**: Accumulate factual discoveries, technical decisions, and configuration details.
 6. **Error Log & Loop Prevention**:
     - Consolidate repeated identical errors into a single entry.
     - If the Agent has made the same mistake multiple times (e.g., repeatedly trying a non-existent path), summarize it as one event with a frequency count (e.g., "Failed to read X (attempted 5 times)").
@@ -114,6 +121,12 @@ Your output MUST be a valid XML structure:
 
 <state_snapshot>
     <overall_goal>Current primary objective</overall_goal>
+    <prev_tasks>
+        <task>
+            <user_query>Resolved user question/request</user_query>
+            <result_summary>Final solution and handling points</result_summary>
+        </task>
+    </prev_tasks>
     <key_knowledge>Cumulative factual discoveries and decisions</key_knowledge>
     <error_log>Significant errors encountered and their specific resolutions</error_log>
     <file_system_state>Modified files and reference pointers (paths/URLs only)</file_system_state>

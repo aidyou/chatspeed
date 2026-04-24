@@ -5,7 +5,7 @@ use globset::{Glob as GlobPattern, GlobSet, GlobSetBuilder};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 pub struct Glob;
@@ -136,6 +136,7 @@ impl ToolDefinition for Grep {
         - Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\")\n\
         - Supports compound searches with regex alternation (e.g., \"foo|bar|baz\", \"create_workflow|workflow_start|finalAudit\")\n\
         - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\", \"src-tauri/src/**/*.rs\")\n\
+        - Skips common binary, media, archive, document, and executable files such as .so, .dll, .exe, .zip, .rar, .png, .jpg, and .pdf. Only text-like files are searched.\n\
         - Output modes: \"content\" shows matching lines with file and line number (default), \"files_with_matches\" shows only file paths, \"count\" shows match counts\n\
         - In content mode, very long matching lines are truncated from the first match position to keep output readable\n\
         - For efficient exploration, search several related terms at once, use content mode to get line numbers, then read only targeted files/ranges.\n\
@@ -200,7 +201,9 @@ impl ToolDefinition for Grep {
         }
 
         if path.is_file() {
-            if Self::matches_glob(path, path.parent(), glob_set.as_ref()) {
+            if Self::matches_glob(path, path.parent(), glob_set.as_ref())
+                && Self::is_searchable_text_file(path)
+            {
                 Self::search_in_file(path, &re, output_mode, &mut matches, MAX_MATCHES)?;
             }
         } else if path.is_dir() {
@@ -218,6 +221,9 @@ impl ToolDefinition for Grep {
 
                 if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
                     if !Self::matches_glob(entry.path(), Some(path), glob_set.as_ref()) {
+                        continue;
+                    }
+                    if !Self::is_searchable_text_file(entry.path()) {
                         continue;
                     }
                     Self::search_in_file(
@@ -247,6 +253,17 @@ impl ToolDefinition for Grep {
 
 impl Grep {
     const MAX_CONTENT_MATCH_CHARS: usize = 500;
+    const TEXT_SNIFF_BYTES: usize = 8192;
+    const SKIPPED_BINARY_EXTENSIONS: &'static [&'static str] = &[
+        "7z", "a", "apk", "avi", "bin", "bmp", "bz2", "class", "cur", "dat", "deb", "dib", "dll",
+        "dmg", "doc", "docm", "docx", "dylib", "ear", "elc", "eot", "epub", "exe", "flac", "gif",
+        "gz", "icns", "ico", "img", "iso", "jar", "jpeg", "jpg", "lib", "lz", "lz4", "m4a", "mkv",
+        "mov", "mp3", "mp4", "mpeg", "mpg", "msi", "o", "obj", "ogg", "otf", "pdf", "pkg", "png",
+        "ppt", "pptx", "pyc", "pyd", "rar", "so", "sqlite", "tar", "tif", "tiff", "ttf", "war",
+        "wav", "webm", "webp", "woff", "woff2", "xls", "xlsb", "xlsm", "xlsx", "xz", "zip", "zst",
+        "br", "cab", "cer", "crt", "der", "heic", "heif", "lockb", "parquet", "wasm", "woff",
+        "woff2", "psd", "ai", "sketch", "blend", "db", "db3", "sqlite3", "rmeta", "rlib",
+    ];
 
     fn build_glob_set(glob: Option<&str>) -> Result<Option<GlobSet>, ToolError> {
         let Some(glob) = glob.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -274,6 +291,62 @@ impl Grep {
 
         root.and_then(|root| path.strip_prefix(root).ok())
             .map_or(false, |relative| glob_set.is_match(relative))
+    }
+
+    fn is_searchable_text_file(path: &Path) -> bool {
+        if Self::has_blocked_binary_extension(path) {
+            return false;
+        }
+
+        Self::looks_like_text_by_content(path)
+    }
+
+    fn has_blocked_binary_extension(path: &Path) -> bool {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| {
+                let ext = ext.to_ascii_lowercase();
+                Self::SKIPPED_BINARY_EXTENSIONS
+                    .iter()
+                    .any(|blocked| *blocked == ext)
+            })
+            .unwrap_or(false)
+    }
+
+    fn looks_like_text_by_content(path: &Path) -> bool {
+        let mut file = match fs::File::open(path) {
+            Ok(file) => file,
+            Err(_) => return false,
+        };
+
+        let mut buffer = [0_u8; Self::TEXT_SNIFF_BYTES];
+        let bytes_read = match file.read(&mut buffer) {
+            Ok(bytes_read) => bytes_read,
+            Err(_) => return false,
+        };
+
+        if bytes_read == 0 {
+            return true;
+        }
+
+        let sample = &buffer[..bytes_read];
+        if sample.contains(&0) {
+            return false;
+        }
+
+        if std::str::from_utf8(sample).is_ok() {
+            return true;
+        }
+
+        let suspicious = sample
+            .iter()
+            .filter(|&&b| {
+                b < 0x20 && b != b'\n' && b != b'\r' && b != b'\t' && b != 0x0C && b != 0x08
+            })
+            .count();
+
+        let ratio = suspicious as f32 / sample.len() as f32;
+        ratio < 0.01
     }
 
     fn search_in_file(
@@ -750,6 +823,42 @@ mod tests {
 
         // Should match only exact case
         assert_eq!(matches.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_grep_skips_binary_extension_files() {
+        let tool = Grep;
+        let temp_dir = tempdir().unwrap();
+        let binary_path = temp_dir.path().join("libexample.so");
+
+        fs::write(&binary_path, b"plain text with calibration symbol").unwrap();
+
+        let params = json!({
+            "pattern": "calibration",
+            "path": temp_dir.path().to_string_lossy(),
+            "output_mode": "content"
+        });
+
+        let result = tool.call(params).await.unwrap();
+        assert_eq!(result.content.unwrap(), "[No matches found]");
+    }
+
+    #[tokio::test]
+    async fn test_grep_skips_binary_content_without_extension() {
+        let tool = Grep;
+        let temp_dir = tempdir().unwrap();
+        let binary_path = temp_dir.path().join("payload");
+
+        fs::write(&binary_path, b"\0\0binary\0calibration\0").unwrap();
+
+        let params = json!({
+            "pattern": "calibration",
+            "path": temp_dir.path().to_string_lossy(),
+            "output_mode": "content"
+        });
+
+        let result = tool.call(params).await.unwrap();
+        assert_eq!(result.content.unwrap(), "[No matches found]");
     }
 
     #[tokio::test]

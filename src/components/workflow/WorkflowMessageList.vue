@@ -1020,6 +1020,28 @@ const collapseExplorationBatches = messages => {
       cursor += 1
     }
 
+    if (props.isRunning && cursor >= messages.length) {
+      const lastToolIndex = [...batch]
+        .map((item, batchIndex) => (isReadOnlyExplorationToolMessage(item) ? batchIndex : -1))
+        .filter(batchIndex => batchIndex >= 0)
+        .pop()
+
+      if (typeof lastToolIndex === 'number') {
+        const stableBatch = batch.slice(0, lastToolIndex)
+        const liveTail = batch.slice(lastToolIndex)
+
+        if (stableBatch.length > 0) {
+          const grouped = buildExplorationBatchMessage(stableBatch, index)
+          if (grouped) collapsed.push(grouped)
+          else collapsed.push(...stableBatch)
+        }
+
+        collapsed.push(...liveTail)
+        index = cursor
+        continue
+      }
+    }
+
     const grouped = buildExplorationBatchMessage(batch, index)
     if (grouped) collapsed.push(grouped)
     else collapsed.push(...batch)

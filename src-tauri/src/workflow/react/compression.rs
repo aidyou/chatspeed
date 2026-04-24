@@ -4,7 +4,9 @@ use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::ChatMetadata;
 use crate::db::WorkflowMessage;
 use crate::workflow::react::error::WorkflowEngineError;
+use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::prompts::CONTEXT_COMPRESSION_PROMPT;
+use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
 
 use serde_json::json;
 use std::sync::Arc;
@@ -66,6 +68,8 @@ impl ContextCompressor {
             return Ok("No meaningful progress to compress.".to_string());
         }
 
+        let completed_tasks = Self::render_completed_tasks(incremental_messages);
+
         // 4. Strategic Summary (LLM Call)
         let user_prompt = if last_summary_idx.is_some() {
             "Please update the existing <state_snapshot> with the new information provided above. Output only the updated XML block."
@@ -74,7 +78,7 @@ impl ContextCompressor {
         };
 
         let summary = self
-            .extract_fact_from_history(purified_history, user_prompt)
+            .extract_fact_from_history(purified_history, &completed_tasks, user_prompt)
             .await?;
         Ok(summary)
     }
@@ -82,21 +86,10 @@ impl ContextCompressor {
     async fn extract_fact_from_history(
         &self,
         history_json: Vec<serde_json::Value>,
+        completed_tasks: &str,
         user_prompt: &str,
     ) -> Result<String, WorkflowEngineError> {
         let transcript = Self::render_history_as_transcript(&history_json);
-        let full_history = vec![
-            json!({ "role": "system", "content": CONTEXT_COMPRESSION_PROMPT }),
-            json!({
-                "role": "user",
-                "content": format!(
-                    "<conversation_history>\n{}\n</conversation_history>\n\n{}",
-                    transcript,
-                    user_prompt
-                )
-            }),
-        ];
-
         let chat_interface = {
             let mut chats_guard = self.chat_state.chats.lock().await;
             let protocol = crate::ccproxy::ChatProtocol::OpenAI;
@@ -113,8 +106,27 @@ impl ContextCompressor {
 
         let max_attempts = 3;
         let mut attempt = 0;
-        let result = loop {
+        loop {
             attempt += 1;
+            let retry_instruction = if attempt == 1 {
+                String::new()
+            } else {
+                "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. You MUST return exactly one non-empty <state_snapshot>...</state_snapshot> XML block. Do NOT return JSON, reasoning-only text, or explanations. Ensure <prev_tasks> is preserved and populated when completed tasks exist.</SYSTEM_REMINDER>".to_string()
+            };
+            let full_history = vec![
+                json!({ "role": "system", "content": CONTEXT_COMPRESSION_PROMPT }),
+                json!({
+                    "role": "user",
+                    "content": format!(
+                        "<completed_tasks>\n{}\n</completed_tasks>\n\n<conversation_history>\n{}\n</conversation_history>\n\n{}{}",
+                        completed_tasks,
+                        transcript,
+                        user_prompt,
+                        retry_instruction
+                    )
+                }),
+            ];
+
             match chat_interface
                 .chat(
                     self.provider_id,
@@ -130,7 +142,30 @@ impl ContextCompressor {
                 )
                 .await
             {
-                Ok(result) => break result,
+                Ok(result) => {
+                    let normalized = Self::normalize_summary_result(&result);
+                    if let Some(validated) = Self::validate_summary_result(&normalized) {
+                        return Ok(validated);
+                    }
+
+                    if attempt < max_attempts {
+                        let wait_secs = 2u64.pow(attempt - 1);
+                        log::warn!(
+                            "ContextCompressor: compression attempt {}/{} returned invalid summary format, retrying in {}s. normalized_preview={}",
+                            attempt,
+                            max_attempts,
+                            wait_secs,
+                            Self::preview_for_log(&normalized, 500)
+                        );
+                        sleep(Duration::from_secs(wait_secs)).await;
+                        continue;
+                    }
+
+                    return Err(WorkflowEngineError::General(format!(
+                        "Compression returned invalid summary format after {} attempts",
+                        max_attempts
+                    )));
+                }
                 Err(err)
                     if attempt < max_attempts && Self::should_retry_compression_error(&err) =>
                 {
@@ -146,9 +181,7 @@ impl ContextCompressor {
                 }
                 Err(err) => return Err(WorkflowEngineError::Ai(err)),
             }
-        };
-
-        Ok(Self::normalize_summary_result(&result))
+        }
     }
 
     fn sanitize_message_content_for_compression(content: &str) -> String {
@@ -239,6 +272,100 @@ impl ContextCompressor {
             .join("\n\n")
     }
 
+    fn render_completed_tasks(messages: &[WorkflowMessage]) -> String {
+        let mut tasks = Vec::new();
+        let mut segment_start = messages
+            .iter()
+            .position(|message| {
+                !message
+                    .metadata
+                    .as_ref()
+                    .map(|meta| meta["type"] == "summary")
+                    .unwrap_or(false)
+            })
+            .unwrap_or(messages.len());
+
+        for (idx, message) in messages.iter().enumerate().skip(segment_start) {
+            if !Self::is_successful_completion_message(message) {
+                continue;
+            }
+
+            let segment = &messages[segment_start..=idx];
+            let user_query = segment
+                .iter()
+                .filter(|message| {
+                    message.role == "user"
+                        && message.step_type.as_deref() != Some("observe")
+                        && !message.message.trim().is_empty()
+                })
+                .map(|message| message.message.trim())
+                .collect::<Vec<_>>()
+                .join("\n---\n");
+
+            let result_summary = segment
+                .iter()
+                .rev()
+                .find(|message| message.role == "assistant")
+                .map(IntelligenceManager::extract_completion_summary)
+                .unwrap_or_default();
+
+            if !user_query.trim().is_empty() || !result_summary.trim().is_empty() {
+                tasks.push(format!(
+                    "<task>\n<user_query>{}</user_query>\n<result_summary>{}</result_summary>\n</task>",
+                    Self::escape_xml_text(&user_query),
+                    Self::escape_xml_text(result_summary.trim())
+                ));
+            }
+
+            segment_start = idx + 1;
+        }
+
+        if tasks.is_empty() {
+            "None".to_string()
+        } else {
+            tasks.join("\n")
+        }
+    }
+
+    fn is_successful_completion_message(message: &WorkflowMessage) -> bool {
+        if message.role != "tool" || message.is_error {
+            return false;
+        }
+
+        let Some(meta) = message.metadata.as_ref() else {
+            return false;
+        };
+
+        let is_completion_tool = meta
+            .get("tool_name")
+            .and_then(|value| value.as_str())
+            .map(|tool_name| tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
+            .unwrap_or(false);
+        if !is_completion_tool {
+            return false;
+        }
+
+        let execution_status = meta
+            .get("execution_status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("completed");
+        let approval_status = meta
+            .get("approval_status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("approved");
+
+        execution_status == "completed"
+            && approval_status != "pending"
+            && approval_status != "rejected"
+    }
+
+    fn escape_xml_text(value: &str) -> String {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+
     fn normalize_summary_result(result: &str) -> String {
         let trimmed = result.trim();
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
@@ -248,15 +375,53 @@ impl ContextCompressor {
                     return content.to_string();
                 }
             }
+
+            return String::new();
         }
 
         trimmed.to_string()
+    }
+
+    fn validate_summary_result(normalized: &str) -> Option<String> {
+        let trimmed = normalized.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        if !trimmed.starts_with("<state_snapshot>") || !trimmed.ends_with("</state_snapshot>") {
+            return None;
+        }
+
+        let required_tags = [
+            "<overall_goal>",
+            "<prev_tasks>",
+            "<key_knowledge>",
+            "<error_log>",
+            "<file_system_state>",
+            "<recent_actions>",
+            "<task_state>",
+        ];
+
+        if required_tags.iter().any(|tag| !trimmed.contains(tag)) {
+            return None;
+        }
+
+        Some(trimmed.to_string())
+    }
+
+    fn preview_for_log(value: &str, max_chars: usize) -> String {
+        let mut text: String = value.chars().take(max_chars).collect();
+        if value.chars().count() > max_chars {
+            text.push_str("...");
+        }
+        text
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::ContextCompressor;
+    use crate::db::WorkflowMessage;
 
     #[test]
     fn normalize_summary_result_extracts_content_field_from_json() {
@@ -266,6 +431,13 @@ mod tests {
             normalized,
             "<state_snapshot>\n  <overall_goal>goal</overall_goal>\n</state_snapshot>"
         );
+    }
+
+    #[test]
+    fn normalize_summary_result_rejects_reasoning_only_json() {
+        let raw = r#"{"content":"","reasoning":"Let me analyze this first"}"#;
+        let normalized = ContextCompressor::normalize_summary_result(raw);
+        assert!(normalized.is_empty());
     }
 
     #[test]
@@ -293,5 +465,110 @@ mod tests {
         assert!(transcript.contains("<message role=\"user\">"));
         assert!(transcript.contains("<message role=\"tool\">"));
         assert!(transcript.contains("result"));
+    }
+
+    #[test]
+    fn validate_summary_result_requires_full_state_snapshot_shape() {
+        let invalid = "<state_snapshot><overall_goal>x</overall_goal></state_snapshot>";
+        assert!(ContextCompressor::validate_summary_result(invalid).is_none());
+
+        let valid = "<state_snapshot><overall_goal>x</overall_goal><prev_tasks>None</prev_tasks><key_knowledge>a</key_knowledge><error_log>b</error_log><file_system_state>c</file_system_state><recent_actions>d</recent_actions><task_state>e</task_state></state_snapshot>";
+        assert!(ContextCompressor::validate_summary_result(valid).is_some());
+    }
+
+    #[test]
+    fn render_completed_tasks_keeps_each_finished_segment_summary() {
+        let messages = vec![
+            WorkflowMessage {
+                id: Some(1),
+                session_id: "s".to_string(),
+                role: "user".to_string(),
+                message: "First question".to_string(),
+                reasoning: None,
+                metadata: None,
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(2),
+                session_id: "s".to_string(),
+                role: "assistant".to_string(),
+                message: "First answer".to_string(),
+                reasoning: None,
+                metadata: Some(serde_json::json!({ "message_kind": "completion_report" })),
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(3),
+                session_id: "s".to_string(),
+                role: "tool".to_string(),
+                message: "Finished".to_string(),
+                reasoning: None,
+                metadata: Some(serde_json::json!({ "tool_name": "complete_workflow_with_summary" })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(4),
+                session_id: "s".to_string(),
+                role: "user".to_string(),
+                message: "Second question".to_string(),
+                reasoning: None,
+                metadata: None,
+                attached_context: None,
+                step_type: None,
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(5),
+                session_id: "s".to_string(),
+                role: "assistant".to_string(),
+                message: "Second answer".to_string(),
+                reasoning: None,
+                metadata: Some(serde_json::json!({ "message_kind": "completion_report" })),
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(6),
+                session_id: "s".to_string(),
+                role: "tool".to_string(),
+                message: "Finished".to_string(),
+                reasoning: None,
+                metadata: Some(serde_json::json!({ "tool_name": "complete_workflow_with_summary" })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 5,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+        ];
+
+        let rendered = ContextCompressor::render_completed_tasks(&messages);
+        assert!(rendered.contains("<user_query>First question</user_query>"));
+        assert!(rendered.contains("<result_summary>First answer</result_summary>"));
+        assert!(rendered.contains("<user_query>Second question</user_query>"));
+        assert!(rendered.contains("<result_summary>Second answer</result_summary>"));
     }
 }

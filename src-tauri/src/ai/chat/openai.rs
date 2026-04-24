@@ -3,7 +3,7 @@ use reqwest::Response;
 use rust_i18n::t;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::str::FromStr;
 use std::{sync::Arc, time::Instant};
 use tokio::sync::Mutex;
@@ -29,6 +29,15 @@ use crate::{
 struct JsonErrorPayload<'a> {
     status: u16,
     message: &'a str,
+}
+
+const MAX_TOOL_CALLS_PER_RESPONSE: usize = 15;
+
+struct PreparedToolCalls {
+    calls: Vec<(u32, ToolCallDeclaration)>,
+    raw_count: usize,
+    duplicate_count: usize,
+    limit_dropped_count: usize,
 }
 
 /// OpenAI chat implementation
@@ -425,7 +434,38 @@ impl OpenAIChat {
             .collect();
         ordered_tool_calls.sort_by_key(|(idx, _)| *idx);
 
-        let assistant_tool_requests: Vec<Value> = ordered_tool_calls
+        let prepared_tool_calls = Self::prepare_tool_calls(ordered_tool_calls);
+        if prepared_tool_calls.calls.is_empty() {
+            log::warn!(
+                "{} proposed {} raw tool calls, but none remained after dedupe/limit filtering",
+                provider_name,
+                prepared_tool_calls.raw_count
+            );
+            accumulated_tool_calls.clear();
+            return;
+        }
+
+        if prepared_tool_calls.duplicate_count > 0 || prepared_tool_calls.limit_dropped_count > 0 {
+            log::warn!(
+                "{} proposed {} raw tool calls; dispatching {} after filtering (duplicates_dropped={}, limit_dropped={}, max_per_response={})",
+                provider_name,
+                prepared_tool_calls.raw_count,
+                prepared_tool_calls.calls.len(),
+                prepared_tool_calls.duplicate_count,
+                prepared_tool_calls.limit_dropped_count,
+                MAX_TOOL_CALLS_PER_RESPONSE
+            );
+        } else {
+            log::info!(
+                "{} proposed {} tool calls; dispatching all {}",
+                provider_name,
+                prepared_tool_calls.raw_count,
+                prepared_tool_calls.calls.len()
+            );
+        }
+
+        let assistant_tool_requests: Vec<Value> = prepared_tool_calls
+            .calls
             .iter()
             .map(|(idx, tcd)| {
                 let arguments_str = tcd
@@ -482,7 +522,7 @@ impl OpenAIChat {
             }
         }
 
-        for (_, tcd) in &ordered_tool_calls {
+        for (_, tcd) in &prepared_tool_calls.calls {
             let mut trimmed_tcd = tcd.clone();
             if let Some(args) = trimmed_tcd.arguments.as_mut() {
                 *args = Self::normalize_tool_arguments(args);
@@ -496,7 +536,7 @@ impl OpenAIChat {
                         metadata_option.as_ref().and_then(|m| m.to_value()),
                         None,
                     ));
-                    log::info!("tool call: {}", trimmed_tcd.name);
+                    log::debug!("dispatching proposed tool call: {}", trimmed_tcd.name);
                     #[cfg(debug_assertions)]
                     {
                         log::debug!(
@@ -534,6 +574,43 @@ impl OpenAIChat {
         accumulated_tool_calls.clear();
     }
 
+    fn prepare_tool_calls(
+        ordered_tool_calls: Vec<(u32, ToolCallDeclaration)>,
+    ) -> PreparedToolCalls {
+        let raw_count = ordered_tool_calls.len();
+        let mut seen = HashSet::new();
+        let mut deduped_calls = Vec::new();
+        let mut duplicate_count = 0;
+
+        for (idx, mut tcd) in ordered_tool_calls {
+            let normalized_args = tcd
+                .arguments
+                .as_deref()
+                .map(Self::normalize_tool_arguments)
+                .unwrap_or_default();
+            let dedupe_key = format!("{}:{}", tcd.name, normalized_args);
+            if !seen.insert(dedupe_key) {
+                duplicate_count += 1;
+                continue;
+            }
+
+            tcd.arguments = Some(normalized_args);
+            deduped_calls.push((idx, tcd));
+        }
+
+        let limit_dropped_count = deduped_calls
+            .len()
+            .saturating_sub(MAX_TOOL_CALLS_PER_RESPONSE);
+        deduped_calls.truncate(MAX_TOOL_CALLS_PER_RESPONSE);
+
+        PreparedToolCalls {
+            calls: deduped_calls,
+            raw_count,
+            duplicate_count,
+            limit_dropped_count,
+        }
+    }
+
     fn normalize_tool_arguments(raw: &str) -> String {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -542,7 +619,8 @@ impl OpenAIChat {
 
         let cleaned = crate::libs::util::format_json_str(trimmed);
         if let Ok(parsed) = serde_json::from_str::<Value>(&cleaned) {
-            return serde_json::to_string(&parsed).unwrap_or(cleaned);
+            let canonical = Self::canonicalize_json_value(parsed);
+            return serde_json::to_string(&canonical).unwrap_or(cleaned);
         }
 
         let start = cleaned
@@ -567,6 +645,26 @@ impl OpenAIChat {
         }
 
         trimmed.to_string()
+    }
+
+    fn canonicalize_json_value(value: Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let sorted = map
+                    .into_iter()
+                    .map(|(key, value)| (key, Self::canonicalize_json_value(value)))
+                    .collect::<BTreeMap<_, _>>();
+                let mut canonical = serde_json::Map::new();
+                for (key, value) in sorted {
+                    canonical.insert(key, value);
+                }
+                Value::Object(canonical)
+            }
+            Value::Array(items) => Value::Array(
+                items.into_iter().map(Self::canonicalize_json_value).collect(),
+            ),
+            other => other,
+        }
     }
 
     /// Determines the appropriate API endpoint based on tools and function call settings

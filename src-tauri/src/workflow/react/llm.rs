@@ -714,7 +714,11 @@ impl LlmProcessor {
 
     fn combine_message_and_reasoning(role: &str, message: &str, reasoning: Option<&str>) -> String {
         let trimmed_message = message.trim();
-        let trimmed_reasoning = reasoning.map(str::trim).unwrap_or("");
+        let sanitized_reasoning =
+            crate::workflow::react::context::ContextManager::sanitize_reasoning_content(
+                reasoning.map(|value| value.to_string()),
+            );
+        let trimmed_reasoning = sanitized_reasoning.as_deref().unwrap_or("");
 
         if role != "assistant" || trimmed_reasoning.is_empty() {
             return message.to_string();
@@ -1563,5 +1567,25 @@ mod tests {
         assert!(content.contains("<think>"));
         assert!(content.contains("enough context"));
         assert!(history[1]["tool_calls"].is_array());
+    }
+
+    #[test]
+    fn normalize_history_strips_existing_think_tags_from_reasoning() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Explain it", None, None),
+            message_with_reasoning(
+                "assistant",
+                "",
+                "<think>Need to inspect the scheduler",
+                Some("think"),
+                None,
+            ),
+        ]);
+
+        let content = history[1]["content"].as_str().unwrap_or_default();
+        assert_eq!(
+            content,
+            "<think>\nNeed to inspect the scheduler\n</think>"
+        );
     }
 }
