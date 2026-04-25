@@ -447,9 +447,10 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
     changed
 }
 
-fn normalize_workflow_agent_config(
+fn normalize_workflow_agent_config_inner(
     store: &MainStore,
     workflow: &mut Workflow,
+    persist: bool,
 ) -> Result<(), String> {
     let agent = store
         .get_agent(&workflow.agent_id)
@@ -468,16 +469,28 @@ fn normalize_workflow_agent_config(
 
     if missing_fields_filled || shell_policy_missing {
         let normalized_config = agent_config_to_json_with_agent_shell_policy(&config, &agent)?;
-        store
-            .update_workflow_agent_config(
-                workflow.id.as_deref().unwrap_or_default(),
-                &normalized_config,
-            )
-            .map_err(|e| e.to_string())?;
+        if persist {
+            store
+                .update_workflow_agent_config(
+                    workflow.id.as_deref().unwrap_or_default(),
+                    &normalized_config,
+                )
+                .map_err(|e| e.to_string())?;
+        }
         workflow.agent_config = Some(normalized_config);
     }
 
     Ok(())
+}
+
+/// Normalize agent config in memory only, without DB write.
+/// Use this for read-only operations like `get_workflow_snapshot`
+/// to avoid silently updating `updated_at` and changing sort order.
+fn normalize_workflow_agent_config_in_memory(
+    store: &MainStore,
+    workflow: &mut Workflow,
+) -> Result<(), String> {
+    normalize_workflow_agent_config_inner(store, workflow, false)
 }
 
 #[tauri::command]
@@ -735,7 +748,7 @@ pub async fn get_workflow_snapshot(
         let mut snapshot = store
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?;
-        normalize_workflow_agent_config(&store, &mut snapshot.workflow)?;
+        normalize_workflow_agent_config_in_memory(&store, &mut snapshot.workflow)?;
         snapshot
     };
     let merged_messages = merge_ui_workflow_messages(&snapshot.messages);

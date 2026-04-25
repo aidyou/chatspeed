@@ -18,6 +18,7 @@ pub struct TokenUsage {
 mod tests {
     use super::StreamParser;
     use bytes::Bytes;
+    use crate::ai::traits::chat::MessageType;
 
     #[test]
     fn parse_openai_usage_only_chunk() {
@@ -32,6 +33,45 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 168);
         assert_eq!(usage.completion_tokens, 2408);
         assert_eq!(usage.total_tokens, 2576);
+    }
+
+    #[test]
+    fn parse_openai_thinking_chunk_uses_thinking_field() {
+        let chunk = Bytes::from(
+            "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"thinking\":\"step 1\"}}]}\n\n",
+        );
+
+        let chunks = StreamParser::parse_openai(chunk).expect("thinking chunk should parse");
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].reasoning_content.as_deref(), Some("step 1"));
+        assert_eq!(chunks[0].msg_type, None);
+    }
+
+    #[test]
+    fn parse_openai_reasoning_details_chunk_combines_text_entries() {
+        let chunk = Bytes::from(
+            "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\" first \"},{\"type\":\"reasoning.summary\",\"text\":\"ignored\"},{\"type\":\"reasoning.text\",\"text\":\"second\"}]}}]}\n\n",
+        );
+
+        let chunks =
+            StreamParser::parse_openai(chunk).expect("reasoning_details chunk should parse");
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            chunks[0].reasoning_content.as_deref(),
+            Some("first\nsecond")
+        );
+    }
+
+    #[test]
+    fn parse_openai_done_chunk_marks_finished_message() {
+        let chunk = Bytes::from("data: [DONE]\n\n");
+
+        let chunks = StreamParser::parse_openai(chunk).expect("done chunk should parse");
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].msg_type, Some(MessageType::Finished));
     }
 }
 
@@ -166,9 +206,35 @@ impl StreamParser {
                                     chunk_msg_type = Some(MessageType::Text);
                                 }
 
+                                let mut reasoning_content = delta.reasoning_content;
+                                if reasoning_content.as_deref().is_none_or(|text| text.is_empty()) {
+                                    reasoning_content =
+                                        delta.thinking.filter(|text| !text.is_empty());
+                                }
+                                if reasoning_content.as_deref().is_none_or(|text| text.is_empty()) {
+                                    reasoning_content = delta.reasoning_details.as_ref().and_then(
+                                        |details| {
+                                            let combined = details
+                                                .iter()
+                                                .filter(|detail| detail["type"] == "reasoning.text")
+                                                .filter_map(|detail| {
+                                                    detail["text"].as_str().map(str::trim)
+                                                })
+                                                .filter(|text| !text.is_empty())
+                                                .collect::<Vec<_>>()
+                                                .join("\n");
+                                            if combined.is_empty() {
+                                                None
+                                            } else {
+                                                Some(combined)
+                                            }
+                                        },
+                                    );
+                                }
+
                                 chunks.push(StreamChunk {
                                     role: delta.role.clone(),
-                                    reasoning_content: delta.reasoning_content,
+                                    reasoning_content,
                                     content: chunk_content,
                                     usage: usage.clone(),
                                     // If tool_calls are present, they take precedence for msg_type

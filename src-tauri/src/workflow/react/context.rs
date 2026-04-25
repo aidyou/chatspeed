@@ -53,6 +53,15 @@ impl ContextManager {
             .unwrap_or(false)
     }
 
+    pub(crate) fn is_compression_summary_message(message: &WorkflowMessage) -> bool {
+        let Some(meta) = message.metadata.as_ref() else {
+            return false;
+        };
+
+        meta.get("type").and_then(|v| v.as_str()) == Some("summary")
+            && meta.get("compressed_until_message_id").is_some()
+    }
+
     fn is_successful_completion_message(message: &WorkflowMessage) -> bool {
         if message.role != "tool" || message.is_error {
             return false;
@@ -86,7 +95,10 @@ impl ContextManager {
     }
 
     fn latest_summary_message(messages: &[WorkflowMessage]) -> Option<&WorkflowMessage> {
-        messages.iter().rev().find(|m| Self::is_summary_message(m))
+        messages
+            .iter()
+            .rev()
+            .find(|m| Self::is_compression_summary_message(m))
     }
 
     fn latest_summary_boundary_id(messages: &[WorkflowMessage]) -> Option<i64> {
@@ -114,7 +126,9 @@ impl ContextManager {
     }
 
     fn latest_summary_index(messages: &[WorkflowMessage]) -> Option<usize> {
-        messages.iter().rposition(Self::is_summary_message)
+        messages
+            .iter()
+            .rposition(Self::is_compression_summary_message)
     }
 
     fn estimate_message_tokens(message: &WorkflowMessage) -> f64 {
@@ -168,6 +182,7 @@ impl ContextManager {
     fn build_compression_candidate_after_completion_count(
         &self,
         minimum_completions_after_summary: usize,
+        completion_index_to_compress: usize,
     ) -> Option<(Vec<WorkflowMessage>, i64)> {
         let compressed_until_message_id =
             Self::latest_summary_boundary_id(&self.messages).unwrap_or(0);
@@ -189,27 +204,37 @@ impl ContextManager {
             return None;
         }
 
-        let last_completion_idx = *completion_indices.last()?;
-        let compressed_until_id = self.messages[last_completion_idx].id?;
+        let target_completion_idx = *completion_indices.get(completion_index_to_compress)?;
+        let latest_completion_idx = *completion_indices.last()?;
+
+        if latest_completion_idx <= target_completion_idx {
+            return None;
+        }
+
+        if self.messages.len().saturating_sub(latest_completion_idx + 1) == 0 {
+            return None;
+        }
+
+        let compressed_until_id = self.messages[target_completion_idx].id?;
 
         let start_idx = Self::latest_summary_index(&self.messages).unwrap_or(0);
 
-        if start_idx > last_completion_idx {
+        if start_idx > target_completion_idx {
             return None;
         }
 
         Some((
-            self.messages[start_idx..=last_completion_idx].to_vec(),
+            self.messages[start_idx..=target_completion_idx].to_vec(),
             compressed_until_id,
         ))
     }
 
     pub fn build_blocking_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
-        self.build_compression_candidate_after_completion_count(1)
+        self.build_compression_candidate_after_completion_count(2, 0)
     }
 
     pub fn build_rollup_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
-        self.build_compression_candidate_after_completion_count(2)
+        self.build_compression_candidate_after_completion_count(3, 1)
     }
 
     pub fn new(
@@ -512,7 +537,7 @@ impl ContextManager {
 #[cfg(test)]
 mod tests {
     use super::ContextManager;
-    use crate::db::{Agent, MainStore};
+    use crate::db::{Agent, MainStore, WorkflowMessage};
     use crate::libs::tsid::TsidGenerator;
     use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
     use serde_json::json;
@@ -615,6 +640,48 @@ mod tests {
             .await
             .expect("failed to add completion message")
             .0;
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Follow-up task".to_string(),
+                None,
+                None,
+                None,
+                18,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add follow-up task");
+        let _ = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                19,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add follow-up completion");
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Starting next task".to_string(),
+                None,
+                None,
+                None,
+                20,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add active task marker");
 
         let (candidate_messages, compressed_until_id) = context
             .build_blocking_compression_candidate()
@@ -677,7 +744,7 @@ mod tests {
         assert_eq!(
             candidate_messages.last().and_then(|m| m.id),
             completion_message.id,
-            "compression boundary should end at the last successful complete_workflow_with_summary"
+            "compression boundary should stop at the earliest compressible completion and keep the latest completed task in memory"
         );
         assert_eq!(Some(compressed_until_id), completion_message.id);
     }
@@ -870,7 +937,7 @@ mod tests {
             .await
             .expect("failed to add third completion message")
             .0;
-        let post_finish = context
+        let _ = context
             .add_message(
                 "user".to_string(),
                 "task 4".to_string(),
@@ -883,12 +950,41 @@ mod tests {
                 None,
             )
             .await
+            .expect("failed to add fourth task");
+        let completion_message_4 = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                8,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add fourth completion message")
+            .0;
+        let post_finish = context
+            .add_message(
+                "user".to_string(),
+                "task 5".to_string(),
+                None,
+                None,
+                None,
+                9,
+                false,
+                None,
+                None,
+            )
+            .await
             .expect("failed to add active task")
             .0;
 
         let (candidate, compressed_until_id) = context
             .build_rollup_compression_candidate()
-            .expect("second finish task should be compressible");
+            .expect("third uncompressed completed task should trigger rollup");
 
         assert_eq!(
             candidate
@@ -902,7 +998,7 @@ mod tests {
         assert_eq!(
             candidate.last().and_then(|m| m.id),
             completion_message_3.id,
-            "incremental compression should stop at the latest completion after the summary"
+            "incremental compression should stop at the second completion after the latest summary so the latest completed task remains available"
         );
         assert_eq!(
             compressed_until_id,
@@ -911,13 +1007,17 @@ mod tests {
                 .expect("completion message id missing")
         );
         assert!(
+            context.messages.iter().any(|m| m.id == completion_message_4.id),
+            "the latest completed task should remain available in memory"
+        );
+        assert!(
             context.messages.iter().any(|m| m.id == post_finish.id),
             "messages after the compression boundary should stay in memory"
         );
     }
 
     #[tokio::test]
-    async fn build_rollup_compression_candidate_allows_initial_summary_after_two_finished_tasks() {
+    async fn build_rollup_compression_candidate_requires_three_finished_tasks_for_initial_summary() {
         let (_dir, store) = setup_store();
         let session_id = "session-initial-rollup-test";
         insert_workflow(&store, session_id);
@@ -985,9 +1085,64 @@ mod tests {
             .expect("failed to add second completion message")
             .0;
 
+        assert!(
+            context.build_rollup_compression_candidate().is_none(),
+            "initial rollup should wait until three finished segments exist"
+        );
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 3".to_string(),
+                None,
+                None,
+                None,
+                4,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add third task");
+        let _completion_message_3 = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                5,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add third completion message")
+            .0;
+
+        assert!(
+            context.build_rollup_compression_candidate().is_none(),
+            "initial rollup should wait until a new active task starts after the retained completed task"
+        );
+
+        let _active_message = context
+            .add_message(
+                "assistant".to_string(),
+                "Starting task 4".to_string(),
+                None,
+                None,
+                None,
+                6,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add active task marker");
+
         let (candidate, compressed_until_id) = context
             .build_rollup_compression_candidate()
-            .expect("initial rollup should trigger after two finished segments");
+            .expect("initial rollup should trigger after three finished segments once active work resumes");
 
         assert!(
             candidate
@@ -998,7 +1153,7 @@ mod tests {
         assert_eq!(
             candidate.last().and_then(|m| m.id),
             completion_message_2.id,
-            "initial rollup should stop at the latest successful completion"
+            "initial rollup should stop at the second successful completion"
         );
         assert_eq!(
             compressed_until_id,
@@ -1009,7 +1164,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rollup_candidate_requires_two_finished_segments_after_summary() {
+    async fn rollup_candidate_requires_three_finished_segments_after_summary() {
         let (_dir, store) = setup_store();
         let session_id = "session-rollup-threshold-test";
         insert_workflow(&store, session_id);
@@ -1073,7 +1228,7 @@ mod tests {
             )
             .await
             .expect("failed to add second task");
-        let _ = context
+        let _completion_message_2 = context
             .add_message(
                 "tool".to_string(),
                 "Finished".to_string(),
@@ -1086,11 +1241,12 @@ mod tests {
                 Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
             )
             .await
-            .expect("failed to add second finish task");
+            .expect("failed to add second finish task")
+            .0;
 
         assert!(
             context.build_rollup_compression_candidate().is_none(),
-            "background rollup should not trigger until two finished segments exist after the latest summary"
+            "background rollup should not trigger until three finished segments exist after the latest summary"
         );
 
         let _ = context
@@ -1107,7 +1263,7 @@ mod tests {
             )
             .await
             .expect("failed to add third task");
-        let completion_message_3 = context
+        let _completion_message_3 = context
             .add_message(
                 "tool".to_string(),
                 "Finished".to_string(),
@@ -1123,12 +1279,181 @@ mod tests {
             .expect("failed to add third completion message")
             .0;
 
+        assert!(
+            context.build_rollup_compression_candidate().is_none(),
+            "background rollup should wait until a new active task starts after the retained completed task"
+        );
+
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Starting task 4".to_string(),
+                None,
+                None,
+                None,
+                7,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add active task marker");
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 4".to_string(),
+                None,
+                None,
+                None,
+                7,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add fourth task");
+        let _completion_message_4 = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                8,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add fourth completion message")
+            .0;
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Starting task 5".to_string(),
+                None,
+                None,
+                None,
+                9,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add active task after fourth completion");
+
         let (_, compressed_until_id) = context
             .build_rollup_compression_candidate()
-            .expect("background rollup should trigger after two finished segments");
+            .expect("background rollup should trigger after three finished segments exist after the latest summary");
         assert_eq!(
             compressed_until_id,
-            completion_message_3
+            _completion_message_3
+                .id
+                .expect("third completion message id missing")
+        );
+    }
+
+    #[tokio::test]
+    async fn blocking_candidate_keeps_latest_completed_task_once_work_resumes() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-blocking-threshold-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 1".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add first task");
+        let completion_message_1 = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add first completion message")
+            .0;
+
+        assert!(
+            context.build_blocking_compression_candidate().is_none(),
+            "blocking compression should not remove the only completed task"
+        );
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 2".to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add second task");
+        let _completion_message_2 = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add second completion message")
+            .0;
+
+        assert!(
+            context.build_blocking_compression_candidate().is_none(),
+            "blocking compression should wait for a new active task after the retained completion"
+        );
+
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Starting task 3".to_string(),
+                None,
+                None,
+                None,
+                4,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add active task marker");
+
+        let (_, compressed_until_id) = context
+            .build_blocking_compression_candidate()
+            .expect("blocking compression should keep the latest completed task");
+        assert_eq!(
+            compressed_until_id,
+            completion_message_1
                 .id
                 .expect("completion message id missing")
         );
@@ -1266,6 +1591,32 @@ mod tests {
             context.build_blocking_compression_candidate().is_none(),
             "rejected completion must not be treated as a successful compression boundary"
         );
+    }
+
+    #[test]
+    fn approved_plan_summary_is_not_treated_as_compression_summary() {
+        let approved_plan = WorkflowMessage {
+            id: Some(1),
+            session_id: "s".to_string(),
+            role: "system".to_string(),
+            message: "# APPROVED EXECUTION PLAN".to_string(),
+            reasoning: None,
+            metadata: Some(json!({
+                "type": "summary",
+                "subtype": "approved_plan",
+                "plan_content": "do the work",
+                "todo_content": "[]"
+            })),
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        assert!(ContextManager::is_summary_message(&approved_plan));
+        assert!(!ContextManager::is_compression_summary_message(&approved_plan));
     }
 
     #[tokio::test]

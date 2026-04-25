@@ -502,14 +502,14 @@
       </el-form-item>
       <el-form-item
         v-if="modelConfigForm.reasoning"
-        :label="$t('settings.model.thinkingBudgetTokens')">
-        <el-input-number
-          v-model="modelConfigForm.thinkingBudgetTokens"
-          :min="256"
-          :max="131072"
-          :step="256"
-          controls-position="right"
-          style="width: 100%" />
+        :label="$t('settings.model.thinkingLevel')">
+        <el-select v-model="modelConfigForm.thinkingLevel" style="width: 100%">
+          <el-option
+            v-for="option in modelThinkingLevelOptions"
+            :key="option.value"
+            :label="$t(option.label)"
+            :value="option.value" />
+        </el-select>
       </el-form-item>
       <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
         <el-switch v-model="modelConfigForm.functionCall" />
@@ -1160,13 +1160,33 @@ const defaultModelConfig = {
   functionCall: false,
   reasoning: false,
   thinking: null,
-  thinkingBudgetTokens: 1024,
+  thinkingLevel: 'low',
   imageInput: false,
   contextSize: 128000,
   temperature: -0.1,
   maxTokens: 0,
   customParams: []
 }
+const THINKING_LEVEL_TO_BUDGET = {
+  low: 1024,
+  medium: 2048,
+  high: 4096,
+  max: 8192
+}
+const thinkingLevelFromBudget = (budget) => {
+  const normalized = Number(budget) || 0
+  if (normalized > 4096) return 'max'
+  if (normalized > 2048) return 'high'
+  if (normalized > 1024) return 'medium'
+  return 'low'
+}
+const budgetFromThinkingLevel = (level) => THINKING_LEVEL_TO_BUDGET[level] || THINKING_LEVEL_TO_BUDGET.low
+const modelThinkingLevelOptions = [
+  { value: 'low', label: 'settings.model.reasoningLow' },
+  { value: 'medium', label: 'settings.model.reasoningMedium' },
+  { value: 'high', label: 'settings.model.reasoningHigh' },
+  { value: 'max', label: 'settings.model.reasoningMax' }
+]
 const modelConfigRules = {
   id: [{ required: true, message: t('settings.model.modelIdRequired') }]
 }
@@ -1196,7 +1216,7 @@ const onModelConfig = model => {
       ...model,
       customParams: model.customParams || [],
       thinking: model.thinking || null,
-      thinkingBudgetTokens: model.thinking?.budgetTokens || 1024
+      thinkingLevel: thinkingLevelFromBudget(model.thinking?.budgetTokens)
     }
   } else {
     prevModelConfigId.value = ''
@@ -1238,12 +1258,12 @@ const updateModelConfig = () => {
       modelConfigForm.value.reasoning
         ? {
           type: 'enabled',
-          budgetTokens: Number(modelConfigForm.value.thinkingBudgetTokens) || 1024
+          budgetTokens: budgetFromThinkingLevel(modelConfigForm.value.thinkingLevel)
         }
         : null,
     customParams: modelConfigForm.value.customParams.filter(p => p.key.trim() !== '')
   }
-  delete updatedModelConfig.thinkingBudgetTokens
+  delete updatedModelConfig.thinkingLevel
 
   if (index !== -1) {
     if (prevModelConfigId.value && prevModelConfigId.value === modelForm.value.defaultModel) {

@@ -57,12 +57,13 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
   const displayAllowedPath = computed(() => {
     const paths = currentPaths.value
     if (!paths || paths.length === 0) return t('settings.agent.workingDirectory')
-    const firstPath = paths[0]
-    if (!firstPath) return t('settings.agent.workingDirectory')
-    // Try to get last segment of path
-    const parts = firstPath.split(/[/\\]/).filter((p) => p !== '')
-    const result = parts[parts.length - 1] || firstPath
-    return result
+    return paths
+      .map(p => {
+        const parts = p.split(/[/\\]/).filter(p => p !== '')
+        return parts[parts.length - 1] ?? ''
+      })
+      .filter(p => p.trim() !== '')
+      .join(', ')
   })
 
   // Clear pending paths when agent changes
@@ -102,7 +103,7 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
     }
   }
 
-  const onRemovePath = async (index) => {
+  const onRemovePath = async index => {
     if (currentWorkflowId.value) {
       // Editing existing workflow
       const newPaths = [...allowedPaths.value]
@@ -120,7 +121,7 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
   }
 
   // Handle add path from FileTree component
-  const onAddPathFromTree = async (selected) => {
+  const onAddPathFromTree = async selected => {
     if (!selected) return
     if (currentWorkflowId.value) {
       // Editing existing workflow
@@ -143,11 +144,11 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
   }
 
   // Handle remove path from FileTree component
-  const onRemovePathFromTree = async (path) => {
+  const onRemovePathFromTree = async path => {
     if (!path) return
     if (currentWorkflowId.value) {
       // Editing existing workflow
-      const newPaths = allowedPaths.value.filter((p) => p !== path)
+      const newPaths = allowedPaths.value.filter(p => p !== path)
       await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
       // Immediately notify executor
       await invokeWrapper('workflow_signal', {

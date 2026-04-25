@@ -239,6 +239,10 @@ pub struct OpenAIStreamDelta {
     pub content: Option<String>,
     pub role: Option<String>,
     pub reasoning_content: Option<String>,
+    #[serde(default)]
+    pub thinking: Option<String>,
+    #[serde(default)]
+    pub reasoning_details: Option<Vec<Value>>,
     #[serde(rename = "type")]
     pub msg_type: Option<String>,
     #[serde(default)]

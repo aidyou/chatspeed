@@ -19,7 +19,7 @@ use crate::tools::{
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
     child_tasks::render_call_mode_sub_agent_tool_result,
-    compression::ContextCompressor,
+    compression::{CompressionMode, ContextCompressor},
     context::ContextManager,
     dispatcher::{Dispatcher, DispatcherConfig},
     error::WorkflowEngineError,
@@ -332,13 +332,14 @@ impl WorkflowExecutor {
         &mut self,
         compression_candidate: Vec<WorkflowMessage>,
         compressed_until_message_id: i64,
+        mode: CompressionMode,
     ) {
         self.background_compression_boundary_id = Some(compressed_until_message_id);
         let compressor = self.compressor.clone();
         let session_id = self.session_id.clone();
 
         tokio::spawn(async move {
-            match compressor.compress(&compression_candidate).await {
+            match compressor.compress(&compression_candidate, mode).await {
                 Ok(summary) => {
                     let signal = serde_json::to_string(&WorkflowSignal::CompressionReady {
                         compressed_until_message_id,
@@ -1443,11 +1444,18 @@ impl WorkflowExecutor {
         );
 
         let approved_plan = plan.clone();
-        self.context.prune_for_execution(plan).await?;
-        if self.planning_root.exists() {
-            let _ = std::fs::remove_dir_all(&self.planning_root);
+        // Only prune history during formal Planning→Implementation transition.
+        // In Standard (default) mode, the AI naturally creates plans as part of
+        // the conversation flow; pruning here would discard follow-up questions
+        // and investigation context, causing the AI to drift back to the initial
+        // query instead of executing the approved plan.
+        if self.policy.phase == ExecutionPhase::Planning {
+            self.context.prune_for_execution(plan).await?;
+            if self.planning_root.exists() {
+                let _ = std::fs::remove_dir_all(&self.planning_root);
+            }
+            let _ = std::fs::create_dir_all(&self.planning_root);
         }
-        let _ = std::fs::create_dir_all(&self.planning_root);
 
         let mut new_policy = ExecutionPolicy::implementation();
         new_policy.approval_level = self.policy.approval_level.clone();
@@ -1804,6 +1812,17 @@ impl WorkflowExecutor {
                 || self.state == WorkflowState::AwaitingApproval
                 || self.state == WorkflowState::AwaitingSubAgent
             {
+                if self.state == WorkflowState::AwaitingApproval
+                    && self.pending_approvals.is_empty()
+                {
+                    log::warn!(
+                        "[Workflow][session={}][phase=wait][event=orphaned_approval_wait] AwaitingApproval with no pending approvals; resuming thinking",
+                        self.session_id
+                    );
+                    self.update_state(WorkflowState::Thinking).await?;
+                    continue;
+                }
+
                 let wait_reason_enum = match &self.state {
                     WorkflowState::Paused => Some(WaitReason::Confirmation),
                     WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
@@ -2894,12 +2913,17 @@ impl WorkflowExecutor {
                         self.session_id
                     );
 
-                    // A. Context Pruning: Keep only Initial Query + Final Plan + Todo List
-                    self.context.prune_for_execution(plan).await?;
-                    if self.planning_root.exists() {
-                        let _ = std::fs::remove_dir_all(&self.planning_root);
+                    // A. Context Pruning: Only in formal Planning phase.
+                    // In Standard (default) mode, keep full conversation context
+                    // to prevent the AI from losing follow-up questions and
+                    // investigation context that led to this plan.
+                    if self.policy.phase == ExecutionPhase::Planning {
+                        self.context.prune_for_execution(plan).await?;
+                        if self.planning_root.exists() {
+                            let _ = std::fs::remove_dir_all(&self.planning_root);
+                        }
+                        let _ = std::fs::create_dir_all(&self.planning_root);
                     }
-                    let _ = std::fs::create_dir_all(&self.planning_root);
 
                     // B. Policy & State Reset
                     let mut new_policy = ExecutionPolicy::implementation();
@@ -3477,8 +3501,10 @@ impl WorkflowExecutor {
                         })
                         .await?;
 
-                        let compression_result =
-                            self.compressor.compress(&compression_candidate).await;
+                        let compression_result = self
+                            .compressor
+                            .compress(&compression_candidate, CompressionMode::Blocking)
+                            .await;
 
                         self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
                             is_compressing: false,
@@ -3561,6 +3587,7 @@ impl WorkflowExecutor {
                             self.spawn_background_compression(
                                 compression_candidate,
                                 compressed_until_message_id,
+                                CompressionMode::Rollup,
                             );
                         }
                     }

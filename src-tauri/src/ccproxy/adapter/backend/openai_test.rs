@@ -9,7 +9,16 @@ mod tests {
         unified::{UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool},
     };
     use reqwest::Client;
-    use serde_json::json;
+    use serde_json::{json, Value};
+
+    fn request_json(builder: reqwest::RequestBuilder) -> Value {
+        let request = builder.build().expect("request should build");
+        let body = request
+            .body()
+            .and_then(|body| body.as_bytes())
+            .expect("request body should be available as bytes");
+        serde_json::from_slice(body).expect("request body should be valid json")
+    }
 
     /// Test that tool calls are properly paired with tool results
     #[tokio::test]
@@ -143,6 +152,81 @@ mod tests {
         // We can't easily inspect the request builder, but we can verify it was created
         // In a real test, we might want to capture the actual request being made
         println!("Request builder created successfully");
+    }
+
+    #[tokio::test]
+    async fn test_native_reasoning_history_is_preserved_for_supported_models() {
+        let adapter = OpenAIBackendAdapter;
+        let client = Client::new();
+        let mut unified_request = UnifiedRequest {
+            model: "deepseek-chat".to_string(),
+            messages: vec![UnifiedMessage {
+                role: UnifiedRole::Assistant,
+                content: vec![UnifiedContentBlock::Text {
+                    text: "Visible answer".to_string(),
+                }],
+                reasoning_content: Some("Hidden chain".to_string()),
+            }],
+            stream: false,
+            ..Default::default()
+        };
+
+        let request = adapter
+            .adapt_request(
+                &client,
+                &mut unified_request,
+                "test-api-key",
+                "https://api.openai.com/v1",
+                "deepseek-chat",
+                false,
+                &mut reqwest::header::HeaderMap::new(),
+            )
+            .await
+            .expect("request adaptation should succeed");
+
+        let request_json = request_json(request);
+        let first_message = &request_json["messages"][0];
+        assert_eq!(first_message["content"], "Visible answer");
+        assert_eq!(first_message["reasoning_content"], "Hidden chain");
+    }
+
+    #[tokio::test]
+    async fn test_reasoning_history_falls_back_to_think_block_for_unsupported_models() {
+        let adapter = OpenAIBackendAdapter;
+        let client = Client::new();
+        let mut unified_request = UnifiedRequest {
+            model: "claude-3-7-sonnet".to_string(),
+            messages: vec![UnifiedMessage {
+                role: UnifiedRole::Assistant,
+                content: vec![UnifiedContentBlock::Text {
+                    text: "Visible answer".to_string(),
+                }],
+                reasoning_content: Some("Hidden chain".to_string()),
+            }],
+            stream: false,
+            ..Default::default()
+        };
+
+        let request = adapter
+            .adapt_request(
+                &client,
+                &mut unified_request,
+                "test-api-key",
+                "https://api.openai.com/v1",
+                "claude-3-7-sonnet",
+                false,
+                &mut reqwest::header::HeaderMap::new(),
+            )
+            .await
+            .expect("request adaptation should succeed");
+
+        let request_json = request_json(request);
+        let first_message = &request_json["messages"][0];
+        assert_eq!(
+            first_message["content"],
+            "<think>\nHidden chain\n</think>\n\nVisible answer"
+        );
+        assert!(first_message.get("reasoning_content").is_none());
     }
 
     /// Test multiple consecutive assistant messages with tool calls (real-world scenario)

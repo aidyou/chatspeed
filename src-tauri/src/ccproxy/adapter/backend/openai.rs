@@ -16,6 +16,11 @@ use crate::ccproxy::types::{TOOL_PARSE_ERROR_REMINDER, TOOL_TAG_END, TOOL_TAG_ST
 use crate::ccproxy::{
     adapter::{
         backend::{common, update_message_block},
+        input::helper::thinking_adapter::{
+            adapt_vendor_thinking_params_for_openai_backend,
+            merge_reasoning_into_openai_message_content,
+            supports_native_reasoning_history_for_openai_backend,
+        },
         range_adapter::adapt_temperature,
         unified::{
             SseStatus, UnifiedContentBlock, UnifiedEmbeddingData, UnifiedEmbeddingInput,
@@ -303,6 +308,21 @@ impl BackendAdapter for OpenAIBackendAdapter {
                         content = Some(OpenAIMessageContent::Text(" ".to_string()));
                     }
 
+                    let reasoning_content = if role_str == "assistant"
+                        && supports_native_reasoning_history_for_openai_backend(
+                            &unified_request.model,
+                        ) {
+                        combined_reasoning
+                    } else {
+                        if role_str == "assistant" {
+                            if let Some(reasoning) = combined_reasoning.as_deref() {
+                                content =
+                                    merge_reasoning_into_openai_message_content(content, reasoning);
+                            }
+                        }
+                        None
+                    };
+
                     openai_messages.push(UnifiedChatMessage {
                         role: Some(role_str.to_string()),
                         content,
@@ -311,7 +331,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
                         } else {
                             Some(primary_tool_calls)
                         },
-                        reasoning_content: combined_reasoning,
+                        reasoning_content,
                         ..Default::default()
                     });
                 }
@@ -366,59 +386,29 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 }
             });
 
-        let is_openai_reasoning_model =
-            unified_request.model.starts_with("o1-") || unified_request.model.starts_with("o3-");
         // Check if it's a MiniMax model (common aliases or direct naming)
-        let is_minimax = unified_request.model.to_lowercase().contains("minimax");
+        let _is_minimax = unified_request.model.to_lowercase().contains("minimax");
         // Check if it's a Zhipu GLM model
-        let is_glm = unified_request.model.to_lowercase().contains("glm");
+        let _is_glm = unified_request.model.to_lowercase().contains("glm");
         // Check if it's a DeepSeek model
         let is_deepseek = unified_request.model.to_lowercase().contains("deepseek");
         // Check if it's a Qwen model
-        let is_qwen = unified_request.model.to_lowercase().contains("qwen")
+        let _is_qwen = unified_request.model.to_lowercase().contains("qwen")
             || unified_request.model.to_lowercase().contains("qwq");
         // Check if it's a Kimi (Moonshot) model
-        let is_kimi = unified_request.model.to_lowercase().contains("kimi")
+        let _is_kimi = unified_request.model.to_lowercase().contains("kimi")
             || unified_request.model.to_lowercase().contains("moonshot");
-
-        let (reasoning_effort, reasoning_split, vendor_thinking, enable_thinking, thinking_budget) =
-            if let Some(thinking) = &unified_request.thinking {
-                if matches!(thinking.include_thoughts, Some(true)) {
-                    let effort = if is_openai_reasoning_model {
-                        let e = match thinking.budget_tokens {
-                            Some(budget) if budget < 4096 => "low",
-                            Some(budget) if budget >= 4096 && budget <= 16384 => "medium",
-                            Some(budget) if budget > 16384 => "high",
-                            _ => "medium",
-                        };
-                        Some(e.to_string())
-                    } else {
-                        None
-                    };
-
-                    let split = if is_minimax { Some(true) } else { None };
-                    let v_thinking = if is_glm || is_deepseek || is_kimi {
-                        Some(crate::ccproxy::types::openai::ZhipuThinking {
-                            r#type: "enabled".to_string(),
-                        })
-                    } else {
-                        None
-                    };
-
-                    let e_thinking = if is_qwen { Some(true) } else { None };
-                    let t_budget = if is_qwen {
-                        thinking.budget_tokens
-                    } else {
-                        None
-                    };
-
-                    (effort, split, v_thinking, e_thinking, t_budget)
-                } else {
-                    (None, None, None, None, None)
-                }
-            } else {
-                (None, None, None, None, None)
-            };
+        let vendor_thinking_params = adapt_vendor_thinking_params_for_openai_backend(
+            &unified_request.model,
+            unified_request.thinking.as_ref(),
+            unified_request.reasoning_effort.as_deref(),
+            unified_request.tools.as_ref().is_some_and(|tools| !tools.is_empty()),
+        );
+        let reasoning_effort = vendor_thinking_params.reasoning_effort.clone();
+        let reasoning_split = vendor_thinking_params.reasoning_split;
+        let vendor_thinking = vendor_thinking_params.thinking.clone();
+        let enable_thinking = vendor_thinking_params.enable_thinking;
+        let thinking_budget = vendor_thinking_params.thinking_budget;
 
         // --- New Prompt Injection Logic ---
         let injection_pos = unified_request

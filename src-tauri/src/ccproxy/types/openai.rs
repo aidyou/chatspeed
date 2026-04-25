@@ -113,7 +113,7 @@ pub struct OpenAIChatCompletionRequest {
     pub store: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ZhipuThinking {
     pub r#type: String, // "enabled", "disabled"
 }

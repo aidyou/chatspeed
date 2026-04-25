@@ -70,9 +70,14 @@
               <el-switch v-model="currentModel.thinkingEnabled" size="small" />
             </div>
             <div class="param-item" v-if="currentModel.thinkingEnabled" style="flex: 1;">
-              <span class="param-label" style="display: block; margin-bottom: 4px;">{{ $t('settings.model.thinkingBudgetTokens') }}</span>
-              <el-input-number v-model="currentModel.thinkingBudgetTokens" :min="256" :max="131072" :step="256"
-                size="small" controls-position="right" style="width: 100%" />
+              <span class="param-label" style="display: block; margin-bottom: 4px;">{{ $t('settings.model.thinkingLevel') }}</span>
+              <el-select v-model="currentModel.thinkingLevel" size="small" style="width: 100%">
+                <el-option
+                  v-for="option in workflowThinkingLevelOptions"
+                  :key="option.value"
+                  :label="$t(option.label)"
+                  :value="option.value" />
+              </el-select>
             </div>
           </div>
         </div>
@@ -128,10 +133,27 @@ const defaultModelConfig = () => ({
   temperature: -0.1,
   thinking: null,
   thinkingEnabled: false,
-  thinkingBudgetTokens: 1024,
+  thinkingLevel: 'low',
   contextSize: 128000,
   maxTokens: 0
 })
+const THINKING_LEVEL_TO_BUDGET = {
+  low: 1024,
+  medium: 2048,
+  high: 4096
+}
+const thinkingLevelFromBudget = (budget) => {
+  const normalized = Number(budget) || 0
+  if (normalized > 2048) return 'high'
+  if (normalized > 1024) return 'medium'
+  return 'low'
+}
+const budgetFromThinkingLevel = (level) => THINKING_LEVEL_TO_BUDGET[level] || THINKING_LEVEL_TO_BUDGET.low
+const workflowThinkingLevelOptions = [
+  { value: 'low', label: 'settings.model.reasoningLow' },
+  { value: 'medium', label: 'settings.model.reasoningMedium' },
+  { value: 'high', label: 'settings.model.reasoningHigh' }
+]
 
 const agentModels = reactive({
   plan: defaultModelConfig(),
@@ -158,7 +180,7 @@ const normalizeModelDraft = (model) => ({
   ...(model || {}),
   thinking: model?.thinking || null,
   thinkingEnabled: !!model?.thinking,
-  thinkingBudgetTokens: model?.thinking?.budgetTokens || 1024
+  thinkingLevel: thinkingLevelFromBudget(model?.thinking?.budgetTokens)
 })
 
 const applyProviderModelOverrides = (modelId) => {
@@ -172,7 +194,7 @@ const applyProviderModelOverrides = (modelId) => {
   }
   currentModel.value.thinking = selected.thinking || null
   currentModel.value.thinkingEnabled = !!selected.thinking
-  currentModel.value.thinkingBudgetTokens = selected.thinking?.budgetTokens || 1024
+  currentModel.value.thinkingLevel = thinkingLevelFromBudget(selected.thinking?.budgetTokens)
   if (selected.contextSize !== undefined && selected.contextSize !== null) {
     currentModel.value.contextSize = selected.contextSize
   }
@@ -232,11 +254,11 @@ const handleSave = () => {
     result[key].thinking = result[key].thinkingEnabled
       ? {
         type: 'enabled',
-        budgetTokens: Number(result[key].thinkingBudgetTokens) || 1024
+        budgetTokens: budgetFromThinkingLevel(result[key].thinkingLevel)
       }
       : null
     delete result[key].thinkingEnabled
-    delete result[key].thinkingBudgetTokens
+    delete result[key].thinkingLevel
   }
   if (modelModes.plan === 'proxy') result.plan.id = 0
   if (modelModes.act === 'proxy') result.act.id = 0

@@ -1,5 +1,6 @@
 use crate::ccproxy::{
     adapter::{
+        input::helper::thinking_adapter::build_unified_thinking_from_openai_request,
         range_adapter::{clamp_to_protocol_range, Parameter},
         unified::{
             UnifiedContentBlock, UnifiedEmbeddingInput, UnifiedEmbeddingRequest, UnifiedMessage,
@@ -148,20 +149,19 @@ pub fn from_openai(
         logprobs: req.logprobs,
         top_logprobs: req.top_logprobs,
         logit_bias: req.logit_bias.clone(),
+        reasoning_effort: req.reasoning_effort.clone(),
         // Claude-specific parameters - map OpenAI user to Claude metadata.user_id
         metadata: req.user.clone().map(|user_id| {
             crate::ccproxy::adapter::unified::UnifiedMetadata {
                 user_id: Some(user_id),
             }
         }),
-        thinking: if req.reasoning_effort.is_some() || req.reasoning_split.unwrap_or(false) {
-            Some(crate::ccproxy::adapter::unified::UnifiedThinking {
-                include_thoughts: Some(true),
-                budget_tokens: None, // No direct mapping from reasoning_effort to a token budget
-            })
-        } else {
-            None
-        },
+        thinking: build_unified_thinking_from_openai_request(
+            req.thinking.as_ref(),
+            req.reasoning_effort.as_deref(),
+            req.reasoning_split,
+            req.thinking_budget,
+        ),
         cache_control: None, // OpenAI doesn't support cache control
         // Gemini-specific parameters - map OpenAI response_format to Gemini fields
         safety_settings: None, // OpenAI doesn't have safety settings

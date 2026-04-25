@@ -231,7 +231,9 @@ impl LlmProcessor {
             if m.role == "system"
                 && m.metadata
                     .as_ref()
-                    .map_or(false, |meta| meta["type"] == "summary")
+                    .is_some_and(|_| {
+                        crate::workflow::react::context::ContextManager::is_compression_summary_message(m)
+                    })
             {
                 Some(m.message.clone())
             } else {
@@ -712,25 +714,13 @@ impl LlmProcessor {
         Self::normalize_history_messages(raw_history)
     }
 
-    fn combine_message_and_reasoning(role: &str, message: &str, reasoning: Option<&str>) -> String {
-        let trimmed_message = message.trim();
-        let sanitized_reasoning =
-            crate::workflow::react::context::ContextManager::sanitize_reasoning_content(
-                reasoning.map(|value| value.to_string()),
-            );
-        let trimmed_reasoning = sanitized_reasoning.as_deref().unwrap_or("");
-
-        if role != "assistant" || trimmed_reasoning.is_empty() {
-            return message.to_string();
+    fn sanitize_history_reasoning(role: &str, reasoning: Option<&str>) -> Option<String> {
+        if role != "assistant" {
+            return None;
         }
 
-        if trimmed_message.is_empty() {
-            return format!("<think>\n{}\n</think>", trimmed_reasoning);
-        }
-
-        format!(
-            "<think>\n{}\n</think>\n\n{}",
-            trimmed_reasoning, trimmed_message
+        crate::workflow::react::context::ContextManager::sanitize_reasoning_content(
+            reasoning.map(|value| value.to_string()),
         )
     }
 
@@ -801,9 +791,13 @@ impl LlmProcessor {
             }
 
             let role = m.role.clone();
-            let mut content = runtime_observation_content.unwrap_or_else(|| {
-                Self::combine_message_and_reasoning(&role, &m.message, m.reasoning.as_deref())
-            });
+            let has_runtime_observation = runtime_observation_content.is_some();
+            let mut content = runtime_observation_content.unwrap_or_else(|| m.message.clone());
+            let mut reasoning_content = if has_runtime_observation {
+                None
+            } else {
+                Self::sanitize_history_reasoning(&role, m.reasoning.as_deref())
+            };
             let tool_calls = m
                 .metadata
                 .as_ref()
@@ -855,6 +849,15 @@ impl LlmProcessor {
                             serde_json::json!(format!("{}\n\n{}", last_content, content));
                     }
 
+                    if let Some(new_reasoning) = reasoning_content.take() {
+                        let merged_reasoning = last["reasoning_content"]
+                            .as_str()
+                            .filter(|existing| !existing.trim().is_empty())
+                            .map(|existing| format!("{}\n\n{}", existing, new_reasoning))
+                            .unwrap_or(new_reasoning);
+                        last["reasoning_content"] = serde_json::json!(merged_reasoning);
+                    }
+
                     // Merge tool_calls instead of overwriting
                     if let Some(new_tc) = tool_calls {
                         if let Some(existing_tc) = last["tool_calls"].as_array_mut() {
@@ -884,7 +887,11 @@ impl LlmProcessor {
                 continue;
             }
 
-            if role == "assistant" && content.trim().is_empty() && tool_calls.is_none() {
+            if role == "assistant"
+                && content.trim().is_empty()
+                && tool_calls.is_none()
+                && reasoning_content.is_none()
+            {
                 continue;
             }
 
@@ -896,6 +903,9 @@ impl LlmProcessor {
                 };
             if let Some(tc) = tool_calls {
                 msg["tool_calls"] = tc;
+            }
+            if let Some(reasoning) = reasoning_content {
+                msg["reasoning_content"] = serde_json::json!(reasoning);
             }
             if let Some(tid) = tool_call_id {
                 msg["tool_call_id"] = serde_json::json!(tid);
@@ -1544,7 +1554,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_history_replays_assistant_reasoning_inside_think_block() {
+    fn normalize_history_replays_assistant_reasoning_in_native_field() {
         let history = LlmProcessor::normalize_history_messages(vec![
             message("user", "Implement the fix", None, None),
             message_with_reasoning(
@@ -1563,14 +1573,16 @@ mod tests {
         ]);
 
         assert_eq!(history[1]["role"], "assistant");
-        let content = history[1]["content"].as_str().unwrap_or_default();
-        assert!(content.contains("<think>"));
-        assert!(content.contains("enough context"));
+        assert!(history[1]["content"].is_null());
+        assert!(history[1]["reasoning_content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("enough context"));
         assert!(history[1]["tool_calls"].is_array());
     }
 
     #[test]
-    fn normalize_history_strips_existing_think_tags_from_reasoning() {
+    fn normalize_history_strips_existing_think_tags_from_reasoning_field() {
         let history = LlmProcessor::normalize_history_messages(vec![
             message("user", "Explain it", None, None),
             message_with_reasoning(
@@ -1582,10 +1594,35 @@ mod tests {
             ),
         ]);
 
-        let content = history[1]["content"].as_str().unwrap_or_default();
         assert_eq!(
-            content,
-            "<think>\nNeed to inspect the scheduler\n</think>"
+            history[1]["reasoning_content"].as_str().unwrap_or_default(),
+            "Need to inspect the scheduler"
+        );
+    }
+
+    #[test]
+    fn normalize_history_merges_consecutive_assistant_reasoning_content() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message_with_reasoning(
+                "assistant",
+                "First visible step",
+                "First hidden step",
+                Some("think"),
+                None,
+            ),
+            message_with_reasoning(
+                "assistant",
+                "Second visible step",
+                "Second hidden step",
+                Some("think"),
+                None,
+            ),
+        ]);
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0]["reasoning_content"].as_str().unwrap_or_default(),
+            "First hidden step\n\nSecond hidden step"
         );
     }
 }

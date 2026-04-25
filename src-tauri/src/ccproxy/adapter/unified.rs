@@ -55,6 +55,8 @@ pub struct UnifiedRequest {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logit_bias: Option<HashMap<String, f32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 
     // Claude-specific parameters
     #[serde(skip_serializing_if = "Option::is_none")]

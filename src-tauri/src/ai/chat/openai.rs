@@ -18,6 +18,7 @@ use crate::ai::util::{
     init_request_params, init_request_params_value, merge_custom_params, merge_custom_params_value,
     process_custom_headers,
 };
+use crate::ccproxy::adapter::input::helper::thinking_adapter::build_openai_compat_thinking_fields;
 use crate::ccproxy::{ChatProtocol, StreamFormat, StreamProcessor};
 use crate::db::{AiModel, ModelConfig};
 use crate::{
@@ -32,6 +33,39 @@ struct JsonErrorPayload<'a> {
 }
 
 const MAX_TOOL_CALLS_PER_RESPONSE: usize = 15;
+
+fn extract_reasoning_from_openai_message(message: &Value) -> String {
+    if let Some(reasoning_content) = message.get("reasoning_content").and_then(|value| value.as_str())
+    {
+        let trimmed = reasoning_content.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    if let Some(thinking) = message.get("thinking").and_then(|value| value.as_str()) {
+        let trimmed = thinking.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    if let Some(details) = message.get("reasoning_details").and_then(|value| value.as_array()) {
+        let combined = details
+            .iter()
+            .filter(|detail| detail.get("type").and_then(|value| value.as_str()) == Some("reasoning.text"))
+            .filter_map(|detail| detail.get("text").and_then(|value| value.as_str()))
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !combined.is_empty() {
+            return combined;
+        }
+    }
+
+    String::new()
+}
 
 struct PreparedToolCalls {
     calls: Vec<(u32, ToolCallDeclaration)>,
@@ -357,8 +391,8 @@ impl OpenAIChat {
         let reasoning_content = parsed["choices"]
             .as_array()
             .and_then(|choices| choices.first())
-            .and_then(|choice| choice["message"]["reasoning_content"].as_str())
-            .unwrap_or("");
+            .map(|choice| extract_reasoning_from_openai_message(&choice["message"]))
+            .unwrap_or_default();
 
         // Extract token usage if available
         let token_usage = if let Some(usage) = parsed.get("usage") {
@@ -376,7 +410,7 @@ impl OpenAIChat {
         if !reasoning_content.is_empty() {
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
-                reasoning_content.to_string(),
+                reasoning_content.clone(),
                 MessageType::Reasoning,
                 metadata_option.as_ref().and_then(|m| m.to_value()),
                 None,
@@ -709,6 +743,56 @@ impl OpenAIChat {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::extract_reasoning_from_openai_message;
+    use serde_json::json;
+
+    #[test]
+    fn extract_reasoning_prefers_reasoning_content() {
+        let message = json!({
+            "reasoning_content": "direct reasoning",
+            "thinking": "fallback thinking",
+            "reasoning_details": [
+                { "type": "reasoning.text", "text": "detail" }
+            ]
+        });
+
+        assert_eq!(
+            extract_reasoning_from_openai_message(&message),
+            "direct reasoning"
+        );
+    }
+
+    #[test]
+    fn extract_reasoning_falls_back_to_thinking() {
+        let message = json!({
+            "thinking": "thinking text"
+        });
+
+        assert_eq!(
+            extract_reasoning_from_openai_message(&message),
+            "thinking text"
+        );
+    }
+
+    #[test]
+    fn extract_reasoning_combines_reasoning_details() {
+        let message = json!({
+            "reasoning_details": [
+                { "type": "reasoning.text", "text": " first " },
+                { "type": "reasoning.summary", "text": "ignored" },
+                { "type": "reasoning.text", "text": "second" }
+            ]
+        });
+
+        assert_eq!(
+            extract_reasoning_from_openai_message(&message),
+            "first\nsecond"
+        );
+    }
+}
+
 impl_stoppable!(OpenAIChat);
 
 #[async_trait]
@@ -831,8 +915,25 @@ impl AiChatTrait for OpenAIChat {
                 }
             }
 
-            if let Some(thinking) = &merged_metadata.thinking {
-                obj.insert("thinking".to_string(), json!(thinking));
+            if merged_metadata.thinking.is_some() {
+                let compat_thinking =
+                    build_openai_compat_thinking_fields(&final_model, merged_metadata.thinking.as_ref());
+
+                if !obj.contains_key("thinking") {
+                    if let Some(thinking) = compat_thinking.thinking {
+                        obj.insert("thinking".to_string(), json!(thinking));
+                    }
+                }
+                if !obj.contains_key("reasoning_effort") {
+                    if let Some(reasoning_effort) = compat_thinking.reasoning_effort {
+                        obj.insert("reasoning_effort".to_string(), json!(reasoning_effort));
+                    }
+                }
+                if !obj.contains_key("thinking_budget") {
+                    if let Some(thinking_budget) = compat_thinking.thinking_budget {
+                        obj.insert("thinking_budget".to_string(), json!(thinking_budget));
+                    }
+                }
             }
 
             // temperature: OpenAI range is typically 0.0 to 2.0

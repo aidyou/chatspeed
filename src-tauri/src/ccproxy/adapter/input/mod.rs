@@ -1,5 +1,6 @@
 mod claude_input;
 mod gemini_input;
+pub mod helper;
 mod ollama_input;
 mod openai_input;
 

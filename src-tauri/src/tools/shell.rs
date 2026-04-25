@@ -536,19 +536,18 @@ impl ToolDefinition for ShellExecute {
                     stdout.push_str("\n[Truncated]");
                 }
 
-                if output.status.success() {
-                    // Success: just return the output, no prefix
-                    Ok(ToolCallResult::success(Some(stdout), None))
-                } else {
-                    // Error: show Error: prefix with stderr
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let error_msg = if stderr.is_empty() {
-                        format!("Error: Exit {}", output.status)
-                    } else {
-                        format!("Error: {}", stderr)
-                    };
-                    Err(ToolError::ExecutionFailed(error_msg))
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let exit_code = output.status.code().unwrap_or(-1);
+                let mut result = format!("Exit code: {}\n", exit_code);
+                if !stdout.is_empty() {
+                    result.push_str("\nstdout:\n");
+                    result.push_str(&stdout);
                 }
+                if !stderr.is_empty() {
+                    result.push_str("\nstderr:\n");
+                    result.push_str(&stderr);
+                }
+                Ok(ToolCallResult::success(Some(result), None))
             }
             Ok(Err(e)) => Err(ToolError::ExecutionFailed(format!("Spawn failed: {}", e))),
             Err(_) => Err(ToolError::ExecutionFailed(format!(
@@ -657,20 +656,25 @@ impl ShellExecute {
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         // Process has exited
-                        if status.success() {
-                            if full_stdout.len() > 30_000 {
-                                full_stdout.truncate(30_000);
-                                full_stdout.push_str("\n[Truncated]");
-                            }
-                            return Ok(ToolCallResult::success(Some(full_stdout), None));
-                        } else {
-                            let error_msg = if full_stderr.is_empty() {
-                                format!("Error: Exit {}", status)
-                            } else {
-                                format!("Error: {}", full_stderr)
-                            };
-                            return Err(ToolError::ExecutionFailed(error_msg));
+                        if full_stdout.len() > 30_000 {
+                            full_stdout.truncate(30_000);
+                            full_stdout.push_str("\n[Truncated]");
                         }
+                        if full_stderr.len() > 30_000 {
+                            full_stderr.truncate(30_000);
+                            full_stderr.push_str("\n[Truncated]");
+                        }
+                        let exit_code = status.code().unwrap_or(-1);
+                        let mut result = format!("Exit code: {}\n", exit_code);
+                        if !full_stdout.is_empty() {
+                            result.push_str("\nstdout:\n");
+                            result.push_str(&full_stdout);
+                        }
+                        if !full_stderr.is_empty() {
+                            result.push_str("\nstderr:\n");
+                            result.push_str(&full_stderr);
+                        }
+                        return Ok(ToolCallResult::success(Some(result), None));
                     }
                     Ok(None) => {
                         // Both streams EOF but process still running - wait a bit
@@ -754,20 +758,25 @@ impl ShellExecute {
                     match child.try_wait() {
                         Ok(Some(status)) => {
                             // Process has exited
-                            if status.success() {
-                                if full_stdout.len() > 30_000 {
-                                    full_stdout.truncate(30_000);
-                                    full_stdout.push_str("\n[Truncated]");
-                                }
-                                return Ok(ToolCallResult::success(Some(full_stdout), None));
-                            } else {
-                                let error_msg = if full_stderr.is_empty() {
-                                    format!("Error: Exit {}", status)
-                                } else {
-                                    format!("Error: {}", full_stderr)
-                                };
-                                return Err(ToolError::ExecutionFailed(error_msg));
+                            if full_stdout.len() > 30_000 {
+                                full_stdout.truncate(30_000);
+                                full_stdout.push_str("\n[Truncated]");
                             }
+                            if full_stderr.len() > 30_000 {
+                                full_stderr.truncate(30_000);
+                                full_stderr.push_str("\n[Truncated]");
+                            }
+                            let exit_code = status.code().unwrap_or(-1);
+                            let mut result = format!("Exit code: {}\n", exit_code);
+                            if !full_stdout.is_empty() {
+                                result.push_str("\nstdout:\n");
+                                result.push_str(&full_stdout);
+                            }
+                            if !full_stderr.is_empty() {
+                                result.push_str("\nstderr:\n");
+                                result.push_str(&full_stderr);
+                            }
+                            return Ok(ToolCallResult::success(Some(result), None));
                         }
                         Ok(None) => {
                             // Process still running, continue

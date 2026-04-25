@@ -31,7 +31,14 @@ impl OutputAdapter for OpenAIOutputAdapter {
         for c in response.content {
             match c {
                 crate::ccproxy::adapter::unified::UnifiedContentBlock::Thinking { thinking } => {
-                    reasoning_content = Some(thinking);
+                    if let Some(existing) = &mut reasoning_content {
+                        if !existing.is_empty() && !thinking.is_empty() {
+                            existing.push('\n');
+                        }
+                        existing.push_str(&thinking);
+                    } else {
+                        reasoning_content = Some(thinking);
+                    }
                 }
                 crate::ccproxy::adapter::unified::UnifiedContentBlock::Text { text } => {
                     text_content.push_str(&text);

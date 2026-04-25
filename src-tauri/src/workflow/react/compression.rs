@@ -5,7 +5,10 @@ use crate::ai::traits::chat::ChatMetadata;
 use crate::db::WorkflowMessage;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::intelligence::IntelligenceManager;
-use crate::workflow::react::prompts::CONTEXT_COMPRESSION_PROMPT;
+use crate::workflow::react::prompts::{
+    BLOCKING_CONTEXT_COMPRESSION_PROMPT, ROLLUP_CONTEXT_COMPRESSION_PROMPT,
+};
+use crate::workflow::react::context::ContextManager;
 use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
 
 use serde_json::json;
@@ -17,6 +20,12 @@ pub struct ContextCompressor {
     pub chat_state: Arc<ChatState>,
     pub provider_id: i64,
     pub model: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompressionMode {
+    Rollup,
+    Blocking,
 }
 
 impl ContextCompressor {
@@ -33,17 +42,16 @@ impl ContextCompressor {
     pub async fn compress(
         &self,
         messages: &[WorkflowMessage],
+        mode: CompressionMode,
     ) -> Result<String, WorkflowEngineError> {
         if messages.is_empty() {
             return Ok(String::new());
         }
 
         // 1. Locate the LATEST summary to implement incremental compression
-        let last_summary_idx = messages.iter().rposition(|m| {
-            m.metadata
-                .as_ref()
-                .map_or(false, |meta| meta["type"] == "summary")
-        });
+        let last_summary_idx = messages
+            .iter()
+            .rposition(ContextManager::is_compression_summary_message);
 
         // 2. Slice history from the last summary point to now
         let incremental_messages = if let Some(idx) = last_summary_idx {
@@ -56,6 +64,9 @@ impl ContextCompressor {
         let purified_history: Vec<serde_json::Value> = incremental_messages
             .iter()
             .filter_map(|m| {
+                if Self::should_skip_message_for_compression(m) {
+                    return None;
+                }
                 let content = Self::sanitize_message_content_for_compression(&m.message);
                 let keep = !content.is_empty()
                     && content != "Finished"
@@ -78,7 +89,7 @@ impl ContextCompressor {
         };
 
         let summary = self
-            .extract_fact_from_history(purified_history, &completed_tasks, user_prompt)
+            .extract_fact_from_history(purified_history, &completed_tasks, user_prompt, mode)
             .await?;
         Ok(summary)
     }
@@ -88,6 +99,7 @@ impl ContextCompressor {
         history_json: Vec<serde_json::Value>,
         completed_tasks: &str,
         user_prompt: &str,
+        mode: CompressionMode,
     ) -> Result<String, WorkflowEngineError> {
         let transcript = Self::render_history_as_transcript(&history_json);
         let chat_interface = {
@@ -114,7 +126,13 @@ impl ContextCompressor {
                 "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. You MUST return exactly one non-empty <state_snapshot>...</state_snapshot> XML block. Do NOT return JSON, reasoning-only text, or explanations. Ensure <prev_tasks> is preserved and populated when completed tasks exist.</SYSTEM_REMINDER>".to_string()
             };
             let full_history = vec![
-                json!({ "role": "system", "content": CONTEXT_COMPRESSION_PROMPT }),
+                json!({
+                    "role": "system",
+                    "content": match mode {
+                        CompressionMode::Rollup => ROLLUP_CONTEXT_COMPRESSION_PROMPT,
+                        CompressionMode::Blocking => BLOCKING_CONTEXT_COMPRESSION_PROMPT,
+                    }
+                }),
                 json!({
                     "role": "user",
                     "content": format!(
@@ -233,6 +251,17 @@ impl ContextCompressor {
         sanitized.trim().to_string()
     }
 
+    fn should_skip_message_for_compression(message: &WorkflowMessage) -> bool {
+        let Some(meta) = message.metadata.as_ref() else {
+            return false;
+        };
+
+        let tool_name = meta.get("tool_name").and_then(|value| value.as_str());
+        let approval_status = meta.get("approval_status").and_then(|value| value.as_str());
+
+        tool_name == Some("submit_plan") && approval_status == Some("approved")
+    }
+
     fn should_retry_compression_error(error: &AiError) -> bool {
         match error {
             AiError::ApiRequestFailed { status_code, .. } => {
@@ -311,7 +340,8 @@ impl ContextCompressor {
 
             if !user_query.trim().is_empty() || !result_summary.trim().is_empty() {
                 tasks.push(format!(
-                    "<task>\n<user_query>{}</user_query>\n<result_summary>{}</result_summary>\n</task>",
+                    "<task>\n<task_index>{}</task_index>\n<user_query>{}</user_query>\n<result_summary>{}</result_summary>\n</task>",
+                    idx,
                     Self::escape_xml_text(&user_query),
                     Self::escape_xml_text(result_summary.trim())
                 ));
@@ -570,5 +600,29 @@ mod tests {
         assert!(rendered.contains("<result_summary>First answer</result_summary>"));
         assert!(rendered.contains("<user_query>Second question</user_query>"));
         assert!(rendered.contains("<result_summary>Second answer</result_summary>"));
+    }
+
+    #[test]
+    fn compression_skips_approved_submit_plan_observation_messages() {
+        let message = WorkflowMessage {
+            id: Some(1),
+            session_id: "s".to_string(),
+            role: "tool".to_string(),
+            message: "# Approved Plan\n\nplan body\n\n<SYSTEM_REMINDER>approved</SYSTEM_REMINDER>"
+                .to_string(),
+            reasoning: None,
+            metadata: Some(serde_json::json!({
+                "tool_name": "submit_plan",
+                "approval_status": "approved"
+            })),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        assert!(ContextCompressor::should_skip_message_for_compression(&message));
     }
 }

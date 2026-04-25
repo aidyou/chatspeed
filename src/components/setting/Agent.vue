@@ -247,15 +247,17 @@
                     <el-switch v-model="agentForm[role.key + 'Model'].thinkingEnabled" size="small" />
                   </div>
                   <div class="param-item" v-if="agentForm[role.key + 'Model'].thinkingEnabled">
-                    <span class="param-label">{{ $t('settings.model.thinkingBudgetTokens') }}</span>
-                    <el-input-number
-                      v-model="agentForm[role.key + 'Model'].thinkingBudgetTokens"
-                      :min="256"
-                      :max="131072"
-                      :step="256"
+                    <span class="param-label">{{ $t('settings.model.thinkingLevel') }}</span>
+                    <el-select
+                      v-model="agentForm[role.key + 'Model'].thinkingLevel"
                       size="small"
-                      controls-position="right"
-                      style="width: 120px" />
+                      style="width: 120px">
+                      <el-option
+                        v-for="option in agentThinkingLevelOptions"
+                        :key="option.value"
+                        :label="$t(option.label)"
+                        :value="option.value" />
+                    </el-select>
                   </div>
                 </div>
               </div>
@@ -447,10 +449,27 @@ const defaultAgentModelConfig = () => ({
   temperature: -0.1,
   thinking: null,
   thinkingEnabled: false,
-  thinkingBudgetTokens: 1024,
+  thinkingLevel: 'low',
   contextSize: 128000,
   maxTokens: 0
 })
+const THINKING_LEVEL_TO_BUDGET = {
+  low: 1024,
+  medium: 2048,
+  high: 4096
+}
+const thinkingLevelFromBudget = (budget) => {
+  const normalized = Number(budget) || 0
+  if (normalized > 2048) return 'high'
+  if (normalized > 1024) return 'medium'
+  return 'low'
+}
+const budgetFromThinkingLevel = (level) => THINKING_LEVEL_TO_BUDGET[level] || THINKING_LEVEL_TO_BUDGET.low
+const agentThinkingLevelOptions = [
+  { value: 'low', label: 'settings.model.reasoningLow' },
+  { value: 'medium', label: 'settings.model.reasoningMedium' },
+  { value: 'high', label: 'settings.model.reasoningHigh' }
+]
 
 const defaultFormData = {
   name: '',
@@ -768,11 +787,11 @@ const normalizeAgentFormForSave = form => {
     model.thinking = model.thinkingEnabled
       ? {
         type: 'enabled',
-        budgetTokens: Number(model.thinkingBudgetTokens) || 1024
+        budgetTokens: budgetFromThinkingLevel(model.thinkingLevel)
       }
       : null
     delete model.thinkingEnabled
-    delete model.thinkingBudgetTokens
+    delete model.thinkingLevel
   })
 
   normalized.availableTools = Array.isArray(normalized.availableTools)
@@ -825,7 +844,7 @@ const applyProviderModelOverrides = (key, modelId) => {
   }
   currentModel.thinking = selected.thinking || null
   currentModel.thinkingEnabled = !!selected.thinking
-  currentModel.thinkingBudgetTokens = selected.thinking?.budgetTokens || 1024
+  currentModel.thinkingLevel = thinkingLevelFromBudget(selected.thinking?.budgetTokens)
   if (selected.contextSize !== undefined && selected.contextSize !== null) {
     currentModel.contextSize = selected.contextSize
   }
@@ -863,7 +882,7 @@ const normalizeModelDraft = model => ({
   ...(model || {}),
   thinking: model?.thinking || null,
   thinkingEnabled: !!model?.thinking,
-  thinkingBudgetTokens: model?.thinking?.budgetTokens || 1024
+  thinkingLevel: thinkingLevelFromBudget(model?.thinking?.budgetTokens)
 })
 
 const parseModelField = (field, key) => {

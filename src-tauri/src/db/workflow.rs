@@ -227,10 +227,19 @@ impl MainStore {
                 params![workflow_id],
             )?;
 
-            tx.execute(
+            // workflow_events is an audit/secondary table. If it is corrupted (e.g.,
+            // "database disk image is malformed"), do not block the workflow deletion.
+            // Log the error and continue so the primary workflow data still gets cleaned up.
+            if let Err(e) = tx.execute(
                 "DELETE FROM workflow_events WHERE session_id = ?1",
                 params![workflow_id],
-            )?;
+            ) {
+                log::error!(
+                    "[Workflow][session={}] Failed to delete workflow events (non-fatal, continuing): {}",
+                    workflow_id,
+                    e
+                );
+            }
         }
 
         // Delete child workflow rows before their parent to satisfy parent_session_id FK.

@@ -130,6 +130,7 @@
       .ai-content {
         .content {
           background: none;
+          padding-top:0;
 
           table{
             max-width: 100%;
@@ -635,7 +636,7 @@
 
         // Thoughts - collapsible reasoning container
         .reasoning-container {
-          margin-bottom: 12px;
+          margin-bottom: var(--cs-space);
 
           .reasoning-header {
             display: flex;
