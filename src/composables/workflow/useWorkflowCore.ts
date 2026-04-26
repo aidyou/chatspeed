@@ -608,6 +608,16 @@ export function useWorkflowCore({
                     // Current-session approvals are rendered inline in tool messages.
                     upsertPendingApprovalEntry(sessionId, payload)
                     playApprovalNotificationSound()
+                } else if (payload.type === 'approval_resolved') {
+                    clearPendingApprovalEntries(sessionId, 'approval')
+                    if (payload.approved) {
+                        workflowStore.markToolApprovedRunning(payload.tool_call_id)
+                    } else {
+                        workflowStore.markToolRejected(payload.tool_call_id)
+                    }
+                } else if (payload.type === 'tool_started') {
+                    clearPendingApprovalEntries(sessionId, 'approval')
+                    workflowStore.markToolApprovedRunning(payload.tool_call_id)
                 } else if (payload.type === 'retry_status') {
                     if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Handle 429 retry status
@@ -1148,6 +1158,7 @@ export function useWorkflowCore({
         if (currentWorkflowId.value) {
             // Optimistic update: Immediately set running to false to toggle the UI button.
             // The backend might take a moment to gracefully cancel, but the user expects immediate feedback.
+            workflowStore.updateWorkflowStatus(currentWorkflowId.value, WORKFLOW_STATUSES.CANCELLED, null)
             workflowStore.setRunning(false)
             workflowStore.setHasLiveSession(false)
 

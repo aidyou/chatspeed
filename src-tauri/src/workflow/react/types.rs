@@ -64,6 +64,16 @@ pub enum GatewayPayload {
         #[serde(skip_serializing_if = "Option::is_none")]
         display_type: Option<String>,
     },
+    ApprovalResolved {
+        tool_call_id: String,
+        approved: bool,
+        approve_all: bool,
+    },
+    ToolStarted {
+        tool_call_id: String,
+        tool_name: String,
+        arguments: serde_json::Value,
+    },
     SyncTodo {
         todo_list: serde_json::Value,
     },

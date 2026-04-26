@@ -211,7 +211,12 @@ impl ContextManager {
             return None;
         }
 
-        if self.messages.len().saturating_sub(latest_completion_idx + 1) == 0 {
+        if self
+            .messages
+            .len()
+            .saturating_sub(latest_completion_idx + 1)
+            == 0
+        {
             return None;
         }
 
@@ -379,6 +384,8 @@ impl ContextManager {
             .collect::<Vec<_>>();
         let mut wrapped_initial_user_query = false;
 
+        let todo_use_reminder = "<SYSTEM_REMINDER>For complex or multi-step work, use the todo* tools to track execution. Create tasks before major work begins, update statuses as you make progress, and keep the todo list aligned with the actual execution state.</SYSTEM_REMINDER>";
+
         for msg in llm_messages.iter_mut() {
             if let Some(att) = &msg.attached_context {
                 if !att.is_empty() {
@@ -386,13 +393,19 @@ impl ContextManager {
                 }
             }
 
-            // Only the first real user request should be treated as the workflow's user_query.
+            // Only the first real user request in the current active segment should be treated
+            // as the workflow's user_query: either the session's first user message, or the
+            // first user message after the latest successful completion.
             if msg.role == "user"
                 && msg.step_type.as_deref() != Some("observe")
                 && !wrapped_initial_user_query
-                && !msg.message.starts_with("<user_query>")
             {
-                msg.message = format!("<user_query>\n{}\n</user_query>", msg.message);
+                if !msg.message.starts_with("<user_query>") {
+                    msg.message = format!(
+                        "<user_query>\n{}\n</user_query>\n{}",
+                        msg.message, todo_use_reminder,
+                    );
+                }
                 wrapped_initial_user_query = true;
             }
 
@@ -1007,7 +1020,10 @@ mod tests {
                 .expect("completion message id missing")
         );
         assert!(
-            context.messages.iter().any(|m| m.id == completion_message_4.id),
+            context
+                .messages
+                .iter()
+                .any(|m| m.id == completion_message_4.id),
             "the latest completed task should remain available in memory"
         );
         assert!(
@@ -1017,7 +1033,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_rollup_compression_candidate_requires_three_finished_tasks_for_initial_summary() {
+    async fn build_rollup_compression_candidate_requires_three_finished_tasks_for_initial_summary()
+    {
         let (_dir, store) = setup_store();
         let session_id = "session-initial-rollup-test";
         insert_workflow(&store, session_id);
@@ -1140,9 +1157,9 @@ mod tests {
             .await
             .expect("failed to add active task marker");
 
-        let (candidate, compressed_until_id) = context
-            .build_rollup_compression_candidate()
-            .expect("initial rollup should trigger after three finished segments once active work resumes");
+        let (candidate, compressed_until_id) = context.build_rollup_compression_candidate().expect(
+            "initial rollup should trigger after three finished segments once active work resumes",
+        );
 
         assert!(
             candidate
@@ -1616,7 +1633,9 @@ mod tests {
         };
 
         assert!(ContextManager::is_summary_message(&approved_plan));
-        assert!(!ContextManager::is_compression_summary_message(&approved_plan));
+        assert!(!ContextManager::is_compression_summary_message(
+            &approved_plan
+        ));
     }
 
     #[tokio::test]

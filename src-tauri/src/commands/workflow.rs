@@ -1104,7 +1104,7 @@ pub async fn workflow_start(
         return Err(format!("Session already exists: {}", session_id));
     }
 
-    let (clean_prompt, attached_context, allowed_paths) = {
+    let (raw_prompt, clean_prompt, attached_context, allowed_paths) = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         let snapshot = store
             .get_workflow_snapshot(&session_id)
@@ -1136,10 +1136,10 @@ pub async fn workflow_start(
         let (p, att) = if initial_prompt.is_some() {
             inject_at_mentions(&prompt, &paths)
         } else {
-            (prompt, String::new())
+            (prompt.clone(), String::new())
         };
 
-        (p, att, paths)
+        (prompt, p, att, paths)
     };
 
     let mut agent_config = {
@@ -1245,6 +1245,14 @@ pub async fn workflow_start(
         }
     }
 
+    let planning_dir = app_data_dir.join("planning").join(&session_id);
+    if planning_mode {
+        if planning_dir.exists() {
+            let _ = std::fs::remove_dir_all(&planning_dir);
+        }
+        let _ = std::fs::create_dir_all(&planning_dir);
+    }
+
     let shared_executor: Arc<
         tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
     > = if planning_mode {
@@ -1298,9 +1306,11 @@ pub async fn workflow_start(
 
             // Check if message already exists to avoid duplicates
             let messages = executor.messages();
-            let is_duplicate = messages
-                .iter()
-                .any(|m| m.role == "user" && m.message == clean_prompt);
+            let is_duplicate = messages.iter().any(|m| {
+                m.role == "user"
+                    && m.step_type.as_deref() != Some("observe")
+                    && (m.message == clean_prompt || m.message == raw_prompt)
+            });
 
             if !is_duplicate {
                 executor
@@ -1354,10 +1364,17 @@ pub async fn workflow_start(
     let session_id_for_spawn = session_id.clone();
     let gateway_for_spawn = gateway_arc.clone();
     let manager_for_spawn = workflow_manager_arc.clone();
+    let main_store_for_spawn = main_store_arc.clone();
     tokio::spawn(async move {
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
+                if let Ok(store) = main_store_for_spawn.read() {
+                    let _ = store.update_workflow_status(
+                        &session_id_for_spawn,
+                        &WorkflowState::Cancelled.to_string(),
+                    );
+                }
                 let _ = manager_for_spawn
                     .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
                 log::info!(
@@ -1482,10 +1499,7 @@ pub async fn workflow_approve_plan(
     }
 
     let planning_dir = app_data_dir.join("planning").join(&session_id);
-    if planning_dir.exists() {
-        let _ = std::fs::remove_dir_all(&planning_dir);
-        let _ = std::fs::create_dir_all(&planning_dir);
-    }
+    let _ = std::fs::create_dir_all(&planning_dir);
 
     let mut agent_config = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
@@ -1589,7 +1603,11 @@ pub async fn workflow_approve_plan(
         // Use the plan
         executor_guard.add_message_and_notify(
             "user".into(),
-            format!("The plan has been approved. Please proceed with execution.\n\nApproved Plan:\n{}", plan),
+            format!(
+                "The plan has been approved. Please proceed with execution.\n\nApproved Plan:\n{}\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
+                plan,
+                crate::workflow::react::prompts::APPROVED_PLAN_EXECUTION_REMINDER
+            ),
             None,
             None,
             Some(StepType::Observe),
@@ -1645,10 +1663,17 @@ pub async fn workflow_approve_plan(
     let session_id_for_spawn = session_id.clone();
     let gateway_for_spawn = gateway_arc.clone();
     let manager_for_spawn = workflow_manager_arc.clone();
+    let main_store_for_spawn = main_store_arc.clone();
     tokio::spawn(async move {
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
+                if let Ok(store) = main_store_for_spawn.read() {
+                    let _ = store.update_workflow_status(
+                        &session_id_for_spawn,
+                        &WorkflowState::Cancelled.to_string(),
+                    );
+                }
                 let _ = manager_for_spawn
                     .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
                 log::info!(
@@ -2298,6 +2323,37 @@ pub struct WorkspaceFile {
     pub score: i32,
 }
 
+fn is_obviously_ignored_name(name: &str) -> bool {
+    let name_lower = name.to_ascii_lowercase();
+    matches!(
+        name,
+        ".git"
+            | ".svn"
+            | ".hg"
+            | "node_modules"
+            | "__pycache__"
+            | ".turbo"
+            | ".next"
+            | ".nuxt"
+            | ".svelte-kit"
+            | "dist"
+            | "coverage"
+    ) || name_lower.ends_with(".pyc")
+        || matches!(
+            name_lower.as_str(),
+            ".ds_store" | "thumbs.db" | "desktop.ini"
+        )
+}
+
+fn path_contains_obviously_ignored_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(is_obviously_ignored_name)
+    })
+}
+
 #[tauri::command]
 pub async fn search_workspace_files(
     paths: Vec<String>,
@@ -2312,10 +2368,16 @@ pub async fn search_workspace_files(
             continue;
         }
 
-        let walker = ignore::WalkBuilder::new(&base)
-            .standard_filters(true)
-            .hidden(false)
-            .build();
+        let mut builder = ignore::WalkBuilder::new(&base);
+        builder.standard_filters(true).hidden(false);
+        builder.filter_entry(|entry| {
+            entry
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_none_or(|name| !is_obviously_ignored_name(name))
+        });
+        let walker = builder.build();
 
         for result in walker {
             let entry = match result {
@@ -2325,16 +2387,8 @@ pub async fn search_workspace_files(
 
             let path = entry.path().to_path_buf();
             let name = entry.file_name().to_string_lossy().to_string();
-            let name_lower = name.to_lowercase();
 
-            // Manual filters for common unwanted items
-            if name == "node_modules"
-                || name == ".git"
-                || name == "__pycache__"
-                || name_lower.ends_with(".pyc")
-                || name_lower == "thumbs.db"
-                || name_lower == ".ds_store"
-            {
+            if path_contains_obviously_ignored_component(&path) {
                 continue;
             }
 
@@ -2343,6 +2397,7 @@ pub async fn search_workspace_files(
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .to_string();
+            let name_lower = name.to_lowercase();
 
             let mut score = 0;
             if !query_lower.is_empty() {
@@ -2372,12 +2427,17 @@ pub async fn search_workspace_files(
                 .and_then(|s| s.to_str().map(|s| s.to_lowercase()))
             {
                 match ext.as_str() {
-                    "bash" | "c" | "cpp" | "css" | "go" | "groovy" | "h" | "hpp" | "htm"
-                    | "html" | "ini" | "java" | "js" | "jsx" | "json" | "kotlin" | "less"
-                    | "lua" | "perl" | "php" | "plsql" | "py" | "r" | "rs" | "ruby" | "scala"
-                    | "sass" | "scss" | "sh" | "sql" | "stylus" | "swift" | "toml" | "ts"
-                    | "tsx" | "vue" | "xml" | "yaml" | "yml" => {
+                    // Common programming languages
+                    "c" | "cpp" | "css" | "go" | "h" | "hpp" | "htm" | "html" | "java" | "js"
+                    | "jsx" | "json" | "kotlin" | "less" | "lua" | "perl" | "php" | "py" | "rs"
+                    | "ruby" | "scala" | "sass" | "scss" | "sh" | "sql" | "swift" | "toml"
+                    | "ts" | "tsx" | "vue" | "xml" | "yaml" | "yml" => {
                         score += 5;
+                    }
+                    // Less common programming languages
+                    "bash" | "cc" | "cxx" | "groovy" | "hxx" | "ini" | "mjs" | "mm" | "plsql"
+                    | "ps1" | "r" | "stylus" | "zsh" => {
+                        score += 3;
                     }
                     "md" | "txt" | "csv" | "tsv" | "log" | "rst" | "readme" => {
                         score += 5;

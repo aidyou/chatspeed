@@ -1451,9 +1451,6 @@ impl WorkflowExecutor {
         // query instead of executing the approved plan.
         if self.policy.phase == ExecutionPhase::Planning {
             self.context.prune_for_execution(plan).await?;
-            if self.planning_root.exists() {
-                let _ = std::fs::remove_dir_all(&self.planning_root);
-            }
             let _ = std::fs::create_dir_all(&self.planning_root);
         }
 
@@ -1487,31 +1484,47 @@ impl WorkflowExecutor {
                 .await?;
         }
 
-        self.add_message_and_notify_internal(
-            "tool".to_string(),
-            format!(
-                "# Approved Plan\n\n{}\n\n<SYSTEM_REMINDER>The plan has been approved and the workflow has switched to implementation. Use the approved plan as execution guidance and do not use planning note tools in implementation.</SYSTEM_REMINDER>",
-                approved_plan
-            ),
-            None,
-            None,
-            Some(StepType::Observe),
-            false,
-            None,
-            Some(json!({
-                "tool_call_id": tool_call_id,
-                "tool_name": TOOL_SUBMIT_PLAN,
-                "title": "Submit Plan",
-                "summary": "Plan approved",
-                "execution_status": "completed",
-                "is_error": false,
-                "display_type": "markdown",
-                "approval_status": "approved"
-            })),
-        )
-        .await?;
+        self.append_approved_plan_observation(Some(tool_call_id), &approved_plan)
+            .await?;
 
         self.update_state(WorkflowState::Thinking).await
+    }
+
+    async fn append_approved_plan_observation(
+        &mut self,
+        tool_call_id: Option<&str>,
+        approved_plan: &str,
+    ) -> Result<(), WorkflowEngineError> {
+        let mut metadata = json!({
+            "tool_name": TOOL_SUBMIT_PLAN,
+            "title": "Submit Plan",
+            "summary": "Plan approved",
+            "execution_status": "completed",
+            "is_error": false,
+            "display_type": "markdown",
+            "approval_status": "approved"
+        });
+        if let Some(tool_call_id) = tool_call_id.filter(|id| !id.trim().is_empty()) {
+            metadata["tool_call_id"] = json!(tool_call_id);
+        }
+
+        let _ = self
+            .add_message_and_notify_internal(
+                "tool".to_string(),
+                format!(
+                    "# Approved Plan\n\n{}\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
+                    approved_plan,
+                    super::prompts::APPROVED_PLAN_EXECUTION_REMINDER
+                ),
+                None,
+                None,
+                Some(StepType::Observe),
+                false,
+                None,
+                Some(metadata),
+            )
+            .await?;
+        Ok(())
     }
 
     fn split_shell_command_segments(command: &str) -> Vec<String> {
@@ -2033,6 +2046,22 @@ impl WorkflowExecutor {
                                 log::error!(
                                     "[Workflow][session={}] workflow.event.append_failed - error={}",
                                     self.session_id,
+                                    e
+                                );
+                            }
+
+                            if let Err(e) = self
+                                .dispatch_ui_payload(GatewayPayload::ApprovalResolved {
+                                    tool_call_id: tool_call_id.clone(),
+                                    approved,
+                                    approve_all,
+                                })
+                                .await
+                            {
+                                log::warn!(
+                                    "[Workflow][session={}] workflow.ui_dispatch_failed - approval_resolved {}: {}",
+                                    self.session_id,
+                                    tool_call_id,
                                     e
                                 );
                             }
@@ -2912,16 +2941,39 @@ impl WorkflowExecutor {
                         "WorkflowExecutor {}: Plan found, executing atomic transition to Implementation phase",
                         self.session_id
                     );
+                    let submit_plan_tool_call_id =
+                        self.context.messages.iter().rev().find_map(|m| {
+                            m.metadata.as_ref().and_then(|meta| {
+                                meta.get("tool_calls").and_then(|v| v.as_array()).and_then(
+                                    |calls| {
+                                        calls.iter().find_map(|call| {
+                                            let name = call
+                                                .get("name")
+                                                .and_then(|v| v.as_str())
+                                                .or_else(|| {
+                                                    call.get("function")
+                                                        .and_then(|f| f.get("name"))
+                                                        .and_then(|v| v.as_str())
+                                                });
+                                            if name == Some(TOOL_SUBMIT_PLAN) {
+                                                call.get("id")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(str::to_string)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                    },
+                                )
+                            })
+                        });
 
                     // A. Context Pruning: Only in formal Planning phase.
                     // In Standard (default) mode, keep full conversation context
                     // to prevent the AI from losing follow-up questions and
                     // investigation context that led to this plan.
                     if self.policy.phase == ExecutionPhase::Planning {
-                        self.context.prune_for_execution(plan).await?;
-                        if self.planning_root.exists() {
-                            let _ = std::fs::remove_dir_all(&self.planning_root);
-                        }
+                        self.context.prune_for_execution(plan.clone()).await?;
                         let _ = std::fs::create_dir_all(&self.planning_root);
                     }
 
@@ -2963,6 +3015,11 @@ impl WorkflowExecutor {
                         })
                         .await?;
                     }
+                    self.append_approved_plan_observation(
+                        submit_plan_tool_call_id.as_deref(),
+                        &plan,
+                    )
+                    .await?;
 
                     self.update_state(WorkflowState::Thinking).await?;
                     continue;
@@ -3799,6 +3856,29 @@ impl WorkflowExecutor {
         }
     }
 
+    async fn dispatch_tool_started_payload(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) {
+        if let Err(e) = self
+            .dispatch_ui_payload(GatewayPayload::ToolStarted {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                arguments: arguments.clone(),
+            })
+            .await
+        {
+            log::warn!(
+                "[Workflow][session={}] workflow.ui_dispatch_failed - tool_started {}: {}",
+                self.session_id,
+                tool_call_id,
+                e
+            );
+        }
+    }
+
     fn append_tool_terminal_event(
         &self,
         tool_call_id: &str,
@@ -4105,6 +4185,7 @@ impl WorkflowExecutor {
 
             for (id, name, args, call) in parallel_execution_queue {
                 self.append_tool_started_event(&id, &name, &args);
+                self.dispatch_tool_started_payload(&id, &name, &args).await;
 
                 let tm_clone = tm.clone();
                 let gtm_clone = gtm.clone();
@@ -4139,6 +4220,7 @@ impl WorkflowExecutor {
         // Phase B: Sequential Batch (State-sensitive tools like todo_*)
         for (id, name, args, call) in sequential_execution_queue {
             self.append_tool_started_event(&id, &name, &args);
+            self.dispatch_tool_started_payload(&id, &name, &args).await;
 
             // Inject internal tool_call_id for streaming tools
             let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);

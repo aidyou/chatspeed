@@ -1219,7 +1219,42 @@ impl ToolDefinition for TaskOutputTool {
                 };
 
                 match task.value() {
-                    BackgroundTask::SubAgent { executor, .. } => {
+                    BackgroundTask::SubAgent {
+                        executor,
+                        output_accessible,
+                        ..
+                    } => {
+                        if let Ok(Some(completion)) =
+                            find_durable_sub_agent_completion(&self.main_store, &self.session_id, task_id)
+                        {
+                            let delivered = completion
+                                .result
+                                .as_deref()
+                                .or(completion.summary.as_deref())
+                                .or(completion.error.as_deref())
+                                .unwrap_or("Sub-agent completed")
+                                .to_string();
+                            let _ = sync_sub_agent_completion_consumed(
+                                &self.main_store,
+                                &self.session_id,
+                                task_id,
+                            );
+                            mark_completed_task_consumed(task_id);
+                            let content = if *output_accessible {
+                                delivered
+                            } else {
+                                render_call_mode_sub_agent_tool_result(
+                                    task_id,
+                                    &completion.status,
+                                    None,
+                                    &delivered,
+                                    None,
+                                    false,
+                                )
+                            };
+                            return Ok(ToolCallResult::success(Some(content), None));
+                        }
+
                         let executor = executor.clone();
                         drop(task);
                         let guard = executor.lock().await;

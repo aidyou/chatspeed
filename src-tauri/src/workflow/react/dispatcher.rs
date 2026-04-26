@@ -30,6 +30,8 @@ fn gateway_payload_name(payload: &GatewayPayload) -> &'static str {
         GatewayPayload::Message { .. } => "message",
         GatewayPayload::State { .. } => "state",
         GatewayPayload::Confirm { .. } => "confirm",
+        GatewayPayload::ApprovalResolved { .. } => "approval_resolved",
+        GatewayPayload::ToolStarted { .. } => "tool_started",
         GatewayPayload::SyncTodo { .. } => "sync_todo",
         GatewayPayload::RetryStatus { .. } => "retry_status",
         GatewayPayload::CompressionStatus { .. } => "compression_status",

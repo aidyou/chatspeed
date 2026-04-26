@@ -332,7 +332,13 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute(
-            "UPDATE workflows SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            "UPDATE workflows
+             SET status = ?1,
+                 updated_at = CASE
+                     WHEN status IS NOT ?1 THEN CURRENT_TIMESTAMP
+                     ELSE updated_at
+                 END
+             WHERE id = ?2",
             params![status, id],
         )?;
         Ok(())
@@ -344,7 +350,13 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute(
-            "UPDATE workflows SET title = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            "UPDATE workflows
+             SET title = ?1,
+                 updated_at = CASE
+                     WHEN title IS NOT ?1 THEN CURRENT_TIMESTAMP
+                     ELSE updated_at
+                 END
+             WHERE id = ?2",
             params![title, id],
         )?;
         Ok(())
@@ -361,7 +373,14 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute(
-            "UPDATE workflows SET title = ?1, user_query = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+            "UPDATE workflows
+             SET title = ?1,
+                 user_query = ?2,
+                 updated_at = CASE
+                     WHEN title IS NOT ?1 OR user_query IS NOT ?2 THEN CURRENT_TIMESTAMP
+                     ELSE updated_at
+                 END
+             WHERE id = ?3",
             params![title, user_query, id],
         )?;
         Ok(())
@@ -373,7 +392,13 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute(
-            "UPDATE workflows SET user_query = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            "UPDATE workflows
+             SET user_query = ?1,
+                 updated_at = CASE
+                     WHEN user_query IS NOT ?1 THEN CURRENT_TIMESTAMP
+                     ELSE updated_at
+                 END
+             WHERE id = ?2",
             params![user_query, id],
         )?;
         Ok(())
@@ -385,7 +410,13 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute(
-            "UPDATE workflows SET todo_list = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            "UPDATE workflows
+             SET todo_list = ?1,
+                 updated_at = CASE
+                     WHEN todo_list IS NOT ?1 THEN CURRENT_TIMESTAMP
+                     ELSE updated_at
+                 END
+             WHERE id = ?2",
             params![todo_list, id],
         )?;
         Ok(())
@@ -401,7 +432,13 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute(
-            "UPDATE workflows SET agent_config = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            "UPDATE workflows
+             SET agent_config = ?1,
+                 updated_at = CASE
+                     WHEN agent_config IS NOT ?1 THEN CURRENT_TIMESTAMP
+                     ELSE updated_at
+                 END
+             WHERE id = ?2",
             params![agent_config, id],
         )?;
         Ok(())
@@ -413,7 +450,13 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute(
-            "UPDATE workflows SET agent_id = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            "UPDATE workflows
+             SET agent_id = ?1,
+                 updated_at = CASE
+                     WHEN agent_id IS NOT ?1 THEN CURRENT_TIMESTAMP
+                     ELSE updated_at
+                 END
+             WHERE id = ?2",
             params![agent_id, id],
         )?;
         Ok(())

@@ -32,6 +32,10 @@ export function useWorkflowMessages() {
     if (!workflowStore.messages || workflowStore.messages.length === 0) return []
 
     const rawMsgs = workflowStore.messages
+    const ledgerStateById = new Map(
+      (workflowStore.toolList || []).map(tool => [tool.toolCallId, tool])
+    )
+    const subAgentProgressById = workflowStore.subAgentProgress || new Map()
     const toolStates = new Map() // tool_call_id -> { isFinal: bool, isRejected: bool, hasError: bool, isRunning: bool }
     const toolHasWaitingMsg = new Set() // tool_call_id that has an 'Awaiting' message
     const toolMessageIds = new Set() // tool_call_id with dedicated tool/user-observe messages
@@ -84,15 +88,38 @@ export function useWorkflowMessages() {
       if (String(meta.tool_name || '').toLowerCase() !== 'sub_agent_run') return null
 
       const payload = parseSubAgentRunPayload(message)
+      const liveProgress = payload.taskId ? subAgentProgressById.get(payload.taskId) : null
       const completion = payload.taskId ? subAgentCompletions.get(payload.taskId) : null
       const completionResult = completion?.result || completion?.data?.result || {}
       const completionStatus =
+        liveProgress?.status ||
         completion?.execution_status ||
         completion?.data?.execution_status ||
         completionResult.status ||
         meta.sub_agent_status ||
         meta.execution_status ||
         'running'
+      const toolCallsCount =
+        liveProgress?.toolCallsCount ??
+        liveProgress?.tool_calls_count ??
+        completionResult.tool_calls_count ??
+        completion?.tool_calls_count ??
+        completion?.data?.tool_calls_count ??
+        0
+      const currentContextTokens =
+        liveProgress?.currentContextTokens ??
+        liveProgress?.current_context_tokens ??
+        completionResult.current_context_tokens ??
+        completion?.current_context_tokens ??
+        completion?.data?.current_context_tokens ??
+        null
+      const maxContextTokens =
+        liveProgress?.maxContextTokens ??
+        liveProgress?.max_context_tokens ??
+        completionResult.max_context_tokens ??
+        completion?.max_context_tokens ??
+        completion?.data?.max_context_tokens ??
+        null
       const resultContent =
         completionResult.result ||
         completionResult.error ||
@@ -107,6 +134,9 @@ export function useWorkflowMessages() {
         taskMarkdown: payload.task || 'Delegated task',
         mode: payload.mode || 'call',
         status: completionStatus,
+        toolCallsCount,
+        currentContextTokens,
+        maxContextTokens,
         result: resultContent,
         resultMarkdown: resultContent,
         hasResult: Boolean(resultContent)
@@ -128,13 +158,27 @@ export function useWorkflowMessages() {
         const id = meta.tool_call_id
         const approvalStatus = meta.approval_status || ''
         const executionStatus = meta.execution_status || ''
+        const ledgerState = ledgerStateById.get(id)
 
         if (m.role === 'tool' || (m.role === 'user' && m.stepType === 'observe')) {
           toolMessageIds.add(id)
         }
 
-        // Use approval_status as the primary indicator
-        if (executionStatus === 'pending_approval' || approvalStatus === 'pending') {
+        if (ledgerState?.status === 'approved_running') {
+          toolStates.set(id, {
+            isFinal: false,
+            isRejected: false,
+            hasError: false,
+            isRunning: true
+          })
+        } else if (ledgerState?.status === 'rejected') {
+          toolStates.set(id, { isFinal: true, isRejected: true, hasError: false })
+        } else if (ledgerState?.status === 'final_success') {
+          toolStates.set(id, { isFinal: true, isRejected: false, hasError: false })
+        } else if (ledgerState?.status === 'final_error') {
+          toolStates.set(id, { isFinal: true, isRejected: false, hasError: true })
+        } else if (executionStatus === 'pending_approval' || approvalStatus === 'pending') {
+          // Use approval_status as the primary indicator
           toolHasWaitingMsg.add(id)
         } else if (executionStatus === 'running') {
           toolStates.set(id, {
@@ -192,11 +236,17 @@ export function useWorkflowMessages() {
           const id = m.metadata.tool_call_id
           const state = toolStates.get(id)
           const approvalStatus = m.metadata.approval_status
+          const ledgerState = ledgerStateById.get(id)
 
-          // If there's a final result (approved, rejected, or executed)
-          if (state?.isFinal) {
-            // Hide "pending" messages when there's a final result
-            if (approvalStatus === 'pending' && toolHasWaitingMsg.has(id)) return false
+          const isResolvedByLedger =
+            ledgerState?.status === 'approved_running' ||
+            ledgerState?.status === 'rejected' ||
+            ledgerState?.status === 'final_success' ||
+            ledgerState?.status === 'final_error'
+
+          // Hide old waiting cards once the actual execution/rejection state has taken over.
+          if ((state?.isFinal || state?.isRunning || isResolvedByLedger) && approvalStatus === 'pending') {
+            if (toolHasWaitingMsg.has(id)) return false
           }
         }
 
@@ -255,7 +305,7 @@ export function useWorkflowMessages() {
               }
               const { icon, toolType, action, target } = formatToolTitle(name, args)
               const state = toolStates.get(call.id)
-              const ledgerState = workflowStore.toolList?.find(tool => tool.toolCallId === call.id)
+              const ledgerState = ledgerStateById.get(call.id)
               const isRejected =
                 ledgerState?.status === 'rejected' || (!!state?.isFinal && !!state?.isRejected)
               const isRunning = ledgerState?.status === 'approved_running' || !!state?.isRunning
@@ -288,9 +338,15 @@ export function useWorkflowMessages() {
               }
             })
             .filter(call => {
-              if (toolMessageIds.has(call.id)) return false
               const state = toolStates.get(call.id)
+              const ledgerState = ledgerStateById.get(call.id)
+              if (toolMessageIds.has(call.id)) return false
+              if (ledgerState?.status === 'approved_running') return false
+              if (ledgerState?.status === 'final_success') return false
+              if (ledgerState?.status === 'final_error') return false
+              if (ledgerState?.status === 'rejected') return true
               if (!state) return true
+              if (state.isRunning) return false
               return state.isRejected
             })
         }

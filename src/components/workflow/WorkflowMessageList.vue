@@ -145,8 +145,18 @@
                     </div>
                     <div class="sub-agent-card__row">
                       <span class="sub-agent-card__label">Mode</span>
-                      <span class="sub-agent-card__value mode">{{
-                        message.subAgentCard.mode
+                      <span class="sub-agent-card__value mode">
+                        {{ message.subAgentCard.mode }}
+                      </span>
+                    </div>
+                    <div class="sub-agent-card__row">
+                      <span class="sub-agent-card__label">Tools</span>
+                      <span class="sub-agent-card__value">{{ getSubAgentLiveTools(message) }}</span>
+                    </div>
+                    <div class="sub-agent-card__row">
+                      <span class="sub-agent-card__label">Context</span>
+                      <span class="sub-agent-card__value">{{
+                        getSubAgentLiveContext(message)
                       }}</span>
                     </div>
                   </div>
@@ -1225,6 +1235,33 @@ const getSubAgentStatusLabel = message => {
   if (status === 'failed') return 'Failed'
   if (status === 'cancelled' || status === 'interrupted') return 'Stopped'
   return 'Running'
+}
+
+const getSubAgentLiveContext = message => {
+  const card = message?.subAgentCard || {}
+  const currentContextTokens = Number(card.currentContextTokens)
+  const maxContextTokens = Number(card.maxContextTokens)
+
+  if (
+    Number.isFinite(currentContextTokens) &&
+    currentContextTokens >= 0 &&
+    Number.isFinite(maxContextTokens) &&
+    maxContextTokens > 0
+  ) {
+    return `${Math.round((currentContextTokens / maxContextTokens) * 100)}% ctx`
+  }
+
+  return '--'
+}
+
+const getSubAgentLiveTools = message => {
+  const card = message?.subAgentCard || {}
+  const toolCallsCount = Number(card.toolCallsCount || 0)
+
+  if (Number.isFinite(toolCallsCount) && toolCallsCount > 0) {
+    return `${toolCallsCount} tools`
+  }
+  return '0 tools'
 }
 
 const subAgentStatusClass = message => {

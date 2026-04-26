@@ -4,7 +4,6 @@ import { computed, ref } from 'vue';
 import { useSettingStore } from '@/stores/setting';
 import {
   APPROVAL_WAITING_STATUSES,
-  BLOCKING_WAIT_REASONS,
   RESUMABLE_STATUSES,
   RUNNING_STATUSES,
   TERMINAL_STATUSES,
@@ -286,21 +285,34 @@ export const useWorkflowStore = defineStore('workflow', () => {
   });
 
   const canContinue = computed(() => {
+    if (!currentWorkflow.value?.id) return false;
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    if (RUNNING_STATUSES.includes(status) || status === WORKFLOW_STATUSES.COMPLETED) {
+      return false;
+    }
+
+    // Approval waits should be resolved through the approval UI, not a generic resume button.
     if (
       [
-        WORKFLOW_STATUSES.COMPLETED,
-        WORKFLOW_STATUSES.AWAITING_USER,
         WORKFLOW_STATUSES.AWAITING_APPROVAL,
         WORKFLOW_STATUSES.AWAITING_AUTO_APPROVAL
       ].includes(status)
     ) {
       return false;
     }
-    if (BLOCKING_WAIT_REASONS.includes(waitReason.value)) {
+
+    // While a live session is already waiting on the backend, resuming should go through
+    // the dedicated signal path instead of spawning a new executor.
+    if (hasLiveSession.value) {
       return false;
     }
-    return RESUMABLE_STATUSES.includes(status);
+
+    return [
+      WORKFLOW_STATUSES.PAUSED,
+      WORKFLOW_STATUSES.AWAITING_USER,
+      WORKFLOW_STATUSES.AWAITING_SUB_AGENT,
+      ...RESUMABLE_STATUSES
+    ].includes(status);
   });
 
   const pendingApprovalMessage = computed(() => {
@@ -370,8 +382,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
       const ledger = currentTaskLedger.value;
       if (ledger) {
-        ledger.tools = derived;
-        ledger.lastUpdated = Date.now();
+        const nextLedger = {
+          ...ledger,
+          tools: new Map(derived),
+          lastUpdated: Date.now()
+        };
+        taskLedgerMap.value.set(currentWorkflowId.value, nextLedger);
+        taskLedgerMap.value = new Map(taskLedgerMap.value);
       }
     } catch (err) {
       console.error('[TaskLedger] Failed to rebuild:', err);
@@ -426,8 +443,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
       isExpanded: toolState.isExpanded ?? existing?.isExpanded ?? false
     };
 
-    ledger.tools.set(toolCallId, next);
-    ledger.lastUpdated = now;
+    const nextTools = new Map(ledger.tools);
+    nextTools.set(toolCallId, next);
+    taskLedgerMap.value.set(currentWorkflowId.value, {
+      ...ledger,
+      tools: nextTools,
+      lastUpdated: now
+    });
+    taskLedgerMap.value = new Map(taskLedgerMap.value);
 
     return next;
   };
@@ -621,6 +644,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
    */
   const clearTaskLedger = (workflowId) => {
     taskLedgerMap.value.delete(workflowId);
+    taskLedgerMap.value = new Map(taskLedgerMap.value);
   };
 
   /**
