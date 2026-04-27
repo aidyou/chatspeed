@@ -37,6 +37,27 @@ pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";
 
 use phf::{phf_set, Set};
 
+pub fn is_core_workflow_builtin_tool(name: &str) -> bool {
+    matches!(
+        name,
+        TOOL_PLAN_READ_NOTE
+            | TOOL_PLAN_WRITE_NOTE
+            | TOOL_PLAN_EDIT_NOTE
+            | TOOL_SUB_AGENT_RUN
+            | TOOL_SUB_AGENT_OUTPUT
+            | TOOL_SUB_AGENT_STOP
+            | TOOL_TODO_CREATE
+            | TOOL_TODO_LIST
+            | TOOL_TODO_UPDATE
+            | TOOL_TODO_GET
+            | TOOL_SKILL
+            | TOOL_ASK_USER
+            | TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+            | TOOL_SUBMIT_RESULT
+            | TOOL_SUBMIT_PLAN
+    )
+}
+
 pub fn is_auto_execute_workflow_tool(name: &str) -> bool {
     matches!(
         name,
@@ -52,6 +73,54 @@ pub fn is_auto_execute_workflow_tool(name: &str) -> bool {
             | TOOL_SUBMIT_RESULT
             | TOOL_SKILL
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_workflow_builtin_tools_include_hidden_management_tools() {
+        for tool in [
+            TOOL_ASK_USER,
+            TOOL_SKILL,
+            TOOL_SUBMIT_PLAN,
+            TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+            TOOL_SUBMIT_RESULT,
+            TOOL_SUB_AGENT_RUN,
+            TOOL_SUB_AGENT_OUTPUT,
+            TOOL_SUB_AGENT_STOP,
+            TOOL_TODO_CREATE,
+            TOOL_TODO_LIST,
+            TOOL_TODO_UPDATE,
+            TOOL_TODO_GET,
+            TOOL_PLAN_READ_NOTE,
+            TOOL_PLAN_WRITE_NOTE,
+            TOOL_PLAN_EDIT_NOTE,
+        ] {
+            assert!(is_core_workflow_builtin_tool(tool), "{tool} should be core");
+        }
+    }
+
+    #[test]
+    fn regular_selectable_tools_are_not_marked_as_core_workflow_builtins() {
+        for tool in [
+            TOOL_BASH,
+            TOOL_READ_FILE,
+            TOOL_WRITE_FILE,
+            TOOL_EDIT_FILE,
+            TOOL_LIST_DIR,
+            TOOL_GLOB,
+            TOOL_GREP,
+            TOOL_WEB_SEARCH,
+            TOOL_WEB_FETCH,
+        ] {
+            assert!(
+                !is_core_workflow_builtin_tool(tool),
+                "{tool} should remain user-selectable"
+            );
+        }
+    }
 }
 
 /// Read-only bash commands that require exact match (no arguments expected)

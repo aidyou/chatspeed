@@ -339,9 +339,12 @@ impl MainStore {
             stmt.query_row(params![&agent.id], |row| Ok(Agent::from(row)))
                 .optional()?
         };
-        let persisted_name = existing_agent
-            .as_ref()
-            .and_then(|current| current.is_system.filter(|v| *v).map(|_| current.name.clone()));
+        let persisted_name = existing_agent.as_ref().and_then(|current| {
+            current
+                .is_system
+                .filter(|v| *v)
+                .map(|_| current.name.clone())
+        });
         let effective_name = persisted_name.unwrap_or_else(|| agent.name.clone());
 
         // Check for name uniqueness on other agents

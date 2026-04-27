@@ -81,9 +81,7 @@ fn is_successful_completion_tool_message(message: &WorkflowMessage) -> bool {
         .and_then(|v| v.as_str())
         .unwrap_or("approved");
 
-    execution_status == "completed"
-        && approval_status != "pending"
-        && approval_status != "rejected"
+    execution_status == "completed" && approval_status != "pending" && approval_status != "rejected"
 }
 
 fn latest_successful_completion_index(messages: &[WorkflowMessage]) -> Option<usize> {
@@ -111,16 +109,20 @@ fn extract_completion_summary_from_assistant(message: &WorkflowMessage) -> Optio
             tool_calls.iter().rev().find_map(|call| {
                 let tool_name = call
                     .get("name")
-                    .or_else(|| call.get("function").and_then(|function| function.get("name")))
+                    .or_else(|| {
+                        call.get("function")
+                            .and_then(|function| function.get("name"))
+                    })
                     .and_then(|value| value.as_str())
                     .unwrap_or_default();
                 if tool_name != crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY {
                     return None;
                 }
 
-                let args_value = call
-                    .get("arguments")
-                    .or_else(|| call.get("function").and_then(|function| function.get("arguments")))?;
+                let args_value = call.get("arguments").or_else(|| {
+                    call.get("function")
+                        .and_then(|function| function.get("arguments"))
+                })?;
                 let parsed_args = if let Some(args_text) = args_value.as_str() {
                     serde_json::from_str::<serde_json::Value>(args_text).ok()
                 } else {
@@ -908,6 +910,10 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                 role: "user".to_string(),
                 message: message.clone(),
                 reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: Some("sub_agent_interrupted".to_string()),
                 metadata: Some({
                     let mut metadata = runtime_observation_metadata(
                         RuntimeObservationType::SubAgentInterrupted,
@@ -1281,17 +1287,50 @@ async fn cleanup_workflow_resources(
 }
 
 fn legacy_wait_reason_from_status(status: &str) -> Option<WaitReason> {
-    match status.to_lowercase().as_str() {
-        "paused" => Some(WaitReason::Confirmation),
-        "awaiting_user" => Some(WaitReason::UserInput),
-        "awaiting_approval" | "awaitingapproval" | "awaiting_auto_approval" => {
+    stored_workflow_state(status).and_then(wait_reason_for_workflow_state)
+}
+
+fn stored_workflow_state(status: &str) -> Option<WorkflowState> {
+    use std::str::FromStr;
+
+    match status {
+        "failed" => Some(WorkflowState::Error),
+        "awaitingapproval" => Some(WorkflowState::AwaitingApproval),
+        other => WorkflowState::from_str(other).ok(),
+    }
+}
+
+fn wait_reason_for_workflow_state(state: WorkflowState) -> Option<WaitReason> {
+    match state {
+        WorkflowState::Paused => Some(WaitReason::Confirmation),
+        WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
+        WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
             Some(WaitReason::Approval)
         }
-        "awaiting_sub_agent" => Some(WaitReason::SubAgent),
+        WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
         _ => None,
     }
 }
 
+fn is_terminal_stored_workflow_state(status: &str) -> bool {
+    matches!(
+        stored_workflow_state(status),
+        Some(WorkflowState::Completed | WorkflowState::Error | WorkflowState::Cancelled)
+    )
+}
+
+fn is_resumable_stored_workflow_state_for_user_message(status: &str) -> bool {
+    matches!(
+        stored_workflow_state(status),
+        Some(
+            WorkflowState::Pending
+                | WorkflowState::Completed
+                | WorkflowState::Cancelled
+                | WorkflowState::Error
+                | WorkflowState::AwaitingUser
+        )
+    )
+}
 fn restore_context_for_signal(
     store: Arc<std::sync::RwLock<MainStore>>,
     session_id: &str,
@@ -1372,7 +1411,14 @@ pub async fn workflow_start(
         return Err(format!("Session already exists: {}", session_id));
     }
 
-    let (raw_prompt, clean_prompt, attached_context, allowed_paths, workflow_status, existing_messages) = {
+    let (
+        raw_prompt,
+        clean_prompt,
+        attached_context,
+        allowed_paths,
+        workflow_status,
+        existing_messages,
+    ) = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         let snapshot = store
             .get_workflow_snapshot(&session_id)
@@ -1466,12 +1512,9 @@ pub async fn workflow_start(
         })
         .collect();
 
-    let related_task_summary = if planning_mode
-        && initial_prompt.is_some()
-        && matches!(
-            workflow_status.to_lowercase().as_str(),
-            "completed" | "error" | "failed" | "cancelled"
-        )
+    let is_terminal_workflow = is_terminal_stored_workflow_state(&workflow_status);
+
+    let related_task_summary = if planning_mode && initial_prompt.is_some() && is_terminal_workflow
     {
         let previous_context = previous_completed_task_context(&existing_messages);
         let planning_model = agent_config
@@ -1591,6 +1634,13 @@ pub async fn workflow_start(
         executor.init().await.map_err(|e| e.to_string())?;
 
         if initial_prompt.is_some() {
+            if is_terminal_workflow {
+                executor
+                    .begin_new_context_segment()
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+
             if let Some(previous_summary) = related_task_summary {
                 executor
                     .add_message_and_notify(
@@ -1794,18 +1844,6 @@ pub async fn workflow_approve_plan(
     let workflow_manager_arc = workflow_manager.inner().clone();
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
 
-    let mut context = crate::workflow::react::context::ContextManager::new(
-        session_id.clone(),
-        main_store_arc.clone(),
-        128000,
-        tsid_generator_arc.clone(),
-    );
-
-    context
-        .prune_for_execution(plan.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-
     {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         store
@@ -1919,24 +1957,32 @@ pub async fn workflow_approve_plan(
         };
 
         let mut executor_guard = executor;
-        executor_guard.add_message_and_notify(
-            "system".into(),
-            format!(
-                "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## TODO LIST\n{}",
-                plan, todo_json
-            ),
-            None,
-            None,
-            None,
-            false,
-            None,
-            Some(json!({
-                "type": "summary",
-                "subtype": "approved_plan",
-                "plan_content": plan,
-                "todo_content": todo_json
-            })),
-        ).await.map_err(|e| e.to_string())?;
+        executor_guard
+            .add_message_and_notify(
+                "system".into(),
+                format!(
+                    "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## TODO LIST\n{}",
+                    plan, todo_json
+                ),
+                None,
+                None,
+                None,
+                false,
+                None,
+                Some(json!({
+                    "type": "summary",
+                    "subtype": "approved_plan",
+                    "plan_content": plan,
+                    "todo_content": todo_json
+                })),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        executor_guard
+            .begin_execution_context_from_approved_plan()
+            .await
+            .map_err(|e| e.to_string())?;
 
         executor_guard.add_message_and_notify(
             "user".into(),
@@ -2146,11 +2192,8 @@ pub async fn workflow_signal(
             .and_then(|value| value["type"].as_str().map(SignalType::from_str))
             .flatten();
 
-        let snapshot_status_lower = workflow_snapshot.workflow.status.to_lowercase();
-        let snapshot_is_terminal = matches!(
-            snapshot_status_lower.as_str(),
-            "completed" | "cancelled" | "error" | "failed"
-        );
+        let snapshot_is_terminal =
+            is_terminal_stored_workflow_state(&workflow_snapshot.workflow.status);
         let should_force_recovery_for_terminal_user_message = snapshot_is_terminal
             && matches!(
                 signal_type_enum,
@@ -2284,19 +2327,12 @@ pub async fn workflow_signal(
                 Some(SignalType::UserMessage | SignalType::LegacyUserInput)
             ) {
                 if let Some(content) = val["content"].as_str() {
-                    let status_lower = workflow_snapshot.workflow.status.to_lowercase();
                     // When recovery_context is None (for example a brand-new workflow with no
                     // persisted execution history yet), fall back to the durable workflow status.
                     let is_resumable =
                         is_resumable_from_context_for_user_message(recovery_context.as_ref())
-                            || matches!(
-                                status_lower.as_str(),
-                                "pending"
-                                    | "completed"
-                                    | "cancelled"
-                                    | "error"
-                                    | "failed"
-                                    | "awaiting_user"
+                            || is_resumable_stored_workflow_state_for_user_message(
+                                &workflow_snapshot.workflow.status,
                             );
 
                     if !is_resumable {
@@ -2341,10 +2377,11 @@ pub async fn workflow_signal(
             } else if signal_type == "rebroadcast_pending"
                 || signal_type == "request_confirm_broadcast"
             {
-                let status_lower = workflow_snapshot.workflow.status.to_lowercase();
                 let can_rebroadcast = effective_wait_reason == Some(WaitReason::Approval)
-                    || status_lower == "awaiting_approval"
-                    || status_lower == "awaitingapproval";
+                    || matches!(
+                        stored_workflow_state(&workflow_snapshot.workflow.status),
+                        Some(WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval)
+                    );
                 if !can_rebroadcast {
                     log::info!(
                         "[Workflow][session={}][phase=signal] Session is not awaiting approval, skipping rebroadcast_pending. runtime_state={:?}, wait_reason={:?}, status={}",
@@ -2381,9 +2418,11 @@ pub async fn workflow_signal(
                 workflow_signal,
                 Some(WorkflowSignal::Continue | WorkflowSignal::Stop)
             ) {
-                let status_lower = workflow_snapshot.workflow.status.to_lowercase();
                 let can_resume = effective_wait_reason == Some(WaitReason::Confirmation)
-                    || status_lower == "paused";
+                    || matches!(
+                        stored_workflow_state(&workflow_snapshot.workflow.status),
+                        Some(WorkflowState::Paused)
+                    );
                 if !can_resume {
                     log::info!(
                         "[Workflow][session={}][phase=signal] Session is not confirmation-waiting, ignoring {}. runtime_state={:?}, wait_reason={:?}, status={}",
@@ -2458,10 +2497,11 @@ pub async fn workflow_signal(
                 workflow_signal,
                 Some(WorkflowSignal::ApprovalDecision { .. })
             ) {
-                let status_lower = workflow_snapshot.workflow.status.to_lowercase();
                 let can_resume = effective_wait_reason == Some(WaitReason::Approval)
-                    || status_lower == "awaiting_approval"
-                    || status_lower == "awaitingapproval";
+                    || matches!(
+                        stored_workflow_state(&workflow_snapshot.workflow.status),
+                        Some(WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval)
+                    );
                 if !can_resume {
                     return Err(format!(
                         "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",

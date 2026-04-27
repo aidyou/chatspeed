@@ -699,14 +699,10 @@ const myLanguage = computed(() => {
 })
 
 /**
- * The user must have at least one model available and should not have initiated a new topic to create a new conversation.
+ * Creating a new conversation should always be possible as long as chat is available.
+ * Existing conversation state must not block starting a brand-new one.
  */
-const canCreateNewConversation = computed(
-  () =>
-    canChat.value &&
-    (chatStore.messages.length > 0 ||
-      (chatStore.messages.length == 0 && chatStore.currentConversationId < 1))
-)
+const canCreateNewConversation = computed(() => canChat.value)
 
 /**
  * The user must have at least one model available,

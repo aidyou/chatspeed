@@ -37,10 +37,13 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             role TEXT NOT NULL,
             message TEXT NOT NULL,
             reasoning TEXT,
+            message_kind TEXT NOT NULL DEFAULT 'message',
+            message_subtype TEXT,
+            segment_id INTEGER NOT NULL DEFAULT 1,
+            source_event_type TEXT,
             metadata TEXT,
             attached_context TEXT,             -- Hidden content for AI context only
             step_type TEXT,                    -- Enum: 'think', 'act', 'observe'
-
             step_index INTEGER DEFAULT 0,      -- The index of the step in the current session
             is_error INTEGER DEFAULT 0,        -- 0 for false, 1 for true
             error_type TEXT,                   -- Enum: 'Security', 'Io', 'InvalidParams', 'Network', 'Auth', 'Other'
@@ -51,6 +54,30 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
     (
         "idx_workflow_messages_session_id",
         "CREATE INDEX IF NOT EXISTS idx_workflow_messages_session_id ON workflow_messages(session_id)"
+    ),
+    // Workflow context projection table for AI-only prompt history
+    (
+        "workflow_context_messages",
+        "CREATE TABLE IF NOT EXISTS workflow_context_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            segment_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            message TEXT NOT NULL,
+            reasoning TEXT,
+            message_kind TEXT NOT NULL DEFAULT 'message',
+            message_subtype TEXT,
+            metadata TEXT,
+            source_message_id INTEGER,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES workflows(id),
+            FOREIGN KEY (source_message_id) REFERENCES workflow_messages(id)
+        )"
+    ),
+    (
+        "idx_workflow_context_messages_session_segment_id",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_context_messages_session_segment_id
+         ON workflow_context_messages(session_id, segment_id, id)"
     ),
     // Workflow snapshots table for ExecutionContext recovery
     (
@@ -178,9 +205,77 @@ fn ensure_workflow_parent_column(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn ensure_workflow_message_columns(conn: &Connection) -> Result<(), StoreError> {
+    if !column_exists(conn, "workflow_messages", "message_kind")? {
+        conn.execute(
+            "ALTER TABLE workflow_messages ADD COLUMN message_kind TEXT NOT NULL DEFAULT 'message'",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "workflow_messages", "message_subtype")? {
+        conn.execute(
+            "ALTER TABLE workflow_messages ADD COLUMN message_subtype TEXT",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "workflow_messages", "segment_id")? {
+        conn.execute(
+            "ALTER TABLE workflow_messages ADD COLUMN segment_id INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "workflow_messages", "source_event_type")? {
+        conn.execute(
+            "ALTER TABLE workflow_messages ADD COLUMN source_event_type TEXT",
+            [],
+        )?;
+    }
+
+    Ok(())
+}
+
 pub fn ensure(conn: &Connection) -> Result<(), StoreError> {
     ensure_agent_hierarchy_columns(conn)?;
     ensure_workflow_parent_column(conn)?;
+    ensure_workflow_message_columns(conn)?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS workflow_context_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            segment_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            message TEXT NOT NULL,
+            reasoning TEXT,
+            message_kind TEXT NOT NULL DEFAULT 'message',
+            message_subtype TEXT,
+            metadata TEXT,
+            source_message_id INTEGER,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES workflows(id),
+            FOREIGN KEY (source_message_id) REFERENCES workflow_messages(id)
+        )",
+        [],
+    )?;
+    if !column_exists(conn, "workflow_context_messages", "message_kind")? {
+        conn.execute(
+            "ALTER TABLE workflow_context_messages ADD COLUMN message_kind TEXT NOT NULL DEFAULT 'message'",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "workflow_context_messages", "message_subtype")? {
+        conn.execute(
+            "ALTER TABLE workflow_context_messages ADD COLUMN message_subtype TEXT",
+            [],
+        )?;
+    }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workflow_context_messages_session_segment_id
+         ON workflow_context_messages(session_id, segment_id, id)",
+        [],
+    )?;
     Ok(())
 }
 

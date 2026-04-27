@@ -42,6 +42,10 @@ pub struct WorkflowMessage {
     pub role: String,
     pub message: String,
     pub reasoning: Option<String>,
+    pub message_kind: String,
+    pub message_subtype: Option<String>,
+    pub segment_id: i32,
+    pub source_event_type: Option<String>,
     pub metadata: Option<Value>,
     pub attached_context: Option<String>,
     pub step_type: Option<String>,
@@ -49,6 +53,22 @@ pub struct WorkflowMessage {
     #[serde(default)]
     pub is_error: bool,
     pub error_type: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowContextMessage {
+    pub id: Option<i64>,
+    pub session_id: String,
+    pub segment_id: i32,
+    pub role: String,
+    pub message: String,
+    pub reasoning: Option<String>,
+    pub message_kind: String,
+    pub message_subtype: Option<String>,
+    pub metadata: Option<Value>,
+    pub source_message_id: Option<i64>,
     pub created_at: Option<String>,
 }
 
@@ -91,6 +111,12 @@ impl From<&Row<'_>> for WorkflowMessage {
             role: row.get("role").unwrap_or_default(),
             message: row.get("message").unwrap_or_default(),
             reasoning: row.get("reasoning").ok(),
+            message_kind: row
+                .get("message_kind")
+                .unwrap_or_else(|_| "message".to_string()),
+            message_subtype: row.get("message_subtype").ok(),
+            segment_id: row.get("segment_id").unwrap_or(1),
+            source_event_type: row.get("source_event_type").ok(),
             metadata,
             attached_context: row.get("attached_context").ok(),
             step_type: row.get("step_type").ok(),
@@ -117,6 +143,29 @@ impl From<&Row<'_>> for WorkflowEventRecord {
             event_version: row.get("event_version").unwrap_or_default(),
             event_data,
             created_at: row.get("created_at").unwrap_or_default(),
+        }
+    }
+}
+
+impl From<&Row<'_>> for WorkflowContextMessage {
+    fn from(row: &Row<'_>) -> Self {
+        let metadata_str: Option<String> = row.get("metadata").ok();
+        let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+
+        Self {
+            id: row.get("id").ok(),
+            session_id: row.get("session_id").unwrap_or_default(),
+            segment_id: row.get("segment_id").unwrap_or_default(),
+            role: row.get("role").unwrap_or_default(),
+            message: row.get("message").unwrap_or_default(),
+            reasoning: row.get("reasoning").ok(),
+            message_kind: row
+                .get("message_kind")
+                .unwrap_or_else(|_| "message".to_string()),
+            message_subtype: row.get("message_subtype").ok(),
+            metadata,
+            source_message_id: row.get("source_message_id").ok(),
+            created_at: row.get("created_at").ok(),
         }
     }
 }
@@ -299,13 +348,17 @@ impl MainStore {
             .map(|m| serde_json::to_string(m).unwrap_or_default());
 
         conn.execute(
-            "INSERT INTO workflow_messages (session_id, role, message, reasoning, metadata, attached_context, step_type, step_index, is_error, error_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO workflow_messages (session_id, role, message, reasoning, message_kind, message_subtype, segment_id, source_event_type, metadata, attached_context, step_type, step_index, is_error, error_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 msg.session_id,
                 msg.role,
                 msg.message,
                 msg.reasoning,
+                msg.message_kind,
+                msg.message_subtype,
+                msg.segment_id,
+                msg.source_event_type,
                 metadata_json,
                 msg.attached_context,
                 msg.step_type,
@@ -324,6 +377,89 @@ impl MainStore {
         let mut new_msg = msg.clone();
         new_msg.id = Some(id);
         Ok(new_msg)
+    }
+
+    pub fn add_workflow_context_message(
+        &self,
+        msg: &WorkflowContextMessage,
+    ) -> Result<WorkflowContextMessage, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let metadata_json = msg
+            .metadata
+            .as_ref()
+            .map(|m| serde_json::to_string(m).unwrap_or_default());
+
+        conn.execute(
+            "INSERT INTO workflow_context_messages (session_id, segment_id, role, message, reasoning, message_kind, message_subtype, metadata, source_message_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                msg.session_id,
+                msg.segment_id,
+                msg.role,
+                msg.message,
+                msg.reasoning,
+                msg.message_kind,
+                msg.message_subtype,
+                metadata_json,
+                msg.source_message_id,
+            ],
+        )?;
+
+        let id = conn.last_insert_rowid();
+        let mut new_msg = msg.clone();
+        new_msg.id = Some(id);
+        Ok(new_msg)
+    }
+
+    pub fn list_workflow_context_messages(
+        &self,
+        session_id: &str,
+        segment_id: i32,
+    ) -> Result<Vec<WorkflowContextMessage>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, segment_id, role, message, reasoning, message_kind, message_subtype, metadata, source_message_id, created_at
+             FROM workflow_context_messages
+             WHERE session_id = ?1 AND segment_id = ?2
+             ORDER BY id ASC",
+        )?;
+
+        let rows = stmt.query_map(params![session_id, segment_id], |row| {
+            Ok(WorkflowContextMessage::from(row))
+        })?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?);
+        }
+        Ok(messages)
+    }
+
+    pub fn get_latest_workflow_context_segment_id(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<i32>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        conn.query_row(
+            "SELECT MAX(segment_id) FROM workflow_context_messages WHERE session_id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(|value| value.flatten())
+        .map_err(StoreError::from)
     }
 
     pub fn update_workflow_status(&self, id: &str, status: &str) -> Result<(), StoreError> {
@@ -479,35 +615,6 @@ impl MainStore {
         Ok(todo_list_str
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default())
-    }
-
-    pub fn delete_workflow_messages(
-        &self,
-        session_id: &str,
-        keep_ids: Vec<i64>,
-    ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        if keep_ids.is_empty() {
-            conn.execute(
-                "DELETE FROM workflow_messages WHERE session_id = ?1",
-                params![session_id],
-            )?;
-        } else {
-            let id_list = keep_ids
-                .iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            let query = format!(
-                "DELETE FROM workflow_messages WHERE session_id = ?1 AND id NOT IN ({})",
-                id_list
-            );
-            conn.execute(&query, params![session_id])?;
-        }
-        Ok(())
     }
 
     // ExecutionContext Snapshot Operations

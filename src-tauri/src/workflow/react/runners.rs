@@ -30,6 +30,18 @@ impl ReActExecutor for ExecutionExecutor {
         self.executor.run_loop_internal().await
     }
 
+    async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
+        self.executor.begin_new_context_segment().await
+    }
+
+    async fn begin_execution_context_from_approved_plan(
+        &mut self,
+    ) -> Result<(), WorkflowEngineError> {
+        self.executor
+            .begin_execution_context_from_approved_plan()
+            .await
+    }
+
     async fn add_message_and_notify(
         &mut self,
         role: String,

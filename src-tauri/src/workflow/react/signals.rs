@@ -24,7 +24,7 @@ pub fn parse_runtime_signal(raw: &str) -> RuntimeSignal {
     let signal_type_enum = SignalType::from_str(signal_type);
     let workflow_signal = crate::workflow::react::types::WorkflowSignal::parse(raw);
 
-    if signal_type_enum == Some(SignalType::Stop) || raw.to_lowercase().contains("stop") {
+    if signal_type_enum == Some(SignalType::Stop) || raw.trim().eq_ignore_ascii_case("stop") {
         return RuntimeSignal::Stop;
     }
 

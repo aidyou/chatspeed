@@ -35,7 +35,9 @@ struct JsonErrorPayload<'a> {
 const MAX_TOOL_CALLS_PER_RESPONSE: usize = 15;
 
 fn extract_reasoning_from_openai_message(message: &Value) -> String {
-    if let Some(reasoning_content) = message.get("reasoning_content").and_then(|value| value.as_str())
+    if let Some(reasoning_content) = message
+        .get("reasoning_content")
+        .and_then(|value| value.as_str())
     {
         let trimmed = reasoning_content.trim();
         if !trimmed.is_empty() {
@@ -50,10 +52,15 @@ fn extract_reasoning_from_openai_message(message: &Value) -> String {
         }
     }
 
-    if let Some(details) = message.get("reasoning_details").and_then(|value| value.as_array()) {
+    if let Some(details) = message
+        .get("reasoning_details")
+        .and_then(|value| value.as_array())
+    {
         let combined = details
             .iter()
-            .filter(|detail| detail.get("type").and_then(|value| value.as_str()) == Some("reasoning.text"))
+            .filter(|detail| {
+                detail.get("type").and_then(|value| value.as_str()) == Some("reasoning.text")
+            })
             .filter_map(|detail| detail.get("text").and_then(|value| value.as_str()))
             .map(str::trim)
             .filter(|text| !text.is_empty())
@@ -695,7 +702,10 @@ impl OpenAIChat {
                 Value::Object(canonical)
             }
             Value::Array(items) => Value::Array(
-                items.into_iter().map(Self::canonicalize_json_value).collect(),
+                items
+                    .into_iter()
+                    .map(Self::canonicalize_json_value)
+                    .collect(),
             ),
             other => other,
         }
@@ -916,8 +926,10 @@ impl AiChatTrait for OpenAIChat {
             }
 
             if merged_metadata.thinking.is_some() {
-                let compat_thinking =
-                    build_openai_compat_thinking_fields(&final_model, merged_metadata.thinking.as_ref());
+                let compat_thinking = build_openai_compat_thinking_fields(
+                    &final_model,
+                    merged_metadata.thinking.as_ref(),
+                );
 
                 if !obj.contains_key("thinking") {
                     if let Some(thinking) = compat_thinking.thinking {

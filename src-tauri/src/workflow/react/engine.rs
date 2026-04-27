@@ -58,6 +58,10 @@ const DEFAULT_MAX_STEPS: usize = 60;
 pub trait ReActExecutor: Send + Sync {
     async fn init(&mut self) -> Result<(), WorkflowEngineError>;
     async fn run_loop(&mut self) -> Result<(), WorkflowEngineError>;
+    async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError>;
+    async fn begin_execution_context_from_approved_plan(
+        &mut self,
+    ) -> Result<(), WorkflowEngineError>;
     async fn add_message_and_notify(
         &mut self,
         role: String,
@@ -470,6 +474,18 @@ impl ReActExecutor for WorkflowExecutor {
 
     async fn run_loop(&mut self) -> Result<(), WorkflowEngineError> {
         self.run_loop_internal().await
+    }
+
+    async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
+        self.context.begin_new_segment_with_seed(Vec::new()).await
+    }
+
+    async fn begin_execution_context_from_approved_plan(
+        &mut self,
+    ) -> Result<(), WorkflowEngineError> {
+        self.context
+            .begin_execution_segment_from_approved_plan()
+            .await
     }
 
     async fn add_message_and_notify(
@@ -1155,20 +1171,7 @@ impl WorkflowExecutor {
                 .unwrap_or(true); // Default to allowed for safety if not found in meta
 
             let config_allowed = configured_tools.as_ref().map_or(true, |tools| {
-                matches!(
-                    name,
-                    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
-                        | TOOL_SUBMIT_PLAN
-                        | TOOL_SUB_AGENT_RUN
-                        | TOOL_SUB_AGENT_OUTPUT
-                        | TOOL_SUB_AGENT_STOP
-                ) || (self.policy.allows_planning_note_tools()
-                    && matches!(
-                        name,
-                        crate::tools::TOOL_PLAN_READ_NOTE
-                            | crate::tools::TOOL_PLAN_WRITE_NOTE
-                            | crate::tools::TOOL_PLAN_EDIT_NOTE
-                    ))
+                is_core_workflow_builtin_tool(name)
                     || tools.contains(name)
                     || (name == "mcp_tool_load"
                         && tools.iter().any(|tool| tool.contains(MCP_TOOL_NAME_SPLIT)))
@@ -1449,6 +1452,9 @@ impl WorkflowExecutor {
 
         let approved_plan = plan.clone();
         self.persist_approved_plan_anchor(&approved_plan).await?;
+        self.context
+            .begin_execution_segment_from_approved_plan()
+            .await?;
 
         let mut new_policy = ExecutionPolicy::implementation();
         new_policy.approval_level = self.policy.approval_level.clone();
@@ -5069,10 +5075,7 @@ impl WorkflowExecutor {
         self.dispatch_sub_agent_progress().await;
 
         // Summary messages should not trigger compression - they are the result of compression
-        let is_summary = msg
-            .metadata
-            .as_ref()
-            .map_or(false, |m| m["type"] == "summary");
+        let is_summary = msg.message_kind == "summary";
 
         Ok(needs_compression && !is_summary)
     }

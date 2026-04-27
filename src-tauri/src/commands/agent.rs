@@ -30,22 +30,25 @@ pub async fn update_agent(
     agent: Agent,
 ) -> Result<(), String> {
     let store = state.read().map_err(|e| e.to_string())?;
-    let effective_agent = if let Some(existing) = store.get_agent(&agent.id).map_err(|e| e.to_string())? {
-        if existing.is_system.unwrap_or(false) {
-            let mut locked = existing.clone();
-            locked.disabled = agent.disabled.or(existing.disabled);
-            locked
+    let effective_agent =
+        if let Some(existing) = store.get_agent(&agent.id).map_err(|e| e.to_string())? {
+            if existing.is_system.unwrap_or(false) {
+                let mut locked = existing.clone();
+                locked.disabled = agent.disabled.or(existing.disabled);
+                locked
+            } else {
+                let mut updated = agent;
+                updated.is_system = Some(false);
+                updated
+            }
         } else {
             let mut updated = agent;
             updated.is_system = Some(false);
             updated
-        }
-    } else {
-        let mut updated = agent;
-        updated.is_system = Some(false);
-        updated
-    };
-    store.update_agent(&effective_agent).map_err(|e| e.to_string())?;
+        };
+    store
+        .update_agent(&effective_agent)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

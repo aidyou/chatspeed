@@ -3,13 +3,13 @@ use crate::ai::error::AiError;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::ChatMetadata;
 use crate::db::WorkflowMessage;
+use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
+use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::prompts::{
     BLOCKING_CONTEXT_COMPRESSION_PROMPT, ROLLUP_CONTEXT_COMPRESSION_PROMPT,
 };
-use crate::workflow::react::context::ContextManager;
-use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
 
 use serde_json::json;
 use std::sync::Arc;
@@ -305,13 +305,7 @@ impl ContextCompressor {
         let mut tasks = Vec::new();
         let mut segment_start = messages
             .iter()
-            .position(|message| {
-                !message
-                    .metadata
-                    .as_ref()
-                    .map(|meta| meta["type"] == "summary")
-                    .unwrap_or(false)
-            })
+            .position(|message| message.message_kind != "summary")
             .unwrap_or(messages.len());
 
         for (idx, message) in messages.iter().enumerate().skip(segment_start) {
@@ -515,6 +509,10 @@ mod tests {
                 role: "user".to_string(),
                 message: "First question".to_string(),
                 reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
                 metadata: None,
                 attached_context: None,
                 step_type: None,
@@ -529,6 +527,10 @@ mod tests {
                 role: "assistant".to_string(),
                 message: "First answer".to_string(),
                 reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
                 metadata: Some(serde_json::json!({ "message_kind": "completion_report" })),
                 attached_context: None,
                 step_type: Some("think".to_string()),
@@ -543,7 +545,13 @@ mod tests {
                 role: "tool".to_string(),
                 message: "Finished".to_string(),
                 reasoning: None,
-                metadata: Some(serde_json::json!({ "tool_name": "complete_workflow_with_summary" })),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(
+                    serde_json::json!({ "tool_name": "complete_workflow_with_summary" }),
+                ),
                 attached_context: None,
                 step_type: Some("observe".to_string()),
                 step_index: 2,
@@ -557,6 +565,10 @@ mod tests {
                 role: "user".to_string(),
                 message: "Second question".to_string(),
                 reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 2,
+                source_event_type: None,
                 metadata: None,
                 attached_context: None,
                 step_type: None,
@@ -571,6 +583,10 @@ mod tests {
                 role: "assistant".to_string(),
                 message: "Second answer".to_string(),
                 reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 2,
+                source_event_type: None,
                 metadata: Some(serde_json::json!({ "message_kind": "completion_report" })),
                 attached_context: None,
                 step_type: Some("think".to_string()),
@@ -585,7 +601,13 @@ mod tests {
                 role: "tool".to_string(),
                 message: "Finished".to_string(),
                 reasoning: None,
-                metadata: Some(serde_json::json!({ "tool_name": "complete_workflow_with_summary" })),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(
+                    serde_json::json!({ "tool_name": "complete_workflow_with_summary" }),
+                ),
                 attached_context: None,
                 step_type: Some("observe".to_string()),
                 step_index: 5,
@@ -611,6 +633,10 @@ mod tests {
             message: "# Approved Plan\n\nplan body\n\n<SYSTEM_REMINDER>approved</SYSTEM_REMINDER>"
                 .to_string(),
             reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
             metadata: Some(serde_json::json!({
                 "tool_name": "submit_plan",
                 "approval_status": "approved"
@@ -623,6 +649,8 @@ mod tests {
             created_at: None,
         };
 
-        assert!(ContextCompressor::should_skip_message_for_compression(&message));
+        assert!(ContextCompressor::should_skip_message_for_compression(
+            &message
+        ));
     }
 }

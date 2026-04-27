@@ -87,16 +87,16 @@ impl IntelligenceManager {
             .iter()
             .rev()
             .find_map(|message| {
-                message.metadata.as_ref().and_then(|meta| {
-                    if meta.get("subtype").and_then(|value| value.as_str()) == Some("approved_plan")
-                    {
-                        meta.get("plan_content")
-                            .and_then(|value| value.as_str())
-                            .map(str::to_string)
-                    } else {
-                        None
-                    }
-                })
+                if message.message_subtype.as_deref() == Some("approved_plan") {
+                    message
+                        .metadata
+                        .as_ref()
+                        .and_then(|meta| meta.get("plan_content"))
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                } else {
+                    None
+                }
             })
             .unwrap_or_else(|| "No approved plan was provided for this workflow.".to_string())
     }

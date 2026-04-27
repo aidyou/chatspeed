@@ -1,5 +1,7 @@
 use crate::ccproxy::adapter::unified::UnifiedThinking;
-use crate::ccproxy::types::openai::{OpenAIMessageContent, OpenAIMessageContentPart, ZhipuThinking};
+use crate::ccproxy::types::openai::{
+    OpenAIMessageContent, OpenAIMessageContentPart, ZhipuThinking,
+};
 use crate::db::ThinkingConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,10 +100,7 @@ pub fn merge_reasoning_into_openai_message_content(
             }
         }
         Some(OpenAIMessageContent::Parts(mut parts)) => {
-            parts.insert(
-                0,
-                OpenAIMessageContentPart::Text { text: think_block },
-            );
+            parts.insert(0, OpenAIMessageContentPart::Text { text: think_block });
             Some(OpenAIMessageContent::Parts(parts))
         }
         None => Some(OpenAIMessageContent::Text(think_block)),
@@ -393,7 +392,9 @@ mod tests {
         assert!(supports_native_reasoning_history_for_openai_backend(
             "deepseek-reasoner"
         ));
-        assert!(supports_native_reasoning_history_for_openai_backend("gpt-5"));
+        assert!(supports_native_reasoning_history_for_openai_backend(
+            "gpt-5"
+        ));
         assert!(!supports_native_reasoning_history_for_openai_backend(
             "claude-3-7-sonnet"
         ));

@@ -1,4 +1,4 @@
-use crate::db::{MainStore, WorkflowMessage};
+use crate::db::{MainStore, WorkflowContextMessage, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
 use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
 use crate::workflow::react::error::WorkflowEngineError;
@@ -13,12 +13,16 @@ pub struct ContextManager {
     pub main_store: Arc<std::sync::RwLock<MainStore>>,
     pub max_tokens: usize,
     pub messages: Vec<WorkflowMessage>,
+    pub context_messages: Vec<WorkflowContextMessage>,
+    pub current_segment_id: i32,
     pub tsid_generator: Arc<TsidGenerator>,
     /// Semaphore to control concurrent operations if needed
     pub semaphore: Arc<Semaphore>,
 }
 
 impl ContextManager {
+    const TODO_USE_REMINDER: &str = "<SYSTEM_REMINDER>For complex or multi-step work, use the todo* tools to track execution. Create tasks before major work begins, update statuses as you make progress, and keep the todo list aligned with the actual execution state.</SYSTEM_REMINDER>";
+
     pub(crate) fn sanitize_reasoning_content(reasoning: Option<String>) -> Option<String> {
         let reasoning = reasoning?;
         let trimmed = reasoning.trim();
@@ -46,11 +50,7 @@ impl ContextManager {
     }
 
     fn is_summary_message(message: &WorkflowMessage) -> bool {
-        message
-            .metadata
-            .as_ref()
-            .map(|meta| meta["type"] == "summary")
-            .unwrap_or(false)
+        message.message_kind == "summary"
     }
 
     pub(crate) fn is_compression_summary_message(message: &WorkflowMessage) -> bool {
@@ -58,7 +58,8 @@ impl ContextManager {
             return false;
         };
 
-        meta.get("type").and_then(|v| v.as_str()) == Some("summary")
+        message.message_kind == "summary"
+            && message.message_subtype.as_deref() == Some("compression")
             && meta.get("compressed_until_message_id").is_some()
     }
 
@@ -131,13 +132,8 @@ impl ContextManager {
             .rposition(Self::is_compression_summary_message)
     }
 
-    fn estimate_message_tokens(message: &WorkflowMessage) -> f64 {
-        let content_to_estimate = if let Some(att) = &message.attached_context {
-            format!("{}\n\n{}", message.message, att)
-        } else {
-            message.message.clone()
-        };
-        crate::ccproxy::utils::token_estimator::estimate_tokens(&content_to_estimate)
+    fn estimate_context_message_tokens(message: &WorkflowContextMessage) -> f64 {
+        crate::ccproxy::utils::token_estimator::estimate_tokens(&message.message)
     }
 
     fn rebuild_compacted_messages(
@@ -172,9 +168,9 @@ impl ContextManager {
     }
 
     pub fn current_token_estimate(&self) -> usize {
-        self.messages
+        self.context_messages
             .iter()
-            .map(Self::estimate_message_tokens)
+            .map(Self::estimate_context_message_tokens)
             .sum::<f64>()
             .round() as usize
     }
@@ -253,6 +249,8 @@ impl ContextManager {
             main_store,
             max_tokens,
             messages: Vec::new(),
+            context_messages: Vec::new(),
+            current_segment_id: 1,
             tsid_generator,
             semaphore: Arc::new(Semaphore::new(3)), // Restore to 3 concurrent calls
         }
@@ -267,8 +265,216 @@ impl ContextManager {
             store.get_workflow_snapshot(&self.session_id)?
         };
         self.messages = Self::rebuild_compacted_messages(&snapshot.messages, self.max_tokens);
+        let (segment_id, context_messages) = {
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            let latest_segment_id = store
+                .get_latest_workflow_context_segment_id(&self.session_id)?
+                .unwrap_or(1);
+            let context_messages =
+                store.list_workflow_context_messages(&self.session_id, latest_segment_id)?;
+            (latest_segment_id, context_messages)
+        };
+        self.current_segment_id = segment_id;
+        self.context_messages = context_messages;
+        if self.context_messages.is_empty() {
+            self.bootstrap_context_projection_from_messages().await?;
+        }
 
         Ok(())
+    }
+
+    async fn bootstrap_context_projection_from_messages(
+        &mut self,
+    ) -> Result<(), WorkflowEngineError> {
+        let start_index = Self::latest_successful_completion_index(&self.messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let active_messages: Vec<WorkflowMessage> = self.messages[start_index..].to_vec();
+        self.current_segment_id = 1;
+        self.context_messages.clear();
+
+        for message in active_messages {
+            let step_type = message
+                .step_type
+                .as_deref()
+                .and_then(|value| value.parse().ok());
+            let context_message = self.project_context_message(&message, step_type.as_ref());
+            let persisted = {
+                let store = self.main_store.read().map_err(|e| {
+                    WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+                })?;
+                store.add_workflow_context_message(&context_message)?
+            };
+            self.context_messages.push(persisted);
+        }
+
+        Ok(())
+    }
+
+    fn merge_attached_context(content: &str, attached_context: Option<&str>) -> String {
+        match attached_context {
+            Some(attached) if !attached.is_empty() => format!("{}\n\n{}", content, attached),
+            _ => content.to_string(),
+        }
+    }
+
+    fn should_wrap_as_user_query(&self, role: &str, step_type: Option<&StepType>) -> bool {
+        role == "user"
+            && step_type != Some(&StepType::Observe)
+            && !self
+                .context_messages
+                .iter()
+                .any(|message| message.role == "user")
+    }
+
+    fn project_context_message(
+        &self,
+        message: &WorkflowMessage,
+        step_type: Option<&StepType>,
+    ) -> WorkflowContextMessage {
+        let merged_content =
+            Self::merge_attached_context(&message.message, message.attached_context.as_deref());
+        let final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
+            let plan = message
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("plan_content"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let todos = message
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("todo_content"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("[]");
+            format!(
+                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
+                plan, todos
+            )
+        } else if self.should_wrap_as_user_query(&message.role, step_type) {
+            format!(
+                "<user_query>\n{}\n</user_query>\n{}",
+                merged_content,
+                Self::TODO_USE_REMINDER
+            )
+        } else {
+            merged_content
+        };
+
+        WorkflowContextMessage {
+            id: None,
+            session_id: self.session_id.clone(),
+            segment_id: self.current_segment_id,
+            role: message.role.clone(),
+            message: final_content,
+            reasoning: message.reasoning.clone(),
+            message_kind: message.message_kind.clone(),
+            message_subtype: message.message_subtype.clone(),
+            metadata: message.metadata.clone(),
+            source_message_id: message.id,
+            created_at: None,
+        }
+    }
+
+    fn to_workflow_messages(messages: &[WorkflowContextMessage]) -> Vec<WorkflowMessage> {
+        messages
+            .iter()
+            .map(|message| WorkflowMessage {
+                id: message.id,
+                session_id: message.session_id.clone(),
+                role: message.role.clone(),
+                message: message.message.clone(),
+                reasoning: message.reasoning.clone(),
+                message_kind: message.message_kind.clone(),
+                message_subtype: message.message_subtype.clone(),
+                segment_id: message.segment_id,
+                source_event_type: None,
+                metadata: message.metadata.clone(),
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: message.created_at.clone(),
+            })
+            .collect()
+    }
+
+    async fn persist_context_seed(
+        &self,
+        seed: WorkflowContextMessage,
+    ) -> Result<WorkflowContextMessage, WorkflowEngineError> {
+        let store = self.main_store.read().map_err(|e| {
+            WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+        })?;
+        store
+            .add_workflow_context_message(&seed)
+            .map_err(WorkflowEngineError::from)
+    }
+
+    pub async fn begin_new_segment_with_seed(
+        &mut self,
+        seed_messages: Vec<WorkflowContextMessage>,
+    ) -> Result<(), WorkflowEngineError> {
+        self.current_segment_id += 1;
+        self.context_messages.clear();
+
+        for mut seed in seed_messages {
+            seed.segment_id = self.current_segment_id;
+            seed.session_id = self.session_id.clone();
+            let persisted = self.persist_context_seed(seed).await?;
+            self.context_messages.push(persisted);
+        }
+
+        Ok(())
+    }
+
+    pub async fn append_existing_context_messages_to_current_segment(
+        &mut self,
+        messages: Vec<WorkflowContextMessage>,
+    ) -> Result<(), WorkflowEngineError> {
+        for mut message in messages {
+            message.id = None;
+            message.segment_id = self.current_segment_id;
+            message.session_id = self.session_id.clone();
+            message.created_at = None;
+            let persisted = self.persist_context_seed(message).await?;
+            self.context_messages.push(persisted);
+        }
+
+        Ok(())
+    }
+
+    pub async fn begin_execution_segment_from_approved_plan(
+        &mut self,
+    ) -> Result<(), WorkflowEngineError> {
+        let initial_user = self
+            .context_messages
+            .iter()
+            .find(|message| message.role == "user")
+            .cloned()
+            .ok_or_else(|| {
+                WorkflowEngineError::General(
+                    "Cannot start execution segment without a current user query".to_string(),
+                )
+            })?;
+
+        let approved_plan = self
+            .context_messages
+            .iter()
+            .rev()
+            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
+            .cloned()
+            .ok_or_else(|| {
+                WorkflowEngineError::General(
+                    "Cannot start execution segment without an approved plan anchor".to_string(),
+                )
+            })?;
+
+        self.begin_new_segment_with_seed(vec![initial_user, approved_plan])
+            .await
     }
 
     /// Adds a new message and persists it. Returns true if compression is needed.
@@ -284,6 +490,20 @@ impl ContextManager {
         error_type: Option<String>,
         metadata: Option<serde_json::Value>,
     ) -> Result<(WorkflowMessage, bool), WorkflowEngineError> {
+        let should_start_new_segment = role == "user"
+            && step_type != Some(StepType::Observe)
+            && self
+                .messages_since_last_completion()
+                .into_iter()
+                .all(|message| {
+                    !(message.role == "user"
+                        && message.step_type.as_deref() != Some("observe")
+                        && !message.message.trim().is_empty())
+                });
+        if should_start_new_segment {
+            self.begin_new_segment_with_seed(Vec::new()).await?;
+        }
+
         let _permit = self
             .semaphore
             .acquire()
@@ -301,9 +521,13 @@ impl ContextManager {
             role: role.clone(),
             message: content,
             reasoning,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: self.current_segment_id,
+            source_event_type: None,
             metadata,
             attached_context,
-            step_type: step_type.map(|s| s.to_string()),
+            step_type: step_type.clone().map(|s| s.to_string()),
             step_index,
             is_error,
             error_type,
@@ -318,6 +542,15 @@ impl ContextManager {
         };
 
         self.messages.push(persisted.clone());
+
+        let context_message = self.project_context_message(&persisted, step_type.as_ref());
+        let persisted_context = {
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            store.add_workflow_context_message(&context_message)?
+        };
+        self.context_messages.push(persisted_context);
 
         // Check if compression is needed (80% threshold)
         // Estimate from the currently retained context only.
@@ -344,6 +577,10 @@ impl ContextManager {
             role: "system".to_string(),
             message: format!("## Previous Context Snapshot\n{}", summary),
             reasoning: None,
+            message_kind: "summary".to_string(),
+            message_subtype: Some("compression".to_string()),
+            segment_id: self.current_segment_id,
+            source_event_type: None,
             metadata: Some(json!({
                 "type": "summary",
                 "compressed_until_message_id": compressed_until_message_id
@@ -365,81 +602,45 @@ impl ContextManager {
         };
 
         let mut all_messages = self.messages.clone();
-        all_messages.push(persisted_summary);
+        all_messages.push(persisted_summary.clone());
         self.messages = Self::rebuild_compacted_messages(&all_messages, self.max_tokens);
+
+        let retained_context: Vec<WorkflowContextMessage> = self
+            .context_messages
+            .iter()
+            .filter(|message| {
+                message
+                    .source_message_id
+                    .is_some_and(|id| id > compressed_until_message_id)
+            })
+            .cloned()
+            .collect();
+
+        self.begin_new_segment_with_seed(vec![WorkflowContextMessage {
+            id: None,
+            session_id: self.session_id.clone(),
+            segment_id: 0,
+            role: "system".to_string(),
+            message: format!("## Previous Context Snapshot\n{}", summary),
+            reasoning: None,
+            message_kind: "summary".to_string(),
+            message_subtype: Some("compression".to_string()),
+            metadata: Some(json!({
+                "type": "summary",
+                "compressed_until_message_id": compressed_until_message_id
+            })),
+            source_message_id: persisted_summary.id,
+            created_at: None,
+        }])
+        .await?;
+        self.append_existing_context_messages_to_current_segment(retained_context)
+            .await?;
 
         Ok(())
     }
 
     pub fn get_messages_for_llm(&self) -> Vec<WorkflowMessage> {
-        let start_index = Self::latest_successful_completion_index(&self.messages)
-            .map(|index| index + 1)
-            .unwrap_or(0);
-        let current_segment = self.messages[start_index..].to_vec();
-        let approved_plan_index = current_segment.iter().position(|message| {
-            message
-                .metadata
-                .as_ref()
-                .and_then(|meta| meta.get("subtype"))
-                .and_then(|value| value.as_str())
-                == Some("approved_plan")
-        });
-
-        let mut llm_messages = if let Some(plan_index) = approved_plan_index {
-            let mut filtered = Vec::new();
-            if let Some(user_query) = current_segment.iter().find(|message| {
-                message.role == "user" && message.step_type.as_deref() != Some("observe")
-            }) {
-                filtered.push(user_query.clone());
-            }
-            filtered.extend(current_segment.into_iter().skip(plan_index));
-            filtered
-        } else {
-            current_segment
-        };
-        let mut wrapped_initial_user_query = false;
-
-        let todo_use_reminder = "<SYSTEM_REMINDER>For complex or multi-step work, use the todo* tools to track execution. Create tasks before major work begins, update statuses as you make progress, and keep the todo list aligned with the actual execution state.</SYSTEM_REMINDER>";
-
-        for msg in llm_messages.iter_mut() {
-            if let Some(att) = &msg.attached_context {
-                if !att.is_empty() {
-                    msg.message = format!("{}\n\n{}", msg.message, att);
-                }
-            }
-
-            // Only the first real user request in the current active segment should be treated
-            // as the workflow's user_query: either the session's first user message, or the
-            // first user message after the latest successful completion.
-            if msg.role == "user"
-                && msg.step_type.as_deref() != Some("observe")
-                && !wrapped_initial_user_query
-            {
-                if !msg.message.starts_with("<user_query>") {
-                    msg.message = format!(
-                        "<user_query>\n{}\n</user_query>\n{}",
-                        msg.message, todo_use_reminder,
-                    );
-                }
-                wrapped_initial_user_query = true;
-            }
-
-            // 2. Wrap Approved Plan components if metadata exists
-            if let Some(meta) = &msg.metadata {
-                if meta["subtype"] == "approved_plan" {
-                    let plan = meta["plan_content"].as_str().unwrap_or("");
-                    let todos = meta["todo_content"].as_str().unwrap_or("[]");
-
-                    msg.message = format!(
-                        "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
-                        plan,
-                        todos
-                    );
-                }
-            }
-        }
-
-        llm_messages
+        Self::to_workflow_messages(&self.context_messages)
     }
 
     /// Gets the initial user query for the session.
@@ -470,95 +671,6 @@ impl ContextManager {
             .map(|message| message.message)
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| self.get_initial_query())
-    }
-
-    /// Prunes the context for transitioning from Planning to Execution.
-    /// It keeps the initial user query and adds the final approved plan as the new anchor.
-    pub async fn prune_for_execution(
-        &mut self,
-        approved_plan: String,
-    ) -> Result<(), WorkflowEngineError> {
-        log::info!(
-            "ContextManager {}: Pruning context for execution phase",
-            self.session_id
-        );
-
-        let initial_query = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
-            let snapshot = store.get_workflow_snapshot(&self.session_id)?;
-            snapshot.messages.iter().find(|m| m.role == "user").cloned()
-        };
-
-        // 1. Physical Database Pruning: Delete all intermediate steps but keep initial query ID
-        {
-            let store = self.main_store.write().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
-            let keep_ids = initial_query
-                .as_ref()
-                .and_then(|m| m.id)
-                .map(|id| vec![id])
-                .unwrap_or_default();
-            store.delete_workflow_messages(&self.session_id, keep_ids)?;
-        }
-
-        // 2. Clear current in-memory messages
-        self.messages.clear();
-
-        // 3. Re-add initial query to memory if found
-        if let Some(query) = initial_query {
-            self.messages.push(query);
-        }
-
-        // 3. Fetch current todo items to inject into context
-        let todo_json = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
-            let todos = store.get_todo_list_for_workflow(&self.session_id)?;
-            serde_json::to_string_pretty(&todos).unwrap_or_else(|_| "[]".to_string())
-        };
-
-        // 4. Add the approved plan as a specialized summary message
-        let msg_id = self
-            .tsid_generator
-            .generate_u64()
-            .map_err(|e| WorkflowEngineError::General(e))?;
-        let plan_msg = WorkflowMessage {
-            id: Some(msg_id as i64),
-            session_id: self.session_id.clone(),
-            role: "system".to_string(),
-            message: format!(
-                "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## TODO LIST\n{}",
-                approved_plan, todo_json
-            ),
-            reasoning: None,
-            metadata: Some(json!({
-                "type": "summary",
-                "subtype": "approved_plan",
-                "plan_content": approved_plan,
-                "todo_content": todo_json
-            })),
-            attached_context: None,
-            step_type: None,
-            step_index: 0,
-            is_error: false,
-            error_type: None,
-            created_at: None,
-        };
-
-        let persisted_plan = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
-            store.add_workflow_message(&plan_msg)?
-        };
-
-        self.messages.push(persisted_plan);
-
-        Ok(())
     }
 }
 
@@ -735,12 +847,7 @@ mod tests {
         let summary_messages = snapshot
             .messages
             .iter()
-            .filter(|m| {
-                m.metadata
-                    .as_ref()
-                    .map(|meta| meta["type"] == "summary")
-                    .unwrap_or(false)
-            })
+            .filter(|m| m.message_kind == "summary")
             .count();
 
         assert_eq!(
@@ -759,12 +866,7 @@ mod tests {
             "initial user query should remain in the stored history"
         );
         assert!(
-            context.messages.iter().any(|m| {
-                m.metadata
-                    .as_ref()
-                    .map(|meta| meta["type"] == "summary")
-                    .unwrap_or(false)
-            }),
+            context.messages.iter().any(|m| m.message_kind == "summary"),
             "the in-memory context should include the persisted summary"
         );
         assert!(
@@ -1017,11 +1119,7 @@ mod tests {
             .expect("third uncompressed completed task should trigger rollup");
 
         assert_eq!(
-            candidate
-                .first()
-                .and_then(|m| m.metadata.as_ref())
-                .and_then(|m| m.get("type"))
-                .and_then(|v| v.as_str()),
+            candidate.first().map(|m| m.message_kind.as_str()),
             Some("summary"),
             "incremental compression should start from the latest summary"
         );
@@ -1635,6 +1733,10 @@ mod tests {
             role: "system".to_string(),
             message: "# APPROVED EXECUTION PLAN".to_string(),
             reasoning: None,
+            message_kind: "summary".to_string(),
+            message_subtype: Some("approved_plan".to_string()),
+            segment_id: 1,
+            source_event_type: None,
             metadata: Some(json!({
                 "type": "summary",
                 "subtype": "approved_plan",

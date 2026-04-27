@@ -227,19 +227,18 @@ impl LlmProcessor {
         let raw_history = context.get_messages_for_llm();
 
         // 1. Context Normalization & Prompt Injection
-        let state_snapshot = raw_history.iter().rev().find_map(|m| {
-            if m.role == "system"
-                && m.metadata
-                    .as_ref()
-                    .is_some_and(|_| {
-                        crate::workflow::react::context::ContextManager::is_compression_summary_message(m)
-                    })
-            {
-                Some(m.message.clone())
-            } else {
-                None
-            }
-        });
+        let state_snapshot =
+            raw_history.iter().rev().find_map(|m| {
+                if m.role == "system" && m.metadata.as_ref().is_some_and(|_| {
+                    crate::workflow::react::context::ContextManager::is_compression_summary_message(
+                        m,
+                    )
+                }) {
+                    Some(m.message.clone())
+                } else {
+                    None
+                }
+            });
 
         // Extract the next pending todo item for progress display.
         let next_pending_task = None::<String>;
@@ -1422,6 +1421,10 @@ mod tests {
             role: role.to_string(),
             message: content.to_string(),
             reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
             metadata,
             attached_context: None,
             step_type: step_type.map(str::to_string),
@@ -1445,6 +1448,10 @@ mod tests {
             role: role.to_string(),
             message: content.to_string(),
             reasoning: Some(reasoning.to_string()),
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
             metadata,
             attached_context: None,
             step_type: step_type.map(str::to_string),

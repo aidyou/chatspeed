@@ -17,8 +17,8 @@ pub struct TokenUsage {
 #[cfg(test)]
 mod tests {
     use super::StreamParser;
-    use bytes::Bytes;
     use crate::ai::traits::chat::MessageType;
+    use bytes::Bytes;
 
     #[test]
     fn parse_openai_usage_only_chunk() {
@@ -207,13 +207,19 @@ impl StreamParser {
                                 }
 
                                 let mut reasoning_content = delta.reasoning_content;
-                                if reasoning_content.as_deref().is_none_or(|text| text.is_empty()) {
+                                if reasoning_content
+                                    .as_deref()
+                                    .is_none_or(|text| text.is_empty())
+                                {
                                     reasoning_content =
                                         delta.thinking.filter(|text| !text.is_empty());
                                 }
-                                if reasoning_content.as_deref().is_none_or(|text| text.is_empty()) {
-                                    reasoning_content = delta.reasoning_details.as_ref().and_then(
-                                        |details| {
+                                if reasoning_content
+                                    .as_deref()
+                                    .is_none_or(|text| text.is_empty())
+                                {
+                                    reasoning_content =
+                                        delta.reasoning_details.as_ref().and_then(|details| {
                                             let combined = details
                                                 .iter()
                                                 .filter(|detail| detail["type"] == "reasoning.text")
@@ -228,8 +234,7 @@ impl StreamParser {
                                             } else {
                                                 Some(combined)
                                             }
-                                        },
-                                    );
+                                        });
                                 }
 
                                 chunks.push(StreamChunk {

@@ -360,6 +360,16 @@ mod tests {
             Ok(())
         }
 
+        async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+
+        async fn begin_execution_context_from_approved_plan(
+            &mut self,
+        ) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+
         async fn add_message_and_notify(
             &mut self,
             _role: String,

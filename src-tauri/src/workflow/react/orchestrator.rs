@@ -604,6 +604,10 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 role: "user".to_string(),
                 message: task.to_string(),
                 reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: Some("delegated_task".to_string()),
+                segment_id: 1,
+                source_event_type: Some("sub_agent_started".to_string()),
                 metadata: Some(json!({
                     "type": "delegated_task",
                     "parentSessionId": parent_session_id,
@@ -1224,9 +1228,11 @@ impl ToolDefinition for TaskOutputTool {
                         output_accessible,
                         ..
                     } => {
-                        if let Ok(Some(completion)) =
-                            find_durable_sub_agent_completion(&self.main_store, &self.session_id, task_id)
-                        {
+                        if let Ok(Some(completion)) = find_durable_sub_agent_completion(
+                            &self.main_store,
+                            &self.session_id,
+                            task_id,
+                        ) {
                             let delivered = completion
                                 .result
                                 .as_deref()
@@ -1503,6 +1509,10 @@ mod tests {
                     role: "assistant".to_string(),
                     message: "mock Code Browse scan completed".to_string(),
                     reasoning: None,
+                    message_kind: "message".to_string(),
+                    message_subtype: None,
+                    segment_id: 1,
+                    source_event_type: None,
                     metadata: None,
                     attached_context: None,
                     step_type: None,
@@ -1523,6 +1533,16 @@ mod tests {
 
         async fn run_loop(&mut self) -> Result<(), WorkflowEngineError> {
             self.state = WorkflowState::Completed;
+            Ok(())
+        }
+
+        async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+
+        async fn begin_execution_context_from_approved_plan(
+            &mut self,
+        ) -> Result<(), WorkflowEngineError> {
             Ok(())
         }
 
