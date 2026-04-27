@@ -342,10 +342,17 @@ fn append_sub_agent_event(
 fn filter_sub_agent_tool_ids(tools_json: Option<&str>) -> Option<String> {
     let mut tools = tools_json.and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())?;
     tools.retain(|tool| {
+        // System/internal tools that sub-agents should not access
         tool != crate::tools::TOOL_BASH
             && tool != crate::tools::TOOL_SUB_AGENT_RUN
             && tool != crate::tools::TOOL_SUB_AGENT_OUTPUT
             && tool != crate::tools::TOOL_SUB_AGENT_STOP
+            // Plan-related tools are for planning mode (writing records), not for sub-agents
+            && tool != crate::tools::TOOL_PLAN_READ_NOTE
+            && tool != crate::tools::TOOL_PLAN_EDIT_NOTE
+            && tool != crate::tools::TOOL_PLAN_WRITE_NOTE
+            // ask_user requires user interaction, sub-agents cannot use it
+            && tool != crate::tools::TOOL_ASK_USER
     });
     serde_json::to_string(&tools).ok()
 }

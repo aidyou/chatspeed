@@ -543,6 +543,7 @@ import { showMessage } from '@/libs/util'
 import ApprovalDialog from './ApprovalDialog.vue'
 import MarkdownSimple from './MarkdownSimple.vue'
 import { useWorkflowStore } from '@/stores/workflow'
+import { WORKFLOW_STATUSES, WORKFLOW_WAIT_REASONS } from '@/composables/workflow/signalTypes'
 
 const workflowStore = useWorkflowStore()
 const { t } = useI18n()
@@ -1367,7 +1368,12 @@ const hasRealUserResponseAfter = fromIndex => {
 }
 
 const canAnswerAskUser = (message, index) => {
-  if (props.isRunning) return false
+  const currentStatus = String(workflowStore.currentWorkflow?.status || '').toLowerCase()
+  const isAwaitingUser =
+    workflowStore.waitReason === WORKFLOW_WAIT_REASONS.USER_INPUT ||
+    currentStatus === WORKFLOW_STATUSES.AWAITING_USER
+  if (!isAwaitingUser && props.isRunning) return false
+  if (!isAwaitingUser) return false
   if (!getChoiceGroups(message).length) return false
   return !hasRealUserResponseAfter(index)
 }

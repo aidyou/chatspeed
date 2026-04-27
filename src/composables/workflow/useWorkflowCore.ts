@@ -381,6 +381,14 @@ export function useWorkflowCore({
         return pendingApprovalEntries.value[`${sessionId}:${approvalId}`] || null
     }
 
+    const getExecutionContextPendingTools = (workflow) => {
+        const pendingTools =
+            workflow?.executionContext?.pendingTools ||
+            workflow?.executionContext?.pending_tools ||
+            []
+        return Array.isArray(pendingTools) ? pendingTools : []
+    }
+
     const clearPendingApprovalEntry = (sessionId, approvalId) => {
         if (!sessionId || !approvalId) return
         const key = `${sessionId}:${approvalId}`
@@ -718,28 +726,62 @@ export function useWorkflowCore({
 
             clearPendingApprovalEntries(id)
 
-            if (status === WORKFLOW_STATUSES.AWAITING_APPROVAL && pendingApprovalRequest && !workflowStore.pendingApprovalMessage) {
-                upsertPendingApprovalEntry(id, {
-                    id: pendingApprovalRequest.toolCallId || 'awaiting_approval',
-                    action: pendingApprovalRequest.toolName || t('workflow.awaiting_approval')
-                })
-                workflowStore.addMessage({
-                    sessionId: id,
-                    role: 'tool',
-                    message: pendingApprovalRequest.details || '',
-                    stepType: 'Observe',
-                    stepIndex: workflowStore.messages.length,
-                    isError: false,
-                    errorType: null,
-                    metadata: {
-                        tool_call_id: pendingApprovalRequest.toolCallId || '',
-                        tool_name: pendingApprovalRequest.toolName || '',
-                        display_type: pendingApprovalRequest.displayType || '',
-                        summary: t('workflow.awaiting_approval'),
-                        approval_status: 'pending',
-                        execution_status: 'pending_approval'
+            if (status === WORKFLOW_STATUSES.AWAITING_APPROVAL) {
+                const structuredPendingTools = getExecutionContextPendingTools(workflowStore.currentWorkflow)
+
+                if (structuredPendingTools.length > 0) {
+                    for (const pendingTool of structuredPendingTools) {
+                        const toolCallId = pendingTool.toolCallId || pendingTool.tool_call_id || ''
+                        const toolName = pendingTool.toolName || pendingTool.tool_name || ''
+                        const details = pendingTool.details || ''
+                        const displayType = pendingTool.displayType || pendingTool.display_type || ''
+                        if (!toolCallId) continue
+
+                        upsertPendingApprovalEntry(id, {
+                            id: toolCallId,
+                            action: toolName || t('workflow.awaiting_approval')
+                        })
+                        workflowStore.addMessage({
+                            sessionId: id,
+                            role: 'tool',
+                            message: details,
+                            stepType: 'Observe',
+                            stepIndex: workflowStore.messages.length,
+                            isError: false,
+                            errorType: null,
+                            metadata: {
+                                tool_call_id: toolCallId,
+                                tool_name: toolName,
+                                display_type: displayType,
+                                summary: t('workflow.awaiting_approval'),
+                                approval_status: 'pending',
+                                execution_status: 'pending_approval'
+                            }
+                        })
                     }
-                })
+                } else if (pendingApprovalRequest && !workflowStore.pendingApprovalMessage) {
+                    upsertPendingApprovalEntry(id, {
+                        id: pendingApprovalRequest.toolCallId || 'awaiting_approval',
+                        action: pendingApprovalRequest.toolName || t('workflow.awaiting_approval')
+                    })
+                    workflowStore.addMessage({
+                        sessionId: id,
+                        role: 'tool',
+                        message: pendingApprovalRequest.details || '',
+                        stepType: 'Observe',
+                        stepIndex: workflowStore.messages.length,
+                        isError: false,
+                        errorType: null,
+                        metadata: {
+                            tool_call_id: pendingApprovalRequest.toolCallId || '',
+                            tool_name: pendingApprovalRequest.toolName || '',
+                            display_type: pendingApprovalRequest.displayType || '',
+                            summary: t('workflow.awaiting_approval'),
+                            approval_status: 'pending',
+                            execution_status: 'pending_approval'
+                        }
+                    })
+                }
             } else if (status !== WORKFLOW_STATUSES.AWAITING_APPROVAL) {
                 clearPendingApprovalEntries(id)
             }

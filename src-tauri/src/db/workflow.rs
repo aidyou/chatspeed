@@ -267,6 +267,11 @@ impl MainStore {
 
         for workflow_id in &workflow_ids {
             tx.execute(
+                "DELETE FROM workflow_context_messages WHERE session_id = ?1",
+                params![workflow_id],
+            )?;
+
+            tx.execute(
                 "DELETE FROM workflow_messages WHERE session_id = ?1",
                 params![workflow_id],
             )?;

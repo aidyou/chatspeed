@@ -465,14 +465,19 @@ impl ToolDefinition for EditFile {
     fn description(&self) -> &str {
         "Performs exact string replacements in files.\n\n\
         Usage:\n\
-        - Ensure you have viewed the full content of the file (e.g., via `read_file` or user-provided context) to confirm exact text and indentation before editing. \n\
-        - When editing, ensure you preserve the exact indentation (tabs/spaces). If you used `read_file`, remember its output format: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.\n\
+        - Ensure you have viewed the relevant file content (e.g., via `read_file` or user-provided context) to confirm exact text and indentation before editing.\n\
+        - When editing, preserve the exact indentation (tabs/spaces). If you used `read_file`, remember its output format: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in `old_string` or `new_string`.\n\
         - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n\
         - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n\
         - The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.\n\
-        - Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.\n\
+        - Use `replace_all` only when every occurrence of `old_string` should be changed, such as safe file-wide literal updates.\n\
+        - When multiple independent edits are needed in the same file, issue them as batched `edit_file` tool calls in the same turn when the tool system supports parallel/batched calls.\n\
+        - Batch same-file edit calls only when the edits are independent, precise, and do not rely on the result of another edit in the same batch.\n\
+        - Use sequential `edit_file` calls with re-reading when edits depend on previous changes, affect overlapping or uncertain regions, require updated context, or would be harder to review as a batch.\n\
+        - Keep edits precise and minimal. Do not combine unrelated files, unrelated regions, or unrelated behavior changes just to reduce tool calls.\n\
         - The tool preserves existing CRLF/LF line endings when possible. If an exact match fails because of line-ending differences, it tries a normalized fallback."
     }
+
     fn category(&self) -> ToolCategory {
         ToolCategory::FileSystem
     }

@@ -927,6 +927,7 @@ impl WorkflowExecutor {
             "display_type": display_type.clone()
         });
         self.pending_approvals.insert(id.to_string(), stash_obj);
+        self.enqueue_pending_approval(id);
 
         self.update_state(WorkflowState::AwaitingApproval).await?;
 

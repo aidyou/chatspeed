@@ -118,6 +118,8 @@ pub struct WorkflowExecutor {
     pub(crate) loop_detector: LoopDetector,
     /// Memory cache for tools awaiting user approval.
     pub(crate) pending_approvals: Arc<dashmap::DashMap<String, serde_json::Value>>,
+    /// FIFO queue for pending approvals so batch approvals preserve tool order.
+    pub(crate) pending_approval_queue: VecDeque<String>,
     /// One-shot cache of bash commands approved by Smart AI review to prevent
     /// the generic approval path from re-intercepting the same command.
     pub(crate) smart_approved_bash_commands: HashSet<String>,
@@ -696,6 +698,7 @@ impl WorkflowExecutor {
             },
             loop_detector: LoopDetector::new(),
             pending_approvals: Arc::new(dashmap::DashMap::new()),
+            pending_approval_queue: VecDeque::new(),
             smart_approved_bash_commands: HashSet::new(),
             smart_approved_tool_call_ids: HashSet::new(),
             recovery_failed: false,
@@ -1011,6 +1014,7 @@ impl WorkflowExecutor {
                                 });
                                 self.pending_approvals
                                     .insert(tool.tool_call_id.clone(), info_with_details);
+                                self.enqueue_pending_approval(&tool.tool_call_id);
 
                                 let details_value = tool
                                     .details
@@ -1296,7 +1300,7 @@ impl WorkflowExecutor {
             .allowed_categories
             .contains(&ToolCategory::System)
         {
-            if self.agent_config.skill_enabled.unwrap_or(true) {
+            if self.agent_config.skill_enabled.unwrap_or(false) {
                 tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
                     .await?;
             }
@@ -1818,6 +1822,102 @@ impl WorkflowExecutor {
         updated_policy
     }
 
+    fn read_agent_config_array<T>(agent_config: &serde_json::Value, keys: &[&str]) -> Vec<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        keys.iter()
+            .find_map(|key| {
+                agent_config
+                    .get(*key)
+                    .and_then(|value| serde_json::from_value::<Vec<T>>(value.clone()).ok())
+            })
+            .unwrap_or_default()
+    }
+
+    fn write_agent_config_array<T>(
+        agent_config: &mut serde_json::Value,
+        canonical_key: &str,
+        legacy_keys: &[&str],
+        items: &[T],
+    ) where
+        T: serde::Serialize,
+    {
+        if let Some(obj) = agent_config.as_object_mut() {
+            let serialized = serde_json::to_value(items).unwrap_or(serde_json::json!([]));
+            obj.insert(canonical_key.to_string(), serialized);
+            for key in legacy_keys {
+                if *key != canonical_key {
+                    obj.remove(*key);
+                }
+            }
+        }
+    }
+
+    fn read_agent_config_shell_policy(
+        agent_config: &serde_json::Value,
+    ) -> Vec<crate::tools::ShellPolicyRule> {
+        Self::read_agent_config_array(agent_config, &["shellPolicy", "shell_policy"])
+    }
+
+    fn write_agent_config_shell_policy(
+        agent_config: &mut serde_json::Value,
+        policy: &[crate::tools::ShellPolicyRule],
+    ) {
+        Self::write_agent_config_array(
+            agent_config,
+            "shellPolicy",
+            &["shellPolicy", "shell_policy"],
+            policy,
+        );
+    }
+
+    #[cfg(test)]
+    fn read_agent_config_auto_approve(agent_config: &serde_json::Value) -> Vec<String> {
+        Self::read_agent_config_array(agent_config, &["autoApprove", "auto_approve"])
+    }
+
+    fn write_agent_config_auto_approve(agent_config: &mut serde_json::Value, tools: &[String]) {
+        Self::write_agent_config_array(
+            agent_config,
+            "autoApprove",
+            &["autoApprove", "auto_approve"],
+            tools,
+        );
+    }
+
+    pub(crate) fn enqueue_pending_approval(&mut self, tool_call_id: &str) {
+        if self.pending_approval_queue.iter().any(|id| id == tool_call_id) {
+            return;
+        }
+        self.pending_approval_queue.push_back(tool_call_id.to_string());
+    }
+
+    pub(crate) fn remove_pending_approval(&mut self, tool_call_id: &str) {
+        self.pending_approvals.remove(tool_call_id);
+        self.pending_approval_queue.retain(|id| id != tool_call_id);
+    }
+
+    pub(crate) fn ordered_pending_approvals(&self) -> Vec<(String, serde_json::Value)> {
+        let mut ordered = Vec::new();
+        let mut seen = HashSet::new();
+
+        for tool_call_id in &self.pending_approval_queue {
+            if let Some(info) = self.pending_approvals.get(tool_call_id) {
+                ordered.push((tool_call_id.clone(), info.value().clone()));
+                seen.insert(tool_call_id.clone());
+            }
+        }
+
+        for entry in self.pending_approvals.iter() {
+            if seen.insert(entry.key().clone()) {
+                ordered.push((entry.key().clone(), entry.value().clone()));
+            }
+        }
+
+        ordered
+    }
+
     pub(crate) async fn run_loop_internal(&mut self) -> Result<(), WorkflowEngineError> {
         // P0-2: Guard - do not continue execution in safe-failed state
         if self.recovery_failed {
@@ -2030,11 +2130,7 @@ impl WorkflowExecutor {
                                 self.session_id
                             );
                             if self.state == WorkflowState::AwaitingApproval {
-                                let items: Vec<_> = self
-                                    .pending_approvals
-                                    .iter()
-                                    .map(|r| (r.key().clone(), r.value().clone()))
-                                    .collect();
+                                let items = self.ordered_pending_approvals();
                                 for (id, info) in items {
                                     let details_value = info
                                         .get("details")
@@ -2132,7 +2228,7 @@ impl WorkflowExecutor {
                                 if tool_name == TOOL_SUBMIT_PLAN {
                                     self.transition_approved_plan(&tool_call_id, &tool_args)
                                         .await?;
-                                    self.pending_approvals.remove(&tool_call_id);
+                                    self.remove_pending_approval(&tool_call_id);
                                     continue;
                                 }
 
@@ -2173,14 +2269,10 @@ impl WorkflowExecutor {
                                                                 })
                                                                 .unwrap_or(serde_json::json!({}));
 
-                                                        let existing_policy = agent_config
-                                                            .get("shell_policy")
-                                                            .and_then(|v| {
-                                                                serde_json::from_value::<
-                                                            Vec<crate::tools::ShellPolicyRule>,
-                                                        >(v.clone()).ok()
-                                                            })
-                                                            .unwrap_or_default();
+                                                        let existing_policy =
+                                                            Self::read_agent_config_shell_policy(
+                                                                &agent_config,
+                                                            );
 
                                                         let updated_policy =
                                                             Self::build_shell_policy_with_patterns(
@@ -2188,9 +2280,10 @@ impl WorkflowExecutor {
                                                                 &wildcard_patterns,
                                                             );
 
-                                                        agent_config["shell_policy"] =
-                                                            serde_json::to_value(&updated_policy)
-                                                                .unwrap_or(serde_json::json!([]));
+                                                        Self::write_agent_config_shell_policy(
+                                                            &mut agent_config,
+                                                            &updated_policy,
+                                                        );
 
                                                         if let Ok(config_str) =
                                                             serde_json::to_string(&agent_config)
@@ -2253,9 +2346,10 @@ impl WorkflowExecutor {
                                                     .and_then(|s| serde_json::from_str(&s).ok())
                                                     .unwrap_or(serde_json::json!({}));
 
-                                                agent_config["auto_approve"] =
-                                                    serde_json::to_value(&tools)
-                                                        .unwrap_or(serde_json::json!([]));
+                                                Self::write_agent_config_auto_approve(
+                                                    &mut agent_config,
+                                                    &tools,
+                                                );
 
                                                 if let Ok(config_str) =
                                                     serde_json::to_string(&agent_config)
@@ -2285,6 +2379,18 @@ impl WorkflowExecutor {
                                 let mut enriched_args = tool_args_obj.clone();
                                 enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
                                     serde_json::json!(tool_call_id);
+
+                                self.append_tool_started_event(
+                                    &tool_call_id,
+                                    &tool_name,
+                                    &tool_args_obj,
+                                );
+                                self.dispatch_tool_started_payload(
+                                    &tool_call_id,
+                                    &tool_name,
+                                    &tool_args_obj,
+                                )
+                                .await;
 
                                 let result =
                                     if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
@@ -2340,8 +2446,10 @@ impl WorkflowExecutor {
                                 )
                                 .await?;
 
-                                self.pending_approvals.remove(&tool_call_id);
-                                self.update_state(WorkflowState::Thinking).await?;
+                                self.remove_pending_approval(&tool_call_id);
+                                if self.pending_approvals.is_empty() {
+                                    self.update_state(WorkflowState::Thinking).await?;
+                                }
                             } else {
                                 let tool_name = if let Some(stashed) =
                                     self.pending_approvals.get(&tool_call_id)
@@ -2396,8 +2504,10 @@ impl WorkflowExecutor {
                                 )
                                 .await?;
 
-                                self.pending_approvals.remove(&tool_call_id);
-                                self.update_state(WorkflowState::Thinking).await?;
+                                self.remove_pending_approval(&tool_call_id);
+                                if self.pending_approvals.is_empty() {
+                                    self.update_state(WorkflowState::Thinking).await?;
+                                }
                             }
                             continue;
                         }
@@ -2501,11 +2611,7 @@ impl WorkflowExecutor {
                         self.session_id
                     );
                     if self.state == WorkflowState::AwaitingApproval {
-                        let items: Vec<_> = self
-                            .pending_approvals
-                            .iter()
-                            .map(|r| (r.key().clone(), r.value().clone()))
-                            .collect();
+                        let items = self.ordered_pending_approvals();
                         for (id, info) in items {
                             let details_value = info
                                 .get("details")
@@ -2578,7 +2684,7 @@ impl WorkflowExecutor {
 
                         if tool_name == TOOL_SUBMIT_PLAN {
                             self.transition_approved_plan(signal_id, &tool_args).await?;
-                            self.pending_approvals.remove(signal_id);
+                            self.remove_pending_approval(signal_id);
                             continue;
                         }
 
@@ -2615,17 +2721,10 @@ impl WorkflowExecutor {
                                                     .and_then(|s| serde_json::from_str(&s).ok())
                                                     .unwrap_or(serde_json::json!({}));
 
-                                                let existing_policy = agent_config
-                                                    .get("shell_policy")
-                                                    .and_then(|v| {
-                                                        serde_json::from_value::<
-                                                            Vec<crate::tools::ShellPolicyRule>,
-                                                        >(
-                                                            v.clone()
-                                                        )
-                                                        .ok()
-                                                    })
-                                                    .unwrap_or_default();
+                                                let existing_policy =
+                                                    Self::read_agent_config_shell_policy(
+                                                        &agent_config,
+                                                    );
 
                                                 let updated_policy =
                                                     Self::build_shell_policy_with_patterns(
@@ -2633,9 +2732,10 @@ impl WorkflowExecutor {
                                                         &wildcard_patterns,
                                                     );
 
-                                                agent_config["shell_policy"] =
-                                                    serde_json::to_value(&updated_policy)
-                                                        .unwrap_or(serde_json::json!([]));
+                                                Self::write_agent_config_shell_policy(
+                                                    &mut agent_config,
+                                                    &updated_policy,
+                                                );
 
                                                 if let Ok(config_str) =
                                                     serde_json::to_string(&agent_config)
@@ -2693,8 +2793,10 @@ impl WorkflowExecutor {
                                             .and_then(|s| serde_json::from_str(&s).ok())
                                             .unwrap_or(serde_json::json!({}));
 
-                                        agent_config["auto_approve"] = serde_json::to_value(&tools)
-                                            .unwrap_or(serde_json::json!([]));
+                                        Self::write_agent_config_auto_approve(
+                                            &mut agent_config,
+                                            &tools,
+                                        );
 
                                         if let Ok(config_str) = serde_json::to_string(&agent_config)
                                         {
@@ -2723,6 +2825,10 @@ impl WorkflowExecutor {
                         let mut enriched_args = tool_args_obj.clone();
                         enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
                             serde_json::json!(signal_id);
+
+                        self.append_tool_started_event(signal_id, &tool_name, &tool_args_obj);
+                        self.dispatch_tool_started_payload(signal_id, &tool_name, &tool_args_obj)
+                            .await;
 
                         let result = if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                             self.global_tool_manager
@@ -2847,9 +2953,10 @@ impl WorkflowExecutor {
                     }
 
                     // 4. Clean up the stashed approval entry
-                    self.pending_approvals.remove(signal_id);
-
-                    self.update_state(WorkflowState::Thinking).await?;
+                    self.remove_pending_approval(signal_id);
+                    if self.pending_approvals.is_empty() {
+                        self.update_state(WorkflowState::Thinking).await?;
+                    }
                     continue;
                 }
 
@@ -4127,7 +4234,6 @@ impl WorkflowExecutor {
             // (like AwaitingApproval, AwaitingUser or Paused), we MUST NOT run or even audit subsequent tools.
             // They are simply postponed until the previous turn's block is resolved.
             if predicted_turn_block
-                || self.state == WorkflowState::AwaitingApproval
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::Paused
                 || self.state == WorkflowState::AwaitingSubAgent
@@ -4151,14 +4257,37 @@ impl WorkflowExecutor {
             }
 
             // --- SEMANTIC AUDIT ---
+            let approval_batch_active = self.state == WorkflowState::AwaitingApproval;
             match self.pre_dispatch_check(&id, &name, &args, &text_part).await {
                 Ok(Some(early_result)) => {
                     // Tool was intercepted (Approval needed, Loop detected, etc.)
+                    let approval_intercepted =
+                        early_result.approval_status.as_deref() == Some("pending");
                     result_map.insert(id, (early_result, call));
-                    // Note: If pre_dispatch_check changed state to AwaitingApproval,
-                    // the next iterations will hit the 'CAUSAL BLOCKING CHECK' above.
+                    if !approval_intercepted && self.state != WorkflowState::AwaitingApproval {
+                        predicted_turn_block = true;
+                    }
                 }
                 Ok(None) => {
+                    if approval_batch_active || self.state == WorkflowState::AwaitingApproval {
+                        log::info!(
+                            "WorkflowExecutor {}: Postponing tool '{}' because an earlier approval in this turn must run first",
+                            self.session_id,
+                            name
+                        );
+                        result_map.insert(id, (ReinforcedResult {
+                            content: "<SYSTEM_REMINDER>Action postponed. Earlier tools in this turn are queued for FIFO approval. Re-issue this command after those approved actions finish if it is still needed.</SYSTEM_REMINDER>".into(),
+                            title: format!("Postponed: {}", name),
+                            summary: "Approval queue blocked".to_string(),
+                            is_error: false,
+                            error_type: None,
+                            display_type: "text".to_string(),
+                            approval_status: Some("rejected".to_string()),
+                            observation_kind: Some(ObservationKind::TurnBlockedPostponed),
+                        }, call));
+                        continue;
+                    }
+
                     let blocks_following_tools =
                         matches!(name.as_str(), crate::tools::TOOL_SUB_AGENT_RUN)
                             && args
@@ -4814,6 +4943,7 @@ impl WorkflowExecutor {
                 );
             }
             self.pending_approvals.clear();
+            self.pending_approval_queue.clear();
         }
 
         // Calculate wait_reason atomically with state
@@ -4831,12 +4961,11 @@ impl WorkflowExecutor {
             // Write WaitEntered event only when entering waiting state.
             if wait_reason.is_some() {
                 let pending_tools: Vec<serde_json::Value> = self
-                    .pending_approvals
-                    .iter()
-                    .map(|entry| {
-                        let info = entry.value();
+                    .ordered_pending_approvals()
+                    .into_iter()
+                    .map(|(tool_call_id, info)| {
                         serde_json::json!({
-                            "tool_call_id": entry.key(),
+                            "tool_call_id": tool_call_id,
                             "tool_name": info["name"].as_str().unwrap_or("unknown"),
                             "arguments": info.get("arguments").cloned().unwrap_or(serde_json::json!({})),
                             "details": info.get("details").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -5687,12 +5816,11 @@ impl WorkflowExecutor {
         };
 
         let pending_tools: Vec<PendingTool> = self
-            .pending_approvals
-            .iter()
-            .map(|entry| {
-                let value = entry.value();
+            .ordered_pending_approvals()
+            .into_iter()
+            .map(|(tool_call_id, value)| {
                 PendingTool {
-                    tool_call_id: entry.key().clone(),
+                    tool_call_id,
                     tool_name: value
                         .get("name")
                         .and_then(|v| v.as_str())
@@ -5940,6 +6068,58 @@ mod recovery_tests {
                 "^git status($| .*)".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn test_read_agent_config_shell_policy_supports_legacy_and_canonical_keys() {
+        let config = serde_json::json!({
+            "shellPolicy": [{ "pattern": "^cargo check($| .*)", "decision": "allow" }],
+            "shell_policy": [{ "pattern": "^git status($| .*)", "decision": "allow" }]
+        });
+
+        let rules = WorkflowExecutor::read_agent_config_shell_policy(&config);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].pattern, "^cargo check($| .*)");
+    }
+
+    #[test]
+    fn test_write_agent_config_shell_policy_replaces_legacy_key_and_preserves_existing_rules() {
+        let mut config = serde_json::json!({
+            "shellPolicy": [{ "pattern": "^cargo check($| .*)", "decision": "allow" }],
+            "shell_policy": [{ "pattern": "^git status($| .*)", "decision": "allow" }]
+        });
+        let merged = WorkflowExecutor::build_shell_policy_with_patterns(
+            &WorkflowExecutor::read_agent_config_shell_policy(&config),
+            &["^git status($| .*)".to_string()],
+        );
+
+        WorkflowExecutor::write_agent_config_shell_policy(&mut config, &merged);
+
+        assert!(config.get("shell_policy").is_none());
+        let rules = WorkflowExecutor::read_agent_config_shell_policy(&config);
+        assert_eq!(rules.len(), 2);
+        assert!(rules
+            .iter()
+            .any(|rule| rule.pattern == "^cargo check($| .*)"));
+        assert!(rules
+            .iter()
+            .any(|rule| rule.pattern == "^git status($| .*)"));
+    }
+
+    #[test]
+    fn test_write_agent_config_auto_approve_replaces_legacy_key_and_preserves_existing_tools() {
+        let mut config = serde_json::json!({
+            "autoApprove": ["read_file"],
+            "auto_approve": ["grep"]
+        });
+        let mut tools = WorkflowExecutor::read_agent_config_auto_approve(&config);
+        tools.push("bash".to_string());
+
+        WorkflowExecutor::write_agent_config_auto_approve(&mut config, &tools);
+
+        assert!(config.get("auto_approve").is_none());
+        let stored = WorkflowExecutor::read_agent_config_auto_approve(&config);
+        assert_eq!(stored, vec!["read_file".to_string(), "bash".to_string()]);
     }
 
     #[test]
