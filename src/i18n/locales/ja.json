@@ -188,6 +188,7 @@
       "deleteSuccess": "エージェントが正常に削除されました！",
       "deleteTitle": "エージェントを削除",
       "description": "説明",
+      "disabled": "無効",
       "edit": "エージェントを編集",
       "fetchFailed": "エージェントの取得に失敗しました",
       "finalAudit": "最終監査",

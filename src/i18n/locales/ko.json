@@ -188,6 +188,7 @@
       "deleteSuccess": "에이전트가 성공적으로 삭제되었습니다!",
       "deleteTitle": "에이전트 삭제",
       "description": "설명",
+      "disabled": "비활성화",
       "edit": "에이전트 편집",
       "fetchFailed": "에이전트 가져오기 실패",
       "finalAudit": "최종 감사",

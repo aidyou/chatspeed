@@ -447,18 +447,6 @@ impl WorkflowExecutor {
             }));
         }
 
-        // In Full approval mode, set AwaitingAutoApproval state.
-        // This acts as a signal for the main loop to perform auto-transition.
-        if self.policy.approval_level == ApprovalLevel::Full {
-            log::info!(
-                "WorkflowExecutor {}: Setting AwaitingAutoApproval for auto-transition in Full mode",
-                self.session_id
-            );
-            self.update_state(WorkflowState::AwaitingAutoApproval)
-                .await?;
-            return Ok(None);
-        }
-
         self.handle_approval_interception(id, TOOL_SUBMIT_PLAN, args, None)
             .await
     }

@@ -189,6 +189,7 @@
       "deleteSuccess": "智能體刪除成功！",
       "deleteTitle": "刪除智能體",
       "description": "描述",
+      "disabled": "停用",
       "edit": "編輯智能體",
       "fetchFailed": "取得智能體失敗",
       "finalAudit": "執行終審",

@@ -51,6 +51,7 @@
               </div>
             </el-tooltip>
             <el-tooltip
+              v-if="!element.isSystem"
               :content="$t('settings.agent.delete')"
               placement="top"
               :hide-after="0"
@@ -83,10 +84,10 @@
       <el-tabs v-model="activeTab">
         <el-tab-pane :label="$t('settings.agent.basicInfo')" name="basic">
           <el-form-item :label="$t('settings.agent.name')" prop="name">
-            <el-input v-model="agentForm.name" />
+            <el-input v-model="agentForm.name" :disabled="isSystemAgentReadOnly" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.role')" prop="role">
-            <el-select v-model="agentForm.role" style="width: 100%">
+            <el-select v-model="agentForm.role" style="width: 100%" :disabled="isSystemAgentReadOnly">
               <el-option
                 v-for="option in AGENT_ROLE_OPTIONS"
                 :key="option.value"
@@ -98,7 +99,7 @@
             v-if="agentForm.role === AGENT_ROLE.CHILD"
             :label="$t('settings.agent.parentAgent')"
             prop="parentAgentId">
-            <el-select v-model="agentForm.parentAgentId" style="width: 100%" filterable>
+            <el-select v-model="agentForm.parentAgentId" style="width: 100%" filterable :disabled="isSystemAgentReadOnly">
               <el-option
                 v-for="agent in primaryAgentOptions"
                 :key="agent.id"
@@ -107,10 +108,13 @@
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.description')" prop="description">
-            <el-input v-model="agentForm.description" type="textarea" :rows="2" />
+            <el-input v-model="agentForm.description" type="textarea" :rows="2" :disabled="isSystemAgentReadOnly" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.agent.disabled')" prop="disabled">
+            <el-switch v-model="agentForm.disabled" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.systemPrompt')" prop="systemPrompt">
-            <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="5" />
+            <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="5" :disabled="isSystemAgentReadOnly" />
           </el-form-item>
           <el-form-item
             v-if="agentForm.role !== AGENT_ROLE.CHILD"
@@ -120,11 +124,12 @@
               v-model="agentForm.planningPrompt"
               type="textarea"
               :rows="5"
+              :disabled="isSystemAgentReadOnly"
               :placeholder="$t('settings.agent.planningPromptPlaceholder')" />
           </el-form-item>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.agent.models')" name="models">
+        <el-tab-pane :label="$t('settings.agent.models')" name="models" :disabled="isSystemAgentReadOnly">
           <div class="models-layout">
             <div class="model-item-compact" v-for="role in modelRoles" :key="role.key">
               <div class="header">
@@ -265,7 +270,7 @@
           </div>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools">
+        <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools" :disabled="isSystemAgentReadOnly">
           <el-form-item :label="$t('settings.agent.skillEnabled')" prop="skillEnabled">
             <el-switch v-model="agentForm.skillEnabled" />
           </el-form-item>
@@ -307,7 +312,7 @@
           </el-form-item>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.agent.security')" name="security">
+        <el-tab-pane :label="$t('settings.agent.security')" name="security" :disabled="isSystemAgentReadOnly">
           <div class="security-group">
             <div class="shell-policy-header">
               <h3>{{ $t('settings.agent.authorizedPaths') }}</h3>
@@ -476,6 +481,8 @@ const defaultFormData = {
   description: '',
   role: AGENT_ROLE.PRIMARY,
   parentAgentId: null,
+  isSystem: false,
+  disabled: false,
   systemPrompt: '',
   planningPrompt: '',
   availableTools: [],
@@ -526,9 +533,14 @@ const toolNameMap = computed(() => {
 
 const primaryAgentOptions = computed(() => {
   return agents.value.filter(
-    agent => (agent.role || AGENT_ROLE.PRIMARY) === AGENT_ROLE.PRIMARY && agent.id !== editId.value
+    agent =>
+      (agent.role || AGENT_ROLE.PRIMARY) === AGENT_ROLE.PRIMARY &&
+      !agent.disabled &&
+      agent.id !== editId.value
   )
 })
+
+const isSystemAgentReadOnly = computed(() => !!editId.value && agentForm.value.isSystem)
 
 const canConfigureShellPolicy = computed(() => agentForm.value.role !== AGENT_ROLE.CHILD)
 
@@ -819,6 +831,8 @@ const normalizeAgentFormForSave = form => {
     normalized.skillEnabled = normalized.skillEnabled !== false
   }
 
+  normalized.isSystem = normalized.isSystem === true
+  normalized.disabled = normalized.disabled === true
   normalized.finalAudit = false
   return normalized
 }
@@ -998,6 +1012,8 @@ const editAgent = async id => {
     agentForm.value.allowedPaths = []
     agentForm.value.role = AGENT_ROLE.PRIMARY
     agentForm.value.parentAgentId = null
+    agentForm.value.isSystem = false
+    agentForm.value.disabled = false
     agentForm.value.skillEnabled = true
     allModelRoles.forEach(role => {
       agentForm.value[role.key + 'Model'] = normalizeModelDraft(agentForm.value[role.key + 'Model'])
@@ -1011,7 +1027,14 @@ const copyAgent = async id => {
   try {
     const agentData = await agentStore.getAgent(id)
     if (!agentData) return
-    agentForm.value = { ...defaultFormData, ...agentData }
+    agentForm.value = {
+      ...defaultFormData,
+      ...agentData,
+      id: null,
+      isSystem: false,
+      disabled: false,
+      name: `${agentData.name}-Copy`
+    }
     editId.value = null
     if (agentData.models) {
       try {

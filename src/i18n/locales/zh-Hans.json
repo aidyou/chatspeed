@@ -192,6 +192,7 @@
       "deleteSuccess": "智能体删除成功！",
       "deleteTitle": "删除智能体",
       "description": "描述",
+      "disabled": "禁用",
       "edit": "编辑智能体",
       "fetchFailed": "获取智能体失败",
       "finalAudit": "执行终审",

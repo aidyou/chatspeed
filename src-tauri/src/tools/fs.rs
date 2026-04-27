@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-const PLANNING_NOTE_FILES: &[&str] = &["notes.md", "plan.md", "research.md"];
+const PLANNING_NOTE_FILE: &str = "note.md";
 
 fn format_read_file_open_error(path_str: &str, error: &std::io::Error) -> ToolError {
     match error.kind() {
@@ -35,21 +35,8 @@ fn should_skip_list_dir_entry(name: &str) -> bool {
         || name_lower == ".ds_store"
 }
 
-fn validate_planning_note_name(note_name: &str) -> Result<&str, ToolError> {
-    let trimmed = note_name.trim();
-    if PLANNING_NOTE_FILES.contains(&trimmed) {
-        Ok(trimmed)
-    } else {
-        Err(ToolError::InvalidParams(format!(
-            "Invalid planning note '{}'. Allowed note_name values: {}",
-            note_name,
-            PLANNING_NOTE_FILES.join(", ")
-        )))
-    }
-}
-
-fn planning_note_path(planning_root: &Path, note_name: &str) -> Result<PathBuf, ToolError> {
-    Ok(planning_root.join(validate_planning_note_name(note_name)?))
+fn planning_note_path(planning_root: &Path) -> PathBuf {
+    planning_root.join(PLANNING_NOTE_FILE)
 }
 
 fn execute_read_file(path_str: &str, offset: usize, limit: usize) -> NativeToolResult {
@@ -551,10 +538,9 @@ impl ToolDefinition for PlanReadNote {
     }
 
     fn description(&self) -> &str {
-        "Reads a planning note from the session-scoped planning directory used by strict manual plan mode.\n\
-        This tool can only access fixed planning files and cannot read arbitrary workspace files.\n\
-        Allowed note_name values: notes.md, plan.md, research.md.\n\
-        Use this tool to review your planning drafts or research notes before calling `submit_plan`."
+        "Reads the fixed planning note from `.cs/note.md` in the active workspace during strict manual plan mode.\n\
+        This tool can only access that planning note and cannot read arbitrary workspace files.\n\
+        Use this tool to review your planning draft or research notes before calling `submit_plan`."
     }
 
     fn category(&self) -> ToolCategory {
@@ -572,15 +558,10 @@ impl ToolDefinition for PlanReadNote {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "note_name": {
-                        "type": "string",
-                        "description": "Planning note file to read",
-                        "enum": PLANNING_NOTE_FILES
-                    },
                     "offset": { "type": "integer", "default": 0, "minimum": 0 },
                     "limit": { "type": "integer", "default": 2000, "minimum": 1 }
                 },
-                "required": ["note_name"]
+                "additionalProperties": false
             }),
             output_schema: None,
             disabled: false,
@@ -589,14 +570,9 @@ impl ToolDefinition for PlanReadNote {
     }
 
     async fn call(&self, params: Value) -> NativeToolResult {
-        let note_name = params["note_name"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams(
-                "note_name is required".to_string(),
-            ))?;
         let offset = params["offset"].as_u64().unwrap_or(0) as usize;
         let limit = params["limit"].as_u64().unwrap_or(2000) as usize;
-        let path = planning_note_path(&self.planning_root, note_name)?;
+        let path = planning_note_path(&self.planning_root);
         execute_read_file(&path.to_string_lossy(), offset, limit)
     }
 }
@@ -618,9 +594,8 @@ impl ToolDefinition for PlanWriteNote {
     }
 
     fn description(&self) -> &str {
-        "Creates or fully replaces a planning note in the strict manual planning directory.\n\
+        "Creates or fully replaces the fixed planning note at `.cs/note.md` in strict manual plan mode.\n\
         This tool is only for planning artifacts, not workspace implementation.\n\
-        Allowed note_name values: notes.md, plan.md, research.md.\n\
         Use it to capture structured notes, draft the proposed plan, or persist investigation output."
     }
 
@@ -639,14 +614,10 @@ impl ToolDefinition for PlanWriteNote {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "note_name": {
-                        "type": "string",
-                        "description": "Planning note file to write",
-                        "enum": PLANNING_NOTE_FILES
-                    },
                     "content": { "type": "string", "description": "Complete file content to store in the planning note" }
                 },
-                "required": ["note_name", "content"]
+                "required": ["content"],
+                "additionalProperties": false
             }),
             output_schema: None,
             disabled: false,
@@ -655,15 +626,10 @@ impl ToolDefinition for PlanWriteNote {
     }
 
     async fn call(&self, params: Value) -> NativeToolResult {
-        let note_name = params["note_name"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams(
-                "note_name is required".to_string(),
-            ))?;
         let content = params["content"]
             .as_str()
             .ok_or(ToolError::InvalidParams("content is required".to_string()))?;
-        let path = planning_note_path(&self.planning_root, note_name)?;
+        let path = planning_note_path(&self.planning_root);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 ToolError::IoError(format!("Failed to prepare planning directory: {}", e))
@@ -676,7 +642,7 @@ impl ToolDefinition for PlanWriteNote {
             Some("Planning note written successfully.".to_string()),
             Some(json!({
                 "file_path": path.to_string_lossy(),
-                "note_name": note_name,
+                "note_name": PLANNING_NOTE_FILE,
                 "bytes_written": content.len()
             })),
         ))
@@ -700,10 +666,9 @@ impl ToolDefinition for PlanEditNote {
     }
 
     fn description(&self) -> &str {
-        "Edits an existing planning note in the strict manual planning directory using exact string replacement.\n\
+        "Edits the fixed planning note at `.cs/note.md` using exact string replacement.\n\
         This tool cannot touch arbitrary workspace files.\n\
-        Allowed note_name values: notes.md, plan.md, research.md.\n\
-        Use this after `plan_read_note` when you need a precise update to an existing planning document."
+        Use this after `plan_read_note` when you need a precise update to the planning document."
     }
 
     fn category(&self) -> ToolCategory {
@@ -721,16 +686,12 @@ impl ToolDefinition for PlanEditNote {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "note_name": {
-                        "type": "string",
-                        "description": "Planning note file to edit",
-                        "enum": PLANNING_NOTE_FILES
-                    },
                     "old_string": { "type": "string", "description": "The exact existing text to replace" },
                     "new_string": { "type": "string", "description": "The replacement text" },
                     "replace_all": { "type": "boolean", "default": false }
                 },
-                "required": ["note_name", "old_string", "new_string"]
+                "required": ["old_string", "new_string"],
+                "additionalProperties": false
             }),
             output_schema: None,
             disabled: false,
@@ -739,11 +700,6 @@ impl ToolDefinition for PlanEditNote {
     }
 
     async fn call(&self, params: Value) -> NativeToolResult {
-        let note_name = params["note_name"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams(
-                "note_name is required".to_string(),
-            ))?;
         let old_string = params["old_string"]
             .as_str()
             .ok_or(ToolError::InvalidParams(
@@ -755,7 +711,7 @@ impl ToolDefinition for PlanEditNote {
                 "new_string is required".to_string(),
             ))?;
         let replace_all = params["replace_all"].as_bool().unwrap_or(false);
-        let path = planning_note_path(&self.planning_root, note_name)?;
+        let path = planning_note_path(&self.planning_root);
         execute_edit_file(&path.to_string_lossy(), old_string, new_string, replace_all)
     }
 }

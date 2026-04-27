@@ -148,6 +148,7 @@ import { useWorkflowApproval } from '@/composables/workflow/useWorkflowApproval'
 import { useWorkflowPaths } from '@/composables/workflow/useWorkflowPaths'
 import { useWorkflowInput } from '@/composables/workflow/useWorkflowInput'
 import { useWorkflowCore } from '@/composables/workflow/useWorkflowCore'
+import { TERMINAL_STATUSES } from '@/composables/workflow/signalTypes'
 
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
@@ -178,7 +179,8 @@ const showPlanningModeToggle = computed(() => {
   if (!workflow) return true
 
   const hasStartedContent = Boolean(String(workflow.userQuery || '').trim()) || (workflow.messagesCount || 0) > 0
-  return !hasStartedContent && !workflowStore.hasLiveSession
+  const status = String(workflow.status || '').toLowerCase()
+  return !workflowStore.hasLiveSession && (!hasStartedContent || TERMINAL_STATUSES.includes(status))
 })
 
 // System skills

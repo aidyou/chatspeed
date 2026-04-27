@@ -1884,6 +1884,8 @@ mod tests {
             Some(false),
             None,
             Some(false),
+            Some(false),
+            Some(false),
             None,
         );
         let parent_session_id = "diagnostic_parent_session";
@@ -1925,6 +1927,8 @@ mod tests {
                 None,
                 Some(false),
                 None,
+                Some(false),
+                Some(false),
                 Some(false),
                 None,
             )]);
@@ -2014,6 +2018,8 @@ mod tests {
             Some(false),
             None,
             Some(true),
+            Some(false),
+            Some(false),
             None,
         );
         let child_agent = crate::db::Agent::new(
@@ -2041,6 +2047,8 @@ mod tests {
             None,
             Some(false),
             None,
+            Some(false),
+            Some(false),
             Some(false),
             None,
         );
@@ -2184,6 +2192,8 @@ mod tests {
             None,
             Some(false),
             None,
+            Some(false),
+            Some(false),
             Some(false),
             None,
         );

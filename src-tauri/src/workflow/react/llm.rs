@@ -966,10 +966,19 @@ impl LlmProcessor {
         }
 
         // 2. Agent Specific Instructions
-        if !self.agent_config.system_prompt.is_empty() {
+        let agent_prompt = match policy.phase {
+            ExecutionPhase::Planning => self
+                .agent_config
+                .planning_prompt
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(PLANNING_MODE_PROMPT),
+            _ => self.agent_config.system_prompt.as_str(),
+        };
+        if !agent_prompt.trim().is_empty() {
             system_parts.push(format!(
                 "<AGENT_SPECIFIC_INSTRUCTIONS>\n{}\n</AGENT_SPECIFIC_INSTRUCTIONS>",
-                self.agent_config.system_prompt
+                agent_prompt
             ));
         }
 
@@ -1103,6 +1112,16 @@ impl LlmProcessor {
             reminders
         ));
 
+        match policy.phase {
+            ExecutionPhase::Implementation => {
+                system_parts.push(format!(
+                    "<PHASE_INSTRUCTIONS>\n{}\n</PHASE_INSTRUCTIONS>",
+                    EXECUTION_MODE_PROMPT
+                ));
+            }
+            ExecutionPhase::Standard | ExecutionPhase::Planning => {}
+        }
+
         // === END NEW ===
 
         let combined_system_prompt = system_parts.join("\n\n---\n\n");
@@ -1115,28 +1134,6 @@ impl LlmProcessor {
             0,
             serde_json::json!({ "role": "system", "content": combined_system_prompt }),
         );
-
-        // 10. Phase Instructions (injected into user's first message)
-        let phase_instruction = match policy.phase {
-            ExecutionPhase::Planning => self
-                .agent_config
-                .planning_prompt
-                .as_deref()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or(PLANNING_MODE_PROMPT),
-            ExecutionPhase::Implementation => EXECUTION_MODE_PROMPT,
-            ExecutionPhase::Standard => "",
-        };
-
-        if !phase_instruction.is_empty() {
-            if let Some(first_user_msg) = history.iter_mut().find(|m| m["role"] == "user") {
-                let original_content = first_user_msg["content"].as_str().unwrap_or("");
-                first_user_msg["content"] = serde_json::json!(format!(
-                    "<PHASE_INSTRUCTIONS>\n{}\n</PHASE_INSTRUCTIONS>\n\n{}",
-                    phase_instruction, original_content
-                ));
-            }
-        }
 
         history
     }

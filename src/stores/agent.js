@@ -83,6 +83,8 @@ const _transformFromBackend = (backendAgent) => {
     models: backendAgent.models || null,
     maxContexts: backendAgent.max_contexts || 128000,
     approvalLevel: backendAgent.approval_level || 'default',
+    isSystem: backendAgent.is_system !== undefined ? Boolean(backendAgent.is_system) : false,
+    disabled: backendAgent.disabled !== undefined ? Boolean(backendAgent.disabled) : false,
     skillEnabled: backendAgent.skill_enabled !== undefined
       ? Boolean(backendAgent.skill_enabled)
       : (backendAgent.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD
@@ -134,7 +136,9 @@ const _transformToBackend = (frontendAgent) => {
     // Final audit is kept in backend for compatibility, but it is no longer configurable in the UI.
     final_audit: false,
     approval_level: frontendAgent.approvalLevel || 'default',
-    skill_enabled: frontendAgent.skillEnabled ?? (frontendAgent.role !== AGENT_ROLE.CHILD)
+    skill_enabled: frontendAgent.skillEnabled ?? (frontendAgent.role !== AGENT_ROLE.CHILD),
+    is_system: frontendAgent.isSystem ?? false,
+    disabled: frontendAgent.disabled ?? false
   };
 };
 
@@ -264,8 +268,8 @@ export const useAgentStore = defineStore('agent', () => {
 
   return {
     agents,
-    primaryAgents: computed(() => agents.value.filter(agent => (agent.role || AGENT_ROLE.PRIMARY) === AGENT_ROLE.PRIMARY)),
-    childAgents: computed(() => agents.value.filter(agent => agent.role === AGENT_ROLE.CHILD)),
+    primaryAgents: computed(() => agents.value.filter(agent => (agent.role || AGENT_ROLE.PRIMARY) === AGENT_ROLE.PRIMARY && !agent.disabled)),
+    childAgents: computed(() => agents.value.filter(agent => agent.role === AGENT_ROLE.CHILD && !agent.disabled)),
     availableTools,
     loading,
     error,

@@ -192,6 +192,7 @@
       "deleteSuccess": "Agent deleted successfully!",
       "deleteTitle": "Delete Agent",
       "description": "Description",
+      "disabled": "Disabled",
       "edit": "Edit Agent",
       "fetchFailed": "Failed to fetch agent",
       "finalAudit": "Final Audit",

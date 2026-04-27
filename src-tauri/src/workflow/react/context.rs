@@ -375,13 +375,28 @@ impl ContextManager {
         let start_index = Self::latest_successful_completion_index(&self.messages)
             .map(|index| index + 1)
             .unwrap_or(0);
-        let mut llm_messages = self
-            .messages
-            .iter()
-            .enumerate()
-            .filter(|(index, message)| message.role == "system" || *index >= start_index)
-            .map(|(_, message)| message.clone())
-            .collect::<Vec<_>>();
+        let current_segment = self.messages[start_index..].to_vec();
+        let approved_plan_index = current_segment.iter().position(|message| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("subtype"))
+                .and_then(|value| value.as_str())
+                == Some("approved_plan")
+        });
+
+        let mut llm_messages = if let Some(plan_index) = approved_plan_index {
+            let mut filtered = Vec::new();
+            if let Some(user_query) = current_segment.iter().find(|message| {
+                message.role == "user" && message.step_type.as_deref() != Some("observe")
+            }) {
+                filtered.push(user_query.clone());
+            }
+            filtered.extend(current_segment.into_iter().skip(plan_index));
+            filtered
+        } else {
+            current_segment
+        };
         let mut wrapped_initial_user_query = false;
 
         let todo_use_reminder = "<SYSTEM_REMINDER>For complex or multi-step work, use the todo* tools to track execution. Create tasks before major work begins, update statuses as you make progress, and keep the todo list aligned with the actual execution state.</SYSTEM_REMINDER>";
@@ -579,6 +594,8 @@ mod tests {
             None,
             Some(false),
             Some("default".to_string()),
+            Some(false),
+            Some(false),
             Some(false),
             Some(4096),
         );

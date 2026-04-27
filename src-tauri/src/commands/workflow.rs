@@ -1,3 +1,5 @@
+use crate::ai::chat::openai::OpenAIChat;
+use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::db::{Agent, AgentConfig, MainStore, Workflow, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
@@ -33,6 +35,272 @@ use tauri::{AppHandle, Manager, State};
 // ==========================================
 // 0. Helper Functions for @mentions
 // ==========================================
+
+fn workflow_planning_root(allowed_roots: &[PathBuf]) -> PathBuf {
+    allowed_roots
+        .first()
+        .cloned()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+        .join(".cs")
+}
+
+fn reset_workflow_planning_note(allowed_roots: &[PathBuf]) -> Result<(), String> {
+    let planning_root = workflow_planning_root(allowed_roots);
+    std::fs::create_dir_all(&planning_root).map_err(|e| e.to_string())?;
+    std::fs::write(planning_root.join("note.md"), "").map_err(|e| e.to_string())
+}
+
+fn is_user_authored_workflow_message(message: &WorkflowMessage) -> bool {
+    message.role == "user" && message.step_type.as_deref() != Some("observe")
+}
+
+fn is_successful_completion_tool_message(message: &WorkflowMessage) -> bool {
+    if message.role != "tool" || message.is_error {
+        return false;
+    }
+
+    let Some(meta) = message.metadata.as_ref() else {
+        return false;
+    };
+
+    let is_completion_tool = meta
+        .get("tool_name")
+        .and_then(|v| v.as_str())
+        .map(|tool_name| tool_name == crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
+        .unwrap_or(false);
+    if !is_completion_tool {
+        return false;
+    }
+
+    let execution_status = meta
+        .get("execution_status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("completed");
+    let approval_status = meta
+        .get("approval_status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("approved");
+
+    execution_status == "completed"
+        && approval_status != "pending"
+        && approval_status != "rejected"
+}
+
+fn latest_successful_completion_index(messages: &[WorkflowMessage]) -> Option<usize> {
+    messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, message)| {
+            if is_successful_completion_tool_message(message) {
+                Some(index)
+            } else {
+                None
+            }
+        })
+}
+
+fn extract_completion_summary_from_assistant(message: &WorkflowMessage) -> Option<String> {
+    let visible_content = message.message.trim();
+    let tool_summary = message
+        .metadata
+        .as_ref()
+        .and_then(|meta| meta.get("tool_calls"))
+        .and_then(|tool_calls| tool_calls.as_array())
+        .and_then(|tool_calls| {
+            tool_calls.iter().rev().find_map(|call| {
+                let tool_name = call
+                    .get("name")
+                    .or_else(|| call.get("function").and_then(|function| function.get("name")))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                if tool_name != crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY {
+                    return None;
+                }
+
+                let args_value = call
+                    .get("arguments")
+                    .or_else(|| call.get("function").and_then(|function| function.get("arguments")))?;
+                let parsed_args = if let Some(args_text) = args_value.as_str() {
+                    serde_json::from_str::<serde_json::Value>(args_text).ok()
+                } else {
+                    Some(args_value.clone())
+                }?;
+                parsed_args
+                    .get("summary")
+                    .and_then(|summary| summary.as_str())
+                    .map(str::trim)
+                    .filter(|summary| !summary.is_empty())
+                    .map(str::to_string)
+            })
+        });
+
+    match (visible_content.is_empty(), tool_summary) {
+        (true, Some(summary)) => Some(summary),
+        (false, Some(summary)) => Some(format!("{}\n\n{}", visible_content, summary)),
+        (false, None) => Some(visible_content.to_string()),
+        (true, None) => None,
+    }
+}
+
+fn previous_completed_task_context(messages: &[WorkflowMessage]) -> Option<(String, String)> {
+    let completion_indices: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            if is_successful_completion_tool_message(message) {
+                Some(index)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let last_completion_index = *completion_indices.last()?;
+    let segment_start = completion_indices
+        .iter()
+        .rev()
+        .nth(1)
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let segment = &messages[segment_start..=last_completion_index];
+
+    let previous_query = segment
+        .iter()
+        .find(|message| is_user_authored_workflow_message(message))
+        .map(|message| message.message.trim().to_string())
+        .filter(|value| !value.is_empty())?;
+
+    let previous_summary = segment
+        .iter()
+        .rev()
+        .find_map(|message| {
+            (message.role == "assistant")
+                .then_some(message)
+                .and_then(extract_completion_summary_from_assistant)
+        })
+        .or_else(|| {
+            segment
+                .iter()
+                .rev()
+                .find(|message| message.role == "assistant")
+                .map(|message| message.message.trim().to_string())
+        })
+        .filter(|value| !value.is_empty())?;
+
+    Some((previous_query, previous_summary))
+}
+
+fn extract_first_json_object(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        return Some(trimmed);
+    }
+
+    let fenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed)
+        .trim();
+    let fenced = fenced.strip_suffix("```").unwrap_or(fenced).trim();
+    if fenced.starts_with('{') && fenced.ends_with('}') {
+        return Some(fenced);
+    }
+
+    let start = trimmed.find('{')?;
+    let end = trimmed.rfind('}')?;
+    (start < end).then_some(&trimmed[start..=end])
+}
+
+async fn classify_related_task_summary(
+    chat_state: Arc<ChatState>,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
+    session_id: &str,
+    provider_id: i64,
+    model_name: &str,
+    previous_query: &str,
+    previous_summary: &str,
+    new_query: &str,
+) -> Result<Option<String>, String> {
+    if model_name.trim().is_empty()
+        || previous_query.trim().is_empty()
+        || previous_summary.trim().is_empty()
+        || new_query.trim().is_empty()
+    {
+        return Ok(None);
+    }
+
+    let chat_interface = {
+        let mut chats_guard = chat_state.chats.lock().await;
+        chats_guard
+            .entry(crate::ccproxy::ChatProtocol::OpenAI)
+            .or_default()
+            .entry(format!("{}_planning_relation", session_id))
+            .or_insert_with(|| crate::create_chat!(main_store))
+            .clone()
+    };
+
+    let messages = vec![
+        json!({
+            "role": "system",
+            "content": "You classify whether a new request continues a previously completed task.\nReturn JSON only with shape: {\"relation\":\"same_task|related_task|new_task\",\"summary_for_planner\":\"...\"}.\nUse `same_task` when the new request continues or revises the same task.\nUse `related_task` when it is strongly related and previous completed work should inform the next plan.\nUse `new_task` when prior work should not be carried forward.\nIf relation is `same_task` or `related_task`, write `summary_for_planner` as a concise markdown summary of the previous completed task that is directly useful for planning the new request. Otherwise return an empty string."
+        }),
+        json!({
+            "role": "user",
+            "content": format!(
+                "<previous_user_query>\n{}\n</previous_user_query>\n<previous_completed_summary>\n{}\n</previous_completed_summary>\n<new_user_query>\n{}\n</new_user_query>",
+                previous_query, previous_summary, new_query
+            )
+        }),
+    ];
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+    chat_interface
+        .chat(
+            provider_id,
+            model_name,
+            format!("{}_planning_relation", session_id),
+            messages,
+            None,
+            None,
+            move |chunk| {
+                let _ = tx.try_send(chunk);
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut response = String::new();
+    while let Some(chunk) = rx.recv().await {
+        match chunk.r#type {
+            crate::ai::traits::chat::MessageType::Text => response.push_str(&chunk.chunk),
+            crate::ai::traits::chat::MessageType::Finished => break,
+            crate::ai::traits::chat::MessageType::Error => return Err(chunk.chunk.clone()),
+            _ => {}
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct TaskRelationResponse {
+        relation: String,
+        summary_for_planner: String,
+    }
+
+    let parsed = extract_first_json_object(&response)
+        .and_then(|json_text| serde_json::from_str::<TaskRelationResponse>(json_text).ok());
+
+    let Some(parsed) = parsed else {
+        return Ok(None);
+    };
+
+    if matches!(parsed.relation.as_str(), "same_task" | "related_task") {
+        let summary = parsed.summary_for_planner.trim().to_string();
+        if !summary.is_empty() {
+            return Ok(Some(summary));
+        }
+    }
+
+    Ok(None)
+}
 
 fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessage> {
     let mut latest_tool_message_index = std::collections::HashMap::<String, usize>::new();
@@ -1104,7 +1372,7 @@ pub async fn workflow_start(
         return Err(format!("Session already exists: {}", session_id));
     }
 
-    let (raw_prompt, clean_prompt, attached_context, allowed_paths) = {
+    let (raw_prompt, clean_prompt, attached_context, allowed_paths, workflow_status, existing_messages) = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         let snapshot = store
             .get_workflow_snapshot(&session_id)
@@ -1139,7 +1407,7 @@ pub async fn workflow_start(
             (prompt.clone(), String::new())
         };
 
-        (prompt, p, att, paths)
+        (prompt, p, att, paths, wf.status.clone(), snapshot.messages)
     };
 
     let mut agent_config = {
@@ -1198,6 +1466,39 @@ pub async fn workflow_start(
         })
         .collect();
 
+    let related_task_summary = if planning_mode
+        && initial_prompt.is_some()
+        && matches!(
+            workflow_status.to_lowercase().as_str(),
+            "completed" | "error" | "failed" | "cancelled"
+        )
+    {
+        let previous_context = previous_completed_task_context(&existing_messages);
+        let planning_model = agent_config
+            .models
+            .as_ref()
+            .and_then(|models| models.plan.as_ref().or(models.act.as_ref()));
+        if let (Some((previous_query, previous_summary)), Some(model)) =
+            (previous_context, planning_model)
+        {
+            classify_related_task_summary(
+                chat_state_arc.clone(),
+                main_store_arc.clone(),
+                &session_id,
+                model.id,
+                &model.model,
+                &previous_query,
+                &previous_summary,
+                &clean_prompt,
+            )
+            .await?
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Persisted phase is authoritative for existing workflows. This prevents a stale
     // frontend planning toggle from re-entering strict planning after a plan was approved.
     let persisted_phase = agent_config_json
@@ -1209,11 +1510,7 @@ pub async fn workflow_start(
         });
     let mut policy = match persisted_phase {
         Some(crate::workflow::react::policy::ExecutionPhase::Planning) => {
-            if planning_mode {
-                crate::workflow::react::policy::ExecutionPolicy::planning_strict()
-            } else {
-                crate::workflow::react::policy::ExecutionPolicy::planning()
-            }
+            crate::workflow::react::policy::ExecutionPolicy::planning_strict()
         }
         Some(crate::workflow::react::policy::ExecutionPhase::Implementation) => {
             crate::workflow::react::policy::ExecutionPolicy::implementation()
@@ -1245,12 +1542,8 @@ pub async fn workflow_start(
         }
     }
 
-    let planning_dir = app_data_dir.join("planning").join(&session_id);
     if planning_mode {
-        if planning_dir.exists() {
-            let _ = std::fs::remove_dir_all(&planning_dir);
-        }
-        let _ = std::fs::create_dir_all(&planning_dir);
+        reset_workflow_planning_note(&allowed_roots)?;
     }
 
     let shared_executor: Arc<
@@ -1298,6 +1591,28 @@ pub async fn workflow_start(
         executor.init().await.map_err(|e| e.to_string())?;
 
         if initial_prompt.is_some() {
+            if let Some(previous_summary) = related_task_summary {
+                executor
+                    .add_message_and_notify(
+                        "system".into(),
+                        format!(
+                            "# Related Previous Task Context\n<previous_task_summary>\n{}\n</previous_task_summary>",
+                            previous_summary
+                        ),
+                        None,
+                        None,
+                        None,
+                        false,
+                        None,
+                        Some(json!({
+                            "type": "summary",
+                            "subtype": "related_previous_task"
+                        })),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+
             let att_opt = if attached_context.is_empty() {
                 None
             } else {
@@ -1306,7 +1621,10 @@ pub async fn workflow_start(
 
             // Check if message already exists to avoid duplicates
             let messages = executor.messages();
-            let is_duplicate = messages.iter().any(|m| {
+            let active_segment_start = latest_successful_completion_index(&messages)
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            let is_duplicate = messages.iter().skip(active_segment_start).any(|m| {
                 m.role == "user"
                     && m.step_type.as_deref() != Some("observe")
                     && (m.message == clean_prompt || m.message == raw_prompt)
@@ -1498,9 +1816,6 @@ pub async fn workflow_approve_plan(
             .map_err(|e| e.to_string())?;
     }
 
-    let planning_dir = app_data_dir.join("planning").join(&session_id);
-    let _ = std::fs::create_dir_all(&planning_dir);
-
     let mut agent_config = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         store
@@ -1595,12 +1910,34 @@ pub async fn workflow_approve_plan(
         let mut executor = shared_executor.lock().await;
         executor.init().await.map_err(|e| e.to_string())?;
 
-        // Prune history and set the approved plan as anchor
-        let mut executor_guard = executor;
-        // The implementation runner handles pruning during its own internal initialization if needed,
-        // but here we force the transition context
+        let todo_json = {
+            let store = main_store_arc.read().map_err(|e| e.to_string())?;
+            let todos = store
+                .get_todo_list_for_workflow(&session_id)
+                .map_err(|e| e.to_string())?;
+            serde_json::to_string_pretty(&todos).unwrap_or_else(|_| "[]".to_string())
+        };
 
-        // Use the plan
+        let mut executor_guard = executor;
+        executor_guard.add_message_and_notify(
+            "system".into(),
+            format!(
+                "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## TODO LIST\n{}",
+                plan, todo_json
+            ),
+            None,
+            None,
+            None,
+            false,
+            None,
+            Some(json!({
+                "type": "summary",
+                "subtype": "approved_plan",
+                "plan_content": plan,
+                "todo_content": todo_json
+            })),
+        ).await.map_err(|e| e.to_string())?;
+
         executor_guard.add_message_and_notify(
             "user".into(),
             format!(

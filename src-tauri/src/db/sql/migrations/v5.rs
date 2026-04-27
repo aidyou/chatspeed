@@ -140,6 +140,20 @@ fn ensure_agent_hierarchy_columns(conn: &Connection) -> Result<(), StoreError> {
         )?;
     }
 
+    if !column_exists(conn, "agents", "is_system")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN is_system BOOLEAN NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "agents", "disabled")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN disabled BOOLEAN NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_agents_parent_agent_id ON agents(parent_agent_id)",
         [],

@@ -541,7 +541,11 @@ impl WorkflowExecutor {
         let skill_paths: Vec<PathBuf> = skill_scanner.get_search_paths();
 
         // Build sandbox_paths
-        let planning_root = app_data_dir.join("planning").join(&session_id);
+        let planning_root = allowed_paths
+            .first()
+            .cloned()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+            .join(".cs");
         let mut sandbox_paths = vec![planning_root.clone()];
         sandbox_paths.push(std::env::temp_dir());
         if let Some(home) = dirs::home_dir() {
@@ -1271,7 +1275,7 @@ impl WorkflowExecutor {
             if is_allowed(TOOL_ASK_USER) {
                 tm.register_tool(Arc::new(AskUser)).await?;
             }
-            if self.policy.phase != ExecutionPhase::Implementation && is_allowed(TOOL_SUBMIT_PLAN) {
+            if self.policy.is_strict_manual_planning() && is_allowed(TOOL_SUBMIT_PLAN) {
                 tm.register_tool(Arc::new(SubmitPlan)).await?;
             }
             if self.policy.phase != ExecutionPhase::Planning {
@@ -1444,15 +1448,7 @@ impl WorkflowExecutor {
         );
 
         let approved_plan = plan.clone();
-        // Only prune history during formal Planning→Implementation transition.
-        // In Standard (default) mode, the AI naturally creates plans as part of
-        // the conversation flow; pruning here would discard follow-up questions
-        // and investigation context, causing the AI to drift back to the initial
-        // query instead of executing the approved plan.
-        if self.policy.phase == ExecutionPhase::Planning {
-            self.context.prune_for_execution(plan).await?;
-            let _ = std::fs::create_dir_all(&self.planning_root);
-        }
+        self.persist_approved_plan_anchor(&approved_plan).await?;
 
         let mut new_policy = ExecutionPolicy::implementation();
         new_policy.approval_level = self.policy.approval_level.clone();
@@ -1488,6 +1484,41 @@ impl WorkflowExecutor {
             .await?;
 
         self.update_state(WorkflowState::Thinking).await
+    }
+
+    async fn persist_approved_plan_anchor(
+        &mut self,
+        approved_plan: &str,
+    ) -> Result<(), WorkflowEngineError> {
+        let todo_json = {
+            let store = self.context.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            let todos = store.get_todo_list_for_workflow(&self.session_id)?;
+            serde_json::to_string_pretty(&todos).unwrap_or_else(|_| "[]".to_string())
+        };
+
+        let _ = self
+            .add_message_and_notify_internal(
+                "system".to_string(),
+                format!(
+                    "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## TODO LIST\n{}",
+                    approved_plan, todo_json
+                ),
+                None,
+                None,
+                None,
+                false,
+                None,
+                Some(json!({
+                    "type": "summary",
+                    "subtype": "approved_plan",
+                    "plan_content": approved_plan,
+                    "todo_content": todo_json
+                })),
+            )
+            .await?;
+        Ok(())
     }
 
     async fn append_approved_plan_observation(
@@ -2968,14 +2999,7 @@ impl WorkflowExecutor {
                             })
                         });
 
-                    // A. Context Pruning: Only in formal Planning phase.
-                    // In Standard (default) mode, keep full conversation context
-                    // to prevent the AI from losing follow-up questions and
-                    // investigation context that led to this plan.
-                    if self.policy.phase == ExecutionPhase::Planning {
-                        self.context.prune_for_execution(plan.clone()).await?;
-                        let _ = std::fs::create_dir_all(&self.planning_root);
-                    }
+                    self.persist_approved_plan_anchor(&plan).await?;
 
                     // B. Policy & State Reset
                     let mut new_policy = ExecutionPolicy::implementation();
@@ -4408,6 +4432,18 @@ impl WorkflowExecutor {
                         content: "<SYSTEM_REMINDER>submit_plan is only available before an approved plan enters implementation. This workflow is already in implementation mode. Continue executing the approved plan with implementation tools, and use complete_workflow_with_summary when the work is finished.</SYSTEM_REMINDER>".to_string(),
                         title: "Tool unavailable: submit_plan".to_string(),
                         summary: "submit_plan unavailable during implementation".to_string(),
+                        display_type: "text".to_string(),
+                        is_error: true,
+                        error_type: Some("ToolUnavailable".to_string()),
+                        approval_status: None,
+                        observation_kind: None,
+                    }));
+                }
+                if !self.policy.is_strict_manual_planning() {
+                    return Ok(Some(ReinforcedResult {
+                        content: "<SYSTEM_REMINDER>submit_plan is only available in manually activated Plan Mode. Switch this workflow into Plan Mode first, prepare the plan there, and then submit it for approval.</SYSTEM_REMINDER>".to_string(),
+                        title: "Tool unavailable: submit_plan".to_string(),
+                        summary: "submit_plan unavailable outside manual plan mode".to_string(),
                         display_type: "text".to_string(),
                         is_error: true,
                         error_type: Some("ToolUnavailable".to_string()),

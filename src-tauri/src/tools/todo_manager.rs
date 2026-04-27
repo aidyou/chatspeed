@@ -481,6 +481,8 @@ mod tests {
                 None, // final_audit
                 None, // approval_level
                 None, // skill_enabled
+                None, // is_system
+                None, // disabled
                 None, // max_contexts
             );
             store_guard.add_agent(&agent).unwrap();

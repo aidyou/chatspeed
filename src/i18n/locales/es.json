@@ -188,6 +188,7 @@
       "deleteSuccess": "¡Agente eliminado con éxito!",
       "deleteTitle": "Eliminar agente",
       "description": "Descripción",
+      "disabled": "Deshabilitado",
       "edit": "Editar agente",
       "fetchFailed": "Error al obtener el agente",
       "finalAudit": "Auditoría final",

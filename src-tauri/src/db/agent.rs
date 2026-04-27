@@ -122,6 +122,10 @@ pub struct Agent {
     pub approval_level: Option<String>,
     /// Whether skills are enabled for this agent
     pub skill_enabled: Option<bool>,
+    /// Whether this agent is a built-in system agent
+    pub is_system: Option<bool>,
+    /// Whether this agent is disabled from workflow selection/delegation
+    pub disabled: Option<bool>,
     /// Maximum context length (in tokens)
     pub max_contexts: Option<i32>,
     /// Creation timestamp
@@ -149,6 +153,8 @@ impl Agent {
         final_audit: Option<bool>,
         approval_level: Option<String>,
         skill_enabled: Option<bool>,
+        is_system: Option<bool>,
+        disabled: Option<bool>,
         max_contexts: Option<i32>,
     ) -> Self {
         Self {
@@ -167,6 +173,8 @@ impl Agent {
             final_audit,
             approval_level,
             skill_enabled,
+            is_system,
+            disabled,
             max_contexts,
             created_at: None,
             updated_at: None,
@@ -246,6 +254,8 @@ impl From<&Row<'_>> for Agent {
             final_audit: row.get("final_audit").ok(),
             approval_level: row.get("approval_level").ok(),
             skill_enabled: row.get("skill_enabled").ok(),
+            is_system: row.get("is_system").ok(),
+            disabled: row.get("disabled").ok(),
             max_contexts: row.get("max_contexts").ok(),
             created_at: row.get("created_at").ok(),
             updated_at: row.get("updated_at").ok(),
@@ -288,8 +298,8 @@ impl MainStore {
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, is_system, disabled, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 agent.id,
                 agent.name,
@@ -306,6 +316,8 @@ impl MainStore {
                 agent.final_audit,
                 agent.approval_level,
                 agent.skill_enabled,
+                agent.is_system,
+                agent.disabled,
                 agent.max_contexts,
             ],
         )?;
@@ -322,10 +334,20 @@ impl MainStore {
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         let tx = conn.transaction()?;
 
+        let existing_agent: Option<Agent> = {
+            let mut stmt = tx.prepare("SELECT * FROM agents WHERE id = ?1")?;
+            stmt.query_row(params![&agent.id], |row| Ok(Agent::from(row)))
+                .optional()?
+        };
+        let persisted_name = existing_agent
+            .as_ref()
+            .and_then(|current| current.is_system.filter(|v| *v).map(|_| current.name.clone()));
+        let effective_name = persisted_name.unwrap_or_else(|| agent.name.clone());
+
         // Check for name uniqueness on other agents
         let count: i64 = tx.query_row(
             "SELECT COUNT(*) FROM agents WHERE name = ?1 AND id != ?2",
-            params![&agent.name, &agent.id],
+            params![&effective_name, &agent.id],
             |row| row.get(0),
         )?;
 
@@ -363,11 +385,13 @@ impl MainStore {
                 final_audit = ?12,
                 approval_level = ?13,
                 skill_enabled = ?14,
-                max_contexts = ?15,
+                is_system = ?15,
+                disabled = ?16,
+                max_contexts = ?17,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?16",
+             WHERE id = ?18",
             params![
-                agent.name,
+                effective_name,
                 agent.description,
                 agent.role.clone().unwrap_or_else(|| "primary".to_string()),
                 agent.parent_agent_id,
@@ -381,6 +405,8 @@ impl MainStore {
                 agent.final_audit,
                 agent.approval_level,
                 agent.skill_enabled,
+                agent.is_system,
+                agent.disabled,
                 agent.max_contexts,
                 agent.id,
             ],
@@ -462,6 +488,7 @@ impl MainStore {
             "SELECT * FROM agents
              WHERE COALESCE(role, agent_type, 'primary') = 'child'
                AND parent_agent_id = ?1
+               AND COALESCE(disabled, 0) = 0
              ORDER BY name",
         )?;
 

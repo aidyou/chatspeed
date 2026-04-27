@@ -484,18 +484,17 @@ Reasoning/thinking text does not count as the report. Put the report in normal a
 /// Specialized prompt for the Planning Mode.
 /// To be used by the PlanningExecutor for exploration and strategy.
 pub const PLANNING_MODE_PROMPT: &str = r#"# Planning & Strategy (Plan Mode)
-Planning can be **User-Activated** (Strict Mode) or **Self-Initiated** (Autonomous Design). Use this state to research, design, and align on complex tasks before performing implementation.
+Plan Mode is manually activated by the user. Use this state to research, design, and align on complex tasks before performing implementation.
 
 **RULES & RESTRICTIONS**:
 - **Execution Guard**:
-  - If Plan Mode is **manually activated** by the user, permanent changes to the codebase are STRICTLY PROHIBITED. You MUST submit and get approval for a plan via `submit_plan` before touching any files outside the planning directory.
-  - If you **voluntarily choose** to plan (Autonomous), treat the planning phase as a best practice for high-risk or multi-file changes. Once you decide to propose a design, use `submit_plan` to seek alignment before starting implementation.
-- **Gatekeeping**: Submitting your plan using the `submit_plan` tool is the standard way to transition from strategy to implementation. For manually activated mode, this is the ONLY way to unlock code modification.
+  - Permanent changes to the codebase are STRICTLY PROHIBITED. You MUST submit and get approval for a plan via `submit_plan` before touching files outside the planning workspace.
+- **Gatekeeping**: Submitting your plan using the `submit_plan` tool is the ONLY way to transition from strategy to implementation.
 - **Structured Plan Payload**: When calling `submit_plan`, the complete approval plan MUST be placed in the structured `plan` argument. Free-form assistant text may summarize the plan for readability, but it is not the authoritative approval payload.
 - Once your plan is approved, you will transition to execution mode to perform the actual implementation steps in the Primary/Additional directories.
 - **Tool Discipline**:
-  - In strict/manual Plan Mode, do NOT call implementation tools against the real codebase. This includes `edit_file`, `write_file`, mutating `bash` commands, or any command whose purpose is to change files, install dependencies, build artifacts, or create project-side work products outside the planning directory.
-  - In strict/manual Plan Mode, use `read_file`, `list_dir`, `glob`, and `grep` to investigate the codebase. Use `plan_read_note`, `plan_write_note`, and `plan_edit_note` only for session-scoped planning notes (`notes.md`, `plan.md`, `research.md`) inside the planning directory.
+  - In Plan Mode, do NOT call implementation tools against the real codebase. This includes `edit_file`, `write_file`, mutating `bash` commands, or any command whose purpose is to change files, install dependencies, build artifacts, or create project-side work products outside the planning workspace.
+  - In Plan Mode, use `read_file`, `list_dir`, `glob`, and `grep` to investigate the codebase. Use `plan_read_note`, `plan_write_note`, and `plan_edit_note` only for `.cs/note.md` inside the project workspace.
   - `plan_write_note` and `plan_edit_note` are for planning artifacts only. Never treat them as a loophole to implement changes in the real workspace.
   - Allowed actions are limited to exploration, reading, search, analysis, planning notes in the planning directory, clarification, and plan submission.
   - If you already have enough context to explain the change, STOP exploring and submit the plan. Do not "test" whether writes are blocked.
@@ -534,7 +533,7 @@ Your final response should include:
 - **Todo List**: A structured set of tasks for the execution phase (using `todo_create` or similar).
 - **Verification**: A plan for how to verify that the final outcome is correct and meets requirements.
 - The `submit_plan.plan` argument must contain the complete plan that should be approved. Do not rely on surrounding assistant text as the plan source.
-- The final action in strict/manual Plan Mode should normally be `submit_plan`, not another exploratory or implementation tool call.
+- The final action in Plan Mode should normally be `submit_plan`, not another exploratory or implementation tool call.
 
 ### Phase 5: Request Approval
 Once you have formulated a final plan and addressed any user concerns, you MUST request approval to proceed to the execution phase.

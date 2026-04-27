@@ -188,6 +188,7 @@
       "deleteSuccess": "Agent erfolgreich gelöscht!",
       "deleteTitle": "Agent löschen",
       "description": "Beschreibung",
+      "disabled": "Deaktiviert",
       "edit": "Agent bearbeiten",
       "fetchFailed": "Fehler beim Abrufen des Agenten",
       "finalAudit": "Abschlussprüfung durchführen",
