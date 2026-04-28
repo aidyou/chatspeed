@@ -834,6 +834,9 @@
       "empty": "Vide",
       "contextUsage": "Utilisation du contexte"
     },
-    "selectAgentFirst": "Veuillez d'abord sélectionner un agent"
+    "selectAgentFirst": "Veuillez d'abord sélectionner un agent",
+    "notificationSound": "Notifications sonores",
+    "approvalSound": "Son d'approbation",
+    "completionSound": "Son d'achèvement"
   }
 }

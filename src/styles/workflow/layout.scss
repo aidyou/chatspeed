@@ -1,5 +1,17 @@
-// Workflow layout styles
+.approval-queue-menu{
+    .approval-menu-item{
+        width:100%;
 
+        .approval-menu-action{
+            font-size: var(--cs-font-size-md);
+            line-height: 1.4;
+        }
+        .approval-menu-workflow{
+            color: var(--cs-text-color-secondary);
+        }
+    }
+}
+// Workflow layout styles
 .workflow-layout {
   height: 100vh;
   overflow: hidden;

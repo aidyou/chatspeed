@@ -834,6 +834,9 @@
       "empty": "Vacío",
       "contextUsage": "Uso del contexto"
     },
-    "selectAgentFirst": "Por favor, seleccione primero un agente"
+    "selectAgentFirst": "Por favor, seleccione primero un agente",
+    "notificationSound": "Notificaciones de sonido",
+    "approvalSound": "Sonido de aprobación",
+    "completionSound": "Sonido de finalización"
   }
 }

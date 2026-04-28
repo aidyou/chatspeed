@@ -2,20 +2,29 @@
   <div class="workflow-layout">
     <Titlebar :show-menu-button="settingStore.settings.showMenuButton">
       <template #left>
-        <el-tooltip :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)" placement="right"
-          :hide-after="0" :enterable="false">
+        <el-tooltip
+          :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)"
+          placement="right"
+          :hide-after="0"
+          :enterable="false">
           <div class="icon-btn upperLayer" @click="onToggleSidebar">
             <cs name="sidebar" />
           </div>
         </el-tooltip>
       </template>
       <template #center>
-        <div v-if="displayAllowedPathTitle" class="workflow-titlebar-primary-path" :title="displayAllowedPathTitle">
+        <div
+          v-if="displayAllowedPathTitle"
+          class="workflow-titlebar-primary-path"
+          :title="displayAllowedPathTitle">
           {{ displayAllowedPathTitle }}
         </div>
       </template>
       <template #right>
-        <el-dropdown v-if="pendingApprovalList.length > 0" trigger="click" @command="handleApprovalCommand">
+        <el-dropdown
+          v-if="pendingApprovalList.length > 0"
+          trigger="click"
+          @command="handleApprovalCommand">
           <div class="icon-btn upperLayer approval-queue-btn blinking">
             <cs name="approval" />
             <span class="approval-queue-count">{{ approvalQueueCount }}</span>
@@ -27,21 +36,49 @@
                 :key="item.key"
                 :command="item.sessionId">
                 <div class="approval-menu-item">
+                  <div class="approval-menu-action">
+                    <cs name="approval" size="var(--cs-font-size-md)" />{{ item.action }}
+                  </div>
                   <div class="approval-menu-workflow">{{ item.workflowTitle }}</div>
-                  <div class="approval-menu-action">{{ item.action }}</div>
                 </div>
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <div class="icon-btn upperLayer" @click="toggleWorkflowApprovalMute">
-          <el-tooltip :content="$t(`workflow.${workflowApprovalMuted ? 'unmuteApprovalNotifications' : 'muteApprovalNotifications'}`)" :hide-after="0" :enterable="false"
-            placement="bottom">
-            <cs :name="workflowApprovalMuted ? 'mute' : 'unmute'" />
-          </el-tooltip>
-        </div>
+        <el-dropdown trigger="click">
+          <div class="icon-btn upperLayer">
+            <el-tooltip
+              :content="$t('workflow.notificationSound')"
+              :hide-after="0"
+              :enterable="false"
+              placement="bottom">
+              <cs :name="soundIcon" />
+            </el-tooltip>
+          </div>
+          <template #dropdown>
+            <el-dropdown-menu class="sound-dropdown-menu">
+              <el-dropdown-item>
+                <el-checkbox
+                  :model-value="!workflowApprovalMuted"
+                  @change="toggleWorkflowApprovalMute">
+                  {{ $t('workflow.approvalSound') }}
+                </el-checkbox>
+              </el-dropdown-item>
+              <el-dropdown-item>
+                <el-checkbox
+                  :model-value="!workflowCompletionMuted"
+                  @change="toggleWorkflowCompletionMute">
+                  {{ $t('workflow.completionSound') }}
+                </el-checkbox>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <div class="icon-btn upperLayer pin-btn" @click="onPin" :class="{ active: isAlwaysOnTop }">
-          <el-tooltip :content="$t(`common.${isAlwaysOnTop ? 'unpin' : 'pin'}`)" :hide-after="0" :enterable="false"
+          <el-tooltip
+            :content="$t(`common.${isAlwaysOnTop ? 'unpin' : 'pin'}`)"
+            :hide-after="0"
+            :enterable="false"
             placement="bottom">
             <cs name="pin" />
           </el-tooltip>
@@ -50,64 +87,110 @@
     </Titlebar>
 
     <div class="workflow-main">
-      <WorkflowSidebar :workflows="filteredWorkflows" :current-workflow-id="currentWorkflowId"
-        :sidebar-collapsed="sidebarCollapsed" :sidebar-width="sidebarWidth" :sidebar-style="sidebarStyle"
-        :current-paths="currentPaths" :can-switch-workflow="canSwitchWorkflow" :is-dragging="isDragging"
-        @select-workflow="selectWorkflow" @edit-workflow="onEditWorkflow" @delete-workflow="onDeleteWorkflow"
-        @add-path-from-tree="onAddPathFromTree" @remove-path-from-tree="onRemovePathFromTree" />
+      <WorkflowSidebar
+        :workflows="filteredWorkflows"
+        :current-workflow-id="currentWorkflowId"
+        :sidebar-collapsed="sidebarCollapsed"
+        :sidebar-width="sidebarWidth"
+        :sidebar-style="sidebarStyle"
+        :current-paths="currentPaths"
+        :can-switch-workflow="canSwitchWorkflow"
+        :is-dragging="isDragging"
+        @select-workflow="selectWorkflow"
+        @edit-workflow="onEditWorkflow"
+        @delete-workflow="onDeleteWorkflow"
+        @add-path-from-tree="onAddPathFromTree"
+        @remove-path-from-tree="onRemovePathFromTree" />
 
       <!-- Resize Handle -->
-      <div v-if="!sidebarCollapsed" class="sidebar-resize-handle" :class="{ dragging: isDragging }"
+      <div
+        v-if="!sidebarCollapsed"
+        class="sidebar-resize-handle"
+        :class="{ dragging: isDragging }"
         @mousedown="onResizeStart" />
 
       <!-- Main container -->
       <el-container class="main-container">
-        <WorkflowMessageList ref="messageListRef" :messages="enhancedMessages" :is-running="isRunning"
+        <WorkflowMessageList
+          ref="messageListRef"
+          :messages="enhancedMessages"
+          :is-running="isRunning"
           :queued-messages="workflowStore.messageQueue"
-          :is-chatting="isChatting" :chat-state="chatState" :is-compressing="isCompressing"
-          :compression-message="compressionMessage" :last-assistant-message="lastAssistantMessage"
-          :approval-loading="approvalLoading" :active-approval-id="activeApprovalId"
+          :is-chatting="isChatting"
+          :chat-state="chatState"
+          :is-compressing="isCompressing"
+          :compression-message="compressionMessage"
+          :last-assistant-message="lastAssistantMessage"
+          :approval-loading="approvalLoading"
+          :active-approval-id="activeApprovalId"
           :ask-user-submitting="askUserSubmitting"
-          :is-message-expanded="isMessageExpanded" :is-reasoning-expanded="isReasoningExpanded"
-          :remove-system-reminder="removeSystemReminder" :get-diff-markdown="getDiffMarkdown"
-          :parse-choice-content="parseChoiceContent" :get-parsed-message="getParsedMessage"
-          :get-reasoning-preview="getReasoningPreview" :should-show-tool-raw-content="shouldShowToolRawContent"
+          :is-message-expanded="isMessageExpanded"
+          :is-reasoning-expanded="isReasoningExpanded"
+          :remove-system-reminder="removeSystemReminder"
+          :get-diff-markdown="getDiffMarkdown"
+          :parse-choice-content="parseChoiceContent"
+          :get-parsed-message="getParsedMessage"
+          :get-reasoning-preview="getReasoningPreview"
+          :should-show-tool-raw-content="shouldShowToolRawContent"
           :pending-count="currentWorkflowPendingApprovals.length"
           @toggle-expand="toggleMessageExpand"
           @toggle-reasoning="toggleReasoningExpand"
           @submit-ask-user="submitAskUserResponse"
-          @approve-tool="onApproveAction" @approve-all-tool="onApproveAllAction"
+          @approve-tool="onApproveAction"
+          @approve-all-tool="onApproveAllAction"
           @approve-all-pending="onApproveAllPendingAction"
           @reject-tool="onRejectAction" />
 
-      <!-- Status Panel (Floating) -->
-      <StatusPanel />
+        <!-- Status Panel (Floating) -->
+        <StatusPanel />
 
         <!-- Input Area -->
-        <WorkflowInputArea ref="inputAreaRef" v-model:input-message="inputMessage" :is-running="isRunning"
-          :has-live-session="hasLiveSession" :wait-reason="waitReason"
+        <WorkflowInputArea
+          ref="inputAreaRef"
+          v-model:input-message="inputMessage"
+          :is-running="isRunning"
+          :has-live-session="hasLiveSession"
+          :wait-reason="waitReason"
           :current-workflow="currentWorkflow"
-          :current-workflow-id="currentWorkflowId" :selected-agent="selectedAgent" :can-edit-agent="canEditCurrentWorkflowAgent"
+          :current-workflow-id="currentWorkflowId"
+          :selected-agent="selectedAgent"
+          :can-edit-agent="canEditCurrentWorkflowAgent"
           :show-planning-mode-toggle="showPlanningModeToggle"
           :active-model-name="activeModelName"
-          :planning-mode="planningMode" :approval-level="approvalLevel" :final-audit-mode="finalAuditMode"
-          :agents="agentStore.agents" :show-skill-suggestions="showSkillSuggestions"
-          :show-file-suggestions="showFileSuggestions" :filtered-system-skills="filteredSystemSkills"
-          :file-suggestions="fileSuggestions" :selected-skill-index="selectedSkillIndex"
-          :selected-file-index="selectedFileIndex" :on-input-key-down="onInputKeyDown"
-          :on-composition-start="onCompositionStart" :on-composition-end="onCompositionEnd"
-          :on-skill-select="onSkillSelect" :on-file-select="onFileSelect" @send-message="onSendMessage"
-          @continue="onContinue" @stop="onStop" @approve-plan="onApprovePlan"
-          @toggle-planning-mode="planningMode = !planningMode" @toggle-final-audit-mode="toggleFinalAuditMode"
-          @update-approval-level="approvalLevel = $event" @update-selected-agent="onSelectedAgentChange"
+          :planning-mode="planningMode"
+          :approval-level="approvalLevel"
+          :final-audit-mode="finalAuditMode"
+          :agents="agentStore.agents"
+          :show-skill-suggestions="showSkillSuggestions"
+          :show-file-suggestions="showFileSuggestions"
+          :filtered-system-skills="filteredSystemSkills"
+          :file-suggestions="fileSuggestions"
+          :selected-skill-index="selectedSkillIndex"
+          :selected-file-index="selectedFileIndex"
+          :on-input-key-down="onInputKeyDown"
+          :on-composition-start="onCompositionStart"
+          :on-composition-end="onCompositionEnd"
+          :on-skill-select="onSkillSelect"
+          :on-file-select="onFileSelect"
+          @send-message="onSendMessage"
+          @continue="onContinue"
+          @stop="onStop"
+          @approve-plan="onApprovePlan"
+          @toggle-planning-mode="planningMode = !planningMode"
+          @toggle-final-audit-mode="toggleFinalAuditMode"
+          @update-approval-level="approvalLevel = $event"
+          @update-selected-agent="onSelectedAgentChange"
           @create-new-workflow="createNewWorkflow"
           @open-model-selector="openModelSelector" />
       </el-container>
     </div>
 
     <!-- Edit workflow dialog -->
-    <el-dialog v-model="editWorkflowDialogVisible" :title="$t('workflow.editWorkflowTitle')"
-      :close-on-press-escape="false" width="50%">
+    <el-dialog
+      v-model="editWorkflowDialogVisible"
+      :title="$t('workflow.editWorkflowTitle')"
+      :close-on-press-escape="false"
+      width="50%">
       <el-form>
         <el-form-item :label="$t('workflow.workflowTitle')">
           <el-input v-model="editWorkflowTitle" />
@@ -119,7 +202,10 @@
       </template>
     </el-dialog>
 
-    <WorkflowModelSelector v-model="modelSelectorVisible" :initial-tab="modelSelectorTab" :agent="selectedAgent"
+    <WorkflowModelSelector
+      v-model="modelSelectorVisible"
+      :initial-tab="modelSelectorTab"
+      :agent="selectedAgent"
       @save="onModelConfigSave" />
   </div>
 </template>
@@ -158,9 +244,9 @@ const agentStore = useAgentStore()
 const settingStore = useSettingStore()
 const windowStore = useWindowStore()
 
-  // Component refs
-  const messageListRef = ref(null)
-  const inputAreaRef = ref(null)
+// Component refs
+const messageListRef = ref(null)
+const inputAreaRef = ref(null)
 
 // Unlisten refs
 const unlistenFocusInput = ref(null)
@@ -180,7 +266,8 @@ const showPlanningModeToggle = computed(() => {
   const workflow = workflowStore.currentWorkflow
   if (!workflow) return true
 
-  const hasStartedContent = Boolean(String(workflow.userQuery || '').trim()) || (workflow.messagesCount || 0) > 0
+  const hasStartedContent =
+    Boolean(String(workflow.userQuery || '').trim()) || (workflow.messagesCount || 0) > 0
   const status = String(workflow.status || '').toLowerCase()
   return !workflowStore.hasLiveSession && (!hasStartedContent || TERMINAL_STATUSES.includes(status))
 })
@@ -345,18 +432,13 @@ const {
 } = core
 
 // Approval composable
-const {
-  approvalLoading,
-  activeApprovalId,
-  onApproveAction,
-  onApproveAllAction,
-  onRejectAction
-} = useWorkflowApproval({
-  currentWorkflowId: computed(() => workflowStore.currentWorkflowId),
-  getPendingApprovalEntry,
-  clearPendingApprovalEntry,
-  upsertPendingApprovalEntry
-})
+const { approvalLoading, activeApprovalId, onApproveAction, onApproveAllAction, onRejectAction } =
+  useWorkflowApproval({
+    currentWorkflowId: computed(() => workflowStore.currentWorkflowId),
+    getPendingApprovalEntry,
+    clearPendingApprovalEntry,
+    upsertPendingApprovalEntry
+  })
 
 // Set up the onSendMessage callback for the input composable
 inputComposable.onSendMessage.value = async () => {
@@ -386,7 +468,7 @@ const createNewWorkflow = async () => {
 }
 
 // Wrapper for skill select that properly handles send
-const onSkillSelect = (skill) => {
+const onSkillSelect = skill => {
   originalOnSkillSelect(skill)
   // If it was a command (UI action), the input now contains the command
   // We need to trigger send manually since originalOnSkillSelect doesn't have access to onSendMessage
@@ -410,6 +492,11 @@ const currentWorkflowId = computed(() => workflowStore.currentWorkflowId)
 const currentWorkflow = computed(() => workflowStore.currentWorkflow)
 const isAlwaysOnTop = computed(() => windowStore.workflowWindowAlwaysOnTop)
 const workflowApprovalMuted = computed(() => !!settingStore.settings.workflowApprovalMuted)
+const workflowCompletionMuted = computed(() => !!settingStore.settings.workflowCompletionMuted)
+const soundIcon = computed(() => {
+  // Show mute icon when both sounds are muted, otherwise show unmute/sound icon
+  return workflowApprovalMuted.value && workflowCompletionMuted.value ? 'mute' : 'unmute'
+})
 const approvalQueueCount = computed(() => {
   const count = pendingApprovalList.value.length
   return count > 9 ? '9+' : String(count)
@@ -417,9 +504,7 @@ const approvalQueueCount = computed(() => {
 
 // Only count and approve entries for the current workflow
 const currentWorkflowPendingApprovals = computed(() =>
-  pendingApprovalList.value.filter(
-    entry => entry.sessionId === currentWorkflowId.value
-  )
+  pendingApprovalList.value.filter(entry => entry.sessionId === currentWorkflowId.value)
 )
 
 const displayAllowedPathTitle = computed(() => {
@@ -427,7 +512,7 @@ const displayAllowedPathTitle = computed(() => {
   return displayAllowedPath.value || ''
 })
 
-const getWorkflowSortTime = (workflow) => {
+const getWorkflowSortTime = workflow => {
   const candidates = [
     workflow?.updatedAtMs,
     workflow?.updated_at_ms,
@@ -456,9 +541,9 @@ const filteredWorkflows = computed(() => {
   const searchQuery = '' // From WorkflowSidebar component
   const base = !searchQuery
     ? workflows.value
-    : workflows.value.filter((wf) =>
-    (wf.title || wf.userQuery).toLowerCase().includes(searchQuery.toLowerCase())
-    )
+    : workflows.value.filter(wf =>
+        (wf.title || wf.userQuery).toLowerCase().includes(searchQuery.toLowerCase())
+      )
 
   return [...base].sort((a, b) => getWorkflowSortTime(b) - getWorkflowSortTime(a))
 })
@@ -475,7 +560,7 @@ const canEditCurrentWorkflowAgent = computed(() => {
   return !hasLiveSession.value && !hasQuery && !hasMessages
 })
 
-const onSelectedAgentChange = async (agent) => {
+const onSelectedAgentChange = async agent => {
   selectedAgent.value = agent
 
   if (!currentWorkflowId.value || !canEditCurrentWorkflowAgent.value || !agent) {
@@ -487,9 +572,8 @@ const onSelectedAgentChange = async (agent) => {
       sessionId: currentWorkflowId.value,
       agentId: agent.id
     })
-    const agentConfig = typeof agentConfigResult === 'string'
-      ? JSON.parse(agentConfigResult)
-      : agentConfigResult
+    const agentConfig =
+      typeof agentConfigResult === 'string' ? JSON.parse(agentConfigResult) : agentConfigResult
 
     if (workflowStore.currentWorkflow) {
       workflowStore.currentWorkflow.agentId = agent.id
@@ -514,14 +598,14 @@ const onSelectedAgentChange = async (agent) => {
   }
 }
 
-  // 错误边界处理
-  const onErrorCaptured = (err, instance, info) => {
-    console.warn('[Workflow] UI error captured:', err.message, info)
-    // 返回 false 阻止错误继续传播
-    return false
-  }
+// 错误边界处理
+const onErrorCaptured = (err, instance, info) => {
+  console.warn('[Workflow] UI error captured:', err.message, info)
+  // 返回 false 阻止错误继续传播
+  return false
+}
 
-const submitAskUserResponse = async (content) => {
+const submitAskUserResponse = async content => {
   if (!content?.trim()) return
 
   askUserSubmitting.value = true
@@ -540,7 +624,11 @@ const toggleWorkflowApprovalMute = async () => {
   await settingStore.setSetting('workflowApprovalMuted', !workflowApprovalMuted.value)
 }
 
-const handleApprovalCommand = async (sessionId) => {
+const toggleWorkflowCompletionMute = async () => {
+  await settingStore.setSetting('workflowCompletionMuted', !workflowCompletionMuted.value)
+}
+
+const handleApprovalCommand = async sessionId => {
   if (!sessionId) return
   await selectWorkflow(sessionId)
 }
@@ -549,7 +637,7 @@ const resolveInitialWorkflowId = () => {
   const savedWorkflowId = settingStore.settings.workflowLastSelectedId
   if (
     savedWorkflowId &&
-    workflowStore.workflows.some((workflow) => workflow.id === savedWorkflowId)
+    workflowStore.workflows.some(workflow => workflow.id === savedWorkflowId)
   ) {
     return savedWorkflowId
   }
@@ -557,7 +645,7 @@ const resolveInitialWorkflowId = () => {
   return workflowStore.workflows[0]?.id || null
 }
 
-const onGlobalKeyDown = (event) => {
+const onGlobalKeyDown = event => {
   const isMac = osType.value === 'macos'
   const modifierPressed = isMac ? event.metaKey : event.ctrlKey
 
@@ -587,7 +675,7 @@ watch(
 )
 
 onMounted(async () => {
-  unlistenFocusInput.value = await listen('cs://workflow-focus-input', (event) => {
+  unlistenFocusInput.value = await listen('cs://workflow-focus-input', event => {
     if (event.payload && event.payload.windowLabel === settingStore.windowLabel) {
       inputAreaRef.value?.focus()
     }

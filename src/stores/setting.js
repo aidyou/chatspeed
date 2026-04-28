@@ -22,6 +22,7 @@ const defaultSettings = {
   codeDarkTheme: 'github-dark',
   showMenuButton: true,
   workflowApprovalMuted: true,
+  workflowCompletionMuted: true,
   workflowLastSelectedId: '',
   // chat settings
   historyMessages: 5,

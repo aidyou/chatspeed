@@ -834,6 +834,9 @@
       "empty": "Пусто",
       "contextUsage": "Использование контекста"
     },
-    "selectAgentFirst": "Пожалуйста, сначала выберите агента"
+    "selectAgentFirst": "Пожалуйста, сначала выберите агента",
+    "notificationSound": "Звуковые уведомления",
+    "approvalSound": "Звук одобрения",
+    "completionSound": "Звук завершения"
   }
 }

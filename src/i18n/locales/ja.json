@@ -834,6 +834,9 @@
       "empty": "空",
       "contextUsage": "コンテキスト使用量"
     },
-    "selectAgentFirst": "まずエージェントを選択してください"
+    "selectAgentFirst": "まずエージェントを選択してください",
+    "notificationSound": "通知音",
+    "approvalSound": "承認通知音",
+    "completionSound": "完了通知音"
   }
 }

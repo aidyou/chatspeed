@@ -9,6 +9,7 @@ import { useModelStore } from '@/stores/model'
 import { useSettingStore } from '@/stores/setting'
 import { ElMessageBox } from 'element-plus'
 import notificationSoundUrl from '/sound/notification.mp3'
+import successSoundUrl from '/sound/success.mp3'
 import {
     RUNNING_STATUSES,
     SIGNAL_TYPES,
@@ -18,6 +19,7 @@ import {
     WORKFLOW_WAIT_REASONS
 } from '@/composables/workflow/signalTypes'
 import { safeExecute } from './useErrorBoundary'
+import { BLOCKING_WAIT_REASONS } from './signalTypes'
 
 /**
  * Composable for core workflow operations
@@ -33,12 +35,6 @@ export function useWorkflowCore({
     pendingPaths,
     currentWorkflowId,
     currentWorkflow,
-    chattingParser,
-    chatState,
-    enhancedMessages,
-    isCompressing,
-    compressionMessage,
-    fetchSystemSkills,
     resetChatState,
     clearRetryTimer,
     setRetryStatus,
@@ -81,7 +77,8 @@ export function useWorkflowCore({
     const pendingApprovalList = computed(() =>
         Object.values(pendingApprovalEntries.value).sort((a, b) => b.updatedAt - a.updatedAt)
     )
-    const approvalNotificationAudio = ref(null)
+    const approvalNotificationAudio = ref<HTMLAudioElement>()
+    const completionAudio = ref<HTMLAudioElement>()
 
     const playApprovalNotificationSound = async () => {
         if (settingStore.settings.workflowApprovalMuted) return
@@ -97,6 +94,23 @@ export function useWorkflowCore({
             await approvalNotificationAudio.value.play()
         } catch (error) {
             console.warn('[Workflow] Failed to play approval notification sound:', error)
+        }
+    }
+
+    const playCompletionSound = async () => {
+        if (settingStore.settings.workflowCompletionMuted) return
+
+        try {
+            if (!completionAudio.value) {
+                completionAudio.value = new Audio(successSoundUrl)
+                completionAudio.value.preload = 'auto'
+            }
+
+            completionAudio.value.pause()
+            completionAudio.value.currentTime = 0
+            await completionAudio.value.play()
+        } catch (error) {
+            console.warn('[Workflow] Failed to play completion sound:', error)
         }
     }
 
@@ -349,7 +363,7 @@ export function useWorkflowCore({
         }
     }
 
-    const clearPendingApprovalEntries = (sessionId, kind = null) => {
+    const clearPendingApprovalEntries = (sessionId: string, kind = null) => {
         if (!sessionId) {
             pendingApprovalEntries.value = {}
             return
@@ -376,7 +390,7 @@ export function useWorkflowCore({
         }
     }
 
-    const getPendingApprovalEntry = (sessionId, approvalId) => {
+    const getPendingApprovalEntry = (sessionId: string, approvalId: string) => {
         if (!sessionId || !approvalId) return null
         return pendingApprovalEntries.value[`${sessionId}:${approvalId}`] || null
     }
@@ -476,6 +490,10 @@ export function useWorkflowCore({
                         workflowStore.loadWorkflows().catch((error) => {
                             console.warn('[Workflow] Failed to refresh workflows after background terminal state:', error)
                         })
+                        // Play completion sound when background workflow successfully completes
+                        if (statusLower === WORKFLOW_STATUSES.COMPLETED) {
+                            playCompletionSound()
+                        }
                         const cleanup = backgroundStateListeners.get(sessionId)
                         if (cleanup) {
                             cleanup()
@@ -561,6 +579,10 @@ export function useWorkflowCore({
                         workflowStore.loadWorkflows().catch((error) => {
                             console.warn('[Workflow] Failed to refresh workflows after terminal state:', error)
                         })
+                        // Play completion sound when workflow successfully completes
+                        if ((payload.state || '').toLowerCase() === WORKFLOW_STATUSES.COMPLETED) {
+                            playCompletionSound()
+                        }
                     }
 
                     // Check for confirmation waiting
@@ -1548,6 +1570,7 @@ export function useWorkflowCore({
         onSaveEditWorkflow,
         onDeleteWorkflow,
         createNewWorkflow,
-        toggleFinalAuditMode
+        toggleFinalAuditMode,
+        playCompletionSound
     }
 }

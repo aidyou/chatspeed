@@ -844,6 +844,7 @@
     "editWorkflowTitle": "Edit Workflow Title",
     "executing": "Executing...",
     "muteApprovalNotifications": "Mute approval sound",
+    "muteCompletionNotifications": "Mute completion sound",
     "newWorkflow": "New Workflow",
     "rejected": "Rejected",
     "retrying": "Request too fast, retrying (attempt {attempt}/{total}), waiting {seconds} seconds...",
@@ -888,6 +889,10 @@
       "contextUsage": "Context Usage"
     },
     "unmuteApprovalNotifications": "Enable approval sound",
-    "selectAgentFirst": "Please select an agent first"
+    "unmuteCompletionNotifications": "Enable completion sound",
+    "selectAgentFirst": "Please select an agent first",
+    "notificationSound": "Sound notifications",
+    "approvalSound": "Approval sound",
+    "completionSound": "Completion sound"
   }
 }

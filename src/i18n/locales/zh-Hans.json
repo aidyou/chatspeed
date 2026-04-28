@@ -852,6 +852,7 @@
     "historyTab": "会话",
     "newWorkflow": "新建工作流",
     "muteApprovalNotifications": "静音审批提示音",
+    "muteCompletionNotifications": "静音完成提示音",
     "rejected": "已拒绝",
     "retrying": "请求频率过快，正在重试 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
     "startFailed": "启动工作流失败: {error}",
@@ -871,6 +872,10 @@
       "title": "状态面板"
     },
     "unmuteApprovalNotifications": "开启审批提示音",
+ "unmuteCompletionNotifications": "开启完成提示音",
+    "notificationSound": "声音通知",
+    "approvalSound": "审批提示音",
+    "completionSound": "完成提示音",
     "todoList": {
       "title": "待办事项",
       "next": "下一步"

@@ -834,6 +834,9 @@
     },
     "finishTask": "Aufgabe abschließen",
     "workflowTitle": "Workflow-Titel",
-    "selectAgentFirst": "Bitte wählen Sie zuerst einen Agenten aus"
+    "selectAgentFirst": "Bitte wählen Sie zuerst einen Agenten aus",
+    "notificationSound": "Tonbenachrichtigungen",
+    "approvalSound": "Genehmigungston",
+    "completionSound": "Abschlusston"
   }
 }

@@ -834,6 +834,9 @@
       "empty": "비어있음",
       "contextUsage": "컨텍스트 사용량"
     },
-    "selectAgentFirst": "먼저 에이전트를 선택해주세요"
+    "selectAgentFirst": "먼저 에이전트를 선택해주세요",
+    "notificationSound": "알림 소리",
+    "approvalSound": "승인 알림음",
+    "completionSound": "완료 알림음"
   }
 }
