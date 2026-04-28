@@ -141,6 +141,7 @@
     "uploadFailed": "檔案上傳失敗",
     "approve": "批准",
     "approveAll": "全部批准",
+    "approveAndAddToWhitelist": "批准並新增到白名單",
     "reject": "拒絕",
     "collapse": "摺疊"
   },

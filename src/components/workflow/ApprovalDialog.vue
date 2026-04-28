@@ -39,69 +39,25 @@
         <el-button type="primary" @click="onApprove" :loading="loading" round>{{
           $t('common.approve')
         }}</el-button>
-        <el-button v-if="!isPlanApproval" type="success" @click="onApproveAll" :loading="loading" round>{{
-          $t('common.approveAll')
-        }}</el-button>
+        <el-button
+          v-if="!isPlanApproval"
+          type="success"
+          @click="onApproveAll"
+          :loading="loading"
+          round
+          >{{ $t('common.approveAndAddToWhitelist') }}</el-button
+        >
+        <el-button
+          v-if="!isPlanApproval && pendingCount > 1"
+          type="warning"
+          @click="onApproveAllPending"
+          :loading="loading"
+          round
+          >{{ $t('common.approveAll') }} ({{ pendingCount }})</el-button
+        >
       </div>
     </div>
   </div>
-  <el-dialog
-    v-else
-    v-model="visible"
-    :title="action || ''"
-    :width="dialogWidth"
-    :close-on-click-modal="false"
-    :close-on-press-escape="false"
-    :show-close="false"
-    :class="{ 'diff-dialog': isEditAction }"
-    :modal-class="isEditAction ? 'diff-dialog-overlay' : ''"
-    custom-class="approval-dialog">
-    <div class="approval-content">
-      <div class="details-box" :class="{ 'plan-details-box': isPlanApproval }">
-        <div v-if="isEditAction" class="diff-view">
-          <div v-if="filePath" class="diff-file-path">File: {{ filePath }}</div>
-          <div class="diff-text">
-            <div
-              v-for="(line, index) in diffLines"
-              :key="`${index}-${line.lineNumber}-${line.prefix}`"
-              class="diff-line"
-              :class="line.type">
-              <span class="diff-prefix" :data-prefix="line.prefix" aria-hidden="true"></span>
-              <span class="diff-line-number">{{ line.lineNumber }}</span>
-              <span class="diff-separator">|</span>
-              <span class="diff-content">{{ line.content }}</span>
-            </div>
-          </div>
-        </div>
-        <div v-else-if="isShellAction" class="shell-view">
-          <MarkdownSimple :content="shellMarkdown" class-name="approval-markdown" />
-        </div>
-        <div v-else-if="isMarkdownAction" class="markdown-view">
-          <MarkdownSimple :content="detailPayload.detailsText" class-name="approval-markdown" />
-        </div>
-        <pre v-else class="details-text">{{ detailPayload.detailsText }}</pre>
-      </div>
-      <div class="rejection-note-box">
-        <div class="note-header">{{ $t('workflow.approval.rejectionMessageLabel') }}</div>
-        <el-input
-          :model-value="rejectionMessage"
-          type="textarea"
-          :autosize="{ minRows: 1, maxRows: 6 }"
-          resize="none"
-          :placeholder="$t('workflow.approval.rejectionMessagePlaceholder')"
-          @update:model-value="value => emit('update:rejectionMessage', value)" />
-      </div>
-      <div class="dialog-footer inline-footer">
-        <el-button @click="onReject" :loading="loading" round>{{ $t('common.reject') }}</el-button>
-        <el-button type="primary" @click="onApprove" :loading="loading" round>{{
-          $t('common.approve')
-        }}</el-button>
-        <el-button v-if="!isPlanApproval" type="success" @click="onApproveAll" :loading="loading" round>{{
-          $t('common.approveAll')
-        }}</el-button>
-      </div>
-    </div>
-  </el-dialog>
 </template>
 
 <script setup>
@@ -129,7 +85,11 @@ const props = defineProps({
     type: String,
     default: ''
   },
-  loading: Boolean
+  loading: Boolean,
+  pendingCount: {
+    type: Number,
+    default: 0
+  }
 })
 
 const emit = defineEmits([
@@ -137,6 +97,7 @@ const emit = defineEmits([
   'update:rejectionMessage',
   'approve',
   'approveAll',
+  'approveAllPending',
   'reject'
 ])
 
@@ -257,7 +218,8 @@ const generateDiffLines = (oldStr, newStr, startLine = 1, contextData = {}) => {
   appendContextLines(
     diff,
     contextData.context_before,
-    contextData.context_before_start_line || Math.max(1, startLine - (contextData.context_before?.length || 0)),
+    contextData.context_before_start_line ||
+      Math.max(1, startLine - (contextData.context_before?.length || 0)),
     'context'
   )
 
@@ -331,10 +293,10 @@ const generateDiffLines = (oldStr, newStr, startLine = 1, contextData = {}) => {
   return diff
 }
 
-const visible = computed({
-  get: () => props.modelValue,
-  set: val => emit('update:modelValue', val)
-})
+// const visible = computed({
+//   get: () => props.modelValue,
+//   set: val => emit('update:modelValue', val)
+// })
 
 const rejectionMessage = computed(() => props.rejectionMessage || '')
 
@@ -386,9 +348,9 @@ const extractShellCommand = payload => {
 const shellCommand = computed(() => extractShellCommand(detailPayload.value))
 const shellMarkdown = computed(() => `\`\`\`bash\n${shellCommand.value || ''}\n\`\`\``)
 
-const dialogWidth = computed(() => {
-  return isEditAction.value ? '90%' : '500px'
-})
+// const dialogWidth = computed(() => {
+//   return isEditAction.value ? '90%' : '500px'
+// })
 
 const onApprove = () => {
   emit('approve')
@@ -396,6 +358,10 @@ const onApprove = () => {
 
 const onApproveAll = () => {
   emit('approveAll')
+}
+
+const onApproveAllPending = () => {
+  emit('approveAllPending')
 }
 
 const onReject = () => {

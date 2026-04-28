@@ -72,10 +72,12 @@
           :remove-system-reminder="removeSystemReminder" :get-diff-markdown="getDiffMarkdown"
           :parse-choice-content="parseChoiceContent" :get-parsed-message="getParsedMessage"
           :get-reasoning-preview="getReasoningPreview" :should-show-tool-raw-content="shouldShowToolRawContent"
+          :pending-count="pendingApprovalList.length"
           @toggle-expand="toggleMessageExpand"
           @toggle-reasoning="toggleReasoningExpand"
           @submit-ask-user="submitAskUserResponse"
           @approve-tool="onApproveAction" @approve-all-tool="onApproveAllAction"
+          @approve-all-pending="onApproveAllPendingAction"
           @reject-tool="onRejectAction" />
 
       <!-- Status Panel (Floating) -->
@@ -390,6 +392,13 @@ const onSkillSelect = (skill) => {
   // We need to trigger send manually since originalOnSkillSelect doesn't have access to onSendMessage
   if (skill.type === 'command') {
     onSendMessage()
+  }
+}
+
+// Approve all pending approval items by sending individual approve signals for each
+const onApproveAllPendingAction = () => {
+  for (const entry of pendingApprovalList.value) {
+    onApproveAction(entry.id, entry.sessionId)
   }
 }
 

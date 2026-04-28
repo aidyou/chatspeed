@@ -111,6 +111,7 @@
   "common": {
     "approve": "批准",
     "approveAll": "全部批准",
+    "approveAndAddToWhitelist": "批准并添加到白名单",
     "autoHide": "将窗口设置为「失去焦点后自动隐藏」",
     "cancel": "取消",
     "clear": "清空",

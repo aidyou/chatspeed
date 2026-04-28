@@ -297,13 +297,13 @@
                         v-for="(opt, optIndex) in group.options"
                         :key="`${group.title}-${opt}`"
                         :value="opt"
-                        :disabled="!canAnswerAskUser(message, index) || askUserSubmitting">
+                        :disabled="!canAnswerAskUser(message) || askUserSubmitting">
                         <span class="choice-option-label">{{ optIndex + 1 }}. {{ opt }}</span>
                       </el-radio>
                       <div class="choice-custom-row">
                         <el-radio
                           :value="CUSTOM_ASK_USER_VALUE"
-                          :disabled="!canAnswerAskUser(message, index) || askUserSubmitting">
+                          :disabled="!canAnswerAskUser(message) || askUserSubmitting">
                           <span class="choice-option-label">{{ group.options.length + 1 }}.</span>
                         </el-radio>
                         <el-input
@@ -312,7 +312,7 @@
                           type="textarea"
                           :autosize="{ minRows: 1, maxRows: 6 }"
                           :placeholder="$t('workflow.askUser.customPlaceholder')"
-                          :disabled="!canAnswerAskUser(message, index) || askUserSubmitting"
+                          :disabled="!canAnswerAskUser(message) || askUserSubmitting"
                           @focus="setAskUserSelection(message, group.title, CUSTOM_ASK_USER_VALUE)"
                           @update:model-value="
                             value => setAskUserCustomInput(message, group.title, value)
@@ -320,7 +320,7 @@
                       </div>
                     </el-radio-group>
                   </div>
-                  <div v-if="canAnswerAskUser(message, index)" class="choice-submit-row">
+                  <div v-if="canAnswerAskUser(message)" class="choice-submit-row">
                     <el-button
                       size="small"
                       type="primary"
@@ -353,11 +353,13 @@
                   :display-type="message.metadata?.display_type || message.toolDisplay.displayType"
                   :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
                   :loading="approvalLoading && activeApprovalId === message.metadata?.tool_call_id"
+                  :pending-count="pendingCount"
                   @update:rejection-message="
                     value => setApprovalDraft(message.metadata?.tool_call_id, value)
                   "
                   @approve="$emit('approve-tool', message.metadata?.tool_call_id)"
                   @approve-all="$emit('approve-all-tool', message.metadata?.tool_call_id)"
+                  @approve-all-pending="onApproveAllPending"
                   @reject="
                     $emit(
                       'reject-tool',
@@ -630,6 +632,10 @@ const props = defineProps({
   askUserSubmitting: {
     type: Boolean,
     default: false
+  },
+  pendingCount: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -639,6 +645,7 @@ const emit = defineEmits([
   'scroll-bottom',
   'approve-tool',
   'approve-all-tool',
+  'approve-all-pending',
   'reject-tool',
   'submit-ask-user'
 ])
@@ -1083,6 +1090,21 @@ const collapseAssistantCompletionPairs = messages => {
   return collapsed
 }
 
+/// Ordered FIFO queue of pending approval tool_call_ids from the source messages.
+const pendingApprovalQueue = computed(() =>
+  props.messages
+    .filter(msg => msg.metadata?.approval_status === 'pending')
+    .map(msg => msg.metadata?.tool_call_id)
+)
+
+/// Returns true when the message is the first pending approval in the FIFO queue.
+const isFirstPendingApproval = message => {
+  if (message.metadata?.approval_status !== 'pending') return false
+  const queue = pendingApprovalQueue.value
+  if (queue.length === 0) return false
+  return queue[0] === message.metadata?.tool_call_id
+}
+
 const visibleMessages = computed(() =>
   collapseExplorationBatches(
     collapseAssistantCompletionPairs(
@@ -1143,6 +1165,15 @@ const setApprovalDraft = (toolCallId, value) => {
   approvalDrafts.value = {
     ...approvalDrafts.value,
     [toolCallId]: value
+  }
+}
+
+const onApproveAllPending = () => {
+  const pendingMessages = props.messages.filter(
+    m => m.metadata?.approval_status === 'pending' && m.metadata?.tool_call_id
+  )
+  for (const msg of pendingMessages) {
+    emit('approve-tool', msg.metadata?.tool_call_id)
   }
 }
 
@@ -1355,8 +1386,18 @@ const setAskUserCustomInput = (message, title, value) => {
   }))
 }
 
-const hasRealUserResponseAfter = fromIndex => {
-  for (let i = fromIndex + 1; i < props.messages.length; i++) {
+/**
+ * Check if there is a real user message after the given message in props.messages.
+ * Uses the message's displayId to find its actual position, avoiding index mismatch
+ * between visibleMessages (v-for) and props.messages (filtered/merged).
+ */
+const hasRealUserResponseAfter = message => {
+  const startIndex = props.messages.findIndex(
+    m => (m.displayId || m.id) === (message.displayId || message.id)
+  )
+  if (startIndex === -1) return false
+
+  for (let i = startIndex + 1; i < props.messages.length; i++) {
     const msg = props.messages[i]
     if (msg?.role !== 'user') continue
     if (msg?.metadata?.queue_status === 'queued') continue
@@ -1367,15 +1408,29 @@ const hasRealUserResponseAfter = fromIndex => {
   return false
 }
 
-const canAnswerAskUser = (message, index) => {
+/**
+ * Check whether a user can answer an ask_user message.
+ *
+ * The function uses a two-layer check:
+ * 1. Workflow state (primary): the session must be in AwaitingUser / wait_reason=user_input.
+ * 2. Message-level fallback (redundancy): the message itself has display_type=choice
+ *    and parsable choice groups. This guards against edge cases where the state event
+ *    arrives slightly before or after the message event due to reactivity ordering.
+ */
+const canAnswerAskUser = (message) => {
   const currentStatus = String(workflowStore.currentWorkflow?.status || '').toLowerCase()
   const isAwaitingUser =
     workflowStore.waitReason === WORKFLOW_WAIT_REASONS.USER_INPUT ||
     currentStatus === WORKFLOW_STATUSES.AWAITING_USER
-  if (!isAwaitingUser && props.isRunning) return false
+
+  // Primary guard: workflow must be in user-waiting state
   if (!isAwaitingUser) return false
+
+  // Must have parsable choice groups
   if (!getChoiceGroups(message).length) return false
-  return !hasRealUserResponseAfter(index)
+
+  // Check no real user response already exists after this message
+  return !hasRealUserResponseAfter(message)
 }
 
 const buildAskUserResponse = message => {
@@ -1616,5 +1671,19 @@ defineExpose({
 .context-snapshot-card__body {
   padding: var(--cs-space-sm) var(--cs-space);
   border-top: 1px solid var(--cs-border-color);
+}
+
+/* Pending approval queue items (non-first in FIFO) */
+.approval-queue-item {
+  opacity: 0.7;
+  padding-left: var(--cs-space-lg, 16px);
+  border-left: 2px solid var(--el-color-warning);
+  margin-bottom: 4px;
+  cursor: default;
+  pointer-events: none;
+}
+
+.approval-queue-item .tool-type-icon {
+  color: var(--el-color-warning);
 }
 </style>

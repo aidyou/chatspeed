@@ -657,11 +657,13 @@ impl ShellExecute {
                     Ok(Some(status)) => {
                         // Process has exited
                         if full_stdout.len() > 30_000 {
-                            full_stdout.truncate(30_000);
+                            let boundary = find_char_boundary(&full_stdout, 30_000);
+                            full_stdout.truncate(boundary);
                             full_stdout.push_str("\n[Truncated]");
                         }
                         if full_stderr.len() > 30_000 {
-                            full_stderr.truncate(30_000);
+                            let boundary = find_char_boundary(&full_stderr, 30_000);
+                            full_stderr.truncate(boundary);
                             full_stderr.push_str("\n[Truncated]");
                         }
                         let exit_code = status.code().unwrap_or(-1);
@@ -797,6 +799,18 @@ impl ShellExecute {
             }
         }
     }
+}
+
+/// Find the nearest valid UTF-8 character boundary at or before `max_len`.
+fn find_char_boundary(s: &str, max_len: usize) -> usize {
+    if s.len() <= max_len {
+        return s.len();
+    }
+    let mut boundary = max_len;
+    while boundary > 0 && !s.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    boundary
 }
 
 #[cfg(test)]
