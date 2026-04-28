@@ -789,7 +789,7 @@
     }
   },
   "workflow": {
-    "awaiting_approval": "ユーザーの承認待ち",
+    "awaitingApproval": "ユーザーの承認待ち",
     "todoList": {
       "title": "TODOリスト",
       "next": "次へ"

@@ -800,7 +800,8 @@
     }
   },
   "workflow": {
-    "awaiting_approval": "等待用户审批",
+    "awaitingApproval": "等待用户审批",
+    "awaitingUser": "等待用户输入",
     "edited": "已编辑",
     "planningModeTooltip": "计划模式：在执行前进行 AI 调研和方案设计",
     "approvePlan": "批准计划",

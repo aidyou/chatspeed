@@ -86,7 +86,7 @@ export const getToolStatusSummary = (
 
   switch (state) {
     case 'pending':
-      return workflowText('workflow.awaiting_approval', 'Awaiting approval')
+      return workflowText('workflow.awaitingApproval', 'Awaiting approval')
     case 'running':
       return workflowText('workflow.executing', 'Executing...')
     case 'rejected':

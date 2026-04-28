@@ -799,7 +799,7 @@
     }
   },
   "workflow": {
-    "awaiting_approval": "Awaiting approval",
+    "awaitingApproval": "Awaiting approval",
     "edited": "Edited",
     "planningModeTooltip": "Planning Mode: AI research and strategy before execution",
     "approvePlan": "Approve Plan",

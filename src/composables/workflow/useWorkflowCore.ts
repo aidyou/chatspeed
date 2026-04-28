@@ -8,7 +8,7 @@ import { useAgentStore } from '@/stores/agent'
 import { useModelStore } from '@/stores/model'
 import { useSettingStore } from '@/stores/setting'
 import { ElMessageBox } from 'element-plus'
-import notificationSoundUrl from '../../../src-tauri/assets/sound/notification.mp3'
+import notificationSoundUrl from '/sound/notification.mp3'
 import {
     RUNNING_STATUSES,
     SIGNAL_TYPES,
@@ -22,7 +22,7 @@ import { safeExecute } from './useErrorBoundary'
 /**
  * Composable for core workflow operations
  * Handles CRUD, start/stop/continue, and event handling
- * 
+ *
  * Phase 9: Add error boundaries to ensure UI exceptions don't block workflow execution
  */
 export function useWorkflowCore({
@@ -343,7 +343,7 @@ export function useWorkflowCore({
                 sessionId,
                 kind: payload.kind || 'approval',
                 workflowTitle,
-                action: payload.action || t('workflow.awaiting_approval'),
+                action: payload.action || t('workflow.awaitingApproval'),
                 updatedAt: Date.now()
             }
         }
@@ -409,7 +409,7 @@ export function useWorkflowCore({
         upsertPendingApprovalEntry(sessionId, {
             id: 'awaiting_user',
             kind: 'ask_user',
-            action: t('workflow.awaiting_user')
+            action: t('workflow.awaitingUser')
         })
     }
 
@@ -509,7 +509,7 @@ export function useWorkflowCore({
             ) {
                 upsertPendingApprovalEntry(workflow.id, {
                     id: 'awaiting_approval',
-                    action: t('workflow.awaiting_approval')
+                    action: t('workflow.awaitingApproval')
                 })
                 continue
             }
@@ -552,7 +552,7 @@ export function useWorkflowCore({
                     const prevState = workflowStore.currentWorkflow?.status
                     const prevWaitReason = workflowStore.waitReason
                     workflowStore.updateWorkflowStatus(sessionId, payload.state, payload.wait_reason || null)
-                    
+
                     const isWaiting = WAITING_STATUSES.includes(payload.state)
                     console.log(`[Workflow][state] ${prevState} -> ${payload.state} | wait_reason: ${payload.wait_reason || 'null'} | isWaiting: ${isWaiting}`)
 
@@ -707,7 +707,7 @@ export function useWorkflowCore({
             showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
             return
         }
-        
+
         console.log('[Workflow] selectWorkflow completed, currentWorkflow:', workflowStore.currentWorkflow?.id, 'status:', workflowStore.currentWorkflow?.status)
 
         if (workflowStore.currentWorkflow) {
@@ -715,10 +715,10 @@ export function useWorkflowCore({
             if (agent) {
                 selectedAgent.value = agent
             }
-            
+
             // Setup event listeners for the existing session (always setup, even if no agent)
             await setupWorkflowEvents(id)
-            
+
             const status = workflowStore.currentWorkflow?.status?.toLowerCase()
             const pendingApprovalRequest = workflowStore.pendingApprovalRequest
 
@@ -739,7 +739,7 @@ export function useWorkflowCore({
 
                         upsertPendingApprovalEntry(id, {
                             id: toolCallId,
-                            action: toolName || t('workflow.awaiting_approval')
+                            action: toolName || t('workflow.awaitingApproval')
                         })
                         workflowStore.addMessage({
                             sessionId: id,
@@ -753,7 +753,7 @@ export function useWorkflowCore({
                                 tool_call_id: toolCallId,
                                 tool_name: toolName,
                                 display_type: displayType,
-                                summary: t('workflow.awaiting_approval'),
+                                summary: t('workflow.awaitingApproval'),
                                 approval_status: 'pending',
                                 execution_status: 'pending_approval'
                             }
@@ -762,7 +762,7 @@ export function useWorkflowCore({
                 } else if (pendingApprovalRequest && !workflowStore.pendingApprovalMessage) {
                     upsertPendingApprovalEntry(id, {
                         id: pendingApprovalRequest.toolCallId || 'awaiting_approval',
-                        action: pendingApprovalRequest.toolName || t('workflow.awaiting_approval')
+                        action: pendingApprovalRequest.toolName || t('workflow.awaitingApproval')
                     })
                     workflowStore.addMessage({
                         sessionId: id,
@@ -776,7 +776,7 @@ export function useWorkflowCore({
                             tool_call_id: pendingApprovalRequest.toolCallId || '',
                             tool_name: pendingApprovalRequest.toolName || '',
                             display_type: pendingApprovalRequest.displayType || '',
-                            summary: t('workflow.awaiting_approval'),
+                            summary: t('workflow.awaitingApproval'),
                             approval_status: 'pending',
                             execution_status: 'pending_approval'
                         }
@@ -857,7 +857,7 @@ export function useWorkflowCore({
             clearRetryTimer()
             resetChatState()
             workflowStore.setNotification('', 'info')
-            
+
             const signal = JSON.stringify({ type: SIGNAL_TYPES.STOP })
             try {
                 await invokeWrapper('workflow_signal', {

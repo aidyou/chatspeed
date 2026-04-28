@@ -795,7 +795,7 @@
     },
     "planningModeTooltip": "Modo de planejamento: Pesquisa e estratégia de IA antes da execução",
     "approvePlan": "Aprovar plano",
-    "awaiting_approval": "Aguardando aprovação",
+    "awaitingApproval": "Aguardando aprovação",
     "submit_plan": "Enviar plano",
     "confirmDeleteWorkflow": "Tem certeza de que deseja excluir este fluxo de trabalho? Esta ação não pode ser desfeita.",
     "continue": "Continuar",

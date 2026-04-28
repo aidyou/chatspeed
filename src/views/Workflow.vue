@@ -72,7 +72,7 @@
           :remove-system-reminder="removeSystemReminder" :get-diff-markdown="getDiffMarkdown"
           :parse-choice-content="parseChoiceContent" :get-parsed-message="getParsedMessage"
           :get-reasoning-preview="getReasoningPreview" :should-show-tool-raw-content="shouldShowToolRawContent"
-          :pending-count="pendingApprovalList.length"
+          :pending-count="currentWorkflowPendingApprovals.length"
           @toggle-expand="toggleMessageExpand"
           @toggle-reasoning="toggleReasoningExpand"
           @submit-ask-user="submitAskUserResponse"
@@ -395,9 +395,9 @@ const onSkillSelect = (skill) => {
   }
 }
 
-// Approve all pending approval items by sending individual approve signals for each
+// Approve all pending approval items for the current workflow by sending individual approve signals for each
 const onApproveAllPendingAction = () => {
-  for (const entry of pendingApprovalList.value) {
+  for (const entry of currentWorkflowPendingApprovals.value) {
     onApproveAction(entry.id, entry.sessionId)
   }
 }
@@ -414,6 +414,13 @@ const approvalQueueCount = computed(() => {
   const count = pendingApprovalList.value.length
   return count > 9 ? '9+' : String(count)
 })
+
+// Only count and approve entries for the current workflow
+const currentWorkflowPendingApprovals = computed(() =>
+  pendingApprovalList.value.filter(
+    entry => entry.sessionId === currentWorkflowId.value
+  )
+)
 
 const displayAllowedPathTitle = computed(() => {
   if (!currentPaths.value?.length) return ''

@@ -795,7 +795,7 @@
     },
     "planningModeTooltip": "계획 모드: 실행 전 AI 연구 및 전략",
     "approvePlan": "계획 승인",
-    "awaiting_approval": "사용자 승인 대기 중",
+    "awaitingApproval": "사용자 승인 대기 중",
     "submit_plan": "계획 제출",
     "confirmDeleteWorkflow": "이 워크플로우를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
     "continue": "계속",

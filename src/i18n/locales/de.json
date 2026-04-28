@@ -791,7 +791,7 @@
   "workflow": {
     "planningModeTooltip": "Planungsmodus: KI-Recherche und Strategien vor der Ausführung",
     "approvePlan": "Plan genehmigen",
-    "awaiting_approval": "Warte auf Genehmigung",
+    "awaitingApproval": "Warte auf Genehmigung",
     "submit_plan": "Plan einreichen",
     "thinking": "Denke nach...",
     "thinkingExpanded": "Denkprozess",

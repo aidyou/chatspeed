@@ -791,7 +791,8 @@
     }
   },
   "workflow": {
-    "awaiting_approval": "等待使用者審批",
+    "awaitingApproval": "等待使用者審批",
+    "awaitingUser": "等待使用者輸入",
     "planningModeTooltip": "規劃模式：執行前 AI 研究與策略",
     "approvePlan": "批准計劃",
     "thinkingExpanded": "思考中（已展開）",

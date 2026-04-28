@@ -795,7 +795,7 @@
     },
     "planningModeTooltip": "Mode de planification : Recherche et stratégie IA avant exécution",
     "approvePlan": "Approuver le plan",
-    "awaiting_approval": "En attente d'approbation",
+    "awaitingApproval": "En attente d'approbation",
     "submit_plan": "Soumettre le plan",
     "confirmDeleteWorkflow": "Êtes-vous sûr de vouloir supprimer ce flux de travail ? Cette action ne peut pas être annulée.",
     "continue": "Continuer",
