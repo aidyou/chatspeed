@@ -308,6 +308,14 @@ export function useWorkflowCore({
         return invokeWrapper('workflow_signal', { sessionId, signal })
     }
 
+    const removeQueuedUserMessageSignal = async (sessionId, queuedUserMessageId) => {
+        const signal = JSON.stringify({
+            type: SIGNAL_TYPES.REMOVE_QUEUED_USER_MESSAGE,
+            queued_user_message_id: queuedUserMessageId
+        })
+        return invokeWrapper('workflow_signal', { sessionId, signal })
+    }
+
     const flushDeferredQueuedMessages = async () => {
         if (!currentWorkflowId.value) return
         if (BLOCKING_WAIT_REASONS.includes(waitReason.value)) return
@@ -636,10 +644,12 @@ export function useWorkflowCore({
                     scrollToBottom()
                 } else if (payload.type === 'confirm') {
                     // Current-session approvals are rendered inline in tool messages.
+                    workflowStore.clearApprovalSubmission(sessionId, payload.id)
                     upsertPendingApprovalEntry(sessionId, payload)
                     playApprovalNotificationSound()
                 } else if (payload.type === 'approval_resolved') {
                     clearPendingApprovalEntries(sessionId, 'approval')
+                    workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     if (payload.approved) {
                         workflowStore.markToolApprovedRunning(payload.tool_call_id)
                     } else {
@@ -647,7 +657,10 @@ export function useWorkflowCore({
                     }
                 } else if (payload.type === 'tool_started') {
                     clearPendingApprovalEntries(sessionId, 'approval')
+                    workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     workflowStore.markToolApprovedRunning(payload.tool_call_id)
+                } else if (payload.type === 'queued_user_message_removed') {
+                    workflowStore.removeQueuedMessage(payload.queued_user_message_id)
                 } else if (payload.type === 'retry_status') {
                     if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Handle 429 retry status
@@ -747,9 +760,16 @@ export function useWorkflowCore({
             console.log('[Workflow] Checking session recovery:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasLiveSession:', workflowStore.hasLiveSession)
 
             clearPendingApprovalEntries(id)
+            workflowStore.clearApprovalSubmissionsForSession(id)
 
             if (status === WORKFLOW_STATUSES.AWAITING_APPROVAL) {
                 const structuredPendingTools = getExecutionContextPendingTools(workflowStore.currentWorkflow)
+                workflowStore.reconcilePendingApprovalSubmissions(
+                    id,
+                    structuredPendingTools
+                        .map(tool => tool.toolCallId || tool.tool_call_id || '')
+                        .filter(Boolean)
+                )
 
                 if (structuredPendingTools.length > 0) {
                     for (const pendingTool of structuredPendingTools) {
@@ -1042,32 +1062,25 @@ export function useWorkflowCore({
             // Phase 3: Use unified waiting check - all waiting states should send signal
             // Backend will validate signal type based on wait_reason
             if (isRunning.value || isWaiting.value) {
-                // Approval waiting: keep input in frontend queue, send after approval resumes.
-                if (waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL) {
-                    workflowStore.addMessageToQueue({
-                        content: message,
-                        status: 'pending_approval',
-                        sent: false
-                    })
-                    return
-                }
-
-                // Running: send signal and keep a local queue placeholder until backend ack arrives.
+                const shouldQueueLocally =
+                    isRunning.value || waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
                 let queuedId = null
-                if (isRunning.value) {
+                if (shouldQueueLocally) {
                     queuedId = `local_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
                     workflowStore.addMessageToQueue({
                         id: queuedId,
                         content: message,
-                        status: 'queued',
+                        status:
+                            waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
+                                ? 'pending_approval'
+                                : 'queued',
                         sent: false
                     })
                 }
 
                 // Just send signal to the running loop
                 try {
-                    // Optimistic update only for states that accept user_input signal
-                    // Do NOT update for approval waiting - backend will reject user_input signal
+                    // Optimistic update only for states that immediately consume user input.
                     const shouldOptimisticUpdate =
                         waitReason.value === WORKFLOW_WAIT_REASONS.USER_INPUT ||
                         waitReason.value === WORKFLOW_WAIT_REASONS.CONFIRMATION
@@ -1117,6 +1130,26 @@ export function useWorkflowCore({
                     showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
                 }
             }
+        }
+    }
+
+    const removeQueuedMessage = async (queuedId) => {
+        if (!queuedId) return
+
+        const queuedItem = workflowStore.messageQueue.find((item) => item.id === queuedId)
+        if (!queuedItem) return
+
+        workflowStore.removeQueuedMessage(queuedId)
+
+        if (!queuedItem.sent || !currentWorkflowId.value) {
+            return
+        }
+
+        try {
+            await removeQueuedUserMessageSignal(currentWorkflowId.value, queuedId)
+        } catch (error) {
+            workflowStore.addMessageToQueue(queuedItem)
+            console.error('Failed to remove queued message from workflow:', error)
         }
     }
 
@@ -1560,6 +1593,7 @@ export function useWorkflowCore({
         selectWorkflow,
         startNewWorkflow,
         onSendMessage,
+        removeQueuedMessage,
         handleBuiltinCommand,
         onContinue,
         onApprovePlan,

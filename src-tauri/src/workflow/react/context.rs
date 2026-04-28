@@ -175,10 +175,9 @@ impl ContextManager {
             .round() as usize
     }
 
-    fn build_compression_candidate_after_completion_count(
+    fn build_compression_candidate_preserving_latest_completion(
         &self,
         minimum_completions_after_summary: usize,
-        completion_index_to_compress: usize,
     ) -> Option<(Vec<WorkflowMessage>, i64)> {
         let compressed_until_message_id =
             Self::latest_summary_boundary_id(&self.messages).unwrap_or(0);
@@ -200,7 +199,8 @@ impl ContextManager {
             return None;
         }
 
-        let target_completion_idx = *completion_indices.get(completion_index_to_compress)?;
+        let target_completion_idx = *completion_indices
+            .get(completion_indices.len().saturating_sub(2))?;
         let latest_completion_idx = *completion_indices.last()?;
 
         if latest_completion_idx <= target_completion_idx {
@@ -230,12 +230,22 @@ impl ContextManager {
         ))
     }
 
-    pub fn build_blocking_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
-        self.build_compression_candidate_after_completion_count(2, 0)
+    pub fn build_pressure_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
+        self.build_compression_candidate_preserving_latest_completion(2)
     }
 
+    pub fn build_task_boundary_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
+        self.build_compression_candidate_preserving_latest_completion(3)
+    }
+
+    #[allow(dead_code)]
+    pub fn build_blocking_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
+        self.build_pressure_compression_candidate()
+    }
+
+    #[allow(dead_code)]
     pub fn build_rollup_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
-        self.build_compression_candidate_after_completion_count(3, 1)
+        self.build_task_boundary_compression_candidate()
     }
 
     pub fn new(
@@ -501,7 +511,10 @@ impl ContextManager {
                         && !message.message.trim().is_empty())
                 });
         if should_start_new_segment {
-            self.begin_new_segment_with_seed(Vec::new()).await?;
+            // Carry forward all current context (compression summary + recent messages)
+            // into the new segment so the LLM doesn't lose context when the user
+            // sends a new message after completion.
+            self.begin_new_segment_with_seed(self.context_messages.clone()).await?;
         }
 
         let _permit = self
@@ -1758,7 +1771,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_messages_for_llm_excludes_previous_completion_segment() {
+    async fn get_messages_for_llm_carries_forward_context_on_new_user_message() {
         let (_dir, store) = setup_store();
         let session_id = "session-llm-segment-test";
         insert_workflow(&store, session_id);
@@ -1836,9 +1849,11 @@ mod tests {
         assert!(llm_contents
             .iter()
             .any(|content| content.contains("Second task")));
-        assert!(!llm_contents
+        assert!(llm_contents
             .iter()
-            .any(|content| content.contains("First completion report")));
+            .any(|content| content.contains("First completion report")),
+            "the assistant's previous completion report should remain in the LLM context to preserve continuity"
+        );
     }
 
     #[test]

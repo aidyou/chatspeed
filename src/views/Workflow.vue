@@ -133,12 +133,15 @@
           :get-reasoning-preview="getReasoningPreview"
           :should-show-tool-raw-content="shouldShowToolRawContent"
           :pending-count="currentWorkflowPendingApprovals.length"
+          :current-workflow-id="currentWorkflowId"
+          :is-approval-submitting="isApprovalSubmitting"
           @toggle-expand="toggleMessageExpand"
           @toggle-reasoning="toggleReasoningExpand"
           @submit-ask-user="submitAskUserResponse"
           @approve-tool="onApproveAction"
           @approve-all-tool="onApproveAllAction"
           @approve-all-pending="onApproveAllPendingAction"
+          @remove-queued-message="removeQueuedMessage"
           @reject-tool="onRejectAction" />
 
         <!-- Status Panel (Floating) -->
@@ -418,6 +421,7 @@ const {
   selectWorkflow,
   startNewWorkflow,
   onSendMessage: coreOnSendMessage,
+  removeQueuedMessage,
   handleBuiltinCommand,
   onContinue,
   onApprovePlan,
@@ -432,7 +436,7 @@ const {
 } = core
 
 // Approval composable
-const { approvalLoading, activeApprovalId, onApproveAction, onApproveAllAction, onRejectAction } =
+const { approvalLoading, activeApprovalId, isApprovalSubmitting, onApproveAction, onApproveAllAction, onRejectAction } =
   useWorkflowApproval({
     currentWorkflowId: computed(() => workflowStore.currentWorkflowId),
     getPendingApprovalEntry,
@@ -477,10 +481,22 @@ const onSkillSelect = skill => {
   }
 }
 
-// Approve all pending approval items for the current workflow by sending individual approve signals for each
-const onApproveAllPendingAction = () => {
-  for (const entry of currentWorkflowPendingApprovals.value) {
-    onApproveAction(entry.id, entry.sessionId)
+// Approve all pending approval items for the current workflow.
+// If the workflow process (session) is alive, send all signals concurrently (fast path).
+// If the process is dead, send sequentially so the first restarts the workflow without
+// multiple concurrent workflow_start() calls conflicting on the backend.
+const onApproveAllPendingAction = async () => {
+  const entries = currentWorkflowPendingApprovals.value
+  if (!entries.length) return
+
+  if (hasLiveSession.value) {
+    // Session alive → send all concurrently
+    await Promise.all(entries.map(entry => onApproveAction(entry.id, entry.sessionId)))
+  } else {
+    // Session dead → send one at a time to avoid workflow_start conflicts
+    for (const entry of entries) {
+      await onApproveAction(entry.id, entry.sessionId)
+    }
   }
 }
 

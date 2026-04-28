@@ -14,6 +14,7 @@ export const SIGNAL_TYPES = {
   UPDATE_MODEL_CONFIG: 'update_model_config',
   REMOVE_SHELL_POLICY_ITEM: 'remove_shell_policy_item',
   REMOVE_AUTO_APPROVED_TOOL: 'remove_auto_approved_tool',
+  REMOVE_QUEUED_USER_MESSAGE: 'remove_queued_user_message',
 } as const
 
 export const WORKFLOW_WAIT_REASONS = {

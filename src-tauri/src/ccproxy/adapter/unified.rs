@@ -227,7 +227,7 @@ pub struct UnifiedTool {
 }
 
 /// Controls how the model uses tools.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum UnifiedToolChoice {
     None,

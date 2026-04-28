@@ -24,6 +24,7 @@ pub struct ContextCompressor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompressionMode {
+    #[allow(dead_code)]
     Rollup,
     Blocking,
 }

@@ -69,6 +69,9 @@ pub enum GatewayPayload {
         approved: bool,
         approve_all: bool,
     },
+    QueuedUserMessageRemoved {
+        queued_user_message_id: String,
+    },
     ToolStarted {
         tool_call_id: String,
         tool_name: String,
@@ -202,6 +205,7 @@ pub enum WorkflowSignal {
         #[serde(default, alias = "queuedUserMessageId")]
         queued_user_message_id: Option<String>,
     },
+    RemoveQueuedUserMessage { queued_user_message_id: String },
     /// User approves or rejects a tool call (for AwaitingApproval state)
     /// Frontend legacy format uses "approval" as type and "id" as field.
     #[serde(rename = "approval")]
@@ -276,6 +280,7 @@ impl WorkflowSignal {
             (WorkflowSignal::UpdateModelConfig { .. }, _) => true,
             (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
             (WorkflowSignal::RemoveShellPolicyItem { .. }, _) => true,
+            (WorkflowSignal::RemoveQueuedUserMessage { .. }, _) => true,
             (WorkflowSignal::CompressionReady { .. }, _) => true,
             (WorkflowSignal::CompressionFailed { .. }, _) => true,
             // UserMessage is valid for UserInput waiting
@@ -295,6 +300,7 @@ impl WorkflowSignal {
     pub fn type_name(&self) -> &'static str {
         match self {
             WorkflowSignal::UserMessage { .. } => "user_message",
+            WorkflowSignal::RemoveQueuedUserMessage { .. } => "remove_queued_user_message",
             WorkflowSignal::ApprovalDecision { .. } => "approval_decision",
             WorkflowSignal::Continue => "continue",
             WorkflowSignal::Stop => "stop",
@@ -544,6 +550,15 @@ mod tests {
         let json = r#"{"type":"stop"}"#;
         let signal = WorkflowSignal::parse(json).unwrap();
         assert!(matches!(signal, WorkflowSignal::Stop));
+
+        let json = r#"{"type":"remove_queued_user_message","queued_user_message_id":"queue_1"}"#;
+        let signal = WorkflowSignal::parse(json).unwrap();
+        assert!(matches!(
+            signal,
+            WorkflowSignal::RemoveQueuedUserMessage {
+                queued_user_message_id
+            } if queued_user_message_id == "queue_1"
+        ));
     }
 
     #[test]
@@ -600,5 +615,11 @@ mod tests {
         };
         assert!(update_models.is_valid_for(Some(&WaitReason::Confirmation)));
         assert!(update_models.is_valid_for(None));
+
+        let remove_queued = WorkflowSignal::RemoveQueuedUserMessage {
+            queued_user_message_id: "queue_1".to_string(),
+        };
+        assert!(remove_queued.is_valid_for(Some(&WaitReason::Approval)));
+        assert!(remove_queued.is_valid_for(None));
     }
 }

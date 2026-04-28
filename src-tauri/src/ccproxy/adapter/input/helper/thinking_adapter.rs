@@ -5,7 +5,7 @@ use crate::ccproxy::types::openai::{
 use crate::db::ThinkingConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReasoningModelFamily {
+pub(crate) enum ReasoningModelFamily {
     OpenAI,
     DeepSeek,
     Qwen,
@@ -34,7 +34,7 @@ pub struct VendorThinkingParams {
     pub thinking_budget: Option<i32>,
 }
 
-fn detect_family(model: &str) -> ReasoningModelFamily {
+pub(crate) fn detect_family(model: &str) -> ReasoningModelFamily {
     let lower = model.to_lowercase();
     if lower.contains("ollama") {
         ReasoningModelFamily::Ollama

@@ -346,7 +346,10 @@
                   >{{ removeSystemReminder(message.message) }}</pre
                 >
                 <ApprovalDialog
-                  v-if="message.metadata?.approval_status === 'pending'"
+                  v-if="
+                    message.metadata?.approval_status === 'pending' &&
+                    !isApprovalSubmitting(currentWorkflowId, message.metadata?.tool_call_id)
+                  "
                   inline
                   :action="message.metadata?.tool_name || message.toolDisplay.action"
                   :details="removeSystemReminder(message.message)"
@@ -533,6 +536,12 @@
       <div v-for="item in queuedMessages" :key="item.id" class="queued-item">
         <cs name="clock" size="12px" class="queued-icon" />
         <span class="queued-text">{{ item.content }}</span>
+        <button
+          type="button"
+          class="queued-remove"
+          @click="$emit('remove-queued-message', item.id)">
+          <cs name="close" size="12px" />
+        </button>
       </div>
     </div>
   </div>
@@ -597,6 +606,14 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  currentWorkflowId: {
+    type: String,
+    default: ''
+  },
+  isApprovalSubmitting: {
+    type: Function,
+    default: () => false
+  },
   isMessageExpanded: {
     type: Function,
     required: true
@@ -647,7 +664,8 @@ const emit = defineEmits([
   'approve-all-tool',
   'approve-all-pending',
   'reject-tool',
-  'submit-ask-user'
+  'submit-ask-user',
+  'remove-queued-message'
 ])
 
 const messagesRef = ref(null)
@@ -1169,12 +1187,7 @@ const setApprovalDraft = (toolCallId, value) => {
 }
 
 const onApproveAllPending = () => {
-  const pendingMessages = props.messages.filter(
-    m => m.metadata?.approval_status === 'pending' && m.metadata?.tool_call_id
-  )
-  for (const msg of pendingMessages) {
-    emit('approve-tool', msg.metadata?.tool_call_id)
-  }
+  emit('approve-all-pending')
 }
 
 const getChoiceKey = message =>
@@ -1685,5 +1698,21 @@ defineExpose({
 
 .approval-queue-item .tool-type-icon {
   color: var(--el-color-warning);
+}
+
+.queued-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--cs-text-color-secondary);
+  cursor: pointer;
+}
+
+.queued-remove:hover {
+  color: var(--cs-text-color-primary);
 }
 </style>

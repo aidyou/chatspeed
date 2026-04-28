@@ -2326,54 +2326,96 @@ pub async fn workflow_signal(
                 signal_type_enum,
                 Some(SignalType::UserMessage | SignalType::LegacyUserInput)
             ) {
-                if let Some(content) = val["content"].as_str() {
-                    // When recovery_context is None (for example a brand-new workflow with no
-                    // persisted execution history yet), fall back to the durable workflow status.
-                    let is_resumable =
-                        is_resumable_from_context_for_user_message(recovery_context.as_ref())
-                            || is_resumable_stored_workflow_state_for_user_message(
-                                &workflow_snapshot.workflow.status,
-                            );
+                let can_queue_during_approval = effective_wait_reason == Some(WaitReason::Approval)
+                    || matches!(
+                        stored_workflow_state(&workflow_snapshot.workflow.status),
+                        Some(WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval)
+                    );
 
-                    if !is_resumable {
-                        log::warn!(
-                            "[Workflow][session={}][phase=signal] Cannot resume with user message: runtime_state={:?}, wait_reason={:?}, status={}",
-                            session_id,
-                            recovery_context.as_ref().map(|ctx| &ctx.state),
-                            effective_wait_reason,
-                            workflow_snapshot.workflow.status
-                        );
-                        return Err(format!(
-                            "Cannot resume: workflow is in '{}' state",
-                            workflow_snapshot.workflow.status
-                        ));
-                    }
+                // When recovery_context is None (for example a brand-new workflow with no
+                // persisted execution history yet), fall back to the durable workflow status.
+                let is_resumable = is_resumable_from_context_for_user_message(recovery_context.as_ref())
+                    || is_resumable_stored_workflow_state_for_user_message(
+                        &workflow_snapshot.workflow.status,
+                    );
 
-                    log::info!(
-                        "[Workflow][session={}][phase=signal] Resuming orphan session with user message, runtime_state={:?}, wait_reason={:?}, status={}",
+                if !is_resumable {
+                    log::warn!(
+                        "[Workflow][session={}][phase=signal] Cannot resume with user message: runtime_state={:?}, wait_reason={:?}, status={}",
                         session_id,
                         recovery_context.as_ref().map(|ctx| &ctx.state),
                         effective_wait_reason,
                         workflow_snapshot.workflow.status
                     );
-
-                    workflow_start(
-                        app,
-                        state,
-                        chat_state,
-                        tsid_generator,
-                        gateway,
-                        factory,
-                        workflow_manager,
-                        session_id,
-                        workflow_snapshot.workflow.agent_id.clone(),
-                        Some(content.to_string()),
-                        None,
-                    )
-                    .await?;
-
-                    return Ok("Workflow resumed with input".to_string());
+                    return Err(format!(
+                        "Cannot resume: workflow is in '{}' state",
+                        workflow_snapshot.workflow.status
+                    ));
                 }
+
+                log::info!(
+                    "[Workflow][session={}][phase=signal] Resuming orphan session with user message, runtime_state={:?}, wait_reason={:?}, status={}",
+                    session_id,
+                    recovery_context.as_ref().map(|ctx| &ctx.state),
+                    effective_wait_reason,
+                    workflow_snapshot.workflow.status
+                );
+
+                workflow_start(
+                    app,
+                    state,
+                    chat_state,
+                    tsid_generator,
+                    gateway,
+                    factory,
+                    workflow_manager,
+                    session_id.clone(),
+                    workflow_snapshot.workflow.agent_id.clone(),
+                    if can_queue_during_approval {
+                        None
+                    } else {
+                        val["content"].as_str().map(|content| content.to_string())
+                    },
+                    None,
+                )
+                .await?;
+
+                if can_queue_during_approval {
+                    let mut retries = 5;
+                    let mut last_error = None;
+                    while retries > 0 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        match gateway_arc.inject_input(&session_id, signal.clone()).await {
+                            Ok(_) => {
+                                log::info!(
+                                    "[Workflow] user_message injected successfully after approval-wait recovery"
+                                );
+                                break;
+                            }
+                            Err(e) => {
+                                last_error = Some(e);
+                                retries -= 1;
+                                log::warn!(
+                                    "[Workflow] Failed to inject user_message during approval-wait recovery, retries left: {}",
+                                    retries
+                                );
+                            }
+                        }
+                    }
+                    if retries == 0 {
+                        let err_msg = last_error
+                            .map(|e| e.to_string())
+                            .unwrap_or_else(|| "Unknown error".into());
+                        return Err(format!(
+                            "Failed to inject user_message after resuming: {}",
+                            err_msg
+                        ));
+                    }
+
+                    return Ok("Workflow resumed and user message queued".to_string());
+                }
+
+                return Ok("Workflow resumed with input".to_string());
             } else if signal_type == "rebroadcast_pending"
                 || signal_type == "request_confirm_broadcast"
             {

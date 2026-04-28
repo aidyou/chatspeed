@@ -70,6 +70,7 @@ pub enum SignalType {
     UpdateModelConfig,
     RemoveShellPolicyItem,
     RemoveAutoApprovedTool,
+    RemoveQueuedUserMessage,
 }
 
 impl SignalType {
@@ -91,6 +92,7 @@ impl SignalType {
             "update_model_config" => Some(SignalType::UpdateModelConfig),
             "remove_shell_policy_item" => Some(SignalType::RemoveShellPolicyItem),
             "remove_auto_approved_tool" => Some(SignalType::RemoveAutoApprovedTool),
+            "remove_queued_user_message" => Some(SignalType::RemoveQueuedUserMessage),
             _ => None,
         }
     }
@@ -114,6 +116,7 @@ impl SignalType {
             SignalType::UpdateModelConfig => "update_model_config",
             SignalType::RemoveShellPolicyItem => "remove_shell_policy_item",
             SignalType::RemoveAutoApprovedTool => "remove_auto_approved_tool",
+            SignalType::RemoveQueuedUserMessage => "remove_queued_user_message",
         }
     }
 }

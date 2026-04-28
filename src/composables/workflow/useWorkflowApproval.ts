@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invokeWrapper } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
@@ -21,6 +21,10 @@ export function useWorkflowApproval({
   const approvalLoading = ref(false)
   const activeApprovalId = ref('')
 
+  const isApprovalSubmitting = computed(
+    () => (sessionId, toolCallId) => workflowStore.isApprovalSubmitted(sessionId, toolCallId)
+  )
+
   const submitApproval = async ({
     toolCallId,
     approved,
@@ -41,6 +45,8 @@ export function useWorkflowApproval({
     }
     clearPendingApprovalEntry?.(sessionId, toolCallId)
 
+    workflowStore.markApprovalSubmitted(sessionId, toolCallId)
+
     try {
       const signal = JSON.stringify({
         type: SIGNAL_TYPES.APPROVAL,
@@ -60,6 +66,7 @@ export function useWorkflowApproval({
       }
     } catch (error) {
       workflowStore.markToolPendingApproval(toolCallId)
+      workflowStore.clearApprovalSubmission(sessionId, toolCallId)
       if (pendingEntry) {
         upsertPendingApprovalEntry?.(sessionId, {
           id: pendingEntry.id,
@@ -116,6 +123,7 @@ export function useWorkflowApproval({
   return {
     approvalLoading,
     activeApprovalId,
+    isApprovalSubmitting,
     onApproveAction,
     onApproveAllAction,
     onRejectAction

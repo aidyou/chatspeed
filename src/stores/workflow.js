@@ -92,6 +92,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const shellPolicy = ref([]);
   const toolStreams = ref(new Map()); // tool_id -> string[] (max 100 lines)
   const subAgentProgress = ref(new Map()); // sub_agent_id -> lightweight parent UI projection
+  const approvalSubmissions = ref(new Map()); // sessionId -> Set<toolCallId>
 
   // ==================== Task Ledger State ====================
   /**
@@ -176,6 +177,76 @@ export const useWorkflowStore = defineStore('workflow', () => {
   });
 
   // ==================== Helper Functions ====================
+
+  const cloneApprovalSubmissions = () => {
+    const next = new Map();
+    for (const [sessionId, toolIds] of approvalSubmissions.value.entries()) {
+      next.set(sessionId, new Set(toolIds));
+    }
+    return next;
+  };
+
+  const markApprovalSubmitted = (sessionId, toolCallId) => {
+    if (!sessionId || !toolCallId) return;
+    const next = cloneApprovalSubmissions();
+    const toolIds = next.get(sessionId) || new Set();
+    toolIds.add(toolCallId);
+    next.set(sessionId, toolIds);
+    approvalSubmissions.value = next;
+  };
+
+  const clearApprovalSubmission = (sessionId, toolCallId) => {
+    if (!sessionId || !toolCallId) return;
+    const existing = approvalSubmissions.value.get(sessionId);
+    if (!existing?.has(toolCallId)) return;
+
+    const next = cloneApprovalSubmissions();
+    const toolIds = next.get(sessionId);
+    toolIds?.delete(toolCallId);
+    if (!toolIds || toolIds.size === 0) {
+      next.delete(sessionId);
+    } else {
+      next.set(sessionId, toolIds);
+    }
+    approvalSubmissions.value = next;
+  };
+
+  const clearApprovalSubmissionsForSession = (sessionId) => {
+    if (!sessionId || !approvalSubmissions.value.has(sessionId)) return;
+    const next = cloneApprovalSubmissions();
+    next.delete(sessionId);
+    approvalSubmissions.value = next;
+  };
+
+  const reconcilePendingApprovalSubmissions = (sessionId, pendingToolIds = []) => {
+    if (!sessionId || pendingToolIds.length === 0) return;
+    const existing = approvalSubmissions.value.get(sessionId);
+    if (!existing || existing.size === 0) return;
+
+    const next = cloneApprovalSubmissions();
+    const toolIds = next.get(sessionId);
+    let changed = false;
+
+    for (const toolCallId of pendingToolIds) {
+      if (toolIds?.delete(toolCallId)) {
+        changed = true;
+      }
+    }
+
+    if (!changed) return;
+
+    if (!toolIds || toolIds.size === 0) {
+      next.delete(sessionId);
+    } else {
+      next.set(sessionId, toolIds);
+    }
+    approvalSubmissions.value = next;
+  };
+
+  const isApprovalSubmitted = (sessionId, toolCallId) => {
+    if (!sessionId || !toolCallId) return false;
+    return approvalSubmissions.value.get(sessionId)?.has(toolCallId) || false;
+  };
 
   const normalizeExecutionContext = (ctx) => {
     if (!ctx || typeof ctx !== 'object') return null;
@@ -801,6 +872,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       });
 
       messages.value = parsedMessages;
+      clearApprovalSubmissionsForSession(workflowId);
 
       // 重建 Task Ledger
       if (taskLedgerEnabled.value) {
@@ -1141,6 +1213,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const clearCurrentWorkflow = () => {
     if (currentWorkflowId.value) {
       clearTaskLedger(currentWorkflowId.value);
+      clearApprovalSubmissionsForSession(currentWorkflowId.value);
     }
     currentWorkflowId.value = null;
     persistLastSelectedWorkflowId('');
@@ -1171,6 +1244,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     shellPolicy,
     toolStreams,
     subAgentProgress,
+    approvalSubmissions,
 
     // Task Ledger State
     taskLedgerMap,
@@ -1203,6 +1277,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
     markToolApprovedRunning,
     markToolRejected,
     markToolPendingApproval,
+    markApprovalSubmitted,
+    clearApprovalSubmission,
+    clearApprovalSubmissionsForSession,
+    reconcilePendingApprovalSubmissions,
+    isApprovalSubmitted,
     appendToolStream,
     clearToolStream,
     getToolStream,

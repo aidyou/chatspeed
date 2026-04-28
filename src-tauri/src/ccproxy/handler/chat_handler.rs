@@ -15,7 +15,7 @@ use crate::ccproxy::{
             ClaudeOutputAdapter, GeminiOutputAdapter, OllamaOutputAdapter, OpenAIOutputAdapter,
             OutputAdapter, OutputAdapterEnum,
         },
-        unified::{SseStatus, UnifiedRequest},
+        unified::{SseStatus, UnifiedRequest, UnifiedToolChoice},
     },
     claude::ClaudeNativeRequest,
     errors::{CCProxyError, ProxyResult},
@@ -212,6 +212,13 @@ fn build_unified_request(
     }
 }
 
+fn should_relax_required_tool_choice(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.to_lowercase()))
+        .is_some_and(|host| host == "api.deepseek.com" || host == "api.deepseek.cn")
+}
+
 pub async fn handle_chat_completion(
     chat_protocol: ChatProtocol,
     client_headers: HeaderMap,
@@ -337,6 +344,12 @@ pub async fn handle_chat_completion(
 
     // --- Inject Engine Defaults only if missing from client AND configured with valid non-default values ---
     ModelResolver::merge_parameters_unified(&mut unified_request, &proxy_model);
+
+    if matches!(unified_request.tool_choice, Some(UnifiedToolChoice::Required))
+        && should_relax_required_tool_choice(&proxy_model.base_url)
+    {
+        unified_request.tool_choice = Some(UnifiedToolChoice::Auto);
+    }
 
     // Tool filtering logic remains same
     if proxy_model.tool_filter.len() > 0 {

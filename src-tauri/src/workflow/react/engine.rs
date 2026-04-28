@@ -334,6 +334,123 @@ impl WorkflowExecutor {
         Ok(())
     }
 
+    async fn run_blocking_compression(
+        &mut self,
+        compression_candidate: Vec<WorkflowMessage>,
+        compressed_until_message_id: i64,
+        reason: &str,
+    ) -> Result<bool, WorkflowEngineError> {
+        if self.last_compression_boundary_id == Some(compressed_until_message_id) {
+            log::info!(
+                "[Workflow][session={}][phase=compression] Skip blocking compression for boundary {} because it was already persisted ({})",
+                self.session_id,
+                compressed_until_message_id,
+                reason
+            );
+            return Ok(false);
+        }
+
+        self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
+            is_compressing: true,
+            message: t!("workflow.compression_in_progress").to_string(),
+        })
+        .await?;
+
+        self.dispatch_ui_payload(GatewayPayload::Notification {
+            message: t!("workflow.compression_in_progress").to_string(),
+            category: Some("info".to_string()),
+        })
+        .await?;
+
+        let compression_result = self
+            .compressor
+            .compress(&compression_candidate, CompressionMode::Blocking)
+            .await;
+
+        self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
+            is_compressing: false,
+            message: String::new(),
+        })
+        .await?;
+
+        self.dispatch_ui_payload(GatewayPayload::Notification {
+            message: String::new(),
+            category: Some("info".to_string()),
+        })
+        .await?;
+
+        match compression_result {
+            Ok(summary) => {
+                self.persist_compression_summary(summary, compressed_until_message_id)
+                    .await?;
+                log::info!(
+                    "[Workflow][session={}][phase=compression] Blocking compression completed through boundary {} ({})",
+                    self.session_id,
+                    compressed_until_message_id,
+                    reason
+                );
+                Ok(true)
+            }
+            Err(err) => {
+                log::warn!(
+                    "[Workflow][session={}][phase=compression] Blocking compression failed through boundary {} ({}): {}",
+                    self.session_id,
+                    compressed_until_message_id,
+                    reason,
+                    err
+                );
+                Ok(false)
+            }
+        }
+    }
+
+    async fn maybe_run_blocking_compression_after_message(
+        &mut self,
+        role: &str,
+        step_type: Option<&StepType>,
+        needs_compression: bool,
+    ) -> Result<bool, WorkflowEngineError> {
+        let is_new_task_boundary = role == "user" && step_type != Some(&StepType::Observe);
+
+        if !is_new_task_boundary {
+            return Ok(false);
+        }
+
+        if let Some((compression_candidate, compressed_until_message_id)) =
+            self.context.build_task_boundary_compression_candidate()
+        {
+            return self
+                .run_blocking_compression(
+                    compression_candidate,
+                    compressed_until_message_id,
+                    "task_boundary",
+                )
+                .await;
+        }
+
+        if needs_compression {
+            if let Some((compression_candidate, compressed_until_message_id)) =
+                self.context.build_pressure_compression_candidate()
+            {
+                return self
+                    .run_blocking_compression(
+                        compression_candidate,
+                        compressed_until_message_id,
+                        "context_pressure",
+                    )
+                    .await;
+            }
+
+            log::info!(
+                "[Workflow][session={}][phase=compression] Context exceeded 80% but no safe completed segment is available for blocking compression",
+                self.session_id
+            );
+        }
+
+        Ok(false)
+    }
+
+    #[allow(dead_code)]
     fn spawn_background_compression(
         &mut self,
         compression_candidate: Vec<WorkflowMessage>,
@@ -440,6 +557,7 @@ impl WorkflowExecutor {
         }
     }
 
+    #[allow(dead_code)]
     fn should_retry_background_compression(&self, compressed_until_message_id: i64) -> bool {
         self.background_compression_retry_state
             .get(&compressed_until_message_id)
@@ -1994,6 +2112,22 @@ impl WorkflowExecutor {
 
                 let workflow_signal = WorkflowSignal::parse(&signal_str);
 
+                if matches!(wait_reason_enum, Some(WaitReason::Approval)) {
+                    if let RuntimeSignal::UserMessage {
+                        content,
+                        queued_user_message_id,
+                    } = parse_runtime_signal(&signal_str)
+                    {
+                        log::info!(
+                            "[Workflow][session={}][phase=wait][event=user_message_queued] Queueing user message while awaiting approval",
+                            self.session_id
+                        );
+                        self.enqueue_user_message(content, queued_user_message_id)
+                            .await?;
+                        continue;
+                    }
+                }
+
                 if let Some(signal) = &workflow_signal {
                     if !signal.is_valid_for(wait_reason_enum.as_ref()) {
                         log::warn!(
@@ -2520,6 +2654,20 @@ impl WorkflowExecutor {
                             self.current_step = 0;
                             self.max_steps += DEFAULT_MAX_STEPS;
                             self.update_state(WorkflowState::Thinking).await?;
+                            continue;
+                        }
+                        WorkflowSignal::RemoveQueuedUserMessage {
+                            queued_user_message_id,
+                        } => {
+                            let removed = self
+                                .remove_queued_user_message(&queued_user_message_id)
+                                .await?;
+                            log::info!(
+                                "[Workflow][session={}][phase=wait][event=queued_user_message_remove] queued_id={} removed={}",
+                                self.session_id,
+                                queued_user_message_id,
+                                removed
+                            );
                             continue;
                         }
                         WorkflowSignal::UserMessage { content, .. } => {
@@ -3418,6 +3566,8 @@ impl WorkflowExecutor {
                 break;
             };
 
+            let mut observe_needs_compression = false;
+
             for (id, reinforced, original_call) in &results {
                 if Self::is_postponed_turn_block_result(reinforced) {
                     log::info!(
@@ -3514,7 +3664,7 @@ impl WorkflowExecutor {
                     metadata["execution_status"] = serde_json::json!(execution_status);
                 }
 
-                let _ = self
+                let tool_message_needs_compression = self
                     .add_message_and_notify_internal(
                         "tool".to_string(),
                         reinforced.content.clone(),
@@ -3526,6 +3676,7 @@ impl WorkflowExecutor {
                         Some(metadata),
                     )
                     .await?;
+                observe_needs_compression |= tool_message_needs_compression;
             }
 
             // Flush user messages queued during active execution after Observe stage completes.
@@ -3650,141 +3801,22 @@ impl WorkflowExecutor {
                 self.sync_todo_list().await?;
             }
 
-            // --- TRIGGER CONTEXT COMPRESSION ---
-            // Cooldown: at least 3 steps since the last persisted compression to prevent churn.
-            if self.current_step > self.last_compression_step + 3 {
-                if needs_compression {
-                    if let Some((compression_candidate, compressed_until_message_id)) =
-                        self.context.build_blocking_compression_candidate()
-                    {
-                        if self.last_compression_boundary_id == Some(compressed_until_message_id) {
-                            log::info!(
-                                "[Workflow][session={}][phase=compression] Skip blocking compression because boundary {} was already compressed",
-                                self.session_id,
-                                compressed_until_message_id
-                            );
-                            continue;
-                        }
-                        if !self.should_retry_background_compression(compressed_until_message_id) {
-                            if let Some((failures, next_retry_step)) = self
-                                .background_compression_retry_state
-                                .get(&compressed_until_message_id)
-                                .copied()
-                            {
-                                log::info!(
-                                    "[Workflow][session={}][phase=compression] Backing off blocking compression for boundary {} after {} failures; retry at step {} (current step {})",
-                                    self.session_id,
-                                    compressed_until_message_id,
-                                    failures,
-                                    next_retry_step,
-                                    self.current_step
-                                );
-                            }
-                            continue;
-                        }
-
-                        self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
-                            is_compressing: true,
-                            message: t!("workflow.compression_in_progress").to_string(),
-                        })
+            if needs_compression || observe_needs_compression {
+                if let Some((compression_candidate, compressed_until_message_id)) =
+                    self.context.build_pressure_compression_candidate()
+                {
+                    let _ = self
+                        .run_blocking_compression(
+                            compression_candidate,
+                            compressed_until_message_id,
+                            "context_pressure",
+                        )
                         .await?;
-
-                        self.dispatch_ui_payload(GatewayPayload::Notification {
-                            message: t!("workflow.compression_in_progress").to_string(),
-                            category: Some("info".to_string()),
-                        })
-                        .await?;
-
-                        let compression_result = self
-                            .compressor
-                            .compress(&compression_candidate, CompressionMode::Blocking)
-                            .await;
-
-                        self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
-                            is_compressing: false,
-                            message: String::new(),
-                        })
-                        .await?;
-
-                        self.dispatch_ui_payload(GatewayPayload::Notification {
-                            message: String::new(),
-                            category: Some("info".to_string()),
-                        })
-                        .await?;
-
-                        match compression_result {
-                            Ok(summary) => {
-                                if let Err(err) = self
-                                    .persist_compression_summary(
-                                        summary,
-                                        compressed_until_message_id,
-                                    )
-                                    .await
-                                {
-                                    log::warn!(
-                                        "[Workflow][session={}][phase=compression] Failed to persist compressed context: {}",
-                                        self.session_id,
-                                        err
-                                    );
-                                }
-                            }
-                            Err(err) => {
-                                self.record_background_compression_failure(
-                                    compressed_until_message_id,
-                                );
-                                log::warn!(
-                                    "[Workflow][session={}][phase=compression] Compression request failed: {}",
-                                    self.session_id,
-                                    err
-                                );
-                            }
-                        }
-                    } else {
-                        log::info!(
-                            "[Workflow][session={}][phase=compression] Skip blocking compression because no completed complete_workflow_with_summary segment is available",
-                            self.session_id
-                        );
-                    }
-                } else if self.background_compression_boundary_id.is_none() {
-                    if let Some((compression_candidate, compressed_until_message_id)) =
-                        self.context.build_rollup_compression_candidate()
-                    {
-                        if self.last_compression_boundary_id == Some(compressed_until_message_id) {
-                            log::info!(
-                                "[Workflow][session={}][phase=compression] Skip background rollup because boundary {} was already compressed",
-                                self.session_id,
-                                compressed_until_message_id
-                            );
-                        } else if !self
-                            .should_retry_background_compression(compressed_until_message_id)
-                        {
-                            if let Some((failures, next_retry_step)) = self
-                                .background_compression_retry_state
-                                .get(&compressed_until_message_id)
-                                .copied()
-                            {
-                                log::info!(
-                                    "[Workflow][session={}][phase=compression] Backing off background rollup for boundary {} after {} failures; retry at step {} (current step {})",
-                                    self.session_id,
-                                    compressed_until_message_id,
-                                    failures,
-                                    next_retry_step,
-                                    self.current_step
-                                );
-                            }
-                        } else {
-                            log::info!(
-                                "[Workflow][session={}][phase=compression] Starting background rollup compression through boundary {}",
-                                self.session_id,
-                                compressed_until_message_id
-                            );
-                            self.spawn_background_compression(
-                                compression_candidate,
-                                compressed_until_message_id,
-                                CompressionMode::Rollup,
-                            );
-                        }
-                    }
+                } else {
+                    log::info!(
+                        "[Workflow][session={}][phase=compression] Context exceeded 80% but no safe completed segment is available for blocking compression",
+                        self.session_id
+                    );
                 }
             }
 
@@ -5192,13 +5224,21 @@ impl WorkflowExecutor {
             role: role.clone(),
             content: content.clone(),
             reasoning,
-            step_type,
+            step_type: step_type.clone(),
             step_index: self.current_step as i32,
             is_error,
             error_type: error_type.clone(),
             metadata,
         })
         .await?;
+
+        let _ = self
+            .maybe_run_blocking_compression_after_message(
+                &role,
+                step_type.as_ref(),
+                needs_compression,
+            )
+            .await?;
 
         self.dispatch_context_usage().await?;
         self.dispatch_sub_agent_progress().await;
@@ -5495,6 +5535,22 @@ impl WorkflowExecutor {
                     signal,
                     signal_type,
                 } => {
+                    if let Some(WorkflowSignal::RemoveQueuedUserMessage {
+                        queued_user_message_id,
+                    }) = signal.clone()
+                    {
+                        let removed = self
+                            .remove_queued_user_message(&queued_user_message_id)
+                            .await?;
+                        log::info!(
+                            "[Workflow][session={}][phase=signal][event=queued_user_message_remove] queued_id={} removed={}",
+                            self.session_id,
+                            queued_user_message_id,
+                            removed
+                        );
+                        continue;
+                    }
+
                     if let Some(signal) = signal {
                         let current_wait_reason = self.current_wait_reason();
                         if !signal.is_valid_for(current_wait_reason.as_ref()) {
@@ -5663,6 +5719,25 @@ impl WorkflowExecutor {
         .await?;
 
         Ok(())
+    }
+
+    async fn remove_queued_user_message(
+        &mut self,
+        queued_user_message_id: &str,
+    ) -> Result<bool, WorkflowEngineError> {
+        let before = self.queued_user_messages.len();
+        self.queued_user_messages
+            .retain(|(queued_id, _)| queued_id != queued_user_message_id);
+        let removed = self.queued_user_messages.len() != before;
+
+        if removed {
+            self.dispatch_ui_payload(GatewayPayload::QueuedUserMessageRemoved {
+                queued_user_message_id: queued_user_message_id.to_string(),
+            })
+            .await?;
+        }
+
+        Ok(removed)
     }
 
     async fn flush_queued_user_messages(&mut self) -> Result<bool, WorkflowEngineError> {
