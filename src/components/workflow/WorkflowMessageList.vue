@@ -100,14 +100,39 @@
                   :key="`${message.displayId}_group_${groupIndex}_tool_${toolIndex}`"
                   class="cli-tool-call exploration-card__tool"
                   :class="[tool.toolType || 'tool-system']">
-                  <div class="tool-line title-wrap">
+                  <div
+                    class="tool-line title-wrap expandable"
+                    @click="$emit('toggle-expand', getExplorationToolExpandId(message, groupIndex, toolIndex))">
                     <cs :name="tool.icon || 'tool'" size="14px" class="tool-type-icon" />
                     <span class="tool-name">{{ tool.action }}</span>
                     <span class="tool-target">{{ tool.target }}</span>
                   </div>
-                  <div v-if="tool.summary" class="tool-line summary">
+                  <div
+                    v-if="tool.summary && !isExplorationToolExpanded(message, groupIndex, toolIndex)"
+                    class="tool-line summary expandable"
+                    @click="$emit('toggle-expand', getExplorationToolExpandId(message, groupIndex, toolIndex))">
                     <span class="corner-icon">⎿</span>
                     <span class="summary-text">{{ tool.summary }}</span>
+                    <span class="expand-hint">(click to expand)</span>
+                  </div>
+                  <div v-if="isExplorationToolExpanded(message, groupIndex, toolIndex)" class="tool-detail">
+                    <MarkdownSimple
+                      v-if="
+                        shouldShowExplorationToolRawContent(tool) &&
+                        tool.displayType === 'diff'
+                      "
+                      :content="getDiffMarkdown(removeSystemReminder(tool.message))" />
+                    <MarkdownSimple
+                      v-else-if="
+                        shouldShowExplorationToolRawContent(tool) &&
+                        tool.displayType === 'markdown'
+                      "
+                      :content="removeSystemReminder(tool.message)" />
+                    <pre
+                      v-else-if="shouldShowExplorationToolRawContent(tool)"
+                      class="raw-content"
+                      >{{ removeSystemReminder(tool.message) }}</pre
+                    >
                   </div>
                 </div>
               </div>
@@ -482,7 +507,14 @@
       <div class="content-container">
         <div class="ai-content chat">
           <div v-if="chatState.reasoning" class="reasoning-container">
-            <div class="reasoning-header">
+            <div
+              class="reasoning-header"
+              :class="{ clickable: hasStreamingThoughtCompleted }"
+              @click="
+                hasStreamingThoughtCompleted
+                  ? $emit('toggle-reasoning', STREAMING_REASONING_DISPLAY_ID)
+                  : null
+              ">
               <cs
                 name="reasoning"
                 size="14px"
@@ -495,6 +527,14 @@
                     : getReasoningPreview(chatState.reasoning)
                 }}
               </span>
+              <span v-if="hasStreamingThoughtCompleted" class="reasoning-toggle">
+                {{ isReasoningExpanded(STREAMING_REASONING_DISPLAY_ID) ? '▲' : '▼' }}
+              </span>
+            </div>
+            <div
+              v-if="hasStreamingThoughtCompleted && isReasoningExpanded(STREAMING_REASONING_DISPLAY_ID)"
+              class="reasoning-content">
+              {{ chatState.reasoning }}
             </div>
           </div>
           <!-- Streaming Blocks (Optimized rendering) -->
@@ -559,6 +599,7 @@ import { WORKFLOW_STATUSES, WORKFLOW_WAIT_REASONS } from '@/composables/workflow
 const workflowStore = useWorkflowStore()
 const { t } = useI18n()
 const CUSTOM_ASK_USER_VALUE = '__custom__'
+const STREAMING_REASONING_DISPLAY_ID = '__streaming_reasoning__'
 
 const props = defineProps({
   messages: {
@@ -1005,11 +1046,15 @@ const buildExplorationBatchMessage = (messages, startIndex) => {
     }
 
     currentGroup.tools.push({
+      message: item?.message || '',
+      metadata: item?.metadata || {},
       icon: item?.toolDisplay?.icon || 'tool',
       toolType: item?.toolDisplay?.toolType || 'tool-system',
       action: item?.toolDisplay?.action || '',
       target: item?.toolDisplay?.target || '',
-      summary: item?.toolDisplay?.summary || ''
+      summary: item?.toolDisplay?.summary || '',
+      displayType: item?.toolDisplay?.displayType || '',
+      sourceMessage: item
     })
   }
 
@@ -1251,6 +1296,22 @@ const getExplorationGroupReasoningId = (message, groupIndex) =>
 
 const isExplorationGroupReasoningExpanded = (message, groupIndex) =>
   props.isReasoningExpanded(getExplorationGroupReasoningId(message, groupIndex))
+
+const getExplorationToolExpandId = (message, groupIndex, toolIndex) =>
+  `${message?.displayId || message?.id || 'exploration'}:group_tool:${groupIndex}:${toolIndex}`
+
+const isExplorationToolExpanded = (message, groupIndex, toolIndex) =>
+  props.isMessageExpanded({
+    displayId: getExplorationToolExpandId(message, groupIndex, toolIndex),
+    metadata: {},
+    toolDisplay: {}
+  })
+
+const shouldShowExplorationToolRawContent = tool => {
+  if (!tool) return false
+  if (tool.sourceMessage) return props.shouldShowToolRawContent(tool.sourceMessage)
+  return !!props.removeSystemReminder(tool.message || '').trim()
+}
 
 const getVisibleUserContent = message => props.removeSystemReminder(message?.message || '')
 

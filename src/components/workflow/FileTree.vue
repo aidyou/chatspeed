@@ -24,6 +24,7 @@
             <span class="root-name" :title="root">{{ getDirName(root) }}</span>
           </div>
           <div class="root-actions">
+            <cs name="copy" size="12px" class="action-btn copy-btn" @click.stop="copyRootPath(root)" />
             <cs name="ext-folder-open" size="12px" class="action-btn open-btn" @click.stop="openAuthorizedFolder(root)" />
             <cs name="refresh" size="12px" class="action-btn refresh-btn" @click.stop="refreshRoot(root)" />
             <cs name="trash" size="12px" class="action-btn remove-btn" @click.stop="onRemovePath(root)" />
@@ -50,6 +51,8 @@
 import { ref, watch, onMounted, computed } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invokeWrapper } from '@/libs/tauri'
+import { writeClipboard } from '@/libs/clipboard'
+import { showMessage } from '@/libs/util'
 import MarkdownSimple from './MarkdownSimple.vue'
 import TreeNode from './TreeNode.vue'
 
@@ -104,6 +107,17 @@ const openAuthorizedFolder = async (path) => {
     await invokeWrapper('open_path_in_file_manager', { path })
   } catch (error) {
     console.error('Failed to open authorized folder:', error)
+  }
+}
+
+const copyRootPath = async (path) => {
+  if (!path) return
+  try {
+    await writeClipboard(path)
+    showMessage('Path copied', 'success')
+  } catch (error) {
+    console.error('Failed to copy root path:', error)
+    showMessage('Failed to copy path', 'error')
   }
 }
 

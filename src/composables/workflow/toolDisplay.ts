@@ -1,54 +1,29 @@
 import i18n from '@/i18n'
 
-const PROJECT_MARKERS = [
-  'app',
-  'frontend',
-  'src-tauri',
-  'internal',
-  'cmd',
-  'pkg',
-  'docs',
-  'scripts',
-  'work',
-  'src',
-  'test',
-  'tests'
-]
-
 const normalizeSlash = (value: string) => value.replace(/\\/g, '/')
 
 const stripTrailingSlash = (value: string) => value.replace(/\/+$/, '')
 
-const normalizeRootCandidates = (roots?: string[]) =>
-  (roots || [])
-    .filter(root => typeof root === 'string' && root.trim())
-    .map(root => stripTrailingSlash(normalizeSlash(root.trim())))
-    .sort((a, b) => b.length - a.length)
+const getPrimaryRoot = (roots?: string[]) => {
+  const root = (roots || []).find(candidate => typeof candidate === 'string' && candidate.trim())
+  return root ? stripTrailingSlash(normalizeSlash(root.trim())) : ''
+}
 
 export const formatDisplayPath = (path: string, roots?: string[]) => {
   if (!path || typeof path !== 'string') return path
   const normalized = normalizeSlash(path.trim())
-  const rootCandidates = normalizeRootCandidates(roots)
+  const primaryRoot = getPrimaryRoot(roots)
 
-  for (const root of rootCandidates) {
-    if (normalized === root) return '.'
-    if (normalized.startsWith(`${root}/`)) {
-      return normalized.slice(root.length + 1) || '.'
+  if (primaryRoot) {
+    if (normalized === primaryRoot) return '.'
+    if (normalized.startsWith(`${primaryRoot}/`)) {
+      return normalized.slice(primaryRoot.length + 1) || '.'
     }
+    return normalized
   }
 
   if (!normalized.startsWith('/')) return normalized
-
-  for (const marker of PROJECT_MARKERS) {
-    const token = `/${marker}/`
-    const index = normalized.indexOf(token)
-    if (index >= 0) {
-      return normalized.slice(index + 1)
-    }
-  }
-
-  const parts = normalized.split('/').filter(Boolean)
-  return parts.slice(-3).join('/') || normalized
+  return normalized
 }
 
 export const normalizeToolDisplayText = (text: string, roots?: string[]) => {

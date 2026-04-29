@@ -22,6 +22,7 @@ pub enum ObservationKind {
 
 pub struct ReinforcedResult {
     pub content: String,
+    pub llm_content: Option<String>,
     pub title: String,
     pub summary: String,
     pub is_error: bool,
@@ -75,6 +76,11 @@ impl ObservationReinforcer {
 
         match result {
             Ok(val) => {
+                let llm_content_override = val
+                    .get("structured_content")
+                    .and_then(|structured| structured.get("llm_content"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
                 let raw_res_for_summary =
                     if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
                         content.to_string()
@@ -112,7 +118,7 @@ impl ObservationReinforcer {
                         if let Some(next) = next_pending {
                             let subject = next["subject"].as_str().unwrap_or("Untitled");
                             list_str.push_str(&format!(
-                                "<SYSTEM_REMINDER>Next pending task: {}\n</SYSTEM_REMINDER>",
+                                "<SYSTEM_REMINDER>Next todo: {}\n</SYSTEM_REMINDER>",
                                 subject
                             ));
                         } else {
@@ -124,7 +130,7 @@ impl ObservationReinforcer {
                                 )
                             });
                             if all_terminal && !todos.is_empty() {
-                                list_str.push_str("<SYSTEM_REMINDER>All tasks have reached a terminal state (completed/data_missing/failed). You should now call 'complete_workflow_with_summary' with a comprehensive summary, noting any data gaps.</SYSTEM_REMINDER>\n");
+                                list_str.push_str("<SYSTEM_REMINDER>Todos are terminal. Call 'complete_workflow_with_summary' and mention any data gaps.</SYSTEM_REMINDER>\n");
                             }
                         }
                         raw_res = list_str;
@@ -205,12 +211,13 @@ impl ObservationReinforcer {
 
                 if raw_res == "[]" || raw_res == "{}" || raw_res.is_empty() {
                     let empty_hint = match tool_name {
-                        "web_search" => "No search results found. Try different keywords, use a more specific query, or search in Chinese if the topic is China-related.",
-                        "web_fetch" => "Web page returned no content. The URL may be inaccessible, blocked, or require authentication. Try a different source.",
-                        _ => "If you expected data, try adjusting your search terms or checking if the target exists.",
+                        "web_search" => "No results. Try narrower keywords; use Chinese for China-centric topics.",
+                        "web_fetch" => "No page content. Try another source or treat this URL as unavailable.",
+                        _ => "No data returned. Narrow the query or verify the target exists.",
                     };
                     ReinforcedResult {
                         content: format!("Tool '{}' executed successfully but returned no data. <SYSTEM_REMINDER>{}</SYSTEM_REMINDER>", tool_name, empty_hint),
+                        llm_content: llm_content_override.clone(),
                         title,
                         summary: "No data returned".to_string(),
                         is_error: false,
@@ -228,9 +235,10 @@ impl ObservationReinforcer {
                     };
                     ReinforcedResult {
                         content: format!(
-                            "<truncated_content>\n{}\n</truncated_content>\n<SYSTEM_REMINDER>Output truncated to 20000 chars. Use specific search patterns or read smaller chunks.</SYSTEM_REMINDER>",
+                            "<truncated_content>\n{}\n</truncated_content>\n<SYSTEM_REMINDER>Output truncated at 20000 chars. Narrow with grep/glob or smaller reads.</SYSTEM_REMINDER>",
                             truncated
                         ),
+                        llm_content: llm_content_override.clone(),
                         title,
                         summary: format!("{} (Truncated)", summary),
                         is_error: false,
@@ -242,6 +250,7 @@ impl ObservationReinforcer {
                 } else {
                     ReinforcedResult {
                         content: raw_res,
+                        llm_content: llm_content_override,
                         title,
                         summary,
                         is_error: false,
@@ -271,6 +280,7 @@ impl ObservationReinforcer {
 
                 ReinforcedResult {
                     content,
+                    llm_content: None,
                     title,
                     summary: format!("Error: {}", err_msg),
                     is_error: true,

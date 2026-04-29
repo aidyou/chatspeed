@@ -25,6 +25,14 @@ fn format_todo_list_summary(list: &[Value]) -> String {
     }
 }
 
+fn should_warn_about_single_item_bootstrap(previous_len: usize, created_count: usize) -> bool {
+    previous_len == 0 && created_count == 1
+}
+
+fn single_item_bootstrap_reminder() -> String {
+    "Todo tracking is usually for multi-step or interruption-prone work. If this request is a single direct step, continue without expanding the todo list unless the user explicitly asked for tracking.".to_string()
+}
+
 /// Helper to get and set todo list in DB
 async fn get_db_todo_list(
     store: &Arc<std::sync::RwLock<MainStore>>,
@@ -69,8 +77,8 @@ impl ToolDefinition for TodoCreateTool {
     }
 
     fn description(&self) -> &str {
-        "Use this tool to create one or more structured tasks for your current session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.\n\
-        It also helps the user understand the progress of the task and overall progress of their requests.\n\n\
+        "Use this tool to create one or more structured tasks for your current session when execution tracking is genuinely useful.\n\
+        Use it for multi-step, multi-file, interruption-prone, or verification-heavy work; skip it for single-step or immediately verifiable local tasks.\n\n\
         ## Capabilities\n\
         - **Bulk Creation**: You can pass an array of tasks in the `tasks` field to initialize a complete plan in one call.\n\
         - **Single Creation**: Alternatively, pass `subject` and `description` directly for a single task.\n\
@@ -81,9 +89,8 @@ impl ToolDefinition for TodoCreateTool {
         - Non-trivial and complex tasks - Tasks that require careful planning or multiple operations\n\
         - User explicitly requests todo list - When the user directly asks you to use the todo list\n\
         - User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)\n\
-        - After receiving new instructions - Immediately capture user requirements as tasks\n\
-        - When you start working on a task - Mark it as in_progress BEFORE beginning work\n\
-        - After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation\n\n\
+        - Work that may be interrupted, resumed, delegated, or reviewed later\n\
+        - After task shape is understood and you can break execution into concrete, verifiable units\n\n\
         ## Replace vs Append\n\
         - Use `mode=\"replace\"` when you are starting a fresh execution plan for the current request or the old todo list is no longer the right plan.\n\
         - Use `mode=\"replace\"` by default after the user changes scope, asks for a new investigation, requests a new implementation plan, or when you are rebuilding the task breakdown from scratch.\n\
@@ -95,7 +102,8 @@ impl ToolDefinition for TodoCreateTool {
         - There is only a single, straightforward task\n\
         - The task is trivial and tracking it provides no organizational benefit\n\
         - The task can be completed in less than 3 trivial steps\n\
-        - The task is purely conversational or informational\n\n\
+        - The task is purely conversational or informational\n\
+        - The work is one direct local edit or one direct verification step that can be completed immediately\n\n\
         ## Task Fields\n\
         - **subject**: A brief, actionable title in imperative form (e.g., \"Fix authentication bug in login flow\")\n\
         - **description**: Detailed description of what needs to be done, including context and acceptance criteria\n\
@@ -133,7 +141,7 @@ impl ToolDefinition for TodoCreateTool {
                         "type": "string",
                         "enum": ["append", "replace"],
                         "default": "append",
-                        "description": "append: add to existing list; replace: clear the current todo list and reset it with the new tasks"
+                        "description": "append: add follow-up tasks to the current active plan; replace: clear the current todo list and reset it with a fresh plan"
                     },
                     "subject": { "type": "string", "description": "Brief title (if creating a single task)" },
                     "description": { "type": "string", "description": "Detailed description (if creating a single task)" }
@@ -160,6 +168,7 @@ impl ToolDefinition for TodoCreateTool {
         } else {
             get_db_todo_list(&self.main_store, &self.session_id).await?
         };
+        let previous_len = list.len();
         let mut created_ids = Vec::new();
 
         // Determine if we are creating bulk or single
@@ -188,18 +197,38 @@ impl ToolDefinition for TodoCreateTool {
 
         save_db_todo_list(&self.main_store, &self.session_id, list).await?;
         let created_count = created_ids.len();
-        Ok(ToolCallResult::success(
-            Some(format!(
+        let single_item_bootstrap_warning =
+            should_warn_about_single_item_bootstrap(previous_len, created_count);
+        let reminder = if single_item_bootstrap_warning {
+            Some(single_item_bootstrap_reminder())
+        } else {
+            None
+        };
+        let content = if let Some(reminder) = &reminder {
+            format!(
+                "Successfully created {} todo item(s) in {} mode. IDs: {}\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
+                created_count,
+                mode,
+                created_ids.join(", "),
+                reminder
+            )
+        } else {
+            format!(
                 "Successfully created {} todo item(s) in {} mode. IDs: {}",
                 created_count,
                 mode,
                 created_ids.join(", ")
-            )),
+            )
+        };
+        Ok(ToolCallResult::success(
+            Some(content),
             Some(json!({
                 "status": "created",
                 "mode": mode,
                 "created_count": created_count,
-                "created_ids": created_ids
+                "created_ids": created_ids,
+                "single_item_bootstrap_warning": single_item_bootstrap_warning,
+                "reminder": reminder
             })),
         ))
     }
@@ -454,6 +483,14 @@ mod tests {
     use crate::db::Agent;
     use std::sync::RwLock;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn single_item_bootstrap_warning_only_applies_to_first_single_todo() {
+        assert!(should_warn_about_single_item_bootstrap(0, 1));
+        assert!(!should_warn_about_single_item_bootstrap(0, 2));
+        assert!(!should_warn_about_single_item_bootstrap(1, 1));
+        assert!(single_item_bootstrap_reminder().contains("single direct step"));
+    }
 
     async fn setup_test_db() -> (Arc<RwLock<MainStore>>, String) {
         let temp_file = NamedTempFile::new().unwrap();

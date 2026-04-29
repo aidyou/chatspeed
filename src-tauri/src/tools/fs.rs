@@ -1,12 +1,50 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::tools::llm_output::preview_path_lines_for_llm;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
+use crate::workflow::react::security::PathGuard;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 const PLANNING_NOTE_FILE: &str = "note.md";
+const DEFAULT_READ_FILE_LIMIT: usize = 800;
+const READ_FILE_MAX_LINE_LENGTH: usize = 10_000;
+const READ_FILE_MAX_OUTPUT_CHARS: usize = 18_000;
+
+fn primary_directory(path_guard: Option<&Arc<RwLock<PathGuard>>>) -> PathBuf {
+    path_guard
+        .and_then(|guard| guard.read().ok())
+        .and_then(|guard| guard.get_primary_root().map(PathBuf::from))
+        .or_else(|| std::env::current_dir().ok())
+        .and_then(|path| fs::canonicalize(&path).ok().or(Some(path)))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn resolve_tool_path(path_str: &str, path_guard: Option<&Arc<RwLock<PathGuard>>>) -> PathBuf {
+    let path = PathBuf::from(path_str);
+    if path.is_absolute() {
+        path
+    } else {
+        primary_directory(path_guard).join(path)
+    }
+}
+
+fn display_path_for_tool_output(path: &Path, path_guard: Option<&Arc<RwLock<PathGuard>>>) -> String {
+    let primary_dir = primary_directory(path_guard);
+    let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Ok(relative) = canonical_path.strip_prefix(&primary_dir) {
+        if relative.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            relative.to_string_lossy().to_string()
+        }
+    } else {
+        path.to_string_lossy().to_string()
+    }
+}
 
 fn format_read_file_open_error(path_str: &str, error: &std::io::Error) -> ToolError {
     match error.kind() {
@@ -39,28 +77,85 @@ fn planning_note_path(planning_root: &Path) -> PathBuf {
     planning_root.join(PLANNING_NOTE_FILE)
 }
 
-fn execute_read_file(path_str: &str, offset: usize, limit: usize) -> NativeToolResult {
+#[derive(Clone)]
+struct ListedEntry {
+    display_path: String,
+    is_dir: bool,
+}
+
+fn sort_listed_entries(entries: &mut [ListedEntry]) {
+    entries.sort_by(|left, right| compare_listed_entries(left, right));
+}
+
+fn compare_listed_entries(left: &ListedEntry, right: &ListedEntry) -> std::cmp::Ordering {
+    let left_parts: Vec<&str> = left.display_path.split('/').filter(|part| !part.is_empty()).collect();
+    let right_parts: Vec<&str> = right.display_path.split('/').filter(|part| !part.is_empty()).collect();
+    let shared_len = left_parts.len().min(right_parts.len());
+
+    for index in 0..shared_len {
+        if index + 1 == left_parts.len() && index + 1 == right_parts.len() && left.is_dir != right.is_dir
+        {
+            return if left.is_dir {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+
+        let name_order = left_parts[index]
+            .to_ascii_lowercase()
+            .cmp(&right_parts[index].to_ascii_lowercase())
+            .then_with(|| left_parts[index].cmp(right_parts[index]));
+        if name_order != std::cmp::Ordering::Equal {
+            return name_order;
+        }
+    }
+
+    if left_parts.len() != right_parts.len() {
+        return left_parts.len().cmp(&right_parts.len());
+    }
+
+    if left.is_dir != right.is_dir {
+        return if left.is_dir {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
+        };
+    }
+
+    left.display_path
+        .to_ascii_lowercase()
+        .cmp(&right.display_path.to_ascii_lowercase())
+        .then_with(|| left.display_path.cmp(&right.display_path))
+}
+
+fn execute_read_file(
+    path_str: &str,
+    offset: usize,
+    limit: usize,
+    path_guard: Option<&Arc<RwLock<PathGuard>>>,
+) -> NativeToolResult {
     if limit == 0 {
         return Err(ToolError::InvalidParams(
             "limit must be greater than 0".to_string(),
         ));
     }
 
-    const MAX_LINE_LENGTH: usize = 10_000;
-    const MAX_OUTPUT_CHARS: usize = 18_000;
-    let path = Path::new(path_str);
+    let resolved_path = resolve_tool_path(path_str, path_guard);
+    let display_path = display_path_for_tool_output(&resolved_path, path_guard);
+    let path = resolved_path.as_path();
 
     if path.is_dir() {
         return Err(ToolError::InvalidParams(format!(
             "Path is a directory, not a file: {}. Use 'list_dir' to inspect directories.",
-            path_str
+            display_path
         )));
     }
 
-    let file = fs::File::open(path_str).map_err(|e| format_read_file_open_error(path_str, &e))?;
+    let file = fs::File::open(path).map_err(|e| format_read_file_open_error(&display_path, &e))?;
     let reader = BufReader::new(file);
 
-    let file_size_bytes = fs::metadata(path_str)
+    let file_size_bytes = fs::metadata(path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     let mut lines = Vec::new();
@@ -85,14 +180,14 @@ fn execute_read_file(path_str: &str, offset: usize, limit: usize) -> NativeToolR
             ToolError::IoError(format!(
                 "Failed to read line {} from {}: {}",
                 i + 1,
-                path_str,
+                display_path,
                 e
             ))
         })?;
         if truncated_by_size {
             continue;
         }
-        if content.len() > MAX_LINE_LENGTH {
+        if content.len() > READ_FILE_MAX_LINE_LENGTH {
             return Err(ToolError::ExecutionFailed(format!(
                 "Line {} is too long. Use 'grep' or read_file with a smaller targeted range.",
                 i + 1
@@ -100,7 +195,7 @@ fn execute_read_file(path_str: &str, offset: usize, limit: usize) -> NativeToolR
         }
         let rendered_line = format!("{:>6}\t{}", i + 1, content);
         let rendered_len = rendered_line.chars().count() + 1;
-        if total_chars + rendered_len > MAX_OUTPUT_CHARS {
+        if total_chars + rendered_len > READ_FILE_MAX_OUTPUT_CHARS {
             truncated_by_size = true;
             next_offset = Some(i);
             continue;
@@ -117,7 +212,8 @@ fn execute_read_file(path_str: &str, offset: usize, limit: usize) -> NativeToolR
                     .into(),
             ),
             Some(json!({
-                "file_path": path_str,
+                "file_path": resolved_path.to_string_lossy(),
+                "display_path": display_path,
                 "offset": offset,
                 "limit": limit,
                 "lines_returned": 0,
@@ -136,18 +232,17 @@ fn execute_read_file(path_str: &str, offset: usize, limit: usize) -> NativeToolR
         let resume_offset = next_offset.unwrap_or(end_offset);
         let reminder = if truncated_by_size {
             format!(
-                "<SYSTEM_REMINDER>Read output was truncated before workflow observation limits. File size: {} bytes; total lines: {}. This response includes content through line {}. Use read_file with offset={} and a smaller limit to continue precisely.</SYSTEM_REMINDER>",
-                file_size_bytes,
-                total_lines,
+                "<SYSTEM_REMINDER>Partial file through line {} of {} ({} bytes). Continue with read_file offset={} and a narrower range.</SYSTEM_REMINDER>",
                 last_line_number,
+                total_lines,
+                file_size_bytes,
                 resume_offset
             )
         } else {
             format!(
-                "<SYSTEM_REMINDER>Read output stopped at the requested limit. File size: {} bytes; total lines: {}. This response includes content through line {}. To continue reading this file, call read_file with offset={} and a suitable smaller limit if needed.</SYSTEM_REMINDER>",
-                file_size_bytes,
-                total_lines,
+                "<SYSTEM_REMINDER>Stopped at line {} of {}. Continue with read_file offset={} if needed.</SYSTEM_REMINDER>",
                 last_line_number,
+                total_lines,
                 resume_offset
             )
         };
@@ -157,7 +252,8 @@ fn execute_read_file(path_str: &str, offset: usize, limit: usize) -> NativeToolR
                 truncated_body, reminder
             )),
             Some(json!({
-                "file_path": path_str,
+                "file_path": resolved_path.to_string_lossy(),
+                "display_path": display_path,
                 "offset": offset,
                 "limit": limit,
                 "lines_returned": lines_returned,
@@ -171,9 +267,8 @@ fn execute_read_file(path_str: &str, offset: usize, limit: usize) -> NativeToolR
         ));
     } else if offset > 0 {
         lines.push(format!(
-            "<SYSTEM_REMINDER>Reached EOF after line {}. File size: {} bytes; total lines: {}. Do NOT call read_file with the same offset={} again. If you need earlier context, use a lower offset or grep for a specific symbol.</SYSTEM_REMINDER>",
+            "<SYSTEM_REMINDER>EOF reached at line {} of {}. Do not reuse offset={}; use a lower offset or grep if you need earlier context.</SYSTEM_REMINDER>",
             offset + lines_returned,
-            file_size_bytes,
             total_lines,
             offset
         ));
@@ -182,7 +277,8 @@ fn execute_read_file(path_str: &str, offset: usize, limit: usize) -> NativeToolR
     Ok(ToolCallResult::success(
         Some(lines.join("\n")),
         Some(json!({
-            "file_path": path_str,
+            "file_path": resolved_path.to_string_lossy(),
+            "display_path": display_path,
             "offset": offset,
             "limit": limit,
             "lines_returned": lines_returned,
@@ -199,6 +295,7 @@ fn execute_edit_file(
     old_str_unix: &str,
     new_str_unix: &str,
     replace_all: bool,
+    path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> NativeToolResult {
     if old_str_unix == new_str_unix {
         return Err(ToolError::InvalidParams(
@@ -206,7 +303,8 @@ fn execute_edit_file(
         ));
     }
 
-    let raw_content = fs::read_to_string(path_str).map_err(|e| {
+    let resolved_path = resolve_tool_path(path_str, path_guard);
+    let raw_content = fs::read_to_string(&resolved_path).map_err(|e| {
         ToolError::IoError(format!(
             "Read failed: {}. Ensure the file exists and is readable.",
             e
@@ -297,12 +395,13 @@ fn execute_edit_file(
         )));
     }
 
-    fs::write(path_str, &final_content).map_err(|e| {
+    fs::write(&resolved_path, &final_content).map_err(|e| {
         ToolError::IoError(format!("Edit write failed: {}. Check file permissions.", e))
     })?;
 
     let result_json = json!({
-        "file_path": path_str,
+        "file_path": resolved_path.to_string_lossy(),
+        "display_path": display_path_for_tool_output(&resolved_path, path_guard),
         "old_string": old_str_unix,
         "new_string": new_str_unix,
         "replace_all": replace_all,
@@ -315,7 +414,16 @@ fn execute_edit_file(
     ))
 }
 
-pub struct ReadFile;
+#[derive(Clone, Default)]
+pub struct ReadFile {
+    path_guard: Option<Arc<RwLock<PathGuard>>>,
+}
+
+impl ReadFile {
+    pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
+        Self { path_guard }
+    }
+}
 
 #[async_trait]
 impl ToolDefinition for ReadFile {
@@ -327,8 +435,9 @@ impl ToolDefinition for ReadFile {
         Assume this tool is able to read all files on the machine. If the user provides a path to a file assume that path is valid. \
         It is okay to read a file that does not exist; an error will be returned.\n\n\
         Usage:\n\
-        - The file_path parameter must be an absolute path, not a relative path\n\
-        - By default, it reads up to 2000 lines starting from the beginning of the file\n\
+        - Paths under the primary working directory may be provided as relative paths\n\
+        - For files outside the primary working directory but still within other authorized directories, use absolute paths\n\
+        - By default, it reads up to 800 lines starting from the beginning of the file\n\
         - Use offset and limit for long files or after grep finds a relevant line. offset is zero-based: offset=0 starts at line 1, offset=200 starts at line 201\n\
         - Any single line longer than 10000 characters returns an error instead of being truncated\n\
         - Total returned file content is capped below the workflow observation truncation threshold; if exceeded, the tool returns <truncated_content> plus a SYSTEM_REMINDER with file size, total lines, and the next suggested offset\n\
@@ -354,9 +463,9 @@ impl ToolDefinition for ReadFile {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "file_path": { "type": "string", "description": "The absolute path to the file to read" },
+                    "file_path": { "type": "string", "description": "Path to the file to read. Use a relative path for files under the primary working directory; use an absolute path for files in other authorized directories." },
                     "offset": { "type": "integer", "description": "Zero-based line offset to start reading from. offset=0 starts at line 1; offset=200 starts at line 201. Only provide if the file is too large to read at once.", "default": 0, "minimum": 0 },
-                    "limit": { "type": "integer", "description": "Maximum number of lines to read. Defaults to 2000. Use smaller ranges for large files.", "default": 2000, "minimum": 1 }
+                    "limit": { "type": "integer", "description": "Number of lines to read. When omitted, defaults to 800. This is not a hard maximum; larger values are allowed, but output may still be truncated by workflow observation limits. Use smaller ranges for large files.", "default": 800, "minimum": 1 }
                 },
                 "required": ["file_path"]
             }),
@@ -372,12 +481,23 @@ impl ToolDefinition for ReadFile {
                 "file_path is required".to_string(),
             ))?;
         let offset = params["offset"].as_u64().unwrap_or(0) as usize;
-        let limit = params["limit"].as_u64().unwrap_or(2000) as usize;
-        execute_read_file(path_str, offset, limit)
+        let limit = params["limit"]
+            .as_u64()
+            .unwrap_or(DEFAULT_READ_FILE_LIMIT as u64) as usize;
+        execute_read_file(path_str, offset, limit, self.path_guard.as_ref())
     }
 }
 
-pub struct WriteFile;
+#[derive(Clone, Default)]
+pub struct WriteFile {
+    path_guard: Option<Arc<RwLock<PathGuard>>>,
+}
+
+impl WriteFile {
+    pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
+        Self { path_guard }
+    }
+}
 
 #[async_trait]
 impl ToolDefinition for WriteFile {
@@ -390,7 +510,8 @@ impl ToolDefinition for WriteFile {
         - This tool is only for creating brand-new files.\n\
         - If a file already exists at the provided path, this tool fails; use `edit_file` instead.\n\
         - Parent directories are created automatically when they do not already exist.\n\
-        - Prefer absolute paths. Relative paths are resolved by the process working directory and should be avoided in workflows.\n\
+        - Use a relative path when creating files under the primary working directory.\n\
+        - For other authorized directories, use an absolute path.\n\
         - ALWAYS prefer editing existing files in the codebase. Only use this tool when you are creating a new file that does not already exist.\n\
         - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the user.\n\
         - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked."
@@ -410,7 +531,7 @@ impl ToolDefinition for WriteFile {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "file_path": { "type": "string", "description": "Path to the new file. Prefer an absolute path; parent directories are created automatically." },
+                    "file_path": { "type": "string", "description": "Path to the new file. Use a relative path under the primary working directory, or an absolute path for other authorized directories. Parent directories are created automatically." },
                     "content": { "type": "string", "description": "The content to write to the file" }
                 },
                 "required": ["file_path", "content"]
@@ -429,7 +550,7 @@ impl ToolDefinition for WriteFile {
         let content = params["content"]
             .as_str()
             .ok_or(ToolError::InvalidParams("content is required".to_string()))?;
-        let path = Path::new(path_str);
+        let path = resolve_tool_path(path_str, self.path_guard.as_ref());
 
         if path.exists() {
             return Err(ToolError::InvalidParams(format!(
@@ -443,19 +564,30 @@ impl ToolDefinition for WriteFile {
             fs::create_dir_all(parent).ok();
         }
 
-        fs::write(path, content).map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
+        fs::write(&path, content)
+            .map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
 
         Ok(ToolCallResult::success(
             Some("New file created successfully.".to_string()),
             Some(json!({
-                "file_path": path_str,
+                "file_path": path.to_string_lossy(),
+                "display_path": display_path_for_tool_output(&path, self.path_guard.as_ref()),
                 "bytes_written": content.len()
             })),
         ))
     }
 }
 
-pub struct EditFile;
+#[derive(Clone, Default)]
+pub struct EditFile {
+    path_guard: Option<Arc<RwLock<PathGuard>>>,
+}
+
+impl EditFile {
+    pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
+        Self { path_guard }
+    }
+}
 
 #[async_trait]
 impl ToolDefinition for EditFile {
@@ -493,7 +625,7 @@ impl ToolDefinition for EditFile {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "file_path": { "type": "string", "description": "The absolute path to the file to modify" },
+                    "file_path": { "type": "string", "description": "Path to the file to modify. Use a relative path for files under the primary working directory; use an absolute path for files in other authorized directories." },
                     "old_string": { "type": "string", "description": "The text to replace" },
                     "new_string": { "type": "string", "description": "The text to replace it with (must be different from old_string)" },
                     "replace_all": { "type": "boolean", "description": "Replace all occurrences of old_string (default false)", "default": false }
@@ -522,7 +654,13 @@ impl ToolDefinition for EditFile {
                 "new_string is required".to_string(),
             ))?;
         let replace_all = params["replace_all"].as_bool().unwrap_or(false);
-        execute_edit_file(path_str, old_str_unix, new_str_unix, replace_all)
+        execute_edit_file(
+            path_str,
+            old_str_unix,
+            new_str_unix,
+            replace_all,
+            self.path_guard.as_ref(),
+        )
     }
 }
 
@@ -564,7 +702,7 @@ impl ToolDefinition for PlanReadNote {
                 "type": "object",
                 "properties": {
                     "offset": { "type": "integer", "default": 0, "minimum": 0 },
-                    "limit": { "type": "integer", "default": 2000, "minimum": 1 }
+                    "limit": { "type": "integer", "default": 800, "minimum": 1 }
                 },
                 "additionalProperties": false
             }),
@@ -576,9 +714,11 @@ impl ToolDefinition for PlanReadNote {
 
     async fn call(&self, params: Value) -> NativeToolResult {
         let offset = params["offset"].as_u64().unwrap_or(0) as usize;
-        let limit = params["limit"].as_u64().unwrap_or(2000) as usize;
+        let limit = params["limit"]
+            .as_u64()
+            .unwrap_or(DEFAULT_READ_FILE_LIMIT as u64) as usize;
         let path = planning_note_path(&self.planning_root);
-        execute_read_file(&path.to_string_lossy(), offset, limit)
+        execute_read_file(&path.to_string_lossy(), offset, limit, None)
     }
 }
 
@@ -717,11 +857,20 @@ impl ToolDefinition for PlanEditNote {
             ))?;
         let replace_all = params["replace_all"].as_bool().unwrap_or(false);
         let path = planning_note_path(&self.planning_root);
-        execute_edit_file(&path.to_string_lossy(), old_string, new_string, replace_all)
+        execute_edit_file(&path.to_string_lossy(), old_string, new_string, replace_all, None)
     }
 }
 
-pub struct ListDir;
+#[derive(Clone, Default)]
+pub struct ListDir {
+    path_guard: Option<Arc<RwLock<PathGuard>>>,
+}
+
+impl ListDir {
+    pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
+        Self { path_guard }
+    }
+}
 
 #[async_trait]
 impl ToolDefinition for ListDir {
@@ -731,7 +880,7 @@ impl ToolDefinition for ListDir {
     fn description(&self) -> &str {
         "Lists files and directories in a given directory path. To read file contents, use read_file instead.\n\n\
         Usage:\n\
-        - Returns one path per line.\n\
+        - Returns one path per line. Paths under the primary working directory are shown as relative paths; entries in other authorized directories remain absolute.\n\
         - By default, lists only the immediate children of the directory.\n\
         - Set recursive=true to walk descendants recursively.\n\
         - Respects .gitignore and standard ignore filters, while still showing hidden files unless skipped explicitly.\n\
@@ -753,7 +902,7 @@ impl ToolDefinition for ListDir {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Directory path to list." },
+                    "path": { "type": "string", "description": "Directory path to list. Use a relative path for the primary working directory; use an absolute path for other authorized directories." },
                     "recursive": { "type": "boolean", "description": "When true, recursively lists descendant entries. Defaults to false.", "default": false }
                 },
                 "required": ["path"]
@@ -769,23 +918,24 @@ impl ToolDefinition for ListDir {
             .ok_or(ToolError::InvalidParams("path is required".to_string()))?;
         let recursive = params["recursive"].as_bool().unwrap_or(false);
         let mut entries = vec![];
-        let path = Path::new(path_str);
+        let path = resolve_tool_path(path_str, self.path_guard.as_ref());
+        let display_path = display_path_for_tool_output(&path, self.path_guard.as_ref());
 
         if !path.exists() {
             return Err(ToolError::IoError(format!(
                 "Directory not found: {}",
-                path_str
+                display_path
             )));
         }
         if !path.is_dir() {
             return Err(ToolError::InvalidParams(format!(
                 "Path is a file, not a directory: {}. Use 'read_file' to read file contents.",
-                path_str
+                display_path
             )));
         }
 
         // Use ignore crate to respect .gitignore
-        let mut builder = ignore::WalkBuilder::new(path_str);
+        let mut builder = ignore::WalkBuilder::new(&path);
         builder.standard_filters(true).hidden(false);
         if !recursive {
             builder.max_depth(Some(1));
@@ -807,31 +957,44 @@ impl ToolDefinition for ListDir {
                 continue;
             }
 
-            entries.push(entry.path().to_string_lossy().to_string());
+            entries.push(ListedEntry {
+                display_path: display_path_for_tool_output(entry.path(), self.path_guard.as_ref()),
+                is_dir: entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false),
+            });
             if entries.len() >= 1000 {
                 break;
             }
         }
 
-        if entries.is_empty() {
+        sort_listed_entries(&mut entries);
+        let rendered_entries: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.display_path.clone())
+            .collect();
+
+        if rendered_entries.is_empty() {
             Ok(ToolCallResult::success(
                 Some("Directory is empty.".into()),
                 Some(json!({
-                    "path": path_str,
+                    "path": path.to_string_lossy(),
+                    "display_path": display_path,
                     "recursive": recursive,
                     "count": 0,
-                    "truncated": false
+                    "truncated": false,
+                    "llm_content": "[Directory is empty]"
                 })),
             ))
         } else {
-            let count = entries.len();
+            let count = rendered_entries.len();
             Ok(ToolCallResult::success(
-                Some(entries.join("\n")),
+                Some(rendered_entries.join("\n")),
                 Some(json!({
-                    "path": path_str,
+                    "path": path.to_string_lossy(),
+                    "display_path": display_path,
                     "recursive": recursive,
                     "count": count,
-                    "truncated": count >= 1000
+                    "truncated": count >= 1000,
+                    "llm_content": preview_path_lines_for_llm(&rendered_entries)
                 })),
             ))
         }
@@ -843,12 +1006,19 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::fs;
-    use std::path::Path;
-    use tempfile::{tempdir, NamedTempFile};
+    use std::path::{Path, PathBuf};
+    use tempfile::{tempdir, tempdir_in, NamedTempFile};
+
+    fn make_relative_test_dir() -> (tempfile::TempDir, PathBuf) {
+        let root = primary_directory(None);
+        let temp_dir = tempdir_in(&root).unwrap();
+        let relative = temp_dir.path().strip_prefix(&root).unwrap().to_path_buf();
+        (temp_dir, relative)
+    }
 
     #[tokio::test]
     async fn test_read_file_basic() {
-        let tool = ReadFile;
+        let tool = ReadFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -868,7 +1038,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_with_offset_and_limit() {
-        let tool = ReadFile;
+        let tool = ReadFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -896,7 +1066,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_with_offset_reports_eof() {
-        let tool = ReadFile;
+        let tool = ReadFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -917,7 +1087,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_empty_file_returns_clear_message() {
-        let tool = ReadFile;
+        let tool = ReadFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -934,7 +1104,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_rejects_zero_limit() {
-        let tool = ReadFile;
+        let tool = ReadFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -955,7 +1125,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_line_length_limit() {
-        let tool = ReadFile;
+        let tool = ReadFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -978,7 +1148,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_total_size_limit_returns_truncated_content() {
-        let tool = ReadFile;
+        let tool = ReadFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1003,7 +1173,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_not_found() {
-        let tool = ReadFile;
+        let tool = ReadFile::default();
         let params = json!({
             "file_path": "/nonexistent/path/file.txt"
         });
@@ -1020,7 +1190,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_directory_returns_invalid_params() {
-        let tool = ReadFile;
+        let tool = ReadFile::default();
         let temp_dir = tempdir().unwrap();
         let params = json!({
             "file_path": temp_dir.path().to_string_lossy().to_string()
@@ -1037,8 +1207,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_read_file_supports_relative_path_from_primary_directory() {
+        let tool = ReadFile::default();
+        let (_temp_dir, relative_root) = make_relative_test_dir();
+        let relative_file = relative_root.join("nested.txt");
+        let absolute_file = primary_directory(None).join(&relative_file);
+
+        fs::write(&absolute_file, "alpha\nbeta").unwrap();
+
+        let result = tool
+            .call(json!({
+                "file_path": relative_file.to_string_lossy().to_string()
+            }))
+            .await
+            .unwrap();
+
+        let output = result.content.unwrap();
+        assert!(output.contains("alpha"));
+        assert!(output.contains("beta"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_default_limit_is_reduced() {
+        let tool = ReadFile::default();
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+        let content: Vec<String> = (1..=850).map(|i| format!("line {}", i)).collect();
+        fs::write(&path, content.join("\n")).unwrap();
+
+        let result = tool.call(json!({ "file_path": path })).await.unwrap();
+        let output = result.content.unwrap();
+        let structured = result.structured_content.unwrap();
+
+        assert!(output.contains("line 800"));
+        assert!(!output.contains("line 801"));
+        assert_eq!(structured["truncated_by_limit"].as_bool(), Some(true));
+        assert_eq!(structured["next_offset"].as_u64(), Some(800));
+    }
+
+    #[tokio::test]
     async fn test_write_file_new() {
-        let tool = WriteFile;
+        let tool = WriteFile::default();
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("test.txt");
         let path_str = path.to_string_lossy().to_string();
@@ -1065,7 +1274,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_existing_file_rejected() {
-        let tool = WriteFile;
+        let tool = WriteFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1095,8 +1304,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_file_supports_relative_path_from_primary_directory() {
+        let tool = WriteFile::default();
+        let (_temp_dir, relative_root) = make_relative_test_dir();
+        let relative_file = relative_root.join("new.txt");
+        let absolute_file = primary_directory(None).join(&relative_file);
+
+        tool.call(json!({
+            "file_path": relative_file.to_string_lossy().to_string(),
+            "content": "hello"
+        }))
+        .await
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&absolute_file).unwrap(), "hello");
+    }
+
+    #[tokio::test]
     async fn test_edit_file_basic() {
-        let tool = EditFile;
+        let tool = EditFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1120,7 +1346,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_replace_all() {
-        let tool = EditFile;
+        let tool = EditFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1144,7 +1370,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_non_unique_string() {
-        let tool = EditFile;
+        let tool = EditFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1168,7 +1394,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_string_not_found() {
-        let tool = EditFile;
+        let tool = EditFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1190,7 +1416,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_complex_indentation() {
-        let tool = EditFile;
+        let tool = EditFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1222,7 +1448,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_multiline_block() {
-        let tool = EditFile;
+        let tool = EditFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1242,7 +1468,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_boundary_conditions() {
-        let tool = EditFile;
+        let tool = EditFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1273,7 +1499,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_special_and_unicode() {
-        let tool = EditFile;
+        let tool = EditFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1305,7 +1531,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_real_project_snippet() {
-        let tool = EditFile;
+        let tool = EditFile::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -1345,8 +1571,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_edit_file_supports_relative_path_from_primary_directory() {
+        let tool = EditFile::default();
+        let (_temp_dir, relative_root) = make_relative_test_dir();
+        let relative_file = relative_root.join("edit.txt");
+        let absolute_file = primary_directory(None).join(&relative_file);
+
+        fs::write(&absolute_file, "before value").unwrap();
+
+        tool.call(json!({
+            "file_path": relative_file.to_string_lossy().to_string(),
+            "old_string": "before",
+            "new_string": "after"
+        }))
+        .await
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&absolute_file).unwrap(), "after value");
+    }
+
+    #[tokio::test]
     async fn test_list_dir_basic() {
-        let tool = ListDir;
+        let tool = ListDir::default();
         let temp_dir = tempdir().unwrap();
         let path_str = temp_dir.path().to_string_lossy().to_string();
 
@@ -1386,8 +1632,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_dir_sorts_directories_before_files() {
+        let tool = ListDir::default();
+        let temp_dir = tempdir().unwrap();
+        let path_str = temp_dir.path().to_string_lossy().to_string();
+
+        fs::write(temp_dir.path().join("b.php"), "").unwrap();
+        fs::write(temp_dir.path().join("a.php"), "").unwrap();
+        fs::create_dir(temp_dir.path().join("control")).unwrap();
+        fs::create_dir(temp_dir.path().join("app")).unwrap();
+        fs::create_dir(temp_dir.path().join(".cs")).unwrap();
+
+        let result = tool.call(json!({ "path": path_str })).await.unwrap();
+        let entries: Vec<String> = result
+            .content
+            .unwrap()
+            .lines()
+            .map(|line| {
+                Path::new(line)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+
+        assert_eq!(
+            entries,
+            vec![
+                ".cs".to_string(),
+                "app".to_string(),
+                "control".to_string(),
+                "a.php".to_string(),
+                "b.php".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn test_list_dir_recursive() {
-        let tool = ListDir;
+        let tool = ListDir::default();
         let temp_dir = tempdir().unwrap();
         let path_str = temp_dir.path().to_string_lossy().to_string();
 
@@ -1411,7 +1695,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_dir_nonexistent() {
-        let tool = ListDir;
+        let tool = ListDir::default();
         let params = json!({
             "path": "/nonexistent/directory"
         });
@@ -1426,7 +1710,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_dir_filters_git_and_common_noise() {
-        let tool = ListDir;
+        let tool = ListDir::default();
         let temp_dir = tempdir().unwrap();
         let path_str = temp_dir.path().to_string_lossy().to_string();
 
@@ -1444,5 +1728,54 @@ mod tests {
         assert!(content.contains("visible.txt"));
         assert!(!content.contains(".git"));
         assert!(!content.contains("__pycache__"));
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_returns_relative_paths_under_primary_directory() {
+        let tool = ListDir::default();
+        let (_temp_dir, relative_root) = make_relative_test_dir();
+        let absolute_root = primary_directory(None).join(&relative_root);
+        fs::create_dir(absolute_root.join("subdir")).unwrap();
+        fs::write(absolute_root.join("subdir").join("file.txt"), "").unwrap();
+
+        let result = tool
+            .call(json!({
+                "path": relative_root.to_string_lossy().to_string(),
+                "recursive": true
+            }))
+            .await
+            .unwrap();
+
+        let content = result.content.unwrap();
+        assert!(content.contains(&format!(
+            "{}/subdir/file.txt",
+            relative_root.to_string_lossy()
+        )));
+        assert!(!content.contains(&primary_directory(None).to_string_lossy().to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_includes_llm_content_preview() {
+        let tool = ListDir::default();
+        let (_temp_dir, relative_root) = make_relative_test_dir();
+        let absolute_root = primary_directory(None).join(&relative_root);
+
+        for i in 0..220 {
+            fs::write(absolute_root.join(format!("file-{:03}.txt", i)), "").unwrap();
+        }
+
+        let result = tool
+            .call(json!({
+                "path": relative_root.to_string_lossy().to_string()
+            }))
+            .await
+            .unwrap();
+
+        let structured = result.structured_content.unwrap();
+        let llm_content = structured["llm_content"].as_str().unwrap_or_default();
+
+        assert!(llm_content.contains("file-000.txt"));
+        assert!(llm_content.contains("file-199.txt"));
+        assert!(llm_content.contains("truncated 20 additional lines"));
     }
 }

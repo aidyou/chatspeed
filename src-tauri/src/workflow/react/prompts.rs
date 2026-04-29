@@ -35,7 +35,7 @@ When instructions conflict:
 # Workspace
 
 - Relative paths resolve from the **Primary Directory**, the first user-authorized directory.
-- Other authorized directories may be used when relevant.
+- Use absolute paths for other authorized directories when they are relevant.
 - `.cs/` is the project workspace when phase instructions require it.
 - Use the system temporary directory from `<ENVIRONMENT_CONTEXT>` when available.
 
@@ -89,9 +89,10 @@ A plan is a roadmap. Todos are the active work queue.
 
 Rules:
 - Use planning when phase or agent-specific instructions require it.
-- Use todo tools when phase or agent-specific instructions require execution tracking.
+- Use todo tools only when execution tracking adds real value, such as multi-step, multi-file, interruption-prone, or verification-heavy work.
 - Do not treat a written plan as progress state.
 - Do not skip todos just because a plan contains execution steps.
+- Do not create todos for single-step or immediately verifiable local tasks.
 - When todo tracking is in use, todos are the source of truth for active progress.
 - Before completion, reconcile todo state with actual work performed.
 
@@ -171,6 +172,8 @@ pub const CHILD_AGENT_CORE_SYSTEM_PROMPT: &str = r#"You are a tool-driven autono
 
 ## CONVERGENCE & EFFICIENCY RULES:
 - Use tools, not repeated prose, to make progress.
+- Treat the parent prompt as the source of truth for scope. Do not re-open broad exploration outside the explicitly delegated files, modules, questions, or hypotheses.
+- If the parent asks you to investigate several areas, cover them in one pass and return a structured result instead of leaving obvious follow-up gaps for the parent to rediscover.
 - When the delegated task is complete, submit the final report through `submit_result`.
 - If the delegated task cannot be completed, explain the limitation clearly in `submit_result.result` and summarize it briefly in `submit_result.summary`."#;
 
@@ -196,6 +199,8 @@ Use a child agent when the work benefits from delegation, such as repository sca
 When delegating, choose the child agent whose description best matches the sub-task and call it by the exact `child_agent_id`.
 Only use the listed child agents. Do not invent new child agent IDs.
 Your `task.prompt` must be a complete delegation brief. It must clearly state the objective, exact scope, relevant context, constraints, and what the final output must contain.
+Before calling a child agent, include all known files, modules, open questions, hypotheses to check, and the exact deliverable shape in that single prompt whenever possible.
+After a call-mode child returns, consume its result first. Do not immediately restart broad exploration unless the child output contains a concrete unresolved gap or contradiction.
 If you need the child result before continuing, use `execution_mode="call"`. If the child can work asynchronously and be checked later, use `execution_mode="background"`.
 
 Available child agents:
@@ -781,4 +786,4 @@ Remember:
 - **300 LINE LIMIT**: Ensure the updated memory stays within 300 lines while keeping the most critical information.
 - **COMPACT**: Remove unnecessary empty lines to maximize information density."#;
 
-pub const APPROVED_PLAN_EXECUTION_REMINDER: &str = r#"The plan has been approved and the workflow has switched to implementation. Use the approved plan as execution guidance. Based on the approved plan, use the todo* tools to track execution progress and keep task status current as work advances."#;
+pub const APPROVED_PLAN_EXECUTION_REMINDER: &str = r#"The plan has been approved and the workflow has switched to implementation. Use the approved plan as execution guidance. Do not assume an approved plan automatically requires todo tracking. Use todo* tools only when execution has multiple concrete units, meaningful verification steps, or real interruption risk; skip todos for single-step or immediately verifiable local work."#;

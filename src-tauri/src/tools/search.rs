@@ -1,14 +1,58 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::tools::llm_output::{preview_grep_lines_for_llm, preview_path_lines_for_llm};
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
+use crate::workflow::react::security::PathGuard;
 use async_trait::async_trait;
 use globset::{Glob as GlobPattern, GlobSet, GlobSetBuilder};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
-pub struct Glob;
+fn primary_directory(path_guard: Option<&Arc<RwLock<PathGuard>>>) -> PathBuf {
+    path_guard
+        .and_then(|guard| guard.read().ok())
+        .and_then(|guard| guard.get_primary_root().map(PathBuf::from))
+        .or_else(|| std::env::current_dir().ok())
+        .and_then(|path| fs::canonicalize(&path).ok().or(Some(path)))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn resolve_tool_path(path_str: &str, path_guard: Option<&Arc<RwLock<PathGuard>>>) -> PathBuf {
+    let path = PathBuf::from(path_str);
+    if path.is_absolute() {
+        path
+    } else {
+        primary_directory(path_guard).join(path)
+    }
+}
+
+fn display_path_for_tool_output(path: &Path, path_guard: Option<&Arc<RwLock<PathGuard>>>) -> String {
+    let primary_dir = primary_directory(path_guard);
+    let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Ok(relative) = canonical_path.strip_prefix(&primary_dir) {
+        if relative.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            relative.to_string_lossy().to_string()
+        }
+    } else {
+        path.to_string_lossy().to_string()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Glob {
+    path_guard: Option<Arc<RwLock<PathGuard>>>,
+}
+
+impl Glob {
+    pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
+        Self { path_guard }
+    }
+}
 
 #[async_trait]
 impl ToolDefinition for Glob {
@@ -19,7 +63,8 @@ impl ToolDefinition for Glob {
         "- Fast file pattern matching tool that works with any codebase size\n\
         - Finds files by path/name patterns; it does not search file contents\n\
         - Supports glob patterns like \"**/*.js\", \"src/**/*.ts\", or \"**/{Cargo.toml,package.json}\"\n\
-        - Returns matching file paths, one absolute path per line, capped at 1000 matches\n\
+        - Returns matching file paths, capped at 1000 matches\n\
+        - Paths under the primary working directory are shown as relative paths; matches in other authorized directories remain absolute\n\
         - Automatically respects .gitignore and other ignore files\n\
         - Use this tool before grep/read_file when you need to discover likely files by extension, directory, or filename\n\
         - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the sub_agent_run tool instead\n\
@@ -41,7 +86,7 @@ impl ToolDefinition for Glob {
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string", "description": "The glob pattern to match files against, relative to the search path. Examples: \"**/*.rs\", \"src/**/*.ts\", \"**/{Cargo.toml,package.json}\"." },
-                    "path": { "type": "string", "description": "The directory to search in. Defaults to the current working directory." }
+                    "path": { "type": "string", "description": "The directory to search in. Use a relative path for the primary working directory; use an absolute path for other authorized directories. Defaults to the primary working directory." }
                 },
                 "required": ["pattern"]
             }),
@@ -55,7 +100,8 @@ impl ToolDefinition for Glob {
             .as_str()
             .ok_or(ToolError::InvalidParams("pattern required".to_string()))?;
         let base_path_str = params["path"].as_str().unwrap_or(".");
-        let base_path = Path::new(base_path_str);
+        let base_path = resolve_tool_path(base_path_str, self.path_guard.as_ref());
+        let display_base_path = display_path_for_tool_output(&base_path, self.path_guard.as_ref());
 
         // Prepare the glob matcher
         let glob_matcher = globset::GlobBuilder::new(pattern)
@@ -70,7 +116,7 @@ impl ToolDefinition for Glob {
         let mut truncated = false;
 
         // Use ignore crate to respect .gitignore and filter common files
-        let walker = ignore::WalkBuilder::new(base_path)
+        let walker = ignore::WalkBuilder::new(&base_path)
             .standard_filters(true)
             .hidden(false)
             .build();
@@ -84,10 +130,10 @@ impl ToolDefinition for Glob {
             let path = entry.path();
             if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
                 // Get relative path for matching
-                let rel_path = path.strip_prefix(base_path).unwrap_or(path);
+                let rel_path = path.strip_prefix(&base_path).unwrap_or(path);
 
                 if glob_matcher.is_match(rel_path) {
-                    results.push(path.to_string_lossy().to_string());
+                    results.push(display_path_for_tool_output(path, self.path_guard.as_ref()));
                     if results.len() >= MAX_RESULTS {
                         truncated = true;
                         break;
@@ -101,9 +147,11 @@ impl ToolDefinition for Glob {
                 Some("[No matches found]".into()),
                 Some(json!({
                     "pattern": pattern,
-                    "path": base_path_str,
+                    "path": base_path.to_string_lossy(),
+                    "display_path": display_base_path,
                     "count": 0,
-                    "truncated": false
+                    "truncated": false,
+                    "llm_content": "[No matches found]"
                 })),
             ))
         } else {
@@ -112,17 +160,28 @@ impl ToolDefinition for Glob {
                 Some(results.join("\n")),
                 Some(json!({
                     "pattern": pattern,
-                    "path": base_path_str,
+                    "path": base_path.to_string_lossy(),
+                    "display_path": display_base_path,
                     "count": count,
                     "truncated": truncated,
-                    "max_results": MAX_RESULTS
+                    "max_results": MAX_RESULTS,
+                    "llm_content": preview_path_lines_for_llm(&results)
                 })),
             ))
         }
     }
 }
 
-pub struct Grep;
+#[derive(Clone, Default)]
+pub struct Grep {
+    path_guard: Option<Arc<RwLock<PathGuard>>>,
+}
+
+impl Grep {
+    pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
+        Self { path_guard }
+    }
+}
 
 #[async_trait]
 impl ToolDefinition for Grep {
@@ -161,7 +220,7 @@ impl ToolDefinition for Grep {
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string", "description": "The regular expression pattern to search for in file contents. Use alternation (foo|bar|baz) for compound searches." },
-                    "path": { "type": "string", "description": "File or directory to search in. Defaults to current working directory." },
+                    "path": { "type": "string", "description": "File or directory to search in. Use a relative path for the primary working directory; use an absolute path for other authorized directories. Defaults to the primary working directory." },
                     "glob": { "type": "string", "description": "Glob pattern to filter files (e.g. \"*.js\", \"**/*.tsx\", \"src/**/*.rs\")." },
                     "output_mode": { "type": "string", "enum": ["content", "files_with_matches", "count"], "default": "content", "description": "Output format. content is the default and returns file:line:matched_content. files_with_matches returns only file paths for broad noise-reduction searches. count returns match counts per file." }
                 },
@@ -189,26 +248,34 @@ impl ToolDefinition for Grep {
         let glob_set = Self::build_glob_set(params["glob"].as_str())?;
         let re = Regex::new(pattern_str)
             .map_err(|e| ToolError::InvalidParams(format!("Invalid regex: {}", e)))?;
-        let path = Path::new(search_path);
+        let path = resolve_tool_path(search_path, self.path_guard.as_ref());
+        let display_path = display_path_for_tool_output(&path, self.path_guard.as_ref());
         let mut matches = vec![];
         const MAX_MATCHES: usize = 500;
 
         if !path.exists() {
             return Err(ToolError::IoError(format!(
-                "Search path not found: {}. Use an absolute path or list_dir/glob to verify the correct path.",
-                search_path
+                "Search path not found: {}. Use list_dir/glob to verify the correct path.",
+                display_path
             )));
         }
 
         if path.is_file() {
-            if Self::matches_glob(path, path.parent(), glob_set.as_ref())
-                && Self::is_searchable_text_file(path)
+            if Self::matches_glob(&path, path.parent(), glob_set.as_ref())
+                && Self::is_searchable_text_file(&path)
             {
-                Self::search_in_file(path, &re, output_mode, &mut matches, MAX_MATCHES)?;
+                Self::search_in_file(
+                    &path,
+                    &re,
+                    output_mode,
+                    &mut matches,
+                    MAX_MATCHES,
+                    self.path_guard.as_ref(),
+                )?;
             }
         } else if path.is_dir() {
             // Use ignore crate to respect .gitignore
-            let walker = ignore::WalkBuilder::new(path)
+            let walker = ignore::WalkBuilder::new(&path)
                 .standard_filters(true)
                 .hidden(false)
                 .build();
@@ -220,7 +287,7 @@ impl ToolDefinition for Grep {
                 };
 
                 if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                    if !Self::matches_glob(entry.path(), Some(path), glob_set.as_ref()) {
+                    if !Self::matches_glob(entry.path(), Some(&path), glob_set.as_ref()) {
                         continue;
                     }
                     if !Self::is_searchable_text_file(entry.path()) {
@@ -232,6 +299,7 @@ impl ToolDefinition for Grep {
                         output_mode,
                         &mut matches,
                         MAX_MATCHES,
+                        self.path_guard.as_ref(),
                     )?;
                     if matches.len() >= MAX_MATCHES {
                         break;
@@ -243,10 +311,17 @@ impl ToolDefinition for Grep {
         if matches.is_empty() {
             Ok(ToolCallResult::success(
                 Some("[No matches found]".into()),
-                None,
+                Some(json!({
+                    "llm_content": "[No matches found]"
+                })),
             ))
         } else {
-            Ok(ToolCallResult::success(Some(matches.join("\n")), None))
+            Ok(ToolCallResult::success(
+                Some(matches.join("\n")),
+                Some(json!({
+                    "llm_content": preview_grep_lines_for_llm(&matches, output_mode)
+                })),
+            ))
         }
     }
 }
@@ -355,10 +430,10 @@ impl Grep {
         mode: &str,
         matches: &mut Vec<String>,
         max: usize,
+        path_guard: Option<&Arc<RwLock<PathGuard>>>,
     ) -> Result<(), ToolError> {
         let file = fs::File::open(path).map_err(|e| ToolError::IoError(e.to_string()))?;
         let reader = BufReader::new(file);
-        let path_str = path.to_string_lossy().to_string();
         let mut count = 0;
         for (i, line) in reader.lines().enumerate() {
             if let Ok(content) = line {
@@ -368,10 +443,15 @@ impl Grep {
                         "content" => {
                             let display_content =
                                 Self::format_content_match(&content, matched.start());
-                            matches.push(format!("{}:{}:{}", path_str, i + 1, display_content));
+                            matches.push(format!(
+                                "{}:{}:{}",
+                                display_path_for_tool_output(path, path_guard),
+                                i + 1,
+                                display_content
+                            ));
                         }
                         "files_with_matches" if count == 1 => {
-                            matches.push(path_str.clone());
+                            matches.push(display_path_for_tool_output(path, path_guard));
                         }
                         _ => {}
                     }
@@ -382,7 +462,11 @@ impl Grep {
             }
         }
         if mode == "count" && count > 0 {
-            matches.push(format!("{}: {}", path_str, count));
+            matches.push(format!(
+                "{}: {}",
+                display_path_for_tool_output(path, path_guard),
+                count
+            ));
         }
         Ok(())
     }
@@ -417,12 +501,19 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::fs;
-    use std::path::Path;
-    use tempfile::{tempdir, NamedTempFile};
+    use std::path::{Path, PathBuf};
+    use tempfile::{tempdir, tempdir_in, NamedTempFile};
+
+    fn make_relative_test_dir() -> (tempfile::TempDir, PathBuf) {
+        let root = primary_directory(None);
+        let temp_dir = tempdir_in(&root).unwrap();
+        let relative = temp_dir.path().strip_prefix(&root).unwrap().to_path_buf();
+        (temp_dir, relative)
+    }
 
     #[tokio::test]
     async fn test_glob_basic() {
-        let tool = Glob;
+        let tool = Glob::default();
         let temp_dir = tempdir().unwrap();
 
         // Create test files
@@ -446,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_recursive() {
-        let tool = Glob;
+        let tool = Glob::default();
         let temp_dir = tempdir().unwrap();
 
         // Create nested structure
@@ -469,7 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_no_matches() {
-        let tool = Glob;
+        let tool = Glob::default();
         let temp_dir = tempdir().unwrap();
 
         let params = json!({
@@ -485,7 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_invalid_pattern() {
-        let tool = Glob;
+        let tool = Glob::default();
         let temp_dir = tempdir().unwrap();
 
         // Invalid glob pattern
@@ -501,7 +592,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_max_results() {
-        let tool = Glob;
+        let tool = Glob::default();
         let temp_dir = tempdir().unwrap();
 
         // Create many files
@@ -523,8 +614,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_glob_supports_relative_path_and_returns_relative_matches() {
+        let tool = Glob::default();
+        let (_temp_dir, relative_root) = make_relative_test_dir();
+        let absolute_root = primary_directory(None).join(&relative_root);
+        fs::create_dir(absolute_root.join("src")).unwrap();
+        fs::write(absolute_root.join("src").join("lib.rs"), "").unwrap();
+
+        let result = tool
+            .call(json!({
+                "pattern": "**/*.rs",
+                "path": relative_root.to_string_lossy().to_string()
+            }))
+            .await
+            .unwrap();
+
+        let content = result.content.unwrap();
+        assert!(content.contains(&format!(
+            "{}/src/lib.rs",
+            relative_root.to_string_lossy()
+        )));
+        assert!(!content.contains(&primary_directory(None).to_string_lossy().to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_glob_includes_llm_content_preview() {
+        let tool = Glob::default();
+        let (_temp_dir, relative_root) = make_relative_test_dir();
+        let absolute_root = primary_directory(None).join(&relative_root);
+
+        for i in 0..220 {
+            fs::write(absolute_root.join(format!("file-{:03}.rs", i)), "").unwrap();
+        }
+
+        let result = tool
+            .call(json!({
+                "pattern": "**/*.rs",
+                "path": relative_root.to_string_lossy().to_string()
+            }))
+            .await
+            .unwrap();
+
+        let structured = result.structured_content.unwrap();
+        let llm_content = structured["llm_content"].as_str().unwrap_or_default();
+
+        assert!(llm_content.contains("file-000.rs"));
+        assert!(llm_content.contains("truncated 20 additional lines"));
+        assert!(!llm_content.contains("file-219.rs"));
+    }
+
+    #[tokio::test]
     async fn test_grep_basic() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -553,7 +694,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_files_with_matches() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -576,7 +717,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_defaults_to_content_mode() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -595,7 +736,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_content_truncates_long_lines_from_match() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -619,7 +760,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_count_mode() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -642,7 +783,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_directory_search() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_dir = tempdir().unwrap();
 
         // Create multiple files
@@ -678,7 +819,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_compound_regex_search() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -701,7 +842,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_glob_filter() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_dir = tempdir().unwrap();
 
         fs::write(temp_dir.path().join("file.rs"), "target_symbol").unwrap();
@@ -724,7 +865,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_no_matches() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -744,7 +885,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_invalid_regex() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -763,7 +904,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_nonexistent_path() {
-        let tool = Grep;
+        let tool = Grep::default();
 
         let params = json!({
             "pattern": "test",
@@ -780,7 +921,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_max_matches() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -804,7 +945,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_case_sensitive() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -827,7 +968,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_skips_binary_extension_files() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_dir = tempdir().unwrap();
         let binary_path = temp_dir.path().join("libexample.so");
 
@@ -845,7 +986,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_skips_binary_content_without_extension() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_dir = tempdir().unwrap();
         let binary_path = temp_dir.path().join("payload");
 
@@ -863,7 +1004,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_special_regex_chars() {
-        let tool = Grep;
+        let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
 
@@ -881,5 +1022,63 @@ mod tests {
         let matches: Vec<&str> = content.lines().collect();
 
         assert_eq!(matches.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_grep_supports_relative_path_and_returns_relative_matches() {
+        let tool = Grep::default();
+        let (_temp_dir, relative_root) = make_relative_test_dir();
+        let absolute_root = primary_directory(None).join(&relative_root);
+        fs::create_dir(absolute_root.join("src")).unwrap();
+        fs::write(
+            absolute_root.join("src").join("main.rs"),
+            "fn important_symbol() {}\n",
+        )
+        .unwrap();
+
+        let result = tool
+            .call(json!({
+                "pattern": "important_symbol",
+                "path": relative_root.to_string_lossy().to_string()
+            }))
+            .await
+            .unwrap();
+
+        let content = result.content.unwrap();
+        assert!(content.contains(&format!(
+            "{}/src/main.rs:1:",
+            relative_root.to_string_lossy()
+        )));
+        assert!(!content.contains(&primary_directory(None).to_string_lossy().to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_grep_includes_llm_content_preview() {
+        let tool = Grep::default();
+        let (_temp_dir, relative_root) = make_relative_test_dir();
+        let absolute_root = primary_directory(None).join(&relative_root);
+        let file_path = absolute_root.join("matches.rs");
+
+        let content = (1..=130)
+            .map(|i| format!("target_match_{}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&file_path, content).unwrap();
+
+        let result = tool
+            .call(json!({
+                "pattern": "target_match_",
+                "path": relative_root.to_string_lossy().to_string(),
+                "output_mode": "content"
+            }))
+            .await
+            .unwrap();
+
+        let structured = result.structured_content.unwrap();
+        let llm_content = structured["llm_content"].as_str().unwrap_or_default();
+
+        assert!(llm_content.contains("target_match_1"));
+        assert!(llm_content.contains("target_match_120"));
+        assert!(!llm_content.contains("target_match_130"));
     }
 }

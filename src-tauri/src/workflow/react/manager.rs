@@ -115,6 +115,22 @@ impl WorkflowManager {
         }
     }
 
+    pub fn remove_session_if_matches(
+        &self,
+        session_id: &str,
+        created_at_ms: i64,
+    ) -> Option<ManagedSession> {
+        if let Some(session) = self.sessions.get(session_id) {
+            if session.created_at_ms != created_at_ms {
+                return None;
+            }
+        } else {
+            return None;
+        }
+
+        self.remove_session(session_id)
+    }
+
     pub fn has_session(&self, session_id: &str) -> bool {
         let exists = self.sessions.contains_key(session_id);
 
@@ -139,6 +155,10 @@ impl WorkflowManager {
 
     pub fn get_executor(&self, session_id: &str) -> Option<Arc<Mutex<dyn ReActExecutor>>> {
         self.sessions.get(session_id).map(|s| s.executor.clone())
+    }
+
+    pub fn get_session_created_at_ms(&self, session_id: &str) -> Option<i64> {
+        self.sessions.get(session_id).map(|s| s.created_at_ms)
     }
 
     pub fn update_session_status(&self, session_id: &str, status: ManagedSessionStatus) -> bool {
@@ -437,6 +457,34 @@ mod tests {
         let removed = manager.remove_session("test-session-1");
         assert!(removed.is_some());
 
+        assert!(!manager.has_session("test-session-1"));
+    }
+
+    #[test]
+    fn test_remove_session_if_matches_created_at() {
+        let manager = WorkflowManager::new();
+        let executor = Arc::new(Mutex::new(MockExecutor::new()));
+
+        manager
+            .register_session(
+                "test-session-1".to_string(),
+                executor,
+                ManagedSessionStatus::Completed,
+            )
+            .unwrap();
+
+        let created_at = manager
+            .get_session_created_at_ms("test-session-1")
+            .expect("created_at should exist");
+
+        assert!(manager
+            .remove_session_if_matches("test-session-1", created_at + 1)
+            .is_none());
+        assert!(manager.has_session("test-session-1"));
+
+        assert!(manager
+            .remove_session_if_matches("test-session-1", created_at)
+            .is_some());
         assert!(!manager.has_session("test-session-1"));
     }
 

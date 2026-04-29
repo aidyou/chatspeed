@@ -420,34 +420,6 @@ impl MainStore {
         Ok(new_msg)
     }
 
-    pub fn list_workflow_context_messages(
-        &self,
-        session_id: &str,
-        segment_id: i32,
-    ) -> Result<Vec<WorkflowContextMessage>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let mut stmt = conn.prepare(
-            "SELECT id, session_id, segment_id, role, message, reasoning, message_kind, message_subtype, metadata, source_message_id, created_at
-             FROM workflow_context_messages
-             WHERE session_id = ?1 AND segment_id = ?2
-             ORDER BY id ASC",
-        )?;
-
-        let rows = stmt.query_map(params![session_id, segment_id], |row| {
-            Ok(WorkflowContextMessage::from(row))
-        })?;
-
-        let mut messages = Vec::new();
-        for row in rows {
-            messages.push(row?);
-        }
-        Ok(messages)
-    }
-
     pub fn get_latest_workflow_context_segment_id(
         &self,
         session_id: &str,

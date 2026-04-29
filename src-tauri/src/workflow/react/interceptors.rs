@@ -437,6 +437,7 @@ impl WorkflowExecutor {
         if plan_from_args.is_empty() {
             return Ok(Some(ReinforcedResult {
                 content: "<SYSTEM_REMINDER>Error: You called 'submit_plan' without a non-empty `plan` argument. The approved plan MUST come from the structured tool argument `submit_plan.plan`, not from free-form assistant text. Put the complete plan in `plan` and call `submit_plan` again.</SYSTEM_REMINDER>".into(),
+                llm_content: None,
                 title: "SubmitPlan Error".to_string(),
                 summary: "Missing plan payload".to_string(),
                 is_error: true,
@@ -509,6 +510,7 @@ impl WorkflowExecutor {
         if normalized_groups.is_empty() {
             return Ok(Some(ReinforcedResult {
                 content: "<SYSTEM_REMINDER>Error: 'ask_user' requires grouped choices with at least one valid item. Use {\"items\":[{\"title\":\"...\",\"options\":[\"...\"]}]} and ensure every group has a direct decision title plus at least one concise, actionable option. Use ask_user only for blocking decisions required to continue; do not use it for status updates, generic feedback, final answers, or plan approval. Do not include custom-input placeholder options because the UI already provides custom text input.</SYSTEM_REMINDER>".to_string(),
+                llm_content: None,
                 title: "Ask User Error".to_string(),
                 summary: "Invalid ask_user payload".to_string(),
                 is_error: true,
@@ -525,6 +527,7 @@ impl WorkflowExecutor {
 
         Ok(Some(ReinforcedResult {
             content,
+            llm_content: None,
             title: "Ask User".to_string(),
             summary: "Waiting for user".to_string(),
             is_error: false,
@@ -545,6 +548,7 @@ impl WorkflowExecutor {
         if !text_summary_valid && argument_summary.is_none() {
             return Ok(Some(ReinforcedResult {
                 content: "<SYSTEM_REMINDER>Error: You called 'complete_workflow_with_summary' without a valid user-visible completion report. Reasoning/thinking text does NOT count. Provide the report either as normal assistant content before the tool call or in the `summary` argument of complete_workflow_with_summary. Do NOT call sub_agent_output to retrieve call-mode sub-agent results; call-mode results are already delivered as sub-agent completion observations. First, provide a brief user-visible summary that explicitly covers: 1) what was completed, 2) what was verified, and 3) any important remaining notes or limitations. If a sub-agent produced findings, synthesize those findings into your own response instead of copying them as the final answer. After that valid report is present, call complete_workflow_with_summary again.</SYSTEM_REMINDER>".into(),
+                llm_content: None,
                 title: "FinishTask Error".to_string(),
                 summary: "Invalid completion report".to_string(),
                 is_error: true,
@@ -576,6 +580,7 @@ impl WorkflowExecutor {
                 if !active_tasks.is_empty() {
                     return Ok(Some(ReinforcedResult {
                         content: format!("<SYSTEM_REMINDER>Block: You still have active tasks: {}. Do NOT retry complete_workflow_with_summary yet. Do NOT call sub_agent_output for call-mode sub-agents; their results are delivered directly as observations. You MUST either complete these todos, or mark them as 'failed' or 'data_missing' if they cannot be fulfilled, before calling complete_workflow_with_summary.</SYSTEM_REMINDER>", active_tasks.join(", ")),
+                        llm_content: None,
                         title: "Tasks Pending".to_string(),
                         summary: "Incomplete todos".to_string(),
                         is_error: true,
@@ -602,6 +607,7 @@ impl WorkflowExecutor {
             {
                 return Ok(Some(ReinforcedResult {
                     content: format!("<SYSTEM_REMINDER>Audit Rejected: Your conclusion was deemed incomplete. Feedback: {}\n\nYou MUST address these points before you can call complete_workflow_with_summary. Do NOT call sub_agent_output for call-mode sub-agent results; use the sub-agent completion observations already in context.</SYSTEM_REMINDER>", audit_feedback),
+                    llm_content: None,
                     title: "Audit Rejected".to_string(),
                     summary: "Audit failed".to_string(),
                     is_error: true,
@@ -636,6 +642,7 @@ impl WorkflowExecutor {
 
         Ok(Some(ReinforcedResult {
             content: "Finished".into(),
+            llm_content: None,
             title: "Complete Workflow with Summary".to_string(),
             summary: completion_summary,
             is_error: false,
@@ -664,6 +671,7 @@ impl WorkflowExecutor {
         if result.is_empty() || summary.is_empty() {
             return Ok(Some(ReinforcedResult {
                 content: "<SYSTEM_REMINDER>Error: `submit_result` requires both a non-empty `result` and a non-empty `summary`. Put the full delegated output in `result` and a short notification-safe summary in `summary`, then call `submit_result` again.</SYSTEM_REMINDER>".into(),
+                llm_content: None,
                 title: "Submit Result Error".to_string(),
                 summary: "Missing result payload".to_string(),
                 is_error: true,
@@ -676,6 +684,7 @@ impl WorkflowExecutor {
 
         Ok(Some(ReinforcedResult {
             content: result.to_string(),
+            llm_content: None,
             title: "Submit Result".to_string(),
             summary: summary.to_string(),
             is_error: false,
@@ -710,6 +719,7 @@ impl WorkflowExecutor {
                             "Command blocked by security policy: {}. You may try an alternative command, modify the approach, or ask the user to adjust the policy if this restriction is blocking a legitimate task.",
                             reason
                         ),
+                        llm_content: None,
                         title: format!("Bash({})", command_str),
                         summary: "Blocked".to_string(),
                         is_error: true,
@@ -973,6 +983,7 @@ impl WorkflowExecutor {
 
         Ok(Some(ReinforcedResult {
             content: content_str,
+            llm_content: None,
             title: pretty_title,
             summary: rust_i18n::t!("workflow.awaiting_approval").to_string(),
             is_error: false,
@@ -1002,6 +1013,7 @@ impl WorkflowExecutor {
             {
                 return Ok(Some(ReinforcedResult {
                     content: format!("Security Error: {}\n<SYSTEM_REMINDER>Access to this path is denied. If this path is essential, please ask the user to add it to the 'Authorized Paths' in settings. Otherwise, try to use a different path or approach.</SYSTEM_REMINDER>", e),
+                    llm_content: None,
                     title: format!("Security Check: {}", name),
                     summary: "Access Denied".to_string(),
                     is_error: true,

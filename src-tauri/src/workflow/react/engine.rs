@@ -196,6 +196,10 @@ impl WorkflowExecutor {
         metadata: &mut serde_json::Value,
         reinforced: &ReinforcedResult,
     ) {
+        if let Some(llm_content) = reinforced.llm_content.as_ref() {
+            metadata["llm_content"] = serde_json::json!(llm_content);
+        }
+
         if tool_name == TOOL_SUBMIT_RESULT {
             metadata["structured_content"] = serde_json::json!({
                 "status": "completed",
@@ -597,7 +601,9 @@ impl ReActExecutor for WorkflowExecutor {
     }
 
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
-        self.context.begin_new_segment_with_seed(Vec::new()).await
+        self.context
+            .begin_new_task_segment_from_runtime_projection()
+            .await
     }
 
     async fn begin_execution_context_from_approved_plan(
@@ -1322,25 +1328,32 @@ impl WorkflowExecutor {
             .allowed_categories
             .contains(&ToolCategory::FileSystem)
         {
+            let path_guard = Some(self.path_guard.clone());
             if is_allowed(TOOL_READ_FILE) {
-                tm.register_tool(Arc::new(ReadFile)).await?;
+                tm.register_tool(Arc::new(ReadFile::new(path_guard.clone())))
+                    .await?;
             }
 
             if self.policy.allows_generic_workspace_mutation_tools() && is_allowed(TOOL_WRITE_FILE)
             {
-                tm.register_tool(Arc::new(WriteFile)).await?;
+                tm.register_tool(Arc::new(WriteFile::new(path_guard.clone())))
+                    .await?;
             }
             if self.policy.allows_generic_workspace_mutation_tools() && is_allowed(TOOL_EDIT_FILE) {
-                tm.register_tool(Arc::new(EditFile)).await?;
+                tm.register_tool(Arc::new(EditFile::new(path_guard.clone())))
+                    .await?;
             }
             if is_allowed(TOOL_LIST_DIR) {
-                tm.register_tool(Arc::new(ListDir)).await?;
+                tm.register_tool(Arc::new(ListDir::new(path_guard.clone())))
+                    .await?;
             }
             if is_allowed(TOOL_GLOB) {
-                tm.register_tool(Arc::new(Glob)).await?;
+                tm.register_tool(Arc::new(Glob::new(path_guard.clone())))
+                    .await?;
             }
             if is_allowed(TOOL_GREP) {
-                tm.register_tool(Arc::new(Grep)).await?;
+                tm.register_tool(Arc::new(Grep::new(path_guard.clone())))
+                    .await?;
             }
             if self.policy.allows_planning_note_tools() {
                 if is_allowed(crate::tools::TOOL_PLAN_READ_NOTE) {
@@ -3628,7 +3641,10 @@ impl WorkflowExecutor {
                             "summary": reinforced.summary,
                             "is_error": reinforced.is_error,
                             "error_type": reinforced.error_type,
-                            "llm_content": reinforced.content,
+                            "llm_content": reinforced
+                                .llm_content
+                                .clone()
+                                .unwrap_or_else(|| reinforced.content.clone()),
                         }),
                     );
                 }
@@ -3713,7 +3729,7 @@ impl WorkflowExecutor {
                 } else if let Some(invalid_tool_call_error) = invalid_tool_call_error {
                     runtime_observation_type = RuntimeObservationType::InvalidToolCall;
                     format!(
-                        "<SYSTEM_REMINDER>Error: {}. You must call exactly one of the available tools exposed in this session. Re-read the tool list and try again with a valid tool name and valid arguments.</SYSTEM_REMINDER>",
+                        "<SYSTEM_REMINDER>Error: {}. Call exactly one available tool with a valid name and arguments.</SYSTEM_REMINDER>",
                         invalid_tool_call_error
                     )
                 } else if self.consecutive_no_tool_calls >= 3 {
@@ -3724,16 +3740,14 @@ impl WorkflowExecutor {
                         "complete_workflow_with_summary"
                     };
                     format!(
-                        "<SYSTEM_REMINDER>NO TOOL CALLS DETECTED: You have not called any tools for {} consecutive responses. \
-                        This is wasting your limited step budget ({}/{} steps used, {} remaining). \
-                        If you are truly finished, provide a summary and call '{}'.</SYSTEM_REMINDER>",
+                        "<SYSTEM_REMINDER>No tool calls for {} consecutive responses. Step budget: {}/{} used, {} remaining. If you are finished, provide a summary and call '{}'.</SYSTEM_REMINDER>",
                         self.consecutive_no_tool_calls, self.current_step, self.max_steps, remaining, finish_tool
                     )
                 } else {
                     if self.is_child_agent_workflow() {
-                        "<SYSTEM_REMINDER>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your delegated task, call 'submit_result' with both result and summary.</SYSTEM_REMINDER>".to_string()
+                        "<SYSTEM_REMINDER>No tool call detected. Call a tool now; if the delegated task is done, use 'submit_result' with result and summary.</SYSTEM_REMINDER>".to_string()
                     } else {
-                        "<SYSTEM_REMINDER>Error: No tool call detected in your last response. You MUST call a tool to proceed. If you have finished your task, call 'complete_workflow_with_summary' with a valid `summary` argument or after providing a visible summary in plain text.</SYSTEM_REMINDER>".to_string()
+                        "<SYSTEM_REMINDER>No tool call detected. Call a tool now; if the task is done, use 'complete_workflow_with_summary' with a valid summary.</SYSTEM_REMINDER>".to_string()
                     }
                 };
                 let _ = self
@@ -4277,6 +4291,7 @@ impl WorkflowExecutor {
                 );
                 result_map.insert(id, (ReinforcedResult {
                     content: "<SYSTEM_REMINDER>Action postponed. A preceding tool in this turn is awaiting user intervention. Please re-issue this command if still necessary once the previous action is resolved.</SYSTEM_REMINDER>".into(),
+                    llm_content: None,
                     title: format!("Postponed: {}", name),
                     summary: "Turn blocked".to_string(),
                     is_error: false,
@@ -4309,6 +4324,7 @@ impl WorkflowExecutor {
                         );
                         result_map.insert(id, (ReinforcedResult {
                             content: "<SYSTEM_REMINDER>Action postponed. Earlier tools in this turn are queued for FIFO approval. Re-issue this command after those approved actions finish if it is still needed.</SYSTEM_REMINDER>".into(),
+                            llm_content: None,
                             title: format!("Postponed: {}", name),
                             summary: "Approval queue blocked".to_string(),
                             is_error: false,
@@ -4484,6 +4500,7 @@ impl WorkflowExecutor {
                 .unwrap_or(default_summary);
             return Ok(ReinforcedResult {
                 content: "Finished".into(),
+                llm_content: None,
                 title: "Complete Workflow with Summary".to_string(),
                 summary,
                 is_error: false,
@@ -4501,6 +4518,7 @@ impl WorkflowExecutor {
                     .and_then(|value| value.as_str())
                     .unwrap_or_default()
                     .to_string(),
+                llm_content: None,
                 title: "Submit Result".to_string(),
                 summary: args
                     .get("summary")
@@ -4535,6 +4553,7 @@ impl WorkflowExecutor {
                                 let url = args["url"].as_str().unwrap_or("");
                                 return Ok(ReinforcedResult {
                                     content: format!("<webpage>\n<url>{}</url>\n<content>\n{}\n</content>\n\n<SYSTEM_REMINDER>\n[Auto-Summarized] High-fidelity filtered content.\n</SYSTEM_REMINDER>\n</webpage>", url, summary),
+                                    llm_content: None,
                                     title: format!("Fetch({})", url),
                                     summary: "Content summarized (XML)".to_string(),
                                     is_error: false,
@@ -4597,6 +4616,7 @@ impl WorkflowExecutor {
                 if self.policy.phase == ExecutionPhase::Implementation {
                     return Ok(Some(ReinforcedResult {
                         content: "<SYSTEM_REMINDER>submit_plan is only available before an approved plan enters implementation. This workflow is already in implementation mode. Continue executing the approved plan with implementation tools, and use complete_workflow_with_summary when the work is finished.</SYSTEM_REMINDER>".to_string(),
+                        llm_content: None,
                         title: "Tool unavailable: submit_plan".to_string(),
                         summary: "submit_plan unavailable during implementation".to_string(),
                         display_type: "text".to_string(),
@@ -4609,6 +4629,7 @@ impl WorkflowExecutor {
                 if !self.policy.is_strict_manual_planning() {
                     return Ok(Some(ReinforcedResult {
                         content: "<SYSTEM_REMINDER>submit_plan is only available in manually activated Plan Mode. Switch this workflow into Plan Mode first, prepare the plan there, and then submit it for approval.</SYSTEM_REMINDER>".to_string(),
+                        llm_content: None,
                         title: "Tool unavailable: submit_plan".to_string(),
                         summary: "submit_plan unavailable outside manual plan mode".to_string(),
                         display_type: "text".to_string(),
@@ -4654,6 +4675,7 @@ impl WorkflowExecutor {
                                 true,
                             )
                         ),
+                        llm_content: None,
                         title: "Sub Agent Run".to_string(),
                         summary: "Reused completed sub-agent result".to_string(),
                         is_error: false,
@@ -4675,6 +4697,7 @@ impl WorkflowExecutor {
             );
             return Ok(Some(ReinforcedResult {
                 content: warning,
+                llm_content: None,
                 title: format!("Loop Check: {}", name),
                 summary: "Loop detected".to_string(),
                 is_error: true,
@@ -4692,6 +4715,7 @@ impl WorkflowExecutor {
 
             return Ok(Some(ReinforcedResult {
                 content: "<SYSTEM_REMINDER>Planning note tools are only available in strict/manual Plan Mode before the plan is approved. The workflow is now in implementation, so use `todo_create`, `todo_update`, and `todo_get` for task tracking instead of planning notes.</SYSTEM_REMINDER>".to_string(),
+                llm_content: None,
                 title: format!("Tool unavailable: {}", name),
                 summary: "Planning note tool unavailable".to_string(),
                 is_error: true,

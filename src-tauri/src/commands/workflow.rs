@@ -1195,6 +1195,10 @@ async fn has_reconciled_live_session(
             executor_state
         );
         workflow_manager.remove_session(session_id);
+        WorkflowManager::unregister_session_signal_tx_with_source(
+            session_id,
+            "has_reconciled_live_session.terminal_state_recovery",
+        );
         return false;
     }
 
@@ -1284,6 +1288,50 @@ async fn cleanup_workflow_resources(
     gateway
         .unregister_session_with_source(session_id, "cleanup_workflow_resources.finalize")
         .await;
+}
+
+const COMPLETED_SESSION_CLEANUP_DELAY_SECS: u64 = 600;
+
+fn schedule_completed_session_cleanup(
+    session_id: String,
+    created_at_ms: i64,
+    gateway: Arc<TauriGateway>,
+    workflow_manager: Arc<WorkflowManager>,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(
+            COMPLETED_SESSION_CLEANUP_DELAY_SECS,
+        ))
+        .await;
+
+        let should_cleanup = matches!(
+            workflow_manager.get_session_status(&session_id),
+            Some(ManagedSessionStatus::Completed)
+        ) && workflow_manager
+            .get_session_created_at_ms(&session_id)
+            .is_some_and(|current_created_at| current_created_at == created_at_ms);
+
+        if !should_cleanup {
+            return;
+        }
+
+        log::info!(
+            "[Workflow][session={}][phase=cleanup] Completed-session grace period elapsed; removing inactive completed session",
+            session_id
+        );
+
+        let removed = workflow_manager.remove_session_if_matches(&session_id, created_at_ms);
+        if removed.is_some() {
+            BACKGROUND_TASKS.remove(&session_id);
+            WorkflowManager::unregister_session_signal_tx_with_source(
+                &session_id,
+                "completed_session_cleanup_timer",
+            );
+            gateway
+                .unregister_session_with_source(&session_id, "completed_session_cleanup_timer")
+                .await;
+        }
+    });
 }
 
 fn legacy_wait_reason_from_status(status: &str) -> Option<WaitReason> {
@@ -1805,19 +1853,30 @@ pub async fn workflow_start(
         if matches!(guard.state(), WorkflowState::Completed) {
             let _ = manager_for_spawn
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Completed);
-        }
-        BACKGROUND_TASKS.remove(&session_id_for_spawn);
-        WorkflowManager::unregister_session_signal_tx_with_source(
-            &session_id_for_spawn,
-            "workflow_start.run_loop.finalize",
-        );
-        gateway_for_spawn
-            .unregister_session_with_source(
+            if let Some(created_at_ms) =
+                manager_for_spawn.get_session_created_at_ms(&session_id_for_spawn)
+            {
+                schedule_completed_session_cleanup(
+                    session_id_for_spawn.clone(),
+                    created_at_ms,
+                    gateway_for_spawn.clone(),
+                    manager_for_spawn.clone(),
+                );
+            }
+        } else {
+            BACKGROUND_TASKS.remove(&session_id_for_spawn);
+            WorkflowManager::unregister_session_signal_tx_with_source(
                 &session_id_for_spawn,
                 "workflow_start.run_loop.finalize",
-            )
-            .await;
-        manager_for_spawn.remove_session(&session_id_for_spawn);
+            );
+            gateway_for_spawn
+                .unregister_session_with_source(
+                    &session_id_for_spawn,
+                    "workflow_start.run_loop.finalize",
+                )
+                .await;
+            manager_for_spawn.remove_session(&session_id_for_spawn);
+        }
     });
 
     Ok(session_id)
@@ -2119,19 +2178,30 @@ pub async fn workflow_approve_plan(
         if matches!(guard.state(), WorkflowState::Completed) {
             let _ = manager_for_spawn
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Completed);
-        }
-        manager_for_spawn.remove_session(&session_id_for_spawn);
-        BACKGROUND_TASKS.remove(&session_id_for_spawn);
-        WorkflowManager::unregister_session_signal_tx_with_source(
-            &session_id_for_spawn,
-            "workflow_approve_plan.run_loop.finalize",
-        );
-        gateway_for_spawn
-            .unregister_session_with_source(
+            if let Some(created_at_ms) =
+                manager_for_spawn.get_session_created_at_ms(&session_id_for_spawn)
+            {
+                schedule_completed_session_cleanup(
+                    session_id_for_spawn.clone(),
+                    created_at_ms,
+                    gateway_for_spawn.clone(),
+                    manager_for_spawn.clone(),
+                );
+            }
+        } else {
+            manager_for_spawn.remove_session(&session_id_for_spawn);
+            BACKGROUND_TASKS.remove(&session_id_for_spawn);
+            WorkflowManager::unregister_session_signal_tx_with_source(
                 &session_id_for_spawn,
                 "workflow_approve_plan.run_loop.finalize",
-            )
-            .await;
+            );
+            gateway_for_spawn
+                .unregister_session_with_source(
+                    &session_id_for_spawn,
+                    "workflow_approve_plan.run_loop.finalize",
+                )
+                .await;
+        }
     });
 
     Ok(())

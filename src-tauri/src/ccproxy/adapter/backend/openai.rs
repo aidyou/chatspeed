@@ -819,8 +819,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 for (_, choice) in openai_chunk.choices.iter().enumerate() {
                     let delta = &choice.delta;
 
-                    // Process reasoning content
-                    if let Some(content) = &delta.reasoning_content {
+                    if let Some(content) = delta
+                        .reasoning_content
+                        .as_ref()
+                        .filter(|content| !content.is_empty())
+                    {
                         self.process_reasoning_content(
                             content.clone(),
                             &sse_status,

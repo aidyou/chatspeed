@@ -15,7 +15,7 @@ use crate::ccproxy::{
             ClaudeOutputAdapter, GeminiOutputAdapter, OllamaOutputAdapter, OpenAIOutputAdapter,
             OutputAdapter, OutputAdapterEnum,
         },
-        unified::{SseStatus, UnifiedRequest, UnifiedToolChoice},
+        unified::{SseStatus, UnifiedRequest},
     },
     claude::ClaudeNativeRequest,
     errors::{CCProxyError, ProxyResult},
@@ -32,6 +32,9 @@ use crate::constants::{
     CFG_CCPROXY_RETRY_ON_429_DEFAULT,
 };
 use crate::db::{CcproxyStat, MainStore};
+use crate::ccproxy::handler::request_preprocessor::{
+    preprocess_client_request_body, preprocess_unified_request,
+};
 
 fn get_proxy_alias_from_body(
     chat_protocol: &ChatProtocol,
@@ -212,13 +215,6 @@ fn build_unified_request(
     }
 }
 
-fn should_relax_required_tool_choice(base_url: &str) -> bool {
-    reqwest::Url::parse(base_url)
-        .ok()
-        .and_then(|url| url.host_str().map(|host| host.to_lowercase()))
-        .is_some_and(|host| host == "api.deepseek.com" || host == "api.deepseek.cn")
-}
-
 pub async fn handle_chat_completion(
     chat_protocol: ChatProtocol,
     client_headers: HeaderMap,
@@ -300,21 +296,24 @@ pub async fn handle_chat_completion(
         _ => tool_compat_mode,                   // Fallback to route parameter
     };
 
+    let preprocessed_request_body =
+        preprocess_client_request_body(client_request_body, &chat_protocol, &proxy_model)?;
+
     if chat_protocol == proxy_model.chat_protocol && !final_tool_compat_mode {
         let is_streaming = match chat_protocol {
             ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
                 let req: OpenAIChatCompletionRequest =
-                    serde_json::from_slice(&client_request_body).unwrap_or_default();
+                    serde_json::from_slice(&preprocessed_request_body).unwrap_or_default();
                 req.stream.unwrap_or(false)
             }
             ChatProtocol::Claude => {
                 let req: Result<ClaudeNativeRequest, _> =
-                    serde_json::from_slice(&client_request_body);
+                    serde_json::from_slice(&preprocessed_request_body);
                 req.map(|r| r.stream.unwrap_or(false)).unwrap_or(false)
             }
             ChatProtocol::Ollama => {
                 let req: OllamaChatCompletionRequest =
-                    serde_json::from_slice(&client_request_body).unwrap_or_default();
+                    serde_json::from_slice(&preprocessed_request_body).unwrap_or_default();
                 req.stream.unwrap_or(false)
             }
             ChatProtocol::Gemini => generate_action == "streamGenerateContent",
@@ -322,7 +321,7 @@ pub async fn handle_chat_completion(
 
         let result = super::handle_direct_forward(
             client_headers,
-            client_request_body,
+            preprocessed_request_body,
             proxy_model,
             is_streaming,
             main_store_arc,
@@ -334,7 +333,7 @@ pub async fn handle_chat_completion(
 
     let (mut unified_request, proxy_alias, is_streaming_request) = build_unified_request(
         chat_protocol.clone(),
-        client_request_body.clone(),
+        preprocessed_request_body,
         final_tool_compat_mode,
         route_model_alias,
         generate_action,
@@ -345,11 +344,7 @@ pub async fn handle_chat_completion(
     // --- Inject Engine Defaults only if missing from client AND configured with valid non-default values ---
     ModelResolver::merge_parameters_unified(&mut unified_request, &proxy_model);
 
-    if matches!(unified_request.tool_choice, Some(UnifiedToolChoice::Required))
-        && should_relax_required_tool_choice(&proxy_model.base_url)
-    {
-        unified_request.tool_choice = Some(UnifiedToolChoice::Auto);
-    }
+    preprocess_unified_request(&mut unified_request, &proxy_model);
 
     // Tool filtering logic remains same
     if proxy_model.tool_filter.len() > 0 {

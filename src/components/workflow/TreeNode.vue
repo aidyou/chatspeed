@@ -1,12 +1,21 @@
 <template>
   <div class="tree-node">
-    <div class="node-item" :class="{ 'is-dir': node.is_dir }" @click="handleClick">
+    <div
+      class="node-item"
+      :class="{ 'is-dir': node.is_dir }"
+      :draggable="true"
+      @click="handleClick"
+      @dragstart="handleDragStart">
       <span class="node-icon">
         <cs :name="node.is_dir ? (isExpanded ? 'ext-folder-open' : 'ext-folder') : getFileIcon(node.name)"
           size="14px" />
       </span>
       <span class="node-name" :class="gitStatusClass">{{ node.name }}</span>
       <div v-if="node.git_status" class="git-status" :class="gitStatusClass" :title="node.git_status"></div>
+      <div v-if="node.is_dir" class="node-actions">
+        <cs name="copy" size="12px" class="action-btn copy-btn" @click.stop="copyNodePath" />
+        <cs name="ext-folder-open" size="12px" class="action-btn open-btn" @click.stop="openNodePath" />
+      </div>
     </div>
 
     <div v-if="node.is_dir && isExpanded" class="node-children">
@@ -19,6 +28,8 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { invokeWrapper } from '@/libs/tauri'
+import { writeClipboard } from '@/libs/clipboard'
+import { showMessage } from '@/libs/util'
 
 const props = defineProps({
   node: Object,
@@ -55,6 +66,33 @@ const handleClick = () => {
   } else {
     emit('preview', props.node.path)
   }
+}
+
+const copyNodePath = async () => {
+  try {
+    await writeClipboard(props.node.path)
+    showMessage('Path copied', 'success')
+  } catch (error) {
+    console.error('Failed to copy path:', error)
+    showMessage('Failed to copy path', 'error')
+  }
+}
+
+const openNodePath = async () => {
+  try {
+    await invokeWrapper('open_path_in_file_manager', { path: props.node.path })
+  } catch (error) {
+    console.error('Failed to open directory:', error)
+  }
+}
+
+const handleDragStart = event => {
+  const path = String(props.node?.path || '').trim()
+  if (!path || !event.dataTransfer) return
+
+  event.dataTransfer.effectAllowed = 'copy'
+  event.dataTransfer.setData('application/x-chatspeed-workflow-path', path)
+  event.dataTransfer.setData('text/plain', path)
 }
 
 const getFileIcon = (name) => {
@@ -182,6 +220,27 @@ watch(isExpanded, (newVal) => {
       &.deleted {
         background-color: #f56c6c; // Danger/Red
       }
+    }
+
+    .node-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+
+      .action-btn {
+        color: var(--cs-text-color-secondary);
+
+        &:hover {
+          color: var(--el-color-primary);
+        }
+      }
+    }
+
+    &:hover .node-actions {
+      opacity: 1;
     }
   }
 

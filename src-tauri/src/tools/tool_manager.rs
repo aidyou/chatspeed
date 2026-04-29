@@ -197,13 +197,18 @@ impl ToolManager {
         // =================================================
         // FileSystem & Search tools
         // =================================================
-        self.register_tool(Arc::new(crate::tools::ReadFile)).await?;
-        self.register_tool(Arc::new(crate::tools::WriteFile))
+        self.register_tool(Arc::new(crate::tools::ReadFile::default()))
             .await?;
-        self.register_tool(Arc::new(crate::tools::EditFile)).await?;
-        self.register_tool(Arc::new(crate::tools::ListDir)).await?;
-        self.register_tool(Arc::new(crate::tools::Glob)).await?;
-        self.register_tool(Arc::new(crate::tools::Grep)).await?;
+        self.register_tool(Arc::new(crate::tools::WriteFile::default()))
+            .await?;
+        self.register_tool(Arc::new(crate::tools::EditFile::default()))
+            .await?;
+        self.register_tool(Arc::new(crate::tools::ListDir::default()))
+            .await?;
+        self.register_tool(Arc::new(crate::tools::Glob::default()))
+            .await?;
+        self.register_tool(Arc::new(crate::tools::Grep::default()))
+            .await?;
 
         // =================================================
         // System & Workflow tools

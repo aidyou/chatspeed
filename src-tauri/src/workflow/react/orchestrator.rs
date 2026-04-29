@@ -743,7 +743,9 @@ impl ToolDefinition for TaskTool {
         Prefer child_agent_name when selecting the child agent; use child_agent_id only as a fallback. \
         The prompt must contain a clear objective, the exact scope to investigate or implement, relevant constraints, \
         and the expected output format or success criteria. \
+        Include all known files, modules, open questions, and hypotheses to check in that first prompt whenever possible so the child can explore efficiently in one pass. \
         If the child agent must return structured findings, explicitly state which facts, files, risks, or conclusions must be included. \
+        After a call-mode child returns, the parent should consume that result before doing more broad exploration; only re-open exploration if the child result leaves a concrete unresolved gap. \
         execution_mode defaults to 'call'. Use execution_mode='call' when the parent cannot continue until the child finishes; the parent pauses and receives the result automatically. \
         Use execution_mode='background' when the child can run in parallel while the parent continues other work; completion will be reported automatically, and sub_agent_output can be used later if the result is explicitly needed."
     }
@@ -798,7 +800,7 @@ impl ToolDefinition for TaskTool {
                 "type": "object",
                 "properties": {
                     "description": { "type": "string", "description": "A short (3-5 word) description of the task" },
-                    "prompt": { "type": "string", "description": "A complete delegation brief for the child agent. Include the objective, exact scope, constraints, relevant context, and what the final output must contain." },
+                    "prompt": { "type": "string", "description": "A complete delegation brief for the child agent. Include the objective, exact scope, relevant context, constraints, known files/modules/questions to inspect, and what the final output must contain." },
                     "child_agent_name": {
                         "type": "string",
                         "enum": child_agent_names,

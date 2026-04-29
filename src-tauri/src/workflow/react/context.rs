@@ -21,8 +21,6 @@ pub struct ContextManager {
 }
 
 impl ContextManager {
-    const TODO_USE_REMINDER: &str = "<SYSTEM_REMINDER>For complex or multi-step work, use the todo* tools to track execution. Create tasks before major work begins, update statuses as you make progress, and keep the todo list aligned with the actual execution state.</SYSTEM_REMINDER>";
-
     pub(crate) fn sanitize_reasoning_content(reasoning: Option<String>) -> Option<String> {
         let reasoning = reasoning?;
         let trimmed = reasoning.trim();
@@ -275,50 +273,17 @@ impl ContextManager {
             store.get_workflow_snapshot(&self.session_id)?
         };
         self.messages = Self::rebuild_compacted_messages(&snapshot.messages, self.max_tokens);
-        let (segment_id, context_messages) = {
+        let segment_id = {
             let store = self.main_store.read().map_err(|e| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
             })?;
-            let latest_segment_id = store
+            store
                 .get_latest_workflow_context_segment_id(&self.session_id)?
-                .unwrap_or(1);
-            let context_messages =
-                store.list_workflow_context_messages(&self.session_id, latest_segment_id)?;
-            (latest_segment_id, context_messages)
+                .unwrap_or(1)
         };
         self.current_segment_id = segment_id;
-        self.context_messages = context_messages;
-        if self.context_messages.is_empty() {
-            self.bootstrap_context_projection_from_messages().await?;
-        }
-
-        Ok(())
-    }
-
-    async fn bootstrap_context_projection_from_messages(
-        &mut self,
-    ) -> Result<(), WorkflowEngineError> {
-        let start_index = Self::latest_successful_completion_index(&self.messages)
-            .map(|index| index + 1)
-            .unwrap_or(0);
-        let active_messages: Vec<WorkflowMessage> = self.messages[start_index..].to_vec();
-        self.current_segment_id = 1;
-        self.context_messages.clear();
-
-        for message in active_messages {
-            let step_type = message
-                .step_type
-                .as_deref()
-                .and_then(|value| value.parse().ok());
-            let context_message = self.project_context_message(&message, step_type.as_ref());
-            let persisted = {
-                let store = self.main_store.read().map_err(|e| {
-                    WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-                })?;
-                store.add_workflow_context_message(&context_message)?
-            };
-            self.context_messages.push(persisted);
-        }
+        self.rebuild_context_projection_from_runtime_messages(false, false)
+            .await?;
 
         Ok(())
     }
@@ -328,6 +293,21 @@ impl ContextManager {
             Some(attached) if !attached.is_empty() => format!("{}\n\n{}", content, attached),
             _ => content.to_string(),
         }
+    }
+
+    fn content_for_context_projection(message: &WorkflowMessage) -> String {
+        if message.role == "tool" {
+            if let Some(llm_content) = message
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("llm_content"))
+                .and_then(|value| value.as_str())
+            {
+                return llm_content.to_string();
+            }
+        }
+
+        Self::merge_attached_context(&message.message, message.attached_context.as_deref())
     }
 
     fn should_wrap_as_user_query(&self, role: &str, step_type: Option<&StepType>) -> bool {
@@ -344,8 +324,7 @@ impl ContextManager {
         message: &WorkflowMessage,
         step_type: Option<&StepType>,
     ) -> WorkflowContextMessage {
-        let merged_content =
-            Self::merge_attached_context(&message.message, message.attached_context.as_deref());
+        let merged_content = Self::content_for_context_projection(message);
         let final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
             let plan = message
                 .metadata
@@ -364,11 +343,7 @@ impl ContextManager {
                 plan, todos
             )
         } else if self.should_wrap_as_user_query(&message.role, step_type) {
-            format!(
-                "<user_query>\n{}\n</user_query>\n{}",
-                merged_content,
-                Self::TODO_USE_REMINDER
-            )
+            format!("<user_query>\n{}\n</user_query>", merged_content)
         } else {
             merged_content
         };
@@ -386,6 +361,128 @@ impl ContextManager {
             source_message_id: message.id,
             created_at: None,
         }
+    }
+
+    fn projection_source_messages(&self) -> Vec<WorkflowMessage> {
+        let Some(summary_idx) = Self::latest_summary_index(&self.messages) else {
+            return self.messages.clone();
+        };
+
+        let mut projection = vec![self.messages[summary_idx].clone()];
+        let tail_start = summary_idx + 1;
+        if tail_start >= self.messages.len() {
+            return projection;
+        }
+
+        let completion_indices_after_summary: Vec<usize> = self
+            .messages
+            .iter()
+            .enumerate()
+            .skip(tail_start)
+            .filter_map(|(idx, message)| {
+                Self::is_successful_completion_message(message).then_some(idx)
+            })
+            .collect();
+
+        let retained_start = completion_indices_after_summary
+            .iter()
+            .rev()
+            .nth(1)
+            .map(|index| index + 1)
+            .unwrap_or(tail_start);
+
+        projection.extend(self.messages[retained_start..].iter().cloned());
+        projection
+    }
+
+    fn build_context_projection(
+        &self,
+        source_messages: &[WorkflowMessage],
+        segment_id: i32,
+    ) -> Vec<WorkflowContextMessage> {
+        let mut projected = Vec::new();
+
+        for message in source_messages {
+            let step_type = message
+                .step_type
+                .as_deref()
+                .and_then(|value| value.parse().ok());
+
+            let merged_content = Self::content_for_context_projection(message);
+            let final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
+                let plan = message
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("plan_content"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let todos = message
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("todo_content"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("[]");
+                format!(
+                    "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
+                    plan, todos
+                )
+            } else if message.role == "user"
+                && step_type.as_ref() != Some(&StepType::Observe)
+                && !projected.iter().any(|existing: &WorkflowContextMessage| existing.role == "user")
+            {
+                format!("<user_query>\n{}\n</user_query>", merged_content)
+            } else {
+                merged_content
+            };
+
+            projected.push(WorkflowContextMessage {
+                id: None,
+                session_id: self.session_id.clone(),
+                segment_id,
+                role: message.role.clone(),
+                message: final_content,
+                reasoning: message.reasoning.clone(),
+                message_kind: message.message_kind.clone(),
+                message_subtype: message.message_subtype.clone(),
+                metadata: message.metadata.clone(),
+                source_message_id: message.id,
+                created_at: None,
+            });
+        }
+
+        projected
+    }
+
+    async fn rebuild_context_projection_from_runtime_messages(
+        &mut self,
+        increment_segment: bool,
+        persist: bool,
+    ) -> Result<(), WorkflowEngineError> {
+        if increment_segment {
+            self.current_segment_id += 1;
+        }
+
+        let segment_id = self.current_segment_id;
+        let projection = self.build_context_projection(&self.projection_source_messages(), segment_id);
+        self.context_messages.clear();
+
+        if persist {
+            for message in projection {
+                let persisted = self.persist_context_seed(message).await?;
+                self.context_messages.push(persisted);
+            }
+        } else {
+            self.context_messages = projection;
+        }
+
+        Ok(())
+    }
+
+    pub async fn begin_new_task_segment_from_runtime_projection(
+        &mut self,
+    ) -> Result<(), WorkflowEngineError> {
+        self.rebuild_context_projection_from_runtime_messages(true, true)
+            .await
     }
 
     fn to_workflow_messages(messages: &[WorkflowContextMessage]) -> Vec<WorkflowMessage> {
@@ -435,22 +532,6 @@ impl ContextManager {
             seed.segment_id = self.current_segment_id;
             seed.session_id = self.session_id.clone();
             let persisted = self.persist_context_seed(seed).await?;
-            self.context_messages.push(persisted);
-        }
-
-        Ok(())
-    }
-
-    pub async fn append_existing_context_messages_to_current_segment(
-        &mut self,
-        messages: Vec<WorkflowContextMessage>,
-    ) -> Result<(), WorkflowEngineError> {
-        for mut message in messages {
-            message.id = None;
-            message.segment_id = self.current_segment_id;
-            message.session_id = self.session_id.clone();
-            message.created_at = None;
-            let persisted = self.persist_context_seed(message).await?;
             self.context_messages.push(persisted);
         }
 
@@ -511,10 +592,8 @@ impl ContextManager {
                         && !message.message.trim().is_empty())
                 });
         if should_start_new_segment {
-            // Carry forward all current context (compression summary + recent messages)
-            // into the new segment so the LLM doesn't lose context when the user
-            // sends a new message after completion.
-            self.begin_new_segment_with_seed(self.context_messages.clone()).await?;
+            self.rebuild_context_projection_from_runtime_messages(true, true)
+                .await?;
         }
 
         let _permit = self
@@ -618,35 +697,7 @@ impl ContextManager {
         all_messages.push(persisted_summary.clone());
         self.messages = Self::rebuild_compacted_messages(&all_messages, self.max_tokens);
 
-        let retained_context: Vec<WorkflowContextMessage> = self
-            .context_messages
-            .iter()
-            .filter(|message| {
-                message
-                    .source_message_id
-                    .is_some_and(|id| id > compressed_until_message_id)
-            })
-            .cloned()
-            .collect();
-
-        self.begin_new_segment_with_seed(vec![WorkflowContextMessage {
-            id: None,
-            session_id: self.session_id.clone(),
-            segment_id: 0,
-            role: "system".to_string(),
-            message: format!("## Previous Context Snapshot\n{}", summary),
-            reasoning: None,
-            message_kind: "summary".to_string(),
-            message_subtype: Some("compression".to_string()),
-            metadata: Some(json!({
-                "type": "summary",
-                "compressed_until_message_id": compressed_until_message_id
-            })),
-            source_message_id: persisted_summary.id,
-            created_at: None,
-        }])
-        .await?;
-        self.append_existing_context_messages_to_current_segment(retained_context)
+        self.rebuild_context_projection_from_runtime_messages(true, true)
             .await?;
 
         Ok(())
@@ -693,6 +744,7 @@ mod tests {
     use crate::db::{Agent, MainStore, WorkflowMessage};
     use crate::libs::tsid::TsidGenerator;
     use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
+    use crate::workflow::react::types::StepType;
     use serde_json::json;
     use std::sync::{Arc, RwLock};
 
@@ -1856,6 +1908,205 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn get_messages_for_llm_with_summary_keeps_only_latest_completed_task_and_current_task() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-llm-summary-segment-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Task one".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add task one");
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Task one completion report".to_string(),
+                None,
+                None,
+                Some(crate::workflow::react::types::StepType::Think),
+                1,
+                false,
+                None,
+                Some(json!({ "message_kind": "completion_report" })),
+            )
+            .await
+            .expect("failed to add task one report");
+        let completion_one = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add task one completion")
+            .0;
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Task two".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add task two");
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Task two completion report".to_string(),
+                None,
+                None,
+                Some(crate::workflow::react::types::StepType::Think),
+                4,
+                false,
+                None,
+                Some(json!({ "message_kind": "completion_report" })),
+            )
+            .await
+            .expect("failed to add task two report");
+        let completion_two = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                5,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add task two completion")
+            .0;
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Task three".to_string(),
+                None,
+                None,
+                None,
+                6,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add task three");
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Task three completion report".to_string(),
+                None,
+                None,
+                Some(crate::workflow::react::types::StepType::Think),
+                7,
+                false,
+                None,
+                Some(json!({ "message_kind": "completion_report" })),
+            )
+            .await
+            .expect("failed to add task three report");
+        let _completion_three = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                None,
+                8,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add task three completion")
+            .0;
+
+        context
+            .compress(
+                "<state_snapshot>rolled up older work</state_snapshot>".to_string(),
+                9,
+                completion_two.id.expect("completion two id missing"),
+            )
+            .await
+            .expect("compression should succeed");
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Task four".to_string(),
+                None,
+                None,
+                None,
+                10,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add task four");
+
+        let llm_messages = context.get_messages_for_llm();
+        let llm_contents = llm_messages
+            .iter()
+            .map(|message| message.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(llm_contents
+            .iter()
+            .any(|content| content.contains("Previous Context Snapshot")));
+        assert!(llm_contents
+            .iter()
+            .any(|content| content.contains("Task three")));
+        assert!(llm_contents
+            .iter()
+            .any(|content| content.contains("Task three completion report")));
+        assert!(llm_contents
+            .iter()
+            .any(|content| content.contains("Task four")));
+        assert!(!llm_contents
+            .iter()
+            .any(|content| content.contains("Task one")));
+        assert!(!llm_contents
+            .iter()
+            .any(|content| content.contains("Task one completion report")));
+        assert!(!llm_contents
+            .iter()
+            .any(|content| content.contains("Task two completion report")));
+        assert!(
+            completion_one.id.is_some(),
+            "sanity check: first completion should have a persisted id"
+        );
+    }
+
     #[test]
     fn sanitize_reasoning_content_removes_incomplete_think_wrappers() {
         let sanitized = ContextManager::sanitize_reasoning_content(Some(
@@ -1870,5 +2121,161 @@ mod tests {
             "<think>\nwrapped\n</think>".to_string(),
         ));
         assert_eq!(sanitized_closed.as_deref(), Some("wrapped"));
+    }
+
+    #[tokio::test]
+    async fn tool_projection_prefers_llm_content_over_full_tool_message() {
+        let (_dir, store) = setup_store();
+        insert_workflow(&store, "tool_llm_projection");
+        let mut context = ContextManager::new(
+            "tool_llm_projection".to_string(),
+            store,
+            20_000,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Investigate".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message");
+
+        context
+            .add_message(
+                "tool".to_string(),
+                "FULL SHELL OUTPUT".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_name": "bash",
+                    "llm_content": "REDUCED SHELL OUTPUT"
+                })),
+            )
+            .await
+            .expect("failed to add tool message");
+
+        let llm_messages = context.get_messages_for_llm();
+        let llm_contents = llm_messages
+            .iter()
+            .map(|message| message.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(llm_contents
+            .iter()
+            .any(|content| content.contains("REDUCED SHELL OUTPUT")));
+        assert!(!llm_contents
+            .iter()
+            .any(|content| content.contains("FULL SHELL OUTPUT")));
+    }
+
+    #[tokio::test]
+    async fn begin_new_task_segment_from_runtime_projection_keeps_latest_completed_context() {
+        let (_dir, store) = setup_store();
+        insert_workflow(&store, "new_task_segment_projection");
+        let mut context = ContextManager::new(
+            "new_task_segment_projection".to_string(),
+            store,
+            20_000,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Original task".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add original task");
+
+        context
+            .add_message(
+                "assistant".to_string(),
+                "Original analysis".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                2,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add original analysis");
+
+        let completion = context
+            .add_message(
+                "tool".to_string(),
+                "Finished".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                3,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+            )
+            .await
+            .expect("failed to add completion")
+            .0;
+        assert!(completion.id.is_some(), "completion id should exist");
+
+        context
+            .begin_new_task_segment_from_runtime_projection()
+            .await
+            .expect("failed to begin new task segment");
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Follow-up clarification".to_string(),
+                None,
+                None,
+                None,
+                4,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add follow-up");
+
+        let llm_messages = context.get_messages_for_llm();
+        let llm_contents = llm_messages
+            .iter()
+            .map(|message| message.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(llm_contents
+            .iter()
+            .any(|content| content.contains("Original task")));
+        assert!(llm_contents
+            .iter()
+            .any(|content| content.contains("Original analysis")));
+        assert!(llm_contents
+            .iter()
+            .any(|content| content.contains("Finished")));
+        assert!(llm_contents
+            .iter()
+            .any(|content| content.contains("Follow-up clarification")));
     }
 }

@@ -1,5 +1,6 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
-use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
+use crate::tools::shell_output::build_shell_tool_result;
+use crate::tools::{NativeToolResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::security::PathGuard;
@@ -530,24 +531,15 @@ impl ToolDefinition for ShellExecute {
 
         match timeout(Duration::from_millis(timeout_ms), cmd_future).await {
             Ok(Ok(output)) => {
-                let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                if stdout.len() > 30_000 {
-                    stdout.truncate(30_000);
-                    stdout.push_str("\n[Truncated]");
-                }
-
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let exit_code = output.status.code().unwrap_or(-1);
-                let mut result = format!("Exit code: {}\n", exit_code);
-                if !stdout.is_empty() {
-                    result.push_str("\nstdout:\n");
-                    result.push_str(&stdout);
-                }
-                if !stderr.is_empty() {
-                    result.push_str("\nstderr:\n");
-                    result.push_str(&stderr);
-                }
-                Ok(ToolCallResult::success(Some(result), None))
+                Ok(build_shell_tool_result(
+                    command_str,
+                    exit_code,
+                    &stdout,
+                    &stderr,
+                ))
             }
             Ok(Err(e)) => Err(ToolError::ExecutionFailed(format!("Spawn failed: {}", e))),
             Err(_) => Err(ToolError::ExecutionFailed(format!(
@@ -656,27 +648,13 @@ impl ShellExecute {
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         // Process has exited
-                        if full_stdout.len() > 30_000 {
-                            let boundary = find_char_boundary(&full_stdout, 30_000);
-                            full_stdout.truncate(boundary);
-                            full_stdout.push_str("\n[Truncated]");
-                        }
-                        if full_stderr.len() > 30_000 {
-                            let boundary = find_char_boundary(&full_stderr, 30_000);
-                            full_stderr.truncate(boundary);
-                            full_stderr.push_str("\n[Truncated]");
-                        }
                         let exit_code = status.code().unwrap_or(-1);
-                        let mut result = format!("Exit code: {}\n", exit_code);
-                        if !full_stdout.is_empty() {
-                            result.push_str("\nstdout:\n");
-                            result.push_str(&full_stdout);
-                        }
-                        if !full_stderr.is_empty() {
-                            result.push_str("\nstderr:\n");
-                            result.push_str(&full_stderr);
-                        }
-                        return Ok(ToolCallResult::success(Some(result), None));
+                        return Ok(build_shell_tool_result(
+                            command_str,
+                            exit_code,
+                            &full_stdout,
+                            &full_stderr,
+                        ));
                     }
                     Ok(None) => {
                         // Both streams EOF but process still running - wait a bit
@@ -769,16 +747,12 @@ impl ShellExecute {
                                 full_stderr.push_str("\n[Truncated]");
                             }
                             let exit_code = status.code().unwrap_or(-1);
-                            let mut result = format!("Exit code: {}\n", exit_code);
-                            if !full_stdout.is_empty() {
-                                result.push_str("\nstdout:\n");
-                                result.push_str(&full_stdout);
-                            }
-                            if !full_stderr.is_empty() {
-                                result.push_str("\nstderr:\n");
-                                result.push_str(&full_stderr);
-                            }
-                            return Ok(ToolCallResult::success(Some(result), None));
+                            return Ok(build_shell_tool_result(
+                                command_str,
+                                exit_code,
+                                &full_stdout,
+                                &full_stderr,
+                            ));
                         }
                         Ok(None) => {
                             // Process still running, continue
@@ -799,18 +773,6 @@ impl ShellExecute {
             }
         }
     }
-}
-
-/// Find the nearest valid UTF-8 character boundary at or before `max_len`.
-fn find_char_boundary(s: &str, max_len: usize) -> usize {
-    if s.len() <= max_len {
-        return s.len();
-    }
-    let mut boundary = max_len;
-    while boundary > 0 && !s.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    boundary
 }
 
 #[cfg(test)]

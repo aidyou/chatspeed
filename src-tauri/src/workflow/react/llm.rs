@@ -407,71 +407,21 @@ impl LlmProcessor {
                             WorkflowEngineError::General(format!("RX task failed: {}", e))
                         })??;
 
-                    // --- Post-processing: Extract model-native <think> or <thought> blocks ---
-                    let has_think = plain_text.to_lowercase().contains("<think>");
-                    let has_thought = plain_text.to_lowercase().contains("<thought>");
-
-                    if has_think || has_thought {
-                        let mut extracted_reasoning = String::new();
-                        let mut cleaned_content = String::new();
-                        let mut current_pos = 0;
-                        let text_lower = plain_text.to_lowercase();
-
-                        let tag_pairs = [("<think>", "</think>"), ("<thought>", "</thought>")];
-
-                        // Find the first occurrence of any start tag
-                        while let Some((pos, s, e)) = tag_pairs.iter().find_map(|(s, e)| {
-                            text_lower[current_pos..]
-                                .find(s)
-                                .map(|idx| (current_pos + idx, *s, *e))
-                        }) {
-                            cleaned_content.push_str(&plain_text[current_pos..pos]);
-
-                            let tag_len = s.len();
-                            let remainder_lower = &text_lower[pos + tag_len..];
-                            if let Some(end_idx) = remainder_lower.find(e) {
-                                let absolute_end = pos + tag_len + end_idx;
-                                let reasoning = &plain_text[pos + tag_len..absolute_end];
-                                if !extracted_reasoning.is_empty() {
-                                    extracted_reasoning.push_str("\n\n");
-                                }
-                                extracted_reasoning.push_str(reasoning.trim());
-                                current_pos = absolute_end + e.len();
-                            } else {
-                                // Unclosed tag: take everything till the end
-                                let reasoning = &plain_text[pos + tag_len..];
-                                if !extracted_reasoning.is_empty() {
-                                    extracted_reasoning.push_str("\n\n");
-                                }
-                                extracted_reasoning.push_str(reasoning.trim());
-                                current_pos = plain_text.len();
-                                break;
-                            }
-                        }
-
-                        if current_pos < plain_text.len() {
-                            cleaned_content.push_str(&plain_text[current_pos..]);
-                        }
-
+                    // Only treat model-native thinking tags as hidden reasoning when they
+                    // appear at the beginning of the visible content after leading whitespace.
+                    // Older domestic reasoning models emit a single leading think block before
+                    // the final answer; scanning the entire content can incorrectly strip
+                    // literal tags that appear mid-response.
+                    if let Some((cleaned_content, extracted_reasoning)) =
+                        Self::extract_leading_native_think_block(&plain_text)
+                    {
                         if !extracted_reasoning.is_empty() {
                             if !full_reasoning.is_empty() {
                                 full_reasoning.push_str("\n\n");
                             }
                             full_reasoning.push_str(&extracted_reasoning);
                         }
-
-                        // Final cleanup: remove all variants of thinking tags from plain_text
-                        plain_text = cleaned_content
-                            .replace("<think>", "")
-                            .replace("</think>", "")
-                            .replace("<THINK>", "")
-                            .replace("</THINK>", "")
-                            .replace("<thought>", "")
-                            .replace("</thought>", "")
-                            .replace("<THOUGHT>", "")
-                            .replace("</THOUGHT>", "")
-                            .trim()
-                            .to_string();
+                        plain_text = cleaned_content;
                     }
 
                     let has_invalid_tool_call = final_metadata
@@ -721,6 +671,34 @@ impl LlmProcessor {
         crate::workflow::react::context::ContextManager::sanitize_reasoning_content(
             reasoning.map(|value| value.to_string()),
         )
+    }
+
+    fn extract_leading_native_think_block(plain_text: &str) -> Option<(String, String)> {
+        let trimmed_start = plain_text.trim_start();
+        let leading_ws_len = plain_text.len().saturating_sub(trimmed_start.len());
+        let trimmed_lower = trimmed_start.to_lowercase();
+        let tag_pairs = [("<think>", "</think>"), ("<thought>", "</thought>")];
+
+        for (start_tag, end_tag) in tag_pairs {
+            if !trimmed_lower.starts_with(start_tag) {
+                continue;
+            }
+
+            let content_start = leading_ws_len + start_tag.len();
+            let reasoning = if let Some(end_idx) = trimmed_lower[start_tag.len()..].find(end_tag) {
+                let absolute_end = content_start + end_idx;
+                let mut cleaned_content = String::new();
+                cleaned_content.push_str(&plain_text[..leading_ws_len]);
+                cleaned_content.push_str(&plain_text[absolute_end + end_tag.len()..]);
+                return Some((cleaned_content.trim().to_string(), plain_text[content_start..absolute_end].trim().to_string()));
+            } else {
+                plain_text[content_start..].trim().to_string()
+            };
+
+            return Some((String::new(), reasoning));
+        }
+
+        None
     }
 
     fn normalize_history_messages(raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
@@ -1170,7 +1148,7 @@ impl LlmProcessor {
         reminders
     }
 
-    fn build_reminders(&self, current_step: usize, max_steps: usize) -> String {
+    fn build_reminders(&self, _current_step: usize, _max_steps: usize) -> String {
         let (allowed_roots, cwd) = if let Ok(guard) = self.path_guard.read() {
             let roots = guard.workspace_roots();
             let primary = guard.get_primary_root().map(|p| p.to_path_buf());
@@ -1216,23 +1194,7 @@ impl LlmProcessor {
                     .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                     .unwrap_or_else(|_| "unknown".into());
 
-                let status = std::process::Command::new("git")
-                    .args(["-C", &cwd.to_string_lossy(), "status", "--short"])
-                    .output()
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                    .unwrap_or_default();
-
-                let recent_commits = std::process::Command::new("git")
-                    .args(["-C", &cwd.to_string_lossy(), "log", "-n", "3", "--oneline"])
-                    .output()
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                    .unwrap_or_default();
-
                 env_info.push_str(&format!("  - Git Repository: [Branch: {}]\n", branch));
-                if !status.is_empty() {
-                    env_info.push_str(&format!("  - Pending Changes:\n{}\n", status));
-                }
-                env_info.push_str(&format!("  - Recent Commits:\n{}\n", recent_commits));
             } else {
                 env_info.push_str("  - Is a git repository: false\n");
             }
@@ -1271,16 +1233,9 @@ impl LlmProcessor {
             platform, shell, os_version, today
         ));
 
-        let progress_info = if max_steps > 0 {
-            let remaining = max_steps.saturating_sub(current_step);
-            format!("\n - Step: {current_step} / {max_steps} (remaining: {remaining})")
-        } else {
-            String::new()
-        };
-
         format!(
-            "{}{}\n\n<SYSTEM_REMINDER>\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</SYSTEM_REMINDER>\n",
-            env_info, progress_info
+            "{}\n\n<SYSTEM_REMINDER>\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</SYSTEM_REMINDER>\n",
+            env_info
         )
     }
 
@@ -1320,7 +1275,7 @@ impl LlmProcessor {
 pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str) -> String {
     match error_type {
         "Security" => {
-            "<SYSTEM_REMINDER>The path is outside your authorized workspace. Please use 'list_dir' to verify valid paths or ask the user to add the directory to 'allowed_paths' in settings.</SYSTEM_REMINDER>".to_string()
+            "<SYSTEM_REMINDER>Path is outside the authorized workspace. Use 'list_dir' to verify valid paths or ask the user to add access.</SYSTEM_REMINDER>".to_string()
         }
         "Io" => {
             let is_permission = content.contains("Permission denied");
@@ -1330,59 +1285,53 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
             match tool_name {
                 "read_file" | "list_dir" | "edit_file" | "write_file" => {
                     if is_permission {
-                        "<SYSTEM_REMINDER>Permission denied. Check file/directory permissions or ask the user to grant access.</SYSTEM_REMINDER>".to_string()
+                        "<SYSTEM_REMINDER>Permission denied. Check file permissions or ask the user to grant access.</SYSTEM_REMINDER>".to_string()
                     } else if is_not_found {
-                        "<SYSTEM_REMINDER>Path does not exist. Use 'list_dir' to explore valid paths, or create parent directories first if writing.</SYSTEM_REMINDER>".to_string()
+                        "<SYSTEM_REMINDER>Path not found. Use 'list_dir' to locate it, or create parent directories first if writing.</SYSTEM_REMINDER>".to_string()
                     } else {
-                        "<SYSTEM_REMINDER>I/O error. Verify the path exists and is correct. Use 'list_dir' to explore if unsure.</SYSTEM_REMINDER>".to_string()
+                        "<SYSTEM_REMINDER>I/O error. Verify the path and use 'list_dir' if needed.</SYSTEM_REMINDER>".to_string()
                     }
                 }
-                _ => "<SYSTEM_REMINDER>Analyze the error and try a different approach if necessary.</SYSTEM_REMINDER>".to_string()
+                _ => "<SYSTEM_REMINDER>Review the error and try a different approach if needed.</SYSTEM_REMINDER>".to_string()
             }
         }
         "InvalidParams" => {
-            "<SYSTEM_REMINDER>Check the tool's input schema and ensure all required fields are provided with correct types.</SYSTEM_REMINDER>".to_string()
+            "<SYSTEM_REMINDER>Check the tool schema and required argument types.</SYSTEM_REMINDER>".to_string()
         }
         "NoToolCall" => {
             if tool_name == crate::tools::TOOL_SUBMIT_RESULT {
-                "<SYSTEM_REMINDER>CRITICAL: You MUST call a tool in every response. For a child-agent workflow, when the delegated task is complete, call 'submit_result' with both a full `result` and a concise `summary`.</SYSTEM_REMINDER>".to_string()
+                "<SYSTEM_REMINDER>You must call a tool every turn. When the delegated task is done, call 'submit_result' with both `result` and `summary`.</SYSTEM_REMINDER>".to_string()
             } else {
-                "<SYSTEM_REMINDER>CRITICAL: You MUST call a tool in every response. Review the available tools and select the appropriate one for your current step. If you need to communicate with the user, use 'answer_user'. If the task is complete, use 'complete_workflow_with_summary'.</SYSTEM_REMINDER>".to_string()
+                "<SYSTEM_REMINDER>You must call a tool every turn. Use 'answer_user' to reply, or 'complete_workflow_with_summary' when the task is done.</SYSTEM_REMINDER>".to_string()
             }
         }
         "Timeout" => {
-            "<SYSTEM_REMINDER>Operation timed out. Consider breaking the task into smaller steps or using a less resource-intensive approach.</SYSTEM_REMINDER>".to_string()
+            "<SYSTEM_REMINDER>Operation timed out. Break it into smaller steps or use a lighter approach.</SYSTEM_REMINDER>".to_string()
         }
         "NetworkError" => {
             match tool_name {
                 "web_search" => {
-                    "<SYSTEM_REMINDER>Search failed due to network error. Recovery steps:\n\
-                    1. Retry ONCE if you suspect a transient issue.\n\
-                    2. If it fails again, try rephrasing your query with different keywords. \
-                    If the topic is China-related, try searching in Chinese.\n\
-                    3. If no results found, mark as 'data_missing'.</SYSTEM_REMINDER>"
+                    "<SYSTEM_REMINDER>Search failed. Retry once; if it still fails, rephrase the query. Use Chinese for China-centric topics. If still blocked, mark data_missing.</SYSTEM_REMINDER>"
                         .to_string()
                 }
                 "web_fetch" => {
-                    "<SYSTEM_REMINDER>Failed to fetch this URL. Do NOT retry the same URL. \
-                    Instead: (1) try an alternative URL from your search results, or \
-                    (2) if no alternatives exist, mark the data as unavailable and proceed.</SYSTEM_REMINDER>"
+                    "<SYSTEM_REMINDER>Fetch failed. Do not retry the same URL immediately; try another source or mark the data unavailable.</SYSTEM_REMINDER>"
                         .to_string()
                 }
                 _ => {
-                    "<SYSTEM_REMINDER>Network error occurred. Check connection and retry once. If the issue persists, the service may be unavailable.</SYSTEM_REMINDER>"
+                    "<SYSTEM_REMINDER>Network error. Retry once; if it persists, treat the service as unavailable.</SYSTEM_REMINDER>"
                         .to_string()
                 }
             }
         }
         "AuthError" => {
-            "<SYSTEM_REMINDER>Authentication failed. Check API keys or credentials configuration in settings.</SYSTEM_REMINDER>".to_string()
+            "<SYSTEM_REMINDER>Authentication failed. Check API keys or credentials.</SYSTEM_REMINDER>".to_string()
         }
         "McpServerNotFound" => {
-            "<SYSTEM_REMINDER>The requested MCP server is not found. Verify the server name or use 'list_available_tools' to see available servers.</SYSTEM_REMINDER>".to_string()
+            "<SYSTEM_REMINDER>MCP server not found. Verify the server name or inspect available tools.</SYSTEM_REMINDER>".to_string()
         }
         "Fatal" => {
-            "<SYSTEM_REMINDER>A fatal error occurred. Stop and ask the user for guidance before proceeding.</SYSTEM_REMINDER>".to_string()
+            "<SYSTEM_REMINDER>Fatal error. Stop and ask the user for guidance.</SYSTEM_REMINDER>".to_string()
         }
         _ => {
             match tool_name {
@@ -1390,14 +1339,14 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
                     let is_cmd_not_found = content.contains("command not found");
                     let is_syntax_error = content.contains("syntax error");
                     if is_cmd_not_found {
-                        "<SYSTEM_REMINDER>Command not found. Verify the tool is installed or use an alternative command.</SYSTEM_REMINDER>".to_string()
+                        "<SYSTEM_REMINDER>Command not found. Verify it is installed or use an alternative.</SYSTEM_REMINDER>".to_string()
                     } else if is_syntax_error {
-                        "<SYSTEM_REMINDER>Shell syntax error. Check quoting, parentheses, and special character escaping.</SYSTEM_REMINDER>".to_string()
+                        "<SYSTEM_REMINDER>Shell syntax error. Check quoting and special-character escaping.</SYSTEM_REMINDER>".to_string()
                     } else {
-                        "<SYSTEM_REMINDER>Command failed. Check syntax and ensure required dependencies are installed.</SYSTEM_REMINDER>".to_string()
+                        "<SYSTEM_REMINDER>Command failed. Check syntax and required dependencies.</SYSTEM_REMINDER>".to_string()
                     }
                 }
-                _ => "<SYSTEM_REMINDER>Analyze this error to decide your next step.</SYSTEM_REMINDER>".to_string()
+                _ => "<SYSTEM_REMINDER>Use this error to choose the next step.</SYSTEM_REMINDER>".to_string()
             }
         }
     }
@@ -1628,5 +1577,13 @@ mod tests {
             history[0]["reasoning_content"].as_str().unwrap_or_default(),
             "First hidden step\n\nSecond hidden step"
         );
+    }
+
+    #[test]
+    fn extract_leading_native_think_block_ignores_mid_content_tags() {
+        assert!(LlmProcessor::extract_leading_native_think_block(
+            "Answer first\n<think>literal tag example</think>"
+        )
+        .is_none());
     }
 }
