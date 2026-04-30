@@ -121,11 +121,7 @@ impl ContextCompressor {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let retry_instruction = if attempt == 1 {
-                String::new()
-            } else {
-                "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. You MUST return exactly one non-empty <state_snapshot>...</state_snapshot> XML block. Do NOT return JSON, reasoning-only text, or explanations. Ensure <prev_tasks> is preserved and populated when completed tasks exist.</SYSTEM_REMINDER>".to_string()
-            };
+            let mut retry_instruction = String::new();
             let full_history = vec![
                 json!({
                     "role": "system",
@@ -163,17 +159,25 @@ impl ContextCompressor {
             {
                 Ok(result) => {
                     let normalized = Self::normalize_summary_result(&result);
-                    if let Some(validated) = Self::validate_summary_result(&normalized) {
+                    if let Ok(validated) = Self::validate_summary_result(&normalized) {
                         return Ok(validated);
                     }
 
+                    let validation_error = match Self::validate_summary_result(&normalized) {
+                        Ok(_) => String::new(),
+                        Err(err) => err,
+                    };
+
                     if attempt < max_attempts {
                         let wait_secs = 2u64.pow(attempt - 1);
+                        retry_instruction =
+                            Self::build_retry_instruction(&validation_error, completed_tasks);
                         log::warn!(
-                            "ContextCompressor: compression attempt {}/{} returned invalid summary format, retrying in {}s. normalized_preview={}",
+                            "ContextCompressor: compression attempt {}/{} returned invalid summary format, retrying in {}s. validation_error={}. normalized_preview={}",
                             attempt,
                             max_attempts,
                             wait_secs,
+                            validation_error,
                             Self::preview_for_log(&normalized, 500)
                         );
                         sleep(Duration::from_secs(wait_secs)).await;
@@ -181,8 +185,8 @@ impl ContextCompressor {
                     }
 
                     return Err(WorkflowEngineError::General(format!(
-                        "Compression returned invalid summary format after {} attempts",
-                        max_attempts
+                        "Compression returned invalid summary format after {} attempts: {}",
+                        max_attempts, validation_error
                     )));
                 }
                 Err(err)
@@ -407,14 +411,17 @@ impl ContextCompressor {
         trimmed.to_string()
     }
 
-    fn validate_summary_result(normalized: &str) -> Option<String> {
+    fn validate_summary_result(normalized: &str) -> Result<String, String> {
         let trimmed = normalized.trim();
         if trimmed.is_empty() {
-            return None;
+            return Err("empty response".to_string());
         }
 
         if !trimmed.starts_with("<state_snapshot>") || !trimmed.ends_with("</state_snapshot>") {
-            return None;
+            return Err(
+                "response must contain exactly one top-level <state_snapshot>...</state_snapshot> block"
+                    .to_string(),
+            );
         }
 
         let required_tags = [
@@ -427,11 +434,33 @@ impl ContextCompressor {
             "<task_state>",
         ];
 
-        if required_tags.iter().any(|tag| !trimmed.contains(tag)) {
-            return None;
+        let missing_tags = required_tags
+            .iter()
+            .copied()
+            .filter(|tag| !trimmed.contains(tag))
+            .collect::<Vec<_>>();
+        if !missing_tags.is_empty() {
+            return Err(format!(
+                "missing required tags: {}",
+                missing_tags.join(", ")
+            ));
         }
 
-        Some(trimmed.to_string())
+        Ok(trimmed.to_string())
+    }
+
+    fn build_retry_instruction(validation_error: &str, completed_tasks: &str) -> String {
+        let prev_tasks_requirement = if completed_tasks.trim() == "None" {
+            "If no completed tasks exist, keep <prev_tasks> and set it to None or an empty placeholder."
+        } else {
+            "Completed tasks exist. You MUST preserve them inside <prev_tasks>. Keep the tag even if you need to compress older tasks into <brief> entries."
+        };
+
+        format!(
+            "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. Reason: {}. Return exactly one non-empty <state_snapshot>...</state_snapshot> XML block and nothing else. You MUST include all required tags every time, even when a section has no information: <overall_goal>, <prev_tasks>, <key_knowledge>, <error_log>, <file_system_state>, <recent_actions>, <task_state>. If a section has no content, write `None` or a short empty-state note inside the tag. Do NOT return JSON, reasoning-only text, markdown fences, or explanations. {}</SYSTEM_REMINDER>",
+            validation_error,
+            prev_tasks_requirement
+        )
     }
 
     fn preview_for_log(value: &str, max_chars: usize) -> String {
@@ -495,10 +524,10 @@ mod tests {
     #[test]
     fn validate_summary_result_requires_full_state_snapshot_shape() {
         let invalid = "<state_snapshot><overall_goal>x</overall_goal></state_snapshot>";
-        assert!(ContextCompressor::validate_summary_result(invalid).is_none());
+        assert!(ContextCompressor::validate_summary_result(invalid).is_err());
 
         let valid = "<state_snapshot><overall_goal>x</overall_goal><prev_tasks>None</prev_tasks><key_knowledge>a</key_knowledge><error_log>b</error_log><file_system_state>c</file_system_state><recent_actions>d</recent_actions><task_state>e</task_state></state_snapshot>";
-        assert!(ContextCompressor::validate_summary_result(valid).is_some());
+        assert!(ContextCompressor::validate_summary_result(valid).is_ok());
     }
 
     #[test]

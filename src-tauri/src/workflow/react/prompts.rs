@@ -246,6 +246,18 @@ Your goal is to maintain and update a structured <state_snapshot> XML block that
     - Clearly mark whether an error is [RESOLVED] or [PERSISTENT/UNRESOLVED].
 8. **Memory Externalization**: DO NOT summarize file contents or large data. Instead, list their FILE PATHS or URLs as reference pointers.
 9. **Task Status**: Update the status of tasks: [DONE], [IN PROGRESS], [TODO].
+10. **Required Tags Are Mandatory**:
+    - Your reply MUST contain exactly one `<state_snapshot>...</state_snapshot>` block.
+    - The following tags are ALWAYS required, even when there is no relevant information:
+      - `<overall_goal>`
+      - `<prev_tasks>`
+      - `<key_knowledge>`
+      - `<error_log>`
+      - `<file_system_state>`
+      - `<recent_actions>`
+      - `<task_state>`
+    - If a section has no meaningful content, keep the tag anyway and put `None` or a short empty-state note inside it.
+    - Do NOT omit required tags. Do NOT return JSON. Do NOT return reasoning, commentary, or explanations outside the XML block.
 
 ## OUTPUT FORMAT:
 Your output MUST be a valid XML structure:
@@ -287,6 +299,17 @@ Your goal is to aggressively reduce context size while preserving the user's act
 - You will receive `<completed_tasks>` and `<conversation_history>`.
 - The transcript may include an existing `<state_snapshot>` plus newer messages.
 - Merge everything into one updated `<state_snapshot>`.
+- Your reply MUST contain exactly one `<state_snapshot>...</state_snapshot>` block.
+- The following tags are ALWAYS required, even when there is no relevant information:
+  - `<overall_goal>`
+  - `<prev_tasks>`
+  - `<key_knowledge>`
+  - `<error_log>`
+  - `<file_system_state>`
+  - `<recent_actions>`
+  - `<task_state>`
+- If a section has no meaningful content, keep the tag anyway and put `None` or a short empty-state note inside it.
+- Do NOT omit required tags. Do NOT return JSON. Do NOT return reasoning, commentary, or explanations outside the XML block.
 
 ## OUTPUT FORMAT
 Your output MUST be a valid XML structure:
