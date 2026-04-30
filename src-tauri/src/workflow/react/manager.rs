@@ -5,6 +5,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 use crate::workflow::react::engine::ReActExecutor;
+use crate::workflow::react::types::WorkflowState;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,6 +116,7 @@ impl WorkflowManager {
         }
     }
 
+    #[cfg(test)]
     pub fn remove_session_if_matches(
         &self,
         session_id: &str,
@@ -122,6 +124,22 @@ impl WorkflowManager {
     ) -> Option<ManagedSession> {
         if let Some(session) = self.sessions.get(session_id) {
             if session.created_at_ms != created_at_ms {
+                return None;
+            }
+        } else {
+            return None;
+        }
+
+        self.remove_session(session_id)
+    }
+
+    pub fn remove_session_if_updated_matches(
+        &self,
+        session_id: &str,
+        updated_at_ms: i64,
+    ) -> Option<ManagedSession> {
+        if let Some(session) = self.sessions.get(session_id) {
+            if session.updated_at_ms != updated_at_ms {
                 return None;
             }
         } else {
@@ -157,8 +175,13 @@ impl WorkflowManager {
         self.sessions.get(session_id).map(|s| s.executor.clone())
     }
 
+    #[cfg(test)]
     pub fn get_session_created_at_ms(&self, session_id: &str) -> Option<i64> {
         self.sessions.get(session_id).map(|s| s.created_at_ms)
+    }
+
+    pub fn get_session_updated_at_ms(&self, session_id: &str) -> Option<i64> {
+        self.sessions.get(session_id).map(|s| s.updated_at_ms)
     }
 
     pub fn update_session_status(&self, session_id: &str, status: ManagedSessionStatus) -> bool {
@@ -180,6 +203,33 @@ impl WorkflowManager {
             );
             false
         }
+    }
+
+    pub fn managed_status_for_workflow_state(state: &WorkflowState) -> ManagedSessionStatus {
+        match state {
+            WorkflowState::Pending
+            | WorkflowState::Thinking
+            | WorkflowState::Executing
+            | WorkflowState::Auditing => ManagedSessionStatus::Active,
+            WorkflowState::Paused
+            | WorkflowState::AwaitingUser
+            | WorkflowState::AwaitingApproval
+            | WorkflowState::AwaitingAutoApproval
+            | WorkflowState::AwaitingSubAgent => ManagedSessionStatus::Waiting,
+            WorkflowState::Completed => ManagedSessionStatus::Completed,
+            WorkflowState::Error => ManagedSessionStatus::Failed,
+            WorkflowState::Cancelled => ManagedSessionStatus::Cancelled,
+        }
+    }
+
+    pub fn reconcile_session_status_from_workflow_state(
+        &self,
+        session_id: &str,
+        state: &WorkflowState,
+    ) -> Option<ManagedSessionStatus> {
+        let status = Self::managed_status_for_workflow_state(state);
+        self.update_session_status(session_id, status.clone())
+            .then_some(status)
     }
 
     /// Validates whether a signal may be routed to a live session.
@@ -390,6 +440,11 @@ mod tests {
             Ok(())
         }
 
+        async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError> {
+            self.state = WorkflowState::Thinking;
+            Ok(())
+        }
+
         async fn add_message_and_notify(
             &mut self,
             _role: String,
@@ -415,6 +470,8 @@ mod tests {
         fn set_state(&mut self, state: WorkflowState) {
             self.state = state;
         }
+
+        fn attach_signal_rx(&mut self, _signal_rx: tokio::sync::mpsc::Receiver<String>) {}
 
         fn messages(&self) -> Vec<crate::db::WorkflowMessage> {
             self.messages.clone()
@@ -484,6 +541,40 @@ mod tests {
 
         assert!(manager
             .remove_session_if_matches("test-session-1", created_at)
+            .is_some());
+        assert!(!manager.has_session("test-session-1"));
+    }
+
+    #[test]
+    fn test_remove_session_if_updated_matches() {
+        let manager = WorkflowManager::new();
+        let executor = Arc::new(Mutex::new(MockExecutor::new()));
+
+        manager
+            .register_session(
+                "test-session-1".to_string(),
+                executor,
+                ManagedSessionStatus::Completed,
+            )
+            .unwrap();
+
+        let original_updated_at = manager
+            .get_session_updated_at_ms("test-session-1")
+            .expect("updated_at should exist");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert!(manager.update_session_status("test-session-1", ManagedSessionStatus::Active));
+        let refreshed_updated_at = manager
+            .get_session_updated_at_ms("test-session-1")
+            .expect("updated_at should refresh");
+
+        assert!(refreshed_updated_at >= original_updated_at);
+        assert!(manager
+            .remove_session_if_updated_matches("test-session-1", original_updated_at)
+            .is_none());
+        assert!(manager.has_session("test-session-1"));
+
+        assert!(manager
+            .remove_session_if_updated_matches("test-session-1", refreshed_updated_at)
             .is_some());
         assert!(!manager.has_session("test-session-1"));
     }
@@ -573,5 +664,29 @@ mod tests {
 
         let result = manager.validate_signal_routing("test-session-1", "user_input");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_managed_status_for_workflow_state() {
+        assert_eq!(
+            WorkflowManager::managed_status_for_workflow_state(&WorkflowState::Thinking),
+            ManagedSessionStatus::Active
+        );
+        assert_eq!(
+            WorkflowManager::managed_status_for_workflow_state(&WorkflowState::AwaitingApproval),
+            ManagedSessionStatus::Waiting
+        );
+        assert_eq!(
+            WorkflowManager::managed_status_for_workflow_state(&WorkflowState::Completed),
+            ManagedSessionStatus::Completed
+        );
+        assert_eq!(
+            WorkflowManager::managed_status_for_workflow_state(&WorkflowState::Error),
+            ManagedSessionStatus::Failed
+        );
+        assert_eq!(
+            WorkflowManager::managed_status_for_workflow_state(&WorkflowState::Cancelled),
+            ManagedSessionStatus::Cancelled
+        );
     }
 }

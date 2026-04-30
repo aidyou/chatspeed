@@ -109,6 +109,7 @@
     "moduleUnavailable": "Module non disponible"
   },
   "common": {
+    "all": "Tous",
     "autoHide": "Masquer automatiquement lorsque la fenêtre perd le focus",
     "cancel": "Annuler",
     "clear": "Effacer",
@@ -808,6 +809,7 @@
     "thoughtCompleted": "Réflexion terminée",
     "workflowTitle": "Titre du flux de travail",
     "finishTask": "Terminer la tâche",
+    "autoCompressTooltip": "Compression de rollup automatique : compresse automatiquement les anciennes tâches terminées au démarrage d'une nouvelle tâche",
     "finalAuditTooltip": "Mode d'audit final : L'IA effectue automatiquement une révision de la qualité avant de terminer la tâche",
     "historyTab": "Conversation",
     "todo": {

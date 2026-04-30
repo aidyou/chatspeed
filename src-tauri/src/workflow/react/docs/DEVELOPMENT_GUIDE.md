@@ -1,5 +1,9 @@
 # Workflow React Development Guide
 
+This guide is subordinate to [`../CONSTITUTION.md`](../CONSTITUTION.md).
+
+If this guide and the constitution differ, the constitution wins.
+
 This document defines the mandatory development rules for `src-tauri/src/workflow/react`.
 
 Its purpose is to prevent architectural drift, avoid parallel logic branches, and keep workflow behavior aligned with `work/plan.md`.

@@ -109,6 +109,7 @@
     "moduleUnavailable": "모듈을 사용할 수 없습니다"
   },
   "common": {
+    "all": "전체",
     "autoHide": "창을 '포커스를 잃으면 자동 숨김'으로 설정",
     "cancel": "취소",
     "clear": "초기화",
@@ -808,6 +809,7 @@
     "thoughtCompleted": "사고 완료",
     "workflowTitle": "워크플로우 제목",
     "finishTask": "작업 완료",
+    "autoCompressTooltip": "자동 롤업 압축: 새 작업 시작 시 이전 완료 작업을 자동으로 압축합니다",
     "finalAuditTooltip": "최종 감사 모드: 작업 완료 전 AI 가 자동으로 품질 검토를 수행합니다",
     "historyTab": "대화",
     "todo": {

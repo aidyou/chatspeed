@@ -270,7 +270,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return {
       toolCallId: pendingTool.toolCallId ?? pendingTool.tool_call_id ?? '',
       toolName: pendingTool.toolName ?? pendingTool.tool_name ?? '',
-      details: pendingTool.details ?? '',
+      arguments: pendingTool.arguments ?? null,
+      details: pendingTool.details ?? null,
       displayType: pendingTool.displayType ?? pendingTool.display_type ?? ''
     };
   };
@@ -396,10 +397,19 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
     const legacy = pendingApprovalMessage.value;
     if (!legacy) return null;
+    const legacyDetails = legacy?.metadata?.details ?? null;
+    const legacyArguments =
+      legacy?.metadata?.tool_call?.function?.arguments ||
+      legacy?.metadata?.tool_call?.arguments ||
+      null;
+    if (!legacy?.metadata?.tool_call_id || (!legacyDetails && !legacyArguments)) {
+      return null;
+    }
     return {
       toolCallId: legacy?.metadata?.tool_call_id || '',
       toolName: legacy?.metadata?.tool_name || legacy?.metadata?.title || 'Tool Approval',
-      details: legacy?.message || '',
+      arguments: legacyArguments,
+      details: legacyDetails,
       displayType: legacy?.metadata?.display_type || ''
     };
   });

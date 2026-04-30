@@ -9,6 +9,35 @@
               <template #prefix>
                 <cs name="search" />
               </template>
+              <template #suffix>
+                <el-dropdown
+                  trigger="click"
+                  placement="bottom-end"
+                  @command="selectPrimaryRootFilter">
+                  <div
+                    class="workflow-root-filter-trigger"
+                    :class="{ active: !!selectedPrimaryRootFilter }"
+                    @click.stop>
+                    <cs name="caret-down" />
+                  </div>
+                  <template #dropdown>
+                    <el-dropdown-menu class="workflow-root-filter-menu">
+                      <el-dropdown-item command="" :class="{ active: !selectedPrimaryRootFilter }">
+                        <span class="dropdown-text">{{ rootFilterAllLabel }}</span>
+                        <cs v-if="!selectedPrimaryRootFilter" name="check" size="14px" class="dropdown-check" />
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-for="option in primaryRootOptions"
+                        :key="option"
+                        :command="option"
+                        :class="{ active: selectedPrimaryRootFilter === option }">
+                        <span class="dropdown-text">{{ option }}</span>
+                        <cs v-if="selectedPrimaryRootFilter === option" name="check" size="14px" class="dropdown-check" />
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </template>
             </el-input>
           </div>
           <div class="workflow-list">
@@ -19,9 +48,19 @@
                   disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId
                 }">
                 <div class="workflow-title">{{ wf.title || wf.userQuery || $t('workflow.untitled') }}</div>
-                <div class="workflow-status" v-if="wf.status">
-                  <span :class="['status-indicator', getWorkflowStatusClass(wf.status)]"></span>
-                  {{ getWorkflowStatusLabel(wf.status) }}
+                <div
+                  v-if="wf.status || getPrimaryRootName(wf)"
+                  class="workflow-status-row">
+                  <div class="workflow-status" v-if="wf.status">
+                    <span :class="['status-indicator', getWorkflowStatusClass(wf.status)]"></span>
+                    {{ getWorkflowStatusLabel(wf.status) }}
+                  </div>
+                  <div
+                    v-if="getPrimaryRootName(wf)"
+                    class="workflow-primary-root"
+                    :title="getPrimaryRootPath(wf)">
+                    {{ getPrimaryRootName(wf) }}
+                  </div>
                 </div>
                 <div class="icons" v-show="wf.id === hoveredWorkflowIndex">
                   <div class="icon icon-edit" @click.stop="$emit('edit-workflow', wf.id)">
@@ -98,7 +137,33 @@ defineEmits([
 const activeSidebarTab = ref('history')
 const searchQuery = ref('')
 const hoveredWorkflowIndex = ref(null)
+const selectedPrimaryRootFilter = ref('')
 const runningStatuses = new Set(['thinking', 'executing', 'auditing', 'running'])
+const rootFilterAllLabel = t('common.all')
+
+const trimTrailingSlash = (value = '') => String(value).replace(/[\\/]+$/, '')
+
+const getWorkflowAllowedPaths = (workflow) => {
+  if (Array.isArray(workflow?.allowedPaths) && workflow.allowedPaths.length) {
+    return workflow.allowedPaths
+  }
+  if (Array.isArray(workflow?.agentConfig?.allowedPaths) && workflow.agentConfig.allowedPaths.length) {
+    return workflow.agentConfig.allowedPaths
+  }
+  return []
+}
+
+const getPrimaryRootPath = (workflow) => {
+  const [primaryRoot] = getWorkflowAllowedPaths(workflow)
+  return trimTrailingSlash(primaryRoot || '')
+}
+
+const getPrimaryRootName = (workflow) => {
+  const primaryRoot = getPrimaryRootPath(workflow)
+  if (!primaryRoot) return ''
+  const segments = primaryRoot.split(/[\\/]/).filter(Boolean)
+  return segments[segments.length - 1] || primaryRoot
+}
 
 const getWorkflowStatusClass = (status) => {
   const normalized = String(status || '').toLowerCase()
@@ -110,10 +175,30 @@ const getWorkflowStatusLabel = (status) => {
   return runningStatuses.has(normalized) ? 'running' : status
 }
 
+const primaryRootOptions = computed(() => {
+  const seen = new Set()
+  return props.workflows
+    .map((workflow) => getPrimaryRootName(workflow))
+    .filter((name) => {
+      if (!name || seen.has(name)) return false
+      seen.add(name)
+      return true
+    })
+    .sort((a, b) => a.localeCompare(b))
+})
+
+const selectPrimaryRootFilter = (rootName) => {
+  selectedPrimaryRootFilter.value = rootName || ''
+}
+
 const filteredWorkflows = computed(() => {
-  if (!searchQuery.value) return props.workflows
-  const query = searchQuery.value.toLowerCase()
   return props.workflows.filter((wf) => {
+    const matchesPrimaryRoot = !selectedPrimaryRootFilter.value ||
+      getPrimaryRootName(wf) === selectedPrimaryRootFilter.value
+    if (!matchesPrimaryRoot) return false
+
+    if (!searchQuery.value) return true
+    const query = searchQuery.value.toLowerCase()
     const title = wf.title || ''
     const userQuery = wf.userQuery || ''
     const untitled = t('workflow.untitled').toLowerCase()

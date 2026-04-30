@@ -19,6 +19,7 @@ pub struct AgentConfig {
     pub shell_policy: Option<Vec<ShellPolicyRule>>,
     pub approval_level: Option<String>,
     pub auto_approve: Option<Vec<String>>,
+    pub auto_compress: Option<bool>,
     pub available_tools: Option<Vec<String>>,
     pub final_audit: Option<bool>,
     pub phase: Option<String>,
@@ -47,6 +48,9 @@ impl AgentConfig {
         }
         if other.auto_approve.is_some() {
             self.auto_approve = other.auto_approve.clone();
+        }
+        if other.auto_compress.is_some() {
+            self.auto_compress = other.auto_compress;
         }
         if other.available_tools.is_some() {
             self.available_tools = other.available_tools.clone();

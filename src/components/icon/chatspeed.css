@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-compress:before {
+  content: "\e752";
+}
+
 .cs-warning:before {
   content: "\e6a1";
 }

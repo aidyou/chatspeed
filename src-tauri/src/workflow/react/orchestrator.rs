@@ -584,6 +584,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .auto_approve
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
+            auto_compress: Some(true),
             available_tools: agent_config
                 .available_tools
                 .as_deref()
@@ -640,6 +641,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         } else {
             crate::workflow::react::policy::ExecutionPolicy::standard()
         };
+        let auto_compress_enabled = true;
 
         if subagent_type == "Planning" {
             Ok(Arc::new(Mutex::new(
@@ -662,6 +664,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                     Some(signal_rx),
                     self.tsid_generator.clone(),
                     self.chat_state.tool_manager.clone(),
+                    auto_compress_enabled,
                     policy,
                 ),
             )))
@@ -686,6 +689,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                     Some(signal_rx),
                     self.tsid_generator.clone(),
                     self.chat_state.tool_manager.clone(),
+                    auto_compress_enabled,
                     policy,
                 ),
             )))
@@ -1555,6 +1559,11 @@ mod tests {
             Ok(())
         }
 
+        async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError> {
+            self.state = WorkflowState::Thinking;
+            Ok(())
+        }
+
         async fn add_message_and_notify(
             &mut self,
             _role: String,
@@ -1580,6 +1589,8 @@ mod tests {
         fn set_state(&mut self, state: WorkflowState) {
             self.state = state;
         }
+
+        fn attach_signal_rx(&mut self, _signal_rx: tokio::sync::mpsc::Receiver<String>) {}
 
         fn messages(&self) -> Vec<WorkflowMessage> {
             self.messages.clone()

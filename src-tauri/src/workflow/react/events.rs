@@ -106,7 +106,7 @@ impl WorkflowEvent {
         tool_call_id: String,
         tool_name: String,
         arguments: Value,
-        details: Option<String>,
+        details: Option<Value>,
         display_type: Option<String>,
     ) -> Self {
         Self::new(
@@ -308,7 +308,7 @@ mod tests {
             "call_123".to_string(),
             "bash".to_string(),
             serde_json::json!({"command": "ls"}),
-            Some("List files".to_string()),
+            Some(serde_json::json!("List files")),
             Some("text".to_string()),
         );
         assert_eq!(requested.event_type, WorkflowEventType::ApprovalRequested);

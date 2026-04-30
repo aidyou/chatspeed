@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use std::cmp::{max, min};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 const CONTEXT_LINE_COUNT: usize = 5;
 
@@ -29,7 +30,11 @@ pub fn merge_tool_result_into_preview_args(
     }
 }
 
-pub fn attach_display_context(preview_args: &mut Value, prefer_updated_content: bool) {
+pub fn attach_display_context(
+    preview_args: &mut Value,
+    prefer_updated_content: bool,
+    primary_root: Option<&Path>,
+) {
     let Some(preview_obj) = preview_args.as_object_mut() else {
         return;
     };
@@ -50,7 +55,9 @@ pub fn attach_display_context(preview_args: &mut Value, prefer_updated_content: 
         return;
     };
 
-    let Ok(file_content) = fs::read_to_string(file_path) else {
+    let resolved_path = resolve_preview_file_path(file_path, primary_root);
+
+    let Ok(file_content) = fs::read_to_string(&resolved_path) else {
         return;
     };
 
@@ -139,6 +146,19 @@ pub fn attach_display_context(preview_args: &mut Value, prefer_updated_content: 
     );
 }
 
+fn resolve_preview_file_path(file_path: &str, primary_root: Option<&Path>) -> PathBuf {
+    let path = Path::new(file_path);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+
+    if let Some(root) = primary_root {
+        return root.join(path);
+    }
+
+    path.to_path_buf()
+}
+
 fn locate_block_start_line(file_content: &str, block: &str) -> Option<usize> {
     if block.is_empty() {
         return None;
@@ -170,4 +190,45 @@ fn find_first_match_index(file_content: &str, block: &str) -> Option<usize> {
 
 fn line_count(text: &str) -> usize {
     max(1, text.lines().count())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn attach_display_context_resolves_relative_paths_from_primary_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("file_preview_test_{unique}"));
+        let nested = root.join("src");
+        fs::create_dir_all(&nested).unwrap();
+        let file_path = nested.join("example.txt");
+        fs::write(
+            &file_path,
+            "line1\nline2\nmatch start\nmatch end\nline5\nline6\n",
+        )
+        .unwrap();
+
+        let mut preview_args = json!({
+            "file_path": "src/example.txt",
+            "old_string": "match start\nmatch end",
+            "new_string": "updated start\nupdated end"
+        });
+
+        attach_display_context(&mut preview_args, false, Some(root.as_path()));
+
+        assert_eq!(preview_args.get("start_line").and_then(|v| v.as_u64()), Some(3));
+        assert_eq!(
+            preview_args
+                .get("context_after_start_line")
+                .and_then(|v| v.as_u64()),
+            Some(5)
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

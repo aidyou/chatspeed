@@ -366,7 +366,7 @@ export function useWorkflowMessages() {
         // Standard visibility logic
         if (m.role === 'tool') {
           const name = m.metadata?.tool_call?.name || m.metadata?.tool_call?.function?.name || ''
-          if (name === 'answer_user' || name === 'complete_workflow_with_summary') return false
+          if (name === 'answer_user') return false
           if (
             m.metadata?.execution_status === 'running' &&
             !workflowStore.getToolStream(m.metadata?.tool_call_id).length
@@ -454,6 +454,28 @@ export function useWorkflowMessages() {
       ...(Array.isArray(workflow?.agentConfig?.allowedPaths) ? workflow.agentConfig.allowedPaths : [])
     ]
     return [...new Set(roots.filter(Boolean))]
+  }
+
+  const decodeCompatJsonPayload = value => {
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    if (!trimmed) return value
+    const looksLikeJson =
+      trimmed.startsWith('{') ||
+      trimmed.startsWith('[') ||
+      (trimmed.startsWith('"') && (trimmed.includes('{') || trimmed.includes('[')))
+    if (!looksLikeJson) return value
+
+    let current = value
+    for (let depth = 0; depth < 2; depth += 1) {
+      if (typeof current !== 'string') break
+      try {
+        current = JSON.parse(current)
+      } catch {
+        break
+      }
+    }
+    return current
   }
 
   // Format tool title with icon, tool type class, and display text
@@ -706,6 +728,33 @@ export function useWorkflowMessages() {
       }
     }
 
+    let parsedPayload = meta.details && typeof meta.details === 'object' ? meta.details : null
+
+    if ((!args || Object.keys(args).length === 0) && parsedPayload && typeof parsedPayload === 'object') {
+      args = parsedPayload
+    }
+
+    const canUseLegacyMessagePayload =
+      typeof message.message === 'string' &&
+      !parsedPayload &&
+      ['diff', 'markdown', 'text'].includes(meta.display_type || '') &&
+      !!toolCallId
+
+    if ((!args || Object.keys(args).length === 0) && canUseLegacyMessagePayload) {
+      const parsedDetails = decodeCompatJsonPayload(message.message)
+      if (parsedDetails && typeof parsedDetails === 'object') {
+        args = parsedDetails
+        parsedPayload = parsedDetails
+      }
+    }
+
+    if (!parsedPayload && canUseLegacyMessagePayload) {
+      const parsedDetails = decodeCompatJsonPayload(message.message)
+      if (parsedDetails && typeof parsedDetails === 'object') {
+        parsedPayload = parsedDetails
+      }
+    }
+
     // 2. Format using standard rules
     const formatted = formatToolTitle(name, args)
 
@@ -722,7 +771,16 @@ export function useWorkflowMessages() {
       finalTarget = ''
     } else if (meta.title && meta.title.trim()) {
       finalAction = normalizeToolDisplayText(removeSystemReminder(meta.title), displayRoots())
-      finalTarget = '' // Target is usually embedded in the title
+      const normalizedFormattedAction = normalizeToolDisplayText(formatted.action || '', displayRoots())
+      const normalizedFinalAction = normalizeToolDisplayText(finalAction || '', displayRoots())
+      const titleAlreadyIncludesTarget = finalTarget && normalizedFinalAction.includes(finalTarget)
+      if (
+        !finalTarget ||
+        titleAlreadyIncludesTarget ||
+        normalizedFinalAction !== normalizedFormattedAction
+      ) {
+        finalTarget = ''
+      }
     }
 
     // Fallback for missing action (prevents empty titles)
@@ -755,6 +813,24 @@ export function useWorkflowMessages() {
                         ? 'failed'
                         : undefined
 
+    const looksLikeFileChangePayload = payload => {
+      if (!payload || typeof payload !== 'object') return false
+      const hasPath = typeof payload.file_path === 'string' || typeof payload.path === 'string'
+      const hasEditFields =
+        payload.old_string !== undefined ||
+        payload.new_string !== undefined ||
+        payload.content !== undefined
+      return hasPath && hasEditFields
+    }
+
+    const inferredDisplayType =
+      meta.display_type ||
+      (['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note'].includes(name)
+        ? 'diff'
+        : looksLikeFileChangePayload(parsedPayload) || looksLikeFileChangePayload(args)
+          ? 'diff'
+          : 'text')
+
     return {
       title: finalAction + (finalTarget ? ` ${finalTarget}` : ''),
       summary:
@@ -762,7 +838,7 @@ export function useWorkflowMessages() {
           ? ''
           : getToolStatusSummary(name, summaryStatus, fallbackSummary),
       isError: isError,
-      displayType: meta.display_type || 'text',
+      displayType: inferredDisplayType,
       icon: finalIcon,
       toolType: finalToolType,
       action: finalAction,
@@ -878,7 +954,7 @@ export function useWorkflowMessages() {
         appendContextDiffMarkdown(
           diffParts,
           data.context_after,
-          data.context_after_start_line || currentLineOld
+          data.context_after_start_line || currentLineNew
         )
       } else {
         diffParts.push(`- ${startLine.toString().padStart(4, ' ')} | (empty)`)

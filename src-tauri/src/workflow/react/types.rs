@@ -229,6 +229,11 @@ pub enum WorkflowSignal {
         #[serde(alias = "finalAudit", alias = "audit")]
         final_audit: bool,
     },
+    /// Update runtime task-boundary rollup compression configuration
+    UpdateAutoCompress {
+        #[serde(alias = "autoCompress", alias = "enabled")]
+        auto_compress: bool,
+    },
     /// Update runtime approval level configuration
     UpdateApprovalLevel {
         #[serde(alias = "approvalLevel", alias = "level")]
@@ -275,6 +280,7 @@ impl WorkflowSignal {
             // Runtime config/control signals are valid regardless of current waiting reason
             (WorkflowSignal::RebroadcastPending, _) => true,
             (WorkflowSignal::UpdateFinalAudit { .. }, _) => true,
+            (WorkflowSignal::UpdateAutoCompress { .. }, _) => true,
             (WorkflowSignal::UpdateApprovalLevel { .. }, _) => true,
             (WorkflowSignal::UpdateAllowedPaths { .. }, _) => true,
             (WorkflowSignal::UpdateModelConfig { .. }, _) => true,
@@ -306,6 +312,7 @@ impl WorkflowSignal {
             WorkflowSignal::Stop => "stop",
             WorkflowSignal::RebroadcastPending => "rebroadcast_pending",
             WorkflowSignal::UpdateFinalAudit { .. } => "update_final_audit",
+            WorkflowSignal::UpdateAutoCompress { .. } => "update_auto_compress",
             WorkflowSignal::UpdateApprovalLevel { .. } => "update_approval_level",
             WorkflowSignal::UpdateAllowedPaths { .. } => "update_allowed_paths",
             WorkflowSignal::UpdateModelConfig { .. } => "update_model_config",
@@ -323,7 +330,7 @@ pub struct PendingTool {
     pub tool_call_id: String,
     pub tool_name: String,
     pub arguments: serde_json::Value,
-    pub details: Option<String>,
+    pub details: Option<serde_json::Value>,
     #[serde(default)]
     pub display_type: Option<String>,
 }
@@ -441,7 +448,7 @@ mod tests {
             tool_call_id: "call_123".to_string(),
             tool_name: "bash".to_string(),
             arguments: serde_json::json!({"command": "ls"}),
-            details: Some("List files".to_string()),
+            details: Some(serde_json::json!("List files")),
             display_type: Some("text".to_string()),
         });
 
@@ -457,7 +464,7 @@ mod tests {
             tool_call_id: "call_abc".to_string(),
             tool_name: "write_file".to_string(),
             arguments: serde_json::json!({"path": "/tmp/test.txt", "content": "hello"}),
-            details: Some("Write test file".to_string()),
+            details: Some(serde_json::json!("Write test file")),
             display_type: Some("diff".to_string()),
         };
 
@@ -518,7 +525,7 @@ mod tests {
                 tool_call_id: format!("call_{}", i),
                 tool_name: format!("tool_{}", i),
                 arguments: serde_json::json!({"arg": i}),
-                details: Some(format!("Details for tool {}", i)),
+                details: Some(serde_json::json!(format!("Details for tool {}", i))),
                 display_type: Some("text".to_string()),
             });
         }

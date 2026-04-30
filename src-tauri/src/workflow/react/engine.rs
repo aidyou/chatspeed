@@ -62,6 +62,7 @@ pub trait ReActExecutor: Send + Sync {
     async fn begin_execution_context_from_approved_plan(
         &mut self,
     ) -> Result<(), WorkflowEngineError>;
+    async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError>;
     async fn add_message_and_notify(
         &mut self,
         role: String,
@@ -78,6 +79,7 @@ pub trait ReActExecutor: Send + Sync {
     fn session_id(&self) -> String;
     fn state(&self) -> WorkflowState;
     fn set_state(&mut self, state: WorkflowState);
+    fn attach_signal_rx(&mut self, signal_rx: tokio::sync::mpsc::Receiver<String>);
     fn messages(&self) -> Vec<WorkflowMessage>;
 }
 
@@ -110,6 +112,7 @@ pub struct WorkflowExecutor {
     pub last_compression_boundary_id: Option<i64>,
     pub background_compression_boundary_id: Option<i64>,
     pub background_compression_retry_state: HashMap<i64, (u32, usize)>,
+    pub auto_compress_enabled: bool,
     /// Rules and permissions for this ReAct session.
     pub policy: ExecutionPolicy,
     /// Memory manager for reading/writing memory files
@@ -412,11 +415,11 @@ impl WorkflowExecutor {
         &mut self,
         role: &str,
         step_type: Option<&StepType>,
-        needs_compression: bool,
+        _needs_compression: bool,
     ) -> Result<bool, WorkflowEngineError> {
         let is_new_task_boundary = role == "user" && step_type != Some(&StepType::Observe);
 
-        if !is_new_task_boundary {
+        if !is_new_task_boundary || !self.auto_compress_enabled {
             return Ok(false);
         }
 
@@ -430,25 +433,6 @@ impl WorkflowExecutor {
                     "task_boundary",
                 )
                 .await;
-        }
-
-        if needs_compression {
-            if let Some((compression_candidate, compressed_until_message_id)) =
-                self.context.build_pressure_compression_candidate()
-            {
-                return self
-                    .run_blocking_compression(
-                        compression_candidate,
-                        compressed_until_message_id,
-                        "context_pressure",
-                    )
-                    .await;
-            }
-
-            log::info!(
-                "[Workflow][session={}][phase=compression] Context exceeded 80% but no safe completed segment is available for blocking compression",
-                self.session_id
-            );
         }
 
         Ok(false)
@@ -614,6 +598,10 @@ impl ReActExecutor for WorkflowExecutor {
             .await
     }
 
+    async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError> {
+        self.prepare_completed_resume_internal().await
+    }
+
     async fn add_message_and_notify(
         &mut self,
         role: String,
@@ -650,12 +638,37 @@ impl ReActExecutor for WorkflowExecutor {
         self.state = state;
     }
 
+    fn attach_signal_rx(&mut self, signal_rx: tokio::sync::mpsc::Receiver<String>) {
+        self.signal_rx = Some(signal_rx);
+    }
+
     fn messages(&self) -> Vec<WorkflowMessage> {
         self.context.messages.clone()
     }
 }
 
 impl WorkflowExecutor {
+    async fn prepare_completed_resume_internal(&mut self) -> Result<(), WorkflowEngineError> {
+        self.current_step = 0;
+        self.consecutive_no_tool_calls = 0;
+        self.last_compression_step = 0;
+        self.last_compression_boundary_id = None;
+        self.background_compression_boundary_id = None;
+        self.background_compression_retry_state.clear();
+        self.pending_approvals.clear();
+        self.pending_approval_queue.clear();
+        self.smart_approved_bash_commands.clear();
+        self.smart_approved_tool_call_ids.clear();
+        self.loop_detector = LoopDetector::new();
+        self.recovery_failed = false;
+        self.recovery_error = None;
+        self.queued_user_messages.clear();
+        self.sub_agent_id = None;
+        self.pending_sub_agent_completions.clear();
+
+        self.update_state(WorkflowState::Thinking).await
+    }
+
     pub fn new(
         session_id: String,
         main_store: Arc<std::sync::RwLock<MainStore>>,
@@ -669,6 +682,7 @@ impl WorkflowExecutor {
         signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
         global_tool_manager: Arc<ToolManager>,
+        auto_compress_enabled: bool,
         policy: ExecutionPolicy,
     ) -> Self {
         let session_id_clone = session_id.clone();
@@ -815,6 +829,7 @@ impl WorkflowExecutor {
             last_compression_boundary_id: None,
             background_compression_boundary_id: None,
             background_compression_retry_state: HashMap::new(),
+            auto_compress_enabled,
             policy,
             memory_manager: {
                 let project_root = allowed_paths.first().cloned();
@@ -1133,21 +1148,15 @@ impl WorkflowExecutor {
                                 let info_with_details = json!({
                                     "name": tool.tool_name.clone(),
                                     "arguments": tool.arguments.clone(),
-                                    "details": tool.details.clone().unwrap_or_default(),
+                                    "details": tool.details.clone().unwrap_or(serde_json::Value::Null),
                                     "display_type": tool.display_type.clone().unwrap_or_else(|| "text".to_string())
                                 });
                                 self.pending_approvals
                                     .insert(tool.tool_call_id.clone(), info_with_details);
                                 self.enqueue_pending_approval(&tool.tool_call_id);
 
-                                let details_value = tool
-                                    .details
-                                    .as_ref()
-                                    .map(|s| {
-                                        serde_json::from_str::<serde_json::Value>(s)
-                                            .unwrap_or_else(|_| json!(s))
-                                    })
-                                    .unwrap_or(serde_json::Value::Null);
+                                let details_value =
+                                    tool.details.clone().unwrap_or(serde_json::Value::Null);
                                 let _ = self
                                     .dispatch_ui_payload(GatewayPayload::Confirm {
                                         id: tool.tool_call_id.clone(),
@@ -2279,19 +2288,8 @@ impl WorkflowExecutor {
                             if self.state == WorkflowState::AwaitingApproval {
                                 let items = self.ordered_pending_approvals();
                                 for (id, info) in items {
-                                    let details_value = info
-                                        .get("details")
-                                        .and_then(|v| {
-                                            if let Some(s) = v.as_str() {
-                                                Some(
-                                                    serde_json::from_str::<serde_json::Value>(s)
-                                                        .unwrap_or_else(|_| json!(s)),
-                                                )
-                                            } else {
-                                                Some(v.clone())
-                                            }
-                                        })
-                                        .unwrap_or(serde_json::Value::Null);
+                                    let details_value =
+                                        info.get("details").cloned().unwrap_or(serde_json::Value::Null);
                                     let _ = self
                                         .dispatch_ui_payload(GatewayPayload::Confirm {
                                             id,
@@ -2514,18 +2512,12 @@ impl WorkflowExecutor {
                                 // 2. Execution: MCP tools use global, native tools use local
                                 // Inject internal tool_call_id for streaming tools
                                 // Ensure tool_args is an object (parse if it's a JSON string from fallback)
-                                let tool_args_obj = if tool_args.is_string() {
-                                    serde_json::from_str::<serde_json::Value>(
-                                        tool_args.as_str().unwrap_or("{}"),
-                                    )
-                                    .unwrap_or_else(|_| tool_args.clone())
-                                } else {
-                                    tool_args.clone()
-                                };
-
-                                let mut enriched_args = tool_args_obj.clone();
-                                enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
-                                    serde_json::json!(tool_call_id);
+                                let tool_args_obj =
+                                    Self::normalize_tool_arguments_value(tool_args.clone());
+                                let enriched_args = Self::enrich_tool_arguments_with_call_id(
+                                    &tool_args_obj,
+                                    &tool_call_id,
+                                );
 
                                 self.append_tool_started_event(
                                     &tool_call_id,
@@ -2772,21 +2764,10 @@ impl WorkflowExecutor {
                         self.session_id
                     );
                     if self.state == WorkflowState::AwaitingApproval {
-                        let items = self.ordered_pending_approvals();
-                        for (id, info) in items {
-                            let details_value = info
-                                .get("details")
-                                .and_then(|v| {
-                                    if let Some(s) = v.as_str() {
-                                        Some(
-                                            serde_json::from_str::<serde_json::Value>(s)
-                                                .unwrap_or_else(|_| json!(s)),
-                                        )
-                                    } else {
-                                        Some(v.clone())
-                                    }
-                                })
-                                .unwrap_or(serde_json::Value::Null);
+                            let items = self.ordered_pending_approvals();
+                            for (id, info) in items {
+                                let details_value =
+                                    info.get("details").cloned().unwrap_or(serde_json::Value::Null);
                             let _ = self
                                 .dispatch_ui_payload(GatewayPayload::Confirm {
                                     id,
@@ -2974,18 +2955,9 @@ impl WorkflowExecutor {
                         // 2. Execution: MCP tools use global, native tools use local
                         // Inject internal tool_call_id for streaming tools
                         // Ensure tool_args is an object (parse if it's a JSON string from fallback)
-                        let tool_args_obj = if tool_args.is_string() {
-                            serde_json::from_str::<serde_json::Value>(
-                                tool_args.as_str().unwrap_or("{}"),
-                            )
-                            .unwrap_or_else(|_| tool_args.clone())
-                        } else {
-                            tool_args.clone()
-                        };
-
-                        let mut enriched_args = tool_args_obj.clone();
-                        enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
-                            serde_json::json!(signal_id);
+                        let tool_args_obj = Self::normalize_tool_arguments_value(tool_args.clone());
+                        let enriched_args =
+                            Self::enrich_tool_arguments_with_call_id(&tool_args_obj, signal_id);
 
                         self.append_tool_started_event(signal_id, &tool_name, &tool_args_obj);
                         self.dispatch_tool_started_payload(signal_id, &tool_name, &tool_args_obj)
@@ -3612,6 +3584,7 @@ impl WorkflowExecutor {
                 let mut metadata = serde_json::json!({
                     "tool_call_id": id,
                     "tool_name": tool_name, // CRITICAL: Added for LlmProcessor's recovery logic
+                    "tool_call": original_call,
                     "title": reinforced.title,
                     "summary": reinforced.summary,
                     "execution_status": execution_status,
@@ -3623,6 +3596,13 @@ impl WorkflowExecutor {
                 // Add approval_status if it exists in the reinforced result
                 if let Some(approval_status) = &reinforced.approval_status {
                     metadata["approval_status"] = serde_json::json!(approval_status);
+                }
+                if reinforced.approval_status.as_deref() == Some("pending") {
+                    if let Some(pending_info) = self.pending_approvals.get(id) {
+                        if let Some(details) = pending_info.get("details") {
+                            metadata["details"] = details.clone();
+                        }
+                    }
                 }
                 if let Some(observation_kind) = &reinforced.observation_kind {
                     metadata["observation_kind"] =
@@ -5024,7 +5004,7 @@ impl WorkflowExecutor {
                             "tool_call_id": tool_call_id,
                             "tool_name": info["name"].as_str().unwrap_or("unknown"),
                             "arguments": info.get("arguments").cloned().unwrap_or(serde_json::json!({})),
-                            "details": info.get("details").and_then(|v| v.as_str()).unwrap_or_default(),
+                            "details": info.get("details").cloned().unwrap_or(serde_json::Value::Null),
                             "display_type": info.get("display_type").and_then(|v| v.as_str()),
                         })
                     })
@@ -5520,6 +5500,24 @@ impl WorkflowExecutor {
             return Ok(true);
         }
 
+        if sig_type_enum == Some(SignalType::UpdateAutoCompress) {
+            let enabled = sig_json
+                .get("autoCompress")
+                .and_then(|v| v.as_bool())
+                .or_else(|| sig_json.get("enabled").and_then(|v| v.as_bool()))
+                .or_else(|| sig_json.get("auto_compress").and_then(|v| v.as_bool()));
+            if let Some(enabled) = enabled {
+                log::info!(
+                    "WorkflowExecutor {}: Updating auto compress to {}",
+                    self.session_id,
+                    enabled
+                );
+                self.auto_compress_enabled = enabled;
+                self.persist_workflow_agent_config_value("autoCompress", serde_json::json!(enabled));
+            }
+            return Ok(true);
+        }
+
         Ok(false)
     }
 
@@ -5926,10 +5924,7 @@ impl WorkflowExecutor {
                         .unwrap_or("unknown")
                         .to_string(),
                     arguments: value.get("arguments").cloned().unwrap_or(json!({})),
-                    details: value
-                        .get("details")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
+                    details: value.get("details").cloned(),
                     display_type: value
                         .get("display_type")
                         .and_then(|v| v.as_str())

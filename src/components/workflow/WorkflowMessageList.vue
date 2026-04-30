@@ -377,11 +377,12 @@
                   "
                   inline
                   :action="message.metadata?.tool_name || message.toolDisplay.action"
-                  :details="removeSystemReminder(message.message)"
+                  :target="message.toolDisplay.target"
+                  :details="message.metadata?.details ?? removeSystemReminder(message.message)"
                   :display-type="message.metadata?.display_type || message.toolDisplay.displayType"
                   :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
                   :loading="approvalLoading && activeApprovalId === message.metadata?.tool_call_id"
-                  :pending-count="pendingCount"
+                  :pending-count="inlinePendingApprovalCount"
                   @update:rejection-message="
                     value => setApprovalDraft(message.metadata?.tool_call_id, value)
                   "
@@ -714,6 +715,18 @@ const approvalDrafts = ref({})
 const askUserDrafts = ref({})
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
+
+const inlinePendingApprovalCount = computed(() => {
+  const toolIds = new Set()
+  for (const message of props.messages || []) {
+    if (message?.role !== 'tool') continue
+    const toolCallId = message?.metadata?.tool_call_id
+    if (!toolCallId) continue
+    if (message?.metadata?.approval_status !== 'pending') continue
+    toolIds.add(toolCallId)
+  }
+  return toolIds.size
+})
 
 const isNearBottom = el => {
   if (!el) return true

@@ -109,6 +109,7 @@
     "moduleUnavailable": "模块不可用"
   },
   "common": {
+    "all": "全部",
     "approve": "批准",
     "approveAll": "全部批准",
     "approveAndAddToWhitelist": "批准并添加到白名单",
@@ -848,6 +849,7 @@
     "tools": "工具",
     "editWorkflowTitle": "编辑工作流标题",
     "executing": "执行中...",
+    "autoCompressTooltip": "自动滚动压缩：开启新任务时自动压缩较早的已完成任务",
     "finalAuditTooltip": "终审模式：任务结束前由 AI 自动进行质量审核",
     "historyTab": "会话",
     "newWorkflow": "新建工作流",
@@ -872,7 +874,7 @@
       "title": "状态面板"
     },
     "unmuteApprovalNotifications": "开启审批提示音",
- "unmuteCompletionNotifications": "开启完成提示音",
+    "unmuteCompletionNotifications": "开启完成提示音",
     "notificationSound": "声音通知",
     "approvalSound": "审批提示音",
     "completionSound": "完成提示音",

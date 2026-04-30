@@ -109,6 +109,7 @@
     "moduleUnavailable": "Modul nicht verfügbar"
   },
   "common": {
+    "all": "Alle",
     "autoHide": "Fenster auf „Automatisch ausblenden, wenn der Fokus verloren geht“ setzen",
     "cancel": "Abbrechen",
     "clear": "Leeren",
@@ -805,6 +806,7 @@
     "confirmDeleteWorkflow": "Sind Sie sicher, dass Sie diesen Workflow löschen möchten? Diese Aktion kann nicht rückgängig gemacht werden.",
     "continue": "Fortsetzen",
     "editWorkflowTitle": "Workflow-Titel bearbeiten",
+    "autoCompressTooltip": "Automatische Rollup-Komprimierung: Komprimiert ältere abgeschlossene Aufgaben beim Start einer neuen Aufgabe automatisch",
     "finalAuditTooltip": "Abschlussprüfungsmodus: Qualitätsprüfung durch KI vor Aufgabenabschluss",
     "historyTab": "Sitzung",
     "newWorkflow": "Neuer Workflow",

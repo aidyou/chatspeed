@@ -159,44 +159,7 @@ impl ObservationReinforcer {
                         val.get("structured_content"),
                         val.get("content").and_then(|value| value.as_str()),
                     );
-                    attach_display_context(&mut preview_args, true);
-                    let preview_limit = 100_000;
-
-                    // Truncate large fields for UI history to prevent DB bloat and rendering lag
-                    if let Some(content) = preview_args.get_mut("content") {
-                        if let Some(s) = content.as_str() {
-                            if s.chars().count() > preview_limit {
-                                let truncated: String = s.chars().take(preview_limit).collect();
-                                *content = serde_json::json!(format!(
-                                    "{}\n... (truncated for preview)",
-                                    truncated
-                                ));
-                            }
-                        }
-                    }
-                    if let Some(old_s) = preview_args.get_mut("old_string") {
-                        if let Some(s) = old_s.as_str() {
-                            if s.chars().count() > preview_limit {
-                                let truncated: String = s.chars().take(preview_limit).collect();
-                                *old_s = serde_json::json!(format!(
-                                    "{}\n... (truncated for preview)",
-                                    truncated
-                                ));
-                            }
-                        }
-                    }
-                    if let Some(new_s) = preview_args.get_mut("new_string") {
-                        if let Some(s) = new_s.as_str() {
-                            if s.chars().count() > preview_limit {
-                                let truncated: String = s.chars().take(preview_limit).collect();
-                                *new_s = serde_json::json!(format!(
-                                    "{}\n... (truncated for preview)",
-                                    truncated
-                                ));
-                            }
-                        }
-                    }
-
+                    attach_display_context(&mut preview_args, true, primary_root);
                     raw_res = serde_json::to_string(&preview_args).unwrap_or(raw_res);
                 }
 
@@ -226,7 +189,15 @@ impl ObservationReinforcer {
                         approval_status: None,
                         observation_kind: None,
                     }
-                } else if !matches!(tool_name, TOOL_READ_FILE | TOOL_PLAN_READ_NOTE)
+                } else if !matches!(
+                    tool_name,
+                    TOOL_READ_FILE
+                        | TOOL_PLAN_READ_NOTE
+                        | TOOL_EDIT_FILE
+                        | TOOL_WRITE_FILE
+                        | TOOL_PLAN_EDIT_NOTE
+                        | TOOL_PLAN_WRITE_NOTE
+                )
                     && raw_res.len() > 20000
                 {
                     let truncated = match raw_res.char_indices().nth(20000) {

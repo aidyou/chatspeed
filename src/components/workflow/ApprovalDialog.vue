@@ -73,6 +73,10 @@ const props = defineProps({
     default: false
   },
   action: String,
+  target: {
+    type: String,
+    default: ''
+  },
   details: {
     type: [String, Object, Array],
     default: ''
@@ -103,21 +107,42 @@ const emit = defineEmits([
 
 useI18n()
 
+const decodeCompatJsonPayload = value => {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  if (!trimmed) return value
+  const looksLikeJson =
+    trimmed.startsWith('{') ||
+    trimmed.startsWith('[') ||
+    (trimmed.startsWith('"') && (trimmed.includes('{') || trimmed.includes('[')))
+  if (!looksLikeJson) return value
+
+  let current = value
+  for (let depth = 0; depth < 2; depth += 1) {
+    if (typeof current !== 'string') break
+    try {
+      current = JSON.parse(current)
+    } catch {
+      break
+    }
+  }
+  return current
+}
+
 const normalizeDetailsPayload = value => {
   if (value == null || value === '') {
     return { detailsObject: null, detailsText: '' }
   }
 
   if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value)
-      const detailsObject = Array.isArray(parsed) ? parsed[0] || null : parsed
-      return {
-        detailsObject: detailsObject && typeof detailsObject === 'object' ? detailsObject : null,
-        detailsText: value
-      }
-    } catch {
-      return { detailsObject: null, detailsText: value }
+    const parsed = decodeCompatJsonPayload(value)
+    const detailsObject = Array.isArray(parsed) ? parsed[0] || null : parsed
+    return {
+      detailsObject: detailsObject && typeof detailsObject === 'object' ? detailsObject : null,
+      detailsText:
+        detailsObject && typeof detailsObject === 'object'
+          ? JSON.stringify(detailsObject, null, 2)
+          : String(parsed ?? value)
     }
   }
 
@@ -175,7 +200,7 @@ const isMarkdownAction = computed(() => {
 const filePath = computed(() => {
   if (!isEditAction.value) return ''
   const data = detailsObject.value
-  return data?.file_path || data?.path || ''
+  return data?.display_path || data?.file_path || data?.path || ''
 })
 
 const diffLines = computed(() => {
@@ -287,7 +312,7 @@ const generateDiffLines = (oldStr, newStr, startLine = 1, contextData = {}) => {
   appendContextLines(
     diff,
     contextData.context_after,
-    contextData.context_after_start_line || currentLineOld,
+    contextData.context_after_start_line || currentLineNew,
     'context'
   )
   return diff

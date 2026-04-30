@@ -163,6 +163,7 @@
           :planning-mode="planningMode"
           :approval-level="approvalLevel"
           :final-audit-mode="finalAuditMode"
+          :auto-compress-enabled="autoCompressEnabled"
           :agents="agentStore.agents"
           :show-skill-suggestions="showSkillSuggestions"
           :show-file-suggestions="showFileSuggestions"
@@ -181,6 +182,7 @@
           @approve-plan="onApprovePlan"
           @toggle-planning-mode="planningMode = !planningMode"
           @toggle-final-audit-mode="toggleFinalAuditMode"
+          @toggle-auto-compress="autoCompressEnabled = !autoCompressEnabled"
           @update-approval-level="approvalLevel = $event"
           @update-selected-agent="onSelectedAgentChange"
           @create-new-workflow="createNewWorkflow"
@@ -264,6 +266,7 @@ const selectedAgent = ref(null)
 const approvalLevel = ref('default')
 const finalAuditMode = ref('off')
 const planningMode = ref(false)
+const autoCompressEnabled = ref(true)
 
 const showPlanningModeToggle = computed(() => {
   const workflow = workflowStore.currentWorkflow
@@ -381,6 +384,7 @@ const core = useWorkflowCore({
   planningMode,
   approvalLevel,
   finalAuditMode,
+  autoCompressEnabled,
   pendingPaths,
   currentWorkflowId: computed(() => workflowStore.currentWorkflowId),
   currentWorkflow: computed(() => workflowStore.currentWorkflow),
@@ -609,6 +613,7 @@ const onSelectedAgentChange = async agent => {
     if (agentConfig?.phase) {
       planningMode.value = String(agentConfig.phase).toLowerCase() === 'planning'
     }
+    autoCompressEnabled.value = agentConfig?.autoCompress ?? true
   } catch (error) {
     console.error('Failed to update workflow agent:', error)
   }

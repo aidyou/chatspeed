@@ -109,6 +109,7 @@
     "errorOnAddAttachment": "Failed to add attachment: {error}"
   },
   "common": {
+    "all": "All",
     "approve": "Approve",
     "approveAll": "Approve All",
     "autoHide": "Auto-hide when window loses focus",
@@ -872,6 +873,7 @@
     "submit_plan": "Submit plan",
     "written": "Written",
     "finishTask": "Finish task",
+    "autoCompressTooltip": "Auto rollup compression: automatically compress older completed tasks when a new task starts",
     "finalAuditTooltip": "Final audit mode: AI automatically performs quality review before task completion",
     "historyTab": "Conversation",
     "statusPanel": {

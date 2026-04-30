@@ -109,6 +109,7 @@
     "moduleUnavailable": "模組不可用"
   },
   "common": {
+    "all": "全部",
     "autoHide": "將視窗設定為「失去焦點後自動隱藏」",
     "cancel": "取消",
     "clear": "清空",
@@ -826,6 +827,7 @@
     "editWorkflowTitle": "編輯工作流程標題",
     "muteApprovalNotifications": "靜音審批提示音",
     "muteCompletionNotifications": "靜音完成提示音",
+    "autoCompressTooltip": "自動滾動壓縮：開始新任務時自動壓縮較早的已完成任務",
     "finalAuditTooltip": "最終審核模式：AI 在任務完成前自動執行品質審查",
     "historyTab": "對話",
     "newWorkflow": "新增工作流程",

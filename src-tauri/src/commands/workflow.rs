@@ -98,51 +98,43 @@ fn latest_successful_completion_index(messages: &[WorkflowMessage]) -> Option<us
         })
 }
 
-fn extract_completion_summary_from_assistant(message: &WorkflowMessage) -> Option<String> {
-    let visible_content = message.message.trim();
-    let tool_summary = message
+fn extract_completion_summary_from_tool_message(message: &WorkflowMessage) -> Option<String> {
+    if !is_successful_completion_tool_message(message) {
+        return None;
+    }
+
+    let metadata_summary = message
         .metadata
         .as_ref()
-        .and_then(|meta| meta.get("tool_calls"))
-        .and_then(|tool_calls| tool_calls.as_array())
-        .and_then(|tool_calls| {
-            tool_calls.iter().rev().find_map(|call| {
-                let tool_name = call
-                    .get("name")
-                    .or_else(|| {
-                        call.get("function")
-                            .and_then(|function| function.get("name"))
-                    })
-                    .and_then(|value| value.as_str())
-                    .unwrap_or_default();
-                if tool_name != crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY {
-                    return None;
-                }
-
-                let args_value = call.get("arguments").or_else(|| {
-                    call.get("function")
-                        .and_then(|function| function.get("arguments"))
-                })?;
-                let parsed_args = if let Some(args_text) = args_value.as_str() {
-                    serde_json::from_str::<serde_json::Value>(args_text).ok()
-                } else {
-                    Some(args_value.clone())
-                }?;
-                parsed_args
-                    .get("summary")
-                    .and_then(|summary| summary.as_str())
-                    .map(str::trim)
-                    .filter(|summary| !summary.is_empty())
-                    .map(str::to_string)
-            })
-        });
-
-    match (visible_content.is_empty(), tool_summary) {
-        (true, Some(summary)) => Some(summary),
-        (false, Some(summary)) => Some(format!("{}\n\n{}", visible_content, summary)),
-        (false, None) => Some(visible_content.to_string()),
-        (true, None) => None,
+        .and_then(|meta| meta.get("summary"))
+        .and_then(|summary| summary.as_str())
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .map(str::to_string);
+    if metadata_summary.is_some() {
+        return metadata_summary;
     }
+
+    let tool_call = message
+        .metadata
+        .as_ref()
+        .and_then(|meta| meta.get("tool_call"))?;
+    let args_value = tool_call.get("arguments").or_else(|| {
+        tool_call
+            .get("function")
+            .and_then(|function| function.get("arguments"))
+    })?;
+    let parsed_args = if let Some(args_text) = args_value.as_str() {
+        serde_json::from_str::<serde_json::Value>(args_text).ok()
+    } else {
+        Some(args_value.clone())
+    }?;
+    parsed_args
+        .get("summary")
+        .and_then(|summary| summary.as_str())
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .map(str::to_string)
 }
 
 fn previous_completed_task_context(messages: &[WorkflowMessage]) -> Option<(String, String)> {
@@ -175,11 +167,7 @@ fn previous_completed_task_context(messages: &[WorkflowMessage]) -> Option<(Stri
     let previous_summary = segment
         .iter()
         .rev()
-        .find_map(|message| {
-            (message.role == "assistant")
-                .then_some(message)
-                .and_then(extract_completion_summary_from_assistant)
-        })
+        .find_map(extract_completion_summary_from_tool_message)
         .or_else(|| {
             segment
                 .iter()
@@ -190,6 +178,14 @@ fn previous_completed_task_context(messages: &[WorkflowMessage]) -> Option<(Stri
         .filter(|value| !value.is_empty())?;
 
     Some((previous_query, previous_summary))
+}
+
+fn workflow_auto_compress_enabled(config: &Value) -> bool {
+    config
+        .get("autoCompress")
+        .and_then(|value| value.as_bool())
+        .or_else(|| config.get("auto_compress").and_then(|value| value.as_bool()))
+        .unwrap_or(true)
 }
 
 fn extract_first_json_object(raw: &str) -> Option<&str> {
@@ -1133,9 +1129,7 @@ async fn has_reconciled_live_session(
     if let Some(status) = workflow_manager.get_session_status(session_id) {
         if matches!(
             status,
-            ManagedSessionStatus::Completed
-                | ManagedSessionStatus::Failed
-                | ManagedSessionStatus::Cancelled
+            ManagedSessionStatus::Failed | ManagedSessionStatus::Cancelled
         ) {
             log::warn!(
                 "[Workflow][session={}][phase={}] Found stale live session in terminal managed status {:?}, removing before command handling",
@@ -1168,25 +1162,14 @@ async fn has_reconciled_live_session(
     };
 
     let executor_state = executor_guard.state();
-    let managed_status = match executor_state {
-        WorkflowState::Paused
-        | WorkflowState::AwaitingUser
-        | WorkflowState::AwaitingApproval
-        | WorkflowState::AwaitingAutoApproval
-        | WorkflowState::AwaitingSubAgent => ManagedSessionStatus::Waiting,
-        WorkflowState::Completed => ManagedSessionStatus::Completed,
-        WorkflowState::Error => ManagedSessionStatus::Failed,
-        WorkflowState::Cancelled => ManagedSessionStatus::Cancelled,
-        WorkflowState::Pending
-        | WorkflowState::Thinking
-        | WorkflowState::Executing
-        | WorkflowState::Auditing => ManagedSessionStatus::Active,
-    };
-    let _ = workflow_manager.update_session_status(session_id, managed_status);
+    let _ = workflow_manager.reconcile_session_status_from_workflow_state(
+        session_id,
+        &executor_state,
+    );
 
     if matches!(
         executor_state,
-        WorkflowState::Completed | WorkflowState::Error | WorkflowState::Cancelled
+        WorkflowState::Error | WorkflowState::Cancelled
     ) {
         log::warn!(
             "[Workflow][session={}][phase={}] Found stale live session in terminal state={}, removing before command handling",
@@ -1203,6 +1186,247 @@ async fn has_reconciled_live_session(
     }
 
     true
+}
+
+async fn append_initial_prompt_to_executor(
+    executor: &mut dyn crate::workflow::react::engine::ReActExecutor,
+    raw_prompt: &str,
+    clean_prompt: &str,
+    attached_context: &str,
+    related_task_summary: Option<&str>,
+    begin_new_segment: bool,
+) -> Result<(), crate::workflow::react::error::WorkflowEngineError> {
+    const NEW_TASK_AFTER_COMPLETION_REMINDER: &str = "<SYSTEM_REMINDER>This is a new task following earlier completed work. Refer to previously completed tasks only if they are directly relevant to the current request. If they are not relevant, prioritize the current task and avoid being distracted by older context.</SYSTEM_REMINDER>";
+
+    if begin_new_segment {
+        executor.begin_new_context_segment().await?;
+    }
+
+    if let Some(previous_summary) = related_task_summary {
+        executor
+            .add_message_and_notify(
+                "system".into(),
+                format!(
+                    "# Related Previous Task Context\n<previous_task_summary>\n{}\n</previous_task_summary>",
+                    previous_summary
+                ),
+                None,
+                None,
+                None,
+                false,
+                None,
+                Some(json!({
+                    "type": "summary",
+                    "subtype": "related_previous_task"
+                })),
+            )
+            .await?;
+    }
+
+    let att_opt = if attached_context.is_empty() {
+        None
+    } else {
+        Some(attached_context.to_string())
+    };
+
+    let messages = executor.messages();
+    let has_previous_completed_work = latest_successful_completion_index(&messages).is_some();
+    let active_segment_start = latest_successful_completion_index(&messages)
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let is_duplicate = messages.iter().skip(active_segment_start).any(|m| {
+        m.role == "user"
+            && m.step_type.as_deref() != Some("observe")
+            && (m.message == clean_prompt || m.message == raw_prompt)
+    });
+
+    if !is_duplicate {
+        let user_content = if begin_new_segment && has_previous_completed_work {
+            format!(
+                "{}\n\n{}",
+                clean_prompt, NEW_TASK_AFTER_COMPLETION_REMINDER
+            )
+        } else {
+            clean_prompt.to_string()
+        };
+
+        executor
+            .add_message_and_notify(
+                "user".into(),
+                user_content,
+                att_opt,
+                None,
+                None,
+                false,
+                None,
+                None,
+            )
+            .await?;
+    } else {
+        log::warn!("[Workflow] Skipping duplicate message on resume");
+    }
+
+    Ok(())
+}
+
+async fn try_resume_completed_live_session(
+    session_id: &str,
+    raw_prompt: &str,
+    clean_prompt: &str,
+    attached_context: &str,
+    related_task_summary: Option<&str>,
+    gateway: &Arc<TauriGateway>,
+    workflow_manager: &Arc<WorkflowManager>,
+    main_store: &Arc<std::sync::RwLock<MainStore>>,
+) -> Result<bool, String> {
+    if workflow_manager.get_session_status(session_id) != Some(ManagedSessionStatus::Completed) {
+        return Ok(false);
+    }
+
+    let Some(shared_executor) = workflow_manager.get_executor(session_id) else {
+        workflow_manager.remove_session(session_id);
+        WorkflowManager::unregister_session_signal_tx_with_source(
+            session_id,
+            "workflow_start.resume_completed.missing_executor",
+        );
+        gateway
+            .unregister_session_with_source(
+                session_id,
+                "workflow_start.resume_completed.missing_executor",
+            )
+            .await;
+        return Ok(false);
+    };
+
+    {
+        let mut executor = shared_executor.lock().await;
+        if executor.state() != WorkflowState::Completed {
+            return Ok(false);
+        }
+
+        executor
+            .prepare_completed_resume()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        append_initial_prompt_to_executor(
+            &mut *executor,
+            raw_prompt,
+            clean_prompt,
+            attached_context,
+            related_task_summary,
+            true,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
+    {
+        let mut executor = shared_executor.lock().await;
+        executor.attach_signal_rx(signal_rx);
+    }
+    gateway
+        .register_session_tx_with_source(
+            session_id.to_string(),
+            signal_tx.clone(),
+            "workflow_start.resume_completed",
+        )
+        .await;
+    WorkflowManager::register_session_signal_tx_with_source(
+        session_id.to_string(),
+        signal_tx,
+        "workflow_start.resume_completed",
+    );
+    let _ = workflow_manager.update_session_status(session_id, ManagedSessionStatus::Active);
+
+    let session_id_for_spawn = session_id.to_string();
+    let gateway_for_spawn = gateway.clone();
+    let manager_for_spawn = workflow_manager.clone();
+    let main_store_for_spawn = main_store.clone();
+    tokio::spawn(async move {
+        let mut guard = shared_executor.lock().await;
+        if let Err(e) = guard.run_loop().await {
+            if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
+                if let Ok(store) = main_store_for_spawn.read() {
+                    let _ = store.update_workflow_status(
+                        &session_id_for_spawn,
+                        &WorkflowState::Cancelled.to_string(),
+                    );
+                }
+                let _ = manager_for_spawn
+                    .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
+                BACKGROUND_TASKS.remove(&session_id_for_spawn);
+                WorkflowManager::unregister_session_signal_tx_with_source(
+                    &session_id_for_spawn,
+                    "workflow_start.resume_completed.run_loop.cancelled",
+                );
+                gateway_for_spawn
+                    .unregister_session_with_source(
+                        &session_id_for_spawn,
+                        "workflow_start.resume_completed.run_loop.cancelled",
+                    )
+                    .await;
+                manager_for_spawn.remove_session(&session_id_for_spawn);
+                return;
+            }
+
+            log::error!(
+                "[Workflow][session={}][phase=run_loop][event=crash] Workflow error after completed-session resume: {:?}",
+                session_id_for_spawn,
+                e
+            );
+            let _ = manager_for_spawn
+                .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Failed);
+            let _ = gateway_for_spawn
+                .send(
+                    &session_id_for_spawn,
+                    crate::workflow::react::types::GatewayPayload::Message {
+                        role: "assistant".to_string(),
+                        content: format!(
+                            "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
+                            e
+                        ),
+                        reasoning: None,
+                        step_type: None,
+                        step_index: 0,
+                        is_error: true,
+                        error_type: Some("engine".to_string()),
+                        metadata: None,
+                    },
+                )
+                .await;
+        }
+        if matches!(guard.state(), WorkflowState::Completed) {
+            let _ = manager_for_spawn
+                .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Completed);
+            if let Some(completed_at_ms) =
+                manager_for_spawn.get_session_updated_at_ms(&session_id_for_spawn)
+            {
+                schedule_completed_session_cleanup(
+                    session_id_for_spawn.clone(),
+                    completed_at_ms,
+                    gateway_for_spawn.clone(),
+                    manager_for_spawn.clone(),
+                );
+            }
+        } else {
+            BACKGROUND_TASKS.remove(&session_id_for_spawn);
+            WorkflowManager::unregister_session_signal_tx_with_source(
+                &session_id_for_spawn,
+                "workflow_start.resume_completed.run_loop.finalize",
+            );
+            gateway_for_spawn
+                .unregister_session_with_source(
+                    &session_id_for_spawn,
+                    "workflow_start.resume_completed.run_loop.finalize",
+                )
+                .await;
+            manager_for_spawn.remove_session(&session_id_for_spawn);
+        }
+    });
+
+    Ok(true)
 }
 
 fn is_stale_gateway_injection_error(
@@ -1294,7 +1518,7 @@ const COMPLETED_SESSION_CLEANUP_DELAY_SECS: u64 = 600;
 
 fn schedule_completed_session_cleanup(
     session_id: String,
-    created_at_ms: i64,
+    completed_at_ms: i64,
     gateway: Arc<TauriGateway>,
     workflow_manager: Arc<WorkflowManager>,
 ) {
@@ -1308,8 +1532,8 @@ fn schedule_completed_session_cleanup(
             workflow_manager.get_session_status(&session_id),
             Some(ManagedSessionStatus::Completed)
         ) && workflow_manager
-            .get_session_created_at_ms(&session_id)
-            .is_some_and(|current_created_at| current_created_at == created_at_ms);
+            .get_session_updated_at_ms(&session_id)
+            .is_some_and(|current_updated_at| current_updated_at == completed_at_ms);
 
         if !should_cleanup {
             return;
@@ -1320,7 +1544,8 @@ fn schedule_completed_session_cleanup(
             session_id
         );
 
-        let removed = workflow_manager.remove_session_if_matches(&session_id, created_at_ms);
+        let removed =
+            workflow_manager.remove_session_if_updated_matches(&session_id, completed_at_ms);
         if removed.is_some() {
             BACKGROUND_TASKS.remove(&session_id);
             WorkflowManager::unregister_session_signal_tx_with_source(
@@ -1334,11 +1559,11 @@ fn schedule_completed_session_cleanup(
     });
 }
 
-fn legacy_wait_reason_from_status(status: &str) -> Option<WaitReason> {
-    stored_workflow_state(status).and_then(wait_reason_for_workflow_state)
+fn compat_wait_reason_from_snapshot_status(status: &str) -> Option<WaitReason> {
+    compat_snapshot_workflow_state(status).and_then(wait_reason_for_workflow_state)
 }
 
-fn stored_workflow_state(status: &str) -> Option<WorkflowState> {
+fn compat_snapshot_workflow_state(status: &str) -> Option<WorkflowState> {
     use std::str::FromStr;
 
     match status {
@@ -1360,16 +1585,16 @@ fn wait_reason_for_workflow_state(state: WorkflowState) -> Option<WaitReason> {
     }
 }
 
-fn is_terminal_stored_workflow_state(status: &str) -> bool {
+fn compat_is_terminal_snapshot_status(status: &str) -> bool {
     matches!(
-        stored_workflow_state(status),
+        compat_snapshot_workflow_state(status),
         Some(WorkflowState::Completed | WorkflowState::Error | WorkflowState::Cancelled)
     )
 }
 
-fn is_resumable_stored_workflow_state_for_user_message(status: &str) -> bool {
+fn compat_is_resumable_snapshot_status_for_user_message(status: &str) -> bool {
     matches!(
-        stored_workflow_state(status),
+        compat_snapshot_workflow_state(status),
         Some(
             WorkflowState::Pending
                 | WorkflowState::Completed
@@ -1419,6 +1644,12 @@ fn is_resumable_from_context_for_user_message(ctx: Option<&ExecutionContext>) ->
     }
 }
 
+fn signal_json_content(signal: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(signal)
+        .ok()
+        .and_then(|value| value["content"].as_str().map(|content| content.to_string()))
+}
+
 #[tauri::command]
 pub async fn workflow_start(
     app: tauri::AppHandle,
@@ -1448,16 +1679,6 @@ pub async fn workflow_start(
     let workflow_manager_arc = workflow_manager.inner().clone();
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
     let planning_mode = planning_mode.unwrap_or(false);
-
-    // Reject only truly live sessions. A terminal executor may still exist in
-    // memory for a short window while cleanup races the next user action.
-    if has_reconciled_live_session(&workflow_manager_arc, &session_id, "start").await {
-        log::warn!(
-            "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
-            session_id
-        );
-        return Err(format!("Session already exists: {}", session_id));
-    }
 
     let (
         raw_prompt,
@@ -1511,7 +1732,6 @@ pub async fn workflow_start(
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Agent {} not found", agent_id))?
     };
-
     // Load agent_config JSON for easier access to overrides like 'phase'
     let agent_config_json: Value = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
@@ -1536,31 +1756,7 @@ pub async fn workflow_start(
         }
     }
 
-    let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
-    gateway_arc
-        .register_session_tx_with_source(session_id.clone(), signal_tx.clone(), "workflow_start")
-        .await;
-    WorkflowManager::register_session_signal_tx_with_source(
-        session_id.clone(),
-        signal_tx,
-        "workflow_start",
-    );
-
-    let global_tool_manager = chat_state_arc.tool_manager.clone();
-
-    let allowed_roots: Vec<PathBuf> = allowed_paths
-        .into_iter()
-        .map(|p| {
-            let path = PathBuf::from(p);
-            if path.is_absolute() {
-                path
-            } else {
-                std::env::current_dir().unwrap_or_default().join(path)
-            }
-        })
-        .collect();
-
-    let is_terminal_workflow = is_terminal_stored_workflow_state(&workflow_status);
+    let is_terminal_workflow = compat_is_terminal_snapshot_status(&workflow_status);
 
     let related_task_summary = if planning_mode && initial_prompt.is_some() && is_terminal_workflow
     {
@@ -1590,6 +1786,61 @@ pub async fn workflow_start(
         None
     };
 
+    if initial_prompt.is_some() {
+        if try_resume_completed_live_session(
+            &session_id,
+            &raw_prompt,
+            &clean_prompt,
+            &attached_context,
+            related_task_summary.as_deref(),
+            &gateway_arc,
+            &workflow_manager_arc,
+            &main_store_arc,
+        )
+        .await?
+        {
+            log::info!(
+                "[Workflow][session={}][phase=start] Resumed completed live session without rebuilding executor",
+                session_id
+            );
+            return Ok(session_id);
+        }
+    }
+
+    // Reject only truly live sessions. A completed executor may still exist in
+    // memory for a short window and can be resumed above without rebuilding.
+    if has_reconciled_live_session(&workflow_manager_arc, &session_id, "start").await {
+        log::warn!(
+            "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
+            session_id
+        );
+        return Err(format!("Session already exists: {}", session_id));
+    }
+
+    let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
+    gateway_arc
+        .register_session_tx_with_source(session_id.clone(), signal_tx.clone(), "workflow_start")
+        .await;
+    WorkflowManager::register_session_signal_tx_with_source(
+        session_id.clone(),
+        signal_tx,
+        "workflow_start",
+    );
+
+    let global_tool_manager = chat_state_arc.tool_manager.clone();
+
+    let allowed_roots: Vec<PathBuf> = allowed_paths
+        .into_iter()
+        .map(|p| {
+            let path = PathBuf::from(p);
+            if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir().unwrap_or_default().join(path)
+            }
+        })
+        .collect();
+
     // Persisted phase is authoritative for existing workflows. This prevents a stale
     // frontend planning toggle from re-entering strict planning after a plan was approved.
     let persisted_phase = agent_config_json
@@ -1617,6 +1868,7 @@ pub async fn workflow_start(
             }
         }
     };
+    let auto_compress_enabled = workflow_auto_compress_enabled(&agent_config_json);
 
     // Apply approval level from merged agent config
     if let Some(ref approval_level_str) = agent_config.approval_level {
@@ -1654,6 +1906,7 @@ pub async fn workflow_start(
                 Some(signal_rx),
                 tsid_generator,
                 global_tool_manager,
+                auto_compress_enabled,
                 policy,
             ),
         ))
@@ -1672,6 +1925,7 @@ pub async fn workflow_start(
                 Some(signal_rx),
                 tsid_generator,
                 global_tool_manager,
+                auto_compress_enabled,
                 policy,
             ),
         ))
@@ -1682,69 +1936,16 @@ pub async fn workflow_start(
         executor.init().await.map_err(|e| e.to_string())?;
 
         if initial_prompt.is_some() {
-            if is_terminal_workflow {
-                executor
-                    .begin_new_context_segment()
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
-
-            if let Some(previous_summary) = related_task_summary {
-                executor
-                    .add_message_and_notify(
-                        "system".into(),
-                        format!(
-                            "# Related Previous Task Context\n<previous_task_summary>\n{}\n</previous_task_summary>",
-                            previous_summary
-                        ),
-                        None,
-                        None,
-                        None,
-                        false,
-                        None,
-                        Some(json!({
-                            "type": "summary",
-                            "subtype": "related_previous_task"
-                        })),
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
-
-            let att_opt = if attached_context.is_empty() {
-                None
-            } else {
-                Some(attached_context)
-            };
-
-            // Check if message already exists to avoid duplicates
-            let messages = executor.messages();
-            let active_segment_start = latest_successful_completion_index(&messages)
-                .map(|index| index + 1)
-                .unwrap_or(0);
-            let is_duplicate = messages.iter().skip(active_segment_start).any(|m| {
-                m.role == "user"
-                    && m.step_type.as_deref() != Some("observe")
-                    && (m.message == clean_prompt || m.message == raw_prompt)
-            });
-
-            if !is_duplicate {
-                executor
-                    .add_message_and_notify(
-                        "user".into(),
-                        clean_prompt,
-                        att_opt,
-                        None,
-                        None,
-                        false,
-                        None,
-                        None,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
-            } else {
-                log::warn!("[Workflow] Skipping duplicate message on resume");
-            }
+            append_initial_prompt_to_executor(
+                &mut *executor,
+                &raw_prompt,
+                &clean_prompt,
+                &attached_context,
+                related_task_summary.as_deref(),
+                is_terminal_workflow,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
         }
     }
 
@@ -1853,12 +2054,12 @@ pub async fn workflow_start(
         if matches!(guard.state(), WorkflowState::Completed) {
             let _ = manager_for_spawn
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Completed);
-            if let Some(created_at_ms) =
-                manager_for_spawn.get_session_created_at_ms(&session_id_for_spawn)
+            if let Some(completed_at_ms) =
+                manager_for_spawn.get_session_updated_at_ms(&session_id_for_spawn)
             {
                 schedule_completed_session_cleanup(
                     session_id_for_spawn.clone(),
-                    created_at_ms,
+                    completed_at_ms,
                     gateway_for_spawn.clone(),
                     manager_for_spawn.clone(),
                 );
@@ -1930,6 +2131,20 @@ pub async fn workflow_approve_plan(
             }
         }
     }
+    let auto_compress_enabled = {
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        if let Ok(snapshot) = store.get_workflow_snapshot(&session_id) {
+            snapshot
+                .workflow
+                .agent_config
+                .as_ref()
+                .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                .map(|config| workflow_auto_compress_enabled(&config))
+                .unwrap_or(true)
+        } else {
+            true
+        }
+    };
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
     gateway_arc
@@ -1991,6 +2206,7 @@ pub async fn workflow_approve_plan(
         Some(signal_rx),
         tsid_generator_arc,
         global_tool_manager,
+        auto_compress_enabled,
         crate::workflow::react::policy::ExecutionPolicy::implementation(),
     );
 
@@ -2178,12 +2394,12 @@ pub async fn workflow_approve_plan(
         if matches!(guard.state(), WorkflowState::Completed) {
             let _ = manager_for_spawn
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Completed);
-            if let Some(created_at_ms) =
-                manager_for_spawn.get_session_created_at_ms(&session_id_for_spawn)
+            if let Some(completed_at_ms) =
+                manager_for_spawn.get_session_updated_at_ms(&session_id_for_spawn)
             {
                 schedule_completed_session_cleanup(
                     session_id_for_spawn.clone(),
-                    created_at_ms,
+                    completed_at_ms,
                     gateway_for_spawn.clone(),
                     manager_for_spawn.clone(),
                 );
@@ -2263,7 +2479,7 @@ pub async fn workflow_signal(
             .flatten();
 
         let snapshot_is_terminal =
-            is_terminal_stored_workflow_state(&workflow_snapshot.workflow.status);
+            compat_is_terminal_snapshot_status(&workflow_snapshot.workflow.status);
         let should_force_recovery_for_terminal_user_message = snapshot_is_terminal
             && matches!(
                 signal_type_enum,
@@ -2272,22 +2488,25 @@ pub async fn workflow_signal(
 
         if should_force_recovery_for_terminal_user_message {
             log::warn!(
-                "[Workflow][session={}][phase=signal] Live session still registered but snapshot is terminal (status={}). Treating user message as resume request and entering recovery.",
+                "[Workflow][session={}][phase=signal] Live session is completed and snapshot is terminal (status={}). Treating user message as completed-session resume request.",
                 session_id,
                 workflow_snapshot.workflow.status
             );
-            workflow_manager_arc.remove_session(&session_id);
-            WorkflowManager::unregister_session_signal_tx_with_source(
-                &session_id,
-                "workflow_signal.recovery.snapshot_terminal_user_message",
-            );
-            gateway_arc
-                .unregister_session_with_source(
-                    &session_id,
-                    "workflow_signal.recovery.snapshot_terminal_user_message",
-                )
-                .await;
-            true
+            workflow_start(
+                app,
+                state,
+                chat_state,
+                tsid_generator,
+                gateway,
+                factory,
+                workflow_manager,
+                session_id.clone(),
+                workflow_snapshot.workflow.agent_id.clone(),
+                signal_json_content(&signal),
+                None,
+            )
+            .await?;
+            return Ok("Workflow resumed with input".to_string());
         } else {
             // Route signal through manager
             if let Err(e) = workflow_manager_arc.validate_signal_routing(&session_id, &signal_type)
@@ -2388,7 +2607,9 @@ pub async fn workflow_signal(
             let effective_wait_reason = recovery_context
                 .as_ref()
                 .and_then(|ctx| ctx.wait_reason.clone())
-                .or_else(|| legacy_wait_reason_from_status(&workflow_snapshot.workflow.status));
+                .or_else(|| {
+                    compat_wait_reason_from_snapshot_status(&workflow_snapshot.workflow.status)
+                });
 
             // Handle user_message signal (Phase 3 unified signal type)
             // Also support legacy user_input for backward compatibility
@@ -2397,17 +2618,23 @@ pub async fn workflow_signal(
                 Some(SignalType::UserMessage | SignalType::LegacyUserInput)
             ) {
                 let can_queue_during_approval = effective_wait_reason == Some(WaitReason::Approval)
-                    || matches!(
-                        stored_workflow_state(&workflow_snapshot.workflow.status),
-                        Some(WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval)
-                    );
+                    || (recovery_context.is_none()
+                        && matches!(
+                            compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
+                            Some(
+                                WorkflowState::AwaitingApproval
+                                    | WorkflowState::AwaitingAutoApproval
+                            )
+                        ));
 
                 // When recovery_context is None (for example a brand-new workflow with no
                 // persisted execution history yet), fall back to the durable workflow status.
-                let is_resumable = is_resumable_from_context_for_user_message(recovery_context.as_ref())
-                    || is_resumable_stored_workflow_state_for_user_message(
+                let is_resumable = is_resumable_from_context_for_user_message(
+                    recovery_context.as_ref(),
+                ) || (recovery_context.is_none()
+                    && compat_is_resumable_snapshot_status_for_user_message(
                         &workflow_snapshot.workflow.status,
-                    );
+                    ));
 
                 if !is_resumable {
                     log::warn!(
@@ -2490,10 +2717,14 @@ pub async fn workflow_signal(
                 || signal_type == "request_confirm_broadcast"
             {
                 let can_rebroadcast = effective_wait_reason == Some(WaitReason::Approval)
-                    || matches!(
-                        stored_workflow_state(&workflow_snapshot.workflow.status),
-                        Some(WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval)
-                    );
+                    || (recovery_context.is_none()
+                        && matches!(
+                            compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
+                            Some(
+                                WorkflowState::AwaitingApproval
+                                    | WorkflowState::AwaitingAutoApproval
+                            )
+                        ));
                 if !can_rebroadcast {
                     log::info!(
                         "[Workflow][session={}][phase=signal] Session is not awaiting approval, skipping rebroadcast_pending. runtime_state={:?}, wait_reason={:?}, status={}",
@@ -2531,10 +2762,11 @@ pub async fn workflow_signal(
                 Some(WorkflowSignal::Continue | WorkflowSignal::Stop)
             ) {
                 let can_resume = effective_wait_reason == Some(WaitReason::Confirmation)
-                    || matches!(
-                        stored_workflow_state(&workflow_snapshot.workflow.status),
-                        Some(WorkflowState::Paused)
-                    );
+                    || (recovery_context.is_none()
+                        && matches!(
+                            compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
+                            Some(WorkflowState::Paused)
+                        ));
                 if !can_resume {
                     log::info!(
                         "[Workflow][session={}][phase=signal] Session is not confirmation-waiting, ignoring {}. runtime_state={:?}, wait_reason={:?}, status={}",
@@ -2610,10 +2842,14 @@ pub async fn workflow_signal(
                 Some(WorkflowSignal::ApprovalDecision { .. })
             ) {
                 let can_resume = effective_wait_reason == Some(WaitReason::Approval)
-                    || matches!(
-                        stored_workflow_state(&workflow_snapshot.workflow.status),
-                        Some(WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval)
-                    );
+                    || (recovery_context.is_none()
+                        && matches!(
+                            compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
+                            Some(
+                                WorkflowState::AwaitingApproval
+                                    | WorkflowState::AwaitingAutoApproval
+                            )
+                        ));
                 if !can_resume {
                     return Err(format!(
                         "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
@@ -3297,26 +3533,27 @@ pub async fn get_workflow_dispatcher_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn test_legacy_wait_reason_from_status() {
+    fn test_compat_wait_reason_from_snapshot_status() {
         assert_eq!(
-            legacy_wait_reason_from_status("awaiting_approval"),
+            compat_wait_reason_from_snapshot_status("awaiting_approval"),
             Some(WaitReason::Approval)
         );
         assert_eq!(
-            legacy_wait_reason_from_status("awaiting_user"),
+            compat_wait_reason_from_snapshot_status("awaiting_user"),
             Some(WaitReason::UserInput)
         );
         assert_eq!(
-            legacy_wait_reason_from_status("paused"),
+            compat_wait_reason_from_snapshot_status("paused"),
             Some(WaitReason::Confirmation)
         );
         assert_eq!(
-            legacy_wait_reason_from_status("awaiting_sub_agent"),
+            compat_wait_reason_from_snapshot_status("awaiting_sub_agent"),
             Some(WaitReason::SubAgent)
         );
-        assert_eq!(legacy_wait_reason_from_status("thinking"), None);
+        assert_eq!(compat_wait_reason_from_snapshot_status("thinking"), None);
     }
 
     #[test]
@@ -3343,5 +3580,80 @@ mod tests {
         running.state = RuntimeState::Running;
         assert!(!is_resumable_from_context_for_user_message(Some(&running)));
         assert!(!is_resumable_from_context_for_user_message(None));
+    }
+
+    #[test]
+    fn test_previous_completed_task_context_prefers_structured_tool_summary() {
+        let messages = vec![
+            WorkflowMessage {
+                id: Some(1),
+                session_id: "session-1".to_string(),
+                role: "user".to_string(),
+                message: "Fix the captcha modal".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(2),
+                session_id: "session-1".to_string(),
+                role: "assistant".to_string(),
+                message: "Stale assistant recap that should not win".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(3),
+                session_id: "session-1".to_string(),
+                role: "tool".to_string(),
+                message: "".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_name": crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "execution_status": "completed",
+                    "approval_status": "approved",
+                    "summary": "Structured completion summary",
+                    "tool_call": {
+                        "function": {
+                            "name": crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                            "arguments": "{\"summary\":\"Structured completion summary\"}"
+                        }
+                    }
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+        ];
+
+        let result = previous_completed_task_context(&messages).expect("expected previous task");
+        assert_eq!(result.0, "Fix the captcha modal");
+        assert_eq!(result.1, "Structured completion summary");
     }
 }

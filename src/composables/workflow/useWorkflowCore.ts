@@ -32,6 +32,7 @@ export function useWorkflowCore({
     planningMode,
     approvalLevel,
     finalAuditMode,
+    autoCompressEnabled,
     pendingPaths,
     currentWorkflowId,
     currentWorkflow,
@@ -175,6 +176,7 @@ export function useWorkflowCore({
     })
     const signalMapping: Record<string, string> = {
         finalAudit: SIGNAL_TYPES.UPDATE_FINAL_AUDIT,
+        autoCompress: 'update_auto_compress',
         approvalLevel: SIGNAL_TYPES.UPDATE_APPROVAL_LEVEL
     }
 
@@ -210,6 +212,7 @@ export function useWorkflowCore({
     const mergeLocalUiOverrides = (baseConfig = {}) => ({
         ...baseConfig,
         approvalLevel: approvalLevel.value,
+        autoCompress: autoCompressEnabled.value,
         finalAudit: finalAuditMode.value === 'on',
         phase: currentPhaseValue()
     })
@@ -410,6 +413,33 @@ export function useWorkflowCore({
             []
         return Array.isArray(pendingTools) ? pendingTools : []
     }
+
+    const stringifyWorkflowMessageContent = (value) => {
+        if (typeof value === 'string') return value
+        if (value == null) return ''
+        try {
+            return JSON.stringify(value)
+        } catch {
+            return String(value)
+        }
+    }
+
+    const buildPendingToolMetadata = (toolCallId, toolName, argumentsValue, details, displayType) => ({
+        tool_call_id: toolCallId,
+        tool_name: toolName,
+        tool_call: {
+            id: toolCallId,
+            function: {
+                name: toolName,
+                arguments: argumentsValue ?? {}
+            }
+        },
+        details: details ?? null,
+        display_type: displayType,
+        summary: t('workflow.awaitingApproval'),
+        approval_status: 'pending',
+        execution_status: 'pending_approval'
+    })
 
     const clearPendingApprovalEntry = (sessionId, approvalId) => {
         if (!sessionId || !approvalId) return
@@ -775,7 +805,8 @@ export function useWorkflowCore({
                     for (const pendingTool of structuredPendingTools) {
                         const toolCallId = pendingTool.toolCallId || pendingTool.tool_call_id || ''
                         const toolName = pendingTool.toolName || pendingTool.tool_name || ''
-                        const details = pendingTool.details || ''
+                        const argumentsValue = pendingTool.arguments ?? null
+                        const details = pendingTool.details ?? null
                         const displayType = pendingTool.displayType || pendingTool.display_type || ''
                         if (!toolCallId) continue
 
@@ -786,19 +817,18 @@ export function useWorkflowCore({
                         workflowStore.addMessage({
                             sessionId: id,
                             role: 'tool',
-                            message: details,
+                            message: stringifyWorkflowMessageContent(details),
                             stepType: 'Observe',
                             stepIndex: workflowStore.messages.length,
                             isError: false,
                             errorType: null,
-                            metadata: {
-                                tool_call_id: toolCallId,
-                                tool_name: toolName,
-                                display_type: displayType,
-                                summary: t('workflow.awaitingApproval'),
-                                approval_status: 'pending',
-                                execution_status: 'pending_approval'
-                            }
+                            metadata: buildPendingToolMetadata(
+                                toolCallId,
+                                toolName,
+                                argumentsValue,
+                                details,
+                                displayType
+                            )
                         })
                     }
                 } else if (pendingApprovalRequest && !workflowStore.pendingApprovalMessage) {
@@ -809,19 +839,18 @@ export function useWorkflowCore({
                     workflowStore.addMessage({
                         sessionId: id,
                         role: 'tool',
-                        message: pendingApprovalRequest.details || '',
+                        message: stringifyWorkflowMessageContent(pendingApprovalRequest.details),
                         stepType: 'Observe',
                         stepIndex: workflowStore.messages.length,
                         isError: false,
                         errorType: null,
-                        metadata: {
-                            tool_call_id: pendingApprovalRequest.toolCallId || '',
-                            tool_name: pendingApprovalRequest.toolName || '',
-                            display_type: pendingApprovalRequest.displayType || '',
-                            summary: t('workflow.awaitingApproval'),
-                            approval_status: 'pending',
-                            execution_status: 'pending_approval'
-                        }
+                        metadata: buildPendingToolMetadata(
+                            pendingApprovalRequest.toolCallId || '',
+                            pendingApprovalRequest.toolName || '',
+                            pendingApprovalRequest.arguments ?? null,
+                            pendingApprovalRequest.details,
+                            pendingApprovalRequest.displayType || ''
+                        )
                     })
                 }
             } else if (status !== WORKFLOW_STATUSES.AWAITING_APPROVAL) {
@@ -847,6 +876,10 @@ export function useWorkflowCore({
             } else {
                 finalAuditMode.value = 'off'
             }
+            isSyncingWorkflowConfig.value = false
+
+            isSyncingWorkflowConfig.value = true
+            autoCompressEnabled.value = config.autoCompress ?? true
             isSyncingWorkflowConfig.value = false
 
             // approvalLevel
@@ -1494,6 +1527,9 @@ export function useWorkflowCore({
             if (inheritedFinalAudit !== null) {
                 finalAuditMode.value = inheritedFinalAudit ? 'on' : 'off'
             }
+            if (workflowStore.currentWorkflow?.agentConfig?.autoCompress !== undefined) {
+                autoCompressEnabled.value = !!workflowStore.currentWorkflow.agentConfig.autoCompress
+            }
 
             // 5. Create empty workflow in backend
             const newWorkflowId = await invokeWrapper('create_workflow', {
@@ -1541,6 +1577,11 @@ export function useWorkflowCore({
     watch(finalAuditMode, async (newVal) => {
         if (isSyncingWorkflowConfig.value) return
         await updateWorkflowConfig('finalAudit', newVal === 'on')
+    })
+
+    watch(autoCompressEnabled, async (newVal) => {
+        if (isSyncingWorkflowConfig.value) return
+        await updateWorkflowConfig('autoCompress', !!newVal)
     })
 
     watch(planningMode, async (newVal) => {

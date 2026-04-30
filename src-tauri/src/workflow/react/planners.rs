@@ -43,6 +43,10 @@ impl ReActExecutor for PlanningExecutor {
             .await
     }
 
+    async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError> {
+        self.executor.prepare_completed_resume().await
+    }
+
     async fn add_message_and_notify(
         &mut self,
         role: String,
@@ -80,6 +84,10 @@ impl ReActExecutor for PlanningExecutor {
         self.executor.state = state;
     }
 
+    fn attach_signal_rx(&mut self, signal_rx: tokio::sync::mpsc::Receiver<String>) {
+        self.executor.signal_rx = Some(signal_rx);
+    }
+
     fn messages(&self) -> Vec<crate::db::WorkflowMessage> {
         self.executor.context.messages.clone()
     }
@@ -99,6 +107,7 @@ impl PlanningExecutor {
         signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
         tsid_generator: Arc<TsidGenerator>,
         global_tool_manager: Arc<ToolManager>,
+        auto_compress_enabled: bool,
         policy: ExecutionPolicy,
     ) -> Self {
         let executor = WorkflowExecutor::new(
@@ -114,6 +123,7 @@ impl PlanningExecutor {
             signal_rx,
             tsid_generator,
             global_tool_manager,
+            auto_compress_enabled,
             policy,
         );
         Self { executor }

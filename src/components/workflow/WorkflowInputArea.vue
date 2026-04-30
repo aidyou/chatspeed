@@ -61,6 +61,13 @@
               </label>
             </el-tooltip>
 
+            <el-tooltip :content="$t('workflow.autoCompressTooltip')" placement="top">
+              <label class="icon-btn upperLayer" :class="{ active: autoCompressEnabled }"
+                @click="$emit('toggle-auto-compress')">
+                <cs name="compress" class="small" />
+              </label>
+            </el-tooltip>
+
             <!-- Approval Level Dropdown -->
             <el-dropdown trigger="click" @command="$emit('update-approval-level', $event)">
               <label class="icon-btn upperLayer" :class="{ 'warning-mode': approvalLevel === 'full' }">
@@ -161,8 +168,8 @@
             </el-popover>
 
             <el-tooltip :content="$t('workflow.newWorkflow')" :hide-after="0" :enterable="false" placement="top">
-              <label @click="$emit('create-new-workflow')" :class="{ disabled: canStop }">
-                <cs name="new-chat" class="small" :class="{ disabled: canStop }" />
+              <label @click="$emit('create-new-workflow')">
+                <cs name="new-chat" class="small" />
               </label>
             </el-tooltip>
           </div>
@@ -238,6 +245,10 @@ const props = defineProps({
     type: String,
     default: 'off'
   },
+  autoCompressEnabled: {
+    type: Boolean,
+    default: true
+  },
   agents: {
     type: Array,
     default: () => []
@@ -295,6 +306,7 @@ defineEmits([
   'approve-plan',
   'toggle-planning-mode',
   'toggle-final-audit-mode',
+  'toggle-auto-compress',
   'update-approval-level',
   'update-selected-agent',
   'create-new-workflow',

@@ -109,6 +109,7 @@ Stop broad exploration when:
 # Task Execution Principles
 
 - Start from the user's intended outcome, not from the most convenient code change.
+- Follow an understand -> execute -> verify loop: clarify the objective and context, make the smallest safe change, then verify the result before continuing or completing.
 - Before implementing, identify the expected behavior, affected scope, constraints, and likely verification method.
 - Prefer solving the root problem over patching symptoms when the root cause is reasonably identifiable.
 - Prefer small, verifiable, incremental changes over large, sweeping edits.

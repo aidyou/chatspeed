@@ -840,44 +840,12 @@ impl WorkflowExecutor {
                 TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE => {
                     display_type = "diff".to_string();
                     let mut preview_args = args.clone();
-                    attach_display_context(&mut preview_args, false);
-                    let preview_limit = 100_000;
-
-                    // Truncate large fields for UI preview to prevent IPC/Rendering lag
-                    if let Some(content) = preview_args.get_mut("content") {
-                        if let Some(s) = content.as_str() {
-                            if s.chars().count() > preview_limit {
-                                let truncated: String = s.chars().take(preview_limit).collect();
-                                *content = serde_json::json!(format!(
-                                    "{}\n... (truncated for preview)",
-                                    truncated
-                                ));
-                            }
-                        }
-                    }
-                    if let Some(old_s) = preview_args.get_mut("old_string") {
-                        if let Some(s) = old_s.as_str() {
-                            if s.chars().count() > preview_limit {
-                                let truncated: String = s.chars().take(preview_limit).collect();
-                                *old_s = serde_json::json!(format!(
-                                    "{}\n... (truncated for preview)",
-                                    truncated
-                                ));
-                            }
-                        }
-                    }
-                    if let Some(new_s) = preview_args.get_mut("new_string") {
-                        if let Some(s) = new_s.as_str() {
-                            if s.chars().count() > preview_limit {
-                                let truncated: String = s.chars().take(preview_limit).collect();
-                                *new_s = serde_json::json!(format!(
-                                    "{}\n... (truncated for preview)",
-                                    truncated
-                                ));
-                            }
-                        }
-                    }
-
+                    let primary_root = self
+                        .path_guard
+                        .read()
+                        .ok()
+                        .and_then(|guard| guard.get_primary_root().map(|path| path.to_path_buf()));
+                    attach_display_context(&mut preview_args, false, primary_root.as_deref());
                     // content_str for storing in messages, details_value for UI payload
                     (
                         serde_json::to_string(&preview_args).unwrap_or_default(),
@@ -933,7 +901,7 @@ impl WorkflowExecutor {
         let stash_obj = json!({
             "name": name,
             "arguments": args,
-            "details": content_str.clone(),
+            "details": details_value.clone(),
             "display_type": display_type.clone()
         });
         self.pending_approvals.insert(id.to_string(), stash_obj);
@@ -946,7 +914,7 @@ impl WorkflowExecutor {
             id.to_string(),
             name.to_string(),
             args.clone(),
-            Some(content_str.clone()),
+            Some(details_value.clone()),
             Some(display_type.clone()),
         );
         if let Err(e) = self.append_event(&event) {
