@@ -105,9 +105,7 @@ pub fn from_openai(
             .collect()
     });
 
-    let tool_choice = req
-        .tool_choice
-        .map(convert_openai_tool_choice);
+    let tool_choice = req.tool_choice.map(convert_openai_tool_choice);
 
     Ok(UnifiedRequest {
         model: req.model,

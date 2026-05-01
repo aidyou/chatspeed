@@ -197,8 +197,7 @@ impl ObservationReinforcer {
                         | TOOL_WRITE_FILE
                         | TOOL_PLAN_EDIT_NOTE
                         | TOOL_PLAN_WRITE_NOTE
-                )
-                    && raw_res.len() > 20000
+                ) && raw_res.len() > 20000
                 {
                     let truncated = match raw_res.char_indices().nth(20000) {
                         Some((idx, _)) => &raw_res[..idx],

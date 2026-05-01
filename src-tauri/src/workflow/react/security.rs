@@ -75,7 +75,7 @@ impl PathGuard {
                     if p.exists() {
                         p
                     } else {
-                        log::warn!("[PathGuard] Path does not exist and was ignored: {:?}", p);
+                        log::info!("[PathGuard] Path does not exist and was ignored: {:?}", p);
                         continue;
                     }
                 }

@@ -113,7 +113,10 @@ pub fn preprocess_client_request_body(
     })?;
 
     if should_relax_required_tool_choice(&proxy_model.base_url)
-        && matches!(chat_protocol, ChatProtocol::OpenAI | ChatProtocol::HuggingFace)
+        && matches!(
+            chat_protocol,
+            ChatProtocol::OpenAI | ChatProtocol::HuggingFace
+        )
     {
         let has_tools = body_json
             .get("tools")
@@ -139,8 +142,10 @@ pub fn preprocess_client_request_body(
 }
 
 pub fn preprocess_unified_request(unified_request: &mut UnifiedRequest, proxy_model: &ProxyModel) {
-    if matches!(unified_request.tool_choice, Some(UnifiedToolChoice::Required))
-        && should_relax_required_tool_choice(&proxy_model.base_url)
+    if matches!(
+        unified_request.tool_choice,
+        Some(UnifiedToolChoice::Required)
+    ) && should_relax_required_tool_choice(&proxy_model.base_url)
     {
         unified_request.tool_choice = Some(UnifiedToolChoice::Auto);
     }

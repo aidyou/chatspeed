@@ -78,7 +78,7 @@ impl WorkflowManager {
         status: ManagedSessionStatus,
     ) -> Result<(), WorkflowManagerError> {
         if self.sessions.contains_key(&session_id) {
-            log::warn!(
+            log::info!(
                 "[WorkflowManager][session={}][event=session_registered] Session already exists",
                 session_id
             );
@@ -205,6 +205,42 @@ impl WorkflowManager {
         }
     }
 
+    pub fn transition_session_status_if_current(
+        &self,
+        session_id: &str,
+        expected: ManagedSessionStatus,
+        next: ManagedSessionStatus,
+    ) -> bool {
+        if let Some(mut session) = self.sessions.get_mut(session_id) {
+            if session.status != expected {
+                log::debug!(
+                    "[WorkflowManager][session={}][event=status_transition_skipped] Expected {:?} but found {:?}, next={:?}",
+                    session_id,
+                    expected,
+                    session.status,
+                    next
+                );
+                return false;
+            }
+
+            session.status = next.clone();
+            session.touch();
+            log::info!(
+                "[WorkflowManager][session={}][event=status_updated] Status transitioned from {:?} to {:?}",
+                session_id,
+                expected,
+                next
+            );
+            true
+        } else {
+            log::debug!(
+                "[WorkflowManager][session={}][event=session_lookup_miss] Attempted conditional status transition on non-existent session",
+                session_id
+            );
+            false
+        }
+    }
+
     pub fn managed_status_for_workflow_state(state: &WorkflowState) -> ManagedSessionStatus {
         match state {
             WorkflowState::Pending
@@ -252,7 +288,7 @@ impl WorkflowManager {
                     Ok(())
                 }
                 ManagedSessionStatus::Completed => {
-                    log::warn!(
+                    log::info!(
                         "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: session completed",
                         session_id,
                         signal_type
@@ -263,7 +299,7 @@ impl WorkflowManager {
                     })
                 }
                 ManagedSessionStatus::Failed => {
-                    log::warn!(
+                    log::info!(
                         "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: session failed",
                         session_id,
                         signal_type
@@ -274,7 +310,7 @@ impl WorkflowManager {
                     })
                 }
                 ManagedSessionStatus::Cancelled => {
-                    log::warn!(
+                    log::info!(
                         "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: session cancelled",
                         session_id,
                         signal_type
@@ -347,7 +383,7 @@ impl WorkflowManager {
         };
         let replaced = map.insert(session_id.clone(), tx).is_some();
         if replaced {
-            log::warn!(
+            log::info!(
                 "[WorkflowManager][session={}][event=signal_channel_replaced] Replaced existing GLOBAL_SIGNAL_TX entry, source={}",
                 session_id,
                 source
@@ -377,7 +413,7 @@ impl WorkflowManager {
                 source
             );
         } else {
-            log::warn!(
+            log::debug!(
                 "[WorkflowManager][session={}][event=signal_channel_unregister_miss] GLOBAL_SIGNAL_TX entry already missing, source={}",
                 session_id,
                 source
@@ -612,6 +648,35 @@ mod tests {
             )
             .unwrap();
 
+        assert_eq!(
+            manager.get_session_status("test-session-1"),
+            Some(ManagedSessionStatus::Active)
+        );
+    }
+
+    #[test]
+    fn test_transition_session_status_if_current_only_allows_one_completed_resume_claim() {
+        let manager = WorkflowManager::new();
+        let executor = Arc::new(Mutex::new(MockExecutor::new()));
+
+        manager
+            .register_session(
+                "test-session-1".to_string(),
+                executor,
+                ManagedSessionStatus::Completed,
+            )
+            .unwrap();
+
+        assert!(manager.transition_session_status_if_current(
+            "test-session-1",
+            ManagedSessionStatus::Completed,
+            ManagedSessionStatus::Active,
+        ));
+        assert!(!manager.transition_session_status_if_current(
+            "test-session-1",
+            ManagedSessionStatus::Completed,
+            ManagedSessionStatus::Active,
+        ));
         assert_eq!(
             manager.get_session_status("test-session-1"),
             Some(ManagedSessionStatus::Active)

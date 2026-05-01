@@ -219,6 +219,10 @@ impl WorkflowExecutor {
         }
     }
 
+    fn normalize_pending_tool_details(value: serde_json::Value) -> serde_json::Value {
+        crate::workflow::react::file_preview::normalize_preview_details(value)
+    }
+
     fn build_rejection_observation(tool_name: &str, rejection_message: Option<&str>) -> String {
         let user_prefix = rejection_message
             .map(str::trim)
@@ -1145,18 +1149,19 @@ impl WorkflowExecutor {
                             );
                         } else {
                             for tool in &context.pending_tools {
+                                let details_value = Self::normalize_pending_tool_details(
+                                    tool.details.clone().unwrap_or(serde_json::Value::Null),
+                                );
                                 let info_with_details = json!({
                                     "name": tool.tool_name.clone(),
                                     "arguments": tool.arguments.clone(),
-                                    "details": tool.details.clone().unwrap_or(serde_json::Value::Null),
+                                    "details": details_value.clone(),
                                     "display_type": tool.display_type.clone().unwrap_or_else(|| "text".to_string())
                                 });
                                 self.pending_approvals
                                     .insert(tool.tool_call_id.clone(), info_with_details);
                                 self.enqueue_pending_approval(&tool.tool_call_id);
 
-                                let details_value =
-                                    tool.details.clone().unwrap_or(serde_json::Value::Null);
                                 let _ = self
                                     .dispatch_ui_payload(GatewayPayload::Confirm {
                                         id: tool.tool_call_id.clone(),
@@ -2027,10 +2032,15 @@ impl WorkflowExecutor {
     }
 
     pub(crate) fn enqueue_pending_approval(&mut self, tool_call_id: &str) {
-        if self.pending_approval_queue.iter().any(|id| id == tool_call_id) {
+        if self
+            .pending_approval_queue
+            .iter()
+            .any(|id| id == tool_call_id)
+        {
             return;
         }
-        self.pending_approval_queue.push_back(tool_call_id.to_string());
+        self.pending_approval_queue
+            .push_back(tool_call_id.to_string());
     }
 
     pub(crate) fn remove_pending_approval(&mut self, tool_call_id: &str) {
@@ -2288,8 +2298,10 @@ impl WorkflowExecutor {
                             if self.state == WorkflowState::AwaitingApproval {
                                 let items = self.ordered_pending_approvals();
                                 for (id, info) in items {
-                                    let details_value =
-                                        info.get("details").cloned().unwrap_or(serde_json::Value::Null);
+                                    let details_value = info
+                                        .get("details")
+                                        .cloned()
+                                        .unwrap_or(serde_json::Value::Null);
                                     let _ = self
                                         .dispatch_ui_payload(GatewayPayload::Confirm {
                                             id,
@@ -2764,10 +2776,12 @@ impl WorkflowExecutor {
                         self.session_id
                     );
                     if self.state == WorkflowState::AwaitingApproval {
-                            let items = self.ordered_pending_approvals();
-                            for (id, info) in items {
-                                let details_value =
-                                    info.get("details").cloned().unwrap_or(serde_json::Value::Null);
+                        let items = self.ordered_pending_approvals();
+                        for (id, info) in items {
+                            let details_value = info
+                                .get("details")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
                             let _ = self
                                 .dispatch_ui_payload(GatewayPayload::Confirm {
                                     id,
@@ -3600,7 +3614,8 @@ impl WorkflowExecutor {
                 if reinforced.approval_status.as_deref() == Some("pending") {
                     if let Some(pending_info) = self.pending_approvals.get(id) {
                         if let Some(details) = pending_info.get("details") {
-                            metadata["details"] = details.clone();
+                            metadata["details"] =
+                                Self::normalize_pending_tool_details(details.clone());
                         }
                     }
                 }
@@ -5513,7 +5528,10 @@ impl WorkflowExecutor {
                     enabled
                 );
                 self.auto_compress_enabled = enabled;
-                self.persist_workflow_agent_config_value("autoCompress", serde_json::json!(enabled));
+                self.persist_workflow_agent_config_value(
+                    "autoCompress",
+                    serde_json::json!(enabled),
+                );
             }
             return Ok(true);
         }
@@ -5915,21 +5933,19 @@ impl WorkflowExecutor {
         let pending_tools: Vec<PendingTool> = self
             .ordered_pending_approvals()
             .into_iter()
-            .map(|(tool_call_id, value)| {
-                PendingTool {
-                    tool_call_id,
-                    tool_name: value
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string(),
-                    arguments: value.get("arguments").cloned().unwrap_or(json!({})),
-                    details: value.get("details").cloned(),
-                    display_type: value
-                        .get("display_type")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                }
+            .map(|(tool_call_id, value)| PendingTool {
+                tool_call_id,
+                tool_name: value
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                arguments: value.get("arguments").cloned().unwrap_or(json!({})),
+                details: value.get("details").cloned(),
+                display_type: value
+                    .get("display_type")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
             })
             .collect();
 

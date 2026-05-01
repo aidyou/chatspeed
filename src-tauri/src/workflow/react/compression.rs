@@ -119,9 +119,9 @@ impl ContextCompressor {
 
         let max_attempts = 3;
         let mut attempt = 0;
+        let mut retry_instruction = String::new();
         loop {
             attempt += 1;
-            let mut retry_instruction = String::new();
             let full_history = vec![
                 json!({
                     "role": "system",
@@ -159,12 +159,8 @@ impl ContextCompressor {
             {
                 Ok(result) => {
                     let normalized = Self::normalize_summary_result(&result);
-                    if let Ok(validated) = Self::validate_summary_result(&normalized) {
-                        return Ok(validated);
-                    }
-
                     let validation_error = match Self::validate_summary_result(&normalized) {
-                        Ok(_) => String::new(),
+                        Ok(validated) => return Ok(validated),
                         Err(err) => err,
                     };
 
@@ -172,7 +168,7 @@ impl ContextCompressor {
                         let wait_secs = 2u64.pow(attempt - 1);
                         retry_instruction =
                             Self::build_retry_instruction(&validation_error, completed_tasks);
-                        log::warn!(
+                        log::info!(
                             "ContextCompressor: compression attempt {}/{} returned invalid summary format, retrying in {}s. validation_error={}. normalized_preview={}",
                             attempt,
                             max_attempts,
@@ -193,7 +189,7 @@ impl ContextCompressor {
                     if attempt < max_attempts && Self::should_retry_compression_error(&err) =>
                 {
                     let wait_secs = 2u64.pow(attempt - 1);
-                    log::warn!(
+                    log::info!(
                         "ContextCompressor: compression attempt {}/{} failed, retrying in {}s: {}",
                         attempt,
                         max_attempts,

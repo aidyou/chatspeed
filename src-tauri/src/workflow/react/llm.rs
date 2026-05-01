@@ -438,7 +438,7 @@ impl LlmProcessor {
                             ));
                         }
 
-                        log::warn!(
+                        log::info!(
                             "[Workflow][session={}][phase=llm][event=empty_response_diagnostic] content_chars={}, reasoning_chars={}, tool_calls_chars={}, has_invalid_tool_call={}, token_usage={}, reasoning_preview=\"{}\", metadata={}",
                             self.session_id,
                             plain_text.chars().count(),
@@ -460,10 +460,10 @@ impl LlmProcessor {
                             retry_count += 1;
                             let wait_secs = 2u32.pow(retry_count - 1);
 
-                            log::warn!(
-	                                "WorkflowExecutor {}: Empty LLM response encountered. Retrying in {}s (attempt {}/{})",
-	                                self.session_id,
-	                                wait_secs,
+                            log::info!(
+		                                "WorkflowExecutor {}: Empty LLM response encountered. Retrying in {}s (attempt {}/{})",
+		                                self.session_id,
+		                                wait_secs,
 	                                retry_count,
 	                                max_retries
 	                            );
@@ -575,7 +575,7 @@ impl LlmProcessor {
                         retry_count += 1;
                         let wait_secs = 2u32.pow(retry_count - 1);
 
-                        log::warn!("WorkflowExecutor {}: LLM error encountered. Retrying in {}s (attempt {}/{}) - Error: {}",
+                        log::info!("WorkflowExecutor {}: LLM error encountered. Retrying in {}s (attempt {}/{}) - Error: {}",
                             self.session_id, wait_secs, retry_count, max_retries, e);
 
                         // Send standard retry status for timer logic
@@ -690,7 +690,10 @@ impl LlmProcessor {
                 let mut cleaned_content = String::new();
                 cleaned_content.push_str(&plain_text[..leading_ws_len]);
                 cleaned_content.push_str(&plain_text[absolute_end + end_tag.len()..]);
-                return Some((cleaned_content.trim().to_string(), plain_text[content_start..absolute_end].trim().to_string()));
+                return Some((
+                    cleaned_content.trim().to_string(),
+                    plain_text[content_start..absolute_end].trim().to_string(),
+                ));
             } else {
                 plain_text[content_start..].trim().to_string()
             };

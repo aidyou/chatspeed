@@ -30,6 +30,27 @@ pub fn merge_tool_result_into_preview_args(
     }
 }
 
+pub fn normalize_preview_details(value: Value) -> Value {
+    match value {
+        Value::String(text) => decode_preview_json_string(&text).unwrap_or(Value::String(text)),
+        other => other,
+    }
+}
+
+pub fn render_preview_details_text(details: &Value, display_type: &str) -> String {
+    match display_type {
+        "diff" => render_diff_preview_text(details),
+        "markdown" => details
+            .as_str()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| serde_json::to_string_pretty(details).unwrap_or_default()),
+        _ => details
+            .as_str()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| serde_json::to_string_pretty(details).unwrap_or_default()),
+    }
+}
+
 pub fn attach_display_context(
     preview_args: &mut Value,
     prefer_updated_content: bool,
@@ -159,6 +180,106 @@ fn resolve_preview_file_path(file_path: &str, primary_root: Option<&Path>) -> Pa
     path.to_path_buf()
 }
 
+fn decode_preview_json_string(value: &str) -> Option<Value> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let looks_like_json = trimmed.starts_with('{')
+        || trimmed.starts_with('[')
+        || (trimmed.starts_with('"') && (trimmed.contains('{') || trimmed.contains('[')));
+    if !looks_like_json {
+        return None;
+    }
+
+    let mut current = trimmed.to_string();
+    for _ in 0..2 {
+        let Ok(parsed) = serde_json::from_str::<Value>(&current) else {
+            break;
+        };
+
+        match parsed {
+            Value::String(inner) => current = inner,
+            other => return Some(other),
+        }
+    }
+
+    None
+}
+
+fn render_diff_preview_text(details: &Value) -> String {
+    let Some(data) = details.as_object() else {
+        return serde_json::to_string_pretty(details).unwrap_or_default();
+    };
+
+    let path = data
+        .get("display_path")
+        .or_else(|| data.get("file_path"))
+        .or_else(|| data.get("path"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("file");
+    let start_line = data
+        .get("start_line")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(1);
+    let old_str = data
+        .get("old_string")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let new_str = data
+        .get("new_string")
+        .and_then(|value| value.as_str())
+        .or_else(|| data.get("content").and_then(|value| value.as_str()))
+        .unwrap_or("");
+
+    let mut parts = vec![
+        format!("File: {}", path),
+        format!("Start line: {}", start_line),
+    ];
+
+    if let Some(before) = data
+        .get("context_before")
+        .and_then(|value| value.as_array())
+    {
+        if !before.is_empty() {
+            parts.push("Context before:".to_string());
+            parts.extend(
+                before
+                    .iter()
+                    .filter_map(|line| line.as_str())
+                    .map(ToString::to_string),
+            );
+        }
+    }
+
+    if !old_str.is_empty() {
+        parts.push("<old_string>".to_string());
+        parts.push(old_str.to_string());
+        parts.push("</old_string>".to_string());
+    }
+
+    if !new_str.is_empty() {
+        parts.push("<new_string>".to_string());
+        parts.push(new_str.to_string());
+        parts.push("</new_string>".to_string());
+    }
+
+    if let Some(after) = data.get("context_after").and_then(|value| value.as_array()) {
+        if !after.is_empty() {
+            parts.push("Context after:".to_string());
+            parts.extend(
+                after
+                    .iter()
+                    .filter_map(|line| line.as_str())
+                    .map(ToString::to_string),
+            );
+        }
+    }
+
+    parts.join("\n")
+}
+
 fn locate_block_start_line(file_content: &str, block: &str) -> Option<usize> {
     if block.is_empty() {
         return None;
@@ -221,7 +342,10 @@ mod tests {
 
         attach_display_context(&mut preview_args, false, Some(root.as_path()));
 
-        assert_eq!(preview_args.get("start_line").and_then(|v| v.as_u64()), Some(3));
+        assert_eq!(
+            preview_args.get("start_line").and_then(|v| v.as_u64()),
+            Some(3)
+        );
         assert_eq!(
             preview_args
                 .get("context_after_start_line")

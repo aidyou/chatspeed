@@ -414,6 +414,36 @@ export const useWorkflowStore = defineStore('workflow', () => {
     };
   });
 
+  const pendingPlanApprovalRequest = computed(() => {
+    const structured = getStructuredPendingApproval(currentWorkflow.value?.executionContext);
+    if (structured?.toolName === 'submit_plan') {
+      return structured;
+    }
+
+    const assistantMsgs = messages.value.filter((message) => message?.role === 'assistant');
+    for (let i = assistantMsgs.length - 1; i >= 0; i -= 1) {
+      const message = assistantMsgs[i];
+      const metadata = message?.metadata;
+      const toolCalls = metadata?.tool_calls || (metadata?.tool ? [metadata.tool] : []);
+      if (!Array.isArray(toolCalls) || toolCalls.length === 0) continue;
+
+      const hasSubmitPlan = toolCalls.some(
+        (call) => call?.name === 'submit_plan' || call?.function?.name === 'submit_plan'
+      );
+      if (hasSubmitPlan) {
+        return {
+          toolCallId: '',
+          toolName: 'submit_plan',
+          arguments: null,
+          details: null,
+          displayType: 'markdown'
+        };
+      }
+    }
+
+    return null;
+  });
+
   const canApprovePending = computed(() => {
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
     const isApprovalWaiting =
@@ -427,7 +457,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const isApprovalWaiting =
       waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL || approvalWaitingStates.includes(status);
     if (!isApprovalWaiting) return false;
-    return !canApprovePending.value;
+    return !!pendingPlanApprovalRequest.value;
   });
 
   /**

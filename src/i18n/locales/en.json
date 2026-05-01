@@ -895,6 +895,11 @@
     "selectAgentFirst": "Please select an agent first",
     "notificationSound": "Sound notifications",
     "approvalSound": "Approval sound",
-    "completionSound": "Completion sound"
+    "completionSound": "Completion sound",
+    "deleteLastAssistantTurn": "Delete last assistant turn",
+    "deleteLastAssistantTurnConfirm": "Delete the last assistant turn and its linked tool approvals/results? This also clears persisted recovery state for the workflow.",
+    "deleteLastAssistantTurnDone": "Last assistant turn deleted",
+    "deleteLastAssistantTurnFailed": "Failed to delete last assistant turn: {error}",
+    "deleteLastAssistantTurnMissing": "No assistant turn available to delete"
   }
 }

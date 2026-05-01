@@ -678,7 +678,7 @@ export function useWorkflowCore({
                     upsertPendingApprovalEntry(sessionId, payload)
                     playApprovalNotificationSound()
                 } else if (payload.type === 'approval_resolved') {
-                    clearPendingApprovalEntries(sessionId, 'approval')
+                    clearPendingApprovalEntry(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     if (payload.approved) {
                         workflowStore.markToolApprovedRunning(payload.tool_call_id)
@@ -686,7 +686,7 @@ export function useWorkflowCore({
                         workflowStore.markToolRejected(payload.tool_call_id)
                     }
                 } else if (payload.type === 'tool_started') {
-                    clearPendingApprovalEntries(sessionId, 'approval')
+                    clearPendingApprovalEntry(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     workflowStore.markToolApprovedRunning(payload.tool_call_id)
                 } else if (payload.type === 'queued_user_message_removed') {

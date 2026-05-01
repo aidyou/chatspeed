@@ -159,7 +159,7 @@ impl TauriGateway {
                 source
             );
         } else {
-            log::warn!(
+            log::debug!(
                 "[Workflow][session={}][phase=gateway][event=session_unregister_miss] Gateway channels already missing, source={}",
                 session_id,
                 source
@@ -176,7 +176,7 @@ impl TauriGateway {
         let mut senders = self.input_senders.lock().await;
         let replaced = senders.insert(session_id.clone(), tx).is_some();
         if replaced {
-            log::warn!(
+            log::info!(
                 "[Workflow][session={}][phase=gateway][event=signal_channel_replaced] Replaced existing gateway input sender, source={}",
                 session_id,
                 source
@@ -233,7 +233,7 @@ impl Gateway for TauriGateway {
             );
             Ok(())
         } else {
-            log::warn!(
+            log::info!(
                 "[Workflow][session={}][phase=gateway] No input channel found for session",
                 session_id
             );

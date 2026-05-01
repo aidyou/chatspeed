@@ -898,6 +898,11 @@
     "written": "已写入",
     "workflowTitle": "工作流标题",
     "selectAgentFirst": "请先选择一个智能体",
-    "sessionLost": "会话已断开，请重启或刷新页面。"
+    "sessionLost": "会话已断开，请重启或刷新页面。",
+    "deleteLastAssistantTurn": "删除最后一条助手消息",
+    "deleteLastAssistantTurnConfirm": "删除最后一条助手消息以及其关联的工具审批和结果？这也会清理该工作流的持久化恢复状态。",
+    "deleteLastAssistantTurnDone": "已删除最后一条助手消息",
+    "deleteLastAssistantTurnFailed": "删除最后一条助手消息失败：{error}",
+    "deleteLastAssistantTurnMissing": "当前没有可删除的助手消息"
   }
 }

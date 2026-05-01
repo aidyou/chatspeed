@@ -255,6 +255,7 @@ pub async fn run() -> crate::error::Result<()> {
             // run_dag_workflow,
             add_workflow_message,
             create_workflow,
+            delete_last_assistant_workflow_turn,
             delete_workflow,
             get_system_skills,
             get_workflow_snapshot,

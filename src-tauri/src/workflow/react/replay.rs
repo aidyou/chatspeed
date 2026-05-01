@@ -395,7 +395,7 @@ fn map_ui_state_to_runtime(ui_state: &str) -> RuntimeState {
         "error" => RuntimeState::Failed,
         "cancelled" => RuntimeState::Cancelled,
         _ => {
-            log::warn!("Unknown UI state '{}' mapping to Running", ui_state);
+            log::info!("Unknown UI state '{}' mapping to Running", ui_state);
             RuntimeState::Running
         }
     }
@@ -408,7 +408,7 @@ fn parse_wait_reason(s: &str) -> Option<WaitReason> {
         "approval" => Some(WaitReason::Approval),
         "sub_agent" => Some(WaitReason::SubAgent),
         _ => {
-            log::warn!("Unknown wait reason '{}' parsing to None", s);
+            log::info!("Unknown wait reason '{}' parsing to None", s);
             None
         }
     }

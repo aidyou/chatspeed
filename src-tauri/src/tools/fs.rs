@@ -32,7 +32,10 @@ fn resolve_tool_path(path_str: &str, path_guard: Option<&Arc<RwLock<PathGuard>>>
     }
 }
 
-fn display_path_for_tool_output(path: &Path, path_guard: Option<&Arc<RwLock<PathGuard>>>) -> String {
+fn display_path_for_tool_output(
+    path: &Path,
+    path_guard: Option<&Arc<RwLock<PathGuard>>>,
+) -> String {
     let primary_dir = primary_directory(path_guard);
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Ok(relative) = canonical_path.strip_prefix(&primary_dir) {
@@ -87,27 +90,35 @@ fn sort_listed_entries(entries: &mut [ListedEntry]) {
     entries.sort_by(|left, right| compare_listed_entries(left, right));
 }
 
+fn listed_entry_segment_sort_key<'a>(
+    part: &'a str,
+    is_dir_at_level: bool,
+) -> (u8, String, &'a str) {
+    let kind_rank = if is_dir_at_level { 0 } else { 1 };
+    (kind_rank, part.to_ascii_lowercase(), part)
+}
+
 fn compare_listed_entries(left: &ListedEntry, right: &ListedEntry) -> std::cmp::Ordering {
-    let left_parts: Vec<&str> = left.display_path.split('/').filter(|part| !part.is_empty()).collect();
-    let right_parts: Vec<&str> = right.display_path.split('/').filter(|part| !part.is_empty()).collect();
+    let left_parts: Vec<&str> = left
+        .display_path
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let right_parts: Vec<&str> = right
+        .display_path
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
     let shared_len = left_parts.len().min(right_parts.len());
 
     for index in 0..shared_len {
-        if index + 1 == left_parts.len() && index + 1 == right_parts.len() && left.is_dir != right.is_dir
-        {
-            return if left.is_dir {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
-            };
-        }
-
-        let name_order = left_parts[index]
-            .to_ascii_lowercase()
-            .cmp(&right_parts[index].to_ascii_lowercase())
-            .then_with(|| left_parts[index].cmp(right_parts[index]));
-        if name_order != std::cmp::Ordering::Equal {
-            return name_order;
+        let left_is_dir_at_level = index + 1 < left_parts.len() || left.is_dir;
+        let right_is_dir_at_level = index + 1 < right_parts.len() || right.is_dir;
+        let left_key = listed_entry_segment_sort_key(left_parts[index], left_is_dir_at_level);
+        let right_key = listed_entry_segment_sort_key(right_parts[index], right_is_dir_at_level);
+        let segment_order = left_key.cmp(&right_key);
+        if segment_order != std::cmp::Ordering::Equal {
+            return segment_order;
         }
     }
 
@@ -857,7 +868,13 @@ impl ToolDefinition for PlanEditNote {
             ))?;
         let replace_all = params["replace_all"].as_bool().unwrap_or(false);
         let path = planning_note_path(&self.planning_root);
-        execute_edit_file(&path.to_string_lossy(), old_string, new_string, replace_all, None)
+        execute_edit_file(
+            &path.to_string_lossy(),
+            old_string,
+            new_string,
+            replace_all,
+            None,
+        )
     }
 }
 
@@ -1666,6 +1683,35 @@ mod tests {
                 "a.php".to_string(),
                 "b.php".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn test_sort_listed_entries_handles_non_tree_inputs_without_panicking() {
+        let mut entries = vec![
+            ListedEntry {
+                display_path: "a/y".to_string(),
+                is_dir: true,
+            },
+            ListedEntry {
+                display_path: "a/x".to_string(),
+                is_dir: false,
+            },
+            ListedEntry {
+                display_path: "a/x/z".to_string(),
+                is_dir: false,
+            },
+        ];
+
+        sort_listed_entries(&mut entries);
+
+        let sorted_paths: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.display_path.clone())
+            .collect();
+        assert_eq!(
+            sorted_paths,
+            vec!["a/x/z".to_string(), "a/y".to_string(), "a/x".to_string()]
         );
     }
 

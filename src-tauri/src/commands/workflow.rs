@@ -184,7 +184,11 @@ fn workflow_auto_compress_enabled(config: &Value) -> bool {
     config
         .get("autoCompress")
         .and_then(|value| value.as_bool())
-        .or_else(|| config.get("auto_compress").and_then(|value| value.as_bool()))
+        .or_else(|| {
+            config
+                .get("auto_compress")
+                .and_then(|value| value.as_bool())
+        })
         .unwrap_or(true)
 }
 
@@ -1007,6 +1011,28 @@ pub async fn delete_workflow(
 }
 
 #[tauri::command]
+pub async fn delete_last_assistant_workflow_turn(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    chat_state: State<'_, Arc<ChatState>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    session_id: String,
+) -> Result<bool, String> {
+    cleanup_workflow_resources(
+        &session_id,
+        chat_state.inner(),
+        gateway.inner(),
+        workflow_manager.inner(),
+    )
+    .await;
+
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .delete_last_assistant_turn(&session_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_workflow_snapshot(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
@@ -1131,7 +1157,7 @@ async fn has_reconciled_live_session(
             status,
             ManagedSessionStatus::Failed | ManagedSessionStatus::Cancelled
         ) {
-            log::warn!(
+            log::info!(
                 "[Workflow][session={}][phase={}] Found stale live session in terminal managed status {:?}, removing before command handling",
                 session_id,
                 phase,
@@ -1143,7 +1169,7 @@ async fn has_reconciled_live_session(
     }
 
     let Some(executor) = workflow_manager.get_executor(session_id) else {
-        log::warn!(
+        log::info!(
             "[Workflow][session={}][phase={}] Manager had session entry without executor, removing stale entry",
             session_id,
             phase
@@ -1162,16 +1188,14 @@ async fn has_reconciled_live_session(
     };
 
     let executor_state = executor_guard.state();
-    let _ = workflow_manager.reconcile_session_status_from_workflow_state(
-        session_id,
-        &executor_state,
-    );
+    let _ =
+        workflow_manager.reconcile_session_status_from_workflow_state(session_id, &executor_state);
 
     if matches!(
         executor_state,
         WorkflowState::Error | WorkflowState::Cancelled
     ) {
-        log::warn!(
+        log::info!(
             "[Workflow][session={}][phase={}] Found stale live session in terminal state={}, removing before command handling",
             session_id,
             phase,
@@ -1242,10 +1266,7 @@ async fn append_initial_prompt_to_executor(
 
     if !is_duplicate {
         let user_content = if begin_new_segment && has_previous_completed_work {
-            format!(
-                "{}\n\n{}",
-                clean_prompt, NEW_TASK_AFTER_COMPLETION_REMINDER
-            )
+            format!("{}\n\n{}", clean_prompt, NEW_TASK_AFTER_COMPLETION_REMINDER)
         } else {
             clean_prompt.to_string()
         };
@@ -1263,7 +1284,7 @@ async fn append_initial_prompt_to_executor(
             )
             .await?;
     } else {
-        log::warn!("[Workflow] Skipping duplicate message on resume");
+        log::info!("[Workflow] Skipping duplicate message on resume");
     }
 
     Ok(())
@@ -1279,7 +1300,11 @@ async fn try_resume_completed_live_session(
     workflow_manager: &Arc<WorkflowManager>,
     main_store: &Arc<std::sync::RwLock<MainStore>>,
 ) -> Result<bool, String> {
-    if workflow_manager.get_session_status(session_id) != Some(ManagedSessionStatus::Completed) {
+    if !workflow_manager.transition_session_status_if_current(
+        session_id,
+        ManagedSessionStatus::Completed,
+        ManagedSessionStatus::Active,
+    ) {
         return Ok(false);
     }
 
@@ -1301,6 +1326,8 @@ async fn try_resume_completed_live_session(
     {
         let mut executor = shared_executor.lock().await;
         if executor.state() != WorkflowState::Completed {
+            let _ = workflow_manager
+                .reconcile_session_status_from_workflow_state(session_id, &executor.state());
             return Ok(false);
         }
 
@@ -1338,7 +1365,6 @@ async fn try_resume_completed_live_session(
         signal_tx,
         "workflow_start.resume_completed",
     );
-    let _ = workflow_manager.update_session_status(session_id, ManagedSessionStatus::Active);
 
     let session_id_for_spawn = session_id.to_string();
     let gateway_for_spawn = gateway.clone();
@@ -1619,7 +1645,7 @@ fn restore_context_for_signal(
                     session_id
                 );
             } else {
-                log::warn!(
+                log::info!(
                     "[Workflow][session={}][phase=signal] Recovery context unavailable: {}",
                     session_id,
                     error
@@ -1810,7 +1836,7 @@ pub async fn workflow_start(
     // Reject only truly live sessions. A completed executor may still exist in
     // memory for a short window and can be resumed above without rebuilding.
     if has_reconciled_live_session(&workflow_manager_arc, &session_id, "start").await {
-        log::warn!(
+        log::info!(
             "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
             session_id
         );
@@ -2487,7 +2513,7 @@ pub async fn workflow_signal(
             );
 
         if should_force_recovery_for_terminal_user_message {
-            log::warn!(
+            log::info!(
                 "[Workflow][session={}][phase=signal] Live session is completed and snapshot is terminal (status={}). Treating user message as completed-session resume request.",
                 session_id,
                 workflow_snapshot.workflow.status
@@ -2516,7 +2542,7 @@ pub async fn workflow_signal(
                     Some(SignalType::UserMessage | SignalType::LegacyUserInput)
                 );
                 if allow_recovery_for_terminal_user_message {
-                    log::warn!(
+                    log::info!(
                         "[Workflow][session={}][phase=signal] Live session rejected user message with '{}'. Treating as stale terminal session and entering recovery.",
                         session_id,
                         e
@@ -2534,7 +2560,7 @@ pub async fn workflow_signal(
                         .await;
                     true
                 } else {
-                    log::warn!(
+                    log::info!(
                         "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: {}",
                         session_id,
                         signal_type,
@@ -2561,7 +2587,7 @@ pub async fn workflow_signal(
                     }
                     Err(e) => {
                         if is_stale_gateway_injection_error(&e) {
-                            log::warn!(
+                            log::info!(
                                 "[Workflow][session={}][phase=signal] Gateway injection hit stale live session: {}. Removing stale session and entering recovery.",
                                 session_id,
                                 e
@@ -2579,7 +2605,7 @@ pub async fn workflow_signal(
                                 .await;
                             true
                         } else {
-                            log::warn!(
+                            log::info!(
                                 "[Workflow][session={}][phase=signal] Gateway injection failed despite active session: {}",
                                 session_id,
                                 e
@@ -2629,15 +2655,15 @@ pub async fn workflow_signal(
 
                 // When recovery_context is None (for example a brand-new workflow with no
                 // persisted execution history yet), fall back to the durable workflow status.
-                let is_resumable = is_resumable_from_context_for_user_message(
-                    recovery_context.as_ref(),
-                ) || (recovery_context.is_none()
-                    && compat_is_resumable_snapshot_status_for_user_message(
-                        &workflow_snapshot.workflow.status,
-                    ));
+                let is_resumable =
+                    is_resumable_from_context_for_user_message(recovery_context.as_ref())
+                        || (recovery_context.is_none()
+                            && compat_is_resumable_snapshot_status_for_user_message(
+                                &workflow_snapshot.workflow.status,
+                            ));
 
                 if !is_resumable {
-                    log::warn!(
+                    log::info!(
                         "[Workflow][session={}][phase=signal] Cannot resume with user message: runtime_state={:?}, wait_reason={:?}, status={}",
                         session_id,
                         recovery_context.as_ref().map(|ctx| &ctx.state),
@@ -2692,7 +2718,7 @@ pub async fn workflow_signal(
                             Err(e) => {
                                 last_error = Some(e);
                                 retries -= 1;
-                                log::warn!(
+                                log::info!(
                                     "[Workflow] Failed to inject user_message during approval-wait recovery, retries left: {}",
                                     retries
                                 );
@@ -2818,7 +2844,7 @@ pub async fn workflow_signal(
                         Err(e) => {
                             last_error = Some(e);
                             retries -= 1;
-                            log::warn!(
+                            log::info!(
                                 "[Workflow] Failed to inject {} signal, retries left: {}",
                                 signal_type,
                                 retries
@@ -2891,7 +2917,7 @@ pub async fn workflow_signal(
                         Err(e) => {
                             last_error = Some(e);
                             retries -= 1;
-                            log::warn!(
+                            log::info!(
                                 "[Workflow] Failed to inject approval signal, retries left: {}",
                                 retries
                             );
@@ -2944,7 +2970,7 @@ pub async fn workflow_signal(
                         Err(e) => {
                             last_error = Some(e);
                             retries -= 1;
-                            log::warn!(
+                            log::info!(
                                 "[Workflow] Failed to inject sub_agent_complete signal, retries left: {}",
                                 retries
                             );

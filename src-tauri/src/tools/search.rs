@@ -29,7 +29,10 @@ fn resolve_tool_path(path_str: &str, path_guard: Option<&Arc<RwLock<PathGuard>>>
     }
 }
 
-fn display_path_for_tool_output(path: &Path, path_guard: Option<&Arc<RwLock<PathGuard>>>) -> String {
+fn display_path_for_tool_output(
+    path: &Path,
+    path_guard: Option<&Arc<RwLock<PathGuard>>>,
+) -> String {
     let primary_dir = primary_directory(path_guard);
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Ok(relative) = canonical_path.strip_prefix(&primary_dir) {
@@ -630,10 +633,7 @@ mod tests {
             .unwrap();
 
         let content = result.content.unwrap();
-        assert!(content.contains(&format!(
-            "{}/src/lib.rs",
-            relative_root.to_string_lossy()
-        )));
+        assert!(content.contains(&format!("{}/src/lib.rs", relative_root.to_string_lossy())));
         assert!(!content.contains(&primary_directory(None).to_string_lossy().to_string()));
     }
 

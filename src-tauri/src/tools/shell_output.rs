@@ -19,7 +19,8 @@ pub(crate) fn build_shell_tool_result(
     let display_content = format_shell_output(exit_code, &display_stdout, &display_stderr);
 
     let raw_content = format_shell_output(exit_code, stdout, stderr);
-    let llm_content = reduce_shell_output_for_llm(command_str, exit_code, stdout, stderr, &raw_content);
+    let llm_content =
+        reduce_shell_output_for_llm(command_str, exit_code, stdout, stderr, &raw_content);
 
     ToolCallResult::success(
         Some(display_content),
@@ -253,7 +254,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = build_shell_tool_result("cargo check", 0, &stdout, "");
-        let structured = result.structured_content.expect("structured content missing");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
         let llm_content = structured["llm_content"]
             .as_str()
             .expect("llm_content should be a string");
@@ -267,7 +270,9 @@ mod tests {
     fn git_show_llm_content_omits_full_diff() {
         let stdout = "commit abc\nAuthor: test\nDate: today\n\ndiff --git a/src/main.rs b/src/main.rs\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n";
         let result = build_shell_tool_result("git show HEAD", 0, stdout, "");
-        let structured = result.structured_content.expect("structured content missing");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
         let llm_content = structured["llm_content"]
             .as_str()
             .expect("llm_content should be a string");
@@ -286,7 +291,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = build_shell_tool_result("cargo test", 0, &stdout, "");
-        let structured = result.structured_content.expect("structured content missing");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
         let llm_content = structured["llm_content"]
             .as_str()
             .expect("llm_content should be a string");
@@ -300,7 +307,9 @@ mod tests {
     fn git_diff_llm_content_omits_patch_body() {
         let stdout = "diff --git a/src/main.rs b/src/main.rs\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n";
         let result = build_shell_tool_result("git diff HEAD~1", 0, stdout, "");
-        let structured = result.structured_content.expect("structured content missing");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
         let llm_content = structured["llm_content"]
             .as_str()
             .expect("llm_content should be a string");

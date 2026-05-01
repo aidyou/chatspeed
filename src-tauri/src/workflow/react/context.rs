@@ -197,8 +197,8 @@ impl ContextManager {
             return None;
         }
 
-        let target_completion_idx = *completion_indices
-            .get(completion_indices.len().saturating_sub(2))?;
+        let target_completion_idx =
+            *completion_indices.get(completion_indices.len().saturating_sub(2))?;
         let latest_completion_idx = *completion_indices.last()?;
 
         if latest_completion_idx <= target_completion_idx {
@@ -428,7 +428,9 @@ impl ContextManager {
                 )
             } else if message.role == "user"
                 && step_type.as_ref() != Some(&StepType::Observe)
-                && !projected.iter().any(|existing: &WorkflowContextMessage| existing.role == "user")
+                && !projected
+                    .iter()
+                    .any(|existing: &WorkflowContextMessage| existing.role == "user")
             {
                 format!("<user_query>\n{}\n</user_query>", merged_content)
             } else {
@@ -463,7 +465,8 @@ impl ContextManager {
         }
 
         let segment_id = self.current_segment_id;
-        let projection = self.build_context_projection(&self.projection_source_messages(), segment_id);
+        let projection =
+            self.build_context_projection(&self.projection_source_messages(), segment_id);
         self.context_messages.clear();
 
         if persist {

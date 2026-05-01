@@ -305,6 +305,79 @@ impl MainStore {
         Ok(())
     }
 
+    pub fn delete_last_assistant_turn(&self, session_id: &str) -> Result<bool, StoreError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let tx = conn.transaction()?;
+
+        let assistant_anchor_id: Option<i64> = tx
+            .query_row(
+                "SELECT id
+                 FROM workflow_messages
+                 WHERE session_id = ?1 AND role = 'assistant'
+                 ORDER BY id DESC
+                 LIMIT 1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let Some(assistant_anchor_id) = assistant_anchor_id else {
+            return Ok(false);
+        };
+
+        let first_context_id: Option<i64> = tx
+            .query_row(
+                "SELECT MIN(id)
+                 FROM workflow_context_messages
+                 WHERE session_id = ?1 AND source_message_id >= ?2",
+                params![session_id, assistant_anchor_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+
+        if let Some(first_context_id) = first_context_id {
+            tx.execute(
+                "DELETE FROM workflow_context_messages
+                 WHERE session_id = ?1 AND id >= ?2",
+                params![session_id, first_context_id],
+            )?;
+        }
+
+        tx.execute(
+            "DELETE FROM workflow_messages
+             WHERE session_id = ?1 AND id >= ?2",
+            params![session_id, assistant_anchor_id],
+        )?;
+
+        // Snapshots and events are recovery/audit projections. After deleting the tail
+        // transcript turn, keeping them would allow stale state to resurrect the removed
+        // approval/tool turn through replay or hot-resume.
+        tx.execute(
+            "DELETE FROM workflow_snapshots WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        tx.execute(
+            "DELETE FROM workflow_events WHERE session_id = ?1",
+            params![session_id],
+        )?;
+
+        tx.execute(
+            "UPDATE workflows
+             SET status = 'pending',
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1",
+            params![session_id],
+        )?;
+
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub fn get_workflow_snapshot(&self, id: &str) -> Result<WorkflowSnapshot, StoreError> {
         let conn = self
             .conn
@@ -967,5 +1040,200 @@ mod tests {
             count, 0,
             "parent and sub-agent workflow rows should be deleted"
         );
+    }
+
+    #[test]
+    fn test_delete_last_assistant_turn_removes_tail_messages_and_recovery_state() {
+        let store = create_test_store();
+        let session_id = "session-delete-last-assistant-turn";
+        {
+            let conn = store
+                .conn
+                .lock()
+                .expect("failed to lock db connection for agent seed");
+            conn.execute(
+                "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params!["agent-test", "Agent Test", "You are a test agent.", "autonomous", 20],
+            )
+            .expect("failed to seed agent");
+        }
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let user_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Fix it".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+
+        let assistant_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I'll edit the file".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(serde_json::json!({
+                    "tool_calls": [{
+                        "id": "tool_1",
+                        "function": {
+                            "name": "edit_file",
+                            "arguments": "{\"file_path\":\"a.rs\"}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant message");
+
+        let tool_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "{\"file_path\":\"a.rs\"}".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(serde_json::json!({
+                    "tool_call_id": "tool_1",
+                    "tool_name": "edit_file",
+                    "approval_status": "pending",
+                    "execution_status": "pending_approval"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add tool message");
+
+        store
+            .add_workflow_context_message(&WorkflowContextMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                segment_id: 1,
+                role: "assistant".to_string(),
+                message: assistant_message.message.clone(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: assistant_message.metadata.clone(),
+                source_message_id: assistant_message.id,
+                created_at: None,
+            })
+            .expect("failed to add assistant context message");
+        store
+            .add_workflow_context_message(&WorkflowContextMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                segment_id: 1,
+                role: "tool".to_string(),
+                message: tool_message.message.clone(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: tool_message.metadata.clone(),
+                source_message_id: tool_message.id,
+                created_at: None,
+            })
+            .expect("failed to add tool context message");
+
+        let started =
+            WorkflowEvent::workflow_started(session_id.to_string(), "agent-test".to_string());
+        store
+            .append_workflow_event(&started)
+            .expect("failed to append workflow_started event");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Waiting;
+        context.wait_reason = Some(WaitReason::Approval);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist snapshot");
+
+        let deleted = store
+            .delete_last_assistant_turn(session_id)
+            .expect("failed to delete last assistant turn");
+        assert!(deleted, "assistant tail should be deleted");
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot after deletion");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages[0].id, user_message.id);
+        assert_eq!(snapshot.messages[0].role, "user");
+
+        let conn = store
+            .conn
+            .lock()
+            .expect("failed to lock db connection for assertions");
+
+        let context_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM workflow_context_messages WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .expect("failed to count context messages");
+        assert_eq!(context_count, 0);
+
+        let snapshot_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM workflow_snapshots WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .expect("failed to count snapshots");
+        assert_eq!(snapshot_count, 0);
+
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM workflow_events WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .expect("failed to count events");
+        assert_eq!(event_count, 0);
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM workflows WHERE id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .expect("failed to read workflow status");
+        assert_eq!(status, "pending");
     }
 }

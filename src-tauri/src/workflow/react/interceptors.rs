@@ -7,7 +7,9 @@ use crate::tools::{
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::events::WorkflowEvent;
-use crate::workflow::react::file_preview::attach_display_context;
+use crate::workflow::react::file_preview::{
+    attach_display_context, normalize_preview_details, render_preview_details_text,
+};
 use crate::workflow::react::intelligence::ToolApprovalReview;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
@@ -834,22 +836,24 @@ impl WorkflowExecutor {
         // 1. Determine what to show the user in the UI (Generate Diffs for File Ops)
         let mut display_type = "text".to_string();
         let (content_str, details_value) = if let Some(custom) = display_content {
-            (custom.clone(), serde_json::json!(custom))
+            (
+                custom.clone(),
+                normalize_preview_details(serde_json::json!(custom)),
+            )
         } else {
             match name {
                 TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE => {
                     display_type = "diff".to_string();
                     let mut preview_args = args.clone();
-                    let primary_root = self
-                        .path_guard
-                        .read()
-                        .ok()
-                        .and_then(|guard| guard.get_primary_root().map(|path| path.to_path_buf()));
+                    let primary_root =
+                        self.path_guard.read().ok().and_then(|guard| {
+                            guard.get_primary_root().map(|path| path.to_path_buf())
+                        });
                     attach_display_context(&mut preview_args, false, primary_root.as_deref());
-                    // content_str for storing in messages, details_value for UI payload
+                    let normalized_details = normalize_preview_details(preview_args);
                     (
-                        serde_json::to_string(&preview_args).unwrap_or_default(),
-                        preview_args,
+                        render_preview_details_text(&normalized_details, &display_type),
+                        normalized_details,
                     )
                 }
                 TOOL_BASH => {
@@ -884,7 +888,10 @@ impl WorkflowExecutor {
                     } else {
                         plan
                     };
-                    (preview.clone(), serde_json::json!(preview))
+                    (
+                        preview.clone(),
+                        normalize_preview_details(serde_json::json!(preview)),
+                    )
                 }
                 _ => {
                     let msg = format!(
@@ -892,7 +899,10 @@ impl WorkflowExecutor {
                         name,
                         serde_json::to_string_pretty(args).unwrap_or_default()
                     );
-                    (msg.clone(), serde_json::json!(msg))
+                    (
+                        msg.clone(),
+                        normalize_preview_details(serde_json::json!(msg)),
+                    )
                 }
             }
         };

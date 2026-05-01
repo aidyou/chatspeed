@@ -38,7 +38,9 @@ mod tests {
 
     #[test]
     fn path_preview_keeps_head_and_adds_notice() {
-        let lines = (1..=250).map(|i| format!("entry-{}", i)).collect::<Vec<_>>();
+        let lines = (1..=250)
+            .map(|i| format!("entry-{}", i))
+            .collect::<Vec<_>>();
         let preview = preview_path_lines_for_llm(&lines).expect("preview should exist");
 
         assert!(preview.contains("entry-1"));
@@ -49,9 +51,10 @@ mod tests {
 
     #[test]
     fn grep_preview_uses_content_limit() {
-        let lines = (1..=130).map(|i| format!("file:{}:match", i)).collect::<Vec<_>>();
-        let preview =
-            preview_grep_lines_for_llm(&lines, "content").expect("preview should exist");
+        let lines = (1..=130)
+            .map(|i| format!("file:{}:match", i))
+            .collect::<Vec<_>>();
+        let preview = preview_grep_lines_for_llm(&lines, "content").expect("preview should exist");
 
         assert!(preview.contains("file:1:match"));
         assert!(preview.contains("file:120:match"));

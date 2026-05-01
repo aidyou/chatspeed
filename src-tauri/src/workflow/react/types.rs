@@ -205,7 +205,9 @@ pub enum WorkflowSignal {
         #[serde(default, alias = "queuedUserMessageId")]
         queued_user_message_id: Option<String>,
     },
-    RemoveQueuedUserMessage { queued_user_message_id: String },
+    RemoveQueuedUserMessage {
+        queued_user_message_id: String,
+    },
     /// User approves or rejects a tool call (for AwaitingApproval state)
     /// Frontend legacy format uses "approval" as type and "id" as field.
     #[serde(rename = "approval")]
@@ -240,13 +242,21 @@ pub enum WorkflowSignal {
         approval_level: String,
     },
     /// Update runtime allowed paths configuration
-    UpdateAllowedPaths { paths: Vec<String> },
+    UpdateAllowedPaths {
+        paths: Vec<String>,
+    },
     /// Update runtime model configuration
-    UpdateModelConfig { configs: serde_json::Value },
+    UpdateModelConfig {
+        configs: serde_json::Value,
+    },
     /// Remove a tool from auto-approve list
-    RemoveAutoApprovedTool { tool_name: String },
+    RemoveAutoApprovedTool {
+        tool_name: String,
+    },
     /// Remove a pattern from shell policy
-    RemoveShellPolicyItem { pattern: String },
+    RemoveShellPolicyItem {
+        pattern: String,
+    },
     /// Sub-agent completed (for SubAgent waiting state)
     #[serde(rename = "sub_agent_complete")]
     SubAgentComplete {

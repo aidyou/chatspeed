@@ -74,6 +74,18 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <div
+          class="icon-btn upperLayer"
+          :class="{ disabled: !canDeleteLastAssistantTurn }"
+          @click="onDeleteLastAssistantTurn">
+          <el-tooltip
+            :content="$t('workflow.deleteLastAssistantTurn')"
+            :hide-after="0"
+            :enterable="false"
+            placement="bottom">
+            <cs name="trash" />
+          </el-tooltip>
+        </div>
         <div class="icon-btn upperLayer pin-btn" @click="onPin" :class="{ active: isAlwaysOnTop }">
           <el-tooltip
             :content="$t(`common.${isAlwaysOnTop ? 'unpin' : 'pin'}`)"
@@ -219,7 +231,9 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
+import { ElMessageBox } from 'element-plus'
 import { invokeWrapper } from '@/libs/tauri'
+import { showMessage } from '@/libs/util'
 
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
@@ -485,22 +499,17 @@ const onSkillSelect = skill => {
   }
 }
 
-// Approve all pending approval items for the current workflow.
-// If the workflow process (session) is alive, send all signals concurrently (fast path).
-// If the process is dead, send sequentially so the first restarts the workflow without
-// multiple concurrent workflow_start() calls conflicting on the backend.
+// Approve all pending approval items for the current workflow using a stable snapshot.
+// Sequential dispatch avoids racing backend state transitions for the same session.
 const onApproveAllPendingAction = async () => {
-  const entries = currentWorkflowPendingApprovals.value
+  const entries = [...currentWorkflowPendingApprovals.value]
   if (!entries.length) return
 
-  if (hasLiveSession.value) {
-    // Session alive → send all concurrently
-    await Promise.all(entries.map(entry => onApproveAction(entry.id, entry.sessionId)))
-  } else {
-    // Session dead → send one at a time to avoid workflow_start conflicts
-    for (const entry of entries) {
-      await onApproveAction(entry.id, entry.sessionId)
-    }
+  // Always resolve approvals sequentially against a stable snapshot.
+  // The backend remains authoritative for pending approval order/state, and
+  // concurrent approval signals can race with per-tool state transitions.
+  for (const entry of entries) {
+    await onApproveAction(entry.id, entry.sessionId)
   }
 }
 
@@ -526,11 +535,53 @@ const approvalQueueCount = computed(() => {
 const currentWorkflowPendingApprovals = computed(() =>
   pendingApprovalList.value.filter(entry => entry.sessionId === currentWorkflowId.value)
 )
+const canDeleteLastAssistantTurn = computed(() => {
+  if (!currentWorkflowId.value || canStop.value) return false
+  return workflowStore.messages.some(message => message?.role === 'assistant')
+})
 
 const displayAllowedPathTitle = computed(() => {
   if (!currentPaths.value?.length) return ''
   return displayAllowedPath.value || ''
 })
+
+const onDeleteLastAssistantTurn = async () => {
+  if (!canDeleteLastAssistantTurn.value || !currentWorkflowId.value) return
+
+  try {
+    await ElMessageBox.confirm(
+      t('workflow.deleteLastAssistantTurnConfirm'),
+      t('workflow.deleteLastAssistantTurn'),
+      {
+        confirmButtonText: t('common.delete'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+
+  try {
+    const deleted = await invokeWrapper('delete_last_assistant_workflow_turn', {
+      sessionId: currentWorkflowId.value
+    })
+
+    if (!deleted) {
+      showMessage(t('workflow.deleteLastAssistantTurnMissing'), 'warning')
+      return
+    }
+
+    await selectWorkflow(currentWorkflowId.value)
+    showMessage(t('workflow.deleteLastAssistantTurnDone'), 'success')
+  } catch (error) {
+    console.error('Failed to delete last assistant workflow turn:', error)
+    showMessage(
+      t('workflow.deleteLastAssistantTurnFailed', { error: String(error) }),
+      'error'
+    )
+  }
+}
 
 const getWorkflowSortTime = workflow => {
   const candidates = [

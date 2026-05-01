@@ -122,7 +122,7 @@ impl SkillScanner {
                                 return Some(manifest);
                             }
                             Err(e) => {
-                                log::warn!("Failed to parse YAML frontmatter in {:?}: {}. Trying fallback...", skill_md_path, e);
+                                log::info!("Failed to parse YAML frontmatter in {:?}: {}. Trying fallback...", skill_md_path, e);
 
                                 // Fallback: regex for name and description
                                 let name_re = regex::Regex::new(r"(?m)^name:\s*(.+)$").unwrap();
@@ -169,7 +169,7 @@ impl SkillScanner {
                             return Some(manifest);
                         }
                         Err(e) => {
-                            log::warn!(
+                            log::info!(
                                 "Failed to parse JSON manifest in {:?}: {}",
                                 manifest_path,
                                 e
