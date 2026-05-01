@@ -378,7 +378,7 @@
                   inline
                   :action="message.metadata?.tool_name || message.toolDisplay.action"
                   :target="message.toolDisplay.target"
-                  :details="message.metadata?.details ?? removeSystemReminder(message.message)"
+                  :details="getApprovalDetailsPayload(message)"
                   :display-type="message.metadata?.display_type || message.toolDisplay.displayType"
                   :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
                   :loading="approvalLoading && activeApprovalId === message.metadata?.tool_call_id"
@@ -835,6 +835,37 @@ const getMessageToolName = message => {
       message?.metadata?.tool_call?.function?.name ||
       ''
   ).toLowerCase()
+}
+
+const getToolCallArguments = message => {
+  const rawArgs =
+    message?.metadata?.tool_call?.function?.arguments ?? message?.metadata?.tool_call?.arguments
+  if (!rawArgs) return null
+  if (typeof rawArgs === 'string') {
+    try {
+      return JSON.parse(rawArgs)
+    } catch {
+      return null
+    }
+  }
+  return typeof rawArgs === 'object' ? rawArgs : null
+}
+
+const getApprovalDetailsPayload = message => {
+  const structuredDetails = message?.metadata?.details
+  if (structuredDetails !== undefined && structuredDetails !== null) {
+    return structuredDetails
+  }
+
+  const toolName = getMessageToolName(message)
+  if (['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note'].includes(toolName)) {
+    const args = getToolCallArguments(message)
+    if (args && typeof args === 'object') {
+      return args
+    }
+  }
+
+  return props.removeSystemReminder(message?.message || '')
 }
 
 const isFinishTaskMessage = message => {

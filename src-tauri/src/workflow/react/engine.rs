@@ -24,6 +24,7 @@ use crate::workflow::react::{
     dispatcher::{Dispatcher, DispatcherConfig},
     error::WorkflowEngineError,
     events::WorkflowEvent,
+    file_preview::{attach_display_context, normalize_preview_details},
     gateway::Gateway,
     intelligence::IntelligenceManager,
     llm::LlmProcessor,
@@ -221,6 +222,31 @@ impl WorkflowExecutor {
 
     fn normalize_pending_tool_details(value: serde_json::Value) -> serde_json::Value {
         crate::workflow::react::file_preview::normalize_preview_details(value)
+    }
+
+    fn build_tool_result_details(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        if !matches!(
+            tool_name,
+            crate::tools::TOOL_EDIT_FILE
+                | crate::tools::TOOL_WRITE_FILE
+                | TOOL_PLAN_EDIT_NOTE
+                | TOOL_PLAN_WRITE_NOTE
+        ) {
+            return None;
+        }
+
+        let mut preview_args = args.clone();
+        let primary_root = self
+            .path_guard
+            .read()
+            .ok()
+            .and_then(|guard| guard.get_primary_root().map(|path| path.to_path_buf()));
+        attach_display_context(&mut preview_args, false, primary_root.as_deref());
+        Some(normalize_preview_details(preview_args))
     }
 
     fn build_rejection_observation(tool_name: &str, rejection_message: Option<&str>) -> String {
@@ -2572,6 +2598,7 @@ impl WorkflowExecutor {
                                 let mut metadata = serde_json::json!({
                                     "tool_call_id": tool_call_id,
                                     "tool_name": tool_name,
+                                    "tool_call": tool_call_obj,
                                     "title": reinforced.title,
                                     "summary": reinforced.summary,
                                     "execution_status": if reinforced.is_error { "failed" } else { "completed" },
@@ -2580,6 +2607,11 @@ impl WorkflowExecutor {
                                     "display_type": reinforced.display_type,
                                     "approval_status": "approved"
                                 });
+                                if let Some(details) =
+                                    self.build_tool_result_details(&tool_name, &tool_args)
+                                {
+                                    metadata["details"] = details;
+                                }
                                 Self::enrich_tool_observation_metadata(
                                     &tool_name,
                                     &mut metadata,
@@ -3005,6 +3037,7 @@ impl WorkflowExecutor {
                         let mut metadata = serde_json::json!({
                             "tool_call_id": signal_id,
                             "tool_name": tool_name,
+                            "tool_call": tool_call_obj,
                             "title": reinforced.title,
                             "summary": reinforced.summary,
                             "execution_status": if reinforced.is_error { "failed" } else { "completed" },
@@ -3013,6 +3046,10 @@ impl WorkflowExecutor {
                             "display_type": reinforced.display_type,
                             "approval_status": "approved"
                         });
+                        if let Some(details) = self.build_tool_result_details(&tool_name, &tool_args)
+                        {
+                            metadata["details"] = details;
+                        }
                         Self::enrich_tool_observation_metadata(
                             &tool_name,
                             &mut metadata,
@@ -3617,6 +3654,16 @@ impl WorkflowExecutor {
                             metadata["details"] =
                                 Self::normalize_pending_tool_details(details.clone());
                         }
+                    }
+                } else if let Some(args) = original_call
+                    .get("arguments")
+                    .or_else(|| original_call.get("function").and_then(|value| value.get("arguments")))
+                {
+                    let normalized_args = Self::normalize_tool_arguments_value(args.clone());
+                    if let Some(details) =
+                        self.build_tool_result_details(tool_name, &normalized_args)
+                    {
+                        metadata["details"] = details;
                     }
                 }
                 if let Some(observation_kind) = &reinforced.observation_kind {
@@ -4241,6 +4288,7 @@ impl WorkflowExecutor {
         // Use a map to collect results and a list to maintain original AI call order
         let mut result_map: HashMap<String, (ReinforcedResult, serde_json::Value)> = HashMap::new();
         let mut call_order: Vec<String> = Vec::new();
+        let mut planned_todo_status_overrides: HashMap<String, String> = HashMap::new();
 
         let mut parallel_execution_queue = Vec::new();
         let mut sequential_execution_queue = Vec::new();
@@ -4300,7 +4348,16 @@ impl WorkflowExecutor {
 
             // --- SEMANTIC AUDIT ---
             let approval_batch_active = self.state == WorkflowState::AwaitingApproval;
-            match self.pre_dispatch_check(&id, &name, &args, &text_part).await {
+            match self
+                .pre_dispatch_check(
+                    &id,
+                    &name,
+                    &args,
+                    &text_part,
+                    &planned_todo_status_overrides,
+                )
+                .await
+            {
                 Ok(Some(early_result)) => {
                     // Tool was intercepted (Approval needed, Loop detected, etc.)
                     let approval_intercepted =
@@ -4353,6 +4410,15 @@ impl WorkflowExecutor {
                                 | crate::tools::TOOL_SUB_AGENT_STOP
                         )
                     {
+                        if name == crate::tools::TOOL_TODO_UPDATE {
+                            if let (Some(todo_id), Some(status)) = (
+                                args.get("todo_id").and_then(|value| value.as_str()),
+                                args.get("status").and_then(|value| value.as_str()),
+                            ) {
+                                planned_todo_status_overrides
+                                    .insert(todo_id.to_string(), status.to_string());
+                            }
+                        }
                         has_todo_call = true;
                         sequential_execution_queue.push((id, name, args, call));
                     } else {
@@ -4604,6 +4670,7 @@ impl WorkflowExecutor {
         name: &str,
         args: &serde_json::Value,
         text_part: &str,
+        todo_status_overrides: &HashMap<String, String>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         // --- 1. Workflow Control Interception (Submit, Finish, Ask) ---
         match name {
@@ -4637,7 +4704,9 @@ impl WorkflowExecutor {
                 return self.handle_submit_plan_intercept(id, args, text_part).await;
             }
             TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => {
-                return self.handle_finish_task_intercept(text_part, args).await
+                return self
+                    .handle_finish_task_intercept(text_part, args, todo_status_overrides)
+                    .await
             }
             TOOL_SUBMIT_RESULT => return self.handle_submit_result_intercept(args).await,
             TOOL_ASK_USER => return self.handle_ask_user_intercept(args).await,

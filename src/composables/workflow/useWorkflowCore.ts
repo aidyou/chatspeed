@@ -713,7 +713,7 @@ export function useWorkflowCore({
                     }
                 } else if (payload.type === 'compression_status') {
                     // Handle context compression status
-                    setCompressionStatus(payload.is_compressing, payload.message)
+                    setCompressionStatus(sessionId, payload.is_compressing, payload.message)
                     if (payload.is_compressing) {
                         scrollToBottom()
                     }

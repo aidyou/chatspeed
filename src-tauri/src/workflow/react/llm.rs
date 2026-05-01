@@ -706,7 +706,7 @@ impl LlmProcessor {
 
     fn normalize_history_messages(raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
         let mut history: Vec<serde_json::Value> = Vec::new();
-        let mut deferred_system_observations: Vec<String> = Vec::new();
+        let mut deferred_system_observations: Vec<(Option<String>, String)> = Vec::new();
 
         // If a tool call has both an approval preview (pending) and a later final observation
         // (approved/executed), keep only the final one in LLM context to avoid duplicate tool
@@ -743,7 +743,10 @@ impl LlmProcessor {
                     match rendered.placement {
                         RuntimeObservationPlacement::Preserve => Some(rendered.content),
                         RuntimeObservationPlacement::Defer => {
-                            deferred_system_observations.push(rendered.content);
+                            deferred_system_observations.push((
+                                Self::runtime_observation_tool_call_id(&m),
+                                rendered.content,
+                            ));
                             continue;
                         }
                         RuntimeObservationPlacement::Hide => continue,
@@ -909,7 +912,60 @@ impl LlmProcessor {
             }
         }
 
-        if !deferred_system_observations.is_empty()
+        if !deferred_system_observations.is_empty() {
+            let mut deferred_by_tool_call_id: HashMap<String, Vec<String>> = HashMap::new();
+            let mut trailing_deferred_observations: Vec<String> = Vec::new();
+
+            for (tool_call_id, content) in deferred_system_observations {
+                if let Some(tool_call_id) = tool_call_id.filter(|id| !id.trim().is_empty()) {
+                    deferred_by_tool_call_id
+                        .entry(tool_call_id)
+                        .or_default()
+                        .push(content);
+                } else {
+                    trailing_deferred_observations.push(content);
+                }
+            }
+
+            if !deferred_by_tool_call_id.is_empty() {
+                let mut anchored_history = Vec::with_capacity(history.len());
+                for msg in history {
+                    let tool_call_id = msg
+                        .get("tool_call_id")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                    anchored_history.push(msg);
+
+                    if let Some(tool_call_id) = tool_call_id {
+                        if let Some(contents) = deferred_by_tool_call_id.remove(&tool_call_id) {
+                            if let Some(last_msg) = anchored_history.last_mut() {
+                                if let Some(existing_content) =
+                                    last_msg.get("content").and_then(|value| value.as_str())
+                                {
+                                    let merged_content = if existing_content.trim().is_empty() {
+                                        contents.join("\n\n")
+                                    } else {
+                                        format!(
+                                            "{}\n\n{}",
+                                            existing_content,
+                                            contents.join("\n\n")
+                                        )
+                                    };
+                                    last_msg["content"] = serde_json::json!(merged_content);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for (_, contents) in deferred_by_tool_call_id {
+                    trailing_deferred_observations.extend(contents);
+                }
+
+                history = anchored_history;
+            }
+
+            if !trailing_deferred_observations.is_empty()
             && !history.last().is_some_and(|msg| {
                 msg["role"] == "assistant"
                     && msg
@@ -917,14 +973,28 @@ impl LlmProcessor {
                         .and_then(|calls| calls.as_array())
                         .is_some_and(|calls| !calls.is_empty())
             })
-        {
-            history.push(serde_json::json!({
-                "role": "user",
-                "content": deferred_system_observations.join("\n\n")
-            }));
+            {
+                history.push(serde_json::json!({
+                    "role": "user",
+                    "content": trailing_deferred_observations.join("\n\n")
+                }));
+            }
         }
 
         history
+    }
+
+    fn runtime_observation_tool_call_id(message: &WorkflowMessage) -> Option<String> {
+        let metadata = message.metadata.as_ref()?;
+        if !crate::workflow::react::runtime_observation::is_runtime_observation(Some(metadata)) {
+            return None;
+        }
+
+        metadata
+            .get("data")
+            .and_then(|data| data.get("tool_call_id"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
     }
 
     fn inject_prompts(
@@ -1507,6 +1577,127 @@ mod tests {
             .unwrap_or_default()
             .contains("<tool_result tool=\"sub_agent_run\""));
         assert_eq!(history[4]["role"], "assistant");
+    }
+
+    #[test]
+    fn normalize_history_anchors_deferred_runtime_observation_after_matching_tool_result() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Handle both tools", None, None),
+            message(
+                "assistant",
+                "",
+                Some("think"),
+                Some(json!({
+                    "tool_calls": [
+                        {
+                            "id": "tool_1",
+                            "type": "function",
+                            "function": { "name": "read_file", "arguments": "{}" }
+                        },
+                        {
+                            "id": "tool_2",
+                            "type": "function",
+                            "function": { "name": "grep", "arguments": "{}" }
+                        }
+                    ]
+                })),
+            ),
+            message(
+                "user",
+                "<SYSTEM_REMINDER>Reminder for tool 1</SYSTEM_REMINDER>",
+                Some("observe"),
+                Some(json!({
+                    "message_kind": "runtime_observation",
+                    "llm_visibility": "defer",
+                    "data": {
+                        "tool_call_id": "tool_1"
+                    }
+                })),
+            ),
+            message(
+                "tool",
+                "file content",
+                Some("observe"),
+                Some(json!({
+                    "tool_call_id": "tool_1",
+                    "tool_name": "read_file"
+                })),
+            ),
+            message(
+                "tool",
+                "grep result",
+                Some("observe"),
+                Some(json!({
+                    "tool_call_id": "tool_2",
+                    "tool_name": "grep"
+                })),
+            ),
+        ]);
+
+        assert_eq!(history[1]["role"], "assistant");
+        assert_eq!(history[2]["role"], "tool");
+        assert_eq!(history[2]["tool_call_id"], "tool_1");
+        assert!(history[2]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Reminder for tool 1"));
+        assert_eq!(history[3]["role"], "tool");
+        assert_eq!(history[3]["tool_call_id"], "tool_2");
+        assert_eq!(history.len(), 4);
+    }
+
+    #[test]
+    fn normalize_history_keeps_active_todos_block_observation_in_original_order() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Finish the task", None, None),
+            message(
+                "assistant",
+                "",
+                Some("think"),
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool_finish",
+                        "type": "function",
+                        "function": { "name": "complete_workflow_with_summary", "arguments": "{}" }
+                    }]
+                })),
+            ),
+            message(
+                "tool",
+                "<SYSTEM_REMINDER>Block: You still have active tasks.</SYSTEM_REMINDER>",
+                Some("observe"),
+                Some(json!({
+                    "message_kind": "runtime_observation",
+                    "observation_type": "active_todos_blocked",
+                    "llm_visibility": "preserve_position",
+                    "ui_visibility": "show"
+                })),
+            ),
+            message(
+                "tool",
+                "Task updated.\n<SYSTEM_REMINDER>Todos are terminal.</SYSTEM_REMINDER>",
+                Some("observe"),
+                Some(json!({
+                    "tool_call_id": "tool_todo",
+                    "tool_name": "todo_update"
+                })),
+            ),
+        ]);
+
+        assert_eq!(history[1]["role"], "assistant");
+        assert_eq!(history[2]["role"], "tool");
+        assert!(history[2]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("active tasks"));
+        assert_eq!(history[3]["role"], "tool");
+        assert!(history.iter().all(|msg| {
+            !(msg["role"] == "user"
+                && msg["content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("active tasks"))
+        }));
     }
 
     #[test]

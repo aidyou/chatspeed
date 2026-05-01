@@ -156,7 +156,7 @@ fn default_visibility(
         RuntimeObservationType::AuditRejected
         | RuntimeObservationType::CompletionRejected
         | RuntimeObservationType::ActiveTodosBlocked => (
-            RuntimeObservationLlmVisibility::Defer,
+            RuntimeObservationLlmVisibility::PreservePosition,
             RuntimeObservationUiVisibility::Show,
         ),
         RuntimeObservationType::SkillActivated | RuntimeObservationType::FileContextAttached => (

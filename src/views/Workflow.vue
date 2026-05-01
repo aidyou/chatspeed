@@ -332,7 +332,9 @@ const {
   processChunk,
   processReasoningChunk,
   setCompressionStatus
-} = useWorkflowChat()
+} = useWorkflowChat({
+  currentWorkflowId: computed(() => workflowStore.currentWorkflowId)
+})
 
 // Messages composable
 const {

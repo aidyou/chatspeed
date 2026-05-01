@@ -1,4 +1,5 @@
 use serde_json::json;
+use std::collections::HashMap;
 
 use crate::tools::{
     READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_EDIT_FILE,
@@ -544,6 +545,7 @@ impl WorkflowExecutor {
         &mut self,
         text_part: &str,
         args: &serde_json::Value,
+        todo_status_overrides: &HashMap<String, String>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         let text_summary_valid = Self::is_valid_finish_task_summary(text_part);
         let argument_summary = Self::finish_task_summary_from_args(args);
@@ -566,15 +568,24 @@ impl WorkflowExecutor {
                 let active_tasks: Vec<String> = todos
                     .iter()
                     .filter(|t| {
-                        let s = t["status"].as_str().unwrap_or("");
+                        let todo_id = t["id"].as_str().unwrap_or("");
+                        let s = todo_status_overrides
+                            .get(todo_id)
+                            .map(String::as_str)
+                            .unwrap_or_else(|| t["status"].as_str().unwrap_or(""));
                         s == "pending" || s == "in_progress"
                     })
                     .map(|t| {
+                        let todo_id = t["id"].as_str().unwrap_or("?");
+                        let status = todo_status_overrides
+                            .get(todo_id)
+                            .map(String::as_str)
+                            .unwrap_or_else(|| t["status"].as_str().unwrap_or("?"));
                         format!(
                             "[{}] {} (ID: {})",
-                            t["status"].as_str().unwrap_or("?"),
+                            status,
                             t["subject"].as_str().unwrap_or("Untitled"),
-                            t["id"].as_str().unwrap_or("?")
+                            todo_id
                         )
                     })
                     .collect();

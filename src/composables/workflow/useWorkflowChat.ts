@@ -7,7 +7,7 @@ import { useI18n } from 'vue-i18n'
  * Composable for managing chat/streaming state
  * Handles real-time message streaming, retry countdown, and compression status
  */
-export function useWorkflowChat() {
+export function useWorkflowChat({ currentWorkflowId }) {
   const { t } = useI18n()
   const workflowStore = useWorkflowStore()
 
@@ -18,8 +18,7 @@ export function useWorkflowChat() {
     blocks: [],
     retryInfo: null
   })
-  const isCompressing = ref(false)
-  const compressionMessage = ref('')
+  const compressionStates = ref({})
 
   let retryCountdownTimer = null
 
@@ -93,9 +92,31 @@ export function useWorkflowChat() {
   }
 
   // Set compression status
-  const setCompressionStatus = (isCompressingValue, message) => {
-    isCompressing.value = isCompressingValue
-    compressionMessage.value = message
+  const isCompressing = computed(() => {
+    const sessionId = currentWorkflowId?.value
+    if (!sessionId) return false
+    return !!compressionStates.value[sessionId]?.isCompressing
+  })
+
+  const compressionMessage = computed(() => {
+    const sessionId = currentWorkflowId?.value
+    if (!sessionId) return ''
+    return compressionStates.value[sessionId]?.message || ''
+  })
+
+  const setCompressionStatus = (sessionId, isCompressingValue, message) => {
+    if (!sessionId) return
+
+    const nextStates = { ...compressionStates.value }
+    if (isCompressingValue) {
+      nextStates[sessionId] = {
+        isCompressing: true,
+        message: message || ''
+      }
+    } else {
+      delete nextStates[sessionId]
+    }
+    compressionStates.value = nextStates
   }
 
   onUnmounted(() => {
