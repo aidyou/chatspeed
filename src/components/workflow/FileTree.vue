@@ -41,7 +41,12 @@
     <el-dialog v-model="previewVisible" :title="previewTitle" width="80%" top="5vh" class="file-preview-dialog"
       append-to-body destroy-on-close>
       <div class="preview-content">
-        <markdown-simple :content="previewContent" />
+        <file-preview-diff
+          v-if="previewMode === 'diff'"
+          :file-path="previewFilePath"
+          :old-content="previewBaseContent"
+          :new-content="previewRawContent" />
+        <markdown-simple v-else :content="previewContent" />
       </div>
     </el-dialog>
   </div>
@@ -54,6 +59,7 @@ import { invokeWrapper } from '@/libs/tauri'
 import { writeClipboard } from '@/libs/clipboard'
 import { showMessage } from '@/libs/util'
 import MarkdownSimple from './MarkdownSimple.vue'
+import FilePreviewDiff from './FilePreviewDiff.vue'
 import TreeNode from './TreeNode.vue'
 
 const props = defineProps({
@@ -74,6 +80,10 @@ const loading = ref(false)
 const previewVisible = ref(false)
 const previewTitle = ref('')
 const previewContent = ref('')
+const previewRawContent = ref('')
+const previewBaseContent = ref('')
+const previewMode = ref('markdown')
+const previewFilePath = ref('')
 
 const isExpanded = (path) => expandedNodes.value.has(path)
 
@@ -160,13 +170,25 @@ const refreshRoot = async (path) => {
 
 const previewFile = async (path) => {
   try {
-    const content = await invokeWrapper('read_text_file', { filePath: path })
+    const [content, baseContent] = await Promise.all([
+      invokeWrapper('read_text_file', { filePath: path }),
+      invokeWrapper('read_git_base_text_file', { filePath: path }).catch(() => null)
+    ])
+
     previewTitle.value = getDirName(path)
-    // Wrap content in code block if not already markdown
-    if (!path.endsWith('.md')) {
+    previewFilePath.value = path
+    previewRawContent.value = content
+    previewBaseContent.value = typeof baseContent === 'string' ? baseContent : ''
+
+    if (typeof baseContent === 'string' && baseContent !== content) {
+      previewMode.value = 'diff'
+      previewContent.value = ''
+    } else if (!path.endsWith('.md')) {
+      previewMode.value = 'markdown'
       const ext = path.split('.').pop()
       previewContent.value = `\`\`\`${ext}\n${content}\n\`\`\``
     } else {
+      previewMode.value = 'markdown'
       previewContent.value = content
     }
     previewVisible.value = true

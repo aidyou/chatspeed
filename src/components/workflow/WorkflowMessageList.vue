@@ -10,9 +10,9 @@
       <div class="avatar" v-if="message.role === 'user'">
         <cs name="talk" class="user-icon" />
       </div>
-      <div class="content-container">
-        <div class="content" v-if="message.role === 'user'">
-          <div v-if="getAskUserResponseItems(message).length > 0" class="ask-user-response-card">
+        <div class="content-container">
+          <div class="content" v-if="message.role === 'user'">
+            <div v-if="getAskUserResponseItems(message).length > 0" class="ask-user-response-card">
             <div class="ask-user-response-title">{{ $t('workflow.askUser.responseTitle') }}</div>
             <div
               v-for="(item, itemIndex) in getAskUserResponseItems(message)"
@@ -30,7 +30,19 @@
               >
             </div>
           </div>
-          <pre v-else class="simple-text">{{ getVisibleUserContent(message) }}</pre>
+          <pre
+            v-else
+            class="simple-text"
+            :class="{
+              'is-collapsed': isExpandableUserMessage(message) && !isUserMessageExpanded(message),
+              'is-expandable': isExpandableUserMessage(message)
+            }"
+            @click="
+              isExpandableUserMessage(message) &&
+                $emit('toggle-expand', getUserMessageExpandId(message))
+            "
+            >{{ getVisibleUserContent(message) }}</pre
+          >
         </div>
         <div v-else class="ai-content chat">
           <div v-if="isExplorationBatchMessage(message)" class="exploration-card">
@@ -1359,6 +1371,26 @@ const shouldShowExplorationToolRawContent = tool => {
 
 const getVisibleUserContent = message => props.removeSystemReminder(message?.message || '')
 
+const getUserMessageExpandId = message => `${message?.displayId || message?.id || 'user'}:user`
+
+const isUserMessageExpanded = message =>
+  props.isMessageExpanded({
+    displayId: getUserMessageExpandId(message),
+    metadata: {},
+    toolDisplay: {}
+  })
+
+const isExpandableUserMessage = message => {
+  if (!message || getAskUserResponseItems(message).length > 0) return false
+  const content = getVisibleUserContent(message)
+  if (!content) return false
+
+  const lines = content.split('\n')
+  if (lines.length > 2) return true
+
+  return content.trim().length > 120
+}
+
 const getMessageSubAgentId = message => {
   const meta = message?.metadata || {}
   if (meta.sub_agent_id || meta.subAgentId) return meta.sub_agent_id || meta.subAgentId
@@ -1636,6 +1668,37 @@ defineExpose({
 </script>
 
 <style scoped lang="scss">
+.simple-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+
+  &.is-expandable {
+    cursor: pointer;
+  }
+
+  &.is-collapsed {
+    position: relative;
+    max-height: 50px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &.is-collapsed::after {
+    content: '...';
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    padding-left: 12px;
+    color: var(--cs-text-color-secondary);
+    background: linear-gradient(
+      90deg,
+      rgb(from var(--cs-bg-color) r g b / 0) 0%,
+      var(--cs-bg-color) 40%
+    );
+  }
+}
+
 .exploration-card {
   margin-bottom: 12px;
   border: 1px solid var(--cs-border-color);

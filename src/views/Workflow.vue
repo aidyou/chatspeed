@@ -36,10 +36,13 @@
                 :key="item.key"
                 :command="item.sessionId">
                 <div class="approval-menu-item">
-                  <div class="approval-menu-action">
-                    <cs name="approval" size="var(--cs-font-size-md)" />{{ item.action }}
+                  <div class="approval-menu-title">
+                    <cs name="approval" size="var(--cs-font-size-md)" />
+                    {{ getPendingApprovalTitle(item) }}
                   </div>
-                  <div class="approval-menu-workflow">{{ item.workflowTitle }}</div>
+                  <div class="approval-menu-summary" :title="item.workflowTitle || item.action">
+                    {{ item.workflowTitle || item.action }}
+                  </div>
                 </div>
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -102,6 +105,7 @@
       <WorkflowSidebar
         :workflows="filteredWorkflows"
         :current-workflow-id="currentWorkflowId"
+        :reset-primary-root-filter-token="sidebarRootFilterResetToken"
         :sidebar-collapsed="sidebarCollapsed"
         :sidebar-width="sidebarWidth"
         :sidebar-style="sidebarStyle"
@@ -532,6 +536,7 @@ const approvalQueueCount = computed(() => {
   const count = pendingApprovalList.value.length
   return count > 9 ? '9+' : String(count)
 })
+const sidebarRootFilterResetToken = ref(0)
 
 // Only count and approve entries for the current workflow
 const currentWorkflowPendingApprovals = computed(() =>
@@ -704,7 +709,15 @@ const toggleWorkflowCompletionMute = async () => {
 
 const handleApprovalCommand = async sessionId => {
   if (!sessionId) return
+  sidebarRootFilterResetToken.value += 1
   await selectWorkflow(sessionId)
+}
+
+const getPendingApprovalTitle = item => {
+  if (item?.kind === 'ask_user') {
+    return t('workflow.awaitingUser')
+  }
+  return t('workflow.awaitingApproval')
 }
 
 const resolveInitialWorkflowId = () => {

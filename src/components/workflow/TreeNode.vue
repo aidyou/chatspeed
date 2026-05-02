@@ -44,9 +44,9 @@ const children = ref([])
 const gitStatusClass = computed(() => {
   if (!props.node.git_status) return ''
   const code = props.node.git_status.trim()
-  if (code === 'M') return 'modified'
-  if (code === 'A' || code === '??') return 'added'
-  if (code === 'D') return 'deleted'
+  if (code.includes('D')) return 'deleted'
+  if (code === '??' || code.includes('A')) return 'added'
+  if (code.includes('M') || code.includes('R') || code.includes('C') || code.includes('U')) return 'modified'
   return 'other'
 })
 
@@ -219,6 +219,10 @@ watch(isExpanded, (newVal) => {
 
       &.deleted {
         background-color: #f56c6c; // Danger/Red
+      }
+
+      &.other {
+        background-color: var(--cs-text-color-secondary);
       }
     }
 
