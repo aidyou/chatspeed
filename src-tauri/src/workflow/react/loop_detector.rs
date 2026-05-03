@@ -157,6 +157,12 @@ impl LoopDetector {
         self.consecutive_no_tool_responses = 0;
     }
 
+    /// Clears recent tool-call history so sequence detection only applies to
+    /// uninterrupted runs of tool usage.
+    pub fn reset_tool_call_history(&mut self) {
+        self.recent_calls.clear();
+    }
+
     fn detect_repeated_sequence(&self) -> Option<String> {
         let calls: Vec<_> = self.recent_calls.iter().cloned().collect();
         let max_sequence_len =
@@ -293,6 +299,21 @@ mod tests {
         assert!(detector
             .record_no_tool_response_and_check("same reply")
             .is_none());
+    }
+
+    #[test]
+    fn reset_clears_tool_sequence_streak() {
+        let mut detector = LoopDetector::new();
+        let search_args = json!({"query":"single instance"});
+        let fetch_args = json!({"url":"https://v2.tauri.app/plugin/single-instance/"});
+
+        assert!(detector.record_and_check("web_search", &search_args).is_none());
+        assert!(detector.record_and_check("web_fetch", &fetch_args).is_none());
+
+        detector.reset_tool_call_history();
+
+        assert!(detector.record_and_check("web_search", &search_args).is_none());
+        assert!(detector.record_and_check("web_fetch", &fetch_args).is_none());
     }
 
     #[test]

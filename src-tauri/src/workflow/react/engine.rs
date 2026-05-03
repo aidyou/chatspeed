@@ -3742,6 +3742,7 @@ impl WorkflowExecutor {
             if queued_applied {
                 self.current_step = 0;
                 self.consecutive_no_tool_calls = 0;
+                self.loop_detector.reset_tool_call_history();
                 self.loop_detector.reset_no_tool_response_history();
             }
 
@@ -3755,6 +3756,7 @@ impl WorkflowExecutor {
             }
 
             if results.is_empty() {
+                self.loop_detector.reset_tool_call_history();
                 let repeated_no_tool_warning = self
                     .loop_detector
                     .record_no_tool_response_and_check(&full_response);
@@ -3815,6 +3817,7 @@ impl WorkflowExecutor {
                 if self.flush_queued_user_messages().await? {
                     self.current_step = 0;
                     self.consecutive_no_tool_calls = 0;
+                    self.loop_detector.reset_tool_call_history();
                     self.loop_detector.reset_no_tool_response_history();
                 }
                 if self.consecutive_no_tool_calls >= 3 {
