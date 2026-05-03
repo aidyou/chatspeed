@@ -75,9 +75,22 @@ export function useWorkflowCore({
     const isAwaitingApproval = computed(() => {
         return canApprovePlan.value
     })
-    const pendingApprovalList = computed(() =>
-        Object.values(pendingApprovalEntries.value).sort((a, b) => b.updatedAt - a.updatedAt)
-    )
+    const pendingApprovalList = computed(() => {
+        const entries = Object.values(pendingApprovalEntries.value)
+        const sessionsWithConcreteApprovals = new Set(
+            entries
+                .filter((entry) => entry?.id && entry.id !== 'awaiting_approval')
+                .map((entry) => entry.sessionId)
+        )
+
+        return entries
+            .filter((entry) => {
+                if (!entry) return false
+                if (entry.id !== 'awaiting_approval') return true
+                return !sessionsWithConcreteApprovals.has(entry.sessionId)
+            })
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+    })
     const approvalNotificationAudio = ref<HTMLAudioElement>()
     const completionAudio = ref<HTMLAudioElement>()
 

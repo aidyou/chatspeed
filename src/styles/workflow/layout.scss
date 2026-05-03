@@ -2,12 +2,18 @@
     .approval-menu-item{
         width:100%;
 
-        .approval-menu-action{
+        .approval-menu-title{
             font-size: var(--cs-font-size-md);
             line-height: 1.4;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
-        .approval-menu-workflow{
+        .approval-menu-summary{
             color: var(--cs-text-color-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
     }
 }
@@ -57,18 +63,23 @@
     min-width: 220px;
   }
 
-  .approval-menu-workflow {
+  .approval-menu-title {
     font-size: 12px;
     font-weight: 600;
     color: var(--cs-text-color-primary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
 
-  .approval-menu-action {
+  .approval-menu-summary {
     font-size: 12px;
     color: var(--cs-text-color-secondary);
-    white-space: normal;
-    word-break: break-word;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     line-height: 1.4;
+    max-width: 100%;
   }
 
   .workflow-main {

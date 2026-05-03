@@ -44,9 +44,9 @@ const children = ref([])
 const gitStatusClass = computed(() => {
   if (!props.node.git_status) return ''
   const code = props.node.git_status.trim()
-  if (code === 'M') return 'modified'
-  if (code === 'A' || code === '??') return 'added'
-  if (code === 'D') return 'deleted'
+  if (code.includes('D')) return 'deleted'
+  if (code === '??' || code.includes('A')) return 'added'
+  if (code.includes('M') || code.includes('R') || code.includes('C') || code.includes('U')) return 'modified'
   return 'other'
 })
 
@@ -101,6 +101,8 @@ const getFileIcon = (name) => {
   if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz'].includes(ext)) return 'ext-zip'
   // 图片
   if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico', 'tiff', 'raw'].includes(ext)) return 'ext-pic'
+  // 音视频
+  if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus', 'mp4', 'webm', 'mov', 'm4v', 'ogv', 'mkv'].includes(ext)) return 'ext-file'
   // 文档
   if (['doc', 'docx'].includes(ext)) return 'ext-docx'
   if (['ppt', 'pptx'].includes(ext)) return 'ext-pptx'
@@ -219,6 +221,10 @@ watch(isExpanded, (newVal) => {
 
       &.deleted {
         background-color: #f56c6c; // Danger/Red
+      }
+
+      &.other {
+        background-color: var(--cs-text-color-secondary);
       }
     }
 

@@ -84,7 +84,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import FileTree from './FileTree.vue'
 
@@ -98,6 +98,10 @@ const props = defineProps({
   currentWorkflowId: {
     type: String,
     default: null
+  },
+  resetPrimaryRootFilterToken: {
+    type: Number,
+    default: 0
   },
   sidebarCollapsed: {
     type: Boolean,
@@ -125,7 +129,7 @@ const props = defineProps({
   }
 })
 
-defineEmits([
+const emit = defineEmits([
   'select-workflow',
   'edit-workflow',
   'delete-workflow',
@@ -190,6 +194,31 @@ const primaryRootOptions = computed(() => {
 const selectPrimaryRootFilter = (rootName) => {
   selectedPrimaryRootFilter.value = rootName || ''
 }
+
+watch(
+  () => props.resetPrimaryRootFilterToken,
+  () => {
+    selectedPrimaryRootFilter.value = ''
+  }
+)
+
+watch(
+  () => [selectedPrimaryRootFilter.value, props.currentWorkflowId, props.workflows],
+  () => {
+    if (!selectedPrimaryRootFilter.value) return
+
+    const currentVisible = filteredWorkflows.value.some(
+      workflow => workflow.id === props.currentWorkflowId
+    )
+    if (currentVisible) return
+
+    const nextWorkflowId = filteredWorkflows.value[0]?.id
+    if (nextWorkflowId) {
+      emit('select-workflow', nextWorkflowId)
+    }
+  },
+  { deep: true }
+)
 
 const filteredWorkflows = computed(() => {
   return props.workflows.filter((wf) => {

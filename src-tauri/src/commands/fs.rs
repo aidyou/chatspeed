@@ -13,6 +13,40 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::process::Command;
 
+fn git_status_priority(status: &str) -> u8 {
+    let code = status.trim();
+    if code.contains('D') {
+        return 3;
+    }
+    if code == "??" || code.contains('A') {
+        return 2;
+    }
+    if code.contains('M') || code.contains('R') || code.contains('C') || code.contains('U') {
+        return 1;
+    }
+    0
+}
+
+fn pick_directory_git_status(path: &str, git_statuses: &HashMap<String, String>) -> Option<String> {
+    let prefix = format!("{}/", path.trim_end_matches(['/', '\\']));
+    let mut best_status: Option<&str> = None;
+    let mut best_priority = 0;
+
+    for (candidate_path, candidate_status) in git_statuses {
+        if !candidate_path.starts_with(&prefix) {
+            continue;
+        }
+
+        let priority = git_status_priority(candidate_status);
+        if priority > best_priority {
+            best_priority = priority;
+            best_status = Some(candidate_status.as_str());
+        }
+    }
+
+    best_status.map(ToOwned::to_owned)
+}
+
 fn should_skip_list_dir_entry(name: &str) -> bool {
     let name_lower = name.to_lowercase();
     name == "node_modules"
@@ -23,11 +57,42 @@ fn should_skip_list_dir_entry(name: &str) -> bool {
         || name_lower == ".ds_store"
 }
 
+fn git_working_dir(path: &str) -> &Path {
+    let target = Path::new(path);
+    if target.is_dir() {
+        target
+    } else {
+        target.parent().unwrap_or(target)
+    }
+}
+
+fn get_repo_root(path: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(git_working_dir(path))
+        .output()
+        .map_err(|e| AppError::General {
+            message: format!("Failed to execute git: {}", e),
+        })?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    ))
+}
+
 #[tauri::command]
 pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
+    let Some(repo_root) = get_repo_root(path)? else {
+        return Ok(HashMap::new());
+    };
+
     let output = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(path)
+        .args(["-c", "status.relativePaths=false", "status", "--porcelain"])
+        .current_dir(git_working_dir(path))
         .output()
         .map_err(|e| AppError::General {
             message: format!("Failed to execute git: {}", e),
@@ -39,7 +104,7 @@ pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut status_map = HashMap::new();
-    let base_path = Path::new(path);
+    let base_path = Path::new(&repo_root);
 
     for line in stdout.lines() {
         if line.len() < 4 {
@@ -54,6 +119,49 @@ pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
     }
 
     Ok(status_map)
+}
+
+#[tauri::command]
+pub async fn read_git_base_text_file(file_path: &str) -> Result<Option<String>> {
+    let file = Path::new(file_path);
+    if !file.exists() || file.is_dir() {
+        return Ok(None);
+    }
+
+    let Some(repo_root) = get_repo_root(file_path)? else {
+        return Ok(None);
+    };
+
+    let repo_root_path = Path::new(&repo_root);
+    let relative_path = match file.strip_prefix(repo_root_path) {
+        Ok(relative) => relative,
+        Err(_) => return Ok(None),
+    };
+
+    let relative_path = relative_path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+
+    if relative_path.is_empty() {
+        return Ok(None);
+    }
+
+    let spec = format!("HEAD:{}", relative_path);
+    let output = Command::new("git")
+        .args(["show", &spec])
+        .current_dir(repo_root_path)
+        .output()
+        .map_err(|e| AppError::General {
+            message: format!("Failed to execute git: {}", e),
+        })?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
 }
 #[tauri::command]
 pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
@@ -92,7 +200,13 @@ pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
         let path_str = path_buf.to_string_lossy().to_string();
 
         // Find git status for this file (keys in git_statuses are absolute paths)
-        let status = git_statuses.get(&path_str).cloned();
+        let status = git_statuses.get(&path_str).cloned().or_else(|| {
+            if is_dir {
+                pick_directory_git_status(&path_str, &git_statuses)
+            } else {
+                None
+            }
+        });
 
         list.push(serde_json::json!({
             "name": name,

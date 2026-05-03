@@ -72,7 +72,41 @@
       append-to-body
       destroy-on-close>
       <div class="preview-content">
-        <markdown-simple :content="previewContent" />
+        <div v-if="previewMode === 'unsupported'" class="unsupported-preview">
+          <div class="unsupported-preview__icon">
+            <cs name="warning" size="28px" />
+          </div>
+          <div class="unsupported-preview__title">This file type is not supported for inline preview.</div>
+          <div class="unsupported-preview__desc">
+            You can open it with your system default application.
+          </div>
+          <div class="unsupported-preview__path">{{ previewFilePath }}</div>
+          <el-button type="primary" @click="openPreviewFileWithDefaultApp">Open with Default App</el-button>
+        </div>
+        <div v-else-if="previewMode === 'image'" class="media-preview image-preview">
+          <div class="media-preview__actions">
+            <el-button @click="openPreviewFileWithDefaultApp">Open with Default App</el-button>
+          </div>
+          <img :src="previewAssetUrl" :alt="previewTitle" class="image-preview__img" />
+        </div>
+        <div v-else-if="previewMode === 'audio'" class="media-preview audio-preview">
+          <div class="media-preview__actions">
+            <el-button @click="openPreviewFileWithDefaultApp">Open with Default App</el-button>
+          </div>
+          <audio :src="previewAssetUrl" controls preload="metadata" class="audio-preview__player" />
+        </div>
+        <div v-else-if="previewMode === 'video'" class="media-preview video-preview">
+          <div class="media-preview__actions">
+            <el-button @click="openPreviewFileWithDefaultApp">Open with Default App</el-button>
+          </div>
+          <video :src="previewAssetUrl" controls preload="metadata" class="video-preview__player" />
+        </div>
+        <file-preview-diff
+          v-else-if="previewMode === 'diff'"
+          :file-path="previewFilePath"
+          :old-content="previewBaseContent"
+          :new-content="previewRawContent" />
+        <markdown-simple v-else :content="previewContent" :disable-interaction="true" />
       </div>
     </el-dialog>
   </div>
@@ -80,11 +114,14 @@
 
 <script setup>
 import { ref, watch, onMounted, computed } from 'vue'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invokeWrapper } from '@/libs/tauri'
 import { writeClipboard } from '@/libs/clipboard'
+import { imagePreview } from '@/libs/fs'
 import { showMessage } from '@/libs/util'
 import MarkdownSimple from './MarkdownSimple.vue'
+import FilePreviewDiff from './FilePreviewDiff.vue'
 import TreeNode from './TreeNode.vue'
 
 const props = defineProps({
@@ -105,6 +142,33 @@ const loading = ref(false)
 const previewVisible = ref(false)
 const previewTitle = ref('')
 const previewContent = ref('')
+const previewRawContent = ref('')
+const previewBaseContent = ref('')
+const previewMode = ref('markdown')
+const previewFilePath = ref('')
+const previewAssetUrl = ref('')
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico', 'tiff', 'tif', 'avif'])
+const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus'])
+const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'mkv'])
+const OFFICE_EXTENSIONS = new Set([
+  'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'pdf', 'odt', 'ods', 'odp', 'rtf', 'pages', 'numbers', 'key'
+])
+
+const getFileExtension = (path = '') => {
+  const fileName = path.split(/[/\\]/).pop() || ''
+  const lastDotIndex = fileName.lastIndexOf('.')
+  return lastDotIndex > -1 ? fileName.slice(lastDotIndex + 1).toLowerCase() : ''
+}
+
+const getPreviewType = (path) => {
+  const ext = getFileExtension(path)
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image'
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio'
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video'
+  if (OFFICE_EXTENSIONS.has(ext)) return 'unsupported'
+  return 'text'
+}
 
 const isExpanded = path => expandedNodes.value.has(path)
 
@@ -189,20 +253,72 @@ const refreshRoot = async path => {
   }
 }
 
-const previewFile = async path => {
+const openPreviewFileWithDefaultApp = async () => {
+  if (!previewFilePath.value) return
+
   try {
-    const content = await invokeWrapper('read_text_file', { filePath: path })
+    await invokeWrapper('open_path_in_file_manager', { path: previewFilePath.value })
+  } catch (error) {
+    console.error('Failed to open file with default app:', error)
+    showMessage('Failed to open file', 'error')
+  }
+}
+
+const previewFile = async (path) => {
+  try {
     previewTitle.value = getDirName(path)
-    // Wrap content in code block if not already markdown
-    if (!path.endsWith('.md')) {
-      const ext = path.split('.').pop()
+    previewFilePath.value = path
+    previewAssetUrl.value = ''
+    previewContent.value = ''
+    previewRawContent.value = ''
+    previewBaseContent.value = ''
+
+    const previewType = getPreviewType(path)
+
+    if (previewType === 'unsupported') {
+      previewMode.value = 'unsupported'
+      previewVisible.value = true
+      return
+    }
+
+    if (previewType === 'image' || previewType === 'audio' || previewType === 'video') {
+      previewMode.value = previewType
+      previewAssetUrl.value = previewType === 'image'
+        ? await imagePreview(path)
+        : convertFileSrc(path)
+
+      if (!previewAssetUrl.value) {
+        throw new Error(`Failed to resolve preview URL for ${path}`)
+      }
+
+      previewVisible.value = true
+      return
+    }
+
+    const [content, baseContent] = await Promise.all([
+      invokeWrapper('read_text_file', { filePath: path }),
+      invokeWrapper('read_git_base_text_file', { filePath: path }).catch(() => null)
+    ])
+
+    previewRawContent.value = content
+    previewBaseContent.value = typeof baseContent === 'string' ? baseContent : ''
+
+    if (typeof baseContent === 'string' && baseContent !== content) {
+      previewMode.value = 'diff'
+      previewContent.value = ''
+    } else if (getFileExtension(path) !== 'md') {
+      previewMode.value = 'markdown'
+      const ext = getFileExtension(path) || 'text'
       previewContent.value = `\`\`\`${ext}\n${content}\n\`\`\``
     } else {
+      previewMode.value = 'markdown'
       previewContent.value = content
     }
     previewVisible.value = true
   } catch (e) {
-    console.error('Failed to read file:', e)
+    console.error('Failed to preview file:', e)
+    previewMode.value = 'unsupported'
+    previewVisible.value = true
   }
 }
 
@@ -376,6 +492,77 @@ onMounted(() => {
     max-height: 75vh;
     overflow-y: auto;
     padding: 20px;
+  }
+
+  .media-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .media-preview__actions {
+    width: 100%;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .image-preview__img {
+    display: block;
+    max-width: 100%;
+    max-height: calc(75vh - 80px);
+    object-fit: contain;
+    border-radius: 8px;
+    background: var(--cs-bg-color-light);
+  }
+
+  .audio-preview {
+    min-height: 240px;
+    justify-content: center;
+  }
+
+  .audio-preview__player {
+    width: min(100%, 720px);
+  }
+
+  .video-preview__player {
+    width: 100%;
+    max-height: calc(75vh - 80px);
+    border-radius: 8px;
+    background: #000;
+  }
+
+  .unsupported-preview {
+    min-height: 260px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    text-align: center;
+  }
+
+  .unsupported-preview__icon {
+    color: var(--el-color-warning);
+  }
+
+  .unsupported-preview__title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--cs-text-color-primary);
+  }
+
+  .unsupported-preview__desc {
+    color: var(--cs-text-color-secondary);
+  }
+
+  .unsupported-preview__path {
+    max-width: 100%;
+    padding: 10px 14px;
+    word-break: break-all;
+    border-radius: 8px;
+    color: var(--cs-text-color-secondary);
+    background: var(--cs-bg-color-light);
   }
 }
 

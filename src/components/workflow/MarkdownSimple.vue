@@ -1,11 +1,12 @@
 <template>
-  <div ref="containerRef" :class="className"></div>
+  <div ref="containerRef" :class="[className, { 'preview-safe': disableInteraction }]" @click.capture="handleContentClick"></div>
 </template>
 
 <script setup>
 import { ref, watch, onMounted, nextTick } from 'vue'
 import hljs from 'highlight.js'
 import { parseMarkdown } from '@/libs/chat'
+import { openUrl } from '@/libs/util'
 
 const props = defineProps({
   content: {
@@ -15,10 +16,16 @@ const props = defineProps({
   className: {
     type: String,
     default: 'content'
+  },
+  disableInteraction: {
+    type: Boolean,
+    default: false
   }
 })
 
 const containerRef = ref(null)
+const LINK_SELECTOR = 'a, area'
+const DISABLED_INTERACTIVE_SELECTOR = 'button, input, select, textarea, summary, details, iframe'
 
 // Simple highlight function - no title bar, no copy button
 const highlightCode = () => {
@@ -34,30 +41,60 @@ const highlightCode = () => {
   })
 }
 
+const disableInteractiveContent = () => {
+  if (!props.disableInteraction || !containerRef.value) return
+
+  containerRef.value.querySelectorAll('a, area').forEach(link => {
+    link.setAttribute('tabindex', '-1')
+    link.setAttribute('aria-disabled', 'true')
+  })
+
+  containerRef.value.querySelectorAll('button, input, select, textarea').forEach(element => {
+    element.setAttribute('tabindex', '-1')
+    element.setAttribute('disabled', 'disabled')
+  })
+}
+
+const renderContent = async () => {
+  if (!containerRef.value) return
+
+  containerRef.value.innerHTML = parseMarkdown(props.content)
+  disableInteractiveContent()
+
+  await nextTick()
+  highlightCode()
+}
+
+const handleContentClick = event => {
+  if (!props.disableInteraction) return
+  const link = event.target.closest(LINK_SELECTOR)
+  if (link) {
+    const href = link.getAttribute('href') || ''
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (href && href !== '#' && !href.toLowerCase().startsWith('javascript:')) {
+      openUrl(href)
+    }
+    return
+  }
+
+  if (!event.target.closest(DISABLED_INTERACTIVE_SELECTOR)) return
+
+  event.preventDefault()
+  event.stopPropagation()
+}
+
 // Watch for content changes and re-highlight
 watch(
   () => props.content,
   async () => {
-    if (!containerRef.value) return
-
-    // Parse markdown and set innerHTML
-    containerRef.value.innerHTML = parseMarkdown(props.content)
-
-    // Wait for DOM to update then highlight
-    await nextTick()
-    highlightCode()
+    await renderContent()
   }
 )
 
 onMounted(async () => {
-  if (!containerRef.value) return
-
-  // Initial render
-  containerRef.value.innerHTML = parseMarkdown(props.content)
-
-  // Wait for DOM to update then highlight
-  await nextTick()
-  highlightCode()
+  await renderContent()
 })
 </script>
 
@@ -200,6 +237,23 @@ onMounted(async () => {
     &:empty::before {
       content: 'Diagram';
       color: var(--cs-text-color-placeholder);
+    }
+  }
+
+  &.preview-safe {
+    button,
+    input,
+    select,
+    textarea,
+    summary,
+    details,
+    iframe {
+      pointer-events: none;
+    }
+
+    a,
+    area {
+      cursor: pointer;
     }
   }
 }
