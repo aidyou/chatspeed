@@ -101,6 +101,8 @@ const getFileIcon = (name) => {
   if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz'].includes(ext)) return 'ext-zip'
   // 图片
   if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico', 'tiff', 'raw'].includes(ext)) return 'ext-pic'
+  // 音视频
+  if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus', 'mp4', 'webm', 'mov', 'm4v', 'ogv', 'mkv'].includes(ext)) return 'ext-file'
   // 文档
   if (['doc', 'docx'].includes(ext)) return 'ext-docx'
   if (['ppt', 'pptx'].includes(ext)) return 'ext-pptx'
