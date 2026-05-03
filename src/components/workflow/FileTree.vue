@@ -7,7 +7,11 @@
           <cs name="add" class="action-icon" @click="onAddPath" />
         </el-tooltip>
         <el-tooltip :content="$t('common.refresh')" placement="top">
-          <cs name="refresh" class="action-icon refresh-icon" @click="refreshAll" :class="{ rotating: loading }" />
+          <cs
+            name="refresh"
+            class="action-icon refresh-icon"
+            @click="refreshAll"
+            :class="{ rotating: loading }" />
         </el-tooltip>
       </div>
     </div>
@@ -24,22 +28,49 @@
             <span class="root-name" :title="root">{{ getDirName(root) }}</span>
           </div>
           <div class="root-actions">
-            <cs name="copy" size="12px" class="action-btn copy-btn" @click.stop="copyRootPath(root)" />
-            <cs name="ext-folder-open" size="12px" class="action-btn open-btn" @click.stop="openAuthorizedFolder(root)" />
-            <cs name="refresh" size="12px" class="action-btn refresh-btn" @click.stop="refreshRoot(root)" />
-            <cs name="trash" size="12px" class="action-btn remove-btn" @click.stop="onRemovePath(root)" />
+            <cs
+              name="copy"
+              size="12px"
+              class="action-btn copy-btn"
+              @click.stop="copyRootPath(root)" />
+            <cs
+              name="ext-folder-open"
+              size="12px"
+              class="action-btn open-btn"
+              @click.stop="openAuthorizedFolder(root)" />
+            <cs
+              name="refresh"
+              size="12px"
+              class="action-btn refresh-btn"
+              @click.stop="refreshRoot(root)" />
+            <cs
+              name="trash"
+              size="12px"
+              class="action-btn remove-btn"
+              @click.stop="onRemovePath(root)" />
           </div>
         </div>
         <div v-if="isExpanded(root)" class="children">
-          <tree-node v-for="child in getChildren(root)" :key="child.path" :node="child" :expanded-map="expandedNodes"
-            @toggle="toggleExpand" @preview="previewFile" />
+          <tree-node
+            v-for="child in getChildren(root)"
+            :key="child.path"
+            :node="child"
+            :expanded-map="expandedNodes"
+            @toggle="toggleExpand"
+            @preview="previewFile" />
         </div>
       </div>
     </div>
 
     <!-- File Preview Dialog -->
-    <el-dialog v-model="previewVisible" :title="previewTitle" width="80%" top="5vh" class="file-preview-dialog"
-      append-to-body destroy-on-close>
+    <el-dialog
+      v-model="previewVisible"
+      :title="previewTitle"
+      width="80%"
+      top="5vh"
+      class="file-preview-dialog"
+      append-to-body
+      destroy-on-close>
       <div class="preview-content">
         <markdown-simple :content="previewContent" />
       </div>
@@ -75,9 +106,9 @@ const previewVisible = ref(false)
 const previewTitle = ref('')
 const previewContent = ref('')
 
-const isExpanded = (path) => expandedNodes.value.has(path)
+const isExpanded = path => expandedNodes.value.has(path)
 
-const getDirName = (path) => {
+const getDirName = path => {
   const parts = path.split(/[/\\]/).filter(p => p !== '')
   return parts[parts.length - 1] || path
 }
@@ -97,11 +128,11 @@ const onAddPath = async () => {
   }
 }
 
-const onRemovePath = (path) => {
+const onRemovePath = path => {
   emit('removePath', path)
 }
 
-const openAuthorizedFolder = async (path) => {
+const openAuthorizedFolder = async path => {
   if (!path) return
   try {
     await invokeWrapper('open_path_in_file_manager', { path })
@@ -110,7 +141,7 @@ const openAuthorizedFolder = async (path) => {
   }
 }
 
-const copyRootPath = async (path) => {
+const copyRootPath = async path => {
   if (!path) return
   try {
     await writeClipboard(path)
@@ -121,7 +152,7 @@ const copyRootPath = async (path) => {
   }
 }
 
-const toggleExpand = async (path) => {
+const toggleExpand = async path => {
   if (expandedNodes.value.has(path)) {
     expandedNodes.value.delete(path)
   } else {
@@ -130,7 +161,7 @@ const toggleExpand = async (path) => {
   }
 }
 
-const loadDir = async (path) => {
+const loadDir = async path => {
   try {
     const list = await invokeWrapper('list_dir', { path })
     childrenMap.value.set(path, list)
@@ -139,7 +170,7 @@ const loadDir = async (path) => {
   }
 }
 
-const getChildren = (path) => childrenMap.value.get(path) || []
+const getChildren = path => childrenMap.value.get(path) || []
 
 const refreshAll = async () => {
   loading.value = true
@@ -152,13 +183,13 @@ const refreshAll = async () => {
   loading.value = false
 }
 
-const refreshRoot = async (path) => {
+const refreshRoot = async path => {
   if (expandedNodes.value.has(path)) {
     await loadDir(path)
   }
 }
 
-const previewFile = async (path) => {
+const previewFile = async path => {
   try {
     const content = await invokeWrapper('read_text_file', { filePath: path })
     previewTitle.value = getDirName(path)
@@ -175,11 +206,15 @@ const previewFile = async (path) => {
   }
 }
 
-watch(() => props.paths, (newPaths) => {
-  // Clear state when roots change
-  expandedNodes.value.clear()
-  childrenMap.value.clear()
-}, { deep: true })
+watch(
+  () => props.paths,
+  newPaths => {
+    // Clear state when roots change
+    expandedNodes.value.clear()
+    childrenMap.value.clear()
+  },
+  { deep: true }
+)
 
 onMounted(() => {
   // Optionally auto-expand the first root
@@ -256,6 +291,7 @@ onMounted(() => {
       padding: 6px 15px;
       cursor: pointer;
       transition: background 0.2s;
+      position: relative;
 
       &:hover {
         background: var(--cs-hover-bg-color);
@@ -286,6 +322,9 @@ onMounted(() => {
         gap: 4px;
         opacity: 0;
         transition: opacity 0.2s;
+        position: absolute;
+        right: 0;
+        background: var(--cs-bg-color);
 
         .action-btn {
           cursor: pointer;

@@ -24,8 +24,9 @@ export const readClipboard = async () => {
 /**
  * Write text content to system clipboard
  * 
- * Uses Rust-based clipboard implementation via arboard for cross-platform support.
- * This avoids browser clipboard API limitations and permission issues.
+ * Prefer browser clipboard API for user-triggered copy actions.
+ * Falls back to Rust-based clipboard implementation via arboard when needed.
+ * This avoids Linux/X11 ownership warnings from very short-lived native clipboard instances.
  * 
  * @param {string} text - The text content to write to clipboard
  * @returns {Promise<void>} Resolves when text is written successfully
@@ -40,5 +41,14 @@ export const readClipboard = async () => {
  * }
  */
 export const writeClipboard = async (text) => {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch (error) {
+      console.warn('Browser clipboard write failed, falling back to native clipboard:', error)
+    }
+  }
+
   return await invoke('write_clipboard', { text })
 }
