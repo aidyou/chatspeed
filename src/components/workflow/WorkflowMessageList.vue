@@ -10,9 +10,9 @@
       <div class="avatar" v-if="message.role === 'user'">
         <cs name="talk" class="user-icon" />
       </div>
-        <div class="content-container">
-          <div class="content" v-if="message.role === 'user'">
-            <div v-if="getAskUserResponseItems(message).length > 0" class="ask-user-response-card">
+      <div class="content-container">
+        <div class="content" v-if="message.role === 'user'">
+          <div v-if="getAskUserResponseItems(message).length > 0" class="ask-user-response-card">
             <div class="ask-user-response-title">{{ $t('workflow.askUser.responseTitle') }}</div>
             <div
               v-for="(item, itemIndex) in getAskUserResponseItems(message)"
@@ -30,19 +30,36 @@
               >
             </div>
           </div>
-          <pre
+          <div
             v-else
-            class="simple-text"
-            :class="{
-              'is-collapsed': isExpandableUserMessage(message) && !isUserMessageExpanded(message),
-              'is-expandable': isExpandableUserMessage(message)
-            }"
+            class="user-message-wrap"
+            :class="{ 'is-expandable': isExpandableUserMessage(message) }"
             @click="
               isExpandableUserMessage(message) &&
-                $emit('toggle-expand', getUserMessageExpandId(message))
-            "
-            >{{ getVisibleUserContent(message) }}</pre
-          >
+              $emit('toggle-expand', getUserMessageExpandId(message))
+            ">
+            <pre
+              :data-user-expand-id="getUserMessageExpandId(message)"
+              class="simple-text"
+              :class="{
+                'is-collapsed': isExpandableUserMessage(message) && !isUserMessageExpanded(message),
+                'is-expandable': isExpandableUserMessage(message)
+              }"
+              >{{ getVisibleUserContent(message) }}</pre
+            >
+            <button
+              v-if="isExpandableUserMessage(message)"
+              type="button"
+              class="user-message-toggle"
+              :aria-label="isUserMessageExpanded(message) ? 'Collapse message' : 'Expand message'"
+              @click.stop="$emit('toggle-expand', getUserMessageExpandId(message))">
+              <cs
+                name="double-arrow-down"
+                size="14px"
+                class="user-message-toggle__icon"
+                :class="{ expanded: isUserMessageExpanded(message) }" />
+            </button>
+          </div>
         </div>
         <div v-else class="ai-content chat">
           <div v-if="isExplorationBatchMessage(message)" class="exploration-card">
@@ -102,7 +119,7 @@
                     <div
                       v-if="isExplorationGroupReasoningExpanded(message, groupIndex)"
                       class="reasoning-content">
-                      {{ group.thought }}
+                      {{ sanitizeReasoningContent(group.thought) }}
                     </div>
                   </div>
                 </template>
@@ -114,30 +131,42 @@
                   :class="[tool.toolType || 'tool-system']">
                   <div
                     class="tool-line title-wrap expandable"
-                    @click="$emit('toggle-expand', getExplorationToolExpandId(message, groupIndex, toolIndex))">
+                    @click="
+                      $emit(
+                        'toggle-expand',
+                        getExplorationToolExpandId(message, groupIndex, toolIndex)
+                      )
+                    ">
                     <cs :name="tool.icon || 'tool'" size="14px" class="tool-type-icon" />
                     <span class="tool-name">{{ tool.action }}</span>
                     <span class="tool-target">{{ tool.target }}</span>
                   </div>
                   <div
-                    v-if="tool.summary && !isExplorationToolExpanded(message, groupIndex, toolIndex)"
+                    v-if="
+                      tool.summary && !isExplorationToolExpanded(message, groupIndex, toolIndex)
+                    "
                     class="tool-line summary expandable"
-                    @click="$emit('toggle-expand', getExplorationToolExpandId(message, groupIndex, toolIndex))">
+                    @click="
+                      $emit(
+                        'toggle-expand',
+                        getExplorationToolExpandId(message, groupIndex, toolIndex)
+                      )
+                    ">
                     <span class="corner-icon">⎿</span>
                     <span class="summary-text">{{ tool.summary }}</span>
                     <span class="expand-hint">(click to expand)</span>
                   </div>
-                  <div v-if="isExplorationToolExpanded(message, groupIndex, toolIndex)" class="tool-detail">
+                  <div
+                    v-if="isExplorationToolExpanded(message, groupIndex, toolIndex)"
+                    class="tool-detail">
                     <MarkdownSimple
                       v-if="
-                        shouldShowExplorationToolRawContent(tool) &&
-                        tool.displayType === 'diff'
+                        shouldShowExplorationToolRawContent(tool) && tool.displayType === 'diff'
                       "
                       :content="getDiffMarkdown(removeSystemReminder(tool.message))" />
                     <MarkdownSimple
                       v-else-if="
-                        shouldShowExplorationToolRawContent(tool) &&
-                        tool.displayType === 'markdown'
+                        shouldShowExplorationToolRawContent(tool) && tool.displayType === 'markdown'
                       "
                       :content="removeSystemReminder(tool.message)" />
                     <pre
@@ -462,7 +491,7 @@
                     v-else-if="
                       isRunning && !hasThoughtCompleted(message) && message === lastAssistantMessage
                     ">
-                    {{ getReasoningPreview(message.reasoning || message.message) }}
+                    {{ getReasoningPreview(sanitizeReasoningContent(message.reasoning || message.message)) }}
                   </template>
                   <template v-else>
                     {{ $t('workflow.thoughtCompleted') || 'Thought Complete' }}
@@ -473,7 +502,7 @@
                 </span>
               </div>
               <div v-if="isReasoningExpanded(message.displayId)" class="reasoning-content">
-                {{ message.reasoning || message.message }}
+                {{ sanitizeReasoningContent(message.reasoning || message.message) }}
               </div>
             </div>
             <MarkdownSimple
@@ -537,7 +566,7 @@
                 {{
                   hasStreamingThoughtCompleted
                     ? $t('workflow.thoughtCompleted') || 'Thought Complete'
-                    : getReasoningPreview(chatState.reasoning)
+                    : getReasoningPreview(sanitizeReasoningContent(chatState.reasoning))
                 }}
               </span>
               <span v-if="hasStreamingThoughtCompleted" class="reasoning-toggle">
@@ -545,9 +574,11 @@
               </span>
             </div>
             <div
-              v-if="hasStreamingThoughtCompleted && isReasoningExpanded(STREAMING_REASONING_DISPLAY_ID)"
+              v-if="
+                hasStreamingThoughtCompleted && isReasoningExpanded(STREAMING_REASONING_DISPLAY_ID)
+              "
               class="reasoning-content">
-              {{ chatState.reasoning }}
+              {{ sanitizeReasoningContent(chatState.reasoning) }}
             </div>
           </div>
           <!-- Streaming Blocks (Optimized rendering) -->
@@ -601,7 +632,7 @@
 </template>
 
 <script setup>
-import { computed, ref, nextTick } from 'vue'
+import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
 import ApprovalDialog from './ApprovalDialog.vue'
@@ -613,6 +644,7 @@ const workflowStore = useWorkflowStore()
 const { t } = useI18n()
 const CUSTOM_ASK_USER_VALUE = '__custom__'
 const STREAMING_REASONING_DISPLAY_ID = '__streaming_reasoning__'
+const USER_MESSAGE_COLLAPSED_LINE_COUNT = 4
 
 const props = defineProps({
   messages: {
@@ -725,8 +757,10 @@ const emit = defineEmits([
 const messagesRef = ref(null)
 const approvalDrafts = ref({})
 const askUserDrafts = ref({})
+const userMessageOverflowMap = ref({})
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
+let userMessageResizeObserver = null
 
 const inlinePendingApprovalCount = computed(() => {
   const toolIds = new Set()
@@ -1353,6 +1387,8 @@ const getExplorationGroupReasoningId = (message, groupIndex) =>
 const isExplorationGroupReasoningExpanded = (message, groupIndex) =>
   props.isReasoningExpanded(getExplorationGroupReasoningId(message, groupIndex))
 
+const sanitizeReasoningContent = content => String(content || '').replace(/^\s*<think>\s*/i, '')
+
 const getExplorationToolExpandId = (message, groupIndex, toolIndex) =>
   `${message?.displayId || message?.id || 'exploration'}:group_tool:${groupIndex}:${toolIndex}`
 
@@ -1373,6 +1409,96 @@ const getVisibleUserContent = message => props.removeSystemReminder(message?.mes
 
 const getUserMessageExpandId = message => `${message?.displayId || message?.id || 'user'}:user`
 
+const getUserMessageCollapsedMaxHeight = el => {
+  if (!el || typeof window === 'undefined') return 0
+
+  const styles = window.getComputedStyle(el)
+  const wrapperStyles = window.getComputedStyle(el.parentElement || el)
+  const fontSize = Number.parseFloat(styles.fontSize) || 14
+  const lineHeight =
+    Number.parseFloat(styles.lineHeight) ||
+    Number.parseFloat(styles.getPropertyValue('--user-message-line-height-multiplier')) *
+      fontSize ||
+    fontSize * 1.6
+  const safeBottom =
+    Number.parseFloat(wrapperStyles.getPropertyValue('--user-message-toggle-safe-bottom')) || 0
+
+  return lineHeight * USER_MESSAGE_COLLAPSED_LINE_COUNT + safeBottom
+}
+
+const getUserMessageNaturalHeight = el => {
+  if (!el || typeof window === 'undefined' || typeof document === 'undefined') return 0
+
+  const styles = window.getComputedStyle(el)
+  const wrapperStyles = window.getComputedStyle(el.parentElement || el)
+  const safeRight =
+    Number.parseFloat(wrapperStyles.getPropertyValue('--user-message-toggle-safe-right')) || 0
+  const measureEl = document.createElement('pre')
+  measureEl.textContent = el.textContent || ''
+  measureEl.style.position = 'absolute'
+  measureEl.style.visibility = 'hidden'
+  measureEl.style.pointerEvents = 'none'
+  measureEl.style.zIndex = '-1'
+  measureEl.style.margin = '0'
+  measureEl.style.padding = '0'
+  measureEl.style.border = '0'
+  measureEl.style.maxHeight = 'none'
+  measureEl.style.overflow = 'visible'
+  measureEl.style.whiteSpace = styles.whiteSpace
+  measureEl.style.wordBreak = styles.wordBreak
+  measureEl.style.font = styles.font
+  measureEl.style.lineHeight = styles.lineHeight
+  measureEl.style.letterSpacing = styles.letterSpacing
+  measureEl.style.boxSizing = styles.boxSizing
+  measureEl.style.width = `${Math.max(el.clientWidth - safeRight, 0)}px`
+
+  document.body.appendChild(measureEl)
+  const naturalHeight = measureEl.scrollHeight
+  document.body.removeChild(measureEl)
+
+  return naturalHeight
+}
+
+const updateUserMessageOverflowMap = overflowMap => {
+  const current = userMessageOverflowMap.value
+  const currentKeys = Object.keys(current)
+  const nextKeys = Object.keys(overflowMap)
+
+  if (
+    currentKeys.length === nextKeys.length &&
+    nextKeys.every(key => current[key] === overflowMap[key])
+  ) {
+    return
+  }
+
+  userMessageOverflowMap.value = overflowMap
+}
+
+const measureUserMessageOverflow = () => {
+  const overflowMap = {}
+  const container = messagesRef.value
+  if (!container) {
+    updateUserMessageOverflowMap(overflowMap)
+    return
+  }
+
+  const elements = container.querySelectorAll('[data-user-expand-id]')
+  for (const el of elements) {
+    const expandId = el.getAttribute('data-user-expand-id')
+    if (!expandId) continue
+
+    overflowMap[expandId] = getUserMessageNaturalHeight(el) > getUserMessageCollapsedMaxHeight(el)
+  }
+
+  updateUserMessageOverflowMap(overflowMap)
+}
+
+const scheduleMeasureUserMessageOverflow = () => {
+  nextTick(() => {
+    measureUserMessageOverflow()
+  })
+}
+
 const isUserMessageExpanded = message =>
   props.isMessageExpanded({
     displayId: getUserMessageExpandId(message),
@@ -1382,13 +1508,7 @@ const isUserMessageExpanded = message =>
 
 const isExpandableUserMessage = message => {
   if (!message || getAskUserResponseItems(message).length > 0) return false
-  const content = getVisibleUserContent(message)
-  if (!content) return false
-
-  const lines = content.split('\n')
-  if (lines.length > 2) return true
-
-  return content.trim().length > 120
+  return !!userMessageOverflowMap.value[getUserMessageExpandId(message)]
 }
 
 const getMessageSubAgentId = message => {
@@ -1567,7 +1687,7 @@ const hasRealUserResponseAfter = message => {
  *    and parsable choice groups. This guards against edge cases where the state event
  *    arrives slightly before or after the message event due to reactivity ordering.
  */
-const canAnswerAskUser = (message) => {
+const canAnswerAskUser = message => {
   const currentStatus = String(workflowStore.currentWorkflow?.status || '').toLowerCase()
   const isAwaitingUser =
     workflowStore.waitReason === WORKFLOW_WAIT_REASONS.USER_INPUT ||
@@ -1661,6 +1781,36 @@ const scrollToBottom = (force = false) => {
   }
 }
 
+watch(
+  visibleMessages,
+  () => {
+    scheduleMeasureUserMessageOverflow()
+  },
+  { deep: true, flush: 'post' }
+)
+
+onMounted(() => {
+  if (typeof ResizeObserver !== 'undefined') {
+    userMessageResizeObserver = new ResizeObserver(() => {
+      measureUserMessageOverflow()
+    })
+    if (messagesRef.value) userMessageResizeObserver.observe(messagesRef.value)
+  } else {
+    window.addEventListener('resize', measureUserMessageOverflow)
+  }
+
+  scheduleMeasureUserMessageOverflow()
+})
+
+onBeforeUnmount(() => {
+  if (userMessageResizeObserver) {
+    userMessageResizeObserver.disconnect()
+    userMessageResizeObserver = null
+  } else {
+    window.removeEventListener('resize', measureUserMessageOverflow)
+  }
+})
+
 defineExpose({
   scrollToBottom,
   messagesRef
@@ -1668,35 +1818,59 @@ defineExpose({
 </script>
 
 <style scoped lang="scss">
+.user-message-wrap {
+  position: relative;
+  --user-message-line-height-multiplier: 1.6;
+  --user-message-toggle-size: 18px;
+  --user-message-toggle-right: 15px;
+  --user-message-toggle-bottom: 15px;
+  --user-message-toggle-safe-right: 40px;
+  --user-message-toggle-safe-bottom: 30px;
+}
+
+.user-message-wrap.is-expandable {
+  cursor: pointer;
+}
+
 .simple-text {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-
-  &.is-expandable {
-    cursor: pointer;
-  }
+  line-height: calc(1em * var(--user-message-line-height-multiplier));
 
   &.is-collapsed {
     position: relative;
-    max-height: 50px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  &.is-collapsed::after {
-    content: '...';
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    padding-left: 12px;
-    color: var(--cs-text-color-secondary);
-    background: linear-gradient(
-      90deg,
-      rgb(from var(--cs-bg-color) r g b / 0) 0%,
-      var(--cs-bg-color) 40%
+    max-height: calc(
+      1em * var(--user-message-line-height-multiplier) * 4 + var(--user-message-toggle-safe-bottom)
     );
+    overflow: hidden;
+    padding-right: var(--user-message-toggle-safe-right);
+    padding-bottom: var(--user-message-toggle-safe-bottom);
   }
+}
+
+.user-message-toggle {
+  position: absolute;
+  right: var(--user-message-toggle-right);
+  bottom: var(--user-message-toggle-bottom);
+  padding: 0;
+  border: 0;
+  color: var(--cs-text-color-secondary);
+  cursor: pointer;
+  height: 30px;
+  width: 30px;
+  background: var(--cs-bg-color-light);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.user-message-toggle__icon {
+  transition: transform 0.2s ease;
+}
+
+.user-message-toggle__icon.expanded {
+  transform: rotate(180deg);
 }
 
 .exploration-card {
