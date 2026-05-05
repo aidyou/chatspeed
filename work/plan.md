@@ -1587,99 +1587,271 @@ Reducer 只负责重建：
 
 ---
 
-## 15. 阶段 8：Handoff 与焦点代理模型
+## 15. 阶段 8A：Focus Overlay（低侵入焦点路由层）
 
-> 执行顺序说明（2026-04-07 更新）：为提升可观测性与前端体感验证质量，阶段8改为在阶段9之后执行。  
-> 即：先完成任务账本与高级UI（原阶段9），再实现Handoff与焦点代理（原阶段8）。
+> 执行顺序说明（2026-05-05 更新）：原“阶段8：Handoff 与焦点代理模型”拆分为两个阶段执行。  
+> 即：先完成 `8A Focus Overlay`，在不破坏现有主代理 -> 子代理 call 稳定链路的前提下，引入最小焦点路由能力；  
+> 再在 `8B Full Handoff` 中补全完整控制权转移语义。
 
 ### 15.1 阶段目标
 
-在 call 稳定后，支持真正的控制权转移。
+在现有 call 模型已经稳定的基础上，先增加一个“低侵入焦点层”：
+
+- 系统能知道当前“谁是焦点代理”
+- 用户文本输入可按 `focused_agent_id` 重定向
+- 子代理正常完成后可自动归还主控
+- 恢复后焦点信息不丢失
+
+本阶段不是完整 handoff。它的目标是把“输入该发给谁”从当前固定 `session_id` 路由，升级成最小可恢复的后端决策层，但不一次性改写整套等待模型。
 
 ### 15.2 必备字段
+
+本阶段至少要求以下字段进入运行态，并进入 snapshot：
 
 - `focused_agent_id`
 - `running_agent_id`
 - `parent_session_id`
-- `handoff_stack`
+
+本阶段允许先不持久化完整 `handoff_stack` 语义；若要预留字段，也只能以单层兼容占位存在，不能提前引入多层复杂切换。
 
 ### 15.3 关键要求
 
-- 用户输入根据 `focused_agent_id` 路由
-- 专家完成后可自动归还主控
-- 异常时允许强制回主控
+- 只有 `user_message` 在本阶段允许按 `focused_agent_id` 重路由
+- `approval / continue / stop / sub_agent_complete` 仍先保持根 session 既有处理语义
+- 自动归还必须复用现有 `sub_agent_complete -> parent resume` 主路径
+- 前端只展示焦点，不负责裁决焦点
 
 ### 15.4 完成定义
 
-- 焦点代理切换后用户输入路由正确
-- 恢复后焦点代理不丢失
+- handoff 激活时，用户文本输入可稳定路由到焦点代理
+- 子代理正常完成后，焦点可自动归还父代理
+- 页面刷新与应用重启后，`focused_agent_id` 不丢失
+- 不破坏现有 approval、continue、sub-agent completion 恢复链路
 
 ### 15.5 防偏离补充（执行约束）
 
 #### 15.5.1 主链接入判据（必须）
 
 1. 输入路由由后端运行时按 `focused_agent_id` 决策，前端仅展示，不参与裁决。
-2. 自动归还与强制回主控都经过同一状态机出口，避免双路径行为分叉。
-3. 恢复后 `focused_agent_id`、`running_agent_id`、`handoff_stack` 三者一致。
+2. 焦点切换不得改变现有 `WorkflowState / WaitReason` 主语义，只能在其上叠加“输入目标”的决策。
+3. 自动归还必须走现有子代理完成出口，不得平行新增第二条独立恢复链。
+4. 恢复后 `focused_agent_id` 与 `running_agent_id` 至少保持一致性，不允许 snapshot 与内存态分叉。
 
 #### 15.5.2 禁止伪完成
 
-- 只做 UI 焦点显示切换，不算 handoff 完成。
-- 仅正常归还可用，异常强制回主控不可用，不算完成。
+- 只做 UI 焦点显示切换，不算完成。
+- 直接把所有 signal 都改成按焦点路由，不算安全实现。
 - 仅内存态可用、重启丢失焦点，不算完成。
+- 自动归还可用但打坏 approval / continue 恢复，不算完成。
 
 #### 15.5.3 最小验收证据模板
 
 至少提供：
 
-1. handoff enter/route/return/force_return 各一条日志样本。
-2. 一组“handoff 活跃时输入路由到焦点代理”的断言输出。
-3. 一组重启恢复后焦点与路由一致的证据。
+1. `focus_enter / focus_route / focus_return` 各一条日志样本。
+2. 一组“焦点子代理活跃时，user_message 路由到焦点代理”的断言输出。
+3. 一组“approval / continue 仍走原有主路径”的回归测试证据。
+4. 一组重启恢复后焦点与用户输入路由一致的证据。
 
 ---
 
-## 15A. 第八阶段详细执行清单
+## 15A. 第八阶段 A 详细执行清单
 
-第八阶段是高风险阶段，必须在前面所有阶段稳定后再做。
+阶段 8A 是对现有稳定链路的“叠加式改造”，不是重写阶段。
 
 ### 15A.1 允许修改的文件
 
 - [src-tauri/src/workflow/react/engine.rs](src-tauri/src/workflow/react/engine.rs)
 - [src-tauri/src/workflow/react/manager.rs](src-tauri/src/workflow/react/manager.rs)
+- [src-tauri/src/workflow/react/types.rs](src-tauri/src/workflow/react/types.rs)
+- [src-tauri/src/commands/workflow.rs](src-tauri/src/commands/workflow.rs)
 - [src/composables/workflow/useWorkflowCore.ts](src/composables/workflow/useWorkflowCore.ts)
+- 存储 `focused_agent_id / running_agent_id` 的持久化读写文件（按实际实现补齐）
 
 ### 15A.2 推荐实现顺序
 
-1. 增加 `focused_agent_id`
-2. 增加 handoff 事件
-3. 实现输入路由
-4. 实现异常回主控
-5. 增加恢复测试
+1. 在 `ExecutionContext` 增加 `focused_agent_id`、`running_agent_id`
+2. 在 snapshot 读写路径接通这两个字段
+3. 在 engine 中建立“进入焦点 / 归还焦点”的最小状态更新点
+4. 在 `workflow_signal` 中只为 `user_message` 增加焦点重路由
+5. 保持其他 signal 先沿用现有 session 主路径
+6. 增加恢复测试和回归测试
 
-### 15A.3 本阶段禁止事项
+### 15A.3 具体实施要求
+
+1. `focused_agent_id`
+   - 表示当前应该接收用户文本输入的代理 session
+   - 无焦点子代理时，应回落到主 session
+2. `running_agent_id`
+   - 表示当前正在执行或等待恢复的控制方
+   - 第一版允许与 `focused_agent_id` 大多数场景保持一致
+3. 输入重路由规则
+   - 仅 `user_message` 走焦点代理
+   - `approval` 仍由等待审批的当前 session 处理
+   - `continue / stop` 仍按当前主 session 既有语义处理
+4. 自动归还规则
+   - 只接在当前 `SubAgentComplete` 的现有恢复点
+   - 子代理完成时清理焦点并回落到父 session
+5. 前端职责
+   - 只消费后端返回的焦点信息并展示
+   - 不在前端写“如果某子代理高亮就把消息发给它”之类的裁决逻辑
+
+### 15A.4 本阶段禁止事项
 
 - 不同时改 reviewer gate
-- 不同时改任务账本 UI
+- 不同时改任务账本 UI 语义
+- 不同时引入完整 `handoff_stack`
+- 不把 `approval / continue / stop` 一并改造成按焦点重路由
+- 不重写 `AwaitingSubAgent` 等既有等待态定义
 
-### 15A.4 自动化测试最低要求
+### 15A.5 自动化测试最低要求
+
+1. 焦点子代理活跃时，`user_message` 路由正确
+2. 子代理完成后，焦点自动归还父 session
+3. snapshot 恢复后，`focused_agent_id` 仍可驱动正确路由
+4. approval 恢复链路未回归
+5. continue / stop 链路未回归
+
+### 15A.6 手工验收步骤
+
+1. 创建主 workflow，并触发 call 模式子代理
+2. 子代理活跃时发送用户补充消息
+3. 验证消息进入焦点子代理，而非错误注入父 session
+4. 让子代理正常完成
+5. 再发送一条消息
+6. 验证焦点已自动回到父 session
+7. 在焦点子代理活跃时重启应用
+8. 恢复后再次发送消息，验证路由仍正确
+
+### 15A.7 完成定义
+
+- 焦点路由只增不破
+- `user_message` 焦点重路由稳定
+- 自动归还稳定
+- 恢复稳定
+- 既有 call、approval、continue、sub-agent completion 主链无行为回退
+
+### 15A.8 允许修改文件最小闭环（补充）
+
+为防止“只改前端显示”或“只改一半路由”，阶段 8A 建议最小闭环文件集合为：
+
+- [src-tauri/src/workflow/react/engine.rs](src-tauri/src/workflow/react/engine.rs)
+- [src-tauri/src/workflow/react/manager.rs](src-tauri/src/workflow/react/manager.rs)
+- [src-tauri/src/workflow/react/types.rs](src-tauri/src/workflow/react/types.rs)
+- [src-tauri/src/commands/workflow.rs](src-tauri/src/commands/workflow.rs)
+- [src/composables/workflow/useWorkflowCore.ts](src/composables/workflow/useWorkflowCore.ts)
+- 持久化 `focused_agent_id / running_agent_id` 的 snapshot / DB 读写文件
+
+---
+
+## 15B. 阶段 8B：Full Handoff（完整控制权转移）
+
+阶段 8B 只允许在阶段 8A 稳定后执行。若 8A 的路由回归、恢复回归、或 approval 回归未完全清理，不得进入 8B。
+
+### 15B.1 阶段目标
+
+在 8A 已经提供稳定焦点路由的前提下，再补齐真正的 handoff 状态机：
+
+- 支持完整 `handoff_stack`
+- 支持异常强制回主控
+- 支持焦点、运行者、调用栈三者一致恢复
+- 支持未来扩展到多跳 handoff
+
+### 15B.2 必备字段
+
+- `focused_agent_id`
+- `running_agent_id`
+- `parent_session_id`
+- `handoff_stack`
+
+若实现多层 handoff，`handoff_stack` 中每一层至少应包含：
+
+- 当前焦点代理
+- 上一层归还目标
+- handoff 原因或模式
+- 创建时间或序号
+
+### 15B.3 关键要求
+
+- 自动归还与强制回主控都经过同一状态机出口
+- `handoff_stack` 是事实来源，不允许只靠临时内存判断
+- 恢复后 `focused_agent_id`、`running_agent_id`、`handoff_stack` 三者必须一致
+- 异常回主控时，不能遗留悬空焦点
+
+### 15B.4 防偏离补充（执行约束）
+
+#### 15B.4.1 主链接入判据（必须）
+
+1. handoff enter / route / return / force_return 都必须有结构化日志和可恢复状态。
+2. 强制回主控只能通过统一状态机出口落地，不允许旁路直接改字段。
+3. 任意时刻只允许一个明确焦点；若 stack 与当前焦点不一致，必须优先修复而不是继续运行。
+
+#### 15B.4.2 禁止伪完成
+
+- 只有正常归还、没有异常强制回主控，不算完成。
+- 只在内存里维护 stack、snapshot 不落地，不算完成。
+- 只改某一个 signal 的路由，不形成统一 handoff 出口，不算完成。
+
+#### 15B.4.3 最小验收证据模板
+
+至少提供：
+
+1. `handoff_enter / handoff_route / handoff_return / handoff_force_return` 各一条日志样本。
+2. 一组“handoff 活跃时输入路由到焦点代理”的断言输出。
+3. 一组“异常强制回主控后，焦点与 stack 被正确清理”的测试证据。
+4. 一组重启恢复后 `focused_agent_id / running_agent_id / handoff_stack` 一致的证据。
+
+---
+
+## 15C. 第八阶段 B 详细执行清单
+
+### 15C.1 允许修改的文件
+
+- [src-tauri/src/workflow/react/engine.rs](src-tauri/src/workflow/react/engine.rs)
+- [src-tauri/src/workflow/react/manager.rs](src-tauri/src/workflow/react/manager.rs)
+- [src-tauri/src/workflow/react/types.rs](src-tauri/src/workflow/react/types.rs)
+- [src-tauri/src/commands/workflow.rs](src-tauri/src/commands/workflow.rs)
+- [src/composables/workflow/useWorkflowCore.ts](src/composables/workflow/useWorkflowCore.ts)
+- 持久化 `handoff_stack` 的 snapshot / DB 读写文件（按实际实现补齐）
+
+### 15C.2 推荐实现顺序
+
+1. 定义 `handoff_stack` 结构
+2. 接通 snapshot 持久化
+3. 在 engine 中统一 enter / return / force_return 状态出口
+4. 将 8A 的最小焦点路由升级为完整 handoff 运行态
+5. 增加异常路径恢复测试
+
+### 15C.3 本阶段禁止事项
+
+- 不同时改 reviewer gate
+- 不同时继续扩大任务账本 UI 语义
+- 不把“强制回主控”写成纯前端操作
+
+### 15C.4 自动化测试最低要求
 
 1. handoff 后用户输入路由正确
 2. 自动归还主控正确
 3. 强制回主控可用
+4. `handoff_stack` 恢复正确
+5. 焦点与 stack 不一致时可被检测并收敛
 
-### 15A.5 完成定义
+### 15C.5 手工验收步骤
 
-- 控制权转移稳定且可恢复
+1. 启动主 workflow，并进入 handoff
+2. 验证用户输入被路由到焦点代理
+3. 触发正常完成，验证自动归还
+4. 再次进入 handoff，并模拟异常或强制回主控
+5. 验证父代理恢复主控且没有残留悬空焦点
+6. 在 handoff 活跃时重启应用
+7. 验证恢复后 stack、焦点、输入路由一致
 
-### 15A.6 允许修改文件最小闭环（补充）
+### 15C.6 完成定义
 
-为防止“只改前端路由判断”，阶段8建议最小闭环文件集合为：
-
-- [src-tauri/src/workflow/react/engine.rs](src-tauri/src/workflow/react/engine.rs)
-- [src-tauri/src/workflow/react/manager.rs](src-tauri/src/workflow/react/manager.rs)
-- [src/composables/workflow/useWorkflowCore.ts](src/composables/workflow/useWorkflowCore.ts)
-- 存储 `focused_agent_id/handoff_stack` 的持久化读写文件（按实际实现补齐）
-- 命令层输入路由入口文件（按实际实现补齐）
+- 完整控制权转移稳定且可恢复
+- 自动归还与强制回主控均可用
+- `handoff_stack` 成为事实来源
+- 8A 的稳定性未被破坏
 
 ---
 
