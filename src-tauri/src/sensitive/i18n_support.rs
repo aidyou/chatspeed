@@ -7,9 +7,11 @@ pub fn get_replacement_text(filter_type: &str, language: &str) -> String {
         "Email" => t!("sensitive.filter.email", locale = language).to_string(),
         "IPAddress" => t!("sensitive.filter.ip_address", locale = language).to_string(),
         "CreditCard" => t!("sensitive.filter.credit_card", locale = language).to_string(),
-        "InternationalCreditCard" => {
-            t!("sensitive.filter.international_credit_card", locale = language).to_string()
-        }
+        "InternationalCreditCard" => t!(
+            "sensitive.filter.international_credit_card",
+            locale = language
+        )
+        .to_string(),
         "UnionPay" => t!("sensitive.filter.unionpay", locale = language).to_string(),
         "ChineseIDCard" => t!("sensitive.filter.chinese_id_card", locale = language).to_string(),
         "ChineseMobile" => t!("sensitive.filter.chinese_mobile", locale = language).to_string(),

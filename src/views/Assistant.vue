@@ -34,7 +34,7 @@
 
         <div class="icons upperLayer" v-if="canChat">
           <!-- model selector -->
-          <ModelSelector
+          <ChatModelSelector
             v-model="currentModelProvider"
             position="top"
             :useProviderAvatar="true"
@@ -312,7 +312,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import SkillItem from '@/components/chat/SkillItem.vue'
 import ChatToolCalls from '@/components/chat/ToolCall.vue'
-import ModelSelector from '@/components/chat/ModelSelector.vue'
+import ChatModelSelector from '@/components/chat/ChatModelSelector.vue'
 
 const appWindow = getCurrentWebviewWindow()
 

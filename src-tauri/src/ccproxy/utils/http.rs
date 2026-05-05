@@ -1,14 +1,14 @@
 use http::HeaderMap;
 
 /// Filters out sensitive HTTP headers that should be managed by the local server framework (Axum/Hyper).
-/// 
-/// When proxying requests, certain headers from the backend AI provider can conflict with 
+///
+/// When proxying requests, certain headers from the backend AI provider can conflict with
 /// the local server's behavior or cause client-side errors:
-/// - `Content-Length` & `Transfer-Encoding`: Managed by Axum based on the response body we provide. 
+/// - `Content-Length` & `Transfer-Encoding`: Managed by Axum based on the response body we provide.
 ///   Duplicating or mismatching these will cause protocol errors.
-/// - `Connection` & `Keep-Alive`: Managed by the server's HTTP implementation. Forwarding 'close' 
+/// - `Connection` & `Keep-Alive`: Managed by the server's HTTP implementation. Forwarding 'close'
 ///   from a backend will prematurely terminate the client's connection.
-/// - `Content-Encoding`: Since we often decode the backend response (e.g. for logging or adaptation), 
+/// - `Content-Encoding`: Since we often decode the backend response (e.g. for logging or adaptation),
 ///   forwarding the original encoding header while sending uncompressed data will break the client.
 pub fn filter_proxy_headers(headers: &HeaderMap) -> HeaderMap {
     let mut filtered = HeaderMap::new();

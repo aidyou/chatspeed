@@ -61,7 +61,7 @@ impl WorkflowEngine {
     pub async fn get_function_calling_spec(
         &self,
     ) -> Result<Vec<MCPToolDeclaration>, WorkflowError> {
-        Ok(self.tool_manager.get_tool_calling_spec(None).await?)
+        Ok(self.tool_manager.get_tool_calling_spec(None, None).await?)
     }
 }
 

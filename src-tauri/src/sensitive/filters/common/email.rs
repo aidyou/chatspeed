@@ -12,10 +12,12 @@ pub struct EmailFilter {
 impl EmailFilter {
     /// Creates a new `EmailFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let regex = Regex::new(r#"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed {
-                pattern: "email_regex".to_string(),
-                message: e.to_string(),
+        let regex =
+            Regex::new(r#"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"#).map_err(|e| {
+                SensitiveError::RegexCompilationFailed {
+                    pattern: "email_regex".to_string(),
+                    message: e.to_string(),
+                }
             })?;
         Ok(Self { regex })
     }

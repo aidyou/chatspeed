@@ -1,0 +1,10 @@
+{
+  "test": "write_file_tool_test",
+  "description": "Configuration file for testing the write_file tool functionality",
+  "version": "1.0.0",
+  "timestamp": "2026-04-16T10:00:00Z",
+  "testing": {
+    "purpose": "Demonstrate write_file tool capabilities",
+    "status": "success"
+  }
+}

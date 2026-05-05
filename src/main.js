@@ -10,6 +10,10 @@ import cs from '@/components/icon/Icon.vue'
 import logo from '@/components/icon/Logo.vue'
 import avatar from '@/components/common/Avatar.vue'
 
+// Element Plus MessageBox styles
+import 'element-plus/es/components/message-box/style/css'
+import 'element-plus/es/components/overlay/style/css'
+
 import { registerDirective } from '@/libs/directive'
 
 

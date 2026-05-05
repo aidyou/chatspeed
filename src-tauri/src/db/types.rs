@@ -72,14 +72,30 @@ pub struct CcproxyStat {
 // config
 // =================================================
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ThinkingConfig {
+    pub r#type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelConfig {
     pub id: String,
     pub name: String,
     pub group: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
     #[serde(rename = "functionCall", skip_serializing_if = "Option::is_none")]
     pub function_call: Option<bool>,
+    #[serde(rename = "contextSize", skip_serializing_if = "Option::is_none")]
+    pub context_size: Option<i32>,
+    #[serde(rename = "maxTokens", skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
     #[serde(rename = "customParams", skip_serializing_if = "Option::is_none")]
     pub custom_params: Option<Value>,
 }
@@ -91,7 +107,11 @@ impl Default for ModelConfig {
             name: String::new(),
             group: String::new(),
             reasoning: Some(false),
+            thinking: None,
             function_call: None,
+            context_size: Some(128000),
+            max_tokens: Some(0),
+            temperature: Some(-0.1),
             custom_params: None,
         }
     }

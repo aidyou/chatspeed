@@ -49,11 +49,9 @@ use crate::ai::interaction::chat_completion::{
     list_models_async, start_new_chat_interaction, ChatState,
 };
 use crate::ai::interaction::constants::{SYSTEM_PROMPT, TOOL_USAGE_GUIDANCE};
-use crate::ai::traits::chat::{MCPToolDeclaration, ModelDetails};
+use crate::ai::traits::chat::{ChatMetadata, MCPToolDeclaration, ModelDetails};
 use crate::ccproxy::ChatProtocol;
-use crate::constants::{
-    CFG_INTERFACE_LANGUAGE, DEFAULT_WEB_FETCH_TOOL, DEFAULT_WEB_SEARCH_TOOL,
-};
+use crate::constants::{CFG_INTERFACE_LANGUAGE, DEFAULT_WEB_FETCH_TOOL, DEFAULT_WEB_SEARCH_TOOL};
 use crate::db::MainStore;
 use crate::error::{AppError, Result};
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
@@ -110,12 +108,27 @@ Home Directory: {}
 }
 
 /// Prepares messages with system prompts and environment information
-fn prepare_messages_with_system_context(mut messages: Vec<Value>, has_tools: bool) -> Vec<Value> {
+fn prepare_messages_with_system_context(
+    mut messages: Vec<Value>,
+    has_tools: bool,
+    mcp_summaries: Vec<crate::ai::traits::chat::MCPToolDeclaration>,
+) -> Vec<Value> {
     let mut system_content = SYSTEM_PROMPT.to_string();
 
     // Add tool usage guidance if tools are available
     if has_tools {
         system_content.push_str(TOOL_USAGE_GUIDANCE);
+    }
+
+    // Add MCP tool summaries (descriptions only)
+    if !mcp_summaries.is_empty() {
+        system_content.push_str("\n\n## AVAILABLE MCP TOOLS\n");
+        system_content.push_str("The following MCP tools are installed. ");
+        system_content
+            .push_str("Use the `mcp_tool_load` tool to get detailed parameter information.\n\n");
+        for tool in mcp_summaries {
+            system_content.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
+        }
     }
 
     // Find existing system message from user
@@ -342,24 +355,19 @@ pub async fn chat_completion(
         .map_err(|e| AiError::FailedToGetOrCreateWindowChannel(e.to_string()))?;
 
     // Prepare final_metadata: ensure windowLabel is present.
-    // Frontend JS sends metadata with `windowLabel`.
-    let final_metadata = if let Some(mut md_val) = metadata {
-        if let Some(md_obj) = md_val.as_object_mut() {
-            // Ensure "windowLabel" (from JS) or "label" (fallback) or window.label() is present
-            if !md_obj.contains_key("windowLabel") && !md_obj.contains_key("label") {
-                md_obj.insert("windowLabel".to_string(), json!(window.label()));
-            }
-        }
-        Some(md_val)
-    } else {
-        Some(json!({"windowLabel": window.label()}))
-    };
+    let mut final_metadata: ChatMetadata = ChatMetadata::from_value(metadata);
+
+    // Ensure window label exists for UI updates
+    if final_metadata.window_label.is_none() && final_metadata.label.is_none() {
+        final_metadata.window_label = Some(window.label().to_string());
+    }
 
     // Sensitive Data Filtering
     let (sensitive_config, interface_lang): (SensitiveConfig, String) = {
-        let store = chat_state.main_store.read().map_err(|e| {
-            AppError::Db(crate::db::StoreError::IoError(e.to_string()))
-        })?;
+        let store = chat_state
+            .main_store
+            .read()
+            .map_err(|e| AppError::Db(crate::db::StoreError::IoError(e.to_string())))?;
         (
             store.get_config("sensitive_config", SensitiveConfig::default()),
             store.get_config(CFG_INTERFACE_LANGUAGE, "en".to_string()),
@@ -379,7 +387,12 @@ pub async fn chat_completion(
                 if let Some(content_val) = message.get_mut("content") {
                     if let Some(content_str) = content_val.as_str() {
                         if !content_str.is_empty() {
-                            let sanitized = filter_single_text(content_str, &filter_manager, &sensitive_config, &interface_lang);
+                            let sanitized = filter_single_text(
+                                content_str,
+                                &filter_manager,
+                                &sensitive_config,
+                                &interface_lang,
+                            );
                             *content_val = json!(sanitized);
                         }
                     } else if let Some(content_array) = content_val.as_array_mut() {
@@ -389,7 +402,12 @@ pub async fn chat_completion(
                                     if let Some(text_val) = block_obj.get_mut("text") {
                                         if let Some(text_str) = text_val.as_str() {
                                             if !text_str.is_empty() {
-                                                let sanitized = filter_single_text(text_str, &filter_manager, &sensitive_config, &interface_lang);
+                                                let sanitized = filter_single_text(
+                                                    text_str,
+                                                    &filter_manager,
+                                                    &sensitive_config,
+                                                    &interface_lang,
+                                                );
                                                 *text_val = json!(sanitized);
                                             }
                                         }
@@ -406,18 +424,39 @@ pub async fn chat_completion(
         log::debug!("Sensitive data filtering disabled.");
     }
 
-    let tools_enabled_in_metadata = final_metadata
-        .as_ref()
-        .and_then(|md_val| md_val.get("toolsEnabled").and_then(Value::as_bool))
-        .unwrap_or(true);
+    let tools_enabled_in_metadata = final_metadata.tools_enabled.unwrap_or(true);
+
+    // Register MCP loader tool if MCP is enabled
+    // Only register if it doesn't already exist (to avoid duplicate registration error)
+    if mcp_enabled.unwrap_or(false) {
+        if !chat_state.tool_manager.has_tool("mcp_tool_load").await {
+            chat_state
+                .tool_manager
+                .register_tool(Arc::new(crate::tools::McpToolLoad {
+                    tool_manager: chat_state.tool_manager.clone(),
+                }))
+                .await?;
+        }
+    }
 
     let tools: Option<Vec<MCPToolDeclaration>> = if tools_enabled_in_metadata {
-        let mut available_tools = chat_state.tool_manager.get_tool_calling_spec(None).await?;
+        let mut available_tools = chat_state
+            .tool_manager
+            .get_tool_calling_spec(Some(crate::tools::ToolScope::Chat), None)
+            .await?;
         if !network_enabled.unwrap_or(false) {
             available_tools.retain(|tool| {
                 tool.name != DEFAULT_WEB_SEARCH_TOOL && tool.name != DEFAULT_WEB_FETCH_TOOL
             });
         }
+        // When MCP is enabled, filter out MCP tools (they will be loaded via mcp_tool_load)
+        // But keep the mcp_tool_load tool itself
+        if mcp_enabled.unwrap_or(false) {
+            available_tools.retain(|tool| {
+                !tool.name.contains(MCP_TOOL_NAME_SPLIT) || tool.name == "mcp_tool_load"
+            });
+        }
+        // When MCP is disabled, remove all MCP tools
         if !mcp_enabled.unwrap_or(false) {
             available_tools.retain(|tool| !tool.name.contains(MCP_TOOL_NAME_SPLIT));
         }
@@ -426,9 +465,28 @@ pub async fn chat_completion(
         None
     };
 
+    // Get MCP tool summaries for system prompt (descriptions only)
+    let mcp_summaries = if mcp_enabled.unwrap_or(false) {
+        chat_state
+            .tool_manager
+            .get_tool_calling_spec(Some(crate::tools::ToolScope::Chat), None)
+            .await?
+            .into_iter()
+            .filter(|t| t.name.contains(MCP_TOOL_NAME_SPLIT))
+            .map(|mut t| {
+                // Clear input_schema, only keep name and description
+                t.input_schema = serde_json::json!({});
+                t
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
     // Prepare messages with system context
     let has_tools = tools.as_ref().map_or(false, |t| !t.is_empty());
-    let prepared_messages = prepare_messages_with_system_context(filtered_messages, has_tools);
+    let prepared_messages =
+        prepare_messages_with_system_context(filtered_messages, has_tools, mcp_summaries);
 
     #[cfg(debug_assertions)]
     log::debug!("Processed messages count: {}", prepared_messages.len());
@@ -440,7 +498,7 @@ pub async fn chat_completion(
         chat_id,
         prepared_messages,
         tools,
-        final_metadata,
+        Some(final_metadata),
         None,
     )
     .await

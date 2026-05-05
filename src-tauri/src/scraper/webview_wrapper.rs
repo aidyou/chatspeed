@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{
     AppHandle, EventId, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     WindowEvent, Wry,
@@ -203,35 +203,47 @@ impl WebviewScraper {
         }
 
         let result = async {
-            // Use shorter timeout for page load to fail fast on problematic pages
-            let page_load_timeout = std::cmp::min(page_timeout, Duration::from_secs(15));
-            let page_load_result = tokio::time::timeout(page_load_timeout, rx_page_load).await;
-            if page_load_result.is_err() {
-                // Mark as completed to prevent further processing
-                is_completed.store(true, Ordering::SeqCst);
-                log::warn!(
-                    "Page load timed out for URL: {} after {:?}",
-                    url,
-                    page_load_timeout
-                );
-                return Err(anyhow!("Page load timed out for URL: {}", url));
-            }
+            // Use race between load and DOMContentLoaded events
+            // Plus a fallback probe that checks if the URL has already reached its destination
+            let fast_ready_timeout = std::cmp::min(page_timeout, Duration::from_secs(12));
 
-            let dom_content_result =
-                tokio::time::timeout(page_timeout, rx_dom_content_loaded).await;
-            if dom_content_result.is_err() {
-                // Mark as completed to prevent further processing
-                is_completed.store(true, Ordering::SeqCst);
+            let combined_ready = async {
+                tokio::select! {
+                    _ = rx_page_load => { log::debug!("Page load event received via JS"); },
+                    _ = rx_dom_content_loaded => { log::debug!("DOMContentLoaded event received via JS"); },
+                    _ = async {
+                        // Fallback probe: poll URL status every 500ms
+                        let start = Instant::now();
+                        loop {
+                            if let Ok(current_url) = webview.url() {
+                                let current_url_str = current_url.as_str();
+                                // If we've reached the target URL (ignoring fragments/queries for basic match)
+                                if current_url_str.contains(url) || (url.contains("://") && current_url_str.len() > 10 && !current_url_str.contains("index.html")) {
+                                    // Give it at least 2 seconds to settle if it's a fallback
+                                    if start.elapsed() >= Duration::from_secs(3) {
+                                        log::debug!("Fallback probe: URL reached and settled. Proceeding.");
+                                        break;
+                                    }
+                                }
+                            }
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            if start.elapsed() >= fast_ready_timeout { break; }
+                        }
+                    } => { log::debug!("Fallback probe reached timeout or success"); }
+                }
+            };
+
+            if tokio::time::timeout(fast_ready_timeout, combined_ready).await.is_err() {
                 log::warn!(
-                    "DOMContentLoaded timed out for URL: {} after {:?}",
+                    "Timed out waiting for page ready events for URL: {} after {:?}. Proceeding anyway as fallback.",
                     url,
-                    page_timeout
+                    fast_ready_timeout
                 );
-                return Err(anyhow!("DOMContentLoaded timed out for URL: {}", url));
+                // We no longer return Err here. Instead, we fall through to injection.
             }
 
             if url.contains("bing.com") {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
 
             // Add retry mechanism for script injection
@@ -313,7 +325,7 @@ impl WebviewScraper {
         let utility_js = include_str!("../../assets/scrape/utility.min.js");
         let turndown_js = include_str!("../../assets/scrape/turndown.min.js");
         let readability_js = include_str!("../../assets/scrape/readability.min.js");
-        let scrape_logic_js = include_str!("../../assets/scrape/scrape_logic.min.js");
+        let scrape_logic_js = include_str!("../../assets/scrape/scrape_logic.js");
 
         let config_json_str =
             serde_json::to_string(&config).context("Failed to serialize scraper config to JSON")?;

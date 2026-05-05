@@ -57,13 +57,20 @@ pub fn proxy_group_delete(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Resu
 #[command]
 pub fn set_active_proxy_group(state: State<Arc<RwLock<MainStore>>>, name: String) -> Result<()> {
     let mut store = state.write()?;
-    store.set_config(crate::constants::CFG_ACTIVE_PROXY_GROUP, &serde_json::json!(name)).map_err(AppError::Db)
+    store
+        .set_config(
+            crate::constants::CFG_ACTIVE_PROXY_GROUP,
+            &serde_json::json!(name),
+        )
+        .map_err(AppError::Db)
 }
 
 #[command]
 pub fn get_active_proxy_group(state: State<Arc<RwLock<MainStore>>>) -> Result<String> {
     let store = state.read()?;
-    Ok(store.config.get_setting(crate::constants::CFG_ACTIVE_PROXY_GROUP)
+    Ok(store
+        .config
+        .get_setting(crate::constants::CFG_ACTIVE_PROXY_GROUP)
         .and_then(|v| v.as_str())
         .unwrap_or("default")
         .to_string())

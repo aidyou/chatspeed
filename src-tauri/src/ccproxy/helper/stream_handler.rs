@@ -158,8 +158,9 @@ pub async fn handle_streamed_response(
     *response.status_mut() = sse_status_code;
 
     let final_headers = response.headers_mut();
-    let filtered_headers = crate::ccproxy::utils::http::filter_proxy_headers(&response_headers_from_target);
-    
+    let filtered_headers =
+        crate::ccproxy::utils::http::filter_proxy_headers(&response_headers_from_target);
+
     for (name, value) in filtered_headers.iter() {
         let name_str = name.as_str().to_lowercase();
         if name_str == "content-type"
@@ -219,7 +220,7 @@ pub fn adapt_stream_chunk_to_log(
                 );
             }
         }
-        UnifiedStreamChunk::ToolUseDelta { id, delta } => {
+        UnifiedStreamChunk::ToolUseDelta { id, delta, .. } => {
             if let Some(tool_calls) = &mut recorder.tool_calls {
                 if let Some(tool) = tool_calls.get_mut(id) {
                     tool.args.push_str(delta);

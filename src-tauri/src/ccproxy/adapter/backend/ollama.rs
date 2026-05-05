@@ -401,7 +401,10 @@ impl BackendAdapter for OllamaBackendAdapter {
         let mut request_json = serde_json::to_value(&ollama_request)?;
 
         // Merge custom params from model config
-        crate::ai::util::merge_custom_params(&mut request_json, &unified_request.custom_params);
+        crate::ai::util::merge_custom_params_value(
+            &mut request_json,
+            &unified_request.custom_params,
+        );
 
         if log_proxy_to_file {
             // Log the request to a file
@@ -661,9 +664,17 @@ impl BackendAdapter for OllamaBackendAdapter {
         headers: &mut reqwest::header::HeaderMap,
     ) -> Result<RequestBuilder, anyhow::Error> {
         let input = match &unified_request.input {
-            UnifiedEmbeddingInput::String(s) => crate::ccproxy::types::ollama::OllamaEmbedInput::String(s.clone()),
-            UnifiedEmbeddingInput::StringArray(a) => crate::ccproxy::types::ollama::OllamaEmbedInput::Array(a.clone()),
-            _ => return Err(anyhow::anyhow!("Ollama does not support token inputs for embedding")),
+            UnifiedEmbeddingInput::String(s) => {
+                crate::ccproxy::types::ollama::OllamaEmbedInput::String(s.clone())
+            }
+            UnifiedEmbeddingInput::StringArray(a) => {
+                crate::ccproxy::types::ollama::OllamaEmbedInput::Array(a.clone())
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Ollama does not support token inputs for embedding"
+                ))
+            }
         };
 
         let ollama_request = crate::ccproxy::types::ollama::OllamaEmbedRequest {
@@ -825,14 +836,17 @@ impl OllamaBackendAdapter {
                 tool_type: "tool_use".to_string(),
                 id: tool_id.clone(),
                 name: name.clone(),
+                index: message_index,
             });
         }
 
         let args = &tc.function.arguments;
         if !args.is_null() {
             let mut tool_id = String::new();
+            let mut message_index = 0;
             if let Ok(mut status) = sse_status.write() {
                 tool_id = status.tool_id.clone();
+                message_index = status.message_index;
                 status.estimated_output_tokens += estimate_tokens(&args.to_string());
             };
             // Convert arguments to string
@@ -840,6 +854,7 @@ impl OllamaBackendAdapter {
             unified_chunks.push(UnifiedStreamChunk::ToolUseDelta {
                 id: tool_id,
                 delta: args_str,
+                index: message_index,
             });
         }
     }

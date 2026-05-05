@@ -1,5 +1,6 @@
-pub mod chat;
+pub mod agent;
 pub mod ccproxy;
+pub mod chat;
 pub mod clipboard;
 pub mod constants;
 pub mod dev_tool;

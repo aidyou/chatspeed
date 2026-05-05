@@ -23,7 +23,7 @@
     "errorOnCopyMessage": "메시지 복사 실패: {error}",
     "errorOnDeleteConversation": "대화 삭제 실패: {error}",
     "errorOnDeleteMessage": "메시지 삭제 실패: {error}",
-    "errorOnDeleteNote": "지식 노트 삭제 실패：{error}",
+    "errorOnDeleteNote": "지식 노트 삭제 실패: {error}",
     "errorOnGenerateTitle": "제목 생성 실패: {error}",
     "errorOnGetCurrentConversationId": "현재 대화 ID 가져오기 실패: {error}",
     "errorOnGoToChat": "채팅 창으로 이동 실패: {error}",
@@ -33,10 +33,10 @@
     "errorOnSendMessage": "채팅 메시지 전송 실패: {error}",
     "errorOnStopChat": "채팅 중단 실패: {error}",
     "errorOnUpdateConversation": "대화 업데이트 실패: {error}",
-    "errorOnGetNote": "지식 노트 가져오기 실패：{error}",
-    "errorOnGetNotes": "지식 노트 목록 가져오기 실패：{error}",
-    "errorOnOpenSettingWindow": "설정 창 열기 실패：{error}",
-    "errorOnSearchNotes": "지식 노트 검색 실패：{error}",
+    "errorOnGetNote": "지식 노트 가져오기 실패: {error}",
+    "errorOnGetNotes": "지식 노트 목록 가져오기 실패: {error}",
+    "errorOnOpenSettingWindow": "설정 창 열기 실패: {error}",
+    "errorOnSearchNotes": "지식 노트 검색 실패: {error}",
     "generatingDiagram": "플로우차트 생성 중...",
     "generatingMindmap": "마인드맵 생성 중...",
     "goToChat": "계속 질문하기",
@@ -44,14 +44,14 @@
     "inputMessagePlaceholder": "{at} 입력으로 스킬 호출",
     "messageCopied": "메시지가 복사되었습니다.",
     "messageNotFound": "메시지가 존재하지 않거나 삭제되었습니다.",
-    "newConversaction": "새 대화 (Cmd/Ctrl + N)",
+    "newConversation": "새 대화 (Cmd/Ctrl + N)",
     "mindmapError": "마인드맵 렌더링 실패",
     "networkDisabled": "인터넷 연결 끄기",
     "networkEnabled": "인터넷 연결 켜기: 연결된 콘텐츠를 자동으로 가져오거나 관련 정보를 검색합니다.",
     "noteDeleteConfirmContent": "이 지식 노트를 삭제하시겠습니까?",
     "noteDeleteConfirmTitle": "삭제 확인",
     "noteSaved": "지식 노트가 저장되었습니다.",
-    "noteSaveFailed": "지식 노트 저장 실패：{error}",
+    "noteSaveFailed": "지식 노트 저장 실패: {error}",
     "noteTags": "태그",
     "noteTagsPlaceholder": "여러 태그는 쉼표로 구분해주세요.",
     "noteTagsRequired": "태그를 입력해주세요.",
@@ -104,9 +104,12 @@
     },
     "transaction": {
       "autoDetection": "자동 감지"
-    }
+    },
+    "errorOnLoadConversations": "대화 를 불러오는 중 오류 발생：{error}",
+    "moduleUnavailable": "모듈을 사용할 수 없습니다"
   },
   "common": {
+    "all": "전체",
     "autoHide": "창을 '포커스를 잃으면 자동 숨김'으로 설정",
     "cancel": "취소",
     "clear": "초기화",
@@ -131,7 +134,15 @@
     "search": "검색",
     "unpin": "고정 해제",
     "updateButtonText": "업데이트",
-    "uploadFailed": "파일 업로드 실패"
+    "uploadFailed": "파일 업로드 실패",
+    "delete": "삭제",
+    "more": "더보기",
+    "refresh": "새로고침",
+    "to": "에서",
+    "approve": "승인",
+    "approveAll": "모두 승인",
+    "reject": "거부",
+    "collapse": "접기"
   },
   "menu": {
     "about": "정보",
@@ -145,22 +156,28 @@
     "scraperTest": "스크래퍼 테스트",
     "setting": "설정",
     "skill": "스킬",
-    "proxy_switcher": "프록시 전환"
+    "proxy_switcher": "프록시 전환",
+    "workflow": "워크플로우"
   },
   "note": {
     "searchNotePlaceholder": "지식 노트 검색"
   },
   "proxySwitcher": {
-    "title": "프록시 전환",
-    "toolCompatMode": "도구 모드",
-    "activate": "활성화"
+    "title": "프록시 전환"
   },
   "settings": {
     "agent": {
       "actModel": "행동 모델",
-      "agentType": "에이전트 유형",
       "add": "에이전트 추가",
+      "addPath": "경로 추가",
       "addSuccess": "에이전트가 성공적으로 추가되었습니다!",
+      "approvalLevel": "승인 레벨",
+      "approvalLevelDefault": "에이전트 설정 따름",
+      "approvalLevelFull": "전체 개방 (고위험)",
+      "approvalLevelSmart": "스마트 승인 (쓰기 작업만 인터셉트)",
+      "authorizedPaths": "인증된 디렉토리",
+      "authorizedPathsAdd": "디렉토리 추가",
+      "authorizedPathsTip": "에이전트는 이 디렉토리 (및 하위 디렉토리) 의 파일만 읽고 쓸 수 있습니다.",
       "autoApprove": "자동 승인 도구",
       "autonomousMode": "자율 모드",
       "availableTools": "사용 가능한 도구",
@@ -172,31 +189,45 @@
       "deleteSuccess": "에이전트가 성공적으로 삭제되었습니다!",
       "deleteTitle": "에이전트 삭제",
       "description": "설명",
+      "disabled": "비활성화",
       "edit": "에이전트 편집",
       "fetchFailed": "에이전트 가져오기 실패",
-      "maxContexts": "최대 컨텍스트 길이",
+      "finalAudit": "최종 감사",
+      "modeProvider": "공급자",
+      "modeProxy": "프록시",
       "models": "모델",
       "name": "에이전트 이름",
       "nameRequired": "에이전트 이름을 입력하십시오",
       "noAgents": "에이전트를 찾을 수 없음",
-      "notFound": "에이전트를 찾을 수 없음",
       "planModel": "계획 모델",
       "planningMode": "계획 모드",
       "planningPrompt": "계획 프롬프트",
+      "planningPromptPlaceholder": "시스템 기본 계획 로직을 사용하려면 비워두세요. 사용자 정의하는 경우, 모델이 명확한 작업 목록을 출력하도록 가이드하세요.",
       "reorderFailed": "에이전트 재정렬 실패: {error}",
       "saveFailed": "에이전트 저장 실패: {error}",
-      "selectActModel": "행동 모델 선택",
+      "security": "보안 정책",
       "selectAutoApproveTools": "자동 승인 도구 선택",
       "selectAvailableTools": "사용 가능한 도구 선택",
-      "selectPlanModel": "계획 모델 선택",
-      "selectProvider": "제공자 선택",
-      "selectVisionModel": "비전 모델 선택",
+      "selectDirectory": "디렉토리 선택",
+      "shellDecisionAllow": "허용",
+      "shellDecisionDeny": "거부",
+      "shellDecisionReview": "검토",
+      "shellPolicy": "쉘 감사 정책",
+      "shellPolicyAdd": "규칙 추가",
+      "shellPolicyClear": "규칙 지우기",
+      "shellPolicyClearConfirm": "모든 쉘 감사 규칙을 지우시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+      "shellPolicyClearTitle": "쉘 규칙 지우기",
+      "shellPolicyImportDefault": "기본값 가져오기",
+      "shellPolicyImportDefaultConfirm": "기본 읽기 전용 쉘 규칙을 가져오시겠습니까? 이 작업은 50 개 이상의 일반 읽기 전용 명령 규칙을 추가합니다.",
+      "shellPolicyImportDefaultTitle": "기본 규칙 가져오기",
+      "shellPolicyPattern": "일치 패턴 (정규식/Glob)",
       "systemPrompt": "시스템 프롬프트",
       "systemPromptRequired": "시스템 프롬프트를 입력하십시오",
+      "temperature": "온도",
       "title": "에이전트 관리",
       "toolsLabel": "도구",
       "updateSuccess": "에이전트가 성공적으로 업데이트되었습니다!",
-      "visionModel": "비전 모델"
+      "workingDirectory": "작업 디렉토리"
     },
     "general": {
       "advancedSettings": "고급 설정",
@@ -308,7 +339,8 @@
         "generalTooltip": "텍스트 요약, 정보 추출 등 워크플로우의 간단한 작업에 사용됩니다.",
         "reasoning": "추론 모델",
         "reasoningTooltip": "계획, 분석 결과 요약 등 워크플로우의 복잡한 작업에 주로 사용됩니다."
-      }
+      },
+      "workflowWindowVisibleShortcut": "워크플로우 창"
     },
     "mcp": {
       "added": "추가됨",
@@ -449,6 +481,12 @@
       "proxyServerRequired": "프록시 서버 주소를 입력하십시오.",
       "restrictedHeader": "제한된 헤더가 포함되어 있습니다: {headers}",
       "reasoning": "추론 모델",
+      "reasoningHigh": "높음",
+      "reasoningLow": "낮음",
+      "reasoningMax": "최대",
+      "reasoningMedium": "중간",
+      "thinkingBudgetTokens": "사고 예산",
+      "thinkingLevel": "사고 강도",
       "searchByIdOrName": "ID 또는 이름으로 검색",
       "stop": "중지 토큰",
       "stopPlaceholder": "모델이 텍스트 생성을 중지할 토큰을 설정합니다. 여러 개는 줄 바꿈으로 구분합니다.",
@@ -464,7 +502,8 @@
         "bySetting": "네트워크 설정 따름",
         "http": "HTTP 프록시",
         "none": "프록시 사용 안 함"
-      }
+      },
+      "contextSize": "컨텍스트 크기"
     },
     "proxy": {
       "addNow": "지금 추가",
@@ -552,7 +591,9 @@
           "supportGroupAndCompat": "그룹 및 호환 모드 지원",
           "title": "API 목록",
           "type": "인터페이스 유형"
-        }
+        },
+        "retryOn429": "429 재시도 횟수",
+        "retryOn429Tip": "서버가 429 상태 코드를 반환할 때 지수 백오프 재시도 횟수. 재시도를 비활성화하려면 0 으로 설정하세요."
       },
       "stats": {
         "allTime": "전체",
@@ -593,7 +634,13 @@
         "today": "오늘",
         "toolCompat": "호환 모드",
         "topProvider": "인기 모델",
-        "yes": "예"
+        "yes": "예",
+        "activeModels": "활성 모델",
+        "dailyRequestsTitle": "일일 요청 및 오류율 추세",
+        "errorRate": "오류율",
+        "providerTokenUsageTitle": "공급자 토큰 사용량",
+        "totalRequests": "총 요청 수",
+        "totalTokens": "총 토큰 수"
       },
       "tabs": {
         "groups": "프록시 그룹",
@@ -613,7 +660,6 @@
       "addGroup": "그룹 추가",
       "addNow": "지금 추가",
       "addSuccess": "그룹이 성공적으로 추가되었습니다!",
-      "addTitle": "그룹 추가",
       "batchUpdate": "일괄 업데이트",
       "batchUpdateTitle": "그룹 설정 일괄 업데이트",
       "copyGroup": "그룹 복사",
@@ -623,7 +669,6 @@
       "deleteGroup": "그룹 삭제",
       "deleteSuccess": "그룹이 성공적으로 삭제되었습니다!",
       "editGroup": "그룹 편집",
-      "editTitle": "그룹 편집",
       "noGroupsFound": "그룹을 찾을 수 없습니다.",
       "saveFailed": "그룹 저장 실패: {error}",
       "selectFieldsToUpdate": "업데이트할 필드 선택",
@@ -639,15 +684,12 @@
         "compat": "호환 모드",
         "native": "네이티브 호출"
       },
-      "updateConfirm": "선택한 {count}개의 그룹을 업데이트하시겠습니까?",
       "updateSuccess": "그룹이 성공적으로 업데이트되었습니다!",
       "form": {
         "description": "설명",
         "descriptionPlaceholder": "설명을 입력하세요",
         "disabled": "비활성화",
         "loadFromTemplate": "템플릿에서 로드",
-        "maxContext": "최대 컨텍스트 길이",
-        "maxContextPlaceholder": "모델 사양 또는 API 정보를 참조하세요. 0은 설정하지 않음을 의미합니다",
         "modelInjectionCondition": "모델 주입 조건",
         "modelInjectionConditionPlaceholder": "모델 ID가 일치할 때만 주입 (와일드카드 * 및 ? 지원)",
         "name": "그룹 이름",
@@ -749,7 +791,54 @@
   },
   "workflow": {
     "todoList": {
-      "title": "할 일 목록"
-    }
+      "title": "할 일 목록",
+      "next": "다음"
+    },
+    "planningModeTooltip": "계획 모드: 실행 전 AI 연구 및 전략",
+    "approvePlan": "계획 승인",
+    "awaitingApproval": "사용자 승인 대기 중",
+    "submit_plan": "계획 제출",
+    "confirmDeleteWorkflow": "이 워크플로우를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+    "continue": "계속",
+    "editWorkflowTitle": "워크플로우 제목 편집",
+    "newWorkflow": "새 워크플로우",
+    "retrying": "요청이 너무 빈번합니다, 재시도 중 ({attempt}/{total}번째 시도), {seconds}초 대기 중...",
+    "startFailed": "워크플로우 시작 실패: {error}",
+    "thinking": "사고 중...",
+    "thinkingExpanded": "사고 중 (펼침)",
+    "thoughtCompleted": "사고 완료",
+    "workflowTitle": "워크플로우 제목",
+    "finishTask": "작업 완료",
+    "autoCompressTooltip": "자동 롤업 압축: 새 작업 시작 시 이전 완료 작업을 자동으로 압축합니다",
+    "finalAuditTooltip": "최종 감사 모드: 작업 완료 전 AI 가 자동으로 품질 검토를 수행합니다",
+    "historyTab": "대화",
+    "todo": {
+      "create": "할 일 생성",
+      "createBatch": "할 일 일괄 생성",
+      "update": "할 일 업데이트",
+      "list": "할 일 목록",
+      "view": "할 일 보기",
+      "statusCompleted": "완료됨",
+      "statusInProgress": "진행 중",
+      "statusPending": "대기 중"
+    },
+    "approval": {
+      "action": "대기 중인 작업",
+      "details": "작업 세부정보",
+      "title": "보안 승인",
+      "warning": "이 작업은 잠재적 위험이 있습니다. 계속하시려면 확인해 주세요."
+    },
+    "statusPanel": {
+      "title": "상태",
+      "progress": "진행률",
+      "todos": "작업",
+      "recentOps": "최근 작업",
+      "empty": "비어있음",
+      "contextUsage": "컨텍스트 사용량"
+    },
+    "selectAgentFirst": "먼저 에이전트를 선택해주세요",
+    "notificationSound": "알림 소리",
+    "approvalSound": "승인 알림음",
+    "completionSound": "완료 알림음"
   }
 }

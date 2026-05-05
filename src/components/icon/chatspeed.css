@@ -1,7 +1,6 @@
 @font-face {
   font-family: "chatspeed"; /* Project id 4710661 */
-  src: url('./iconfont.woff2') format('woff2');
-  font-display: swap;
+  src: url('@/components/icon/iconfont.woff2') format('woff2');
 }
 
 .chatspeed {
@@ -10,6 +9,246 @@
   font-style: normal;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.cs-compress:before {
+  content: "\e752";
+}
+
+.cs-warning:before {
+  content: "\e6a1";
+}
+
+.cs-approval:before {
+  content: "\e696";
+}
+
+.cs-mute:before {
+  content: "\13f7c";
+}
+
+.cs-unmute:before {
+  content: "\e862";
+}
+
+.cs-list_dir:before {
+  content: "\e67b";
+}
+
+.cs-web_fetch:before {
+  content: "\e946";
+}
+
+.cs-submit_plan:before {
+  content: "\e684";
+}
+
+.cs-ask_user:before {
+  content: "\e689";
+}
+
+.cs-task:before {
+  content: "\e732";
+}
+
+.cs-write_file:before {
+  content: "\e694";
+}
+
+.cs-glob:before {
+  content: "\e695";
+}
+
+.cs-bash:before {
+  content: "\e69f";
+}
+
+.cs-web_search:before {
+  content: "\e6ce";
+}
+
+.cs-read_file:before {
+  content: "\e6a0";
+}
+
+.cs-edit_file:before {
+  content: "\e6a3";
+}
+
+.cs-todo:before {
+  content: "\e7d4";
+}
+
+.cs-grep:before {
+  content: "\e6a6";
+}
+
+.cs-refresh:before {
+  content: "\e71e";
+}
+
+.cs-brain:before {
+  content: "\e6b3";
+}
+
+.cs-check-x:before {
+  content: "\ed1a";
+}
+
+.cs-ext-rb:before {
+  content: "\e691";
+}
+
+.cs-ext-swift:before {
+  content: "\e69e";
+}
+
+.cs-ext-toml:before {
+  content: "\e75d";
+}
+
+.cs-zip:before {
+  content: "\e683";
+}
+
+.cs-ext-git:before {
+  content: "\f1b4";
+}
+
+.cs-ext-shell:before {
+  content: "\e6e5";
+}
+
+.cs-ext-setting:before {
+  content: "\e87e";
+}
+
+.cs-ext-exe:before {
+  content: "\e681";
+}
+
+.cs-ext-docx:before {
+  content: "\e666";
+}
+
+.cs-ext-pdf:before {
+  content: "\e66b";
+}
+
+.cs-ext-xlsx:before {
+  content: "\ea45";
+}
+
+.cs-ext-pptx:before {
+  content: "\e790";
+}
+
+.cs-ext-csv:before {
+  content: "\e848";
+}
+
+.cs-ext-file:before {
+  content: "\e662";
+}
+
+.cs-ext-pic:before {
+  content: "\e663";
+}
+
+.cs-ext-xml:before {
+  content: "\e945";
+}
+
+.cs-ext-rs:before {
+  content: "\e687";
+}
+
+.cs-ext-folder:before {
+  content: "\e7d1";
+}
+
+.cs-ext-folder-open:before {
+  content: "\e85e";
+}
+
+.cs-ext-svg:before {
+  content: "\e669";
+}
+
+.cs-ext-cpp:before {
+  content: "\e66a";
+}
+
+.cs-ext-java:before {
+  content: "\e66c";
+}
+
+.cs-ext-jsx:before {
+  content: "\e66d";
+}
+
+.cs-ext-ts:before {
+  content: "\e66f";
+}
+
+.cs-ext-tsx:before {
+  content: "\e670";
+}
+
+.cs-ext-c:before {
+  content: "\e69a";
+}
+
+.cs-ext-php:before {
+  content: "\e67e";
+}
+
+.cs-ext-js:before {
+  content: "\e688";
+}
+
+.cs-ext-vue:before {
+  content: "\e69d";
+}
+
+.cs-ext-md:before {
+  content: "\e671";
+}
+
+.cs-ext-css:before {
+  content: "\e676";
+}
+
+.cs-ext-txt:before {
+  content: "\e680";
+}
+
+.cs-ext-html:before {
+  content: "\e679";
+}
+
+.cs-ext-py:before {
+  content: "\e67a";
+}
+
+.cs-ext-yaml:before {
+  content: "\e690";
+}
+
+.cs-ext-json:before {
+  content: "\e67c";
+}
+
+.cs-ext-log:before {
+  content: "\e67f";
+}
+
+.cs-list:before {
+  content: "\e661";
+}
+
+.cs-ai-step:before {
+  content: "\e65e";
 }
 
 .cs-attachment:before {
@@ -424,7 +663,7 @@
   content: "\e660";
 }
 
-.cs-skill-code-go:before {
+.cs-ext-go:before {
   content: "\e62d";
 }
 
@@ -486,10 +725,6 @@
 
 .cs-skill-code-python1:before {
   content: "\e63a";
-}
-
-.cs-skill-code-rust:before {
-  content: "\ec1c";
 }
 
 .cs-skill-piechart2:before {
@@ -646,10 +881,6 @@
 
 .cs-skill:before {
   content: "\e72a";
-}
-
-.cs-sound:before {
-  content: "\e60f";
 }
 
 .cs-about:before {

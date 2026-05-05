@@ -1,3 +1,5 @@
+use super::MigrationDefinition;
+
 /// Version 2 migration SQL statements
 pub const MIGRATION_SQL: &[(&str, &str)] = &[
     // Agents table for ReAct agent configuration
@@ -21,3 +23,10 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         )"
     ),
 ];
+
+pub const MIGRATION: MigrationDefinition = MigrationDefinition {
+    version: 2,
+    description: "v2 migration: Add agents and workflows tables",
+    sql: MIGRATION_SQL,
+    ensure: None,
+};

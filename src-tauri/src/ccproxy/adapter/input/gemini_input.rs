@@ -101,7 +101,17 @@ pub fn from_gemini(
         .generation_config
         .as_ref()
         .and_then(|config| config.temperature)
-        .map(|t| clamp_to_protocol_range(t, ChatProtocol::Gemini, Parameter::Temperature));
+        .and_then(|t| {
+            if t < 0.0 {
+                None
+            } else {
+                Some(clamp_to_protocol_range(
+                    t,
+                    ChatProtocol::Gemini,
+                    Parameter::Temperature,
+                ))
+            }
+        });
     let max_tokens = req.generation_config.as_ref().and_then(|config| {
         config
             .max_output_tokens
@@ -195,7 +205,7 @@ fn convert_gemini_part(part: GeminiPart) -> Result<Vec<UnifiedContentBlock>, any
             Value::String(s) => match serde_json::from_str(&s) {
                 Ok(parsed_json) => {
                     blocks.push(UnifiedContentBlock::ToolUse {
-                        id: uuid::Uuid::new_v4().to_string(),
+                        id: crate::ccproxy::get_tool_id(),
                         name: tool_name,
                         input: parsed_json,
                     });
@@ -220,7 +230,7 @@ fn convert_gemini_part(part: GeminiPart) -> Result<Vec<UnifiedContentBlock>, any
             },
             _ => {
                 blocks.push(UnifiedContentBlock::ToolUse {
-                    id: uuid::Uuid::new_v4().to_string(),
+                    id: crate::ccproxy::get_tool_id(),
                     name: tool_name,
                     input: arguments,
                 });
@@ -235,7 +245,7 @@ fn convert_gemini_part(part: GeminiPart) -> Result<Vec<UnifiedContentBlock>, any
             .unwrap_or_else(|| fc.as_str())
             .to_string();
         Ok(vec![UnifiedContentBlock::ToolResult {
-            tool_use_id: uuid::Uuid::new_v4().to_string(), // Generate ID
+            tool_use_id: crate::ccproxy::get_tool_id(), // Generate ID
             content: content_str,
             is_error: false, // Gemini response doesn't directly indicate error here
         }])

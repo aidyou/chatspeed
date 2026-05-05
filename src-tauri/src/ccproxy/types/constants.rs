@@ -3,30 +3,30 @@ pub const TOOL_TAG_END: &str = "</cs:tool_use>";
 pub const TODO_TAG_START: &str = "<cs:todo>";
 pub const TODO_TAG_END: &str = "</cs:todo>";
 
-pub const TOOL_CALL_EMPTY_REMAIN:&str = "<system-reminder>The tool call was cancelled or failed. The model can try again later if necessary.</system-reminder>";
+pub const TOOL_CALL_EMPTY_REMAIN:&str = "<SYSTEM_REMINDER>The tool call was cancelled or failed. The model can try again later if necessary.</SYSTEM_REMINDER>";
 
-pub const TOOL_PARSE_ERROR_REMINDER: &str = r###"<system-reminder>
+pub const TOOL_PARSE_ERROR_REMINDER: &str = r###"<SYSTEM_REMINDER>
 Your last tool call had an invalid XML format and could not be parsed. Please check carefully and strictly follow the tool usage specifications.
 Common reasons for failure:
 1. Required arguments are missing.
 2. XML special characters `&`, `<`, `>` must be escaped as `&amp;`, `&lt;`, `&gt;` respectively.
 3. Do not escape other characters (e.g., `"`).
-</system-reminder>"###;
+</SYSTEM_REMINDER>"###;
 
-pub const TOOL_ARG_ERROR_REMINDER: &str = r###"<system-reminder>
+pub const TOOL_ARG_ERROR_REMINDER: &str = r###"<SYSTEM_REMINDER>
 Your last tool call's argument contained malformed JSON and could not be parsed. The failed call is displayed above in a <cs:failed_tool_call> tag for your reference.
 Please review JSON format carefully. Do not generate <cs:failed_tool_call> tags yourself.
 Common reasons for failure:
 1. Malformed JSON (e.g., trailing commas, mismatched brackets).
 2. Incorrectly quoted JSON strings/keys (must use double quotes).
 3. JSON structure does not match the tool's input schema.
-</system-reminder>"###;
+</SYSTEM_REMINDER>"###;
 
-// pub const TOOL_RESULT_REMINDER: &str = r#"<system-reminder>
+// pub const TOOL_RESULT_REMINDER: &str = r#"<SYSTEM_REMINDER>
 // This is the result of your last tool call. Use it to decide your next step. Do not output `<cs:tool_result>` tags yourself.
-// </system-reminder>"#;
+// </SYSTEM_REMINDER>"#;
 
-pub const TOOL_RESULT_SUFFIX_REMINDER: &str = r#"<system-reminder>This result is only for notification and display of the tool call result. It is not a question from the user. You do not need to reply to the user based on this result. Only consider whether further tasks need to be performed.</system-reminder>"#;
+pub const TOOL_RESULT_SUFFIX_REMINDER: &str = r#"<SYSTEM_REMINDER>This result is only for notification and display of the tool call result. It is not a question from the user. You do not need to reply to the user based on this result. Only consider whether further tasks need to be performed.</SYSTEM_REMINDER>"#;
 
 /// IMPORTANT: Do not attempt to remove any examples from this prompt.
 /// Each example has been added after testing to regulate the AI's behavior.

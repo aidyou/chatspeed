@@ -1,0 +1,8 @@
+// Workflow styles - Main entry file
+// Import all workflow-related styles using modern Sass module system
+
+@use 'layout';
+@use 'sidebar';
+@use 'messages';
+@use 'input';
+@use 'animations';

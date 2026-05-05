@@ -1,7 +1,7 @@
 use std::env;
-use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::process::Command;
 
 #[cfg(target_os = "windows")]
 /// Attempts to retrieve the full system PATH environment variable on Windows.
@@ -25,7 +25,7 @@ fn get_shell_path() -> Option<String> {
         let mut command = Command::new(shell);
         command.args(&args);
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        
+
         if let Ok(output) = command.output() {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -54,29 +54,28 @@ fn get_shell_path() -> Option<String> {
 
     for shell in shells {
         // Helper to try executing a command and return path or error kind
-        let try_command = |shell_name: &str,
-                                      args: Vec<&str>|
-                    -> Result<Option<String>, std::io::ErrorKind> {
-            match Command::new(shell_name).args(&args).output() {
-                Ok(output) => {
-                    if output.status.success() {
-                        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        if !path.is_empty() {
-                            return Ok(Some(path));
+        let try_command =
+            |shell_name: &str, args: Vec<&str>| -> Result<Option<String>, std::io::ErrorKind> {
+                match Command::new(shell_name).args(&args).output() {
+                    Ok(output) => {
+                        if output.status.success() {
+                            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                            if !path.is_empty() {
+                                return Ok(Some(path));
+                            }
                         }
-                    }
-                    Ok(None)
-                }
-                Err(e) => {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        Err(std::io::ErrorKind::NotFound)
-                    } else {
-                        log::warn!("Failed to run shell command for {}: {}", shell_name, e);
                         Ok(None)
                     }
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::NotFound {
+                            Err(std::io::ErrorKind::NotFound)
+                        } else {
+                            log::warn!("Failed to run shell command for {}: {}", shell_name, e);
+                            Ok(None)
+                        }
+                    }
                 }
-            }
-        };
+            };
 
         // 1. Try interactive login shell first (most likely to have full user PATH)
         log::debug!(

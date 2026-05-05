@@ -23,6 +23,7 @@ pub fn get_tools(list_tools_result: &ListToolsResult) -> Vec<MCPToolDeclaration>
             ),
             output_schema: tool.output_schema.as_ref().map(|o| json!(o)).clone(),
             disabled: false,
+            scope: Some(crate::tools::ToolScope::Both),
         });
     }
     tools

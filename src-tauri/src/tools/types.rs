@@ -4,15 +4,48 @@ use rmcp::model::IntoContents as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolScope {
+    /// 仅在普通聊天中可用
+    Chat,
+    /// 仅在 ReAct 工作流中可用
+    Workflow,
+    /// 两者均可用
+    Both,
+}
+
+impl ToolScope {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Workflow => "workflow",
+            Self::Both => "both",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ToolCategory {
+    FileSystem,
+    Interaction,
+    Mcp,
+    Search,
+    Skill,
+    System,
     Web,
 }
 
 impl Display for ToolCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ToolCategory::FileSystem => write!(f, "FileSystem"),
+            ToolCategory::Interaction => write!(f, "Interaction"),
+            ToolCategory::Mcp => write!(f, "MCP"),
+            ToolCategory::System => write!(f, "System"),
             ToolCategory::Web => write!(f, "Web"),
+            ToolCategory::Search => write!(f, "Search"),
+            ToolCategory::Skill => write!(f, "Skill"),
         }
     }
 }

@@ -1,4 +1,3 @@
-// modules
 mod ai;
 mod ccproxy;
 mod commands;
@@ -39,6 +38,7 @@ use tauri::Manager;
 // use commands::toolbar::*;
 use crate::error::AppError;
 use ai::interaction::chat_completion::ChatState;
+use commands::agent::*;
 use commands::ccproxy::*;
 use commands::chat::*;
 use commands::clipboard::*;
@@ -139,6 +139,14 @@ pub async fn run() -> crate::error::Result<()> {
         .plugin(tauri_plugin_shell::init())
         // Register command handlers that can be invoked from the frontend
         .invoke_handler(tauri::generate_handler![
+            // agent command
+            add_agent,
+            update_agent,
+            delete_agent,
+            get_agent,
+            get_all_agents,
+            get_available_tools,
+
             // settings
             get_all_config,
             set_config,
@@ -226,6 +234,10 @@ pub async fn run() -> crate::error::Result<()> {
             // fs
             image_preview,
             read_text_file,
+            read_git_base_text_file,
+            get_git_status,
+            list_dir,
+            open_path_in_file_manager,
 
             // window
             open_setting_window,
@@ -242,23 +254,35 @@ pub async fn run() -> crate::error::Result<()> {
 
             // workflow
             // run_dag_workflow,
-            add_agent,
-            update_agent,
-            delete_agent,
-            get_agent,
-            get_all_agents,
-            get_available_tools,
-            workflow_chat_completion,
-            workflow_call_tool,
-            create_workflow,
             add_workflow_message,
+            create_workflow,
+            delete_last_assistant_workflow_turn,
             delete_workflow,
+            get_system_skills,
             get_workflow_snapshot,
-            list_workflows,
             get_workflow_session_key,
+            list_workflows,
+            search_workspace_files,
+            update_workflow_allowed_paths,
+            update_workflow_final_audit,
+            update_workflow_approval_level,
+            update_workflow_agent_config,
+            update_workflow_agent_id,
+            get_auto_approved_tools,
+            remove_auto_approved_tool,
+            remove_shell_policy_item,
             update_workflow_status,
             update_workflow_title,
+            update_workflow_title_and_query,
+            update_workflow_query,
             update_workflow_todo_list,
+            workflow_approve_plan,
+            workflow_get_tasks,
+            workflow_signal,
+            workflow_start,
+            workflow_stop,
+            get_workflow_events,
+            get_workflow_dispatcher_metrics,
 
             // dev tools
             test_scrape,
@@ -335,7 +359,8 @@ pub async fn run() -> crate::error::Result<()> {
             // When the user clicks on the close button of a window, everything except the settings window is only hidden.
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 match window.label() {
-                    "main" => {
+                    // For these windows, we just hide them.
+                    "main" | "assistant" | "workflow" => {
                         api.prevent_close();
                         // Check if the window is valid before trying to hide it.
                         if window.is_visible().unwrap_or(false) {
@@ -345,23 +370,7 @@ pub async fn run() -> crate::error::Result<()> {
                                 log::debug!("Window '{}' hidden", window.label());
                             }
                         } else {
-                            log::debug!(
-                                "Window '{}' is not visible, skipping hide",
-                                window.label()
-                            );
-                        }
-                    }
-                    // For these windows, we just hide them.
-                    "assistant" | "toolbar" | "workflow" => {
-                        api.prevent_close();
-                        // Only hide the window if it's currently visible.
-                        if window.is_visible().unwrap_or(false) {
-                            if let Err(e) = window.hide() {
-                                warn!("Failed to hide window '{}': {}", window.label(), e);
-                            } else {
-                                log::debug!("Window '{}' hidden", window.label());
-                            }
-                        } else {
+                            #[cfg(debug_assertions)]
                             log::debug!("Window '{}' is already hidden", window.label());
                         }
                     }
@@ -498,11 +507,19 @@ pub async fn run() -> crate::error::Result<()> {
 
         // Setup the application with necessary configurations and state management
         .setup(|app| {
-            // Initialize the logger - this is critical and must stay here
-            setup_logger(&app);
+        // Initialize the logger - this is critical and must stay here
+        setup_logger(&app);
 
-            // Initialize the main store
-            #[cfg(debug_assertions)]
+        // Initialize RESOURCE_DIR for production
+        #[cfg(not(debug_assertions))]
+        {
+            if let Ok(res_path) = app.path().resource_dir() {
+                *crate::RESOURCE_DIR.write() = res_path;
+                log::info!("RESOURCE_DIR initialized at: {:?}", *crate::RESOURCE_DIR.read());
+            }
+        }
+
+        // Initialize the main store            #[cfg(debug_assertions)]
             let db_path = {
                 let dev_dir = &*crate::STORE_DIR.read();
                 dev_dir.join("chatspeed.db")
@@ -624,6 +641,28 @@ pub async fn run() -> crate::error::Result<()> {
             let update_manager = Arc::new(UpdateManager::new(app.handle().clone()));
             app.manage(update_manager.clone());
 
+            // State 6: TsidGenerator
+            let tsid_generator = Arc::new(crate::libs::tsid::TsidGenerator::new(1).expect("Failed to init TSID generator"));
+            app.manage(tsid_generator.clone());
+
+            // State 7: TauriGateway (Singleton for ReAct signals)
+            let gateway = Arc::new(crate::workflow::react::gateway::TauriGateway::new(app.handle().clone()));
+            app.manage(gateway.clone());
+
+            // State 8: WorkflowManager (Session lifecycle manager)
+            let workflow_manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
+            app.manage(workflow_manager.clone());
+
+            // State 9: SubAgentFactory
+            let factory: Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory> = Arc::new(crate::workflow::react::orchestrator::DefaultSubAgentFactory {
+                main_store: main_store.clone(),
+                chat_state: chat_state.clone(),
+                gateway: gateway.clone(),
+                app_data_dir: app.path().app_data_dir().unwrap_or_default(),
+                tsid_generator: tsid_generator.clone(),
+            });
+            app.manage(factory);
+
             // === END STATE REGISTRATION SECTION ===
 
             // === EVENT LISTENERS SECTION ===
@@ -631,7 +670,6 @@ pub async fn run() -> crate::error::Result<()> {
             // Reason: Event handlers may immediately try to access states via handle.state()
             // If states are not yet registered, this will cause a panic
             // See: src-tauri/src/workflow/helper.rs for state usage in listeners
-            crate::workflow::helper::listen_for_workflow_ready(app.handle());
             // === END EVENT LISTENERS SECTION ===
 
             // === BACKGROUND TASKS SECTION ===
@@ -691,8 +729,8 @@ pub async fn run() -> crate::error::Result<()> {
             // For any future windows, ensure `"create": false` is set in the configuration and
             // initialize them manually here or via specific logic after backend readiness is guaranteed.
 
-            // 1. Main Window (Visible)
-            match window::create_main_window(&app.handle()) {
+            // 1. Main Window (Hidden by default)
+            match window::create_main_window(&app.handle(), false) {
                 Ok(win) => { restore_window_config(&win, main_store.clone()); },
                 Err(e) => { log::error!("Failed to create main window: {}", e); }
             }
@@ -703,8 +741,8 @@ pub async fn run() -> crate::error::Result<()> {
                 Err(e) => { log::error!("Failed to create assistant window: {}", e); }
             }
 
-            // 3. Workflow Window (Hidden)
-            match window::create_workflow_window(&app.handle(), false) {
+            // 3. Workflow Window (Visible by default)
+            match window::create_workflow_window(&app.handle(), true) {
                 Ok(win) => { restore_window_config(&win, main_store.clone()); },
                 Err(e) => { log::error!("Failed to create workflow window: {}", e); }
             }

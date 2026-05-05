@@ -55,6 +55,8 @@ pub struct UnifiedRequest {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logit_bias: Option<HashMap<String, f32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 
     // Claude-specific parameters
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,6 +139,7 @@ impl UnifiedRequest {
             if let Some(tools) = &self.tools {
                 let prompt = generate_tool_prompt(tools);
                 self.tools = None; // Clear tools as they are now in the prompt.
+                self.tool_choice = None; // Clear tool_choice as tools are now in the prompt.
                 prompt
             } else {
                 String::new()
@@ -224,7 +227,7 @@ pub struct UnifiedTool {
 }
 
 /// Controls how the model uses tools.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum UnifiedToolChoice {
     None,
@@ -291,11 +294,13 @@ pub enum UnifiedStreamChunk {
         tool_type: String,
         id: String,
         name: String,
+        index: u32,
     },
     /// A delta of the arguments for a tool call.
     ToolUseDelta {
         id: String,
         delta: String, // JSON string delta
+        index: u32,
     },
     /// The end of a tool call.
     ToolUseEnd {
@@ -423,6 +428,7 @@ pub struct SseStatus {
     pub message_id: String,
     pub tool_id: String,
     pub message_index: u32,
+    pub index_to_tool_id: HashMap<u32, String>,
     pub current_content_block: String,
     // For token estimation
     pub estimated_input_tokens: f64,
@@ -454,6 +460,7 @@ impl Default for SseStatus {
             message_id: String::new(),
             tool_id: String::new(),
             message_index: 0,
+            index_to_tool_id: HashMap::new(),
             current_content_block: String::new(),
             estimated_input_tokens: 0.0,
             estimated_output_tokens: 0.0,

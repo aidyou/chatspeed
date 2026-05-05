@@ -12,24 +12,64 @@ use url::form_urlencoded::{byte_serialize, parse};
 ///
 /// # Returns
 /// The formatted JSON string
-// pub fn format_json_str(jstr: &str) -> String {
-//     let mut formatted = jstr
-//         .trim()
-//         .trim_start_matches("```json")
-//         .trim_start_matches(|c: char| c == '`' || c.is_whitespace())
-//         .trim_end_matches(|c: char| c == '`' || c.is_whitespace())
-//         .replace('\n', "")
-//         .replace('\r', "")
-//         .replace("    ", "")
-//         .replace('\t', "");
-//     if formatted.ends_with('}') && !formatted.starts_with('{') {
-//         formatted = format!("{{{formatted}");
-//     } else if formatted.starts_with('{') && !formatted.ends_with('}') {
-//         formatted = format!("{formatted}}}");
-//     }
+pub fn format_json_str(jstr: &str) -> String {
+    let mut jstr = jstr.trim().to_string();
 
-//     formatted
-// }
+    if jstr.starts_with("```") {
+        if let Some(end) = jstr.rfind("```") {
+            let inner = &jstr[..end];
+            let inner = inner.lines().skip(1).collect::<Vec<_>>().join("\n");
+            if !inner.trim().is_empty() {
+                jstr = inner.trim().to_string();
+            }
+        }
+    }
+
+    if jstr.starts_with('`') && jstr.ends_with('`') && jstr.len() >= 2 {
+        jstr = jstr.trim_matches('`').trim().to_string();
+    }
+
+    // 1. Try to extract content between the first { and the last } or [ and ]
+    let start_brace = jstr.find('{');
+    let start_bracket = jstr.find('[');
+    let end_brace = jstr.rfind('}');
+    let end_bracket = jstr.rfind(']');
+
+    let start = match (start_brace, start_bracket) {
+        (Some(s1), Some(s2)) => Some(s1.min(s2)),
+        (Some(s), None) | (None, Some(s)) => Some(s),
+        (None, None) => None,
+    };
+
+    let end = match (end_brace, end_bracket) {
+        (Some(e1), Some(e2)) => Some(e1.max(e2)),
+        (Some(e), None) | (None, Some(e)) => Some(e),
+        (None, None) => None,
+    };
+
+    if let (Some(s), Some(e)) = (start, end) {
+        if s <= e {
+            jstr = jstr[s..=e].to_string();
+        }
+    }
+
+    // Still perform some basic cleaning for malformed AI output,
+    // but try to be less destructive to valid multi-line content if possible.
+    // However, for tool calling, AI usually produces compact JSON or JSON with newlines for formatting.
+    // If the JSON is already valid, serde_json handles it fine.
+    // The previous aggressive replace('\n', "") was likely to fix raw newlines in strings.
+
+    let formatted = jstr
+        .trim_start_matches("```json")
+        .trim_start_matches(|c: char| c == '`' || c.is_whitespace())
+        .trim_end_matches(|c: char| c == '`' || c.is_whitespace())
+        .trim()
+        .to_string();
+
+    // If it starts with { and ends with }, but serde_json fails, we might still need to clean it.
+    // Let's keep a balance.
+    formatted
+}
 
 /// URL encode a string
 ///

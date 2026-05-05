@@ -1,7 +1,7 @@
 <template>
   <el-header class="header" :class="{ 'reverse-layout': !isMacOS }" v-show="showTitlebar">
     <!-- window controls -->
-    <div class="window-controls upperLayer">
+    <div class="window-controls upperLayer" v-if="isMacOS">
       <div class="control-icon close" @click="closeWindow" type="text" v-if="showCloseButtons">
         <cs name="close" size="9px" />
       </div>
@@ -12,6 +12,20 @@
         <cs :name="isFullscreen ? 'fullscreen' : 'fullscreen-off'" size="10px" />
       </div>
     </div>
+    <div class="window-controls upperLayer" v-else>
+      <div class="control-icon close" @click="closeWindow" type="text" v-if="showCloseButtons">
+        <cs name="close" size="9px" />
+      </div>
+      <div class="control-icon maximize" @click="toggleMaximize" v-if="showMaximizeButton">
+        <cs :name="isFullscreen ? 'fullscreen' : 'fullscreen-off'" size="10px" />
+      </div>
+
+      <div class="control-icon minimize" @click="minimizeWindow" v-if="showMinimizeButton">
+        <cs name="minimize" size="10px" />
+      </div>
+
+    </div>
+
 
     <!-- main content wrapper -->
     <div class="titlebar-content-wrapper">
@@ -23,7 +37,9 @@
       <!-- center area -->
       <div class="center">
         <slot name="center"></slot>
-        <el-tooltip placement="bottom" v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
+        <el-tooltip
+          placement="bottom"
+          v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
           :content="t('common.newVersionReady')">
           <div class="menu icon-btn upperLayer restart" @click="updateStore.restartApp">
             <cs name="restart" />
@@ -98,8 +114,9 @@ const props = defineProps({
 })
 
 const availableMenus = [
+  { name: 'chat', icon: 'skill-chat-square' },
   'assistant',
-  { name: 'workflow', icon: "skill-plan3" },
+  { name: 'workflow', icon: 'skill-plan3' },
   'note',
   'divider',
   'setting',
@@ -245,6 +262,9 @@ const handleCommand = async command => {
   console.log(command)
   try {
     switch (command) {
+      case 'main':
+        await invoke('show_window', { windowLabel: 'main' })
+        break
       case 'note':
         await invoke('open_note_window')
         break

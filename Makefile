@@ -30,13 +30,13 @@ copy-lang-file:
 .PHONY: dev
 dev: copy-lang-file
 	@echo "Starting development environment..."
-	yarn dev
+	pnpm dev
 
 # 构建前的准备工作
 .PHONY: prepare
 prepare: copy-lang-file
 	@echo "Installing dependencies..."
-	yarn install
+	pnpm install
 	@echo "Dependencies installed"
 
 # 清理构建产物
@@ -51,19 +51,19 @@ clean:
 .PHONY: build-mac
 build-mac: prepare
 	@echo "Building for macOS..."
-	yarn tauri build --target universal-apple-darwin
+	pnpm tauri build --target universal-apple-darwin
 
 # Windows 构建
 .PHONY: build-win
 build-win: prepare
 	@echo "Building for Windows..."
-	yarn tauri build --target x86_64-pc-windows-msvc
+	pnpm tauri build --target x86_64-pc-windows-msvc
 
 # Linux 构建
 .PHONY: build-linux
 build-linux: prepare
 	@echo "Building for Linux..."
-	yarn tauri build --target x86_64-unknown-linux-gnu
+	pnpm tauri build --target x86_64-unknown-linux-gnu
 
 # 构建所有平台
 .PHONY: build-all
@@ -86,11 +86,11 @@ dev-watch:
 	@echo "Starting development environment with file watching..."
 	@$(MAKE) copy-lang-file
 	@($(MAKE) watch-lang-file &)
-	yarn dev
+	pnpm dev
 
 # 准备调试环境
 .PHONY: prepare-debug
 prepare-debug: copy-lang-file
 	@echo "Preparing debug environment..."
-	yarn install
+	pnpm install
 	@echo "Debug environment ready. You can now start debugging in VSCode"

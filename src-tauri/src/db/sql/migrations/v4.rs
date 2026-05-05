@@ -1,3 +1,5 @@
+use super::MigrationDefinition;
+
 /// Version 4 migration SQL statements
 /// Adds Proxy Stats table for tracking proxy requests and token usage.
 pub const MIGRATION_SQL: &[(&str, &str)] = &[
@@ -32,3 +34,10 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "CREATE INDEX IF NOT EXISTS idx_ccproxy_stats_status_code ON ccproxy_stats(status_code)",
     ),
 ];
+
+pub const MIGRATION: MigrationDefinition = MigrationDefinition {
+    version: 4,
+    description: "v4 migration: Add ccproxy_stats table",
+    sql: MIGRATION_SQL,
+    ensure: None,
+};

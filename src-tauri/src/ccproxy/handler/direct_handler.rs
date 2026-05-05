@@ -260,7 +260,12 @@ pub async fn handle_direct_forward(
                     log_to_file,
                 );
 
-                bytes
+                inject_openai_estimated_usage_before_done(
+                    bytes,
+                    log_recorder,
+                    sse_status,
+                    &chat_protocol,
+                )
             })
         });
 
@@ -453,9 +458,84 @@ fn enhance_direct_request_body(
     }
 
     // 4. Final step: Merge model-specific custom body params (Highest override for non-standard fields)
-    crate::ai::util::merge_custom_params(&mut body, &proxy_model.custom_params);
+    crate::ai::util::merge_custom_params_value(&mut body, &proxy_model.custom_params);
 
     body
+}
+
+fn inject_openai_estimated_usage_before_done(
+    bytes: bytes::Bytes,
+    log_recorder: Arc<Mutex<StreamLogRecorder>>,
+    sse_status: Arc<RwLock<SseStatus>>,
+    chat_protocol: &ChatProtocol,
+) -> bytes::Bytes {
+    if !matches!(
+        chat_protocol,
+        ChatProtocol::OpenAI | ChatProtocol::HuggingFace
+    ) {
+        return bytes;
+    }
+
+    let chunk = String::from_utf8_lossy(&bytes);
+    if !chunk.contains("[DONE]") {
+        return bytes;
+    }
+
+    let (recorded_input, recorded_output, chat_id, model) =
+        if let Ok(recorder) = log_recorder.lock() {
+            (
+                recorder.input_tokens.unwrap_or(0),
+                recorder.output_tokens.unwrap_or(0),
+                recorder.chat_id.clone(),
+                recorder.model.clone(),
+            )
+        } else {
+            (0, 0, String::new(), String::new())
+        };
+    let (estimated_input, estimated_output) = if let Ok(status) = sse_status.read() {
+        (
+            status.estimated_input_tokens.ceil() as u64,
+            status.estimated_output_tokens.ceil() as u64,
+        )
+    } else {
+        (0, 0)
+    };
+
+    let prompt_tokens = if recorded_input > 0 {
+        recorded_input
+    } else {
+        estimated_input
+    };
+    let completion_tokens = if recorded_output > 0 {
+        recorded_output
+    } else {
+        estimated_output
+    };
+
+    if prompt_tokens == 0 && completion_tokens == 0 {
+        return bytes;
+    }
+
+    let usage_event = format!(
+        "data: {}\n\n",
+        json!({
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": chrono::Utc::now().timestamp(),
+            "model": model,
+            "choices": [],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens
+            }
+        })
+    );
+
+    let rewritten = chunk
+        .replace("data: [DONE]", &format!("{}data: [DONE]", usage_event))
+        .replace("data:[DONE]", &format!("{}data:[DONE]", usage_event));
+    bytes::Bytes::from(rewritten)
 }
 
 fn chunk_parser_and_log(

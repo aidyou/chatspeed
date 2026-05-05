@@ -44,6 +44,7 @@ export function getModelLogo(model) {
     'qwq-': 'qwen',
     'qwen': 'qwen',
     'openai': 'gpt',
+    'step': 'step',
   };
 
   // Check exact matches first

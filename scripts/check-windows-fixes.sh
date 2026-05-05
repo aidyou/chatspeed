@@ -121,7 +121,7 @@ if [ $check_fail -eq 0 ]; then
     echo -e "${GREEN}✓ 所有关键检查项已通过${NC}"
     echo ""
     echo "建议的测试步骤："
-    echo "1. 在Windows上构建: yarn tauri build"
+    echo "1. 在Windows上构建: pnpm tauri build"
     echo "2. 在干净的Windows系统上测试安装包"
     echo "3. 检查日志目录是否创建: %LOCALAPPDATA%\\ai.aidyou.chatspeed\\logs"
     echo "4. 验证字体图标是否正常显示"

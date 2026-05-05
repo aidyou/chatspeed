@@ -29,13 +29,13 @@
 #![allow(dead_code)]
 
 use futures::TryStreamExt;
+use regex::Regex;
 use reqwest::redirect::Policy;
 use reqwest::Client;
 use rust_i18n::t;
+use scraper::{Html, Selector};
 use std::{collections::HashMap, time::Duration};
 use tokio::{fs::File, io::AsyncWriteExt};
-use regex::Regex;
-use scraper::{Html, Selector};
 
 use super::{
     error::{HttpError, HttpResult},
@@ -212,7 +212,9 @@ impl HttpClient {
         while let Some(chunk) = stream.try_next().await.map_err(|e| {
             HttpError::Response(t!("http.download_failed", error = e.to_string()).to_string())
         })? {
-            file.write_all(&chunk).await.map_err(|e| HttpError::Io(e.to_string()))?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| HttpError::Io(e.to_string()))?;
 
             downloaded += chunk.len() as u64;
             let current_progress = if total_size > 0 {
@@ -250,7 +252,9 @@ impl HttpClient {
             }
         }
 
-        file.flush().await.map_err(|e| HttpError::Io(e.to_string()))?;
+        file.flush()
+            .await
+            .map_err(|e| HttpError::Io(e.to_string()))?;
         drop(file);
 
         if let Some(callback) = request.config.progress_callback.as_ref() {
@@ -467,7 +471,8 @@ pub async fn get_real_url(short_url: &str) -> Result<String, Box<dyn std::error:
             }
 
             // 2b: Check for <script> tag redirect (fallback)
-            let re = Regex::new(r#"window\.location\.(?:replace|href)\s*=\s*['"](?P<url>[^'"]+)['"]"#)?;
+            let re =
+                Regex::new(r#"window\.location\.(?:replace|href)\s*=\s*['"](?P<url>[^'"]+)['"]"#)?;
             if let Some(caps) = re.captures(&body) {
                 if let Some(url) = caps.name("url") {
                     return Ok(url.as_str().to_string());

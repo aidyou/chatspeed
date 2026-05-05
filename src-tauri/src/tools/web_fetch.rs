@@ -30,22 +30,32 @@ impl ToolDefinition for WebFetch {
         ToolCategory::Web
     }
 
+    fn scope(&self) -> crate::tools::ToolScope {
+        crate::tools::ToolScope::Both
+    }
+
     /// Returns the name of the function.
     fn name(&self) -> &str {
-        "WebFetch"
+        crate::tools::TOOL_WEB_FETCH
     }
 
     /// Returns the description of the function.
     fn description(&self) -> &str {
-        "Extracts the full content from a single web page URL. Use this tool to understand the content of a specific link.
+        "Extracts the full content or links from a single web page URL. Use this tool to understand the content of a specific link or discover more links on a portal/list page.
 
 **Usage Guidelines:**
+-  **For News/List/Portal pages**: Use `format: \"links\"` or set `keep_link: true` to discover the content you need.
+-  **For specific articles/content**: Use `format: \"markdown\"` (default) to get the main text.
 -  Prioritize content from this tool over your internal knowledge when answering questions about a specific URL.
 -  When using information from this tool, cite the source URL in your answer.
--  You MUST include a disclaimer in your final response. This disclaimer **MUST be translated into the user's language**. Use the following English template as a basis: 'Note: This response is based on content retrieved from the webpage, and its accuracy cannot be independently verified.' For example, if the user's language is Chinese, the disclaimer should be: '注意：此回复基于从提供的网页内容，其准确性无法独立验证。'
 
 **Limitations:**
 -  Avoid using this tool on multimedia files (typically URLs ending in .pdf, .ppt, .docx, .xlsx, .mp3, .mp4, etc.) as they cannot be processed - focus on HTML pages and text-based content instead
+
+**Error Handling:**
+-  If a page returns empty content or fails, do NOT retry the same URL.
+-  Instead, try an alternative source URL from your search results.
+-  If no alternatives exist, mark the data as unavailable and proceed to the next task.
 "
     }
 
@@ -63,12 +73,12 @@ impl ToolDefinition for WebFetch {
                     },
                     "format": {
                         "type": "string",
-                        "enum": ["markdown", "text"],
-                        "description": "Format for the extracted content. Use 'markdown' to preserve structure, or 'text' for plain text. Defaults to 'markdown'."
+                        "enum": ["markdown", "text", "links"],
+                        "description": "Format for the extracted content. Use 'markdown' for articles, 'text' for plain text, or 'links' for news/list/portal pages to discover more URLs. Defaults to 'markdown'."
                     },
                     "keep_link": {
                         "type": "boolean",
-                        "description": "Whether to include hyperlinks in the output. Only effective for 'markdown' format. Enable this when navigation through links on the page is required. Defaults to false."
+                        "description": "Whether to include hyperlinks in the output. Only effective for 'markdown' format. MUST be set to true for news/list/portal pages if using 'markdown' format. Defaults to false."
                     },
                     "keep_image": {
                         "type": "boolean",
@@ -79,15 +89,16 @@ impl ToolDefinition for WebFetch {
             }),
             output_schema: None,
             disabled: false,
+            scope: Some(self.scope()),
         }
     }
 
     /// Executes the web scraper tool.
     async fn call(&self, params: Value) -> NativeToolResult {
         // Get the URL from parameters
-        let url = params["url"].as_str().ok_or_else(|| {
-            ToolError::InvalidParams(t!("tools.url_must_be_string").to_string())
-        })?;
+        let url = params["url"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidParams(t!("tools.url_must_be_string").to_string()))?;
 
         // Check if URL is empty
         if url.is_empty() {
@@ -115,12 +126,18 @@ impl ToolDefinition for WebFetch {
         }
 
         // Get optional selector
-        let content_format = params["format"]
-            .as_str()
-            .unwrap_or("markdown")
-            .to_string()
-            .into();
-        let keep_link = params["keep_link"].as_bool().unwrap_or(false);
+        let content_format_str = params["format"].as_str().unwrap_or("markdown");
+
+        let content_format: crate::scraper::types::StrapeContentFormat =
+            content_format_str.to_string().into();
+
+        let mut keep_link = params["keep_link"].as_bool().unwrap_or(false);
+
+        // Force keep_link to true if format is 'links' or if we're on a portal/list page
+        if content_format_str == "links" {
+            keep_link = true;
+        }
+
         let keep_image = params["keep_image"].as_bool().unwrap_or(false);
         let request = ScrapeRequest::Content(ContentOptions {
             url: url.to_string(),
@@ -128,18 +145,20 @@ impl ToolDefinition for WebFetch {
             keep_link,
             keep_image,
         });
-        
+
         // Execute the scraper engine and propagate errors directly
-        let content = engine::run(self.app_handle.clone(), request).await.map_err(|e| {
-            ToolError::ExecutionFailed(
-                t!(
-                    "tools.web_scraper_failed",
-                    url = url,
-                    details = e.to_string()
+        let content = engine::run(self.app_handle.clone(), request)
+            .await
+            .map_err(|e| {
+                ToolError::ExecutionFailed(
+                    t!(
+                        "tools.web_scraper_failed",
+                        url = url,
+                        details = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
-            )
-        })?;
+            })?;
 
         let format_webpage = |content: &str| -> String {
             format!(
@@ -148,7 +167,10 @@ impl ToolDefinition for WebFetch {
             )
         };
 
-        let empty_prompt = format!("<webpage><url>{}</url><content><!--Not Results--></content></webpage>\n<system-reminder>Failed to fetch content from the URL. The page might be empty, protected, or a dynamic web application. Please verify the URL and try again.</system-reminder>", &url);
+        let empty_prompt = format!(
+            "<webpage><url>{}</url><content><!--Not Results--></content></webpage>\n<SYSTEM_REMINDER>Failed to fetch content from this URL. Do NOT retry the same URL immediately. The page may be empty, protected, or a dynamic web application. Try a different source URL if available; otherwise treat the data as unavailable and continue.</SYSTEM_REMINDER>",
+            &url
+        );
 
         let content_formated = if content.is_empty() {
             empty_prompt

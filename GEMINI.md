@@ -22,19 +22,19 @@ ChatSpeed is an open-source, high-performance AI assistant and smart desktop hub
 ### Prerequisites
 
 - **Node.js**: v22+ recommended.
-- **Yarn**: Used for frontend package management.
+- **pnpm**: Used for frontend package management.
 - **Rust**: Stable toolchain.
 - **vcpkg**: Required on Windows for native dependencies (`sqlite3`, `bzip2`).
 
 ### Key Commands
 
 - **Development**:
-  - `yarn dev`: Starts the Vite development server for the frontend.
-  - `yarn tauri dev`: Starts the Tauri development environment (frontend + backend).
-  - `scripts/win_dev.bat`: (Windows) Automatically configures the environment and starts `yarn tauri dev`.
+  - `pnpm dev`: Starts the Vite development server for the frontend.
+  - `pnpm tauri dev`: Starts the Tauri development environment (frontend + backend).
+  - `scripts/win_dev.bat`: (Windows) Automatically configures the environment and starts `pnpm tauri dev`.
   - `make dev`: Standardized development entry via Makefile.
 - **Building**:
-  - `yarn tauri build`: General build command.
+  - `pnpm tauri build`: General build command.
   - `make build-win`: Build for Windows (requires environment setup).
   - `make build-mac`: Build for macOS (Universal binary).
   - `make build-linux`: Build for Linux.
@@ -62,6 +62,7 @@ This section outlines the coding standards, architectural patterns, and workflow
 - **Safety First**: Never introduce invalid syntax. Avoid potentially panicking code in production.
 - **Context Awareness**: Always read the latest source code and configuration files (e.g., `Cargo.toml`, `package.json`) before making modifications.
 - **Dependency Management**: Verify existing dependencies before adding new ones.
+- **Testing Persistence**: NEVER delete existing test cases unless the code being tested has been explicitly removed. Always adapt and update tests to remain valid with any API or logic changes.
 
 ### 2. Backend Development (Rust & Tauri)
 - **Framework**: Use **Tauri v2** standards and documentation.
@@ -88,7 +89,7 @@ This section outlines the coding standards, architectural patterns, and workflow
 - **Framework**: Vue 3 with the **Composition API** and `<script setup>` syntax.
 - **UI Library**: Use **Element Plus** components and utility classes.
 - **Styling**: Write CSS using **SCSS nested syntax**.
-- **Package Manager**: Use **Yarn** for all package management tasks.
+- **Package Manager**: Use **pnpm** for all package management tasks.
 - **TypeScript Specifics**:
   - Use `unknown` instead of `any` for variables with unknown types.
   - Declarations inside a `switch` case must be enclosed in curly braces `{}` to prevent scope issues.

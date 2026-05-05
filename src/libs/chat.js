@@ -262,7 +262,7 @@ export function buildUserMessage(inputMessage, quoteMessage) {
   if (!quoteMessage) {
     return inputMessage || ''
   }
-  return `<quoted-response>\n${quoteMessage}\n</quoted-response>\n\n<system-reminder>User quoted your response. Please respond considering the quoted content.</system-reminder>\n\n${inputMessage}`
+  return `<quoted-response>\n${quoteMessage}\n</quoted-response>\n\n<SYSTEM_REMINDER>User quoted your response. Please respond considering the quoted content.</SYSTEM_REMINDER>\n\n${inputMessage}`
 }
 
 /**
@@ -421,7 +421,7 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   if (!content) return ''
 
   // remove reminder
-  content = content.replace(/<system-reminder>[\s\S]+?<\/system-reminder>/gi, '')
+  content = content.replace(/<SYSTEM_REMINDER>[\s\S]+?<\/SYSTEM_REMINDER>/gi, '')
 
   // Remove AI-generated non-standard references [[1]](http://domain.com) -> [[1]]
   content = content.replace(/(\[\[\d+\]\])\([^)]+\)/g, (_match, id) => {
@@ -542,7 +542,13 @@ export const parseMarkdown = (content, reference, toolCalls) => {
   //   return `\n\`\`\`${p1?.trim() || 'txt'}\n${p2?.trim() || ''}\n\`\`\`\n`
   // })
 
-  if (toolCalls) {
+  if (toolCalls && toolCalls.length > 0) {
+    const placeholderCount = (content.match(/<!--\[ToolCalls\]-->/g) || []).length
+    if (placeholderCount < toolCalls.length) {
+      for (let i = 0; i < toolCalls.length - placeholderCount; i++) {
+        content += '\n\n<!--[ToolCalls]-->'
+      }
+    }
     content = createToolCallHtml(content, toolCalls)
   }
 
@@ -561,6 +567,7 @@ export const parseMarkdown = (content, reference, toolCalls) => {
         lang = 'text'
         break
       case 'vue':
+      case 'html':
         lang = 'html'
         break
     }

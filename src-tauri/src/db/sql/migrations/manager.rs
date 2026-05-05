@@ -1,37 +1,10 @@
-use crate::db::sql::migrations::{v1, v2, v3, v4, v5};
+use crate::db::sql::migrations::{v1, v2, v3, v4, v5, MigrationDefinition};
 use crate::db::StoreError;
 use rusqlite::Connection;
 
-// Define the migration structure to hold SQL statements directly.
-struct Migration {
-    version: i32,
-    description: &'static str,
-    sql: &'static [(&'static str, &'static str)],
-}
-
 // Register all migrations with their corresponding SQL.
-const MIGRATIONS: &[Migration] = &[
-    Migration {
-        version: 2,
-        description: "v2 migration: Add agents and workflows tables",
-        sql: v2::MIGRATION_SQL,
-    },
-    Migration {
-        version: 3,
-        description: "v3 migration: Placeholder for compatibility",
-        sql: v3::MIGRATION_SQL,
-    },
-    Migration {
-        version: 4,
-        description: "v4 migration: Add ccproxy_stats table",
-        sql: v4::MIGRATION_SQL,
-    },
-    Migration {
-        version: 5,
-        description: "v5 migration: Add workflows table",
-        sql: v5::MIGRATION_SQL,
-    },
-];
+const MIGRATIONS: &[MigrationDefinition] =
+    &[v2::MIGRATION, v3::MIGRATION, v4::MIGRATION, v5::MIGRATION];
 
 /// Executes a given set of SQL statements within a transaction and updates the db version.
 fn execute_migration_sql(
@@ -55,6 +28,19 @@ fn execute_migration_sql(
     )?;
 
     tx.commit()?;
+    Ok(())
+}
+
+fn run_post_migration_ensures(conn: &Connection, current_version: i32) -> Result<(), StoreError> {
+    for migration in MIGRATIONS
+        .iter()
+        .filter(|migration| migration.version <= current_version)
+    {
+        if let Some(ensure) = migration.ensure {
+            ensure(conn)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -98,6 +84,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
             "Database is already up to date at version {}.",
             current_version
         );
+        run_post_migration_ensures(conn, current_version)?;
         return Ok(());
     }
 
@@ -107,7 +94,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
     );
 
     // Filter out all migrations that need to be executed and sort them by version.
-    let mut pending_migrations: Vec<&Migration> = MIGRATIONS
+    let mut pending_migrations: Vec<&MigrationDefinition> = MIGRATIONS
         .iter()
         .filter(|m| m.version > current_version)
         .collect();
@@ -128,6 +115,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
     }
 
     let final_version = get_db_version(conn)?;
+    run_post_migration_ensures(conn, final_version)?;
     log::info!(
         "All migrations applied. Database is now at version {}.",
         final_version

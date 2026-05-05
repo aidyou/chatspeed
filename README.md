@@ -17,7 +17,6 @@
 - **🚀 MCP Hub**：Chatspeed's MCP proxy can provide its own `WebSearch` and `WebFetch` tools, along with any `MCP` tools you've installed, to external clients via the more stable `Streamable HTTP` protocol. Learn how to [centrally manage MCP](https://docs.chatspeed.aidyou.ai/mcp/).
 
 > [!CAUTION]
-> **⚠️ Deprecation Notice**: The `/mcp/sse` endpoint is now officially deprecated and scheduled for removal in **v1.3.0**. Due to inherent stability issues with SSE (such as unfixable 410 errors) and the removal of support in the upstream library, users are strongly encouraged to migrate to the `/mcp/http` (Streamable HTTP) protocol.
 
 ## 🚀 Core Engine: `CCProxy`
 

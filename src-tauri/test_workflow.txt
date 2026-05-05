@@ -1,0 +1,6 @@
+This is a test file for workflow module testing.
+It contains some sample content to verify file operations work correctly.
+The workflow module should be able to handle this file properly.
+Added by edit_file test - this line was added during testing.
+Another test line to verify the edit functionality works correctly.
+Final line added by edit_file test to confirm the operation was successful.

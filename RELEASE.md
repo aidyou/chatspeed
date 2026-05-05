@@ -2,6 +2,14 @@
 
 # Release Notes
 
+## [2.0.0]
+
+### ⚠️ Breaking Changes
+
+- **MCP Proxy SSE Removal**: Completely removed SSE (Server-Sent Events) support from the MCP proxy server. The system now exclusively uses the more stable **Streamable HTTP** protocol (`/mcp/http`) for unified tool access.
+
+---
+
 ## [1.2.9]
 
 ### 🪄 Improvements
@@ -122,7 +130,7 @@
 
 ### ⚠️ Deprecation Notice
 
-- **MCP SSE Protocol**: The `/mcp/sse` endpoint is now officially deprecated and scheduled for removal in **v1.3.0**. Users are strongly encouraged to migrate to the more stable `/mcp/http` (Streamable HTTP) protocol. This decision is due to inherent stability issues with SSE (such as unfixable 410 errors) and the removal of support in the upstream library.
+- **MCP SSE Protocol**: The `/mcp/sse` endpoint is now officially deprecated and scheduled for removal in **v2.0.0**. Users are strongly encouraged to migrate to the more stable `/mcp/http` (Streamable HTTP) protocol. This decision is due to inherent stability issues with SSE (such as unfixable 410 errors) and the removal of support in the upstream library.
 
 ### 🚀 New Features
 

@@ -8,39 +8,67 @@
         </span>
       </el-tooltip>
     </div>
-    <Sortable v-if="models.length > 0" class="list" item-key="id" :list="models" :options="{
-      animation: 150,
-      ghostClass: 'ghost',
-      dragClass: 'drag',
-      draggable: '.draggable',
-      forceFallback: true,
-      bubbleScroll: true
-    }" @update="onUpdate" @end="onDragEnd">
+    <Sortable
+      v-if="models.length > 0"
+      class="list"
+      item-key="id"
+      :list="models"
+      :options="{
+        animation: 150,
+        ghostClass: 'ghost',
+        dragClass: 'drag',
+        draggable: '.draggable',
+        forceFallback: true,
+        bubbleScroll: true
+      }"
+      @update="onUpdate"
+      @end="onDragEnd">
       <template #item="{ element }">
         <div class="item draggable" :key="element.id">
           <div class="label">
-            <img v-if="element.providerLogo !== ''" :src="element.providerLogo" class="provider-logo" />
+            <img
+              v-if="element.providerLogo !== ''"
+              :src="element.providerLogo"
+              class="provider-logo" />
             <avatar :text="element.name" color="primary" size="20px" v-else />
             {{ element.name }}
           </div>
           <div class="value">
-            <el-tooltip :content="$t('settings.model.' + (element.disabled ? 'enable' : 'disable'))" placement="top"
-              :hide-after="0" :enterable="false" transition="none">
-              <el-switch :model-value="!element.disabled" @update:model-value="toggleModelStatus(element)" />
+            <el-tooltip
+              :content="$t('settings.model.' + (element.disabled ? 'enable' : 'disable'))"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
+              transition="none">
+              <el-switch
+                :model-value="!element.disabled"
+                @update:model-value="toggleModelStatus(element)" />
             </el-tooltip>
-            <el-tooltip :content="$t('settings.model.edit')" placement="top" :hide-after="0" :enterable="false"
+            <el-tooltip
+              :content="$t('settings.model.edit')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
               transition="none">
               <div class="icon" @click="editModel(element.id)" @mousedown.stop>
                 <cs name="edit" size="16px" color="secondary" />
               </div>
             </el-tooltip>
-            <el-tooltip :content="$t('settings.model.copy')" placement="top" :hide-after="0" :enterable="false"
+            <el-tooltip
+              :content="$t('settings.model.copy')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
               transition="none">
               <div class="icon" @click="copyModel(element.id)" @mousedown.stop>
                 <cs name="copy" size="16px" color="secondary" />
               </div>
             </el-tooltip>
-            <el-tooltip :content="$t('settings.model.delete')" placement="top" :hide-after="0" :enterable="false"
+            <el-tooltip
+              :content="$t('settings.model.delete')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
               transition="none">
               <div class="icon" @click="deleteModel(element.id)" @mousedown.stop>
                 <cs name="trash" size="16px" color="secondary" />
@@ -58,8 +86,14 @@
   </div>
 
   <!-- model editor -->
-  <el-dialog v-model="modelDialogVisible" width="560px" class="model-edit-dialog" :show-close="false"
-    :close-on-click-modal="false" :close-on-press-escape="false" @closed="onModelDialogClose">
+  <el-dialog
+    v-model="modelDialogVisible"
+    width="560px"
+    class="model-edit-dialog"
+    :show-close="false"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false"
+    @closed="onModelDialogClose">
     <el-form :model="modelForm" :rules="modelRules" ref="formRef" label-width="120px">
       <el-tabs v-model="activeTab">
         <!-- basic info -->
@@ -73,34 +107,55 @@
             <el-input v-model="modelForm.name" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.logo')" prop="logo">
-            <el-input v-model="modelForm.logo" :placeholder="$t('settings.model.logoPlaceholder')" />
+            <el-input
+              v-model="modelForm.logo"
+              :placeholder="$t('settings.model.logoPlaceholder')" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.apiUrl')" prop="baseUrl">
             <el-input v-model="modelForm.baseUrl" :placeholder="baseUrlPlaceholder" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.apiKey')" prop="apiKey">
-            <el-input v-model="modelForm.apiKey" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }"
+            <el-input
+              v-model="modelForm.apiKey"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 5 }"
               :placeholder="$t('settings.model.apiKeyPlaceholder')" />
           </el-form-item>
           <el-form-item :label="$t('settings.general.proxyType')" prop="proxyType">
             <el-radio-group v-model="modelForm.proxyType">
-              <el-radio :value="proxyType.value" v-for="proxyType in proxyTypeOptions" :key="proxyType.value">{{
-                proxyType.label }}</el-radio>
+              <el-radio
+                :value="proxyType.value"
+                v-for="proxyType in proxyTypeOptions"
+                :key="proxyType.value"
+                >{{ proxyType.label }}</el-radio
+              >
             </el-radio-group>
           </el-form-item>
-          <el-form-item :label="$t('settings.general.proxyServer')" prop="proxyServer"
+          <el-form-item
+            :label="$t('settings.general.proxyServer')"
+            prop="proxyServer"
             v-show="modelForm.proxyType === 'http'">
-            <el-input v-model="modelForm.proxyServer" type="text"
+            <el-input
+              v-model="modelForm.proxyServer"
+              type="text"
               :placeholder="$t('settings.general.proxyServerPlaceholder')" />
           </el-form-item>
-          <el-form-item :label="$t('settings.general.proxyUsername')" prop="proxyUsername"
+          <el-form-item
+            :label="$t('settings.general.proxyUsername')"
+            prop="proxyUsername"
             v-show="modelForm.proxyType === 'http'">
-            <el-input v-model="modelForm.proxyUsername" type="text"
+            <el-input
+              v-model="modelForm.proxyUsername"
+              type="text"
               :placeholder="$t('settings.general.proxyUsernamePlaceholder')" />
           </el-form-item>
-          <el-form-item :label="$t('settings.general.proxyPassword')" prop="proxyPassword"
+          <el-form-item
+            :label="$t('settings.general.proxyPassword')"
+            prop="proxyPassword"
             v-show="modelForm.proxyType === 'http'">
-            <el-input v-model="modelForm.proxyPassword" type="text"
+            <el-input
+              v-model="modelForm.proxyPassword"
+              type="text"
               :placeholder="$t('settings.general.proxyPasswordPlaceholder')" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.disabled')" prop="disabled">
@@ -113,7 +168,10 @@
         <el-tab-pane :label="$t('settings.model.modelInfo')" name="modelInfo">
           <div class="card card-col-list">
             <div v-if="Object.keys(modelGroups).length > 0" class="card-container">
-              <el-card v-for="(models, group) in modelGroups" :key="group" body-class="edit-card-body">
+              <el-card
+                v-for="(models, group) in modelGroups"
+                :key="group"
+                body-class="edit-card-body">
                 <template #header>
                   <span>{{ group }}</span>
                 </template>
@@ -132,20 +190,30 @@
                       </span>
                     </div>
                     <div class="value model-action">
-                      <el-tooltip :content="$t('settings.model.defaultModel')" placement="top" :hide-after="0"
-                        :enterable="false" transition="none">
-                        <cs :name="model.id == modelForm.defaultModel ? 'check-circle' : 'uncheck'"
+                      <el-tooltip
+                        :content="$t('settings.model.defaultModel')"
+                        placement="top"
+                        :hide-after="0"
+                        :enterable="false"
+                        transition="none">
+                        <cs
+                          :name="model.id == modelForm.defaultModel ? 'check-circle' : 'uncheck'"
                           @click="onDefaultModelChange(model.id)" />
                       </el-tooltip>
 
                       <cs name="edit" @click="onModelConfig(model)" />
-                      <cs name="trash" color="var(--el-color-danger)" @click="removeModelConfig(model.id)" />
+                      <cs
+                        name="trash"
+                        color="var(--el-color-danger)"
+                        @click="removeModelConfig(model.id)" />
                     </div>
                   </div>
                 </div>
               </el-card>
             </div>
-            <div v-else style="
+            <div
+              v-else
+              style="
                 text-align: center;
                 font-size: var(--cs-font-size-lg);
                 padding: var(--cs-space-lg);
@@ -153,7 +221,11 @@
               {{ $t('settings.model.noModels') }}
             </div>
             <div class="footer">
-              <el-button type="success" round @click="onProviderModelImportShow()" :loading="isLoadingProviderModels"
+              <el-button
+                type="success"
+                round
+                @click="onProviderModelImportShow()"
+                :loading="isLoadingProviderModels"
                 :disabled="isLoadingProviderModels && Object.keys(providerModelToShow).length < 1">
                 <cs name="import" />{{ $t('settings.model.import') }}
               </el-button>
@@ -168,46 +240,110 @@
         <!-- additional info -->
         <el-tab-pane :label="$t('settings.model.additionalInfo')" name="additional">
           <el-form-item :label="$t('settings.model.maxTokens')" prop="maxTokens">
-            <el-input-number v-model="modelForm.maxTokens" :min="64" :max="1000000" :step="1024" :step-strictly="false"
-              controls-position="right" :placeholder="$t('settings.model.maxTokensPlaceholder')" />
+            <el-input-number
+              v-model="modelForm.maxTokens"
+              :min="64"
+              :max="1000000"
+              :step="1024"
+              :step-strictly="false"
+              controls-position="right"
+              :placeholder="$t('settings.model.maxTokensPlaceholder')" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.temperature')" prop="temperature">
-            <el-tooltip :content="$t('settings.model.temperaturePlaceholder')" placement="top" :hide-after="0"
-              :enterable="false" transition="none">
-              <el-slider v-model="modelForm.temperature" :min="0" :max="2" :step="0.1" show-input :show-tooltip="false"
-                input-size="small" />
+            <el-tooltip
+              :content="$t('settings.model.temperaturePlaceholder')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
+              transition="none">
+              <div style="display: flex; align-items: center; width: 100%; gap: 12px">
+                <el-slider
+                  v-model="modelForm.temperature"
+                  :min="-0.1"
+                  :max="2"
+                  :step="0.1"
+                  :show-tooltip="false"
+                  style="flex: 1" />
+                <span style="font-size: 12px; min-width: 32px; text-align: right">
+                  {{ modelForm.temperature < 0 ? 'Off' : modelForm.temperature.toFixed(1) }}
+                </span>
+              </div>
             </el-tooltip>
           </el-form-item>
           <el-form-item :label="$t('settings.model.topP')" prop="topP">
-            <el-tooltip :content="$t('settings.model.topPPlaceholder')" placement="top" :hide-after="0"
-              :enterable="false" transition="none">
-              <el-slider v-model="modelForm.topP" :min="0" :max="1" :step="0.05" show-input
-                :format-tooltip="value => value.toFixed(2)" :show-tooltip="false" input-size="small" />
+            <el-tooltip
+              :content="$t('settings.model.topPPlaceholder')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
+              transition="none">
+              <el-slider
+                v-model="modelForm.topP"
+                :min="0"
+                :max="1"
+                :step="0.05"
+                show-input
+                :format-tooltip="value => value.toFixed(2)"
+                :show-tooltip="false"
+                input-size="small" />
             </el-tooltip>
           </el-form-item>
           <el-form-item :label="$t('settings.model.topK')" prop="topK">
-            <el-tooltip :content="$t('settings.model.topKPlaceholder')" placement="top" :hide-after="0"
-              :enterable="false" transition="none">
-              <el-slider v-model="modelForm.topK" :min="0" :max="100" :step="1" show-input :show-tooltip="false"
+            <el-tooltip
+              :content="$t('settings.model.topKPlaceholder')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
+              transition="none">
+              <el-slider
+                v-model="modelForm.topK"
+                :min="0"
+                :max="100"
+                :step="1"
+                show-input
+                :show-tooltip="false"
                 input-size="small" />
             </el-tooltip>
           </el-form-item>
           <el-form-item :label="$t('settings.model.frequencyPenalty')" prop="frequencyPenalty">
-            <el-tooltip :content="$t('settings.model.frequencyPenaltyPlaceholder')" placement="top" :hide-after="0"
-              :enterable="false" transition="none">
-              <el-slider v-model="modelForm.frequencyPenalty" :min="-2" :max="2" :step="0.1" show-input
-                :show-tooltip="false" input-size="small" />
+            <el-tooltip
+              :content="$t('settings.model.frequencyPenaltyPlaceholder')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
+              transition="none">
+              <el-slider
+                v-model="modelForm.frequencyPenalty"
+                :min="-2"
+                :max="2"
+                :step="0.1"
+                show-input
+                :show-tooltip="false"
+                input-size="small" />
             </el-tooltip>
           </el-form-item>
           <el-form-item :label="$t('settings.model.presencePenalty')" prop="presencePenalty">
-            <el-tooltip :content="$t('settings.model.presencePenaltyPlaceholder')" placement="top" :hide-after="0"
-              :enterable="false" transition="none">
-              <el-slider v-model="modelForm.presencePenalty" :min="-2" :max="2" :step="0.1" show-input
-                :show-tooltip="false" input-size="small" />
+            <el-tooltip
+              :content="$t('settings.model.presencePenaltyPlaceholder')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
+              transition="none">
+              <el-slider
+                v-model="modelForm.presencePenalty"
+                :min="-2"
+                :max="2"
+                :step="0.1"
+                show-input
+                :show-tooltip="false"
+                input-size="small" />
             </el-tooltip>
           </el-form-item>
           <el-form-item :label="$t('settings.model.stop')" prop="stop">
-            <el-input v-model="modelForm.stop" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }"
+            <el-input
+              v-model="modelForm.stop"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 5 }"
               :placeholder="$t('settings.model.stopPlaceholder')" />
           </el-form-item>
 
@@ -221,16 +357,34 @@
               </el-tooltip>
             </div>
 
-            <div v-for="(header, index) in modelForm.customHeaders" :key="index" class="header-row"
+            <div
+              v-for="(header, index) in modelForm.customHeaders"
+              :key="index"
+              class="header-row"
               style="display: flex; gap: 10px; margin-bottom: 10px">
-              <el-input v-model="header.key" :placeholder="$t('settings.model.headerKey')" style="flex: 1" />
-              <el-input v-model="header.value" :placeholder="$t('settings.model.headerValue')" style="flex: 2" />
-              <el-button type="danger" link @click="removeCustomHeader(index)" style="padding: 0; min-width: 24px">
+              <el-input
+                v-model="header.key"
+                :placeholder="$t('settings.model.headerKey')"
+                style="flex: 1" />
+              <el-input
+                v-model="header.value"
+                :placeholder="$t('settings.model.headerValue')"
+                style="flex: 2" />
+              <el-button
+                type="danger"
+                link
+                @click="removeCustomHeader(index)"
+                style="padding: 0; min-width: 24px">
                 <cs name="trash" size="16px" />
               </el-button>
             </div>
 
-            <el-button type="primary" plain size="small" @click="addCustomHeader" style="width: 100%">
+            <el-button
+              type="primary"
+              plain
+              size="small"
+              @click="addCustomHeader"
+              style="width: 100%">
               <cs name="add" /> {{ $t('settings.model.addHeader') }}
             </el-button>
           </div>
@@ -246,20 +400,37 @@
     </template>
   </el-dialog>
 
-  <el-dialog v-model="modelImportDialogVisible" align-center width="500px" :title="$t('settings.model.modelConfig')"
-    :show-close="false" :close-on-click-modal="false" :close-on-press-escape="false">
-    <el-input v-model="providerModelKeyword" :placeholder="$t('settings.model.searchByIdOrName')" clearable
+  <el-dialog
+    v-model="modelImportDialogVisible"
+    align-center
+    width="500px"
+    :title="$t('settings.model.modelConfig')"
+    :show-close="false"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false">
+    <el-input
+      v-model="providerModelKeyword"
+      :placeholder="$t('settings.model.searchByIdOrName')"
+      clearable
       style="margin-bottom: 15px" />
     <div class="card card-col-list card-model-import">
       <div v-if="Object.keys(providerModelToShow).length > 0" class="card-container">
-        <el-card v-for="(providerModels, group) in providerModelToShow" :key="group" body-class="edit-card-body">
+        <el-card
+          v-for="(providerModels, group) in providerModelToShow"
+          :key="group"
+          body-class="edit-card-body">
           <template #header>
             <span>{{ group }}</span>
           </template>
           <div class="list opacity">
             <div class="item" v-for="model in providerModels" :key="model.id">
               <div class="label">
-                <el-tooltip v-if="model.id" :content="model.id" placement="top" :hide-after="0" :enterable="false"
+                <el-tooltip
+                  v-if="model.id"
+                  :content="model.id"
+                  placement="top"
+                  :hide-after="0"
+                  :enterable="false"
                   transition="none">
                   <span>{{ model.name || model.id }}</span>
                 </el-tooltip>
@@ -274,10 +445,17 @@
                 </span>
               </div>
               <div class="value model-action">
-                <el-tooltip v-if="!formModelIds.includes(model.id)" :content="$t('settings.model.add')" placement="top"
-                  :hide-after="0" :enterable="false" transition="none">
-                  <cs :name="providerModelSelected[model.id] ? 'check-circle' : 'uncheck'"
-                    :active="providerModelSelected[model.id]" @click="onProviderModelSelected(model.id)" />
+                <el-tooltip
+                  v-if="!formModelIds.includes(model.id)"
+                  :content="$t('settings.model.add')"
+                  placement="top"
+                  :hide-after="0"
+                  :enterable="false"
+                  transition="none">
+                  <cs
+                    :name="providerModelSelected[model.id] ? 'check-circle' : 'uncheck'"
+                    :active="providerModelSelected[model.id]"
+                    @click="onProviderModelSelected(model.id)" />
                 </el-tooltip>
               </div>
             </div>
@@ -297,9 +475,19 @@
   </el-dialog>
 
   <!-- model config -->
-  <el-dialog v-model="modelConfigDialogVisible" align-center width="500px" :title="$t('settings.model.modelConfig')"
-    :show-close="false" :close-on-click-modal="false" :close-on-press-escape="false">
-    <el-form :model="modelConfigForm" label-width="100px" :rules="modelConfigRules" ref="configFormRef">
+  <el-dialog
+    v-model="modelConfigDialogVisible"
+    align-center
+    width="500px"
+    :title="$t('settings.model.modelConfig')"
+    :show-close="false"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false">
+    <el-form
+      :model="modelConfigForm"
+      label-width="100px"
+      :rules="modelConfigRules"
+      ref="configFormRef">
       <el-form-item :label="$t('settings.model.modelId')" prop="id">
         <el-input v-model="modelConfigForm.id" />
       </el-form-item>
@@ -312,11 +500,61 @@
       <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
         <el-switch v-model="modelConfigForm.reasoning" />
       </el-form-item>
+      <el-form-item
+        v-if="modelConfigForm.reasoning"
+        :label="$t('settings.model.thinkingLevel')">
+        <el-select v-model="modelConfigForm.thinkingLevel" style="width: 100%">
+          <el-option
+            v-for="option in modelThinkingLevelOptions"
+            :key="option.value"
+            :label="$t(option.label)"
+            :value="option.value" />
+        </el-select>
+      </el-form-item>
       <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
         <el-switch v-model="modelConfigForm.functionCall" />
       </el-form-item>
       <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
         <el-switch v-model="modelConfigForm.imageInput" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.contextSize')" prop="contextSize">
+        <el-input-number
+          v-model="modelConfigForm.contextSize"
+          :min="1024"
+          :max="2000000"
+          :step="1024"
+          controls-position="right"
+          style="width: 100%" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.maxTokens')" prop="maxTokens">
+        <el-input-number
+          v-model="modelConfigForm.maxTokens"
+          :min="0"
+          :max="128000"
+          :step="1024"
+          controls-position="right"
+          style="width: 100%" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.model.temperature')" prop="temperature">
+        <el-tooltip
+          :content="$t('settings.model.temperaturePlaceholder')"
+          placement="top"
+          :hide-after="0"
+          :enterable="false"
+          transition="none">
+          <div style="display: flex; align-items: center; width: 100%; gap: 12px">
+            <el-slider
+              v-model="modelConfigForm.temperature"
+              :min="-0.1"
+              :max="2"
+              :step="0.1"
+              :show-tooltip="false"
+              style="flex: 1" />
+            <span style="font-size: 12px; min-width: 32px; text-align: right">
+              {{ modelConfigForm.temperature < 0 ? 'Off' : modelConfigForm.temperature.toFixed(1) }}
+            </span>
+          </div>
+        </el-tooltip>
       </el-form-item>
 
       <el-divider border-style="dashed" />
@@ -329,16 +567,34 @@
           </el-tooltip>
         </div>
 
-        <div v-for="(param, index) in modelConfigForm.customParams" :key="index" class="header-row"
+        <div
+          v-for="(param, index) in modelConfigForm.customParams"
+          :key="index"
+          class="header-row"
           style="display: flex; gap: 10px; margin-bottom: 10px">
-          <el-input v-model="param.key" :placeholder="$t('settings.model.paramKey')" style="flex: 1" />
-          <el-input v-model="param.value" :placeholder="$t('settings.model.paramValue')" style="flex: 2" />
-          <el-button type="danger" link @click="removeModelConfigParam(index)" style="padding: 0; min-width: 24px">
+          <el-input
+            v-model="param.key"
+            :placeholder="$t('settings.model.paramKey')"
+            style="flex: 1" />
+          <el-input
+            v-model="param.value"
+            :placeholder="$t('settings.model.paramValue')"
+            style="flex: 2" />
+          <el-button
+            type="danger"
+            link
+            @click="removeModelConfigParam(index)"
+            style="padding: 0; min-width: 24px">
             <cs name="trash" size="16px" />
           </el-button>
         </div>
 
-        <el-button type="primary" plain size="small" @click="addModelConfigParam" style="width: 100%">
+        <el-button
+          type="primary"
+          plain
+          size="small"
+          @click="addModelConfigParam"
+          style="width: 100%">
           <cs name="add" /> {{ $t('settings.model.addParam') }}
         </el-button>
       </div>
@@ -352,13 +608,21 @@
   </el-dialog>
 
   <!-- preset models -->
-  <el-dialog v-model="presetModelsVisible" :title="$t('settings.model.presetModels')" width="600px" align-center
+  <el-dialog
+    v-model="presetModelsVisible"
+    :title="$t('settings.model.presetModels')"
+    width="600px"
+    align-center
     class="preset-models-dialog">
     <div class="preset-models-container">
       <div class="search-bar">
         <el-row :gutter="10">
           <el-col :span="16">
-            <el-input v-model="searchQuery" :placeholder="$t('common.search')" clearable class="search-input" />
+            <el-input
+              v-model="searchQuery"
+              :placeholder="$t('common.search')"
+              clearable
+              class="search-input" />
           </el-col>
           <el-col :span="8">
             <el-button type="primary" plain @click="onManualAdd()" style="width: 100%">
@@ -369,7 +633,11 @@
       </div>
 
       <div class="preset-models-list">
-        <el-card v-for="model in filteredModels" :key="model.name" class="preset-model-card" shadow="hover">
+        <el-card
+          v-for="model in filteredModels"
+          :key="model.name"
+          class="preset-model-card"
+          shadow="hover">
           <div class="model-item">
             <div class="model-info">
               <img :src="model.logo" class="model-logo" />
@@ -379,13 +647,19 @@
               </div>
               <el-button type="success" @click="importPresetModel(model)">{{
                 $t('settings.model.addFromPreset')
-                }}</el-button>
+              }}</el-button>
             </div>
             <div class="links">
-              <el-link v-if="model.documentationUrl" type="primary" @click="openUrl(model.documentationUrl)">
+              <el-link
+                v-if="model.documentationUrl"
+                type="primary"
+                @click="openUrl(model.documentationUrl)">
                 {{ $t('settings.model.documentation') }}
               </el-link>
-              <el-link v-if="model.modelListUrl" type="primary" @click="openUrl(model.modelListUrl)">
+              <el-link
+                v-if="model.modelListUrl"
+                type="primary"
+                @click="openUrl(model.modelListUrl)">
                 {{ $t('settings.model.modelInfo') }}
               </el-link>
               <el-link v-if="model.keyApplyUrl" type="primary" @click="openUrl(model.keyApplyUrl)">
@@ -559,7 +833,7 @@ const defaultFormData = {
   baseUrl: '',
   apiKey: '',
   maxTokens: 4096,
-  temperature: 0.8,
+  temperature: -0.1,
   topP: 0,
   topK: 0,
   presencePenalty: 0.0,
@@ -885,9 +1159,34 @@ const defaultModelConfig = {
   group: '',
   functionCall: false,
   reasoning: false,
+  thinking: null,
+  thinkingLevel: 'low',
   imageInput: false,
+  contextSize: 128000,
+  temperature: -0.1,
+  maxTokens: 0,
   customParams: []
 }
+const THINKING_LEVEL_TO_BUDGET = {
+  low: 1024,
+  medium: 2048,
+  high: 4096,
+  max: 8192
+}
+const thinkingLevelFromBudget = (budget) => {
+  const normalized = Number(budget) || 0
+  if (normalized > 4096) return 'max'
+  if (normalized > 2048) return 'high'
+  if (normalized > 1024) return 'medium'
+  return 'low'
+}
+const budgetFromThinkingLevel = (level) => THINKING_LEVEL_TO_BUDGET[level] || THINKING_LEVEL_TO_BUDGET.low
+const modelThinkingLevelOptions = [
+  { value: 'low', label: 'settings.model.reasoningLow' },
+  { value: 'medium', label: 'settings.model.reasoningMedium' },
+  { value: 'high', label: 'settings.model.reasoningHigh' },
+  { value: 'max', label: 'settings.model.reasoningMax' }
+]
 const modelConfigRules = {
   id: [{ required: true, message: t('settings.model.modelIdRequired') }]
 }
@@ -913,8 +1212,11 @@ const onModelConfig = model => {
     prevModelConfigId.value = model.id
     model.group = model.group === t('settings.model.ungrouped') ? '' : model.group
     modelConfigForm.value = {
+      ...defaultModelConfig,
       ...model,
-      customParams: model.customParams || []
+      customParams: model.customParams || [],
+      thinking: model.thinking || null,
+      thinkingLevel: thinkingLevelFromBudget(model.thinking?.budgetTokens)
     }
   } else {
     prevModelConfigId.value = ''
@@ -952,8 +1254,16 @@ const updateModelConfig = () => {
   const updatedModelConfig = {
     ...modelConfigForm.value,
     id: trimmedId,
+    thinking:
+      modelConfigForm.value.reasoning
+        ? {
+          type: 'enabled',
+          budgetTokens: budgetFromThinkingLevel(modelConfigForm.value.thinkingLevel)
+        }
+        : null,
     customParams: modelConfigForm.value.customParams.filter(p => p.key.trim() !== '')
   }
+  delete updatedModelConfig.thinkingLevel
 
   if (index !== -1) {
     if (prevModelConfigId.value && prevModelConfigId.value === modelForm.value.defaultModel) {
@@ -1049,7 +1359,18 @@ const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metada
     fetchedProviderModels.value =
       (await modelStore.listModels(protocol, baseUrl, apiKey, metadata)) || []
   } catch (error) {
-    if (error instanceof FrontendAppError) {
+    const formattedError =
+      error instanceof FrontendAppError
+        ? error.toFormattedString()
+        : error?.message || String(error)
+    const isUnsupportedListModels =
+      formattedError.includes('Method Not Allowed') ||
+      formattedError.includes('status_code\":405') ||
+      formattedError.includes('not available for Coding Agents')
+
+    if (isUnsupportedListModels) {
+      console.warn('Provider does not support list_models, skipping model auto-fetch.')
+    } else if (error instanceof FrontendAppError) {
       console.error(
         `Failed to fetch provider models: ${error.toFormattedString()}`,
         error.originalError
@@ -1057,6 +1378,7 @@ const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metada
     } else {
       console.error('Failed to fetch provider models:', error)
     }
+
     fetchedProviderModels.value = []
   } finally {
     isLoadingProviderModels.value = false
@@ -1135,8 +1457,12 @@ const onProviderModelSave = () => {
       name: model.name,
       group: model.family || t('settings.model.ungrouped'),
       reasoning: model.reasoning || false,
+      thinking: null,
       functionCall: model.functionCall || false,
-      imageInput: model.imageInput || false
+      imageInput: model.imageInput || false,
+      contextSize: model.contextSize ?? 128000,
+      temperature: model.temperature ?? -0.1,
+      maxTokens: model.maxTokens ?? 0
     }))
   console.log('modelsToAdd', modelsToAdd)
   if (modelsToAdd.length) {

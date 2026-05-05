@@ -1,6 +1,6 @@
 <template>
   <div class="workflow-layout">
-    <titlebar>
+    <Titlebar :show-menu-button="settingStore.settings.showMenuButton">
       <template #left>
         <el-tooltip
           :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)"
@@ -12,8 +12,83 @@
           </div>
         </el-tooltip>
       </template>
-      <template #center> </template>
+      <template #center>
+        <div
+          v-if="displayAllowedPathTitle"
+          class="workflow-titlebar-primary-path"
+          :title="displayAllowedPathTitle">
+          {{ displayAllowedPathTitle }}
+        </div>
+      </template>
       <template #right>
+        <el-dropdown
+          v-if="pendingApprovalList.length > 0"
+          trigger="click"
+          @command="handleApprovalCommand">
+          <div class="icon-btn upperLayer approval-queue-btn blinking">
+            <cs name="approval" />
+            <span class="approval-queue-count">{{ approvalQueueCount }}</span>
+          </div>
+          <template #dropdown>
+            <el-dropdown-menu class="approval-queue-menu">
+              <el-dropdown-item
+                v-for="item in pendingApprovalList"
+                :key="item.key"
+                :command="item.sessionId">
+                <div class="approval-menu-item">
+                  <div class="approval-menu-title">
+                    <cs name="approval" size="var(--cs-font-size-md)" />
+                    {{ getPendingApprovalTitle(item) }}
+                  </div>
+                  <div class="approval-menu-summary" :title="item.workflowTitle || item.action">
+                    {{ item.workflowTitle || item.action }}
+                  </div>
+                </div>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-dropdown trigger="click">
+          <div class="icon-btn upperLayer">
+            <el-tooltip
+              :content="$t('workflow.notificationSound')"
+              :hide-after="0"
+              :enterable="false"
+              placement="bottom">
+              <cs :name="soundIcon" />
+            </el-tooltip>
+          </div>
+          <template #dropdown>
+            <el-dropdown-menu class="sound-dropdown-menu">
+              <el-dropdown-item>
+                <el-checkbox
+                  :model-value="!workflowApprovalMuted"
+                  @change="toggleWorkflowApprovalMute">
+                  {{ $t('workflow.approvalSound') }}
+                </el-checkbox>
+              </el-dropdown-item>
+              <el-dropdown-item>
+                <el-checkbox
+                  :model-value="!workflowCompletionMuted"
+                  @change="toggleWorkflowCompletionMute">
+                  {{ $t('workflow.completionSound') }}
+                </el-checkbox>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <div
+          class="icon-btn upperLayer"
+          :class="{ disabled: !canDeleteLastAssistantTurn }"
+          @click="onDeleteLastAssistantTurn">
+          <el-tooltip
+            :content="$t('workflow.deleteLastAssistantTurn')"
+            :hide-after="0"
+            :enterable="false"
+            placement="bottom">
+            <cs name="trash" />
+          </el-tooltip>
+        </div>
         <div class="icon-btn upperLayer pin-btn" @click="onPin" :class="{ active: isAlwaysOnTop }">
           <el-tooltip
             :content="$t(`common.${isAlwaysOnTop ? 'unpin' : 'pin'}`)"
@@ -24,131 +99,114 @@
           </el-tooltip>
         </div>
       </template>
-    </titlebar>
+    </Titlebar>
 
     <div class="workflow-main">
-      <el-aside :width="sidebarWidth" :class="{ collapsed: sidebarCollapsed }" class="sidebar">
-        <div class="sidebar-header upperLayer">
-          <el-input
-            v-model="searchQuery"
-            :placeholder="$t('chat.searchChat')"
-            :clearable="true"
-            round>
-            <template #prefix><cs name="search" /></template>
-          </el-input>
-        </div>
-        <div v-show="!sidebarCollapsed" class="workflow-list">
-          <div class="list">
-            <div
-              class="item"
-              v-for="wf in filteredWorkflows"
-              :key="wf.id"
-              @click="selectWorkflow(wf.id)"
-              @mouseenter="hoveredWorkflowIndex = wf.id"
-              @mouseleave="hoveredWorkflowIndex = null"
-              :class="{
-                active: wf.id === currentWorkflowId,
-                disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId
-              }">
-              <div class="workflow-title">{{ wf.title || wf.userQuery }}</div>
-              <div class="workflow-status" v-if="wf.status">
-                <span :class="['status-indicator', wf.status.toLowerCase()]"></span>
-                {{ wf.status }}
-              </div>
-              <div class="icons" v-show="wf.id === hoveredWorkflowIndex">
-                <div class="icon icon-edit" @click.stop="onEditWorkflow(wf.id)">
-                  <cs name="edit" />
-                </div>
-                <div class="icon icon-delete" @click.stop="onDeleteWorkflow(wf.id)">
-                  <cs name="delete" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </el-aside>
+      <WorkflowSidebar
+        :workflows="filteredWorkflows"
+        :current-workflow-id="currentWorkflowId"
+        :reset-primary-root-filter-token="sidebarRootFilterResetToken"
+        :sidebar-collapsed="sidebarCollapsed"
+        :sidebar-width="sidebarWidth"
+        :sidebar-style="sidebarStyle"
+        :current-paths="currentPaths"
+        :can-switch-workflow="canSwitchWorkflow"
+        :is-dragging="isDragging"
+        @select-workflow="selectWorkflow"
+        @edit-workflow="onEditWorkflow"
+        @delete-workflow="onDeleteWorkflow"
+        @add-path-from-tree="onAddPathFromTree"
+        @remove-path-from-tree="onRemovePathFromTree" />
 
-      <!-- main container -->
+      <!-- Resize Handle -->
+      <div
+        v-if="!sidebarCollapsed"
+        class="sidebar-resize-handle"
+        :class="{ dragging: isDragging }"
+        @mousedown="onResizeStart" />
+
+      <!-- Main container -->
       <el-container class="main-container">
-        <div class="messages" ref="messagesRef">
-          <div v-for="message in messages" :key="message.id" class="message" :class="message.role">
-            <div class="avatar">
-              <cs v-if="message.role === 'user'" name="talk" class="user-icon" />
-              <cs v-else name="ai-common" />
-            </div>
-            <div class="content-container">
-              <div class="content" v-if="message.role === 'user'">
-                <pre class="simple-text">{{ message.message }}</pre>
-              </div>
-              <markdown
-                v-else
-                :content="message.message"
-                :tool-calls="message.metadata?.tool_calls || []" />
-            </div>
-          </div>
-        </div>
+        <WorkflowMessageList
+          ref="messageListRef"
+          :messages="enhancedMessages"
+          :is-running="isRunning"
+          :queued-messages="workflowStore.messageQueue"
+          :is-chatting="isChatting"
+          :chat-state="chatState"
+          :is-compressing="isCompressing"
+          :compression-message="compressionMessage"
+          :last-assistant-message="lastAssistantMessage"
+          :approval-loading="approvalLoading"
+          :active-approval-id="activeApprovalId"
+          :ask-user-submitting="askUserSubmitting"
+          :is-message-expanded="isMessageExpanded"
+          :is-reasoning-expanded="isReasoningExpanded"
+          :remove-system-reminder="removeSystemReminder"
+          :get-diff-markdown="getDiffMarkdown"
+          :parse-choice-content="parseChoiceContent"
+          :get-parsed-message="getParsedMessage"
+          :get-reasoning-preview="getReasoningPreview"
+          :should-show-tool-raw-content="shouldShowToolRawContent"
+          :pending-count="currentWorkflowPendingApprovals.length"
+          :current-workflow-id="currentWorkflowId"
+          :is-approval-submitting="isApprovalSubmitting"
+          @toggle-expand="toggleMessageExpand"
+          @toggle-reasoning="toggleReasoningExpand"
+          @submit-ask-user="submitAskUserResponse"
+          @approve-tool="onApproveAction"
+          @approve-all-tool="onApproveAllAction"
+          @approve-all-pending="onApproveAllPendingAction"
+          @remove-queued-message="removeQueuedMessage"
+          @reject-tool="onRejectAction" />
 
-        <div class="todo-list-wrapper" v-if="todoList.length > 0">
-          <TodoList :items="todoList" />
-        </div>
+        <!-- Status Panel (Floating) -->
+        <StatusPanel />
 
-        <!-- footer -->
-        <el-footer class="input-container">
-          <div class="input">
-            <el-input
-              ref="inputRef"
-              v-model="inputMessage"
-              type="textarea"
-              :autosize="{ minRows: 1, maxRows: 10 }"
-              :placeholder="$t('chat.inputMessagePlaceholder', { at: '@' })"
-              @keydown.enter="onKeyEnter" />
-
-            <div class="input-footer">
-              <div class="footer-left">
-                <div class="agent-selector-wrap" :class="{ disabled: currentWorkflowId }">
-                  <AgentSelector
-                    v-model="selectedAgent"
-                    :agent="
-                      currentWorkflow?.agentId
-                        ? agentStore.agents.find(a => a.id === currentWorkflow.agentId)
-                        : null
-                    "
-                    :disabled="!!currentWorkflowId" />
-                </div>
-                <div class="icons">
-                  <el-tooltip
-                    :content="$t('workflow.autoApproveTooltip')"
-                    placement="top">
-                    <label class="icon-btn upperLayer" :class="{ active: autoApproveTools }">
-                      <cs name="tool" class="small" />
-                    </label>
-                  </el-tooltip>
-                  <el-tooltip
-                    :content="$t('workflow.newWorkflow')"
-                    :hide-after="0"
-                    :enterable="false"
-                    placement="top">
-                    <label @click="createNewWorkflow" :class="{ disabled: isRunning }">
-                      <cs name="new-chat" class="small" :class="{ disabled: isRunning }" />
-                    </label>
-                  </el-tooltip>
-                </div>
-              </div>
-              <div class="icons">
-                <cs name="stop" @click="onStop" v-if="isRunning" />
-                <cs
-                  v-else
-                  name="send"
-                  @click="onSendMessage"
-                  :class="{ disabled: !canSendMessage }" />
-              </div>
-            </div>
-          </div>
-        </el-footer>
+        <!-- Input Area -->
+        <WorkflowInputArea
+          ref="inputAreaRef"
+          v-model:input-message="inputMessage"
+          :is-running="isRunning"
+          :has-live-session="hasLiveSession"
+          :wait-reason="waitReason"
+          :current-workflow="currentWorkflow"
+          :current-workflow-id="currentWorkflowId"
+          :selected-agent="selectedAgent"
+          :can-edit-agent="canEditCurrentWorkflowAgent"
+          :show-planning-mode-toggle="showPlanningModeToggle"
+          :active-model-name="activeModelName"
+          :planning-mode="planningMode"
+          :approval-level="approvalLevel"
+          :final-audit-mode="finalAuditMode"
+          :auto-compress-enabled="autoCompressEnabled"
+          :agents="agentStore.agents"
+          :show-skill-suggestions="showSkillSuggestions"
+          :show-file-suggestions="showFileSuggestions"
+          :filtered-system-skills="filteredSystemSkills"
+          :file-suggestions="fileSuggestions"
+          :selected-skill-index="selectedSkillIndex"
+          :selected-file-index="selectedFileIndex"
+          :on-input-key-down="onInputKeyDown"
+          :on-composition-start="onCompositionStart"
+          :on-composition-end="onCompositionEnd"
+          :on-skill-select="onSkillSelect"
+          :on-file-select="onFileSelect"
+          @send-message="onSendMessage"
+          @continue="onContinue"
+          @stop="onStop"
+          @approve-plan="onApprovePlan"
+          @toggle-planning-mode="planningMode = !planningMode"
+          @toggle-final-audit-mode="toggleFinalAuditMode"
+          @toggle-auto-compress="autoCompressEnabled = !autoCompressEnabled"
+          @update-approval-level="approvalLevel = $event"
+          @update-selected-agent="onSelectedAgentChange"
+          @create-new-workflow="createNewWorkflow"
+          @open-model-selector="openModelSelector" />
       </el-container>
     </div>
 
-    <!-- edit workflow dialog -->
+    <!-- Edit workflow dialog -->
     <el-dialog
       v-model="editWorkflowDialogVisible"
       :title="$t('workflow.editWorkflowTitle')"
@@ -164,6 +222,12 @@
         <el-button type="primary" @click="onSaveEditWorkflow">{{ $t('common.save') }}</el-button>
       </template>
     </el-dialog>
+
+    <WorkflowModelSelector
+      v-model="modelSelectorVisible"
+      :initial-tab="modelSelectorTab"
+      :agent="selectedAgent"
+      @save="onModelConfigSave" />
   </div>
 </template>
 
@@ -171,8 +235,9 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { ElMessageBox } from 'element-plus'
 import { invokeWrapper } from '@/libs/tauri'
+import { showMessage } from '@/libs/util'
 
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
@@ -180,14 +245,21 @@ import { useSettingStore } from '@/stores/setting'
 import { useWindowStore } from '@/stores/window'
 
 import Titlebar from '@/components/window/Titlebar.vue'
-import Markdown from '@/components/chat/Markdown.vue'
-import AgentSelector from '@/components/workflow/AgentSelector.vue'
-import TodoList from '@/components/workflow/TodoList.vue'
+import StatusPanel from '@/components/workflow/StatusPanel.vue'
+import WorkflowModelSelector from '@/components/workflow/WorkflowModelSelector.vue'
+import WorkflowSidebar from '@/components/workflow/WorkflowSidebar.vue'
+import WorkflowMessageList from '@/components/workflow/WorkflowMessageList.vue'
+import WorkflowInputArea from '@/components/workflow/WorkflowInputArea.vue'
 
-// Import workflow engine
-import { WorkflowEngine } from '@/pkg/workflow/engine'
-import { WorkflowState } from '@/pkg/workflow/types'
-import { getTodoListForWorkflow } from '@/pkg/workflow/tools/todoList'
+// Composables
+import { useWorkflowSidebar } from '@/composables/workflow/useWorkflowSidebar'
+import { useWorkflowChat } from '@/composables/workflow/useWorkflowChat'
+import { useWorkflowMessages } from '@/composables/workflow/useWorkflowMessages'
+import { useWorkflowApproval } from '@/composables/workflow/useWorkflowApproval'
+import { useWorkflowPaths } from '@/composables/workflow/useWorkflowPaths'
+import { useWorkflowInput } from '@/composables/workflow/useWorkflowInput'
+import { useWorkflowCore } from '@/composables/workflow/useWorkflowCore'
+import { TERMINAL_STATUSES } from '@/composables/workflow/signalTypes'
 
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
@@ -195,216 +267,431 @@ const agentStore = useAgentStore()
 const settingStore = useSettingStore()
 const windowStore = useWindowStore()
 
+// Component refs
+const messageListRef = ref(null)
+const inputAreaRef = ref(null)
+
+// Unlisten refs
 const unlistenFocusInput = ref(null)
-const currentEngine = ref(null)
-const osType = ref('') // To store OS type from backend
-const hoveredWorkflowIndex = ref(null) // For workflow hover effects
 
-// edit workflow dialog
-const editWorkflowDialogVisible = ref(false)
-const editWorkflowId = ref(null)
-const editWorkflowTitle = ref('')
+// OS type
+const osType = ref('')
 
-const sidebarCollapsed = ref(!windowStore.workflowSidebarShow)
-const sidebarWidth = computed(() => (sidebarCollapsed.value ? '0px' : '200px'))
-const searchQuery = ref('')
-const inputMessage = ref('')
+// ============================================================
+// Local state - MUST be defined FIRST before any composables
+// ============================================================
 const selectedAgent = ref(null)
-const autoApproveTools = ref(true)
-const messagesRef = ref(null)
-const inputRef = ref(null)
-const isAlwaysOnTop = computed(() => windowStore.workflowWindowAlwaysOnTop)
+const approvalLevel = ref('default')
+const finalAuditMode = ref('off')
+const planningMode = ref(false)
+const autoCompressEnabled = ref(true)
 
-const workflows = computed(() => workflowStore.workflows)
-const currentWorkflow = computed(() => workflowStore.currentWorkflow)
-const messages = computed(() => workflowStore.messages)
-const isRunning = computed(() => workflowStore.isRunning)
-const currentWorkflowId = computed(() => workflowStore.currentWorkflowId)
+const showPlanningModeToggle = computed(() => {
+  const workflow = workflowStore.currentWorkflow
+  if (!workflow) return true
 
-// Get todo list from the todo manager
-const todoList = computed(() => {
-  if (!currentWorkflowId.value) return []
-  return getTodoListForWorkflow(currentWorkflowId.value)
+  const hasStartedContent =
+    Boolean(String(workflow.userQuery || '').trim()) || (workflow.messagesCount || 0) > 0
+  const status = String(workflow.status || '').toLowerCase()
+  return !workflowStore.hasLiveSession && (!hasStartedContent || TERMINAL_STATUSES.includes(status))
 })
 
-const filteredWorkflows = computed(() => {
-  if (!searchQuery.value) return workflows.value
-  return workflows.value.filter(wf =>
-    (wf.title || wf.userQuery).toLowerCase().includes(searchQuery.value.toLowerCase())
-  )
-})
-
-const canSendMessage = computed(
-  () => inputMessage.value.trim() !== '' && !isRunning.value && selectedAgent.value
-)
-
-const canSwitchWorkflow = computed(() => {
-  // Can't switch if a workflow is currently running
-  return !isRunning.value
-})
-
-// Watch for workflow changes to update UI
-watch(currentWorkflow, newWorkflow => {
-  if (newWorkflow) {
-    // Scroll to bottom when new workflow is selected
-    nextTick(() => {
-      scrollToBottom()
-    })
-  }
-})
-
-// Watch for messages to scroll to bottom
-watch(
-  messages,
-  () => {
-    nextTick(() => {
-      scrollToBottom()
-    })
-  },
-  { deep: true }
-)
-
-const scrollToBottom = () => {
-  if (messagesRef.value) {
-    messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+// System skills
+const systemSkills = ref([])
+const fetchSystemSkills = async () => {
+  try {
+    const result = await invokeWrapper('get_system_skills')
+    systemSkills.value = result || []
+  } catch (error) {
+    console.error('Failed to fetch system skills:', error)
   }
 }
 
-onMounted(async () => {
-  unlistenFocusInput.value = await listen('cs://workflow-focus-input', event => {
-    if (event.payload && event.payload.windowLabel === settingStore.windowLabel) {
-      if (inputRef.value) {
-        inputRef.value.focus()
-      }
-    }
+// ============================================================
+// Composables with NO dependencies on local state
+// ============================================================
+
+// Sidebar composable
+const {
+  sidebarCollapsed,
+  sidebarWidth,
+  sidebarStyle,
+  isDragging,
+  onToggleSidebar,
+  onResizeStart,
+  updateMaxWidth
+} = useWorkflowSidebar()
+
+// Chat/Streaming composable
+const {
+  chattingParser,
+  chatState,
+  isChatting,
+  isCompressing,
+  compressionMessage,
+  clearRetryTimer,
+  getReasoningPreview,
+  resetChatState,
+  setRetryStatus,
+  processChunk,
+  processReasoningChunk,
+  setCompressionStatus
+} = useWorkflowChat({
+  currentWorkflowId: computed(() => workflowStore.currentWorkflowId)
+})
+
+// Messages composable
+const {
+  expandedMessages,
+  expandedReasonings,
+  enhancedMessages,
+  lastAssistantMessage,
+  toggleMessageExpand,
+  isMessageExpanded,
+  toggleReasoningExpand,
+  isReasoningExpanded,
+  removeSystemReminder,
+  getDiffMarkdown,
+  parseChoiceContent,
+  getParsedMessage,
+  shouldShowToolRawContent
+} = useWorkflowMessages()
+
+// ============================================================
+// Composables that DEPEND on local state
+// ============================================================
+
+// Paths composable - needs selectedAgent
+const {
+  pendingPaths,
+  currentPaths,
+  canEditPaths,
+  displayAllowedPath,
+  onAddPathFromTree,
+  onRemovePathFromTree
+} = useWorkflowPaths({
+  currentWorkflowId: computed(() => workflowStore.currentWorkflowId),
+  selectedAgent: computed(() => selectedAgent.value)
+})
+
+// Input composable - needs currentPaths, systemSkills
+const inputComposable = useWorkflowInput({
+  inputRef: computed(() => inputAreaRef.value?.inputRef),
+  onSendMessage: null, // Will be set after core composable is initialized
+  currentPaths: computed(() => currentPaths.value),
+  systemSkills: computed(() => systemSkills.value)
+})
+
+const {
+  inputMessage,
+  showSkillSuggestions,
+  showFileSuggestions,
+  selectedSkillIndex,
+  selectedFileIndex,
+  fileSuggestions,
+  filteredSystemSkills,
+  onInputKeyDown,
+  onCompositionStart,
+  onCompositionEnd,
+  onSkillSelect: originalOnSkillSelect,
+  onFileSelect,
+  clearInput
+} = inputComposable
+
+// Core workflow composable - needs all of the above
+const core = useWorkflowCore({
+  selectedAgent,
+  planningMode,
+  approvalLevel,
+  finalAuditMode,
+  autoCompressEnabled,
+  pendingPaths,
+  currentWorkflowId: computed(() => workflowStore.currentWorkflowId),
+  currentWorkflow: computed(() => workflowStore.currentWorkflow),
+  chattingParser,
+  chatState,
+  enhancedMessages,
+  isCompressing,
+  compressionMessage,
+  fetchSystemSkills,
+  resetChatState,
+  clearRetryTimer,
+  setRetryStatus,
+  processChunk,
+  processReasoningChunk,
+  setCompressionStatus,
+  scrollToBottom: (force = false) => messageListRef.value?.scrollToBottom(force)
+})
+
+const {
+  unlistenWorkflowEvents,
+  modelSelectorVisible,
+  modelSelectorTab,
+  editWorkflowDialogVisible,
+  editWorkflowId,
+  editWorkflowTitle,
+  workflows,
+  isRunning,
+  hasLiveSession,
+  waitReason,
+  canStop,
+  canContinue,
+  activeModelName,
+  pendingApprovalList,
+  getPendingApprovalEntry,
+  clearPendingApprovalEntry,
+  upsertPendingApprovalEntry,
+  canSwitchWorkflow,
+  selectWorkflow,
+  startNewWorkflow,
+  onSendMessage: coreOnSendMessage,
+  removeQueuedMessage,
+  handleBuiltinCommand,
+  onContinue,
+  onApprovePlan,
+  onStop,
+  openModelSelector,
+  onModelConfigSave,
+  onEditWorkflow,
+  onSaveEditWorkflow,
+  onDeleteWorkflow,
+  createNewWorkflow: coreCreateNewWorkflow,
+  toggleFinalAuditMode
+} = core
+
+// Approval composable
+const { approvalLoading, activeApprovalId, isApprovalSubmitting, onApproveAction, onApproveAllAction, onRejectAction } =
+  useWorkflowApproval({
+    currentWorkflowId: computed(() => workflowStore.currentWorkflowId),
+    getPendingApprovalEntry,
+    clearPendingApprovalEntry,
+    upsertPendingApprovalEntry
   })
 
-  try {
-    const osInfo = await invokeWrapper('get_os_info')
-    osType.value = osInfo.os
-  } catch (error) {
-    console.error('Failed to get OS info:', error)
-  }
+// Set up the onSendMessage callback for the input composable
+inputComposable.onSendMessage.value = async () => {
+  const message = inputMessage.value
+  if (!message.trim()) return
 
-  await workflowStore.loadWorkflows()
-  await agentStore.fetchAgents()
-
-  if (agentStore.agents.length > 0) {
-    selectedAgent.value = agentStore.agents[0]
-  }
-
-  // Load the last workflow if available
-  if (workflows.value.length > 0) {
-    await selectWorkflow(workflows.value[0].id)
-  }
-
-  windowStore.initWorkflowWindowAlwaysOnTop()
-  window.addEventListener('keydown', onGlobalKeyDown)
-})
-
-onBeforeUnmount(() => {
-  if (currentEngine.value) {
-    // Clean up current workflow engine if exists
-    currentEngine.value.destroy()
-    currentEngine.value = null
-  }
-  unlistenFocusInput.value()
-  window.removeEventListener('keydown', onGlobalKeyDown)
-})
-
-const onToggleSidebar = () => {
-  sidebarCollapsed.value = !sidebarCollapsed.value
-  windowStore.setWorkflowSidebarShow(!sidebarCollapsed.value)
+  clearInput()
+  const wasCommand = await coreOnSendMessage(message)
+  return wasCommand
 }
 
-const selectWorkflow = async id => {
-  if (!canSwitchWorkflow.value) {
-    console.warn('Cannot switch workflow while another is running')
-    return
-  }
+// ============================================================
+// Wrapper functions combining multiple composables
+// ============================================================
 
-  // Clean up current engine
-  if (currentEngine.value) {
-    currentEngine.value.destroy()
-    currentEngine.value = null
-  }
-
-  // Select the workflow in store
-  await workflowStore.selectWorkflow(id)
-
-  // Load the workflow engine if it exists
-  if (workflowStore.currentWorkflow) {
-    const agent = agentStore.agents.find(a => a.id === workflowStore.currentWorkflow.agentId)
-    if (agent) {
-      // Update the selected agent in the selector
-      selectedAgent.value = agent
-
-      try {
-        currentEngine.value = await WorkflowEngine.load(agent, id, settingStore.settings.chatCompletionProxyPort)
-      } catch (error) {
-        console.error('Failed to load workflow:', error)
-      }
-    }
+// Wrapper function that calls the input composable's send handler
+const onSendMessage = async () => {
+  if (inputComposable.onSendMessage.value) {
+    return await inputComposable.onSendMessage.value()
   }
 }
 
-const startNewWorkflow = async () => {
-  if (!selectedAgent.value) {
-    console.error('No agent selected')
-    return
-  }
-
-  try {
-    // Clean up current engine
-    if (currentEngine.value) {
-      currentEngine.value.destroy()
-      currentEngine.value = null
-    }
-
-    // Start new workflow
-    currentEngine.value = await WorkflowEngine.startNew(
-      selectedAgent.value,
-      inputMessage.value,
-      settingStore.settings.chatCompletionProxyPort
-    )
-
-    // Update store with new workflow
-    await workflowStore.loadWorkflows()
-    await workflowStore.selectWorkflow(currentEngine.value.sessionId)
-
-    inputMessage.value = ''
-  } catch (error) {
-    console.error('Failed to start new workflow:', error)
-  }
+// Wrapper for createNewWorkflow that also clears input
+const createNewWorkflow = async () => {
+  await coreCreateNewWorkflow()
+  clearInput()
 }
 
-const onSendMessage = () => {
-  if (!canSendMessage.value) return
-
-  if (!currentWorkflowId.value) {
-    // Start new workflow
-    startNewWorkflow()
-  } else {
-    // Add message to current workflow
-    workflowStore.addMessageToQueue({ role: 'user', message: inputMessage.value })
-    inputMessage.value = ''
-  }
-}
-
-const onKeyEnter = event => {
-  const shouldSend =
-    settingStore.settings.sendMessageKey === 'Enter' ? !event.shiftKey : event.shiftKey
-  if (shouldSend) {
-    event.preventDefault()
+// Wrapper for skill select that properly handles send
+const onSkillSelect = skill => {
+  originalOnSkillSelect(skill)
+  // If it was a command (UI action), the input now contains the command
+  // We need to trigger send manually since originalOnSkillSelect doesn't have access to onSendMessage
+  if (skill.type === 'command') {
     onSendMessage()
   }
 }
 
-const onStop = () => {
-  if (currentEngine.value) {
-    // Pause the workflow
-    currentEngine.value.stateMachine.transition('PAUSE')
-    workflowStore.setRunning(false)
+// Approve all pending approval items for the current workflow using a stable snapshot.
+// Sequential dispatch avoids racing backend state transitions for the same session.
+const onApproveAllPendingAction = async () => {
+  const entries = [...currentWorkflowPendingApprovals.value]
+  if (!entries.length) return
+
+  // Always resolve approvals sequentially against a stable snapshot.
+  // The backend remains authoritative for pending approval order/state, and
+  // concurrent approval signals can race with per-tool state transitions.
+  for (const entry of entries) {
+    await onApproveAction(entry.id, entry.sessionId)
+  }
+}
+
+// ============================================================
+// Computed properties
+// ============================================================
+
+const currentWorkflowId = computed(() => workflowStore.currentWorkflowId)
+const currentWorkflow = computed(() => workflowStore.currentWorkflow)
+const isAlwaysOnTop = computed(() => windowStore.workflowWindowAlwaysOnTop)
+const workflowApprovalMuted = computed(() => !!settingStore.settings.workflowApprovalMuted)
+const workflowCompletionMuted = computed(() => !!settingStore.settings.workflowCompletionMuted)
+const soundIcon = computed(() => {
+  // Show mute icon when both sounds are muted, otherwise show unmute/sound icon
+  return workflowApprovalMuted.value && workflowCompletionMuted.value ? 'mute' : 'unmute'
+})
+const approvalQueueCount = computed(() => {
+  const count = pendingApprovalList.value.length
+  return count > 9 ? '9+' : String(count)
+})
+const sidebarRootFilterResetToken = ref(0)
+
+// Only count and approve entries for the current workflow
+const currentWorkflowPendingApprovals = computed(() =>
+  pendingApprovalList.value.filter(entry => entry.sessionId === currentWorkflowId.value)
+)
+const canDeleteLastAssistantTurn = computed(() => {
+  if (!currentWorkflowId.value || canStop.value) return false
+  return workflowStore.messages.some(message => message?.role === 'assistant')
+})
+
+const displayAllowedPathTitle = computed(() => {
+  if (!currentPaths.value?.length) return ''
+  return displayAllowedPath.value || ''
+})
+
+const onDeleteLastAssistantTurn = async () => {
+  if (!canDeleteLastAssistantTurn.value || !currentWorkflowId.value) return
+
+  try {
+    await ElMessageBox.confirm(
+      t('workflow.deleteLastAssistantTurnConfirm'),
+      t('workflow.deleteLastAssistantTurn'),
+      {
+        confirmButtonText: t('common.delete'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+
+  try {
+    const deleted = await invokeWrapper('delete_last_assistant_workflow_turn', {
+      sessionId: currentWorkflowId.value
+    })
+
+    if (!deleted) {
+      showMessage(t('workflow.deleteLastAssistantTurnMissing'), 'warning')
+      return
+    }
+
+    await selectWorkflow(currentWorkflowId.value)
+    showMessage(t('workflow.deleteLastAssistantTurnDone'), 'success')
+  } catch (error) {
+    console.error('Failed to delete last assistant workflow turn:', error)
+    showMessage(
+      t('workflow.deleteLastAssistantTurnFailed', { error: String(error) }),
+      'error'
+    )
+  }
+}
+
+const getWorkflowSortTime = workflow => {
+  const candidates = [
+    workflow?.updatedAtMs,
+    workflow?.updated_at_ms,
+    workflow?.updatedAt,
+    workflow?.updated_at,
+    workflow?.createdAt,
+    workflow?.created_at
+  ]
+
+  for (const value of candidates) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value
+    }
+    if (typeof value === 'string' && value) {
+      const timestamp = Date.parse(value)
+      if (!Number.isNaN(timestamp)) {
+        return timestamp
+      }
+    }
+  }
+
+  return 0
+}
+
+const filteredWorkflows = computed(() => {
+  const searchQuery = '' // From WorkflowSidebar component
+  const base = !searchQuery
+    ? workflows.value
+    : workflows.value.filter(wf =>
+        (wf.title || wf.userQuery).toLowerCase().includes(searchQuery.toLowerCase())
+      )
+
+  return [...base].sort((a, b) => getWorkflowSortTime(b) - getWorkflowSortTime(a))
+})
+
+const askUserSubmitting = ref(false)
+
+const canEditCurrentWorkflowAgent = computed(() => {
+  if (!currentWorkflowId.value || !currentWorkflow.value) {
+    return true
+  }
+
+  const hasQuery = !!currentWorkflow.value.userQuery?.trim()
+  const hasMessages = workflowStore.messages.length > 0
+  return !hasLiveSession.value && !hasQuery && !hasMessages
+})
+
+const onSelectedAgentChange = async agent => {
+  selectedAgent.value = agent
+
+  if (!currentWorkflowId.value || !canEditCurrentWorkflowAgent.value || !agent) {
+    return
+  }
+
+  try {
+    const agentConfigResult = await invokeWrapper('update_workflow_agent_id', {
+      sessionId: currentWorkflowId.value,
+      agentId: agent.id
+    })
+    const agentConfig =
+      typeof agentConfigResult === 'string' ? JSON.parse(agentConfigResult) : agentConfigResult
+
+    if (workflowStore.currentWorkflow) {
+      workflowStore.currentWorkflow.agentId = agent.id
+      workflowStore.currentWorkflow.agentConfig = agentConfig || {}
+      workflowStore.currentWorkflow.allowedPaths = agentConfig?.allowedPaths || []
+      workflowStore.currentWorkflow.shellPolicy = agentConfig?.shellPolicy || []
+      workflowStore.setShellPolicy(agentConfig?.shellPolicy || [])
+      workflowStore.setAutoApprovedTools(agentConfig?.autoApprove || [])
+    }
+
+    if (agentConfig?.approvalLevel) {
+      approvalLevel.value = agentConfig.approvalLevel
+    }
+    if (agentConfig?.finalAudit !== undefined && agentConfig?.finalAudit !== null) {
+      finalAuditMode.value = agentConfig.finalAudit ? 'on' : 'off'
+    }
+    if (agentConfig?.phase) {
+      planningMode.value = String(agentConfig.phase).toLowerCase() === 'planning'
+    }
+    autoCompressEnabled.value = agentConfig?.autoCompress ?? true
+  } catch (error) {
+    console.error('Failed to update workflow agent:', error)
+  }
+}
+
+// 错误边界处理
+const onErrorCaptured = (err, instance, info) => {
+  console.warn('[Workflow] UI error captured:', err.message, info)
+  // 返回 false 阻止错误继续传播
+  return false
+}
+
+const submitAskUserResponse = async content => {
+  if (!content?.trim()) return
+
+  askUserSubmitting.value = true
+  try {
+    await coreOnSendMessage(content)
+  } finally {
+    askUserSubmitting.value = false
   }
 }
 
@@ -412,75 +699,40 @@ const onPin = () => {
   windowStore.toggleWorkflowWindowAlwaysOnTop()
 }
 
-const onEditWorkflow = id => {
-  editWorkflowId.value = id
-  editWorkflowTitle.value = workflows.value.find(wf => wf.id === id)?.title || ''
-  editWorkflowDialogVisible.value = true
+const toggleWorkflowApprovalMute = async () => {
+  await settingStore.setSetting('workflowApprovalMuted', !workflowApprovalMuted.value)
 }
 
-const onSaveEditWorkflow = async () => {
-  if (!editWorkflowId.value) return
+const toggleWorkflowCompletionMute = async () => {
+  await settingStore.setSetting('workflowCompletionMuted', !workflowCompletionMuted.value)
+}
 
-  try {
-    await invokeWrapper('update_workflow_title', {
-      workflowId: editWorkflowId.value,
-      title: editWorkflowTitle.value
-    })
+const handleApprovalCommand = async sessionId => {
+  if (!sessionId) return
+  sidebarRootFilterResetToken.value += 1
+  await selectWorkflow(sessionId)
+}
 
-    // Reload workflows to get updated data
-    await workflowStore.loadWorkflows()
-
-    editWorkflowDialogVisible.value = false
-    editWorkflowTitle.value = ''
-    editWorkflowId.value = null
-  } catch (error) {
-    console.error('Failed to update workflow:', error)
+const getPendingApprovalTitle = item => {
+  if (item?.kind === 'ask_user') {
+    return t('workflow.awaitingUser')
   }
+  return t('workflow.awaitingApproval')
 }
 
-const onDeleteWorkflow = id => {
-  ElMessageBox.confirm(t('workflow.confirmDeleteWorkflow'), {
-    confirmButtonText: t('common.confirm'),
-    cancelButtonText: t('common.cancel')
-  }).then(async () => {
-    try {
-      await invokeWrapper('delete_workflow', { workflowId: id })
+const resolveInitialWorkflowId = () => {
+  const savedWorkflowId = settingStore.settings.workflowLastSelectedId
+  if (
+    savedWorkflowId &&
+    workflowStore.workflows.some(workflow => workflow.id === savedWorkflowId)
+  ) {
+    return savedWorkflowId
+  }
 
-      // If deleting the current workflow, clear it
-      if (id === currentWorkflowId.value) {
-        currentEngine.value = null
-        workflowStore.clearCurrentWorkflow()
-      }
-
-      // Reload workflows
-      await workflowStore.loadWorkflows()
-
-      // Load the last workflow if available
-      if (workflows.value.length > 0) {
-        await selectWorkflow(workflows.value[0].id)
-      }
-    } catch (error) {
-      console.error('Failed to delete workflow:', error)
-    }
-  })
-}
-
-const createNewWorkflow = () => {
-  // Clear current workflow
-  currentEngine.value = null
-  workflowStore.clearCurrentWorkflow()
-
-  // Clear input and focus
-  inputMessage.value = ''
-  nextTick(() => {
-    if (inputRef.value) {
-      inputRef.value.focus()
-    }
-  })
+  return workflowStore.workflows[0]?.id || null
 }
 
 const onGlobalKeyDown = event => {
-  // Use OS type from backend. `std::env::consts::OS` returns "macos" for macOS.
   const isMac = osType.value === 'macos'
   const modifierPressed = isMac ? event.metaKey : event.ctrlKey
 
@@ -497,434 +749,78 @@ const onGlobalKeyDown = event => {
     }
   }
 }
+
+// Watch for workflow changes to scroll
+watch(
+  () => workflowStore.messages,
+  () => {
+    nextTick(() => {
+      messageListRef.value?.scrollToBottom()
+    })
+  },
+  { deep: true }
+)
+
+onMounted(async () => {
+  unlistenFocusInput.value = await listen('cs://workflow-focus-input', event => {
+    if (event.payload && event.payload.windowLabel === settingStore.windowLabel) {
+      inputAreaRef.value?.focus()
+    }
+  })
+
+  try {
+    const osInfo = await invokeWrapper('get_os_info')
+    osType.value = osInfo.os
+  } catch (error) {
+    console.error('Failed to get OS info:', error)
+  }
+
+  await workflowStore.loadWorkflows()
+  await agentStore.fetchAgents()
+  await fetchSystemSkills()
+
+  if (agentStore.primaryAgents.length > 0) {
+    selectedAgent.value = agentStore.primaryAgents[0]
+  }
+
+  // Restore the last selected workflow if it still exists.
+  const initialWorkflowId = resolveInitialWorkflowId()
+  if (initialWorkflowId) {
+    await selectWorkflow(initialWorkflowId)
+  } else {
+    // First launch bootstrap: create one empty workflow so sending messages never hits "no session".
+    await coreCreateNewWorkflow()
+  }
+
+  windowStore.initWorkflowWindowAlwaysOnTop()
+  window.addEventListener('keydown', onGlobalKeyDown)
+  window.addEventListener('resize', updateMaxWidth)
+
+  // Initial scroll
+  nextTick(() => messageListRef.value?.scrollToBottom(true))
+})
+
+onBeforeUnmount(() => {
+  if (unlistenWorkflowEvents.value) {
+    unlistenWorkflowEvents.value()
+  }
+  unlistenFocusInput.value?.()
+  window.removeEventListener('keydown', onGlobalKeyDown)
+  window.removeEventListener('resize', updateMaxWidth)
+  clearRetryTimer()
+})
 </script>
 
 <style lang="scss">
-.workflow-layout {
-  height: 100vh;
+@use '@/styles/workflow/index' as *;
+
+.workflow-titlebar-primary-path {
+  max-width: min(40vw, 360px);
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
-
-  .workflow-main {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: row;
-
-    .sidebar {
-      border-right: 1px solid var(--cs-border-color);
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-      transition: width 0.3s ease;
-
-      .sidebar-header {
-        padding: 10px;
-        flex-shrink: 0;
-
-        .el-input {
-          box-sizing: border-box;
-
-          .el-input__wrapper {
-            padding: 0;
-            background: var(--cs-input-bg-color) !important;
-            border-radius: var(--cs-border-radius-xxl);
-            font-size: var(--cs-font-size-sm);
-          }
-
-          .el-input__prefix {
-            display: flex;
-            align-items: center;
-            padding-left: var(--cs-space-sm);
-
-            .cs {
-              font-size: var(--cs-font-size-md);
-              color: var(--cs-text-color-secondary);
-            }
-          }
-        }
-      }
-
-      .workflow-list {
-        flex: 1;
-        overflow-y: auto;
-        height: calc(100% - 60px);
-
-        .list {
-          .item {
-            padding: 10px 15px;
-            cursor: pointer;
-            border-radius: 6px;
-            margin-bottom: 2px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            transition: background-color 0.2s ease;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            position: relative;
-
-            &:hover:not(.disabled) {
-              background-color: var(--cs-hover-bg-color);
-            }
-
-            &.active {
-              background-color: var(--cs-active-bg-color);
-              color: var(--el-color-primary);
-            }
-
-            &.disabled {
-              cursor: not-allowed;
-              opacity: 0.6;
-            }
-
-            .workflow-title {
-              font-weight: 500;
-              overflow: hidden;
-              text-overflow: ellipsis;
-            }
-
-            .workflow-status {
-              display: flex;
-              align-items: center;
-              gap: 6px;
-              font-size: var(--cs-font-size-xs);
-              color: var(--cs-text-color-secondary);
-
-              .status-indicator {
-                width: 6px;
-                height: 6px;
-                border-radius: 50%;
-
-                &.running {
-                  background-color: var(--el-color-warning);
-                  animation: pulse 1.5s ease-in-out infinite;
-                }
-
-                &.completed {
-                  background-color: var(--el-color-success);
-                }
-
-                &.paused {
-                  background-color: var(--el-color-info);
-                }
-
-                &.error {
-                  background-color: var(--el-color-danger);
-                }
-              }
-            }
-
-            .icons {
-              position: absolute;
-              right: 10px;
-              top: 50%;
-              transform: translateY(-50%);
-              display: flex;
-              gap: 4px;
-              opacity: 0;
-              transition: opacity 0.2s ease;
-
-              .icon {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                width: 24px;
-                height: 24px;
-                border-radius: var(--cs-border-radius-round);
-                cursor: pointer;
-                color: var(--cs-text-color-secondary);
-
-                &:hover {
-                  background-color: var(--cs-bg-color-light);
-                  color: var(--cs-text-color-primary);
-                }
-
-                .cs {
-                  font-size: var(--cs-font-size-sm);
-                }
-              }
-            }
-
-            &:hover .icons {
-              opacity: 1;
-            }
-          }
-        }
-      }
-    }
-
-    .main-container {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      overflow: hidden;
-      height: 100%;
-
-      .messages {
-        flex: 1;
-        overflow-y: auto;
-        padding: 15px;
-        scroll-behavior: smooth;
-
-        .message {
-          display: flex;
-          margin-bottom: 15px;
-
-          .avatar {
-            flex-shrink: 0;
-            width: 30px;
-            height: 30px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-right: 12px;
-            margin-top: 2px;
-
-            .user-icon {
-              color: var(--el-color-primary);
-            }
-          }
-
-          .content-container {
-            flex: 1;
-            min-width: 0;
-          }
-
-          &.user {
-            flex-direction: row-reverse;
-
-            .avatar {
-              margin-right: 0;
-              margin-left: 12px;
-            }
-
-            .content {
-              display: flex;
-              justify-content: flex-end;
-
-              .simple-text {
-                background-color: var(--cs-bg-color-light);
-                padding: 10px 15px;
-                border-radius: 10px;
-                max-width: 80%;
-                border: 1px solid var(--cs-border-color);
-                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-                margin: 0;
-              }
-            }
-          }
-        }
-      }
-
-      .todo-list-wrapper {
-        flex-shrink: 0;
-        padding: 0 var(--cs-space) var(--cs-space-sm);
-      }
-
-      footer.input-container {
-        flex-shrink: 0;
-        background-color: transparent;
-        padding: 0 var(--cs-space-sm) var(--cs-space-sm);
-        height: unset;
-        z-index: 1;
-
-        .additional {
-          display: flex;
-          gap: 1px;
-          margin-bottom: var(--cs-space-xs);
-
-          .additional-item {
-            display: flex;
-            align-items: center;
-            flex: 1;
-            max-width: 50%;
-            background-color: var(--cs-input-bg-color);
-            border-radius: var(--cs-border-radius-xxl);
-            padding: var(--cs-space-xs);
-            box-sizing: border-box;
-
-            .data {
-              flex: 1;
-              min-width: 0;
-
-              .skill-item {
-                padding: 0;
-              }
-
-              .message-text {
-                padding-left: var(--cs-space);
-                display: block;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                color: var(--cs-text-color-secondary);
-                font-size: var(--cs-font-size-sm);
-                line-height: 1.5;
-                position: relative;
-
-                &:before {
-                  position: absolute;
-                  top: -3px;
-                  left: 3px;
-                }
-              }
-            }
-
-            .close-btn {
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              width: 24px;
-              height: 24px;
-              margin-left: var(--cs-space-xs);
-              flex-shrink: 0;
-              cursor: pointer;
-              border-radius: var(--cs-border-radius-round);
-              color: var(--cs-text-color-secondary);
-
-              &:hover {
-                background-color: var(--cs-bg-color-light);
-              }
-            }
-          }
-        }
-
-        .input {
-          display: flex;
-          flex-direction: column;
-          background-color: var(--cs-input-bg-color);
-          border-radius: var(--cs-border-radius-lg);
-          padding: var(--cs-space-sm) var(--cs-space) var(--cs-space-xs);
-
-          .icons {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: var(--cs-space-xs);
-            cursor: pointer;
-            gap: var(--cs-space-xs);
-
-            .cs {
-              font-size: var(--cs-font-size-xl) !important;
-              color: var(--cs-text-color-secondary);
-
-              &.small {
-                font-size: var(--cs-font-size-md) !important;
-              }
-
-              &.cs-send:not(.disabled) {
-                color: var(--cs-color-primary);
-              }
-            }
-
-            label {
-              font-size: var(--cs-font-size-sm);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              cursor: pointer;
-              color: var(--cs-text-color-secondary);
-              background-color: var(--cs-bg-color);
-              border-radius: var(--cs-border-radius-lg);
-              padding: var(--cs-space-xs) var(--cs-space-sm);
-              border: 1px solid var(--cs-bg-color);
-
-              &:not(.disabled):not(.default):hover,
-              &.active {
-                color: var(--cs-color-primary);
-
-                .cs {
-                  color: var(--cs-color-primary);
-                }
-              }
-
-              &.active {
-                border: 1px solid var(--cs-color-primary);
-              }
-            }
-          }
-
-          .el-textarea {
-            flex-grow: 1;
-
-            .el-textarea__inner {
-              border: none;
-              box-shadow: none;
-              background: var(--cs-input-bg-color) !important;
-              resize: none !important;
-              color: var(--cs-text-color-primary);
-              padding-left: var(--cs-space-xxs);
-              padding-right: var(--cs-space-xxs);
-            }
-          }
-
-          .input-footer {
-            display: flex;
-            flex-direction: row;
-            align-items: center;
-            justify-content: space-between;
-
-            .footer-left {
-              display: flex;
-              flex-direction: row;
-              justify-content: flex-start;
-              align-items: center;
-
-              .agent-selector-wrap {
-                color: var(--cs-color-primary);
-                background: var(--cs-bg-color);
-                border: 1px solid var(--cs-color-primary);
-                border-radius: var(--cs-border-radius-lg);
-                padding: var(--cs-space-xs) var(--cs-space-sm);
-                font-size: var(--cs-font-size-md);
-
-                &.disabled {
-                  border-color: var(--cs-border-color);
-                  background: none;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
-.pin-btn {
-  border-radius: var(--cs-border-radius-xs);
-  color: var(--cs-text-color-secondary);
-
-  &:hover .cs {
-    color: var(--cs-color-primary) !important;
-  }
-
-  .cs {
-    font-size: var(--cs-font-size-md) !important;
-    transform: rotate(45deg);
-    transition: all 0.3s ease-in-out;
-  }
-
-  &.active {
-    .cs {
-      color: var(--cs-color-primary);
-      transform: rotate(0deg);
-    }
-  }
-}
-
-@keyframes pulse {
-  0% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
-  100% {
-    opacity: 1;
-  }
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--cs-font-size-sm);
+  font-weight: 500;
+  color: var(--cs-text-primary);
 }
 </style>

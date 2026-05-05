@@ -16,6 +16,11 @@ use crate::ccproxy::types::{TOOL_PARSE_ERROR_REMINDER, TOOL_TAG_END, TOOL_TAG_ST
 use crate::ccproxy::{
     adapter::{
         backend::{common, update_message_block},
+        input::helper::thinking_adapter::{
+            adapt_vendor_thinking_params_for_openai_backend,
+            merge_reasoning_into_openai_message_content,
+            supports_native_reasoning_history_for_openai_backend,
+        },
         range_adapter::adapt_temperature,
         unified::{
             SseStatus, UnifiedContentBlock, UnifiedEmbeddingData, UnifiedEmbeddingInput,
@@ -298,9 +303,25 @@ impl BackendAdapter for OpenAIBackendAdapter {
                     };
 
                     // Special case for assistant messages: content must not be None if tool_calls is None
-                    if role_str == "assistant" && content.is_none() && primary_tool_calls.is_empty() {
+                    if role_str == "assistant" && content.is_none() && primary_tool_calls.is_empty()
+                    {
                         content = Some(OpenAIMessageContent::Text(" ".to_string()));
                     }
+
+                    let reasoning_content = if role_str == "assistant"
+                        && supports_native_reasoning_history_for_openai_backend(
+                            &unified_request.model,
+                        ) {
+                        combined_reasoning
+                    } else {
+                        if role_str == "assistant" {
+                            if let Some(reasoning) = combined_reasoning.as_deref() {
+                                content =
+                                    merge_reasoning_into_openai_message_content(content, reasoning);
+                            }
+                        }
+                        None
+                    };
 
                     openai_messages.push(UnifiedChatMessage {
                         role: Some(role_str.to_string()),
@@ -310,7 +331,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
                         } else {
                             Some(primary_tool_calls)
                         },
-                        reasoning_content: combined_reasoning,
+                        reasoning_content,
                         ..Default::default()
                     });
                 }
@@ -365,51 +386,32 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 }
             });
 
-        let is_openai_reasoning_model = unified_request.model.starts_with("o1-") || unified_request.model.starts_with("o3-");
         // Check if it's a MiniMax model (common aliases or direct naming)
-        let is_minimax = unified_request.model.to_lowercase().contains("minimax");
+        let _is_minimax = unified_request.model.to_lowercase().contains("minimax");
         // Check if it's a Zhipu GLM model
-        let is_glm = unified_request.model.to_lowercase().contains("glm");
+        let _is_glm = unified_request.model.to_lowercase().contains("glm");
         // Check if it's a DeepSeek model
         let is_deepseek = unified_request.model.to_lowercase().contains("deepseek");
         // Check if it's a Qwen model
-        let is_qwen = unified_request.model.to_lowercase().contains("qwen") || unified_request.model.to_lowercase().contains("qwq");
+        let _is_qwen = unified_request.model.to_lowercase().contains("qwen")
+            || unified_request.model.to_lowercase().contains("qwq");
         // Check if it's a Kimi (Moonshot) model
-        let is_kimi = unified_request.model.to_lowercase().contains("kimi") || unified_request.model.to_lowercase().contains("moonshot");
-
-        let (reasoning_effort, reasoning_split, vendor_thinking, enable_thinking, thinking_budget) = if let Some(thinking) = &unified_request.thinking {
-            if matches!(thinking.include_thoughts, Some(true)) {
-                let effort = if is_openai_reasoning_model {
-                    let e = match thinking.budget_tokens {
-                        Some(budget) if budget < 4096 => "low",
-                        Some(budget) if budget >= 4096 && budget <= 16384 => "medium",
-                        Some(budget) if budget > 16384 => "high",
-                        _ => "medium",
-                    };
-                    Some(e.to_string())
-                } else {
-                    None
-                };
-                
-                let split = if is_minimax { Some(true) } else { None };
-                let v_thinking = if is_glm || is_deepseek || is_kimi {
-                    Some(crate::ccproxy::types::openai::ZhipuThinking {
-                        r#type: "enabled".to_string(),
-                    })
-                } else {
-                    None
-                };
-
-                let e_thinking = if is_qwen { Some(true) } else { None };
-                let t_budget = if is_qwen { thinking.budget_tokens } else { None };
-                
-                (effort, split, v_thinking, e_thinking, t_budget)
-            } else {
-                (None, None, None, None, None)
-            }
-        } else {
-            (None, None, None, None, None)
-        };
+        let _is_kimi = unified_request.model.to_lowercase().contains("kimi")
+            || unified_request.model.to_lowercase().contains("moonshot");
+        let vendor_thinking_params = adapt_vendor_thinking_params_for_openai_backend(
+            &unified_request.model,
+            unified_request.thinking.as_ref(),
+            unified_request.reasoning_effort.as_deref(),
+            unified_request
+                .tools
+                .as_ref()
+                .is_some_and(|tools| !tools.is_empty()),
+        );
+        let reasoning_effort = vendor_thinking_params.reasoning_effort.clone();
+        let reasoning_split = vendor_thinking_params.reasoning_split;
+        let vendor_thinking = vendor_thinking_params.thinking.clone();
+        let enable_thinking = vendor_thinking_params.enable_thinking;
+        let thinking_budget = vendor_thinking_params.thinking_budget;
 
         // --- New Prompt Injection Logic ---
         let injection_pos = unified_request
@@ -520,8 +522,16 @@ impl BackendAdapter for OpenAIBackendAdapter {
             user: unified_request.user.clone(),
             tools: openai_tools,
             tool_choice: openai_tool_choice,
-            logprobs: if is_deepseek && vendor_thinking.is_some() { None } else { unified_request.logprobs },
-            top_logprobs: if is_deepseek && vendor_thinking.is_some() { None } else { unified_request.top_logprobs },
+            logprobs: if is_deepseek && vendor_thinking.is_some() {
+                None
+            } else {
+                unified_request.logprobs
+            },
+            top_logprobs: if is_deepseek && vendor_thinking.is_some() {
+                None
+            } else {
+                unified_request.top_logprobs
+            },
             stream_options: None,
             logit_bias: unified_request.logit_bias.clone(),
             reasoning_effort,
@@ -546,7 +556,10 @@ impl BackendAdapter for OpenAIBackendAdapter {
         let mut request_json = serde_json::to_value(&openai_request)?;
 
         // Merge custom params from model config
-        crate::ai::util::merge_custom_params(&mut request_json, &unified_request.custom_params);
+        crate::ai::util::merge_custom_params_value(
+            &mut request_json,
+            &unified_request.custom_params,
+        );
 
         if log_proxy_to_file {
             // Log the request to a file
@@ -728,10 +741,14 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 for tc in tool_calls {
                     if let Some(function) = &tc.function {
                         content_blocks.push(UnifiedContentBlock::ToolUse {
-                            id: tc.id.clone().unwrap_or_default(),
+                            id: get_tool_id(), // IGNORE upstream ID, use our own unique ID
                             name: function.name.clone().unwrap_or_default(),
                             input: serde_json::from_str(
-                                &function.arguments.clone().unwrap_or_default().replace("'", "\""),
+                                &function
+                                    .arguments
+                                    .clone()
+                                    .unwrap_or_default()
+                                    .replace("'", "\""),
                             )?,
                         });
                     }
@@ -802,8 +819,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
                 for (_, choice) in openai_chunk.choices.iter().enumerate() {
                     let delta = &choice.delta;
 
-                    // Process reasoning content
-                    if let Some(content) = &delta.reasoning_content {
+                    if let Some(content) = delta
+                        .reasoning_content
+                        .as_ref()
+                        .filter(|content| !content.is_empty())
+                    {
                         self.process_reasoning_content(
                             content.clone(),
                             &sse_status,
@@ -909,16 +929,22 @@ impl BackendAdapter for OpenAIBackendAdapter {
             UnifiedEmbeddingInput::String(s) => OpenAIEmbeddingInput::String(s.clone()),
             UnifiedEmbeddingInput::StringArray(a) => OpenAIEmbeddingInput::Array(a.clone()),
             UnifiedEmbeddingInput::Tokens(t) => OpenAIEmbeddingInput::Tokens(t.clone()),
-            UnifiedEmbeddingInput::TokensArray(ta) => OpenAIEmbeddingInput::ArrayOfTokens(ta.clone()),
+            UnifiedEmbeddingInput::TokensArray(ta) => {
+                OpenAIEmbeddingInput::ArrayOfTokens(ta.clone())
+            }
         };
 
         let openai_request = OpenAIEmbeddingRequest {
             model: model.to_string(),
             input,
-            encoding_format: Some(unified_request.encoding_format.as_ref()
-                .filter(|ef| !ef.is_empty())
-                .cloned()
-                .unwrap_or_else(|| "float".to_string())),
+            encoding_format: Some(
+                unified_request
+                    .encoding_format
+                    .as_ref()
+                    .filter(|ef| !ef.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| "float".to_string()),
+            ),
             dimensions: unified_request.dimensions,
             user: unified_request.user.clone(),
         };
@@ -1104,7 +1130,7 @@ impl OpenAIBackendAdapter {
     ) {
         if let Some(name) = tc.function.as_ref().and_then(|f| f.name.as_ref()) {
             if !name.is_empty() {
-                let tool_id = tc.id.clone().unwrap_or_else(|| get_tool_id());
+                let tool_id = get_tool_id(); // ALWAYS use our own ID for streaming too
 
                 // Update tool_id in status
                 let mut message_index = 0;
@@ -1135,6 +1161,7 @@ impl OpenAIBackendAdapter {
                     tool_type: "tool_use".to_string(),
                     id: tool_id.clone(),
                     name: name.clone(),
+                    index: message_index,
                 });
             }
         }
@@ -1142,8 +1169,10 @@ impl OpenAIBackendAdapter {
         if let Some(args) = tc.function.as_ref().and_then(|f| f.arguments.as_ref()) {
             if !args.is_empty() {
                 let mut tool_id = String::new();
+                let mut message_index = 0;
                 if let Ok(mut status) = sse_status.write() {
                     tool_id = status.tool_id.clone();
+                    message_index = status.message_index;
                     status.estimated_output_tokens += estimate_tokens(args);
                 };
                 // Replace single quotes with double quotes for JSON compatibility
@@ -1151,6 +1180,7 @@ impl OpenAIBackendAdapter {
                 unified_chunks.push(UnifiedStreamChunk::ToolUseDelta {
                     id: tool_id,
                     delta: cleaned_args,
+                    index: message_index,
                 });
             }
         }

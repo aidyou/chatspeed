@@ -3,6 +3,7 @@ mod direct_handler;
 mod embedding_handler;
 mod list_models_handler;
 pub mod ollama_extra_handler;
+mod request_preprocessor;
 
 pub use chat_handler::handle_chat_completion;
 pub use direct_handler::handle_direct_forward;

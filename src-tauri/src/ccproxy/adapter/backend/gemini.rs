@@ -1,4 +1,5 @@
 use crate::ccproxy::get_tool_id;
+use crate::ccproxy::helper::get_msg_id;
 use crate::ccproxy::types::{
     TOOL_PARSE_ERROR_REMINDER, TOOL_RESULT_SUFFIX_REMINDER, TOOL_TAG_END, TOOL_TAG_START,
 };
@@ -658,7 +659,10 @@ impl BackendAdapter for GeminiBackendAdapter {
         let mut request_json = serde_json::to_value(&gemini_request)?;
 
         // Merge custom params from model config
-        crate::ai::util::merge_custom_params(&mut request_json, &unified_request.custom_params);
+        crate::ai::util::merge_custom_params_value(
+            &mut request_json,
+            &unified_request.custom_params,
+        );
 
         if log_proxy_to_file {
             // Log the request to a file
@@ -804,8 +808,8 @@ impl BackendAdapter for GeminiBackendAdapter {
         }
 
         Ok(UnifiedResponse {
-            id: uuid::Uuid::new_v4().to_string(), // Generate a new ID as Gemini doesn't provide one
-            model: "gemini".to_string(),          // Model name might need to be passed through
+            id: get_msg_id(),            // Generate a new ID as Gemini doesn't provide one
+            model: "gemini".to_string(), // Model name might need to be passed through
             content: content_blocks,
             stop_reason,
             usage,
@@ -972,6 +976,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                                     tool_type: "tool_use".to_string(), // or whatever is appropriate
                                     id: tool_id.clone(),
                                     name: tool_name,
+                                    index: message_index,
                                 });
 
                                 // 2. Send all its arguments in a single delta.
@@ -982,6 +987,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                                 unified_chunks.push(UnifiedStreamChunk::ToolUseDelta {
                                     id: tool_id.clone(),
                                     delta: args_json_string,
+                                    index: message_index,
                                 });
 
                                 // 3. Immediately announce the end of this specific tool call.

@@ -4,9 +4,9 @@
   "version": "1.2.8",
   "identifier": "ai.aidyou.chatspeed",
   "build": {
-    "beforeDevCommand": "yarn dev",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "yarn build",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -53,21 +53,6 @@
         "titleBarStyle": "Transparent",
         "decorations": false,
         "transparent": true,
-        "visible": false,
-        "skipTaskbar": true,
-        "center": true,
-        "create": false
-      },
-      {
-        "label": "toolbar",
-        "title": "Toolbar",
-        "url": "/toolbar",
-        "width": 300,
-        "height": 50,
-        "titleBarStyle": "Overlay",
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
         "visible": false,
         "skipTaskbar": true,
         "center": true,
@@ -121,7 +106,10 @@
     ],
     "withGlobalTauri": true,
     "security": {
-      "capabilities": ["default", "scraper"]
+      "capabilities": [
+        "default",
+        "scraper"
+      ]
     }
   },
   "bundle": {
@@ -134,7 +122,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["assets"],
+    "resources": [
+      "assets"
+    ],
     "copyright": "",
     "category": "DeveloperTool",
     "shortDescription": "",

@@ -2,8 +2,7 @@ use crate::{
     ai::{network::ProxyType, util::get_proxy_type},
     ccproxy::{
         errors::{CCProxyError, ProxyResult},
-        helper::proxy_rotator::GlobalApiKey,
-        helper::CC_PROXY_ROTATOR,
+        helper::{proxy_rotator::GlobalApiKey, CC_PROXY_ROTATOR},
         types::{BackendModelTarget, ChatCompletionProxyConfig, ProxyModel},
         ChatProtocol,
     },
@@ -674,6 +673,17 @@ impl ModelResolver {
                 .unwrap_or_else(|| "".to_string()) // Fallback, though index should be valid.
         };
 
+        let chat_protocol = ai_model_detail.api_protocol.try_into().unwrap_or_default();
+
+        log::info!(
+            "ccproxy: model={}, provider={}, base_url={}, protocol={}, selected={}",
+            &model_id,
+            &ai_model_detail.name,
+            &ai_model_detail.base_url,
+            &chat_protocol,
+            &selected_api_key[std::cmp::max(0, selected_api_key.len() - 8)..] // Log last 8 chars for debugging
+        );
+
         let custom_params = ai_model_detail
             .models
             .iter()
@@ -685,7 +695,7 @@ impl ModelResolver {
         Ok(ProxyModel {
             client_alias: model_id.clone(), // For internal requests, alias is the ID
             provider: ai_model_detail.name.clone(),
-            chat_protocol: ai_model_detail.api_protocol.try_into().unwrap_or_default(),
+            chat_protocol,
             base_url: ai_model_detail.base_url,
             model: model_id,
             api_key: selected_api_key,
@@ -837,7 +847,7 @@ impl ModelResolver {
 
         // 2. Add custom headers from model metadata (Default values)
         let custom_headers =
-            crate::ai::util::process_custom_headers(&proxy_model.model_metadata, message_id);
+            crate::ai::util::process_custom_headers_value(&proxy_model.model_metadata, message_id);
         for (k, v) in custom_headers {
             if !should_forward_header(&k) {
                 continue;

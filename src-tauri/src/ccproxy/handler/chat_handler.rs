@@ -5,6 +5,9 @@ use rust_i18n::t;
 use serde_json::{json, Value};
 use std::sync::{Arc, RwLock};
 
+use crate::ccproxy::handler::request_preprocessor::{
+    preprocess_client_request_body, preprocess_unified_request,
+};
 use crate::ccproxy::helper::{get_msg_id, send_with_retry, RetryConfig};
 use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
@@ -293,21 +296,24 @@ pub async fn handle_chat_completion(
         _ => tool_compat_mode,                   // Fallback to route parameter
     };
 
+    let preprocessed_request_body =
+        preprocess_client_request_body(client_request_body, &chat_protocol, &proxy_model)?;
+
     if chat_protocol == proxy_model.chat_protocol && !final_tool_compat_mode {
         let is_streaming = match chat_protocol {
             ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
                 let req: OpenAIChatCompletionRequest =
-                    serde_json::from_slice(&client_request_body).unwrap_or_default();
+                    serde_json::from_slice(&preprocessed_request_body).unwrap_or_default();
                 req.stream.unwrap_or(false)
             }
             ChatProtocol::Claude => {
                 let req: Result<ClaudeNativeRequest, _> =
-                    serde_json::from_slice(&client_request_body);
+                    serde_json::from_slice(&preprocessed_request_body);
                 req.map(|r| r.stream.unwrap_or(false)).unwrap_or(false)
             }
             ChatProtocol::Ollama => {
                 let req: OllamaChatCompletionRequest =
-                    serde_json::from_slice(&client_request_body).unwrap_or_default();
+                    serde_json::from_slice(&preprocessed_request_body).unwrap_or_default();
                 req.stream.unwrap_or(false)
             }
             ChatProtocol::Gemini => generate_action == "streamGenerateContent",
@@ -315,7 +321,7 @@ pub async fn handle_chat_completion(
 
         let result = super::handle_direct_forward(
             client_headers,
-            client_request_body,
+            preprocessed_request_body,
             proxy_model,
             is_streaming,
             main_store_arc,
@@ -327,7 +333,7 @@ pub async fn handle_chat_completion(
 
     let (mut unified_request, proxy_alias, is_streaming_request) = build_unified_request(
         chat_protocol.clone(),
-        client_request_body.clone(),
+        preprocessed_request_body,
         final_tool_compat_mode,
         route_model_alias,
         generate_action,
@@ -337,6 +343,8 @@ pub async fn handle_chat_completion(
 
     // --- Inject Engine Defaults only if missing from client AND configured with valid non-default values ---
     ModelResolver::merge_parameters_unified(&mut unified_request, &proxy_model);
+
+    preprocess_unified_request(&mut unified_request, &proxy_model);
 
     // Tool filtering logic remains same
     if proxy_model.tool_filter.len() > 0 {

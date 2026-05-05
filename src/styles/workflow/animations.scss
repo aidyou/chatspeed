@@ -1,0 +1,56 @@
+// Workflow animations
+
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-border {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes cs-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    max-height: 0;
+    margin-top: 0;
+  }
+
+  to {
+    opacity: 1;
+    max-height: 500px;
+    margin-top: 8px;
+  }
+}
+
+.rotating {
+  animation: cs-rotate 2s linear infinite;
+  display: inline-block;
+  margin-right: 4px;
+}

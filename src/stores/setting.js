@@ -21,6 +21,9 @@ const defaultSettings = {
   codeLightTheme: 'atom-one-light',
   codeDarkTheme: 'github-dark',
   showMenuButton: true,
+  workflowApprovalMuted: true,
+  workflowCompletionMuted: true,
+  workflowLastSelectedId: '',
   // chat settings
   historyMessages: 5,
   conversationTitleGenModel: { id: '', model: '' },
@@ -45,15 +48,6 @@ const defaultSettings = {
   autoStart: false,
   autoUpdate: true,
   backupDir: '',
-  // workflow settings
-  workflowReasoningModel: {
-    id: '',
-    model: ''
-  },
-  workflowGeneralModel: {
-    id: '',
-    model: ''
-  },
   // chat completion proxy settings
   // Allows defining grouped model aliases.
   // Each top-level key is a “group name”; within that group lives the usual

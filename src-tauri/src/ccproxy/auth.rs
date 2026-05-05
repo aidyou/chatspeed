@@ -88,7 +88,10 @@ pub async fn authenticate_request(
     }
 
     // Check if it's a temporary workflow session key
-    if let Some(workflow_id) = headers.get("x-cs-workflow-id").and_then(|v| v.to_str().ok()) {
+    if let Some(workflow_id) = headers
+        .get("x-cs-workflow-id")
+        .and_then(|v| v.to_str().ok())
+    {
         if let Some(stored_key) = chat_state.workflow_keys.get(workflow_id) {
             if token_to_check == *stored_key {
                 log::debug!("Workflow session authenticated successfully.");

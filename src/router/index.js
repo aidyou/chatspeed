@@ -17,11 +17,6 @@ const routes = [
     component: () => import("@/views/Assistant.vue"),
   },
   {
-    path: "/toolbar",
-    name: "toolbar",
-    component: () => import("@/views/Toolbar.vue"),
-  },
-  {
     path: "/note",
     name: "note",
     component: () => import("@/views/Note.vue"),

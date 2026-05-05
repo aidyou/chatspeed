@@ -35,11 +35,12 @@ fn main() {
     } else {
         "x64-windows-static"
     };
-    
+
     // Use environment variable if set, otherwise use default
-    let triplet_env = env::var("VCPKG_DEFAULT_TRIPLET").unwrap_or_else(|_| default_triplet.to_string());
+    let triplet_env =
+        env::var("VCPKG_DEFAULT_TRIPLET").unwrap_or_else(|_| default_triplet.to_string());
     let triplet = triplet_env.as_str();
-    
+
     println!("cargo:warning=Using vcpkg triplet: {}", triplet);
 
     // --- Manual linking for vcpkg dependencies ---
@@ -59,8 +60,14 @@ fn main() {
             let lib_path = absolute_path.join(triplet).join("lib");
 
             if lib_path.exists() {
-                println!("cargo:warning=Found vcpkg artifact directory at: {}", absolute_path.display());
-                println!("cargo:warning=Adding library search path: {}", lib_path.display());
+                println!(
+                    "cargo:warning=Found vcpkg artifact directory at: {}",
+                    absolute_path.display()
+                );
+                println!(
+                    "cargo:warning=Adding library search path: {}",
+                    lib_path.display()
+                );
                 println!("cargo:rustc-link-search=native={}", lib_path.display());
                 vcpkg_found = true;
                 break;

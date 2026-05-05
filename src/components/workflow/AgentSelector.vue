@@ -28,7 +28,7 @@ import { ref, computed, watch } from 'vue'
 import { useAgentStore } from '@/stores/agent'
 
 const agentStore = useAgentStore()
-const agents = computed(() => agentStore.agents)
+const agents = computed(() => agentStore.primaryAgents)
 
 const emit = defineEmits(['update:modelValue'])
 const props = defineProps({

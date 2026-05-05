@@ -2,10 +2,96 @@
 //!
 //! This module provides database operations for managing ReAct agents.
 
+use crate::db::ThinkingConfig;
 use crate::db::{MainStore, StoreError};
 use rusqlite::{params, OptionalExtension, Row};
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
+
+// Re-export ShellPolicyRule for backward compatibility
+pub use crate::tools::ShellPolicyRule;
+
+/// Agent runtime configuration stored in workflow sessions
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConfig {
+    pub allowed_paths: Option<Vec<String>>,
+    pub shell_policy: Option<Vec<ShellPolicyRule>>,
+    pub approval_level: Option<String>,
+    pub auto_approve: Option<Vec<String>>,
+    pub auto_compress: Option<bool>,
+    pub available_tools: Option<Vec<String>>,
+    pub final_audit: Option<bool>,
+    pub phase: Option<String>,
+    pub models: Option<AgentModels>,
+    pub max_contexts: Option<i32>,
+}
+
+impl AgentConfig {
+    pub fn from_json(json: &str) -> Option<Self> {
+        serde_json::from_str(json).ok()
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn apply_overrides(&mut self, other: &AgentConfig) {
+        if other.allowed_paths.is_some() {
+            self.allowed_paths = other.allowed_paths.clone();
+        }
+        if other.shell_policy.is_some() {
+            self.shell_policy = other.shell_policy.clone();
+        }
+        if other.approval_level.is_some() {
+            self.approval_level = other.approval_level.clone();
+        }
+        if other.auto_approve.is_some() {
+            self.auto_approve = other.auto_approve.clone();
+        }
+        if other.auto_compress.is_some() {
+            self.auto_compress = other.auto_compress;
+        }
+        if other.available_tools.is_some() {
+            self.available_tools = other.available_tools.clone();
+        }
+        if other.final_audit.is_some() {
+            self.final_audit = other.final_audit;
+        }
+        if other.phase.is_some() {
+            self.phase = other.phase.clone();
+        }
+        if other.models.is_some() {
+            self.models = other.models.clone();
+        }
+        if other.max_contexts.is_some() {
+            self.max_contexts = other.max_contexts;
+        }
+    }
+}
+
+/// Model configuration within an Agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConfig {
+    pub id: i64,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_size: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModels {
+    pub plan: Option<ModelConfig>,
+    pub act: Option<ModelConfig>,
+}
 
 /// Represents an AI agent for ReAct workflows
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,22 +102,34 @@ pub struct Agent {
     pub name: String,
     /// Description of the agent
     pub description: Option<String>,
+    /// Agent role in the hierarchy (`primary` or `child`)
+    pub role: Option<String>,
+    /// Parent agent ID when this agent is a child agent
+    pub parent_agent_id: Option<String>,
     /// System prompt for the agent
     pub system_prompt: String,
-    /// Type of the agent, e.g., 'autonomous' or 'planning'
-    pub agent_type: String,
     /// Prompt for the planning phase
     pub planning_prompt: Option<String>,
     /// JSON array of available tool IDs
     pub available_tools: Option<String>,
     /// JSON array of tools that can be executed without user confirmation
     pub auto_approve: Option<String>,
-    /// Model for planning phase
-    pub plan_model: Option<String>,
-    /// Model for action phase
-    pub act_model: Option<String>,
-    /// Vision model (reserved)
-    pub vision_model: Option<String>,
+    /// Unified models configuration (JSON string)
+    pub models: Option<AgentModels>,
+    /// Shell command whitelist/blacklist (JSON array of {pattern, decision})
+    pub shell_policy: Option<String>,
+    /// JSON array of authorized directory paths
+    pub allowed_paths: Option<String>,
+    /// Whether the agent's tasks require final audit
+    pub final_audit: Option<bool>,
+    /// Approval level for tool calls (default, smart, full)
+    pub approval_level: Option<String>,
+    /// Whether skills are enabled for this agent
+    pub skill_enabled: Option<bool>,
+    /// Whether this agent is a built-in system agent
+    pub is_system: Option<bool>,
+    /// Whether this agent is disabled from workflow selection/delegation
+    pub disabled: Option<bool>,
     /// Maximum context length (in tokens)
     pub max_contexts: Option<i32>,
     /// Creation timestamp
@@ -47,31 +145,89 @@ impl Agent {
         id: String,
         name: String,
         description: Option<String>,
+        role: Option<String>,
+        parent_agent_id: Option<String>,
         system_prompt: String,
-        agent_type: String,
         planning_prompt: Option<String>,
         available_tools: Option<String>,
         auto_approve: Option<String>,
-        plan_model: Option<String>,
-        act_model: Option<String>,
-        vision_model: Option<String>,
+        models: Option<AgentModels>,
+        shell_policy: Option<String>,
+        allowed_paths: Option<String>,
+        final_audit: Option<bool>,
+        approval_level: Option<String>,
+        skill_enabled: Option<bool>,
+        is_system: Option<bool>,
+        disabled: Option<bool>,
         max_contexts: Option<i32>,
     ) -> Self {
         Self {
             id,
             name,
             description,
+            role,
+            parent_agent_id,
             system_prompt,
-            agent_type,
             planning_prompt,
             available_tools,
             auto_approve,
-            plan_model,
-            act_model,
-            vision_model,
+            models,
+            shell_policy,
+            allowed_paths,
+            final_audit,
+            approval_level,
+            skill_enabled,
+            is_system,
+            disabled,
             max_contexts,
             created_at: None,
             updated_at: None,
+        }
+    }
+
+    /// Merges values from a JSON config string into this Agent instance
+    /// The config JSON uses camelCase field names (from AgentConfig serialization)
+    pub fn merge_config(&mut self, config_json: &str) {
+        if let Some(config) = AgentConfig::from_json(config_json) {
+            // Merge models
+            if config.models.is_some() {
+                self.models = config.models;
+            }
+
+            // Merge shell_policy (Vec<ShellPolicyRule> -> JSON string)
+            if let Some(policy) = config.shell_policy {
+                self.shell_policy = serde_json::to_string(&policy).ok();
+            }
+
+            // Merge allowed_paths (Vec<String> -> JSON string)
+            if let Some(paths) = config.allowed_paths {
+                self.allowed_paths = serde_json::to_string(&paths).ok();
+            }
+
+            // Merge final_audit
+            if config.final_audit.is_some() {
+                self.final_audit = config.final_audit;
+            }
+
+            // Merge auto_approve (Vec<String> -> JSON string)
+            if let Some(tools) = config.auto_approve {
+                self.auto_approve = serde_json::to_string(&tools).ok();
+            }
+
+            // Merge approval_level
+            if config.approval_level.is_some() {
+                self.approval_level = config.approval_level;
+            }
+
+            // Merge available_tools (Vec<String> -> JSON string)
+            if let Some(tools) = config.available_tools {
+                self.available_tools = serde_json::to_string(&tools).ok();
+            }
+
+            // Merge max_contexts
+            if config.max_contexts.is_some() {
+                self.max_contexts = config.max_contexts;
+            }
         }
     }
 }
@@ -83,16 +239,27 @@ impl From<&Row<'_>> for Agent {
             id: row.get("id").unwrap_or_default(),
             name: row.get("name").unwrap_or_default(),
             description: row.get("description").ok(),
+            role: row
+                .get::<_, String>("role")
+                .ok()
+                .or_else(|| row.get::<_, String>("agent_type").ok())
+                .or_else(|| Some("primary".to_string())),
+            parent_agent_id: row.get("parent_agent_id").ok(),
             system_prompt: row.get("system_prompt").unwrap_or_default(),
-            agent_type: row
-                .get("agent_type")
-                .unwrap_or_else(|_| "autonomous".to_string()),
             planning_prompt: row.get("planning_prompt").ok(),
             available_tools: row.get("available_tools").ok(),
             auto_approve: row.get("auto_approve").ok(),
-            plan_model: row.get("plan_model").ok(),
-            act_model: row.get("act_model").ok(),
-            vision_model: row.get("vision_model").ok(),
+            models: row
+                .get::<_, String>("models")
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            shell_policy: row.get("shell_policy").ok(),
+            allowed_paths: row.get("allowed_paths").ok(),
+            final_audit: row.get("final_audit").ok(),
+            approval_level: row.get("approval_level").ok(),
+            skill_enabled: row.get("skill_enabled").ok(),
+            is_system: row.get("is_system").ok(),
+            disabled: row.get("disabled").ok(),
             max_contexts: row.get("max_contexts").ok(),
             created_at: row.get("created_at").ok(),
             updated_at: row.get("updated_at").ok(),
@@ -122,26 +289,42 @@ impl MainStore {
             ));
         }
 
+        // Serialize JSON fields
+        let models_json = agent
+            .models
+            .as_ref()
+            .map(|m| serde_json::to_string(m).ok())
+            .flatten();
+        let available_tools_json = agent.available_tools.as_ref().cloned();
+        let auto_approve_json = agent.auto_approve.as_ref().cloned();
+        let shell_policy_json = agent.shell_policy.as_ref().cloned();
+        let allowed_paths_json = agent.allowed_paths.as_ref().cloned();
+
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, system_prompt, agent_type, planning_prompt, available_tools, auto_approve, plan_model, act_model, vision_model, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, is_system, disabled, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 agent.id,
                 agent.name,
                 agent.description,
+                agent.role.clone().unwrap_or_else(|| "primary".to_string()),
+                agent.parent_agent_id,
                 agent.system_prompt,
-                agent.agent_type,
                 agent.planning_prompt,
-                agent.available_tools,
-                agent.auto_approve,
-                agent.plan_model,
-                agent.act_model,
-                agent.vision_model,
+                available_tools_json,
+                auto_approve_json,
+                models_json,
+                shell_policy_json,
+                allowed_paths_json,
+                agent.final_audit,
+                agent.approval_level,
+                agent.skill_enabled,
+                agent.is_system,
+                agent.disabled,
                 agent.max_contexts,
             ],
         )?;
-
         tx.commit()?;
 
         Ok(agent.id.clone())
@@ -155,10 +338,23 @@ impl MainStore {
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         let tx = conn.transaction()?;
 
+        let existing_agent: Option<Agent> = {
+            let mut stmt = tx.prepare("SELECT * FROM agents WHERE id = ?1")?;
+            stmt.query_row(params![&agent.id], |row| Ok(Agent::from(row)))
+                .optional()?
+        };
+        let persisted_name = existing_agent.as_ref().and_then(|current| {
+            current
+                .is_system
+                .filter(|v| *v)
+                .map(|_| current.name.clone())
+        });
+        let effective_name = persisted_name.unwrap_or_else(|| agent.name.clone());
+
         // Check for name uniqueness on other agents
         let count: i64 = tx.query_row(
             "SELECT COUNT(*) FROM agents WHERE name = ?1 AND id != ?2",
-            params![&agent.name, &agent.id],
+            params![&effective_name, &agent.id],
             |row| row.get(0),
         )?;
 
@@ -168,21 +364,56 @@ impl MainStore {
             ));
         }
 
+        // Serialize JSON fields
+        let models_json = agent
+            .models
+            .as_ref()
+            .map(|m| serde_json::to_string(m).ok())
+            .flatten();
+        let available_tools_json = agent.available_tools.as_ref().cloned();
+        let auto_approve_json = agent.auto_approve.as_ref().cloned();
+        let shell_policy_json = agent.shell_policy.as_ref().cloned();
+        let allowed_paths_json = agent.allowed_paths.as_ref().cloned();
+
         // Update the agent
         tx.execute(
-            "UPDATE agents SET name = ?1, description = ?2, system_prompt = ?3, agent_type = ?4, planning_prompt = ?5, available_tools = ?6, auto_approve = ?7, plan_model = ?8, act_model = ?9, vision_model = ?10, max_contexts = ?11, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?12",
+            "UPDATE agents SET
+                name = ?1,
+                description = ?2,
+                role = ?3,
+                parent_agent_id = ?4,
+                system_prompt = ?5,
+                planning_prompt = ?6,
+                available_tools = ?7,
+                auto_approve = ?8,
+                models = ?9,
+                shell_policy = ?10,
+                allowed_paths = ?11,
+                final_audit = ?12,
+                approval_level = ?13,
+                skill_enabled = ?14,
+                is_system = ?15,
+                disabled = ?16,
+                max_contexts = ?17,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?18",
             params![
-                agent.name,
+                effective_name,
                 agent.description,
+                agent.role.clone().unwrap_or_else(|| "primary".to_string()),
+                agent.parent_agent_id,
                 agent.system_prompt,
-                agent.agent_type,
                 agent.planning_prompt,
-                agent.available_tools,
-                agent.auto_approve,
-                agent.plan_model,
-                agent.act_model,
-                agent.vision_model,
+                available_tools_json,
+                auto_approve_json,
+                models_json,
+                shell_policy_json,
+                allowed_paths_json,
+                agent.final_audit,
+                agent.approval_level,
+                agent.skill_enabled,
+                agent.is_system,
+                agent.disabled,
                 agent.max_contexts,
                 agent.id,
             ],
@@ -202,7 +433,10 @@ impl MainStore {
         let tx = conn.transaction()?;
 
         // Delete the agent
-        tx.execute("DELETE FROM agents WHERE id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM agents WHERE id = ?1 OR parent_agent_id = ?1",
+            params![id],
+        )?;
 
         tx.commit()?;
 
@@ -232,10 +466,41 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
-        let mut stmt = conn.prepare("SELECT * FROM agents ORDER BY name")?;
+        let mut stmt = conn.prepare(
+            "SELECT * FROM agents
+             ORDER BY
+                CASE COALESCE(role, agent_type, 'primary')
+                    WHEN 'primary' THEN 0
+                    ELSE 1
+                END,
+                COALESCE(parent_agent_id, id),
+                name",
+        )?;
 
         let agents = stmt
             .query_map(params![], |row| Ok(Agent::from(row)))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(agents)
+    }
+
+    /// Gets child agents owned by the specified primary agent.
+    pub fn get_child_agents(&self, parent_agent_id: &str) -> Result<Vec<Agent>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT * FROM agents
+             WHERE COALESCE(role, agent_type, 'primary') = 'child'
+               AND parent_agent_id = ?1
+               AND COALESCE(disabled, 0) = 0
+             ORDER BY name",
+        )?;
+
+        let agents = stmt
+            .query_map(params![parent_agent_id], |row| Ok(Agent::from(row)))?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(agents)

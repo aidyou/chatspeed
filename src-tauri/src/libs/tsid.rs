@@ -35,10 +35,7 @@ impl TsidGenerator {
     /// Creates a new synchronous generator.
     pub fn new(node_id: u64) -> Result<Self, String> {
         if node_id >= (1 << NODE_BITS) {
-            return Err(format!(
-                "nodeID must be between 0-{}",
-                (1 << NODE_BITS) - 1
-            ));
+            return Err(format!("nodeID must be between 0-{}", (1 << NODE_BITS) - 1));
         }
 
         let current_ms = SystemTime::now()
@@ -62,17 +59,14 @@ impl TsidGenerator {
         })
     }
 
-    /// Generates a TSID. This is a blocking operation.
-    pub fn generate(&self) -> Result<String, String> {
-        let mut state = self.mu.lock().unwrap(); // Lock once at the beginning
+    /// Generates a TSID as a raw u64 value.
+    pub fn generate_u64(&self) -> Result<u64, String> {
+        let mut state = self.mu.lock().unwrap();
 
         for _ in 0..MAX_RETRIES {
             let now = SystemTime::now();
-            let current_ms = now
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64
-                - TSID_EPOCH as i64;
+            let current_ms =
+                now.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64 - TSID_EPOCH as i64;
 
             if current_ms > state.last_time_ms {
                 state.last_time_ms = current_ms;
@@ -86,22 +80,25 @@ impl TsidGenerator {
                     | (self.node_id << COUNTER_BITS)
                     | (state.counter as u64);
 
-                let tsid_bytes = tsid_value.to_be_bytes();
-                return Ok(crockford_base32_encode(&tsid_bytes));
+                return Ok(tsid_value);
             }
 
-            // Counter overflowed, sleep while holding the lock, like the Go version.
             let now_duration = now.duration_since(UNIX_EPOCH).unwrap();
             let nanos_in_ms = now_duration.as_nanos() % 1_000_000;
             let sleep_nanos = 1_000_000 - nanos_in_ms;
             thread::sleep(std::time::Duration::from_nanos(sleep_nanos as u64));
-            // continue loop
         }
 
         Err("Max retries exceeded".to_string())
     }
-}
 
+    /// Generates a TSID string encoded in Crockford Base32.
+    pub fn generate(&self) -> Result<String, String> {
+        let tsid_value = self.generate_u64()?;
+        let tsid_bytes = tsid_value.to_be_bytes();
+        Ok(crockford_base32_encode(&tsid_bytes))
+    }
+}
 
 /// Crockford Base32 character table
 /// Excludes easily confused characters (I, L, O, U)
@@ -199,7 +196,11 @@ mod tests {
         let sort_start = std::time::Instant::now();
         let mut sorted_ids = generated_ids.clone();
         sorted_ids.sort_unstable();
-        println!("Sorting {}M IDs in {:?}", count / 1_000_000, sort_start.elapsed());
+        println!(
+            "Sorting {}M IDs in {:?}",
+            count / 1_000_000,
+            sort_start.elapsed()
+        );
 
         let check_start = std::time::Instant::now();
         for i in 0..count {
@@ -210,7 +211,11 @@ mod tests {
                 );
             }
         }
-        println!("Verifying order of {}M IDs in {:?}", count / 1_000_000, check_start.elapsed());
+        println!(
+            "Verifying order of {}M IDs in {:?}",
+            count / 1_000_000,
+            check_start.elapsed()
+        );
     }
 
     #[test]

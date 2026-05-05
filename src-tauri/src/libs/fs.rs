@@ -76,22 +76,20 @@ pub fn save_thumbnail_image(
 /// # Returns
 /// * `String` - The file name of the image
 pub fn get_file_name(image_path: &std::path::Path) -> String {
-    if let Some(fname) = image_path.file_name() {
-        let name_str = fname.to_string_lossy().to_string();
-        format!(
-            "{}.{}",
-            hash_string(&name_str),
-            image_path
-                .extension()
-                .and_then(|f| f.to_str())
-                .unwrap_or("png")
-        )
-    } else {
-        format!(
-            "{}.png",
-            hash_string(&image_path.to_string_lossy().to_string())
-        )
-    }
+    let hash_source = image_path
+        .canonicalize()
+        .unwrap_or_else(|_| image_path.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+
+    format!(
+        "{}.{}",
+        hash_string(&hash_source),
+        image_path
+            .extension()
+            .and_then(|f| f.to_str())
+            .unwrap_or("png")
+    )
 }
 
 /// Generate a 32-bit hash string for the given string
