@@ -24,6 +24,11 @@ mod tests {
             log::info!("Set interace language to {}", user_lang);
         }
     }
+
+    #[tokio::test]
+    async fn mock_runtime_app_handle_builds() {
+        let _app_handle = super::get_app_handle();
+    }
 }
 
 // use lazy_static::*;

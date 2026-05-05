@@ -192,8 +192,7 @@ pub async fn handle_ollama_tags(
             let mut hasher = Sha256::new();
             let timestamp = chrono::Utc::now().to_rfc3339();
             hasher.update(format!("{}:{}:{}", alias, provider, timestamp));
-            let digest_bytes = hasher.finalize();
-            let digest = format!("{:x}", digest_bytes);
+            let digest = hex::encode(hasher.finalize());
 
             // Derive model family from model name
             let family = derive_model_family(&alias);

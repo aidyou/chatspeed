@@ -505,17 +505,37 @@ const onSkillSelect = skill => {
   }
 }
 
-// Approve all pending approval items for the current workflow using a stable snapshot.
-// Sequential dispatch avoids racing backend state transitions for the same session.
-const onApproveAllPendingAction = async () => {
-  const entries = [...currentWorkflowPendingApprovals.value]
-  if (!entries.length) return
+// Approve all pending approval items for the current workflow using the
+// in-message FIFO order so the inline item that triggered the batch action
+// is never dropped from the snapshot.
+const onApproveAllPendingAction = async startingToolCallId => {
+  const sessionId = currentWorkflowId.value
+  if (!sessionId) return
+
+  const orderedIds = []
+  const seen = new Set()
+
+  for (const message of workflowStore.messages || []) {
+    if (message?.role !== 'tool') continue
+    const toolCallId = message?.metadata?.tool_call_id
+    if (!toolCallId || seen.has(toolCallId)) continue
+    if (message?.metadata?.approval_status !== 'pending') continue
+
+    seen.add(toolCallId)
+    orderedIds.push(toolCallId)
+  }
+
+  if (startingToolCallId && !seen.has(startingToolCallId)) {
+    orderedIds.unshift(startingToolCallId)
+  }
+
+  if (!orderedIds.length) return
 
   // Always resolve approvals sequentially against a stable snapshot.
   // The backend remains authoritative for pending approval order/state, and
   // concurrent approval signals can race with per-tool state transitions.
-  for (const entry of entries) {
-    await onApproveAction(entry.id, entry.sessionId)
+  for (const toolCallId of orderedIds) {
+    await onApproveAction(toolCallId, sessionId)
   }
 }
 

@@ -429,7 +429,7 @@
                   "
                   @approve="$emit('approve-tool', message.metadata?.tool_call_id)"
                   @approve-all="$emit('approve-all-tool', message.metadata?.tool_call_id)"
-                  @approve-all-pending="onApproveAllPending"
+                  @approve-all-pending="onApproveAllPending(message.metadata?.tool_call_id)"
                   @reject="
                     $emit(
                       'reject-tool',
@@ -1321,8 +1321,8 @@ const setApprovalDraft = (toolCallId, value) => {
   }
 }
 
-const onApproveAllPending = () => {
-  emit('approve-all-pending')
+const onApproveAllPending = toolCallId => {
+  emit('approve-all-pending', toolCallId)
 }
 
 const getChoiceKey = message =>
