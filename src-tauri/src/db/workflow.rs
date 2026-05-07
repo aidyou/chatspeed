@@ -457,6 +457,26 @@ impl MainStore {
         Ok(new_msg)
     }
 
+    pub fn update_workflow_message_metadata(
+        &self,
+        message_id: i64,
+        metadata: &Value,
+    ) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let metadata_json = serde_json::to_string(metadata).unwrap_or_default();
+
+        conn.execute(
+            "UPDATE workflow_messages SET metadata = ?1 WHERE id = ?2",
+            params![metadata_json, message_id],
+        )?;
+
+        Ok(())
+    }
+
     pub fn add_workflow_context_message(
         &self,
         msg: &WorkflowContextMessage,
@@ -1054,7 +1074,13 @@ mod tests {
             conn.execute(
                 "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params!["agent-test", "Agent Test", "You are a test agent.", "autonomous", 20],
+                params![
+                    "agent-test",
+                    "Agent Test",
+                    "You are a test agent.",
+                    "autonomous",
+                    20
+                ],
             )
             .expect("failed to seed agent");
         }

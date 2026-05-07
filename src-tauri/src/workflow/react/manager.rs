@@ -12,6 +12,7 @@ use crate::workflow::react::types::WorkflowState;
 pub enum ManagedSessionStatus {
     Active,
     Waiting,
+    Stopping,
     Completed,
     Failed,
     Cancelled,
@@ -247,6 +248,7 @@ impl WorkflowManager {
             | WorkflowState::Thinking
             | WorkflowState::Executing
             | WorkflowState::Auditing => ManagedSessionStatus::Active,
+            WorkflowState::Stopping => ManagedSessionStatus::Stopping,
             WorkflowState::Paused
             | WorkflowState::AwaitingUser
             | WorkflowState::AwaitingApproval
@@ -286,6 +288,17 @@ impl WorkflowManager {
                         signal_type
                     );
                     Ok(())
+                }
+                ManagedSessionStatus::Stopping => {
+                    log::info!(
+                        "[WorkflowManager][session={}][event=signal_rejected] Signal '{}' rejected: session stopping",
+                        session_id,
+                        signal_type
+                    );
+                    Err(WorkflowManagerError::SignalRejected {
+                        session_id: session_id.to_string(),
+                        reason: "Session is stopping".to_string(),
+                    })
                 }
                 ManagedSessionStatus::Completed => {
                     log::info!(

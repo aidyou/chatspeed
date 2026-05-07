@@ -738,22 +738,21 @@ impl LlmProcessor {
                 continue;
             }
 
-            let runtime_observation_content =
-                if let Some(rendered) = render_runtime_observation_for_llm(&m) {
-                    match rendered.placement {
-                        RuntimeObservationPlacement::Preserve => Some(rendered.content),
-                        RuntimeObservationPlacement::Defer => {
-                            deferred_system_observations.push((
-                                Self::runtime_observation_tool_call_id(&m),
-                                rendered.content,
-                            ));
-                            continue;
-                        }
-                        RuntimeObservationPlacement::Hide => continue,
+            let runtime_observation_content = if let Some(rendered) =
+                render_runtime_observation_for_llm(&m)
+            {
+                match rendered.placement {
+                    RuntimeObservationPlacement::Preserve => Some(rendered.content),
+                    RuntimeObservationPlacement::Defer => {
+                        deferred_system_observations
+                            .push((Self::runtime_observation_tool_call_id(&m), rendered.content));
+                        continue;
                     }
-                } else {
-                    None
-                };
+                    RuntimeObservationPlacement::Hide => continue,
+                }
+            } else {
+                None
+            };
 
             if m.role == "tool" {
                 if let Some(meta) = &m.metadata {
@@ -945,11 +944,7 @@ impl LlmProcessor {
                                     let merged_content = if existing_content.trim().is_empty() {
                                         contents.join("\n\n")
                                     } else {
-                                        format!(
-                                            "{}\n\n{}",
-                                            existing_content,
-                                            contents.join("\n\n")
-                                        )
+                                        format!("{}\n\n{}", existing_content, contents.join("\n\n"))
                                     };
                                     last_msg["content"] = serde_json::json!(merged_content);
                                 }
@@ -966,13 +961,13 @@ impl LlmProcessor {
             }
 
             if !trailing_deferred_observations.is_empty()
-            && !history.last().is_some_and(|msg| {
-                msg["role"] == "assistant"
-                    && msg
-                        .get("tool_calls")
-                        .and_then(|calls| calls.as_array())
-                        .is_some_and(|calls| !calls.is_empty())
-            })
+                && !history.last().is_some_and(|msg| {
+                    msg["role"] == "assistant"
+                        && msg
+                            .get("tool_calls")
+                            .and_then(|calls| calls.as_array())
+                            .is_some_and(|calls| !calls.is_empty())
+                })
             {
                 history.push(serde_json::json!({
                     "role": "user",

@@ -26,6 +26,7 @@ use crate::ccproxy::gemini::{
 use crate::ccproxy::utils::token_estimator::estimate_tokens;
 
 pub struct GeminiBackendAdapter;
+const GEMINI_DUMMY_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
 
 impl GeminiBackendAdapter {
     /// Extract only Gemini-supported JSON Schema fields
@@ -121,6 +122,65 @@ impl GeminiBackendAdapter {
             }
             _ => schema.clone(),
         }
+    }
+
+    fn build_native_message_parts(
+        msg: &crate::ccproxy::adapter::unified::UnifiedMessage,
+    ) -> Vec<GeminiPart> {
+        let mut parts: Vec<GeminiPart> = Vec::new();
+        let mut attach_dummy_thought_signature = msg.role == UnifiedRole::Assistant;
+
+        for block in &msg.content {
+            match block {
+                UnifiedContentBlock::Text { text } => {
+                    parts.push(GeminiPart {
+                        text: Some(text.clone()),
+                        ..Default::default()
+                    });
+                }
+                UnifiedContentBlock::Image { media_type, data } => {
+                    parts.push(GeminiPart {
+                        inline_data: Some(GeminiInlineData {
+                            mime_type: media_type.clone(),
+                            data: data.clone(),
+                        }),
+                        ..Default::default()
+                    });
+                }
+                UnifiedContentBlock::ToolUse { id: _, name, input } => {
+                    let thought_signature = if attach_dummy_thought_signature {
+                        attach_dummy_thought_signature = false;
+                        Some(GEMINI_DUMMY_THOUGHT_SIGNATURE.to_string())
+                    } else {
+                        None
+                    };
+                    parts.push(GeminiPart {
+                        function_call: Some(GeminiFunctionCall {
+                            name: name.clone(),
+                            args: input.clone(),
+                        }),
+                        thought_signature,
+                        ..Default::default()
+                    });
+                }
+                UnifiedContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error: _,
+                } => {
+                    parts.push(GeminiPart {
+                        function_response: Some(GeminiFunctionResponse {
+                            name: tool_use_id.clone(),
+                            response: json!({ "content": content.clone() }),
+                        }),
+                        ..Default::default()
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        parts
     }
 
     /// Process tool compatibility mode chunk
@@ -445,49 +505,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                     UnifiedRole::System => continue, // System prompt is handled at the top level
                 };
 
-                let mut parts: Vec<GeminiPart> = Vec::new();
-                for block in &msg.content {
-                    match block {
-                        UnifiedContentBlock::Text { text } => {
-                            parts.push(GeminiPart {
-                                text: Some(text.clone()),
-                                ..Default::default()
-                            });
-                        }
-                        UnifiedContentBlock::Image { media_type, data } => {
-                            parts.push(GeminiPart {
-                                inline_data: Some(GeminiInlineData {
-                                    mime_type: media_type.clone(),
-                                    data: data.clone(),
-                                }),
-                                ..Default::default()
-                            });
-                        }
-                        UnifiedContentBlock::ToolUse { id: _, name, input } => {
-                            parts.push(GeminiPart {
-                                function_call: Some(GeminiFunctionCall {
-                                    name: name.clone(),
-                                    args: input.clone(),
-                                }),
-                                ..Default::default()
-                            });
-                        }
-                        UnifiedContentBlock::ToolResult {
-                            tool_use_id,
-                            content,
-                            is_error: _,
-                        } => {
-                            parts.push(GeminiPart {
-                                function_response: Some(GeminiFunctionResponse {
-                                    name: tool_use_id.clone(),
-                                    response: json!({ "content": content.clone() }),
-                                }),
-                                ..Default::default()
-                            });
-                        }
-                        _ => {} // Ignore other block types
-                    }
-                }
+                let parts = Self::build_native_message_parts(msg);
 
                 if !parts.is_empty() {
                     gemini_contents.push(GeminiContent {
@@ -1138,5 +1156,56 @@ impl BackendAdapter for GeminiBackendAdapter {
             }],
             usage: UnifiedUsage::default(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GeminiBackendAdapter, GEMINI_DUMMY_THOUGHT_SIGNATURE};
+    use crate::ccproxy::adapter::unified::{UnifiedContentBlock, UnifiedMessage, UnifiedRole};
+    use serde_json::json;
+
+    #[test]
+    fn native_assistant_tool_calls_attach_dummy_signature_to_first_call_per_message() {
+        let assistant_msg = UnifiedMessage {
+            role: UnifiedRole::Assistant,
+            content: vec![
+                UnifiedContentBlock::ToolUse {
+                    id: "call_1".to_string(),
+                    name: "tool_a".to_string(),
+                    input: json!({"city": "Shanghai"}),
+                },
+                UnifiedContentBlock::ToolUse {
+                    id: "call_2".to_string(),
+                    name: "tool_b".to_string(),
+                    input: json!({"city": "Beijing"}),
+                },
+            ],
+            reasoning_content: None,
+        };
+
+        let parts = GeminiBackendAdapter::build_native_message_parts(&assistant_msg);
+        assert_eq!(
+            parts[0].thought_signature.as_deref(),
+            Some(GEMINI_DUMMY_THOUGHT_SIGNATURE)
+        );
+        assert!(parts[1].thought_signature.is_none());
+    }
+
+    #[test]
+    fn user_tool_results_do_not_attach_dummy_signature() {
+        let tool_msg = UnifiedMessage {
+            role: UnifiedRole::Tool,
+            content: vec![UnifiedContentBlock::ToolResult {
+                tool_use_id: "call_1".to_string(),
+                content: "{\"ok\":true}".to_string(),
+                is_error: false,
+            }],
+            reasoning_content: None,
+        };
+
+        let parts = GeminiBackendAdapter::build_native_message_parts(&tool_msg);
+        assert!(parts[0].thought_signature.is_none());
+        assert!(parts[0].function_response.is_some());
     }
 }

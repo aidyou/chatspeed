@@ -81,8 +81,8 @@
               :enterable="false">
               <label
                 class="icon-btn upperLayer"
-                :class="{ active: planningMode }"
-                @click="$emit('toggle-planning-mode')">
+                :class="{ active: planningMode, disabled: !canTogglePlanningMode }"
+                @click="canTogglePlanningMode && $emit('toggle-planning-mode')">
                 <cs name="skill-plan" class="small" />
               </label>
             </el-tooltip>
@@ -299,6 +299,13 @@
             @click="$emit('continue')">
             {{ $t('workflow.continue') }}
           </el-button>
+          <el-button
+            v-else-if="isStopping"
+            size="small"
+            round
+            disabled>
+            {{ $t('workflow.stopping') }}
+          </el-button>
           <cs name="stop" @click="$emit('stop')" v-if="canStop" />
           <cs name="send" @click="$emit('send-message')" :class="{ disabled: !canSendMessage }" />
         </div>
@@ -352,6 +359,10 @@ const props = defineProps({
   planningMode: {
     type: Boolean,
     default: false
+  },
+  canTogglePlanningMode: {
+    type: Boolean,
+    default: true
   },
   approvalLevel: {
     type: String,
@@ -445,6 +456,7 @@ const allowedShellCommands = computed(() =>
 const canStop = computed(() => workflowStore.canStop)
 const canContinue = computed(() => workflowStore.canContinue)
 const canApprovePlan = computed(() => workflowStore.canApprovePlan)
+const isStopping = computed(() => workflowStore.isStopping)
 
 const removeAutoApprovedTool = async toolName => {
   try {
@@ -474,7 +486,9 @@ const inputRef = ref(null)
 
 const inputMessage = defineModel('inputMessage', { type: String, default: '' })
 
-const canSendMessage = computed(() => inputMessage.value.trim() !== '' && props.selectedAgent)
+const canSendMessage = computed(
+  () => inputMessage.value.trim() !== '' && props.selectedAgent && !isStopping.value
+)
 
 const canEditAgent = computed(() => props.canEditAgent)
 

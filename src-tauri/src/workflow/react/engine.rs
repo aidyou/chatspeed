@@ -344,6 +344,71 @@ impl WorkflowExecutor {
         self.max_steps = Self::effective_max_steps(&self.agent_config, &self.policy.phase);
     }
 
+    fn sync_runtime_models_from_agent_config(&mut self) {
+        let act_model = self
+            .agent_config
+            .models
+            .as_ref()
+            .and_then(|models| models.act.as_ref());
+        let plan_model = self
+            .agent_config
+            .models
+            .as_ref()
+            .and_then(|models| models.plan.as_ref());
+
+        let selected_model = if self.policy.phase == ExecutionPhase::Planning {
+            plan_model.or(act_model)
+        } else {
+            act_model.or(plan_model)
+        };
+
+        let model_name = selected_model
+            .map(|m| m.model.clone())
+            .unwrap_or_default();
+        let provider_id = selected_model.map(|m| m.id).unwrap_or(0);
+        let actual_config = self.resolve_actual_model_config(provider_id, &model_name);
+
+        self.llm_processor.agent_config = self.agent_config.clone();
+        self.llm_processor.active_provider_id = provider_id;
+        self.llm_processor.active_model_name = model_name.clone();
+        self.llm_processor.reasoning = if let Some(crate::db::ModelConfig {
+            reasoning: Some(true),
+            ..
+        }) = actual_config
+        {
+            true
+        } else {
+            crate::ai::util::is_reasoning_supported(&model_name.to_lowercase())
+        };
+
+        self.intelligence_manager.active_provider_id = provider_id;
+        self.intelligence_manager.active_model_name = model_name.clone();
+        self.intelligence_manager.approval_provider_id = provider_id;
+        self.intelligence_manager.approval_model_name = model_name.clone();
+
+        if let Some(audit_model) = plan_model.or(selected_model) {
+            self.intelligence_manager.audit_provider_id = audit_model.id;
+            self.intelligence_manager.audit_model_name = audit_model.model.clone();
+        } else {
+            self.intelligence_manager.audit_provider_id = provider_id;
+            self.intelligence_manager.audit_model_name = model_name.clone();
+        }
+
+        self.compressor.provider_id = provider_id;
+        self.compressor.model = model_name.clone();
+        self.sync_runtime_limits();
+
+        log::info!(
+            "[Workflow][session={}][phase=model_sync] Active runtime model synced: phase={:?}, provider_id={}, model={}, audit_provider_id={}, audit_model={}",
+            self.session_id,
+            self.policy.phase,
+            self.llm_processor.active_provider_id,
+            self.llm_processor.active_model_name,
+            self.intelligence_manager.audit_provider_id,
+            self.intelligence_manager.audit_model_name
+        );
+    }
+
     async fn persist_compression_summary(
         &mut self,
         summary: String,
@@ -678,6 +743,49 @@ impl ReActExecutor for WorkflowExecutor {
 }
 
 impl WorkflowExecutor {
+    fn update_pending_approval_message_metadata(
+        &mut self,
+        tool_call_id: &str,
+        approval_status: &str,
+        execution_status: &str,
+        summary: &str,
+        hide_approval_details: bool,
+    ) -> Result<(), WorkflowEngineError> {
+        let mut persisted_update: Option<(i64, serde_json::Value)> = None;
+
+        if let Some(message) = self.context.messages.iter_mut().rev().find(|message| {
+            let Some(meta) = message.metadata.as_ref() else {
+                return false;
+            };
+            meta.get("tool_call_id").and_then(|v| v.as_str()) == Some(tool_call_id)
+                && meta.get("approval_status").and_then(|v| v.as_str()) == Some("pending")
+        }) {
+            let Some(metadata) = message.metadata.as_mut() else {
+                return Ok(());
+            };
+
+            metadata["approval_status"] = serde_json::json!(approval_status);
+            metadata["execution_status"] = serde_json::json!(execution_status);
+            metadata["summary"] = serde_json::json!(summary);
+            metadata["hide_approval_details"] = serde_json::json!(hide_approval_details);
+
+            if let Some(message_id) = message.id {
+                persisted_update = Some((message_id, metadata.clone()));
+            }
+        } else {
+            return Ok(());
+        }
+
+        if let Some((message_id, metadata)) = persisted_update {
+            let store = self.context.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            store.update_workflow_message_metadata(message_id, &metadata)?;
+        }
+
+        Ok(())
+    }
+
     async fn prepare_completed_resume_internal(&mut self) -> Result<(), WorkflowEngineError> {
         self.current_step = 0;
         self.consecutive_no_tool_calls = 0;
@@ -1077,14 +1185,21 @@ impl WorkflowExecutor {
         self.available_skills = self.skill_scanner.scan()?;
         self.llm_processor.available_skills = self.available_skills.clone();
 
-        // Load current state from database
+        // Load current state and the latest persisted workflow config from database.
         {
-            let store = self
-                .context
-                .main_store
-                .read()
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-            if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+            let snapshot = {
+                let store = self
+                    .context
+                    .main_store
+                    .read()
+                    .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+                store.get_workflow_snapshot(&self.session_id).ok()
+            };
+            if let Some(snapshot) = snapshot {
+                if let Some(config_str) = snapshot.workflow.agent_config.as_deref() {
+                    self.agent_config.merge_config(config_str);
+                    self.sync_runtime_models_from_agent_config();
+                }
                 if let Ok(state) = snapshot.workflow.status.parse::<WorkflowState>() {
                     self.state = state;
                 }
@@ -2352,11 +2467,33 @@ impl WorkflowExecutor {
                             approve_all,
                             rejection_message,
                         } => {
+                            let approval_status = if approved { "approved" } else { "rejected" };
+                            let execution_status = if approved {
+                                "approval_submitted"
+                            } else {
+                                "rejected"
+                            };
+                            let summary = if approved {
+                                rust_i18n::t!("workflow.executing").to_string()
+                            } else {
+                                rust_i18n::t!("workflow.user_rejected").to_string()
+                            };
+
+                            self.update_pending_approval_message_metadata(
+                                &tool_call_id,
+                                approval_status,
+                                execution_status,
+                                &summary,
+                                approved,
+                            )?;
+
                             let event = WorkflowEvent::approval_resolved(
                                 self.session_id.clone(),
                                 tool_call_id.clone(),
                                 approved,
                                 approve_all,
+                                Some(approval_status.to_string()),
+                                Some(execution_status.to_string()),
                             );
                             if let Err(e) = self.append_event(&event) {
                                 log::error!(
@@ -2371,6 +2508,8 @@ impl WorkflowExecutor {
                                     tool_call_id: tool_call_id.clone(),
                                     approved,
                                     approve_all,
+                                    approval_status: Some(approval_status.to_string()),
+                                    execution_status: Some(execution_status.to_string()),
                                 })
                                 .await
                             {
@@ -3046,7 +3185,8 @@ impl WorkflowExecutor {
                             "display_type": reinforced.display_type,
                             "approval_status": "approved"
                         });
-                        if let Some(details) = self.build_tool_result_details(&tool_name, &tool_args)
+                        if let Some(details) =
+                            self.build_tool_result_details(&tool_name, &tool_args)
                         {
                             metadata["details"] = details;
                         }
@@ -3655,10 +3795,11 @@ impl WorkflowExecutor {
                                 Self::normalize_pending_tool_details(details.clone());
                         }
                     }
-                } else if let Some(args) = original_call
-                    .get("arguments")
-                    .or_else(|| original_call.get("function").and_then(|value| value.get("arguments")))
-                {
+                } else if let Some(args) = original_call.get("arguments").or_else(|| {
+                    original_call
+                        .get("function")
+                        .and_then(|value| value.get("arguments"))
+                }) {
                     let normalized_args = Self::normalize_tool_arguments_value(args.clone());
                     if let Some(details) =
                         self.build_tool_result_details(tool_name, &normalized_args)
@@ -5524,26 +5665,7 @@ impl WorkflowExecutor {
                     serde_json::from_value::<crate::db::agent::AgentModels>(configs.clone())
                 {
                     self.agent_config.models = Some(models);
-                    self.llm_processor.agent_config = self.agent_config.clone();
-                    if let Some(act_model) = self
-                        .agent_config
-                        .models
-                        .as_ref()
-                        .and_then(|models| models.act.as_ref())
-                    {
-                        self.intelligence_manager.approval_provider_id = act_model.id;
-                        self.intelligence_manager.approval_model_name = act_model.model.clone();
-                    }
-                    if let Some(audit_model) = self
-                        .agent_config
-                        .models
-                        .as_ref()
-                        .and_then(|models| models.plan.as_ref().or(models.act.as_ref()))
-                    {
-                        self.intelligence_manager.audit_provider_id = audit_model.id;
-                        self.intelligence_manager.audit_model_name = audit_model.model.clone();
-                    }
-                    self.sync_runtime_limits();
+                    self.sync_runtime_models_from_agent_config();
                     self.dispatch_context_usage().await?;
                 }
             }

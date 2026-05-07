@@ -180,7 +180,7 @@ export function useWorkflowMessages() {
         } else if (executionStatus === 'pending_approval' || approvalStatus === 'pending') {
           // Use approval_status as the primary indicator
           toolHasWaitingMsg.add(id)
-        } else if (executionStatus === 'running') {
+        } else if (executionStatus === 'approval_submitted' || executionStatus === 'running') {
           toolStates.set(id, {
             isFinal: false,
             isRejected: false,
@@ -190,17 +190,27 @@ export function useWorkflowMessages() {
         } else if (
           executionStatus === 'completed' ||
           executionStatus === 'failed' ||
+          executionStatus === 'interrupted' ||
           executionStatus === 'rejected'
         ) {
           const isRejected = executionStatus === 'rejected'
           const isError =
-            executionStatus === 'failed' || m.isError || m.is_error || meta.is_error || false
+            executionStatus === 'failed' ||
+            executionStatus === 'interrupted' ||
+            m.isError ||
+            m.is_error ||
+            meta.is_error ||
+            false
           toolStates.set(id, { isFinal: true, isRejected, hasError: isError })
         } else if (approvalStatus === 'rejected') {
           // Final states
           const isError = m.isError || m.is_error || meta.is_error || false
           toolStates.set(id, { isFinal: true, isRejected: true, hasError: isError })
-        } else if (approvalStatus === 'approved' && executionStatus !== 'running') {
+        } else if (
+          approvalStatus === 'approved' &&
+          executionStatus !== 'approval_submitted' &&
+          executionStatus !== 'running'
+        ) {
           const isError = m.isError || m.is_error || meta.is_error || false
           toolStates.set(id, { isFinal: true, isRejected: false, hasError: isError })
         } else if (m.role === 'tool') {
@@ -274,7 +284,12 @@ export function useWorkflowMessages() {
         const executionStatus = message.metadata?.execution_status
         if (approvalStatus === 'rejected' || executionStatus === 'rejected') {
           isRejected = true
-        } else if (executionStatus === 'running') {
+        } else if (executionStatus === 'interrupted') {
+          isApproved = false
+        } else if (
+          executionStatus === 'approval_submitted' ||
+          executionStatus === 'running'
+        ) {
           isApproved = false
         } else if (approvalStatus === 'approved') {
           isApproved = true
@@ -368,7 +383,7 @@ export function useWorkflowMessages() {
           const name = m.metadata?.tool_call?.name || m.metadata?.tool_call?.function?.name || ''
           if (name === 'answer_user') return false
           if (
-            m.metadata?.execution_status === 'running' &&
+            ['approval_submitted', 'running'].includes(m.metadata?.execution_status) &&
             !workflowStore.getToolStream(m.metadata?.tool_call_id).length
           ) {
             return true
@@ -401,7 +416,9 @@ export function useWorkflowMessages() {
   const isMessageExpanded = message => {
     // Only force expansion for 'Ask User' to ensure visibility of interaction points.
     // Everything else (especially heavy Diffs) should be collapsed by default.
-    if (message.metadata?.approval_status === 'pending') return true
+    if (message.metadata?.approval_status === 'pending') {
+      return true
+    }
     if (message.toolDisplay?.action === 'Ask User') return true
     return expandedMessages.value.has(message.displayId)
   }
@@ -793,7 +810,7 @@ export function useWorkflowMessages() {
     const summaryStatus =
       executionStatus === 'pending_approval'
         ? 'pending'
-        : executionStatus === 'running'
+        : executionStatus === 'approval_submitted' || executionStatus === 'running'
           ? 'running'
           : executionStatus === 'rejected'
             ? 'rejected'
@@ -801,7 +818,7 @@ export function useWorkflowMessages() {
               ? isError
                 ? 'failed'
                 : 'success'
-              : executionStatus === 'failed'
+              : executionStatus === 'failed' || executionStatus === 'interrupted'
                 ? 'failed'
                 : meta.approval_status === 'pending'
                   ? 'pending'
@@ -852,7 +869,14 @@ export function useWorkflowMessages() {
     const meta = message.metadata || {}
     const content = removeSystemReminder(message.message || '')
     if (!content) return false
-    if (meta.hide_approval_details && meta.execution_status === 'running') return false
+    if (
+      meta.hide_approval_details &&
+      (meta.execution_status === 'approval_submitted' ||
+        meta.execution_status === 'running' ||
+        meta.execution_status === 'interrupted')
+    ) {
+      return false
+    }
     if (
       (message.toolDisplay?.hasStreamOutput ||
         workflowStore.getToolStream(meta.tool_call_id).length > 0) &&

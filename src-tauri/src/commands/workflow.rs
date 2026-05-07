@@ -1,7 +1,7 @@
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
-use crate::db::{Agent, AgentConfig, MainStore, Workflow, WorkflowMessage};
+use crate::db::{Agent, AgentConfig, MainStore, Workflow, WorkflowMessage, WorkflowSnapshot};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::child_tasks::get_sub_agent_registry;
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
@@ -135,6 +135,49 @@ fn extract_completion_summary_from_tool_message(message: &WorkflowMessage) -> Op
         .map(str::trim)
         .filter(|summary| !summary.is_empty())
         .map(str::to_string)
+}
+
+fn rollback_workflow_agent_config(
+    state: &Arc<std::sync::RwLock<MainStore>>,
+    session_id: &str,
+    previous_config_json: &str,
+) {
+    if let Ok(store) = state.read() {
+        let _ = store.update_workflow_agent_config(session_id, previous_config_json);
+    }
+}
+
+async fn inject_runtime_config_signal(
+    gateway: &Arc<TauriGateway>,
+    workflow_manager: &Arc<WorkflowManager>,
+    state: &Arc<std::sync::RwLock<MainStore>>,
+    session_id: &str,
+    previous_config_json: &str,
+    signal: Value,
+) -> Result<(), String> {
+    if !workflow_manager.has_session(session_id) {
+        return Ok(());
+    }
+
+    let signal_type = signal
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    if let Err(error) = workflow_manager.validate_signal_routing(session_id, signal_type) {
+        rollback_workflow_agent_config(state, session_id, previous_config_json);
+        return Err(format!("Signal rejected: {}", error));
+    }
+
+    gateway
+        .inject_input(session_id, signal.to_string())
+        .await
+        .map_err(|error| {
+            rollback_workflow_agent_config(state, session_id, previous_config_json);
+            format!("Gateway injection failed: {}", error)
+        })?;
+
+    Ok(())
 }
 
 fn previous_completed_task_context(messages: &[WorkflowMessage]) -> Option<(String, String)> {
@@ -384,6 +427,106 @@ fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessa
     }
 
     merged
+}
+
+fn is_final_tool_execution_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "rejected" | "interrupted")
+}
+
+fn normalize_snapshot_after_live_reconciliation(
+    store: &MainStore,
+    session_id: &str,
+    snapshot: &mut WorkflowSnapshot,
+    has_live_session: bool,
+) -> Result<(), String> {
+    if has_live_session {
+        return Ok(());
+    }
+
+    if snapshot.workflow.status == WorkflowState::Stopping.to_string() {
+        log::info!(
+            "[Workflow][session={}][phase=snapshot] Persisted stopping state has no live session; normalizing to cancelled",
+            session_id
+        );
+        store
+            .update_workflow_status(session_id, &WorkflowState::Cancelled.to_string())
+            .map_err(|e| e.to_string())?;
+        snapshot.workflow.status = WorkflowState::Cancelled.to_string();
+    }
+
+    let mut finalized_tool_ids = std::collections::HashSet::new();
+    for message in &snapshot.messages {
+        let Some(meta) = message.metadata.as_ref() else {
+            continue;
+        };
+        let Some(tool_call_id) = meta.get("tool_call_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let execution_status = meta
+            .get("execution_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let approval_status = meta
+            .get("approval_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if is_final_tool_execution_status(execution_status)
+            || (message.role == "tool"
+                && approval_status != "pending"
+                && !matches!(
+                    execution_status,
+                    "approval_submitted" | "running" | "pending_approval"
+                ))
+        {
+            finalized_tool_ids.insert(tool_call_id.to_string());
+        }
+    }
+
+    for message in &mut snapshot.messages {
+        let Some(message_id) = message.id else {
+            continue;
+        };
+        let Some(meta) = message.metadata.as_mut() else {
+            continue;
+        };
+        let Some(tool_call_id) = meta
+            .get("tool_call_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if finalized_tool_ids.contains(&tool_call_id) {
+            continue;
+        }
+
+        let execution_status = meta
+            .get("execution_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if !matches!(execution_status, "approval_submitted" | "running") {
+            continue;
+        }
+
+        log::info!(
+            "[Workflow][session={}][phase=snapshot] Runtime tool state '{}' for tool_call_id={} has no live session; normalizing to interrupted",
+            session_id,
+            execution_status,
+            tool_call_id
+        );
+        meta["execution_status"] = json!("interrupted");
+        meta["is_error"] = json!(true);
+        meta["error_type"] = json!("Interrupted");
+        meta["summary"] = json!(rust_i18n::t!("workflow.interrupted_by_restart").to_string());
+        meta["hide_approval_details"] = json!(true);
+        store
+            .update_workflow_message_metadata(message_id, meta)
+            .map_err(|e| e.to_string())?;
+        message.is_error = true;
+        message.error_type = Some("Interrupted".to_string());
+    }
+
+    Ok(())
 }
 
 fn format_size(bytes: u64) -> String {
@@ -1039,7 +1182,7 @@ pub async fn get_workflow_snapshot(
     session_id: String,
 ) -> Result<Value, String> {
     let main_store = state.inner().clone();
-    let snapshot = {
+    let mut snapshot = {
         let store = main_store.read().map_err(|e| e.to_string())?;
         let mut snapshot = store
             .get_workflow_snapshot(&session_id)
@@ -1047,8 +1190,6 @@ pub async fn get_workflow_snapshot(
         normalize_workflow_agent_config_in_memory(&store, &mut snapshot.workflow)?;
         snapshot
     };
-    let merged_messages = merge_ui_workflow_messages(&snapshot.messages);
-    let execution_context = restore_context_for_signal(main_store, &session_id);
 
     // Phase 0-3 UI State Reconciliation: Add hasLiveSession field.
     // Reconcile terminal executors first so the frontend does not keep seeing
@@ -1056,6 +1197,17 @@ pub async fn get_workflow_snapshot(
     let has_live_session =
         has_reconciled_live_session(&workflow_manager.inner().clone(), &session_id, "snapshot")
             .await;
+    {
+        let store = main_store.read().map_err(|e| e.to_string())?;
+        normalize_snapshot_after_live_reconciliation(
+            &store,
+            &session_id,
+            &mut snapshot,
+            has_live_session,
+        )?;
+    }
+    let merged_messages = merge_ui_workflow_messages(&snapshot.messages);
+    let execution_context = restore_context_for_signal(main_store, &session_id);
 
     // Convert snapshot to JSON and inject hasLiveSession
     let mut snapshot_json = serde_json::to_value(&snapshot).map_err(|e| e.to_string())?;
@@ -1152,7 +1304,8 @@ async fn has_reconciled_live_session(
         return false;
     }
 
-    if let Some(status) = workflow_manager.get_session_status(session_id) {
+    let managed_status = workflow_manager.get_session_status(session_id);
+    if let Some(status) = managed_status.clone() {
         if matches!(
             status,
             ManagedSessionStatus::Failed | ManagedSessionStatus::Cancelled
@@ -1179,17 +1332,21 @@ async fn has_reconciled_live_session(
     };
 
     let Ok(executor_guard) = executor.try_lock() else {
-        log::debug!(
-            "[Workflow][session={}][phase={}] Session exists and executor is busy; treating as live",
-            session_id,
-            phase
-        );
+        if phase != "stop" {
+            log::debug!(
+                "[Workflow][session={}][phase={}] Session exists and executor is busy; treating as live",
+                session_id,
+                phase
+            );
+        }
         return true;
     };
 
     let executor_state = executor_guard.state();
-    let _ =
-        workflow_manager.reconcile_session_status_from_workflow_state(session_id, &executor_state);
+    if !matches!(managed_status, Some(ManagedSessionStatus::Stopping)) {
+        let _ = workflow_manager
+            .reconcile_session_status_from_workflow_state(session_id, &executor_state);
+    }
 
     if matches!(
         executor_state,
@@ -1382,6 +1539,15 @@ async fn try_resume_completed_live_session(
                 }
                 let _ = manager_for_spawn
                     .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
+                let _ = gateway_for_spawn
+                    .send(
+                        &session_id_for_spawn,
+                        crate::workflow::react::types::GatewayPayload::State {
+                            state: WorkflowState::Cancelled,
+                            wait_reason: None,
+                        },
+                    )
+                    .await;
                 BACKGROUND_TASKS.remove(&session_id_for_spawn);
                 WorkflowManager::unregister_session_signal_tx_with_source(
                     &session_id_for_spawn,
@@ -1664,6 +1830,7 @@ fn is_resumable_from_context_for_user_message(ctx: Option<&ExecutionContext>) ->
             | RuntimeState::Failed
             | RuntimeState::Cancelled => true,
             RuntimeState::Waiting => context.wait_reason == Some(WaitReason::UserInput),
+            RuntimeState::Stopping => false,
             RuntimeState::Running => false,
         },
         None => false,
@@ -1836,6 +2003,16 @@ pub async fn workflow_start(
     // Reject only truly live sessions. A completed executor may still exist in
     // memory for a short window and can be resumed above without rebuilding.
     if has_reconciled_live_session(&workflow_manager_arc, &session_id, "start").await {
+        if matches!(
+            workflow_manager_arc.get_session_status(&session_id),
+            Some(ManagedSessionStatus::Stopping)
+        ) {
+            log::info!(
+                "[Workflow][session={}][phase=start] Session is still stopping, rejecting restart",
+                session_id
+            );
+            return Err(format!("Session is stopping: {}", session_id));
+        }
         log::info!(
             "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
             session_id
@@ -2024,6 +2201,15 @@ pub async fn workflow_start(
                     "[Workflow][session={}][phase=run_loop][event=cancelled] Workflow session was cancelled by user",
                     session_id_for_spawn
                 );
+                let _ = gateway_for_spawn
+                    .send(
+                        &session_id_for_spawn,
+                        crate::workflow::react::types::GatewayPayload::State {
+                            state: WorkflowState::Cancelled,
+                            wait_reason: None,
+                        },
+                    )
+                    .await;
                 BACKGROUND_TASKS.remove(&session_id_for_spawn);
                 WorkflowManager::unregister_session_signal_tx_with_source(
                     &session_id_for_spawn,
@@ -2364,6 +2550,15 @@ pub async fn workflow_approve_plan(
                     "[Workflow][session={}][phase=run_loop][event=cancelled] Workflow session was cancelled by user",
                     session_id_for_spawn
                 );
+                let _ = gateway_for_spawn
+                    .send(
+                        &session_id_for_spawn,
+                        crate::workflow::react::types::GatewayPayload::State {
+                            state: WorkflowState::Cancelled,
+                            wait_reason: None,
+                        },
+                    )
+                    .await;
                 manager_for_spawn.remove_session(&session_id_for_spawn);
                 BACKGROUND_TASKS.remove(&session_id_for_spawn);
                 WorkflowManager::unregister_session_signal_tx_with_source(
@@ -2537,6 +2732,18 @@ pub async fn workflow_signal(
             // Route signal through manager
             if let Err(e) = workflow_manager_arc.validate_signal_routing(&session_id, &signal_type)
             {
+                let is_stopping_session = matches!(
+                    workflow_manager_arc.get_session_status(&session_id),
+                    Some(ManagedSessionStatus::Stopping)
+                );
+                if is_stopping_session {
+                    log::info!(
+                        "[Workflow][session={}][phase=signal] Signal '{}' rejected because session is stopping",
+                        session_id,
+                        signal_type
+                    );
+                    return Err(format!("Signal rejected: {}", e));
+                }
                 let allow_recovery_for_terminal_user_message = matches!(
                     signal_type_enum,
                     Some(SignalType::UserMessage | SignalType::LegacyUserInput)
@@ -3000,11 +3207,20 @@ pub async fn workflow_signal(
 
 #[tauri::command]
 pub async fn workflow_stop(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<(), String> {
+    let previous_status = {
+        let store = state.inner().read().map_err(|e| e.to_string())?;
+        store
+            .get_workflow_snapshot(&session_id)
+            .map(|snapshot| snapshot.workflow.status)
+            .unwrap_or_else(|_| WorkflowState::Cancelled.to_string())
+    };
+
     interrupt_openai_session(chat_state.inner(), &session_id).await;
     cleanup_owned_background_resources(&session_id, chat_state.inner()).await;
 
@@ -3012,18 +3228,69 @@ pub async fn workflow_stop(
     // Terminal persistence and session cleanup should happen on the executor's
     // normal shutdown path after it processes the stop signal.
     let gateway_arc = gateway.inner().clone();
+    let workflow_manager = workflow_manager.inner().clone();
     match gateway_arc
         .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
         .await
     {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            let _ =
+                workflow_manager.update_session_status(&session_id, ManagedSessionStatus::Stopping);
+            let _ = gateway_arc
+                .send(
+                    &session_id,
+                    crate::workflow::react::types::GatewayPayload::State {
+                        state: WorkflowState::Stopping,
+                        wait_reason: None,
+                    },
+                )
+                .await;
+            {
+                let store = state.inner().read().map_err(|e| e.to_string())?;
+                store
+                    .update_workflow_status(&session_id, &WorkflowState::Stopping.to_string())
+                    .map_err(|e| e.to_string())?;
+            }
+            // Do not return until the live session is no longer considered active.
+            // Frontend-only stop flags are lost on reload, so stop must reconcile
+            // manager/gateway state before the command completes.
+            for _ in 0..50 {
+                if !has_reconciled_live_session(&workflow_manager, &session_id, "stop").await {
+                    return Ok(());
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            }
+
+            if !workflow_manager.has_session(&session_id) {
+                return Ok(());
+            }
+
+            log::warn!(
+                "[Workflow][session={}][phase=stop] Stop signal acknowledged but live session still exists after wait window; leaving session in stopping state until executor exits cleanly",
+                session_id
+            );
+            Ok(())
+        }
         Err(e) if workflow_manager.has_session(&session_id) => {
             if let Some(executor) = workflow_manager.get_executor(&session_id) {
                 let mut guard = executor.lock().await;
                 guard.set_state(WorkflowState::Cancelled);
             }
+            if let Ok(store) = state.inner().read() {
+                let _ = store
+                    .update_workflow_status(&session_id, &WorkflowState::Cancelled.to_string());
+            }
             let _ = workflow_manager
                 .update_session_status(&session_id, ManagedSessionStatus::Cancelled);
+            let _ = gateway_arc
+                .send(
+                    &session_id,
+                    crate::workflow::react::types::GatewayPayload::State {
+                        state: WorkflowState::Cancelled,
+                        wait_reason: None,
+                    },
+                )
+                .await;
             workflow_manager.remove_session(&session_id);
             WorkflowManager::unregister_session_signal_tx_with_source(
                 &session_id,
@@ -3037,7 +3304,12 @@ pub async fn workflow_stop(
                 .await;
             Err(e.to_string())
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => {
+            if let Ok(store) = state.inner().read() {
+                let _ = store.update_workflow_status(&session_id, &previous_status);
+            }
+            Err(e.to_string())
+        }
     }
 }
 
@@ -3247,30 +3519,58 @@ pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, Str
 #[tauri::command]
 pub async fn update_workflow_allowed_paths(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     allowed_paths: Value,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let runtime_paths: Vec<String> =
+        serde_json::from_value(allowed_paths.clone()).map_err(|e| e.to_string())?;
+    let previous_config_json = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .agent_config
+            .unwrap_or_else(|| "{}".to_string())
+    };
 
-    // Get current config
-    let snapshot = store
-        .get_workflow_snapshot(&session_id)
-        .map_err(|e| e.to_string())?;
+    {
+        let store = state.read().map_err(|e| e.to_string())?;
 
-    let mut config = snapshot
-        .workflow
-        .agent_config
-        .and_then(|s| AgentConfig::from_json(&s))
-        .unwrap_or_default();
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
 
-    // Update allowed_paths
-    config.allowed_paths = serde_json::from_value(allowed_paths).ok();
+        let mut config = snapshot
+            .workflow
+            .agent_config
+            .and_then(|s| AgentConfig::from_json(&s))
+            .unwrap_or_default();
 
-    // Save back
-    let new_config_str = config.to_json();
-    store
-        .update_workflow_agent_config(&session_id, &new_config_str)
-        .map_err(|e| e.to_string())?;
+        config.allowed_paths = Some(runtime_paths.clone());
+
+        let new_config_str = config.to_json();
+        store
+            .update_workflow_agent_config(&session_id, &new_config_str)
+            .map_err(|e| e.to_string())?;
+    }
+
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "update_allowed_paths",
+            "paths": runtime_paths
+        }),
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -3289,60 +3589,220 @@ pub async fn get_workflow_session_key(
 #[tauri::command]
 pub async fn update_workflow_final_audit(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     final_audit: bool,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let previous_config_json = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .agent_config
+            .unwrap_or_else(|| "{}".to_string())
+    };
+    {
+        let store = state.read().map_err(|e| e.to_string())?;
 
-    // Get current config
-    let snapshot = store
-        .get_workflow_snapshot(&session_id)
-        .map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
 
-    let mut config = snapshot
-        .workflow
-        .agent_config
-        .and_then(|s| AgentConfig::from_json(&s))
-        .unwrap_or_default();
+        let mut config = snapshot
+            .workflow
+            .agent_config
+            .and_then(|s| AgentConfig::from_json(&s))
+            .unwrap_or_default();
 
-    // Update final_audit
-    config.final_audit = Some(final_audit);
+        config.final_audit = Some(final_audit);
 
-    // Save back
-    let new_config_str = config.to_json();
-    store
-        .update_workflow_agent_config(&session_id, &new_config_str)
-        .map_err(|e| e.to_string())?;
+        let new_config_str = config.to_json();
+        store
+            .update_workflow_agent_config(&session_id, &new_config_str)
+            .map_err(|e| e.to_string())?;
+    }
+
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "update_final_audit",
+            "final_audit": final_audit
+        }),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_workflow_auto_compress(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    session_id: String,
+    auto_compress: bool,
+) -> Result<(), String> {
+    let previous_config_json = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .agent_config
+            .unwrap_or_else(|| "{}".to_string())
+    };
+    {
+        let store = state.read().map_err(|e| e.to_string())?;
+
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+
+        let mut config = snapshot
+            .workflow
+            .agent_config
+            .and_then(|s| AgentConfig::from_json(&s))
+            .unwrap_or_default();
+
+        config.auto_compress = Some(auto_compress);
+
+        let new_config_str = config.to_json();
+        store
+            .update_workflow_agent_config(&session_id, &new_config_str)
+            .map_err(|e| e.to_string())?;
+    }
+
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "update_auto_compress",
+            "auto_compress": auto_compress
+        }),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_workflow_model_config(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    session_id: String,
+    configs: Value,
+) -> Result<(), String> {
+    let previous_config_json = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .agent_config
+            .unwrap_or_else(|| "{}".to_string())
+    };
+    {
+        let store = state.read().map_err(|e| e.to_string())?;
+
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+
+        let mut agent_config = snapshot
+            .workflow
+            .agent_config
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .unwrap_or(json!({}));
+
+        agent_config["models"] = configs.clone();
+
+        let config_str = serde_json::to_string(&agent_config).map_err(|e| e.to_string())?;
+        store
+            .update_workflow_agent_config(&session_id, &config_str)
+            .map_err(|e| e.to_string())?;
+    }
+
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "update_model_config",
+            "configs": configs
+        }),
+    )
+    .await?;
+
     Ok(())
 }
 
 #[tauri::command]
 pub async fn update_workflow_approval_level(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     approval_level: String,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let previous_config_json = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .agent_config
+            .unwrap_or_else(|| "{}".to_string())
+    };
+    {
+        let store = state.read().map_err(|e| e.to_string())?;
 
-    // Get current config
-    let snapshot = store
-        .get_workflow_snapshot(&session_id)
-        .map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
 
-    let mut config = snapshot
-        .workflow
-        .agent_config
-        .and_then(|s| AgentConfig::from_json(&s))
-        .unwrap_or_default();
+        let mut config = snapshot
+            .workflow
+            .agent_config
+            .and_then(|s| AgentConfig::from_json(&s))
+            .unwrap_or_default();
 
-    // Update approval_level
-    config.approval_level = Some(approval_level);
+        config.approval_level = Some(approval_level.clone());
 
-    // Save back
-    let new_config_str = config.to_json();
-    store
-        .update_workflow_agent_config(&session_id, &new_config_str)
-        .map_err(|e| e.to_string())?;
+        let new_config_str = config.to_json();
+        store
+            .update_workflow_agent_config(&session_id, &new_config_str)
+            .map_err(|e| e.to_string())?;
+    }
+
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "update_approval_level",
+            "approval_level": approval_level
+        }),
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -3443,9 +3903,21 @@ pub async fn get_auto_approved_tools(
 pub async fn remove_auto_approved_tool(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     tool_name: String,
 ) -> Result<(), String> {
+    let previous_config_json = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .agent_config
+            .unwrap_or_else(|| "{}".to_string())
+    };
+
     // Update database first
     {
         let store = state.read().map_err(|e| e.to_string())?;
@@ -3473,17 +3945,18 @@ pub async fn remove_auto_approved_tool(
             .map_err(|e| e.to_string())?;
     }
 
-    // Signal running engine to update runtime auto_approve HashSet (after releasing store lock)
-    let _ = gateway
-        .inject_input(
-            &session_id,
-            serde_json::json!({
-                "type": "remove_auto_approved_tool",
-                "tool_name": tool_name
-            })
-            .to_string(),
-        )
-        .await;
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "remove_auto_approved_tool",
+            "tool_name": tool_name
+        }),
+    )
+    .await?;
 
     Ok(())
 }
@@ -3492,9 +3965,21 @@ pub async fn remove_auto_approved_tool(
 pub async fn remove_shell_policy_item(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     pattern: String,
 ) -> Result<(), String> {
+    let previous_config_json = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .agent_config
+            .unwrap_or_else(|| "{}".to_string())
+    };
+
     // Update database first
     {
         let store = state.read().map_err(|e| e.to_string())?;
@@ -3522,17 +4007,18 @@ pub async fn remove_shell_policy_item(
             .map_err(|e| e.to_string())?;
     }
 
-    // Signal running engine to update runtime shell_policy
-    let _ = gateway
-        .inject_input(
-            &session_id,
-            serde_json::json!({
-                "type": "remove_shell_policy_item",
-                "pattern": pattern
-            })
-            .to_string(),
-        )
-        .await;
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "remove_shell_policy_item",
+            "pattern": pattern
+        }),
+    )
+    .await?;
 
     Ok(())
 }

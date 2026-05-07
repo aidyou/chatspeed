@@ -9,6 +9,7 @@ pub enum WorkflowState {
     Thinking,
     Executing,
     Auditing,
+    Stopping,
     Paused,
     AwaitingUser,
     AwaitingApproval,
@@ -68,6 +69,10 @@ pub enum GatewayPayload {
         tool_call_id: String,
         approved: bool,
         approve_all: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approval_status: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        execution_status: Option<String>,
     },
     QueuedUserMessageRemoved {
         queued_user_message_id: String,
@@ -159,6 +164,7 @@ pub enum GatewayPayload {
 pub enum RuntimeState {
     Pending,
     Running,
+    Stopping,
     Waiting,
     Completed,
     Failed,
@@ -172,6 +178,7 @@ impl From<&WorkflowState> for RuntimeState {
             WorkflowState::Thinking | WorkflowState::Executing | WorkflowState::Auditing => {
                 RuntimeState::Running
             }
+            WorkflowState::Stopping => RuntimeState::Stopping,
             WorkflowState::Paused
             | WorkflowState::AwaitingUser
             | WorkflowState::AwaitingApproval

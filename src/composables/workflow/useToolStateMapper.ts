@@ -36,7 +36,7 @@ export interface MessageMetadata {
   title?: string
   summary?: string
   approval_status?: 'pending' | 'approved' | 'rejected'
-  execution_status?: 'pending_approval' | 'running' | 'completed' | 'failed' | 'rejected'
+  execution_status?: 'pending_approval' | 'approval_submitted' | 'running' | 'completed' | 'failed' | 'interrupted' | 'rejected'
   is_error?: boolean
   arguments?: Record<string, any>
   display_type?: string
@@ -172,9 +172,9 @@ function determineStatus(message: RawMessage): ToolViewStatus | null {
   const executionStatus = meta.execution_status
 
   if (executionStatus === 'pending_approval') return 'pending'
-  if (executionStatus === 'running') return 'approved_running'
+  if (executionStatus === 'approval_submitted' || executionStatus === 'running') return 'approved_running'
   if (executionStatus === 'rejected') return 'rejected'
-  if (executionStatus === 'failed') return 'final_error'
+  if (executionStatus === 'failed' || executionStatus === 'interrupted') return 'final_error'
   if (executionStatus === 'completed') return 'final_success'
 
   // Check approval status

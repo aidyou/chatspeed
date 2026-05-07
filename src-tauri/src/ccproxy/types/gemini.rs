@@ -49,6 +49,8 @@ pub struct GeminiPart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thought: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub video_metadata: Option<GeminiVideoMetadata>, // Video content
 }
 

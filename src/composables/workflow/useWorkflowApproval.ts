@@ -38,13 +38,6 @@ export function useWorkflowApproval({
     approvalLoading.value = true
     activeApprovalId.value = toolCallId
     const pendingEntry = getPendingApprovalEntry?.(sessionId, toolCallId) || null
-    if (approved) {
-      workflowStore.markToolApprovedRunning(toolCallId)
-    } else {
-      workflowStore.markToolRejected(toolCallId)
-    }
-    clearPendingApprovalEntry?.(sessionId, toolCallId)
-
     workflowStore.markApprovalSubmitted(sessionId, toolCallId)
 
     try {
@@ -60,12 +53,7 @@ export function useWorkflowApproval({
         sessionId,
         signal
       })
-
-      if (approved) {
-        workflowStore.updateWorkflowStatus(sessionId, 'thinking', null)
-      }
     } catch (error) {
-      workflowStore.markToolPendingApproval(toolCallId)
       workflowStore.clearApprovalSubmission(sessionId, toolCallId)
       if (pendingEntry) {
         upsertPendingApprovalEntry?.(sessionId, {

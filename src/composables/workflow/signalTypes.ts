@@ -29,6 +29,7 @@ export const WORKFLOW_STATUSES = {
   EXECUTING: 'executing',
   AUDITING: 'auditing',
   RUNNING: 'running',
+  STOPPING: 'stopping',
   PAUSED: 'paused',
   AWAITING_USER: 'awaiting_user',
   AWAITING_APPROVAL: 'awaiting_approval',

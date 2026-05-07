@@ -3,7 +3,6 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { invokeWrapper } from '@/libs/tauri'
 import { useI18n } from 'vue-i18n'
 import { useWorkflowStore } from '@/stores/workflow'
-import { SIGNAL_TYPES } from '@/composables/workflow/signalTypes'
 
 /**
  * Composable for managing authorized paths
@@ -85,11 +84,6 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
           if (!newPaths.includes(selected)) {
             newPaths.push(selected)
             await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
-            // Immediately notify executor to update path_guard in memory
-            await invokeWrapper('workflow_signal', {
-              sessionId: currentWorkflowId.value,
-              signal: JSON.stringify({ type: SIGNAL_TYPES.UPDATE_ALLOWED_PATHS, paths: newPaths })
-            })
           }
         } else {
           // No workflow yet - cache in pendingPaths
@@ -109,11 +103,6 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
       const newPaths = [...allowedPaths.value]
       newPaths.splice(index, 1)
       await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
-      // Immediately notify executor
-      await invokeWrapper('workflow_signal', {
-        sessionId: currentWorkflowId.value,
-        signal: JSON.stringify({ type: SIGNAL_TYPES.UPDATE_ALLOWED_PATHS, paths: newPaths })
-      })
     } else {
       // No workflow yet - remove from pendingPaths
       pendingPaths.value.splice(index, 1)
@@ -129,11 +118,6 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
       if (!newPaths.includes(selected)) {
         newPaths.push(selected)
         await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
-        // Immediately notify executor to update path_guard in memory
-        await invokeWrapper('workflow_signal', {
-          sessionId: currentWorkflowId.value,
-          signal: JSON.stringify({ type: SIGNAL_TYPES.UPDATE_ALLOWED_PATHS, paths: newPaths })
-        })
       }
     } else {
       // No workflow yet - cache in pendingPaths
@@ -150,11 +134,6 @@ export function useWorkflowPaths({ currentWorkflowId, selectedAgent }) {
       // Editing existing workflow
       const newPaths = allowedPaths.value.filter(p => p !== path)
       await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
-      // Immediately notify executor
-      await invokeWrapper('workflow_signal', {
-        sessionId: currentWorkflowId.value,
-        signal: JSON.stringify({ type: SIGNAL_TYPES.UPDATE_ALLOWED_PATHS, paths: newPaths })
-      })
     } else {
       // No workflow yet - remove from pendingPaths
       const index = pendingPaths.value.indexOf(path)

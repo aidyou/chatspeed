@@ -352,14 +352,23 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return waitingLikeStates.includes(status);
   });
 
+  const isStopping = computed(() => {
+    const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    return status === WORKFLOW_STATUSES.STOPPING;
+  });
+
   const canStop = computed(() => {
-    return hasLiveSession.value && (isActivelyRunning.value || isLiveWaiting.value);
+    return hasLiveSession.value && !isStopping.value && (isActivelyRunning.value || isLiveWaiting.value);
   });
 
   const canContinue = computed(() => {
     if (!currentWorkflow.value?.id) return false;
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
-    if (RUNNING_STATUSES.includes(status) || status === WORKFLOW_STATUSES.COMPLETED) {
+    if (
+      RUNNING_STATUSES.includes(status) ||
+      status === WORKFLOW_STATUSES.COMPLETED ||
+      status === WORKFLOW_STATUSES.STOPPING
+    ) {
       return false;
     }
 
@@ -578,6 +587,36 @@ export const useWorkflowStore = defineStore('workflow', () => {
     // The only non-final "approved" state is the optimistic frontend patch,
     // which does not go through addMessage.
     return 'completed';
+  };
+
+  const markToolApprovalSubmitted = (toolId) => {
+    if (!toolId) return;
+    const existing = currentTaskLedger.value?.tools.get(toolId);
+
+    if (taskLedgerEnabled.value) {
+      upsertToolViewState({
+        toolCallId: toolId,
+        status: 'approved_running',
+        approvalStatus: 'approved',
+        summary: getToolStatusSummary(existing?.toolName, 'running', 'Executing...')
+      });
+    }
+
+    patchToolMessage(toolId, (existingMessage, meta) => ({
+      ...existingMessage,
+      message: '',
+      metadata: {
+        ...meta,
+        approval_status: 'approved',
+        execution_status: 'approval_submitted',
+        hide_approval_details: true,
+        summary: getToolStatusSummary(
+          meta.tool_name || meta.tool_call?.function?.name || meta.tool_call?.name,
+          'running',
+          'Executing...'
+        )
+      }
+    }));
   };
 
   /**
@@ -1164,6 +1203,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const localUpdateStates = [
         ...RUNNING_STATUSES,
         ...WAITING_STATUSES,
+        WORKFLOW_STATUSES.STOPPING,
         ...TERMINAL_STATUSES
       ];
 
@@ -1300,6 +1340,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     isLiveWaiting,
     isOrphanWaiting,
     isWaiting,
+    isStopping,
     canStop,
     canContinue,
     pendingApprovalMessage,
@@ -1315,6 +1356,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     setShellPolicy,
     removeShellPolicyItem,
     markToolApprovedRunning,
+    markToolApprovalSubmitted,
     markToolRejected,
     markToolPendingApproval,
     markApprovalSubmitted,

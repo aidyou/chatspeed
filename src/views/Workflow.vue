@@ -175,6 +175,7 @@
           :selected-agent="selectedAgent"
           :can-edit-agent="canEditCurrentWorkflowAgent"
           :show-planning-mode-toggle="showPlanningModeToggle"
+          :can-toggle-planning-mode="canEditCurrentWorkflowAgent"
           :active-model-name="activeModelName"
           :planning-mode="planningMode"
           :approval-level="approvalLevel"
@@ -196,7 +197,7 @@
           @continue="onContinue"
           @stop="onStop"
           @approve-plan="onApprovePlan"
-          @toggle-planning-mode="planningMode = !planningMode"
+          @toggle-planning-mode="onTogglePlanningMode"
           @toggle-final-audit-mode="toggleFinalAuditMode"
           @toggle-auto-compress="autoCompressEnabled = !autoCompressEnabled"
           @update-approval-level="approvalLevel = $event"
@@ -657,6 +658,11 @@ const canEditCurrentWorkflowAgent = computed(() => {
   const hasMessages = workflowStore.messages.length > 0
   return !hasLiveSession.value && !hasQuery && !hasMessages
 })
+
+const onTogglePlanningMode = () => {
+  if (!canEditCurrentWorkflowAgent.value) return
+  planningMode.value = !planningMode.value
+}
 
 const onSelectedAgentChange = async agent => {
   selectedAgent.value = agent

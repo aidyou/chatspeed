@@ -298,11 +298,16 @@
             <template v-else>
               <div
                 class="tool-line title-wrap expandable"
-                :class="{ 'tool-rejected': message.isRejected }"
+                :class="{
+                  'tool-rejected': message.isRejected,
+                  'multiline-clamp': message.metadata?.approval_status === 'pending'
+                }"
                 @click="$emit('toggle-expand', message.displayId)">
                 <cs :name="message.toolDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
-                <span class="tool-name">{{ message.toolDisplay.action }}</span>
-                <span class="tool-target">{{ message.toolDisplay.target }}</span>
+                <span class="tool-title-text">
+                  <span class="tool-name">{{ message.toolDisplay.action }}</span>
+                  <span class="tool-target">{{ message.toolDisplay.target }}</span>
+                </span>
                 <cs v-if="message.isApproved" name="check" size="14px" class="approved-icon" />
               </div>
               <!-- Hide summary when expanded -->
@@ -330,6 +335,14 @@
                     class="stream-line">
                     {{ line }}
                   </div>
+                </div>
+                <div
+                  v-else-if="shouldShowRunningPlaceholder(message)"
+                  class="tool-running-placeholder">
+                  <cs name="loading" size="14px" class="tool-running-placeholder__icon cs-spin" />
+                  <span class="tool-running-placeholder__text">
+                    {{ getRunningPlaceholderText(message) }}
+                  </span>
                 </div>
                 <!-- Final Result -->
                 <MarkdownSimple
@@ -412,10 +425,7 @@
                   >{{ removeSystemReminder(message.message) }}</pre
                 >
                 <ApprovalDialog
-                  v-if="
-                    message.metadata?.approval_status === 'pending' &&
-                    !isApprovalSubmitting(currentWorkflowId, message.metadata?.tool_call_id)
-                  "
+                  v-if="shouldShowApprovalDialog(message)"
                   inline
                   :action="message.metadata?.tool_name || message.toolDisplay.action"
                   :target="message.toolDisplay.target"
@@ -519,10 +529,14 @@
                   call.toolType || 'tool-system',
                   call.isRejected ? 'status-error' : 'status-running'
                 ]">
-                <div class="tool-line title-wrap" :class="{ 'tool-rejected': call.isRejected }">
+                <div
+                  class="tool-line title-wrap multiline-clamp"
+                  :class="{ 'tool-rejected': call.isRejected }">
                   <cs :name="call.icon || 'tool'" size="14px" class="tool-type-icon" />
-                  <span class="tool-name">{{ call.action }}</span>
-                  <span class="tool-target">{{ call.target }}</span>
+                  <span class="tool-title-text">
+                    <span class="tool-name">{{ call.action }}</span>
+                    <span class="tool-target">{{ call.target }}</span>
+                  </span>
                 </div>
                 <div class="tool-line summary">
                   <span class="corner-icon">⎿</span>
@@ -1053,7 +1067,7 @@ const isReadOnlyBashCommand = command => {
 const isReadOnlyExplorationToolMessage = message => {
   if (message?.role !== 'tool') return false
   if (message?.metadata?.approval_status === 'pending') return false
-  if (message?.metadata?.execution_status === 'running') return false
+  if (['approval_submitted', 'running'].includes(message?.metadata?.execution_status)) return false
   if (message?.isRejected || message?.toolDisplay?.isError) return false
   if (isSubAgentRunMessage(message) || isFinishTaskMessage(message)) return false
   if (message?.toolDisplay?.hasStreamOutput) return false
@@ -1246,13 +1260,13 @@ const collapseAssistantCompletionPairs = messages => {
 /// Ordered FIFO queue of pending approval tool_call_ids from the source messages.
 const pendingApprovalQueue = computed(() =>
   props.messages
-    .filter(msg => msg.metadata?.approval_status === 'pending')
+    .filter(msg => isApprovalPending(msg) && !isApprovalInFlight(msg))
     .map(msg => msg.metadata?.tool_call_id)
 )
 
 /// Returns true when the message is the first pending approval in the FIFO queue.
 const isFirstPendingApproval = message => {
-  if (message.metadata?.approval_status !== 'pending') return false
+  if (!isApprovalPending(message) || isApprovalInFlight(message)) return false
   const queue = pendingApprovalQueue.value
   if (queue.length === 0) return false
   return queue[0] === message.metadata?.tool_call_id
@@ -1296,17 +1310,38 @@ const hasThoughtCompleted = message => {
   if (props.getParsedMessage(message).content) return true
   if ((message.metadata?.tool_calls?.length || 0) > 0) return true
   if ((message.pendingToolCalls?.length || 0) > 0) return true
-  if (
-    message === lastVisibleMessage.value &&
-    props.isRunning &&
-    !props.isChatting &&
-    !!(message.reasoning || message.message)
-  ) {
+  if (!props.isRunning && !!(message.reasoning || message.message)) {
     return true
   }
   if (hasSubsequentVisibleOutput(message)) return true
   return false
 }
+
+const isApprovalPending = message => message?.metadata?.approval_status === 'pending'
+
+const isApprovalInFlight = message =>
+  !!props.isApprovalSubmitting(props.currentWorkflowId, message?.metadata?.tool_call_id)
+
+const shouldShowApprovalDialog = message =>
+  isApprovalPending(message) && (!isApprovalInFlight(message) || isActiveApproval(message))
+
+const isActiveApproval = message =>
+  !!props.approvalLoading && props.activeApprovalId === message?.metadata?.tool_call_id
+
+const shouldShowRunningPlaceholder = message => {
+  const meta = message?.metadata || {}
+  const toolCallId = meta.tool_call_id
+  if (!toolCallId) return false
+  const executionStatus = String(meta.execution_status || '').toLowerCase()
+  if (executionStatus !== 'approval_submitted' && executionStatus !== 'running')
+    return false
+  if (workflowStore.getToolStream(toolCallId).length > 0) return false
+  if (props.shouldShowToolRawContent(message)) return false
+  return true
+}
+
+const getRunningPlaceholderText = message =>
+  message?.toolDisplay?.summary || t('workflow.executing') || 'Executing...'
 
 const getApprovalDraft = toolCallId => {
   if (!toolCallId) return ''
@@ -2040,6 +2075,44 @@ defineExpose({
 
 .approval-queue-item .tool-type-icon {
   color: var(--el-color-warning);
+}
+
+.tool-running-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-sm);
+}
+
+.tool-running-placeholder__icon {
+  color: var(--el-color-primary);
+  flex-shrink: 0;
+}
+
+.tool-running-placeholder__text {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.tool-line.title-wrap.multiline-clamp {
+  align-items: flex-start;
+}
+
+.tool-title-text {
+  min-width: 0;
+}
+
+.tool-line.title-wrap.multiline-clamp .tool-title-text {
+  flex: 1;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.5;
 }
 
 .queued-remove {

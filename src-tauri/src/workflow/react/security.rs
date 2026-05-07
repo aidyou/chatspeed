@@ -201,6 +201,29 @@ impl PathGuard {
         ret
     }
 
+    fn resolve_physical_path(path: &Path) -> PathBuf {
+        if let Ok(canonical) = path.canonicalize() {
+            return canonical;
+        }
+
+        let mut missing_components = Vec::new();
+        let mut current = path;
+        while let Some(parent) = current.parent() {
+            if let Some(name) = current.file_name() {
+                missing_components.push(name.to_os_string());
+            }
+            if let Ok(mut canonical_parent) = parent.canonicalize() {
+                for component in missing_components.iter().rev() {
+                    canonical_parent.push(component);
+                }
+                return Self::normalize_path(&canonical_parent);
+            }
+            current = parent;
+        }
+
+        Self::normalize_path(path)
+    }
+
     pub fn validate(
         &self,
         target: &Path,
@@ -222,9 +245,7 @@ impl PathGuard {
             }
         };
 
-        let final_path = abs_path
-            .canonicalize()
-            .unwrap_or_else(|_| Self::normalize_path(&abs_path));
+        let final_path = Self::resolve_physical_path(&abs_path);
 
         if Self::is_sensitive_path(&final_path) {
             return Err(WorkflowEngineError::Security(format!(

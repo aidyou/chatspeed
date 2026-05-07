@@ -201,6 +201,52 @@ export function useWorkflowCore({
     const isSyncingWorkflowConfig = ref(false)
     const currentPhaseValue = () => (planningMode.value ? 'planning' : 'standard')
 
+    const syncWorkflowUiControlsFromConfig = (config = {}) => {
+        isSyncingWorkflowConfig.value = true
+        try {
+            if (config.finalAudit !== undefined && config.finalAudit !== null) {
+                finalAuditMode.value = config.finalAudit ? 'on' : 'off'
+            } else if (selectedAgent.value?.finalAudit) {
+                finalAuditMode.value = 'on'
+            } else {
+                finalAuditMode.value = 'off'
+            }
+
+            autoCompressEnabled.value = config.autoCompress ?? true
+
+            if (config.approvalLevel) {
+                approvalLevel.value = config.approvalLevel
+            } else if (selectedAgent.value?.approvalLevel) {
+                approvalLevel.value = selectedAgent.value.approvalLevel
+            } else {
+                approvalLevel.value = 'default'
+            }
+
+            planningMode.value = String(config.phase || '').toLowerCase() === 'planning'
+        } finally {
+            isSyncingWorkflowConfig.value = false
+        }
+    }
+
+    const refreshCurrentWorkflowUiConfig = async () => {
+        if (!currentWorkflowId.value) return
+        try {
+            const snapshot = await invokeWrapper('get_workflow_snapshot', {
+                sessionId: currentWorkflowId.value
+            })
+            const config = snapshot.workflow?.agentConfig
+                ? typeof snapshot.workflow.agentConfig === 'string'
+                    ? JSON.parse(snapshot.workflow.agentConfig)
+                    : snapshot.workflow.agentConfig
+                : {}
+
+            applyWorkflowConfigToLocalStore(config)
+            syncWorkflowUiControlsFromConfig(config)
+        } catch (refreshError) {
+            console.warn('Failed to refresh workflow config after update error:', refreshError)
+        }
+    }
+
     const applyWorkflowConfigToLocalStore = (nextConfig) => {
         const workflowIndex = workflowStore.workflows.findIndex((w) => w.id === currentWorkflowId.value)
         if (workflowIndex === -1) return
@@ -259,6 +305,33 @@ export function useWorkflowCore({
         if (!currentWorkflowId.value) return
 
         try {
+            if (key === 'approvalLevel') {
+                await invokeWrapper('update_workflow_approval_level', {
+                    sessionId: currentWorkflowId.value,
+                    approvalLevel: value
+                })
+                applyWorkflowConfigToLocalStore({ [key]: value })
+                return
+            }
+
+            if (key === 'finalAudit') {
+                await invokeWrapper('update_workflow_final_audit', {
+                    sessionId: currentWorkflowId.value,
+                    finalAudit: !!value
+                })
+                applyWorkflowConfigToLocalStore({ [key]: !!value })
+                return
+            }
+
+            if (key === 'autoCompress') {
+                await invokeWrapper('update_workflow_auto_compress', {
+                    sessionId: currentWorkflowId.value,
+                    autoCompress: !!value
+                })
+                applyWorkflowConfigToLocalStore({ [key]: !!value })
+                return
+            }
+
             // 1. Update database
             const snapshot = await invokeWrapper('get_workflow_snapshot', {
                 sessionId: currentWorkflowId.value
@@ -309,6 +382,7 @@ export function useWorkflowCore({
             applyWorkflowConfigToLocalStore({ [key]: value })
         } catch (error) {
             console.error(`Failed to update ${key}:`, error)
+            await refreshCurrentWorkflowUiConfig()
         }
     }
 
@@ -694,7 +768,11 @@ export function useWorkflowCore({
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     if (payload.approved) {
-                        workflowStore.markToolApprovedRunning(payload.tool_call_id)
+                        if (payload.execution_status === 'approval_submitted') {
+                            workflowStore.markToolApprovalSubmitted(payload.tool_call_id)
+                        } else {
+                            workflowStore.markToolApprovedRunning(payload.tool_call_id)
+                        }
                     } else {
                         workflowStore.markToolRejected(payload.tool_call_id)
                     }
@@ -879,37 +957,7 @@ export function useWorkflowCore({
 
             // Initialize settings from workflow's agentConfig or fallback to agent defaults
             const config = workflowStore.currentWorkflow.agentConfig || {}
-
-            // finalAuditMode
-            isSyncingWorkflowConfig.value = true
-            if (config.finalAudit !== undefined && config.finalAudit !== null) {
-                finalAuditMode.value = config.finalAudit ? 'on' : 'off'
-            } else if (selectedAgent.value?.finalAudit) {
-                finalAuditMode.value = 'on'
-            } else {
-                finalAuditMode.value = 'off'
-            }
-            isSyncingWorkflowConfig.value = false
-
-            isSyncingWorkflowConfig.value = true
-            autoCompressEnabled.value = config.autoCompress ?? true
-            isSyncingWorkflowConfig.value = false
-
-            // approvalLevel
-            isSyncingWorkflowConfig.value = true
-            if (config.approvalLevel) {
-                approvalLevel.value = config.approvalLevel
-            } else if (selectedAgent.value?.approvalLevel) {
-                approvalLevel.value = selectedAgent.value.approvalLevel
-            } else {
-                approvalLevel.value = 'default'
-            }
-            isSyncingWorkflowConfig.value = false
-
-            // planningMode is a workflow phase display, not a runtime hot-toggle for live sessions.
-            isSyncingWorkflowConfig.value = true
-            planningMode.value = String(config.phase || '').toLowerCase() === 'planning'
-            isSyncingWorkflowConfig.value = false
+            syncWorkflowUiControlsFromConfig(config)
         }
 
         // Scroll to bottom after switching workflow (force scroll)
@@ -1104,6 +1152,14 @@ export function useWorkflowCore({
             // Start brand new workflow
             await startNewWorkflow(message)
         } else {
+            const currentStatus = String(workflowStore.currentWorkflow?.status || '').toLowerCase()
+            if (currentStatus === WORKFLOW_STATUSES.STOPPING) {
+                showMessage(
+                    t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
+                    'warning'
+                )
+                return
+            }
             // 2. Decide: Signal or Re-start?
             // Phase 3: Use unified waiting check - all waiting states should send signal
             // Backend will validate signal type based on wait_reason
@@ -1161,6 +1217,13 @@ export function useWorkflowCore({
                     })
                 } catch (error) {
                     const errorText = String(error)
+                    if (errorText.includes('Session is stopping')) {
+                        showMessage(
+                            t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
+                            'warning'
+                        )
+                        return
+                    }
                     // Recovery path: session is already active in manager, route as user_message signal.
                     if (errorText.includes('Session already exists')) {
                         try {
@@ -1238,6 +1301,13 @@ export function useWorkflowCore({
                 agentId: selectedAgent.value.id
             })
         } catch (error) {
+            if (String(error).includes('Session is stopping')) {
+                showMessage(
+                    t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
+                    'warning'
+                )
+                return
+            }
             console.error('Failed to continue workflow:', error)
             showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
         }
@@ -1301,9 +1371,9 @@ export function useWorkflowCore({
         if (currentWorkflowId.value) {
             // Optimistic update: Immediately set running to false to toggle the UI button.
             // The backend might take a moment to gracefully cancel, but the user expects immediate feedback.
-            workflowStore.updateWorkflowStatus(currentWorkflowId.value, WORKFLOW_STATUSES.CANCELLED, null)
+            workflowStore.updateWorkflowStatus(currentWorkflowId.value, WORKFLOW_STATUSES.STOPPING, null)
             workflowStore.setRunning(false)
-            workflowStore.setHasLiveSession(false)
+            workflowStore.setHasLiveSession(true)
 
             // Clear any pending retry status or AI notifications
             clearRetryTimer()
@@ -1330,51 +1400,10 @@ export function useWorkflowCore({
         try {
             // 1. If we have an active workflow session, update workflow's agent_config
             if (currentWorkflowId.value) {
-                // Get current agent_config
-                const snapshot = await invokeWrapper('get_workflow_snapshot', {
-                    sessionId: currentWorkflowId.value
-                })
-
-                let agentConfig = {}
-                if (snapshot.workflow?.agentConfig) {
-                    agentConfig = typeof snapshot.workflow.agentConfig === 'string'
-                        ? JSON.parse(snapshot.workflow.agentConfig)
-                        : snapshot.workflow.agentConfig
-                }
-
-                // Update models in agent_config
-                agentConfig.models = {
-                    plan: configs.plan,
-                    act: configs.act
-                }
-
-                // Save back to workflow (database update)
-                await invokeWrapper('update_workflow_agent_config', {
+                await invokeWrapper('update_workflow_model_config', {
                     sessionId: currentWorkflowId.value,
-                    agentConfig: JSON.stringify(agentConfig)
+                    configs
                 })
-
-                // Signal the live executor to update runtime config. Use the backend
-                // liveness flag instead of a hand-maintained status allowlist so waiting
-                // states such as AwaitingSubAgent are covered.
-                const status = String(currentWorkflow.value?.status || snapshot.workflow?.status || '').toLowerCase()
-                const isLiveSession = !!snapshot.hasLiveSession || workflowStore.hasLiveSession
-                const isRuntimeState =
-                    (RUNNING_STATUSES as readonly string[]).includes(status) ||
-                    (WAITING_STATUSES as readonly string[]).includes(status)
-                if (isLiveSession && isRuntimeState) {
-                    try {
-                        await invokeWrapper('workflow_signal', {
-                            sessionId: currentWorkflowId.value,
-                            signal: JSON.stringify({
-                                type: SIGNAL_TYPES.UPDATE_MODEL_CONFIG,
-                                configs: configs
-                            })
-                        })
-                    } catch (error) {
-                        console.warn('Failed to signal engine (workflow may not be running):', error)
-                    }
-                }
 
                 // Refresh current workflow state from DB to update UI
                 await workflowStore.selectWorkflow(currentWorkflowId.value)
@@ -1395,6 +1424,7 @@ export function useWorkflowCore({
             showMessage(t('common.saveSuccess'), 'success')
         } catch (error) {
             console.error('Failed to save model config:', error)
+            await refreshCurrentWorkflowUiConfig()
             showMessage(t('common.saveFailed'), 'error')
         }
     }

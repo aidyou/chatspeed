@@ -307,13 +307,21 @@ mod tests {
         let search_args = json!({"query":"single instance"});
         let fetch_args = json!({"url":"https://v2.tauri.app/plugin/single-instance/"});
 
-        assert!(detector.record_and_check("web_search", &search_args).is_none());
-        assert!(detector.record_and_check("web_fetch", &fetch_args).is_none());
+        assert!(detector
+            .record_and_check("web_search", &search_args)
+            .is_none());
+        assert!(detector
+            .record_and_check("web_fetch", &fetch_args)
+            .is_none());
 
         detector.reset_tool_call_history();
 
-        assert!(detector.record_and_check("web_search", &search_args).is_none());
-        assert!(detector.record_and_check("web_fetch", &fetch_args).is_none());
+        assert!(detector
+            .record_and_check("web_search", &search_args)
+            .is_none());
+        assert!(detector
+            .record_and_check("web_fetch", &fetch_args)
+            .is_none());
     }
 
     #[test]

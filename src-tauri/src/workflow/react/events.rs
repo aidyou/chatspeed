@@ -127,6 +127,8 @@ impl WorkflowEvent {
         tool_call_id: String,
         approved: bool,
         approve_all: bool,
+        approval_status: Option<String>,
+        execution_status: Option<String>,
     ) -> Self {
         Self::new(
             WorkflowEventType::ApprovalResolved,
@@ -134,7 +136,9 @@ impl WorkflowEvent {
             serde_json::json!({
                 "tool_call_id": tool_call_id,
                 "approved": approved,
-                "approve_all": approve_all
+                "approve_all": approve_all,
+                "approval_status": approval_status,
+                "execution_status": execution_status
             }),
         )
     }
@@ -319,6 +323,8 @@ mod tests {
             "call_123".to_string(),
             true,
             false,
+            Some("approved".to_string()),
+            Some("approval_submitted".to_string()),
         );
         assert_eq!(resolved.event_type, WorkflowEventType::ApprovalResolved);
         assert_eq!(resolved.event_data["approved"], true);

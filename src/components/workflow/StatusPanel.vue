@@ -524,7 +524,11 @@ const recentOperations = computed(() => {
         executionStatus === 'rejected'
       ) {
         status = 'error'
-      } else if (executionStatus === 'running' || executionStatus === 'pending_approval') {
+      } else if (
+        executionStatus === 'running' ||
+        executionStatus === 'approval_submitted' ||
+        executionStatus === 'pending_approval'
+      ) {
         status = 'running'
       }
 
@@ -722,7 +726,11 @@ const childAgentSummariesAll = computed(() => {
         status = 'failed'
       } else if (meta.result || observationData.result || executionStatus === 'completed') {
         status = 'success'
-      } else if (executionStatus === 'waiting' || executionStatus === 'running') {
+      } else if (
+        executionStatus === 'waiting' ||
+        executionStatus === 'approval_submitted' ||
+        executionStatus === 'running'
+      ) {
         status = 'running'
       }
       if (meta.summary || observationData.summary) {
