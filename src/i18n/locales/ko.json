@@ -200,6 +200,7 @@
       "nameRequired": "에이전트 이름을 입력하십시오",
       "noAgents": "에이전트를 찾을 수 없음",
       "planModel": "계획 모델",
+      "utilityModel": "보조 모델",
       "planningMode": "계획 모드",
       "planningPrompt": "계획 프롬프트",
       "planningPromptPlaceholder": "시스템 기본 계획 로직을 사용하려면 비워두세요. 사용자 정의하는 경우, 모델이 명확한 작업 목록을 출력하도록 가이드하세요.",
@@ -209,6 +210,11 @@
       "selectAutoApproveTools": "자동 승인 도구 선택",
       "selectAvailableTools": "사용 가능한 도구 선택",
       "selectDirectory": "디렉토리 선택",
+      "selectSkills": "Skills 선택",
+      "selectedSkills": "활성 Skills",
+      "skillEnabled": "Skills 활성화",
+      "skillsHint": "선택한 Skills만 이 에이전트의 workflow 런타임에 노출됩니다.",
+      "skillsLabel": "기술",
       "shellDecisionAllow": "허용",
       "shellDecisionDeny": "거부",
       "shellDecisionReview": "검토",
@@ -227,6 +233,7 @@
       "title": "에이전트 관리",
       "toolsLabel": "도구",
       "updateSuccess": "에이전트가 성공적으로 업데이트되었습니다!",
+      "noSkillsAvailable": "이 기기에서 사용할 수 있는 Skills를 찾지 못했습니다.",
       "workingDirectory": "작업 디렉토리"
     },
     "general": {

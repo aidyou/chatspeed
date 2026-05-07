@@ -147,6 +147,20 @@ fn rollback_workflow_agent_config(
     }
 }
 
+fn can_defer_runtime_config_signal_for_completed_session(signal_type: &str) -> bool {
+    matches!(
+        signal_type,
+        "update_allowed_paths"
+            | "update_final_audit"
+            | "update_auto_compress"
+            | "update_model_config"
+            | "update_approval_level"
+            | "update_phase"
+            | "remove_auto_approved_tool"
+            | "remove_shell_policy_item"
+    )
+}
+
 async fn inject_runtime_config_signal(
     gateway: &Arc<TauriGateway>,
     workflow_manager: &Arc<WorkflowManager>,
@@ -165,6 +179,17 @@ async fn inject_runtime_config_signal(
         .unwrap_or("unknown");
 
     if let Err(error) = workflow_manager.validate_signal_routing(session_id, signal_type) {
+        if can_defer_runtime_config_signal_for_completed_session(signal_type)
+            && workflow_manager.get_session_status(session_id)
+                == Some(ManagedSessionStatus::Completed)
+        {
+            log::info!(
+                "[Workflow][session={}][phase=config] Deferred '{}' injection because the live session is completed; updated config will apply on the next resumed turn",
+                session_id,
+                signal_type
+            );
+            return Ok(());
+        }
         rollback_workflow_agent_config(state, session_id, previous_config_json);
         return Err(format!("Signal rejected: {}", error));
     }
@@ -766,6 +791,7 @@ fn build_agent_config_from_agent(
     }
 
     config.final_audit = Some(final_audit.unwrap_or(agent.final_audit.unwrap_or(false)));
+    config.skill_enabled = agent.skill_enabled;
 
     if let Some(approve_str) = &agent.auto_approve {
         config.auto_approve = serde_json::from_str(approve_str).ok();
@@ -777,6 +803,10 @@ fn build_agent_config_from_agent(
         config.available_tools = serde_json::from_str(tools_str).ok();
     }
 
+    if let Some(skills_str) = &agent.selected_skills {
+        config.selected_skills = serde_json::from_str(skills_str).ok();
+    }
+
     config
 }
 
@@ -785,7 +815,11 @@ fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
 
     if let Some(models) = &inherited_config.models {
         let mut validated_models = models.clone();
-        for model in [&mut validated_models.plan, &mut validated_models.act] {
+        for model in [
+            &mut validated_models.plan,
+            &mut validated_models.act,
+            &mut validated_models.utility,
+        ] {
             if let Some(m) = model {
                 if let Some(temp) = m.temperature {
                     m.temperature = Some(if temp < 0.0 {
@@ -846,6 +880,14 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
     }
     if config.available_tools.is_none() && defaults.available_tools.is_some() {
         config.available_tools = defaults.available_tools;
+        changed = true;
+    }
+    if config.skill_enabled.is_none() && defaults.skill_enabled.is_some() {
+        config.skill_enabled = defaults.skill_enabled;
+        changed = true;
+    }
+    if config.selected_skills.is_none() && defaults.selected_skills.is_some() {
+        config.selected_skills = defaults.selected_skills;
         changed = true;
     }
     if config.models.is_none() && defaults.models.is_some() {
@@ -3799,6 +3841,61 @@ pub async fn update_workflow_approval_level(
         serde_json::json!({
             "type": "update_approval_level",
             "approval_level": approval_level
+        }),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_workflow_phase(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    session_id: String,
+    phase: String,
+) -> Result<(), String> {
+    let previous_config_json = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .agent_config
+            .unwrap_or_else(|| "{}".to_string())
+    };
+    {
+        let store = state.read().map_err(|e| e.to_string())?;
+
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+
+        let mut config = snapshot
+            .workflow
+            .agent_config
+            .and_then(|s| AgentConfig::from_json(&s))
+            .unwrap_or_default();
+
+        config.phase = Some(phase.clone());
+
+        let new_config_str = config.to_json();
+        store
+            .update_workflow_agent_config(&session_id, &new_config_str)
+            .map_err(|e| e.to_string())?;
+    }
+
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "update_phase",
+            "phase": phase
         }),
     )
     .await?;

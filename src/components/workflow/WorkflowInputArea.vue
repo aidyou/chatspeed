@@ -3,13 +3,19 @@
     <!-- Slash Command Suggestion Panel -->
     <div v-if="showSkillSuggestions && filteredSystemSkills.length > 0" class="slash-command-panel">
       <div
-        v-for="(skill, idx) in filteredSystemSkills"
-        :key="skill.name"
-        class="command-item"
-        :class="{ active: idx === selectedSkillIndex }"
-        @click="onSkillSelect(skill)">
-        <div class="command-name">/{{ skill.name }}</div>
-        <div class="command-desc">{{ skill.description }}</div>
+        v-for="group in groupedSkillSuggestions"
+        :key="group.key"
+        class="command-group">
+        <div class="command-group-title">{{ group.title }}</div>
+        <div
+          v-for="skill in group.items"
+          :key="`${group.key}-${skill.name}`"
+          class="command-item"
+          :class="{ active: skill.originalIndex === selectedSkillIndex }"
+          @click="onSkillSelect(skill)">
+          <div class="command-name">/{{ skill.name }}</div>
+          <div class="command-desc">{{ skill.description }}</div>
+        </div>
       </div>
     </div>
 
@@ -389,6 +395,10 @@ const props = defineProps({
     default: false
   },
   filteredSystemSkills: {
+    type: Array,
+    default: () => []
+  },
+  groupedSkillSuggestions: {
     type: Array,
     default: () => []
   },

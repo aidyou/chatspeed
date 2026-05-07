@@ -202,6 +202,7 @@
       "nameRequired": "請輸入智能體名稱",
       "noAgents": "未找到智能體",
       "planModel": "規劃模型",
+      "utilityModel": "輔助模型",
       "planningMode": "規劃模式",
       "planningPrompt": "規劃提示詞",
       "planningPromptPlaceholder": "留空則使用系統預設規劃邏輯。若要自定義，請引導模型輸出清晰的任務列表。",
@@ -211,6 +212,11 @@
       "selectAutoApproveTools": "選擇自動批准工具",
       "selectAvailableTools": "選擇可用工具",
       "selectDirectory": "選擇目錄",
+      "selectSkills": "選擇 Skills",
+      "selectedSkills": "已啟用 Skills",
+      "skillEnabled": "啟用 Skills",
+      "skillsHint": "只有被選中的 Skills 才會暴露給目前智能體的 workflow 執行期。",
+      "skillsLabel": "技能",
       "shellDecisionAllow": "允許 (Allow)",
       "shellDecisionDeny": "拒絕 (Deny)",
       "shellDecisionReview": "需審核 (Review)",
@@ -229,6 +235,7 @@
       "title": "智能體管理",
       "toolsLabel": "工具",
       "updateSuccess": "智能體更新成功！",
+      "noSkillsAvailable": "目前裝置未發現可用 Skills。",
       "workingDirectory": "工作目錄"
     },
     "general": {

@@ -200,6 +200,7 @@
       "nameRequired": "Пожалуйста, введите имя агента",
       "noAgents": "Агенты не найдены",
       "planModel": "Модель планирования",
+      "utilityModel": "Вспомогательная модель",
       "planningMode": "Режим планирования",
       "planningPrompt": "Подсказка для планирования",
       "planningPromptPlaceholder": "Оставьте пустым для использования системной логики планирования по умолчанию. При настройке направьте модель на вывод четкого списка задач.",
@@ -209,6 +210,11 @@
       "selectAutoApproveTools": "Выбрать инструменты с авто-одобрением",
       "selectAvailableTools": "Выбрать доступные инструменты",
       "selectDirectory": "Выбрать директорию",
+      "selectSkills": "Выбрать skills",
+      "selectedSkills": "Включенные skills",
+      "skillEnabled": "Включить skills",
+      "skillsHint": "Только выбранные skills будут доступны в workflow runtime этого агента.",
+      "skillsLabel": "Skills",
       "shellDecisionAllow": "Разрешить",
       "shellDecisionDeny": "Отклонить",
       "shellDecisionReview": "Проверить",
@@ -227,6 +233,7 @@
       "title": "Управление агентами",
       "toolsLabel": "Инструменты",
       "updateSuccess": "Агент успешно обновлен!",
+      "noSkillsAvailable": "На этом устройстве не найдено доступных skills.",
       "workingDirectory": "Рабочая директория"
     },
     "general": {

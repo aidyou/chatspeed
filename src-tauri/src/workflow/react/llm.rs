@@ -349,9 +349,13 @@ impl LlmProcessor {
 
             // Search through configured workflow model roles to find the active model.
             if let Some(ref models) = self.agent_config.models {
-                for model_config in [models.plan.as_ref(), models.act.as_ref()]
-                    .into_iter()
-                    .flatten()
+                for model_config in [
+                    models.plan.as_ref(),
+                    models.act.as_ref(),
+                    models.utility.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
                 {
                     if model_config.model == self.active_model_name {
                         // Temperature: any value < 0 is treated as "Off/Unset"

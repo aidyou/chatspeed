@@ -341,7 +341,12 @@ impl OpenAIChat {
 
         #[cfg(debug_assertions)]
         {
-            dbg!(&token_usage);
+            log::debug!(
+                "total_tokens: {}, prompt_tokens: {}, completion_tokens: {}",
+                token_usage.total_tokens,
+                token_usage.prompt_tokens,
+                token_usage.completion_tokens
+            );
         }
 
         callback(ChatResponse::new_with_arc(

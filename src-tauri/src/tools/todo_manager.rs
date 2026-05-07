@@ -518,6 +518,7 @@ mod tests {
                 None, // final_audit
                 None, // approval_level
                 None, // skill_enabled
+                None, // selected_skills
                 None, // is_system
                 None, // disabled
                 None, // max_contexts

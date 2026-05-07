@@ -14,8 +14,10 @@ import { sendSyncState } from '@/libs/sync';
  * @property {string} systemPrompt - The system prompt for the agent.
  * @property {string[]} availableTools - A list of tool IDs available to the agent.
  * @property {string[]} autoApprove - A list of tool IDs that are auto-approved.
+ * @property {string[] | null} selectedSkills - Explicitly enabled skill names.
  * @property {Object} planModel - The model used for planning.
  * @property {Object} actModel - The model used for acting.
+ * @property {Object} utilityModel - The model used for workflow utility tasks.
  * @property {Object} codingModel - The model used for coding tasks.
  * @property {Object} copywritingModel - The model used for writing tasks.
  * @property {Object} browsingModel - The model used for browsing tasks.
@@ -47,7 +49,8 @@ const _transformFromBackend = (backendAgent) => {
   // Tauri IPC auto-serializes Rust structs to JS objects
   let models = {
     plan: { ...defaultModel },
-    act: { ...defaultModel }
+    act: { ...defaultModel },
+    utility: { ...defaultModel }
   };
 
   if (backendAgent.models) {
@@ -57,6 +60,9 @@ const _transformFromBackend = (backendAgent) => {
     }
     if (backendAgent.models.act) {
       models.act = { ...defaultModel, ...backendAgent.models.act };
+    }
+    if (backendAgent.models.utility) {
+      models.utility = { ...defaultModel, ...backendAgent.models.utility };
     }
   }
 
@@ -76,6 +82,7 @@ const _transformFromBackend = (backendAgent) => {
     // Models are already objects
     planModel: models.plan,
     actModel: models.act,
+    utilityModel: models.utility,
     // These are JSON strings, need to parse
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
     allowedPaths: backendAgent.allowed_paths ? JSON.parse(backendAgent.allowed_paths) : [],
@@ -87,7 +94,8 @@ const _transformFromBackend = (backendAgent) => {
     disabled: backendAgent.disabled !== undefined ? Boolean(backendAgent.disabled) : false,
     skillEnabled: backendAgent.skill_enabled !== undefined
       ? Boolean(backendAgent.skill_enabled)
-      : (backendAgent.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD
+      : (backendAgent.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD,
+    selectedSkills: backendAgent.selected_skills ? JSON.parse(backendAgent.selected_skills) : null
   };
 };
 
@@ -114,7 +122,8 @@ const _transformToBackend = (frontendAgent) => {
 
   const modelsObj = {
     plan: buildModelConfig(frontendAgent.planModel),
-    act: buildModelConfig(frontendAgent.actModel)
+    act: buildModelConfig(frontendAgent.actModel),
+    utility: buildModelConfig(frontendAgent.utilityModel)
   };
 
   return {
@@ -137,6 +146,9 @@ const _transformToBackend = (frontendAgent) => {
     final_audit: false,
     approval_level: frontendAgent.approvalLevel || 'default',
     skill_enabled: frontendAgent.skillEnabled ?? (frontendAgent.role !== AGENT_ROLE.CHILD),
+    selected_skills: frontendAgent.selectedSkills === null
+      ? null
+      : JSON.stringify(frontendAgent.selectedSkills || []),
     is_system: frontendAgent.isSystem ?? false,
     disabled: frontendAgent.disabled ?? false
   };

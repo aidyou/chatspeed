@@ -17,6 +17,8 @@ pub struct IntelligenceManager {
     pub chat_state: Arc<ChatState>,
     pub active_provider_id: i64,
     pub active_model_name: String,
+    pub utility_provider_id: i64,
+    pub utility_model_name: String,
     pub audit_provider_id: i64,
     pub audit_model_name: String,
     pub approval_provider_id: i64,
@@ -222,6 +224,8 @@ impl IntelligenceManager {
             chat_state,
             active_provider_id,
             active_model_name: active_model_name.clone(),
+            utility_provider_id: active_provider_id,
+            utility_model_name: active_model_name.clone(),
             audit_provider_id,
             audit_model_name,
             approval_provider_id: active_provider_id,
@@ -738,16 +742,27 @@ impl IntelligenceManager {
                 store.get_config("conversation_title_gen_model", serde_json::json!({}));
 
             if gen_model_config.is_object() {
-                let p_id = gen_model_config["id"]
-                    .as_i64()
-                    .unwrap_or(self.active_provider_id);
-                let m_name = gen_model_config["model"]
-                    .as_str()
-                    .unwrap_or(&self.active_model_name)
-                    .to_string();
-                (p_id, m_name)
+                let p_id = gen_model_config["id"].as_i64();
+                let m_name = gen_model_config["model"].as_str();
+                if let (Some(provider_id), Some(model_name)) = (p_id, m_name) {
+                    if provider_id > 0 && !model_name.trim().is_empty() {
+                        (provider_id, model_name.to_string())
+                    } else if !self.utility_model_name.trim().is_empty() {
+                        (self.utility_provider_id, self.utility_model_name.clone())
+                    } else {
+                        (self.active_provider_id, self.active_model_name.clone())
+                    }
+                } else if !self.utility_model_name.trim().is_empty() {
+                    (self.utility_provider_id, self.utility_model_name.clone())
+                } else {
+                    (self.active_provider_id, self.active_model_name.clone())
+                }
             } else {
-                (self.active_provider_id, self.active_model_name.clone())
+                if !self.utility_model_name.trim().is_empty() {
+                    (self.utility_provider_id, self.utility_model_name.clone())
+                } else {
+                    (self.active_provider_id, self.active_model_name.clone())
+                }
             }
         };
 

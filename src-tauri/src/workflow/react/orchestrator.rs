@@ -590,6 +590,11 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
             final_audit: agent_config.final_audit,
+            skill_enabled: agent_config.skill_enabled,
+            selected_skills: agent_config
+                .selected_skills
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok()),
             phase: None,
             models: agent_config.models.clone(),
             max_contexts: agent_config.max_contexts,
@@ -1924,6 +1929,7 @@ mod tests {
             Some(false),
             None,
             Some(false),
+            None,
             Some(false),
             Some(false),
             None,
@@ -1968,6 +1974,7 @@ mod tests {
                 Some(false),
                 None,
                 Some(false),
+                None,
                 Some(false),
                 Some(false),
                 None,
@@ -2058,6 +2065,7 @@ mod tests {
             Some(false),
             None,
             Some(true),
+            None,
             Some(false),
             Some(false),
             None,
@@ -2088,6 +2096,7 @@ mod tests {
             Some(false),
             None,
             Some(false),
+            None,
             Some(false),
             Some(false),
             None,
@@ -2233,6 +2242,7 @@ mod tests {
             Some(false),
             None,
             Some(false),
+            None,
             Some(false),
             Some(false),
             None,

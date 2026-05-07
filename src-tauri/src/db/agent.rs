@@ -22,6 +22,8 @@ pub struct AgentConfig {
     pub auto_compress: Option<bool>,
     pub available_tools: Option<Vec<String>>,
     pub final_audit: Option<bool>,
+    pub skill_enabled: Option<bool>,
+    pub selected_skills: Option<Vec<String>>,
     pub phase: Option<String>,
     pub models: Option<AgentModels>,
     pub max_contexts: Option<i32>,
@@ -58,6 +60,12 @@ impl AgentConfig {
         if other.final_audit.is_some() {
             self.final_audit = other.final_audit;
         }
+        if other.skill_enabled.is_some() {
+            self.skill_enabled = other.skill_enabled;
+        }
+        if other.selected_skills.is_some() {
+            self.selected_skills = other.selected_skills.clone();
+        }
         if other.phase.is_some() {
             self.phase = other.phase.clone();
         }
@@ -91,6 +99,7 @@ pub struct ModelConfig {
 pub struct AgentModels {
     pub plan: Option<ModelConfig>,
     pub act: Option<ModelConfig>,
+    pub utility: Option<ModelConfig>,
 }
 
 /// Represents an AI agent for ReAct workflows
@@ -126,6 +135,8 @@ pub struct Agent {
     pub approval_level: Option<String>,
     /// Whether skills are enabled for this agent
     pub skill_enabled: Option<bool>,
+    /// JSON array of enabled skill names for this agent
+    pub selected_skills: Option<String>,
     /// Whether this agent is a built-in system agent
     pub is_system: Option<bool>,
     /// Whether this agent is disabled from workflow selection/delegation
@@ -157,6 +168,7 @@ impl Agent {
         final_audit: Option<bool>,
         approval_level: Option<String>,
         skill_enabled: Option<bool>,
+        selected_skills: Option<String>,
         is_system: Option<bool>,
         disabled: Option<bool>,
         max_contexts: Option<i32>,
@@ -177,6 +189,7 @@ impl Agent {
             final_audit,
             approval_level,
             skill_enabled,
+            selected_skills,
             is_system,
             disabled,
             max_contexts,
@@ -219,6 +232,16 @@ impl Agent {
                 self.approval_level = config.approval_level;
             }
 
+            // Merge skill_enabled
+            if config.skill_enabled.is_some() {
+                self.skill_enabled = config.skill_enabled;
+            }
+
+            // Merge selected_skills (Vec<String> -> JSON string)
+            if let Some(skills) = config.selected_skills {
+                self.selected_skills = serde_json::to_string(&skills).ok();
+            }
+
             // Merge available_tools (Vec<String> -> JSON string)
             if let Some(tools) = config.available_tools {
                 self.available_tools = serde_json::to_string(&tools).ok();
@@ -258,6 +281,7 @@ impl From<&Row<'_>> for Agent {
             final_audit: row.get("final_audit").ok(),
             approval_level: row.get("approval_level").ok(),
             skill_enabled: row.get("skill_enabled").ok(),
+            selected_skills: row.get("selected_skills").ok(),
             is_system: row.get("is_system").ok(),
             disabled: row.get("disabled").ok(),
             max_contexts: row.get("max_contexts").ok(),
@@ -299,11 +323,12 @@ impl MainStore {
         let auto_approve_json = agent.auto_approve.as_ref().cloned();
         let shell_policy_json = agent.shell_policy.as_ref().cloned();
         let allowed_paths_json = agent.allowed_paths.as_ref().cloned();
+        let selected_skills_json = agent.selected_skills.as_ref().cloned();
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, is_system, disabled, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, is_system, disabled, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 agent.id,
                 agent.name,
@@ -320,6 +345,7 @@ impl MainStore {
                 agent.final_audit,
                 agent.approval_level,
                 agent.skill_enabled,
+                selected_skills_json,
                 agent.is_system,
                 agent.disabled,
                 agent.max_contexts,
@@ -374,6 +400,7 @@ impl MainStore {
         let auto_approve_json = agent.auto_approve.as_ref().cloned();
         let shell_policy_json = agent.shell_policy.as_ref().cloned();
         let allowed_paths_json = agent.allowed_paths.as_ref().cloned();
+        let selected_skills_json = agent.selected_skills.as_ref().cloned();
 
         // Update the agent
         tx.execute(
@@ -392,11 +419,12 @@ impl MainStore {
                 final_audit = ?12,
                 approval_level = ?13,
                 skill_enabled = ?14,
-                is_system = ?15,
-                disabled = ?16,
-                max_contexts = ?17,
+                selected_skills = ?15,
+                is_system = ?16,
+                disabled = ?17,
+                max_contexts = ?18,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?18",
+             WHERE id = ?19",
             params![
                 effective_name,
                 agent.description,
@@ -412,6 +440,7 @@ impl MainStore {
                 agent.final_audit,
                 agent.approval_level,
                 agent.skill_enabled,
+                selected_skills_json,
                 agent.is_system,
                 agent.disabled,
                 agent.max_contexts,

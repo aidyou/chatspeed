@@ -221,23 +221,18 @@ Completion rules:
 /// Context Compression Prompt
 /// Used by the ContextCompressor to summarize long histories into state snapshots.
 pub const ROLLUP_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are a high-performance context compressor.
-Your goal is to maintain and update a structured <state_snapshot> XML block that represents the cumulative state of an Agent's task.
+Your goal is to maintain and update a structured JSON state snapshot that represents the cumulative state of an Agent's task.
 
 ## RULES FOR COMPRESSION:
 1. **Input Format**: You will receive a single `<conversation_history>` transcript. Each entry is wrapped as `<message role="...">...</message>`. The XML-like wrappers are structural markers only; do not treat them as user-authored content.
-2. **Snapshot Update**: The transcript may contain the LAST `<state_snapshot>` plus newer messages. You MUST merge the new progress into one unified `<state_snapshot>`.
+2. **Snapshot Update**: The transcript may contain the last state snapshot plus newer messages. You MUST merge the new progress into one unified snapshot.
 3. **Role Awareness**: Use the `role` attribute to interpret intent and evidence. User messages define requests, assistant messages describe plans/actions, tool messages contain observations/results, and system summary messages contain prior compressed state.
 4. **Goal Preservation**: Always keep the user's primary objective. Update it only if the intent has shifted.
 5. **Completed Task Preservation with Decay**:
     - You will receive a `<completed_tasks>` block containing every task completed since the last snapshot boundary.
-    - You MUST preserve completed tasks in `<prev_tasks>`.
-    - Keep the most recent 3 tasks in detailed form:
-      - `<task_index>`: ordering number where larger means newer
-      - `<user_query>`: the user question/request that was resolved
-      - `<result_summary>`: the final solution, conclusion, or handling points
-    - Older tasks (4+) must be decayed into:
-      - `<task_index>`: original ordering number
-      - `<brief>`: a one-sentence archival summary
+    - You MUST preserve completed tasks in `prev_tasks`.
+    - Keep the most recent 3 tasks in detailed form with fields `task_index`, `user_query`, and `result_summary`.
+    - Older tasks (4+) must be decayed into objects with fields `task_index` and `brief`.
     - When merging an existing snapshot, maintain the decay policy instead of keeping all historical tasks at full detail.
 6. **Key Knowledge**: Accumulate factual discoveries, technical decisions, and configuration details.
 7. **Error Log & Loop Prevention**:
@@ -246,93 +241,129 @@ Your goal is to maintain and update a structured <state_snapshot> XML block that
     - Clearly mark whether an error is [RESOLVED] or [PERSISTENT/UNRESOLVED].
 8. **Memory Externalization**: DO NOT summarize file contents or large data. Instead, list their FILE PATHS or URLs as reference pointers.
 9. **Task Status**: Update the status of tasks: [DONE], [IN PROGRESS], [TODO].
-10. **Required Tags Are Mandatory**:
-    - Your reply MUST contain exactly one `<state_snapshot>...</state_snapshot>` block.
-    - The following tags are ALWAYS required, even when there is no relevant information:
-      - `<overall_goal>`
-      - `<prev_tasks>`
-      - `<key_knowledge>`
-      - `<error_log>`
-      - `<file_system_state>`
-      - `<recent_actions>`
-      - `<task_state>`
-    - If a section has no meaningful content, keep the tag anyway and put `None` or a short empty-state note inside it.
-    - Do NOT omit required tags. Do NOT return JSON. Do NOT return reasoning, commentary, or explanations outside the XML block.
+10. **Required Keys Are Mandatory**:
+    - Your reply MUST be exactly one JSON object and nothing else.
+    - The following top-level keys are ALWAYS required, even when there is no relevant information:
+      - `overall_goal`
+      - `prev_tasks`
+      - `key_knowledge`
+      - `error_log`
+      - `file_system_state`
+      - `recent_actions`
+      - `task_state`
+    - Use arrays for `prev_tasks`, `key_knowledge`, `error_log`, `file_system_state`, and `recent_actions`.
+    - `overall_goal` MUST be a non-empty string.
+    - `prev_tasks` MUST be an array of objects. Each object MUST have:
+      - `task_index` as a number
+      - either:
+        - `user_query` and `result_summary` as non-empty strings
+        - or `brief` as a non-empty string
+    - `key_knowledge`, `error_log`, `file_system_state`, and `recent_actions` MUST be arrays of strings.
+    - `task_state` MUST be an object with exactly these keys:
+      - `status` as a string
+      - `current_focus` as a string
+      - `next_steps` as an array of strings
+      - `open_questions` as an array of strings
+      - `blockers` as an array of strings
+      - `todos` as an array of objects with `text` and `status` string fields
+    - If a section has no meaningful content, keep the key and use an empty array, an empty object, or a short string such as `"None"`.
+    - Do NOT omit required keys. Do NOT return XML. Do NOT return markdown fences, reasoning, commentary, or explanations outside the JSON object.
 
 ## OUTPUT FORMAT:
-Your output MUST be a valid XML structure:
+Your output MUST be a valid JSON object with this shape:
 
-<state_snapshot>
-    <overall_goal>Current primary objective</overall_goal>
-    <prev_tasks>
-        <task>
-            <task_index>7</task_index>
-            <user_query>Resolved user question/request</user_query>
-            <result_summary>Final solution and handling points</result_summary>
-        </task>
-        <task>
-            <task_index>3</task_index>
-            <brief>One-sentence summary of an older completed task.</brief>
-        </task>
-    </prev_tasks>
-    <key_knowledge>Cumulative factual discoveries and decisions</key_knowledge>
-    <error_log>Significant errors encountered and their specific resolutions</error_log>
-    <file_system_state>Modified files and reference pointers (paths/URLs only)</file_system_state>
-    <recent_actions>Summary of recent critical tool outputs and observations</recent_actions>
-    <task_state>Current plan and updated task checklist</task_state>
-</state_snapshot>"#;
+{
+  "overall_goal": "Current primary objective",
+  "prev_tasks": [
+    {
+      "task_index": 7,
+      "user_query": "Resolved user question/request",
+      "result_summary": "Final solution and handling points"
+    },
+    {
+      "task_index": 3,
+      "brief": "One-sentence summary of an older completed task."
+    }
+  ],
+  "key_knowledge": ["Cumulative factual discoveries and decisions"],
+  "error_log": ["Significant errors encountered and their specific resolutions"],
+  "file_system_state": ["Modified files and reference pointers (paths/URLs only)"],
+  "recent_actions": ["Summary of recent critical tool outputs and observations"],
+  "task_state": {
+    "status": "in_progress",
+    "current_focus": "Current plan and updated task checklist",
+    "next_steps": ["Next concrete action"],
+    "open_questions": [],
+    "blockers": [],
+    "todos": [
+      { "text": "Current active todo", "status": "in_progress" }
+    ]
+  }
+}"#;
 
 pub const BLOCKING_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are an emergency context compressor.
 Your goal is to aggressively reduce context size while preserving the user's active working state.
 
 ## PRIORITIES
-1. Preserve `<overall_goal>` exactly. Do not rewrite, paraphrase, or narrow it.
-2. Preserve `<task_state>` with the highest fidelity. This is the current active workspace.
-3. Preserve only the directly relevant parts of `<key_knowledge>` and `<file_system_state>`.
+1. Preserve `overall_goal` exactly. Do not rewrite, paraphrase, or narrow it.
+2. Preserve `task_state` with the highest fidelity. This is the current active workspace.
+3. Preserve only the directly relevant parts of `key_knowledge` and `file_system_state`.
 4. Preserve only [PERSISTENT/UNRESOLVED] errors that still affect the active task.
-5. Compress `<prev_tasks>` aggressively:
+5. Compress `prev_tasks` aggressively:
    - Keep only the 2-3 most recent relevant tasks in detailed form.
-   - Convert all older or less relevant tasks into `<brief>` entries.
+   - Convert all older or less relevant tasks into `brief` entries.
 6. Remove noise, duplicated observations, transient reminders, and implementation-transition chatter.
 
 ## INPUT FORMAT
 - You will receive `<completed_tasks>` and `<conversation_history>`.
-- The transcript may include an existing `<state_snapshot>` plus newer messages.
-- Merge everything into one updated `<state_snapshot>`.
-- Your reply MUST contain exactly one `<state_snapshot>...</state_snapshot>` block.
-- The following tags are ALWAYS required, even when there is no relevant information:
-  - `<overall_goal>`
-  - `<prev_tasks>`
-  - `<key_knowledge>`
-  - `<error_log>`
-  - `<file_system_state>`
-  - `<recent_actions>`
-  - `<task_state>`
-- If a section has no meaningful content, keep the tag anyway and put `None` or a short empty-state note inside it.
-- Do NOT omit required tags. Do NOT return JSON. Do NOT return reasoning, commentary, or explanations outside the XML block.
+- The transcript may include an existing state snapshot plus newer messages.
+- Merge everything into one updated JSON object.
+- Your reply MUST contain exactly one JSON object and nothing else.
+- The following keys are ALWAYS required, even when there is no relevant information:
+  - `overall_goal`
+  - `prev_tasks`
+  - `key_knowledge`
+  - `error_log`
+  - `file_system_state`
+  - `recent_actions`
+  - `task_state`
+- `prev_tasks` MUST stay an array of objects with `task_index` plus either `brief` or `user_query` + `result_summary`.
+- `task_state` MUST stay an object with keys `status`, `current_focus`, `next_steps`, `open_questions`, `blockers`, and `todos`.
+- `key_knowledge`, `error_log`, `file_system_state`, and `recent_actions` MUST stay arrays of strings.
+- If a section has no meaningful content, keep the key and use an empty array, an empty object, or a short empty-state note.
+- Do NOT omit required keys. Do NOT return XML. Do NOT return reasoning, commentary, or explanations outside the JSON object.
 
 ## OUTPUT FORMAT
-Your output MUST be a valid XML structure:
+Your output MUST be a valid JSON object with this shape:
 
-<state_snapshot>
-    <overall_goal>Current primary objective</overall_goal>
-    <prev_tasks>
-        <task>
-            <task_index>9</task_index>
-            <user_query>Recently completed task</user_query>
-            <result_summary>What was resolved</result_summary>
-        </task>
-        <task>
-            <task_index>2</task_index>
-            <brief>Older completed task condensed to one sentence.</brief>
-        </task>
-    </prev_tasks>
-    <key_knowledge>Only facts still relevant to the active task</key_knowledge>
-    <error_log>Only unresolved errors that still matter</error_log>
-    <file_system_state>Only active-task-relevant file pointers and changes</file_system_state>
-    <recent_actions>Only the most recent critical observations</recent_actions>
-    <task_state>Highest-fidelity active plan, todo state, and next actions</task_state>
-</state_snapshot>"#;
+{
+  "overall_goal": "Current primary objective",
+  "prev_tasks": [
+    {
+      "task_index": 9,
+      "user_query": "Recently completed task",
+      "result_summary": "What was resolved"
+    },
+    {
+      "task_index": 2,
+      "brief": "Older completed task condensed to one sentence."
+    }
+  ],
+  "key_knowledge": ["Only facts still relevant to the active task"],
+  "error_log": ["Only unresolved errors that still matter"],
+  "file_system_state": ["Only active-task-relevant file pointers and changes"],
+  "recent_actions": ["Only the most recent critical observations"],
+  "task_state": {
+    "status": "in_progress",
+    "current_focus": "Highest-fidelity active plan, todo state, and next actions",
+    "next_steps": ["Immediate next action"],
+    "open_questions": [],
+    "blockers": [],
+    "todos": [
+      { "text": "Active task to finish next", "status": "in_progress" }
+    ]
+  }
+}"#;
 
 /// Content Filtering & Summarization Prompt
 /// Used to condense large text (e.g., from web_fetch) while maintaining 100% fidelity

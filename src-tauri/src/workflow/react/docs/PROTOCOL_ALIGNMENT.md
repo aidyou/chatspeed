@@ -18,7 +18,9 @@ Rule:
 | Stop execution | `stop` | `SignalType::Stop` / `WorkflowSignal::Stop` | - | Valid for all waiting states and active loop. |
 | Re-broadcast pending approvals | `rebroadcast_pending` | `SignalType::RebroadcastPending` / `WorkflowSignal::RebroadcastPending` | `request_confirm_broadcast` | Legacy alias kept for older clients. |
 | Update final audit config | `update_final_audit` | `SignalType::UpdateFinalAudit` | - | Runtime config signal. |
+| Update auto-compress config | `update_auto_compress` | `SignalType::UpdateAutoCompress` | - | Runtime config signal. |
 | Update approval level config | `update_approval_level` | `SignalType::UpdateApprovalLevel` | - | Runtime config signal. |
+| Update phase config | `update_phase` | `SignalType::UpdatePhase` / `WorkflowSignal::UpdatePhase` | - | Runtime config signal. |
 | Update allowed paths | `update_allowed_paths` | `SignalType::UpdateAllowedPaths` | - | Runtime config signal. |
 | Update model config | `update_model_config` | `SignalType::UpdateModelConfig` | - | Runtime config signal. |
 | Remove shell policy item | `remove_shell_policy_item` | `SignalType::RemoveShellPolicyItem` / `WorkflowSignal::RemoveShellPolicyItem` | - | Supports UI policy updates. |

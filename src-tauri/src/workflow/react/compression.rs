@@ -84,9 +84,9 @@ impl ContextCompressor {
 
         // 4. Strategic Summary (LLM Call)
         let user_prompt = if last_summary_idx.is_some() {
-            "Please update the existing <state_snapshot> with the new information provided above. Output only the updated XML block."
+            "Please update the existing state snapshot with the new information provided above. Output only the updated JSON object."
         } else {
-            "Create the first <state_snapshot> based on the conversation history provided above."
+            "Create the first state snapshot JSON object based on the conversation history provided above."
         };
 
         let summary = self
@@ -394,14 +394,28 @@ impl ContextCompressor {
     fn normalize_summary_result(result: &str) -> String {
         let trimmed = result.trim();
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if let Some(content) = parsed.get("content").and_then(|value| value.as_str()) {
-                let content = content.trim();
-                if !content.is_empty() {
-                    return content.to_string();
+            if let Some(content) = parsed.get("content") {
+                match content {
+                    serde_json::Value::String(text) => {
+                        let content = text.trim();
+                        if !content.is_empty() {
+                            return content.to_string();
+                        }
+                    }
+                    serde_json::Value::Object(_) => {
+                        if let Ok(text) = serde_json::to_string_pretty(content) {
+                            return text;
+                        }
+                    }
+                    _ => {}
                 }
             }
 
-            return String::new();
+            if parsed.is_object() {
+                return serde_json::to_string_pretty(&parsed).unwrap_or_default();
+            }
+
+            return trimmed.to_string();
         }
 
         trimmed.to_string()
@@ -413,47 +427,200 @@ impl ContextCompressor {
             return Err("empty response".to_string());
         }
 
-        if !trimmed.starts_with("<state_snapshot>") || !trimmed.ends_with("</state_snapshot>") {
-            return Err(
-                "response must contain exactly one top-level <state_snapshot>...</state_snapshot> block"
-                    .to_string(),
-            );
+        if trimmed.starts_with("<state_snapshot>") && trimmed.ends_with("</state_snapshot>") {
+            let required_tags = [
+                "<overall_goal>",
+                "<prev_tasks>",
+                "<key_knowledge>",
+                "<error_log>",
+                "<file_system_state>",
+                "<recent_actions>",
+                "<task_state>",
+            ];
+
+            let missing_tags = required_tags
+                .iter()
+                .copied()
+                .filter(|tag| !trimmed.contains(tag))
+                .collect::<Vec<_>>();
+            if !missing_tags.is_empty() {
+                return Err(format!(
+                    "missing required tags: {}",
+                    missing_tags.join(", ")
+                ));
+            }
+
+            return Ok(trimmed.to_string());
         }
 
-        let required_tags = [
-            "<overall_goal>",
-            "<prev_tasks>",
-            "<key_knowledge>",
-            "<error_log>",
-            "<file_system_state>",
-            "<recent_actions>",
-            "<task_state>",
+        let parsed = serde_json::from_str::<serde_json::Value>(trimmed)
+            .map_err(|_| "response must be a single JSON object".to_string())?;
+        let object = parsed
+            .as_object()
+            .ok_or_else(|| "response must be a single JSON object".to_string())?;
+
+        let required_keys = [
+            "overall_goal",
+            "prev_tasks",
+            "key_knowledge",
+            "error_log",
+            "file_system_state",
+            "recent_actions",
+            "task_state",
         ];
 
-        let missing_tags = required_tags
+        let missing_keys = required_keys
             .iter()
             .copied()
-            .filter(|tag| !trimmed.contains(tag))
+            .filter(|key| !object.contains_key(*key))
             .collect::<Vec<_>>();
-        if !missing_tags.is_empty() {
+        if !missing_keys.is_empty() {
             return Err(format!(
-                "missing required tags: {}",
-                missing_tags.join(", ")
+                "missing required keys: {}",
+                missing_keys.join(", ")
             ));
         }
 
-        Ok(trimmed.to_string())
+        Self::validate_non_empty_string_field(&parsed["overall_goal"], "overall_goal")?;
+        Self::validate_prev_tasks(&parsed["prev_tasks"])?;
+        Self::validate_string_array(&parsed["key_knowledge"], "key_knowledge")?;
+        Self::validate_string_array(&parsed["error_log"], "error_log")?;
+        Self::validate_string_array(&parsed["file_system_state"], "file_system_state")?;
+        Self::validate_string_array(&parsed["recent_actions"], "recent_actions")?;
+        Self::validate_task_state(&parsed["task_state"])?;
+
+        serde_json::to_string_pretty(&parsed)
+            .map_err(|error| format!("failed to normalize snapshot json: {}", error))
+    }
+
+    fn validate_non_empty_string_field(
+        value: &serde_json::Value,
+        field: &str,
+    ) -> Result<(), String> {
+        let text = value
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| format!("{} must be a non-empty string", field))?;
+        if text.eq_ignore_ascii_case("null") {
+            return Err(format!("{} must not be the string 'null'", field));
+        }
+        Ok(())
+    }
+
+    fn validate_string_array(value: &serde_json::Value, field: &str) -> Result<(), String> {
+        let items = value
+            .as_array()
+            .ok_or_else(|| format!("{} must be an array of strings", field))?;
+        for (index, item) in items.iter().enumerate() {
+            let text = item
+                .as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .ok_or_else(|| format!("{}[{}] must be a non-empty string", field, index))?;
+            if text.eq_ignore_ascii_case("null") {
+                return Err(format!("{}[{}] must not be 'null'", field, index));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_prev_tasks(value: &serde_json::Value) -> Result<(), String> {
+        let tasks = value
+            .as_array()
+            .ok_or_else(|| "prev_tasks must be an array".to_string())?;
+        for (index, task) in tasks.iter().enumerate() {
+            let obj = task
+                .as_object()
+                .ok_or_else(|| format!("prev_tasks[{}] must be an object", index))?;
+            if !obj
+                .get("task_index")
+                .map(|value| value.is_i64() || value.is_u64())
+                .unwrap_or(false)
+            {
+                return Err(format!("prev_tasks[{}].task_index must be a number", index));
+            }
+
+            let has_brief = obj
+                .get("brief")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .is_some();
+            let has_detailed = obj
+                .get("user_query")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .is_some()
+                && obj
+                    .get("result_summary")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .is_some();
+
+            if !has_brief && !has_detailed {
+                return Err(format!(
+                    "prev_tasks[{}] must contain either brief or user_query + result_summary",
+                    index
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_task_state(value: &serde_json::Value) -> Result<(), String> {
+        let task_state = value
+            .as_object()
+            .ok_or_else(|| "task_state must be an object".to_string())?;
+        for field in ["status", "current_focus"] {
+            Self::validate_non_empty_string_field(
+                task_state
+                    .get(field)
+                    .ok_or_else(|| format!("task_state.{} is required", field))?,
+                &format!("task_state.{}", field),
+            )?;
+        }
+        for field in ["next_steps", "open_questions", "blockers"] {
+            Self::validate_string_array(
+                task_state
+                    .get(field)
+                    .ok_or_else(|| format!("task_state.{} is required", field))?,
+                &format!("task_state.{}", field),
+            )?;
+        }
+
+        let todos = task_state
+            .get("todos")
+            .and_then(|value| value.as_array())
+            .ok_or_else(|| "task_state.todos must be an array".to_string())?;
+        for (index, todo) in todos.iter().enumerate() {
+            let todo_obj = todo
+                .as_object()
+                .ok_or_else(|| format!("task_state.todos[{}] must be an object", index))?;
+            for field in ["text", "status"] {
+                Self::validate_non_empty_string_field(
+                    todo_obj.get(field).ok_or_else(|| {
+                        format!("task_state.todos[{}].{} is required", index, field)
+                    })?,
+                    &format!("task_state.todos[{}].{}", index, field),
+                )?;
+            }
+        }
+
+        Ok(())
     }
 
     fn build_retry_instruction(validation_error: &str, completed_tasks: &str) -> String {
         let prev_tasks_requirement = if completed_tasks.trim() == "None" {
-            "If no completed tasks exist, keep <prev_tasks> and set it to None or an empty placeholder."
+            "If no completed tasks exist, keep `prev_tasks` and set it to an empty array or a short empty-state placeholder."
         } else {
-            "Completed tasks exist. You MUST preserve them inside <prev_tasks>. Keep the tag even if you need to compress older tasks into <brief> entries."
+            "Completed tasks exist. You MUST preserve them inside `prev_tasks`. Keep the key even if you need to compress older tasks into `brief` entries."
         };
 
         format!(
-            "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. Reason: {}. Return exactly one non-empty <state_snapshot>...</state_snapshot> XML block and nothing else. You MUST include all required tags every time, even when a section has no information: <overall_goal>, <prev_tasks>, <key_knowledge>, <error_log>, <file_system_state>, <recent_actions>, <task_state>. If a section has no content, write `None` or a short empty-state note inside the tag. Do NOT return JSON, reasoning-only text, markdown fences, or explanations. {}</SYSTEM_REMINDER>",
+            "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. Reason: {}. Return exactly one non-empty JSON object and nothing else. You MUST include all required keys every time, even when a section has no information: overall_goal, prev_tasks, key_knowledge, error_log, file_system_state, recent_actions, task_state. `overall_goal` must be a non-empty string. `prev_tasks` must be an array of objects with task_index plus either brief or user_query + result_summary. `task_state` must be an object with status, current_focus, next_steps, open_questions, blockers, and todos. The lists key_knowledge, error_log, file_system_state, and recent_actions must be arrays of strings. Do NOT return XML, reasoning-only text, markdown fences, or explanations. {}</SYSTEM_REMINDER>",
             validation_error,
             prev_tasks_requirement
         )
@@ -475,12 +642,9 @@ mod tests {
 
     #[test]
     fn normalize_summary_result_extracts_content_field_from_json() {
-        let raw = r#"{"content":"<state_snapshot>\n  <overall_goal>goal</overall_goal>\n</state_snapshot>","reasoning":"ignored"}"#;
+        let raw = r#"{"content":{"overall_goal":"goal","prev_tasks":[],"key_knowledge":[],"error_log":[],"file_system_state":[],"recent_actions":[],"task_state":"active"},"reasoning":"ignored"}"#;
         let normalized = ContextCompressor::normalize_summary_result(raw);
-        assert_eq!(
-            normalized,
-            "<state_snapshot>\n  <overall_goal>goal</overall_goal>\n</state_snapshot>"
-        );
+        assert!(normalized.contains("\"overall_goal\": \"goal\""));
     }
 
     #[test]
@@ -523,6 +687,12 @@ mod tests {
         assert!(ContextCompressor::validate_summary_result(invalid).is_err());
 
         let valid = "<state_snapshot><overall_goal>x</overall_goal><prev_tasks>None</prev_tasks><key_knowledge>a</key_knowledge><error_log>b</error_log><file_system_state>c</file_system_state><recent_actions>d</recent_actions><task_state>e</task_state></state_snapshot>";
+        assert!(ContextCompressor::validate_summary_result(valid).is_ok());
+    }
+
+    #[test]
+    fn validate_summary_result_accepts_json_snapshot_shape() {
+        let valid = r#"{"overall_goal":"x","prev_tasks":[],"key_knowledge":[],"error_log":[],"file_system_state":[],"recent_actions":[],"task_state":{"status":"in_progress","current_focus":"focus","next_steps":["step"],"open_questions":[],"blockers":[],"todos":[{"text":"todo","status":"in_progress"}]}}"#;
         assert!(ContextCompressor::validate_summary_result(valid).is_ok());
     }
 

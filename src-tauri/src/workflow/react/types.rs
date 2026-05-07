@@ -248,6 +248,10 @@ pub enum WorkflowSignal {
         #[serde(alias = "approvalLevel", alias = "level")]
         approval_level: String,
     },
+    /// Update runtime execution phase configuration
+    UpdatePhase {
+        phase: String,
+    },
     /// Update runtime allowed paths configuration
     UpdateAllowedPaths {
         paths: Vec<String>,
@@ -299,6 +303,7 @@ impl WorkflowSignal {
             (WorkflowSignal::UpdateFinalAudit { .. }, _) => true,
             (WorkflowSignal::UpdateAutoCompress { .. }, _) => true,
             (WorkflowSignal::UpdateApprovalLevel { .. }, _) => true,
+            (WorkflowSignal::UpdatePhase { .. }, _) => true,
             (WorkflowSignal::UpdateAllowedPaths { .. }, _) => true,
             (WorkflowSignal::UpdateModelConfig { .. }, _) => true,
             (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
@@ -331,6 +336,7 @@ impl WorkflowSignal {
             WorkflowSignal::UpdateFinalAudit { .. } => "update_final_audit",
             WorkflowSignal::UpdateAutoCompress { .. } => "update_auto_compress",
             WorkflowSignal::UpdateApprovalLevel { .. } => "update_approval_level",
+            WorkflowSignal::UpdatePhase { .. } => "update_phase",
             WorkflowSignal::UpdateAllowedPaths { .. } => "update_allowed_paths",
             WorkflowSignal::UpdateModelConfig { .. } => "update_model_config",
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",

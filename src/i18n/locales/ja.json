@@ -200,6 +200,7 @@
       "nameRequired": "エージェント名を入力してください",
       "noAgents": "エージェントが見つかりません",
       "planModel": "計画モデル",
+      "utilityModel": "補助モデル",
       "planningMode": "計画モード",
       "planningPrompt": "計画プロンプト",
       "planningPromptPlaceholder": "空白のままにするとシステムのデフォルトの計画ロジックを使用します。カスタマイズする場合は、モデルに明確なタスクリストを出力させるようにガイドしてください。",
@@ -209,6 +210,11 @@
       "selectAutoApproveTools": "自動承認ツールを選択",
       "selectAvailableTools": "利用可能なツールを選択",
       "selectDirectory": "ディレクトリを選択",
+      "selectSkills": "Skills を選択",
+      "selectedSkills": "有効な Skills",
+      "skillEnabled": "Skills を有効化",
+      "skillsHint": "選択した Skills のみがこのエージェントの workflow ランタイムに公開されます。",
+      "skillsLabel": "スキル",
       "shellDecisionAllow": "許可",
       "shellDecisionDeny": "拒否",
       "shellDecisionReview": "レビュー",
@@ -227,6 +233,7 @@
       "title": "エージェント管理",
       "toolsLabel": "ツール",
       "updateSuccess": "エージェントが正常に更新されました！",
+      "noSkillsAvailable": "このデバイスでは利用可能な Skills が見つかりませんでした。",
       "workingDirectory": "作業ディレクトリ"
     },
     "general": {

@@ -31,12 +31,12 @@ export function useWorkflowInput({
     const onSendMessage = ref(onSendMessageCallback)
 
     const builtinCommands = [
-        { name: 'settings', description: 'Open settings window' },
-        { name: 'models', description: 'Open model selection window' },
-        { name: 'mcp', description: 'Open MCP settings' },
-        { name: 'proxy', description: 'Open proxy settings' },
-        { name: 'agent', description: 'Open agent settings' },
-        { name: 'about', description: 'Open about page' }
+        { name: 'settings', description: 'Open settings window', type: 'command', group: 'chatspeed' },
+        { name: 'models', description: 'Open model selection window', type: 'command', group: 'chatspeed' },
+        { name: 'mcp', description: 'Open MCP settings', type: 'command', group: 'chatspeed' },
+        { name: 'proxy', description: 'Open proxy settings', type: 'command', group: 'chatspeed' },
+        { name: 'agent', description: 'Open agent settings', type: 'command', group: 'chatspeed' },
+        { name: 'about', description: 'Open about page', type: 'command', group: 'chatspeed' }
     ]
 
     const filteredSystemSkills = computed(() => {
@@ -47,43 +47,103 @@ export function useWorkflowInput({
         const skills = systemSkills.value.map((s) => ({
             name: s.name,
             description: s.description,
-            type: 'skill'
+            type: 'skill',
+            source: s.source,
+            group: s.source === 'user' ? 'installed' : 'chatspeed'
         }))
-        const commands = builtinCommands.map((c) => ({
-            name: c.name,
-            description: c.description,
-            type: 'command'
-        }))
+        const commands = builtinCommands
 
-        return [...commands, ...skills]
-            .filter(
-                (item) =>
-                    item.name.toLowerCase().includes(query) ||
-                    (item.description && item.description.toLowerCase().includes(query))
-            )
+        const matchedItems = [...commands, ...skills]
+            .map((item) => {
+                const name = item.name.toLowerCase()
+                const description = (item.description || '').toLowerCase()
+                return {
+                    ...item,
+                    matchMeta: {
+                        nameExact: query.length > 0 && name === query,
+                        nameStarts: query.length > 0 && name.startsWith(query),
+                        nameIncludes: query.length === 0 || name.includes(query),
+                        descStarts: query.length > 0 && description.startsWith(query),
+                        descIncludes: query.length > 0 && description.includes(query)
+                    }
+                }
+            })
+            .filter(item => item.matchMeta.nameIncludes || item.matchMeta.descIncludes)
+
+        const hasNameMatch = matchedItems.some(
+            item => item.matchMeta.nameExact || item.matchMeta.nameStarts || item.matchMeta.nameIncludes
+        )
+
+        const filteredItems = matchedItems.filter(item => {
+            if (!hasNameMatch) return item.matchMeta.descIncludes
+            return item.matchMeta.nameExact || item.matchMeta.nameStarts || item.matchMeta.nameIncludes
+        })
+
+        return filteredItems
             .sort((a, b) => {
                 const aName = a.name.toLowerCase()
                 const bName = b.name.toLowerCase()
 
                 // 1. Prioritize exact name match
-                if (aName === query && bName !== query) return -1
-                if (aName !== query && bName === query) return 1
+                if (a.matchMeta.nameExact && !b.matchMeta.nameExact) return -1
+                if (!a.matchMeta.nameExact && b.matchMeta.nameExact) return 1
 
                 // 2. Prioritize "starts with" name match
-                const aStarts = aName.startsWith(query)
-                const bStarts = bName.startsWith(query)
+                const aStarts = a.matchMeta.nameStarts
+                const bStarts = b.matchMeta.nameStarts
                 if (aStarts && !bStarts) return -1
                 if (!aStarts && bStarts) return 1
 
                 // 3. Prioritize "includes" name match
-                const aIncludes = aName.includes(query)
-                const bIncludes = bName.includes(query)
+                const aIncludes = a.matchMeta.nameIncludes
+                const bIncludes = b.matchMeta.nameIncludes
                 if (aIncludes && !bIncludes) return -1
                 if (!aIncludes && bIncludes) return 1
 
-                // 4. Fallback to alphabetical order
+                // 4. When falling back to description matches, keep prefix hits ahead of generic includes.
+                const aDescStarts = a.matchMeta.descStarts
+                const bDescStarts = b.matchMeta.descStarts
+                if (aDescStarts && !bDescStarts) return -1
+                if (!aDescStarts && bDescStarts) return 1
+
+                // 5. Prioritize installed skills over ChatSpeed commands/builtin skills
+                if (a.group !== b.group) {
+                    if (a.group === 'installed') return -1
+                    if (b.group === 'installed') return 1
+                }
+
+                // 6. Fallback to alphabetical order
                 return aName.localeCompare(bName)
             })
+            .map(({ matchMeta, ...item }) => item)
+    })
+
+    const groupedSkillSuggestions = computed(() => {
+        const groups = []
+        const installedItems = filteredSystemSkills.value
+            .map((item, index) => ({ ...item, originalIndex: index }))
+            .filter(item => item.group === 'installed')
+        const chatspeedItems = filteredSystemSkills.value
+            .map((item, index) => ({ ...item, originalIndex: index }))
+            .filter(item => item.group === 'chatspeed')
+
+        if (installedItems.length > 0) {
+            groups.push({
+                key: 'installed',
+                title: t('workflow.installedSkillsGroup'),
+                items: installedItems
+            })
+        }
+
+        if (chatspeedItems.length > 0) {
+            groups.push({
+                key: 'chatspeed',
+                title: t('workflow.chatspeedSkillsGroup'),
+                items: chatspeedItems
+            })
+        }
+
+        return groups
     })
 
     const searchFiles = async (query) => {
@@ -252,8 +312,8 @@ export function useWorkflowInput({
     // Watch for input changes to trigger suggestions
     watch(inputMessage, (newVal) => {
         // TRIGGERS ONLY if '/' is the very first character of the whole input
-        if (newVal === '/') {
-            showSkillSuggestions.value = systemSkills.value.length > 0
+        if (newVal.startsWith('/')) {
+            showSkillSuggestions.value = filteredSystemSkills.value.length > 0
             selectedSkillIndex.value = 0
         } else if (!newVal.startsWith('/') || newVal === '') {
             showSkillSuggestions.value = false
@@ -287,6 +347,7 @@ export function useWorkflowInput({
         selectedFileIndex,
         fileSuggestions,
         filteredSystemSkills,
+        groupedSkillSuggestions,
         onInputKeyDown,
         onCompositionStart,
         onCompositionEnd,

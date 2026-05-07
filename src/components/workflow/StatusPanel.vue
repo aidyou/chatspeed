@@ -47,6 +47,12 @@
               childAgentSummaries.length
             }}</span>
           </button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'models' }"
+            @click="activeTab = 'models'">
+            {{ t('workflow.statusPanel.modelsTab') || 'Models' }}
+          </button>
         </div>
 
         <template v-if="activeTab === 'main'">
@@ -213,6 +219,27 @@
           <span>{{ t('workflow.statusPanel.noSubAgents') || 'No sub-agents yet' }}</span>
         </div>
 
+        <div v-if="activeTab === 'models' && modelStatusRows.length > 0" class="section">
+          <div class="section-header">
+            <cs name="model" size="14px" />
+            <span>{{ t('workflow.statusPanel.models') || 'Models' }}</span>
+          </div>
+          <ul class="model-status-list">
+            <li v-for="item in modelStatusRows" :key="item.key" class="model-status-item">
+              <div class="model-status-main">
+                <span class="model-status-label">{{ item.label }}</span>
+                <span class="model-status-name" :title="item.fullName">{{ item.shortName }}</span>
+              </div>
+              <span class="model-status-source" :class="item.sourceClass">{{ item.source }}</span>
+            </li>
+          </ul>
+        </div>
+
+        <div v-if="activeTab === 'models' && modelStatusRows.length === 0" class="empty-state">
+          <cs name="model" size="28px" />
+          <span>{{ t('workflow.statusPanel.noModels') || 'No model configuration' }}</span>
+        </div>
+
         <!-- Empty state -->
         <div
           v-if="activeTab === 'main' && todoList.length === 0 && recentOperations.length === 0"
@@ -245,6 +272,8 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
+import { useModelStore } from '@/stores/model'
+import { useSettingStore } from '@/stores/setting'
 import { resolveWorkflowToolIcon } from '@/composables/workflow/toolIcons'
 import { normalizeToolDisplayText } from '@/composables/workflow/toolDisplay'
 import { invokeWrapper } from '@/libs/tauri'
@@ -252,6 +281,8 @@ import { invokeWrapper } from '@/libs/tauri'
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
 const agentStore = useAgentStore()
+const modelStore = useModelStore()
+const settingStore = useSettingStore()
 
 // Panel state
 const isVisible = ref(true)
@@ -286,6 +317,7 @@ const displayedTodoList = computed(() => {
 const messages = computed(() => workflowStore.messages)
 const isRunning = computed(() => workflowStore.isRunning)
 const toolLedger = computed(() => workflowStore.toolList || [])
+const currentWorkflow = computed(() => workflowStore.currentWorkflow)
 
 // Panel dimensions
 const PANEL_WIDTH = 280
@@ -338,6 +370,124 @@ const getModelContextSize = modelConfig => {
   const rawValue = modelConfig.contextSize ?? modelConfig.context_size
   return typeof rawValue === 'number' && rawValue > 0 ? rawValue : null
 }
+
+const getModelDisplayName = modelConfig => {
+  if (!modelConfig || typeof modelConfig !== 'object') return ''
+  const providerId = modelConfig.id
+  const modelId = modelConfig.model
+  if (!modelId) return ''
+  if (providerId === 0) return modelId
+  const provider = modelStore.getModelProviderById(providerId)
+  const model = provider?.models?.find(item => item.id === modelId)
+  return model?.name || modelId
+}
+
+const workflowModels = computed(() => currentWorkflow.value?.agentConfig?.models || {})
+const workflowPhase = computed(() =>
+  String(currentWorkflow.value?.agentConfig?.phase || '').toLowerCase() === 'planning'
+    ? 'planning'
+    : 'standard'
+)
+const planModelConfig = computed(() => workflowModels.value.plan || null)
+const activeWorkModelConfig = computed(() => {
+  const models = workflowModels.value
+  return workflowPhase.value === 'planning' ? models.plan || models.act : models.act || models.plan
+})
+const utilityModelStatus = computed(() => {
+  const utility = workflowModels.value.utility
+  if (utility?.model) {
+    return {
+      config: utility,
+      source: translateOrFallback('workflow.statusPanel.direct', 'Direct'),
+      sourceClass: 'direct'
+    }
+  }
+  const fallback = activeWorkModelConfig.value
+  if (fallback?.model) {
+    return {
+      config: fallback,
+      source: translateOrFallback('workflow.statusPanel.fallback', 'Fallback'),
+      sourceClass: 'fallback'
+    }
+  }
+  return null
+})
+const titleModelStatus = computed(() => {
+  const globalConfig = settingStore.settings.conversationTitleGenModel
+  if (globalConfig?.id && globalConfig?.model) {
+    return {
+      config: globalConfig,
+      source: translateOrFallback('workflow.statusPanel.global', 'Global'),
+      sourceClass: 'global'
+    }
+  }
+  if (utilityModelStatus.value?.config?.model) {
+    return {
+      config: utilityModelStatus.value.config,
+      source: translateOrFallback('workflow.statusPanel.utilityFallback', 'Utility Fallback'),
+      sourceClass: 'fallback'
+    }
+  }
+  if (activeWorkModelConfig.value?.model) {
+    return {
+      config: activeWorkModelConfig.value,
+      source: translateOrFallback('workflow.statusPanel.workFallback', 'Work Fallback'),
+      sourceClass: 'fallback'
+    }
+  }
+  return null
+})
+const modelStatusRows = computed(() => {
+  const rows = []
+  if (planModelConfig.value?.model) {
+    const fullName = getModelDisplayName(planModelConfig.value)
+    rows.push({
+      key: 'plan',
+      label: translateOrFallback('workflow.statusPanel.planModel', 'Plan'),
+      fullName,
+      shortName: fullName,
+      source:
+        workflowPhase.value === 'planning'
+          ? translateOrFallback('workflow.statusPanel.active', 'Active')
+          : translateOrFallback('workflow.statusPanel.direct', 'Direct'),
+      sourceClass: workflowPhase.value === 'planning' ? 'active' : 'direct'
+    })
+  }
+  if (activeWorkModelConfig.value?.model) {
+    const fullName = getModelDisplayName(activeWorkModelConfig.value)
+    rows.push({
+      key: 'work',
+      label: translateOrFallback('workflow.statusPanel.workModel', 'Work'),
+      fullName,
+      shortName: fullName,
+      source: translateOrFallback('workflow.statusPanel.active', 'Active'),
+      sourceClass: 'active'
+    })
+  }
+  if (utilityModelStatus.value?.config?.model) {
+    const fullName = getModelDisplayName(utilityModelStatus.value.config)
+    rows.push({
+      key: 'utility',
+      label: translateOrFallback('workflow.statusPanel.utilityModel', 'Utility'),
+      fullName,
+      shortName: fullName,
+      source: utilityModelStatus.value.source,
+      sourceClass: utilityModelStatus.value.sourceClass
+    })
+  }
+  if (titleModelStatus.value?.config?.model) {
+    const fullName = getModelDisplayName(titleModelStatus.value.config)
+    rows.push({
+      key: 'title',
+      label: translateOrFallback('workflow.statusPanel.titleModel', 'Title'),
+      fullName,
+      shortName: fullName,
+      source: titleModelStatus.value.source,
+      sourceClass: titleModelStatus.value.sourceClass
+    })
+  }
+  return rows
+})
 
 const maxContexts = computed(() => {
   const runtimeMax = workflowStore.currentWorkflow?.executionContext?.maxContextTokens
@@ -1684,6 +1834,73 @@ watch(
     margin-top: 4px;
     text-align: right;
     font-family: var(--cs-font-family-mono, monospace);
+  }
+}
+
+.model-status-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+
+  .model-status-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 10px;
+    margin-bottom: 4px;
+    border-radius: var(--cs-border-radius-sm);
+    background: var(--cs-bg-color-light);
+    border: 1px solid var(--cs-border-color);
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  .model-status-main {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+  }
+
+  .model-status-label {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--cs-text-color-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .model-status-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--cs-text-color-primary);
+  }
+
+  .model-status-source {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    line-height: 1.5;
+    background: var(--cs-bg-color);
+    color: var(--cs-text-color-secondary);
+
+    &.active,
+    &.direct,
+    &.global {
+      color: var(--el-color-primary);
+    }
+
+    &.fallback {
+      color: var(--el-color-warning);
+    }
   }
 }
 

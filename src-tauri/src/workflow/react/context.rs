@@ -775,6 +775,7 @@ mod tests {
             Some(false),
             Some("default".to_string()),
             Some(false),
+            None,
             Some(false),
             Some(false),
             Some(4096),

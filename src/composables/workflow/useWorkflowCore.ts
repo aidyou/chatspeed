@@ -332,6 +332,15 @@ export function useWorkflowCore({
                 return
             }
 
+            if (key === 'phase') {
+                await invokeWrapper('update_workflow_phase', {
+                    sessionId: currentWorkflowId.value,
+                    phase: value
+                })
+                applyWorkflowConfigToLocalStore({ [key]: value })
+                return
+            }
+
             // 1. Update database
             const snapshot = await invokeWrapper('get_workflow_snapshot', {
                 sessionId: currentWorkflowId.value

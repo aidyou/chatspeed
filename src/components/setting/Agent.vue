@@ -8,20 +8,14 @@
         </span>
       </el-tooltip>
     </div>
-    <Sortable
-      v-if="agents.length > 0"
-      class="list"
-      item-key="id"
-      :list="agents"
-      :options="{
-        animation: 150,
-        ghostClass: 'ghost',
-        dragClass: 'drag',
-        draggable: '.draggable',
-        forceFallback: true,
-        bubbleScroll: true
-      }"
-      @end="onDragEnd">
+    <Sortable v-if="agents.length > 0" class="list" item-key="id" :list="agents" :options="{
+      animation: 150,
+      ghostClass: 'ghost',
+      dragClass: 'drag',
+      draggable: '.draggable',
+      forceFallback: true,
+      bubbleScroll: true
+    }" @end="onDragEnd">
       <template #item="{ element }">
         <div class="item draggable" :key="element.id">
           <div class="label">
@@ -30,33 +24,20 @@
           </div>
 
           <div class="value">
-            <el-tooltip
-              :content="$t('settings.agent.edit')"
-              placement="top"
-              :hide-after="0"
-              :enterable="false"
+            <el-tooltip :content="$t('settings.agent.edit')" placement="top" :hide-after="0" :enterable="false"
               transition="none">
               <div class="icon" @click="editAgent(element.id)" @mousedown.stop>
                 <cs name="edit" size="16px" color="secondary" />
               </div>
             </el-tooltip>
-            <el-tooltip
-              :content="$t('settings.agent.copy')"
-              placement="top"
-              :hide-after="0"
-              :enterable="false"
+            <el-tooltip :content="$t('settings.agent.copy')" placement="top" :hide-after="0" :enterable="false"
               transition="none">
               <div class="icon" @click="copyAgent(element.id)" @mousedown.stop>
                 <cs name="copy" size="16px" color="secondary" />
               </div>
             </el-tooltip>
-            <el-tooltip
-              v-if="!element.isSystem"
-              :content="$t('settings.agent.delete')"
-              placement="top"
-              :hide-after="0"
-              :enterable="false"
-              transition="none">
+            <el-tooltip v-if="!element.isSystem" :content="$t('settings.agent.delete')" placement="top" :hide-after="0"
+              :enterable="false" transition="none">
               <div class="icon" @click="deleteAgent(element.id)" @mousedown.stop>
                 <cs name="trash" size="16px" color="secondary" />
               </div>
@@ -72,14 +53,8 @@
     </div>
   </div>
 
-  <el-dialog
-    v-model="agentDialogVisible"
-    width="640px"
-    class="agent-edit-dialog"
-    :show-close="false"
-    :close-on-click-modal="false"
-    :close-on-press-escape="false"
-    @closed="onAgentDialogClose">
+  <el-dialog v-model="agentDialogVisible" width="640px" class="agent-edit-dialog" :show-close="false"
+    :close-on-click-modal="false" :close-on-press-escape="false" @closed="onAgentDialogClose">
     <el-form :model="agentForm" :rules="agentRules" ref="formRef" label-width="100px">
       <el-tabs v-model="activeTab">
         <el-tab-pane :label="$t('settings.agent.basicInfo')" name="basic">
@@ -88,23 +63,15 @@
           </el-form-item>
           <el-form-item :label="$t('settings.agent.role')" prop="role">
             <el-select v-model="agentForm.role" style="width: 100%" :disabled="isSystemAgentReadOnly">
-              <el-option
-                v-for="option in AGENT_ROLE_OPTIONS"
-                :key="option.value"
-                :label="$t(option.labelKey)"
+              <el-option v-for="option in AGENT_ROLE_OPTIONS" :key="option.value" :label="$t(option.labelKey)"
                 :value="option.value" />
             </el-select>
           </el-form-item>
-          <el-form-item
-            v-if="agentForm.role === AGENT_ROLE.CHILD"
-            :label="$t('settings.agent.parentAgent')"
+          <el-form-item v-if="agentForm.role === AGENT_ROLE.CHILD" :label="$t('settings.agent.parentAgent')"
             prop="parentAgentId">
-            <el-select v-model="agentForm.parentAgentId" style="width: 100%" filterable :disabled="isSystemAgentReadOnly">
-              <el-option
-                v-for="agent in primaryAgentOptions"
-                :key="agent.id"
-                :label="agent.name"
-                :value="agent.id" />
+            <el-select v-model="agentForm.parentAgentId" style="width: 100%" filterable
+              :disabled="isSystemAgentReadOnly">
+              <el-option v-for="agent in primaryAgentOptions" :key="agent.id" :label="agent.name" :value="agent.id" />
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.description')" prop="description">
@@ -116,15 +83,9 @@
           <el-form-item :label="$t('settings.agent.systemPrompt')" prop="systemPrompt">
             <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="5" :disabled="isSystemAgentReadOnly" />
           </el-form-item>
-          <el-form-item
-            v-if="agentForm.role !== AGENT_ROLE.CHILD"
-            :label="$t('settings.agent.planningPrompt')"
+          <el-form-item v-if="agentForm.role !== AGENT_ROLE.CHILD" :label="$t('settings.agent.planningPrompt')"
             prop="planningPrompt">
-            <el-input
-              v-model="agentForm.planningPrompt"
-              type="textarea"
-              :rows="5"
-              :disabled="isSystemAgentReadOnly"
+            <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="5" :disabled="isSystemAgentReadOnly"
               :placeholder="$t('settings.agent.planningPromptPlaceholder')" />
           </el-form-item>
         </el-tab-pane>
@@ -137,131 +98,71 @@
                 <el-radio-group v-model="modelModes[role.key]" size="small">
                   <el-radio-button value="provider">{{
                     $t('settings.agent.modeProvider')
-                  }}</el-radio-button>
+                    }}</el-radio-button>
                   <el-radio-button value="proxy">{{
                     $t('settings.agent.modeProxy')
-                  }}</el-radio-button>
+                    }}</el-radio-button>
                 </el-radio-group>
               </div>
               <div class="body">
                 <div class="selectors-row">
                   <template v-if="modelModes[role.key] === 'provider'">
-                    <el-select
-                      v-model="agentForm[role.key + 'Model'].id"
-                      size="small"
-                      filterable
-                      @change="onModelIdChange(role.key)"
-                      style="flex: 1">
-                      <el-option
-                        v-for="provider in modelStore.getAvailableProviders"
-                        :key="provider.id"
-                        :label="provider.name"
-                        :value="provider.id" />
+                    <el-select v-model="agentForm[role.key + 'Model'].id" size="small" filterable
+                      @change="onModelIdChange(role.key)" style="flex: 1">
+                      <el-option v-for="provider in modelStore.getAvailableProviders" :key="provider.id"
+                        :label="provider.name" :value="provider.id" />
                     </el-select>
-                    <el-select
-                      v-model="agentForm[role.key + 'Model'].model"
-                      size="small"
-                      filterable
+                    <el-select v-model="agentForm[role.key + 'Model'].model" size="small" filterable
                       :disabled="!agentForm[role.key + 'Model'].id"
-                      @change="value => onProviderModelChange(role.key, value)"
-                      style="flex: 1">
-                      <el-option
-                        v-for="model in getModelList(role.key)"
-                        :key="model.id"
-                        :label="model.name || model.id"
+                      @change="value => onProviderModelChange(role.key, value)" style="flex: 1">
+                      <el-option v-for="model in getModelList(role.key)" :key="model.id" :label="model.name || model.id"
                         :value="model.id" />
                     </el-select>
                   </template>
                   <template v-else>
-                    <el-select
-                      v-model="proxyGroups[role.key]"
-                      size="small"
-                      filterable
-                      @change="onProxyGroupChange(role.key)"
-                      style="flex: 1">
-                      <el-option
-                        v-for="group in proxyGroupStore.list"
-                        :key="group.name"
-                        :label="group.name"
+                    <el-select v-model="proxyGroups[role.key]" size="small" filterable
+                      @change="onProxyGroupChange(role.key)" style="flex: 1">
+                      <el-option v-for="group in proxyGroupStore.list" :key="group.name" :label="group.name"
                         :value="group.name" />
                     </el-select>
-                    <el-select
-                      v-model="proxyAliases[role.key]"
-                      size="small"
-                      filterable
-                      :disabled="!proxyGroups[role.key]"
-                      @change="val => onProxyAliasChange(role.key, val)"
+                    <el-select v-model="proxyAliases[role.key]" size="small" filterable
+                      :disabled="!proxyGroups[role.key]" @change="val => onProxyAliasChange(role.key, val)"
                       style="flex: 1">
-                      <el-option
-                        v-for="alias in getProxyAliases(proxyGroups[role.key])"
-                        :key="alias"
-                        :label="alias"
+                      <el-option v-for="alias in getProxyAliases(proxyGroups[role.key])" :key="alias" :label="alias"
                         :value="alias" />
                     </el-select>
                   </template>
                 </div>
                 <div class="params-row" style="margin-top: 8px; padding: 0 4px">
                   <span class="param-label">{{ $t('settings.agent.temperature') }}</span>
-                  <el-slider
-                    v-model="agentForm[role.key + 'Model'].temperature"
-                    :min="-0.1"
-                    :max="2"
-                    :step="0.1"
-                    size="small"
-                    style="flex: 1; margin-left: 12px" />
-                  <span
-                    class="param-value"
-                    style="font-size: 11px; min-width: 24px; text-align: right"
-                    >{{
-                      (agentForm[role.key + 'Model']?.temperature ?? -0.1) < 0
-                        ? 'Off'
-                        : agentForm[role.key + 'Model']?.temperature?.toFixed(1) || '0.0'
-                    }}</span
-                  >
+                  <el-slider v-model="agentForm[role.key + 'Model'].temperature" :min="-0.1" :max="2" :step="0.1"
+                    size="small" style="flex: 1; margin-left: 12px" />
+                  <span class="param-value" style="font-size: 11px; min-width: 24px; text-align: right">{{
+                    (agentForm[role.key + 'Model']?.temperature ?? -0.1) < 0 ? 'Off' : agentForm[role.key + 'Model'
+                    ]?.temperature?.toFixed(1) || '0.0' }}</span>
                 </div>
                 <div class="params-row compact-params" style="margin-top: 4px">
                   <div class="param-item">
                     <span class="param-label">{{ $t('settings.model.contextSize') }}</span>
-                    <el-input-number
-                      v-model="agentForm[role.key + 'Model'].contextSize"
-                      :min="1024"
-                      :max="2000000"
-                      :step="1024"
-                      size="small"
-                      controls-position="right"
-                      style="width: 120px" />
+                    <el-input-number v-model="agentForm[role.key + 'Model'].contextSize" :min="1024" :max="2000000"
+                      :step="1024" size="small" controls-position="right" style="width: 120px" />
                   </div>
                   <div class="param-item">
                     <span class="param-label">{{ $t('settings.model.maxTokens') }}</span>
-                    <el-input-number
-                      v-model="agentForm[role.key + 'Model'].maxTokens"
-                      :min="0"
-                      :max="128000"
-                      :step="1024"
-                      size="small"
-                      controls-position="right"
-                      style="width: 120px" />
+                    <el-input-number v-model="agentForm[role.key + 'Model'].maxTokens" :min="0" :max="128000"
+                      :step="1024" size="small" controls-position="right" style="width: 120px" />
                   </div>
                 </div>
-                <div
-                  v-if="supportsThinking(role.key)"
-                  class="params-row compact-params"
-                  style="margin-top: 6px">
+                <div v-if="supportsThinking(role.key)" class="params-row compact-params" style="margin-top: 6px">
                   <div class="param-item">
                     <span class="param-label">{{ $t('settings.model.reasoning') }}</span>
                     <el-switch v-model="agentForm[role.key + 'Model'].thinkingEnabled" size="small" />
                   </div>
                   <div class="param-item" v-if="agentForm[role.key + 'Model'].thinkingEnabled">
                     <span class="param-label">{{ $t('settings.model.thinkingLevel') }}</span>
-                    <el-select
-                      v-model="agentForm[role.key + 'Model'].thinkingLevel"
-                      size="small"
-                      style="width: 120px">
-                      <el-option
-                        v-for="option in agentThinkingLevelOptions"
-                        :key="option.value"
-                        :label="$t(option.label)"
-                        :value="option.value" />
+                    <el-select v-model="agentForm[role.key + 'Model'].thinkingLevel" size="small" style="width: 120px">
+                      <el-option v-for="option in agentThinkingLevelOptions" :key="option.value"
+                        :label="$t(option.label)" :value="option.value" />
                     </el-select>
                   </div>
                 </div>
@@ -270,44 +171,49 @@
           </div>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools" :disabled="isSystemAgentReadOnly">
+        <el-tab-pane :label="$t('settings.agent.skillsLabel')" name="skills" :disabled="isSystemAgentReadOnly">
           <el-form-item :label="$t('settings.agent.skillEnabled')" prop="skillEnabled">
             <el-switch v-model="agentForm.skillEnabled" />
           </el-form-item>
+          <el-form-item v-if="agentForm.skillEnabled" :label="$t('settings.agent.selectedSkills')"
+            prop="selectedSkills">
+            <div v-if="sortedSystemSkills.length" class="skill-checklist">
+              <el-checkbox-group v-model="agentForm.selectedSkills" class="skill-checklist__group">
+                <label v-for="skill in sortedSystemSkills" :key="skill.name" class="skill-checklist__item">
+                  <el-checkbox :value="skill.name">
+                    <span class="skill-checklist__name">{{ skill.name }}</span>
+                  </el-checkbox>
+                  <span v-if="skill.description" class="skill-checklist__description" :title="skill.description">
+                    {{ skill.description }}
+                  </span>
+                </label>
+              </el-checkbox-group>
+            </div>
+            <div class="form-tip">{{ $t('settings.agent.skillsHint') }}</div>
+            <div v-if="!sortedSystemSkills.length" class="form-tip">
+              {{ $t('settings.agent.noSkillsAvailable') }}
+            </div>
+          </el-form-item>
+        </el-tab-pane>
+
+        <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools" :disabled="isSystemAgentReadOnly">
           <el-form-item :label="$t('settings.agent.approvalLevel')" prop="approvalLevel">
             <el-select v-model="agentForm.approvalLevel" style="width: 100%">
               <el-option :label="$t('settings.agent.approvalLevelDefault')" value="default" />
               <el-option :label="$t('settings.agent.approvalLevelSmart')" value="smart" />
-              <el-option
-                :label="$t('settings.agent.approvalLevelFull')"
-                value="full"
-                class="danger-option" />
+              <el-option :label="$t('settings.agent.approvalLevelFull')" value="full" class="danger-option" />
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.availableTools')" prop="availableTools">
-            <el-select
-              v-model="agentForm.availableTools"
-              :placeholder="$t('settings.agent.selectAvailableTools')"
-              multiple
-              filterable>
-              <el-option
-                v-for="tool in sortedAvailableTools"
-                :key="tool.id"
-                :label="tool.name"
-                :value="tool.id" />
+            <el-select v-model="agentForm.availableTools" :placeholder="$t('settings.agent.selectAvailableTools')"
+              multiple filterable>
+              <el-option v-for="tool in sortedAvailableTools" :key="tool.id" :label="tool.name" :value="tool.id" />
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.autoApprove')" prop="autoApprove">
-            <el-select
-              v-model="agentForm.autoApprove"
-              :placeholder="$t('settings.agent.selectAutoApproveTools')"
-              multiple
-              filterable>
-              <el-option
-                v-for="tool in autoApproveOptions"
-                :key="tool.id"
-                :label="tool.name"
-                :value="tool.id" />
+            <el-select v-model="agentForm.autoApprove" :placeholder="$t('settings.agent.selectAutoApproveTools')"
+              multiple filterable>
+              <el-option v-for="tool in autoApproveOptions" :key="tool.id" :label="tool.name" :value="tool.id" />
             </el-select>
           </el-form-item>
         </el-tab-pane>
@@ -324,15 +230,8 @@
             </div>
             <p class="security-tip">{{ $t('settings.agent.authorizedPathsTip') }}</p>
             <div class="shell-policy-list">
-              <div
-                v-for="(path, index) in agentForm.allowedPaths"
-                :key="index"
-                class="shell-policy-item">
-                <el-input
-                  v-model="agentForm.allowedPaths[index]"
-                  size="small"
-                  readonly
-                  style="flex: 1" />
+              <div v-for="(path, index) in agentForm.allowedPaths" :key="index" class="shell-policy-item">
+                <el-input v-model="agentForm.allowedPaths[index]" size="small" readonly style="flex: 1" />
                 <el-button type="danger" size="small" circle @click="removeAuthorizedPath(index)">
                   <cs name="trash" size="12px" />
                 </el-button>
@@ -340,10 +239,7 @@
             </div>
           </div>
 
-          <div
-            v-if="canConfigureShellPolicy"
-            class="security-group"
-            style="margin-top: 24px">
+          <div v-if="canConfigureShellPolicy" class="security-group" style="margin-top: 24px">
             <div class="shell-policy-header">
               <h3>{{ $t('settings.agent.shellPolicy') }}</h3>
               <div class="shell-policy-actions">
@@ -353,25 +249,15 @@
                 <el-button type="info" size="small" @click="importDefaultShellPolicies" plain>
                   {{ $t('settings.agent.shellPolicyImportDefault') }}
                 </el-button>
-                <el-button
-                  v-if="agentForm.shellPolicy && agentForm.shellPolicy.length > 0"
-                  type="danger"
-                  size="small"
-                  @click="clearShellPolicyRules"
-                  plain>
+                <el-button v-if="agentForm.shellPolicy && agentForm.shellPolicy.length > 0" type="danger" size="small"
+                  @click="clearShellPolicyRules" plain>
                   {{ $t('settings.agent.shellPolicyClear') }}
                 </el-button>
               </div>
             </div>
             <div class="shell-policy-list" ref="shellPolicyListRef">
-              <div
-                v-for="(rule, index) in agentForm.shellPolicy"
-                :key="index"
-                class="shell-policy-item">
-                <el-input
-                  v-model="rule.pattern"
-                  size="small"
-                  :placeholder="$t('settings.agent.shellPolicyPattern')"
+              <div v-for="(rule, index) in agentForm.shellPolicy" :key="index" class="shell-policy-item">
+                <el-input v-model="rule.pattern" size="small" :placeholder="$t('settings.agent.shellPolicyPattern')"
                   style="flex: 1" />
                 <el-select v-model="rule.decision" size="small" style="width: 130px">
                   <el-option :label="$t('settings.agent.shellDecisionAllow')" value="allow" />
@@ -403,6 +289,7 @@ import { storeToRefs } from 'pinia'
 import { Sortable } from 'sortablejs-vue3'
 import { open } from '@tauri-apps/plugin-dialog'
 
+import { invokeWrapper } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
 import { useModelStore } from '@/stores/model'
 import { useAgentStore } from '@/stores/agent'
@@ -417,18 +304,21 @@ const agentStore = useAgentStore()
 const proxyGroupStore = useProxyGroupStore()
 const settingStore = useSettingStore()
 const { agents, availableTools } = storeToRefs(agentStore)
+const ALWAYS_ENABLED_SKILL_NAMES = ['help']
 
 const formRef = ref(null)
 const shellPolicyListRef = ref(null)
 const agentDialogVisible = ref(false)
 const editId = ref(null)
 const activeTab = ref('basic')
+const systemSkills = ref([])
+const shouldBackfillSelectedSkills = ref(false)
 
-const allModelRoles = [{ key: 'plan' }, { key: 'act' }]
+const allModelRoles = [{ key: 'plan' }, { key: 'act' }, { key: 'utility' }]
 
 const modelRoles = computed(() => {
   if (agentForm.value.role === AGENT_ROLE.CHILD) {
-    return allModelRoles.filter(role => role.key === 'act')
+    return allModelRoles.filter(role => role.key !== 'plan')
   }
   return allModelRoles
 })
@@ -488,10 +378,12 @@ const defaultFormData = {
   availableTools: [],
   autoApprove: [],
   skillEnabled: true,
+  selectedSkills: [],
   shellPolicy: [],
   allowedPaths: [],
   planModel: defaultAgentModelConfig(),
   actModel: defaultAgentModelConfig(),
+  utilityModel: defaultAgentModelConfig(),
   maxContexts: 128000,
   approvalLevel: 'default'
 }
@@ -499,9 +391,9 @@ const defaultFormData = {
 const agentForm = ref({ ...defaultFormData })
 
 // Model config temporary state
-const modelModes = reactive({ plan: 'provider', act: 'provider' })
-const proxyGroups = reactive({ plan: '', act: '' })
-const proxyAliases = reactive({ plan: '', act: '' })
+const modelModes = reactive({ plan: 'provider', act: 'provider', utility: 'provider' })
+const proxyGroups = reactive({ plan: '', act: '', utility: '' })
+const proxyAliases = reactive({ plan: '', act: '', utility: '' })
 
 // Computed property: available tools sorted by name, filtered to exclude core management tools
 const sortedAvailableTools = computed(() => {
@@ -520,6 +412,21 @@ const autoApproveOptions = computed(() => {
       agentForm.value.availableTools.includes(t.id) &&
       t.id !== 'bash'
   )
+})
+
+const sortedSystemSkills = computed(() => {
+  return [...systemSkills.value]
+    .filter(skill => !ALWAYS_ENABLED_SKILL_NAMES.includes(skill.name))
+    .sort((a, b) => {
+      if (a.source !== b.source) {
+        return a.source === 'user' ? -1 : 1
+      }
+      return a.name.localeCompare(b.name, 'zh-Hans')
+    })
+})
+
+const defaultSelectedSkillNames = computed(() => {
+  return sortedSystemSkills.value.map(skill => skill.name)
 })
 
 // Tool ID to name mapping
@@ -552,6 +459,14 @@ const sortToolIdsByName = toolIds => {
     const nameB = toolNameMap.value[b] || ''
     return nameA.localeCompare(nameB, 'zh-Hans')
   })
+}
+
+const sortSkillNamesByName = skillNames => {
+  if (!Array.isArray(skillNames)) return []
+  const nameSet = new Set(defaultSelectedSkillNames.value)
+  return [...new Set(skillNames)]
+    .filter(name => nameSet.has(name))
+    .sort((a, b) => a.localeCompare(b, 'zh-Hans'))
 }
 
 // Watch for availableTools array changes to maintain sorting
@@ -608,6 +523,33 @@ watch(
       // Use nextTick to avoid modifying data during render
       nextTick(() => {
         agentForm.value.autoApprove = sorted
+      })
+    }
+  },
+  { deep: true }
+)
+
+watch(
+  () => agentForm.value.selectedSkills,
+  newVal => {
+    if (!Array.isArray(newVal)) return
+
+    const sorted = sortSkillNamesByName(newVal)
+    let needsSorting = false
+    if (sorted.length !== newVal.length) {
+      needsSorting = true
+    } else {
+      for (let i = 0; i < sorted.length; i++) {
+        if (sorted[i] !== newVal[i]) {
+          needsSorting = true
+          break
+        }
+      }
+    }
+
+    if (needsSorting) {
+      nextTick(() => {
+        agentForm.value.selectedSkills = sorted
       })
     }
   },
@@ -789,6 +731,26 @@ const agentRules = {
   ]
 }
 
+const loadSystemSkills = async () => {
+  try {
+    const result = await invokeWrapper('get_system_skills')
+    systemSkills.value = Array.isArray(result) ? result : []
+  } catch (error) {
+    console.error('Failed to load system skills:', error)
+    systemSkills.value = []
+  }
+}
+
+const setSelectedSkillsFromSource = selectedSkills => {
+  if (Array.isArray(selectedSkills)) {
+    shouldBackfillSelectedSkills.value = false
+    return sortSkillNamesByName(selectedSkills)
+  }
+
+  shouldBackfillSelectedSkills.value = true
+  return [...defaultSelectedSkillNames.value]
+}
+
 const normalizeAgentFormForSave = form => {
   const normalized = JSON.parse(JSON.stringify(form))
 
@@ -814,6 +776,9 @@ const normalizeAgentFormForSave = form => {
       tool => normalized.availableTools.includes(tool) && tool !== 'bash'
     )
     : []
+  normalized.selectedSkills = Array.isArray(normalized.selectedSkills)
+    ? sortSkillNamesByName(normalized.selectedSkills)
+    : []
 
   if (normalized.role === AGENT_ROLE.CHILD) {
     normalized.planningPrompt = ''
@@ -823,6 +788,7 @@ const normalizeAgentFormForSave = form => {
     normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
     normalized.autoApprove = normalized.autoApprove.filter(tool => tool !== 'bash')
     normalized.skillEnabled = false
+    normalized.selectedSkills = []
   } else {
     normalized.parentAgentId = null
     normalized.shellPolicy = Array.isArray(normalized.shellPolicy)
@@ -931,10 +897,11 @@ const editAgent = async id => {
         agentForm.value.autoApprove = sortToolIdsByName(agentForm.value.autoApprove)
       }
 
-      // Unpack unified 'models' JSON field if it exists
+      // Unpack unified 'models' field if it exists
       if (agentData.models) {
         try {
-          const modelsObj = JSON.parse(agentData.models)
+          const modelsObj =
+            typeof agentData.models === 'string' ? JSON.parse(agentData.models) : agentData.models
           allModelRoles.forEach(role => {
             if (modelsObj[role.key]) {
               agentForm.value[role.key + 'Model'] = normalizeModelDraft(modelsObj[role.key])
@@ -975,6 +942,7 @@ const editAgent = async id => {
         agentData.skillEnabled !== undefined
           ? Boolean(agentData.skillEnabled)
           : (agentForm.value.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD
+      agentForm.value.selectedSkills = setSelectedSkillsFromSource(agentData.selectedSkills)
 
       // Unpack 'allowedPaths' JSON field if it exists
       const rawPaths = agentData.allowed_paths || agentData.allowedPaths
@@ -1015,6 +983,8 @@ const editAgent = async id => {
     agentForm.value.isSystem = false
     agentForm.value.disabled = false
     agentForm.value.skillEnabled = true
+    shouldBackfillSelectedSkills.value = true
+    agentForm.value.selectedSkills = [...defaultSelectedSkillNames.value]
     allModelRoles.forEach(role => {
       agentForm.value[role.key + 'Model'] = normalizeModelDraft(agentForm.value[role.key + 'Model'])
     })
@@ -1038,7 +1008,8 @@ const copyAgent = async id => {
     editId.value = null
     if (agentData.models) {
       try {
-        const modelsObj = JSON.parse(agentData.models)
+        const modelsObj =
+          typeof agentData.models === 'string' ? JSON.parse(agentData.models) : agentData.models
         allModelRoles.forEach(role => {
           if (modelsObj[role.key]) {
             agentForm.value[role.key + 'Model'] = normalizeModelDraft(modelsObj[role.key])
@@ -1095,6 +1066,7 @@ const copyAgent = async id => {
       agentData.skillEnabled !== undefined
         ? Boolean(agentData.skillEnabled)
         : (agentForm.value.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD
+    agentForm.value.selectedSkills = setSelectedSkillsFromSource(agentData.selectedSkills)
 
     if (
       !agentForm.value.parentAgentId &&
@@ -1173,6 +1145,7 @@ const onAgentDialogClose = () => {
 onMounted(() => {
   modelStore.updateModelStore()
   proxyGroupStore.getList()
+  loadSystemSkills()
 })
 
 watch(
@@ -1181,12 +1154,16 @@ watch(
     if (role !== AGENT_ROLE.CHILD) {
       agentForm.value.parentAgentId = null
       agentForm.value.skillEnabled = true
+      if (!Array.isArray(agentForm.value.selectedSkills) || !agentForm.value.selectedSkills.length) {
+        agentForm.value.selectedSkills = [...defaultSelectedSkillNames.value]
+      }
       return
     }
 
     agentForm.value.allowedPaths = []
     agentForm.value.shellPolicy = []
     agentForm.value.skillEnabled = false
+    agentForm.value.selectedSkills = []
     agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
       tool => tool !== 'bash'
     )
@@ -1198,6 +1175,22 @@ watch(
       agentForm.value.parentAgentId = primaryAgentOptions.value[0].id
     }
   }
+)
+
+watch(
+  defaultSelectedSkillNames,
+  names => {
+    if (
+      shouldBackfillSelectedSkills.value &&
+      names.length > 0 &&
+      agentForm.value.role !== AGENT_ROLE.CHILD &&
+      (!Array.isArray(agentForm.value.selectedSkills) || agentForm.value.selectedSkills.length === 0)
+    ) {
+      agentForm.value.selectedSkills = [...names]
+      shouldBackfillSelectedSkills.value = false
+    }
+  },
+  { immediate: true }
 )
 
 </script>
@@ -1214,6 +1207,55 @@ watch(
 
   .models-layout {
     padding: 4px;
+  }
+
+  .form-tip {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--cs-text-color-secondary);
+    line-height: 1.5;
+  }
+
+  .skill-checklist {
+    max-height: 260px;
+    overflow-y: auto;
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius-md);
+    background-color: var(--cs-bg-color-light);
+    padding: 8px;
+
+    &__group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+    }
+
+    &__item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 10px;
+      border-radius: var(--cs-border-radius-sm);
+      background-color: var(--cs-bg-color);
+      cursor: pointer;
+    }
+
+    &__name {
+      color: var(--cs-text-color-primary);
+      font-weight: 600;
+      margin-left: 4px;
+    }
+
+    &__description {
+      font-size: 12px;
+      color: var(--cs-text-color-secondary);
+      padding-left: 26px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.4;
+    }
   }
 
   .model-item-compact {

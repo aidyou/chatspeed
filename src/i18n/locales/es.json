@@ -200,6 +200,7 @@
       "nameRequired": "Por favor, introduce el nombre del agente",
       "noAgents": "No se encontraron agentes",
       "planModel": "Modelo de planificación",
+      "utilityModel": "Modelo auxiliar",
       "planningMode": "Modo de planificación",
       "planningPrompt": "Prompt de planificación",
       "planningPromptPlaceholder": "Deje en blanco para usar la lógica de planificación predeterminada del sistema. Si personaliza, guíe al modelo para generar una lista clara de tareas.",
@@ -209,6 +210,11 @@
       "selectAutoApproveTools": "Seleccionar herramientas de aprobación automática",
       "selectAvailableTools": "Seleccionar herramientas disponibles",
       "selectDirectory": "Seleccionar directorio",
+      "selectSkills": "Seleccionar skills",
+      "selectedSkills": "Skills habilitadas",
+      "skillEnabled": "Habilitar skills",
+      "skillsHint": "Solo las skills seleccionadas se expondrán al runtime de workflow de este agente.",
+      "skillsLabel": "Skills",
       "shellDecisionAllow": "Permitir",
       "shellDecisionDeny": "Denegar",
       "shellDecisionReview": "Revisar",
@@ -227,6 +233,7 @@
       "title": "Gestión de agentes",
       "toolsLabel": "Herramientas",
       "updateSuccess": "¡Agente actualizado con éxito!",
+      "noSkillsAvailable": "No se encontraron skills en este dispositivo.",
       "workingDirectory": "Directorio de trabajo"
     },
     "general": {

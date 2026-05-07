@@ -94,6 +94,23 @@ footer.input-container {
                 text-overflow: ellipsis;
             }
         }
+
+        .command-group {
+            &:not(:first-child) {
+                margin-top: 6px;
+                padding-top: 6px;
+                border-top: 1px solid var(--cs-border-color);
+            }
+        }
+
+        .command-group-title {
+            padding: 6px 10px 4px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--cs-text-color-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
     }
 
     .additional {

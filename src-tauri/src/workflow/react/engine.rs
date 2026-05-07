@@ -53,6 +53,7 @@ use crate::workflow::react::{
 
 /// Default maximum ReAct steps before the agent is forced to conclude.
 const DEFAULT_MAX_STEPS: usize = 60;
+const ALWAYS_ENABLED_SKILL_NAME: &str = "help";
 
 /// Unified interface for ReAct executors (Planners and Runners).
 #[async_trait]
@@ -97,6 +98,7 @@ pub struct WorkflowExecutor {
     pub skill_scanner: SkillScanner,
     pub llm_processor: LlmProcessor,
     pub intelligence_manager: IntelligenceManager,
+    pub discovered_skills: HashMap<String, SkillManifest>,
     pub available_skills: HashMap<String, SkillManifest>,
     pub agent_config: Agent,
     pub state: WorkflowState,
@@ -310,6 +312,23 @@ impl WorkflowExecutor {
             .map(|level| (level_str.to_string(), level))
     }
 
+    fn parse_phase_from_signal(sig_json: &Value) -> Option<(String, ExecutionPhase)> {
+        let phase_str = sig_json.get("phase").and_then(|v| v.as_str())?;
+
+        use std::str::FromStr;
+        ExecutionPhase::from_str(phase_str)
+            .ok()
+            .map(|phase| (phase_str.to_string(), phase))
+    }
+
+    fn planning_root_for_allowed_paths(allowed_paths: &[PathBuf]) -> PathBuf {
+        allowed_paths
+            .first()
+            .cloned()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+            .join(".cs")
+    }
+
     fn phase_model_context_limit(agent_config: &Agent, phase: &ExecutionPhase) -> Option<usize> {
         let models = agent_config.models.as_ref()?;
         let selected_model = match phase {
@@ -321,6 +340,81 @@ impl WorkflowExecutor {
             .context_size
             .filter(|value| *value > 0)
             .map(|value| value as usize)
+    }
+
+    fn phase_runtime_model<'a>(
+        agent_config: &'a Agent,
+        phase: &ExecutionPhase,
+    ) -> Option<&'a crate::db::agent::ModelConfig> {
+        let models = agent_config.models.as_ref()?;
+        match phase {
+            ExecutionPhase::Planning => models.plan.as_ref().or(models.act.as_ref()),
+            ExecutionPhase::Implementation | ExecutionPhase::Standard => {
+                models.act.as_ref().or(models.plan.as_ref())
+            }
+        }
+    }
+
+    fn utility_runtime_model<'a>(
+        agent_config: &'a Agent,
+        phase: &ExecutionPhase,
+    ) -> Option<&'a crate::db::agent::ModelConfig> {
+        let models = agent_config.models.as_ref()?;
+        models
+            .utility
+            .as_ref()
+            .or_else(|| Self::phase_runtime_model(agent_config, phase))
+    }
+
+    fn filter_skills_for_agent(
+        discovered_skills: &HashMap<String, SkillManifest>,
+        agent_config: &Agent,
+    ) -> HashMap<String, SkillManifest> {
+        if !agent_config.skill_enabled.unwrap_or(false) {
+            return HashMap::new();
+        }
+
+        let Some(selected_skills_json) = agent_config.selected_skills.as_deref() else {
+            return discovered_skills.clone();
+        };
+
+        let mut selected_skills = match serde_json::from_str::<Vec<String>>(selected_skills_json) {
+            Ok(skills) => skills,
+            Err(error) => {
+                log::warn!(
+                    "[Workflow][session={}][phase=skills] Failed to parse selected_skills, disabling runtime skills: {}",
+                    agent_config.id,
+                    error
+                );
+                return HashMap::new();
+            }
+        };
+
+        if !selected_skills
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(ALWAYS_ENABLED_SKILL_NAME))
+        {
+            selected_skills.push(ALWAYS_ENABLED_SKILL_NAME.to_string());
+        }
+
+        if selected_skills.is_empty() {
+            return HashMap::new();
+        }
+
+        let selected_names = selected_skills.into_iter().collect::<HashSet<_>>();
+        discovered_skills
+            .iter()
+            .filter(|(name, skill)| {
+                selected_names.contains(*name) || selected_names.contains(&skill.name)
+            })
+            .map(|(name, skill)| (name.clone(), skill.clone()))
+            .collect()
+    }
+
+    fn sync_runtime_skills_from_agent_config(&mut self) {
+        self.available_skills =
+            Self::filter_skills_for_agent(&self.discovered_skills, &self.agent_config);
+        self.llm_processor.available_skills = self.available_skills.clone();
     }
 
     fn effective_context_limit(agent_config: &Agent, phase: &ExecutionPhase) -> usize {
@@ -345,26 +439,15 @@ impl WorkflowExecutor {
     }
 
     fn sync_runtime_models_from_agent_config(&mut self) {
-        let act_model = self
-            .agent_config
-            .models
-            .as_ref()
-            .and_then(|models| models.act.as_ref());
+        let selected_model = Self::phase_runtime_model(&self.agent_config, &self.policy.phase);
+        let utility_model = Self::utility_runtime_model(&self.agent_config, &self.policy.phase);
         let plan_model = self
             .agent_config
             .models
             .as_ref()
             .and_then(|models| models.plan.as_ref());
 
-        let selected_model = if self.policy.phase == ExecutionPhase::Planning {
-            plan_model.or(act_model)
-        } else {
-            act_model.or(plan_model)
-        };
-
-        let model_name = selected_model
-            .map(|m| m.model.clone())
-            .unwrap_or_default();
+        let model_name = selected_model.map(|m| m.model.clone()).unwrap_or_default();
         let provider_id = selected_model.map(|m| m.id).unwrap_or(0);
         let actual_config = self.resolve_actual_model_config(provider_id, &model_name);
 
@@ -383,8 +466,15 @@ impl WorkflowExecutor {
 
         self.intelligence_manager.active_provider_id = provider_id;
         self.intelligence_manager.active_model_name = model_name.clone();
-        self.intelligence_manager.approval_provider_id = provider_id;
-        self.intelligence_manager.approval_model_name = model_name.clone();
+        self.intelligence_manager.utility_provider_id =
+            utility_model.map(|m| m.id).unwrap_or(provider_id);
+        self.intelligence_manager.utility_model_name = utility_model
+            .map(|m| m.model.clone())
+            .unwrap_or_else(|| model_name.clone());
+        self.intelligence_manager.approval_provider_id =
+            self.intelligence_manager.utility_provider_id;
+        self.intelligence_manager.approval_model_name =
+            self.intelligence_manager.utility_model_name.clone();
 
         if let Some(audit_model) = plan_model.or(selected_model) {
             self.intelligence_manager.audit_provider_id = audit_model.id;
@@ -394,16 +484,20 @@ impl WorkflowExecutor {
             self.intelligence_manager.audit_model_name = model_name.clone();
         }
 
-        self.compressor.provider_id = provider_id;
-        self.compressor.model = model_name.clone();
+        self.compressor.provider_id = utility_model.map(|m| m.id).unwrap_or(provider_id);
+        self.compressor.model = utility_model
+            .map(|m| m.model.clone())
+            .unwrap_or_else(|| model_name.clone());
         self.sync_runtime_limits();
 
         log::info!(
-            "[Workflow][session={}][phase=model_sync] Active runtime model synced: phase={:?}, provider_id={}, model={}, audit_provider_id={}, audit_model={}",
+            "[Workflow][session={}][phase=model_sync] Runtime models synced: phase={:?}, active_provider_id={}, active_model={}, utility_provider_id={}, utility_model={}, audit_provider_id={}, audit_model={}",
             self.session_id,
             self.policy.phase,
             self.llm_processor.active_provider_id,
             self.llm_processor.active_model_name,
+            self.compressor.provider_id,
+            self.compressor.model,
             self.intelligence_manager.audit_provider_id,
             self.intelligence_manager.audit_model_name
         );
@@ -787,6 +881,8 @@ impl WorkflowExecutor {
     }
 
     async fn prepare_completed_resume_internal(&mut self) -> Result<(), WorkflowEngineError> {
+        self.refresh_runtime_config_from_snapshot().await?;
+        self.rebuild_foundation_tools_for_runtime_update().await?;
         self.current_step = 0;
         self.consecutive_no_tool_calls = 0;
         self.last_compression_step = 0;
@@ -835,11 +931,7 @@ impl WorkflowExecutor {
         let skill_paths: Vec<PathBuf> = skill_scanner.get_search_paths();
 
         // Build sandbox_paths
-        let planning_root = allowed_paths
-            .first()
-            .cloned()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-            .join(".cs");
+        let planning_root = Self::planning_root_for_allowed_paths(&allowed_paths);
         let mut sandbox_paths = vec![planning_root.clone()];
         sandbox_paths.push(std::env::temp_dir());
         if let Some(home) = dirs::home_dir() {
@@ -952,6 +1044,7 @@ impl WorkflowExecutor {
                 audit_provider_id,
                 audit_model_name,
             ),
+            discovered_skills: HashMap::new(),
             available_skills: HashMap::new(),
             agent_config,
             state: WorkflowState::Pending,
@@ -1182,8 +1275,7 @@ impl WorkflowExecutor {
 
     pub(crate) async fn init_internal(&mut self) -> Result<(), WorkflowEngineError> {
         self.context.load_history().await?;
-        self.available_skills = self.skill_scanner.scan()?;
-        self.llm_processor.available_skills = self.available_skills.clone();
+        self.discovered_skills = self.skill_scanner.scan()?;
 
         // Load current state and the latest persisted workflow config from database.
         {
@@ -1205,6 +1297,7 @@ impl WorkflowExecutor {
                 }
             }
         }
+        self.sync_runtime_skills_from_agent_config();
 
         // Get MCP tool summaries for workflow
         self.llm_processor.mcp_tool_summaries = self
@@ -2349,72 +2442,6 @@ impl WorkflowExecutor {
                     .handle_runtime_config_signal(&signal_json, signal_type_enum)
                     .await?
                 {
-                    continue;
-                }
-
-                // Handle remove_auto_approved_tool signal
-                if signal_type_enum == Some(SignalType::RemoveAutoApprovedTool) {
-                    if let Some(tool_name) = signal_json["tool_name"].as_str() {
-                        self.remove_auto_approved_tool(tool_name);
-
-                        // Send update event to frontend
-                        let tools = self.get_auto_approved_tools();
-                        if let Err(e) = self
-                            .dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated { tools })
-                            .await
-                        {
-                            log::error!(
-                                "WorkflowExecutor {}: Failed to send auto-approved tools update after removal: {}",
-                                self.session_id,
-                                e
-                            );
-                        }
-                    }
-                    continue;
-                }
-
-                // Handle remove_shell_policy_item signal
-                if signal_type_enum == Some(SignalType::RemoveShellPolicyItem) {
-                    if let Some(pattern) = signal_json["pattern"].as_str() {
-                        if let Some(updated_policy) = self.remove_shell_policy_item(pattern).await {
-                            // Send update event to frontend
-                            if let Err(e) = self
-                                .dispatch_ui_payload(GatewayPayload::ShellPolicyUpdated {
-                                    policy: updated_policy,
-                                })
-                                .await
-                            {
-                                log::error!(
-                                    "WorkflowExecutor {}: Failed to send shell policy update after removal: {}",
-                                    self.session_id,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                // Accept runtime config updates in waiting states to avoid noisy unknown-signal warnings.
-                if signal_type_enum == Some(SignalType::UpdateFinalAudit) {
-                    let audit = signal_json
-                        .get("finalAudit")
-                        .and_then(|v| v.as_bool())
-                        .or_else(|| signal_json.get("audit").and_then(|v| v.as_bool()));
-                    if let Some(audit) = audit {
-                        log::info!(
-                            "WorkflowExecutor {}: Updating final audit to {} while waiting",
-                            self.session_id,
-                            audit
-                        );
-                        self.agent_config.final_audit = Some(audit);
-                    }
-                    continue;
-                }
-
-                if signal_type_enum == Some(SignalType::UpdateApprovalLevel) {
-                    self.apply_runtime_approval_level_update(&signal_json, true)
-                        .await?;
                     continue;
                 }
 
@@ -3575,56 +3602,7 @@ impl WorkflowExecutor {
 
             self.update_state(WorkflowState::Thinking).await?;
 
-            let agent_config = &self.agent_config;
-
-            // Get model configs directly from AgentModels structure
-            let act_model = agent_config.models.as_ref().and_then(|m| m.act.as_ref());
-            let plan_model = agent_config.models.as_ref().and_then(|m| m.plan.as_ref());
-
-            // Select the appropriate model based on phase and subagent type
-            let selected_model = if self.policy.phase == ExecutionPhase::Planning {
-                plan_model.or(act_model)
-            } else {
-                act_model
-            };
-
-            let _model_name = selected_model.map(|m| m.model.clone()).unwrap_or_default();
-            let provider_id = selected_model.map(|m| m.id).unwrap_or(0);
-
-            // Pierce proxy to get actual model capabilities if needed
-            let actual_config = self.resolve_actual_model_config(provider_id, &_model_name);
-
-            self.llm_processor.active_provider_id = provider_id;
-            self.llm_processor.active_model_name = _model_name.clone();
-
-            // Priority: Model Config (reasoning field) > Auto-detection
-            if let Some(crate::db::ModelConfig {
-                reasoning: Some(true),
-                ..
-            }) = actual_config
-            {
-                self.llm_processor.reasoning = true;
-            } else {
-                self.llm_processor.reasoning =
-                    crate::ai::util::is_reasoning_supported(&_model_name.to_lowercase());
-            }
-
-            self.intelligence_manager.active_provider_id = self.llm_processor.active_provider_id;
-            self.intelligence_manager.active_model_name =
-                self.llm_processor.active_model_name.clone();
-            self.intelligence_manager.approval_provider_id = self.llm_processor.active_provider_id;
-            self.intelligence_manager.approval_model_name =
-                self.llm_processor.active_model_name.clone();
-            if let Some(audit_model) = plan_model.or(selected_model) {
-                self.intelligence_manager.audit_provider_id = audit_model.id;
-                self.intelligence_manager.audit_model_name = audit_model.model.clone();
-            } else {
-                self.intelligence_manager.audit_provider_id = self.llm_processor.active_provider_id;
-                self.intelligence_manager.audit_model_name =
-                    self.llm_processor.active_model_name.clone();
-            }
-            self.compressor.provider_id = self.llm_processor.active_provider_id;
-            self.compressor.model = self.llm_processor.active_model_name.clone();
+            self.sync_runtime_models_from_agent_config();
 
             let chat_interface = {
                 let mut chats_guard = self.chat_state.chats.lock().await;
@@ -4096,8 +4074,12 @@ impl WorkflowExecutor {
             current_project.clone(),
             self.chat_state.clone(),
             &self.session_id,
-            self.llm_processor.active_provider_id,
-            &self.llm_processor.active_model_name,
+            Self::utility_runtime_model(&self.agent_config, &self.policy.phase)
+                .map(|model| model.id)
+                .unwrap_or(self.llm_processor.active_provider_id),
+            Self::utility_runtime_model(&self.agent_config, &self.policy.phase)
+                .map(|model| model.model.as_str())
+                .unwrap_or(&self.llm_processor.active_model_name),
         )
         .await
         .map_err(|e| WorkflowEngineError::General(format!("Memory analysis failed: {}", e)))?;
@@ -5566,6 +5548,126 @@ impl WorkflowExecutor {
             .collect()
     }
 
+    fn rebuild_auto_approve_from_agent_config(&mut self) {
+        self.auto_approve.clear();
+        if let Some(s) = &self.agent_config.auto_approve {
+            if let Ok(v) = serde_json::from_str::<Vec<String>>(s) {
+                for tool in v {
+                    self.auto_approve.insert(tool);
+                }
+            }
+        }
+        if self.policy.is_strict_manual_planning() {
+            self.auto_approve
+                .insert(crate::tools::TOOL_PLAN_READ_NOTE.to_string());
+            self.auto_approve
+                .insert(crate::tools::TOOL_PLAN_WRITE_NOTE.to_string());
+            self.auto_approve
+                .insert(crate::tools::TOOL_PLAN_EDIT_NOTE.to_string());
+        }
+    }
+
+    async fn rebuild_foundation_tools_for_runtime_update(
+        &mut self,
+    ) -> Result<(), WorkflowEngineError> {
+        self.tool_manager.clear(false).await;
+        self.register_foundation_tools().await
+    }
+
+    async fn apply_runtime_phase_update(
+        &mut self,
+        phase_str: &str,
+        phase: ExecutionPhase,
+        waiting: bool,
+    ) -> Result<bool, WorkflowEngineError> {
+        if waiting {
+            log::info!(
+                "WorkflowExecutor {}: Updating phase to {} while waiting",
+                self.session_id,
+                phase_str
+            );
+        } else {
+            log::info!(
+                "WorkflowExecutor {}: Updating phase to {}",
+                self.session_id,
+                phase_str
+            );
+        }
+
+        let mut new_policy = match phase {
+            ExecutionPhase::Planning => ExecutionPolicy::planning_strict(),
+            ExecutionPhase::Implementation => ExecutionPolicy::implementation(),
+            ExecutionPhase::Standard => ExecutionPolicy::standard(),
+        };
+        new_policy.approval_level = self.policy.approval_level.clone();
+        self.policy = new_policy;
+
+        self.sync_runtime_limits();
+        self.rebuild_auto_approve_from_agent_config();
+        self.sync_runtime_models_from_agent_config();
+        self.rebuild_foundation_tools_for_runtime_update().await?;
+        self.persist_workflow_agent_config_value("phase", serde_json::json!(phase_str));
+        self.dispatch_context_usage().await?;
+
+        Ok(true)
+    }
+
+    async fn refresh_runtime_config_from_snapshot(&mut self) -> Result<(), WorkflowEngineError> {
+        let snapshot_config_json = self
+            .context
+            .main_store
+            .read()
+            .ok()
+            .and_then(|store| store.get_workflow_snapshot(&self.session_id).ok())
+            .and_then(|snapshot| snapshot.workflow.agent_config);
+
+        let Some(config_json) = snapshot_config_json else {
+            return Ok(());
+        };
+
+        self.agent_config.merge_config(&config_json);
+        self.sync_runtime_skills_from_agent_config();
+
+        if let Some(config) = crate::db::agent::AgentConfig::from_json(&config_json) {
+            if let Some(phase_str) = config.phase.as_deref() {
+                if let Some((phase_str, phase)) =
+                    Self::parse_phase_from_signal(&serde_json::json!({ "phase": phase_str }))
+                {
+                    self.apply_runtime_phase_update(&phase_str, phase, false)
+                        .await?;
+                }
+            }
+
+            if let Some(level_str) = config.approval_level.as_deref() {
+                use std::str::FromStr;
+                if let Ok(level) = ApprovalLevel::from_str(level_str) {
+                    self.policy.approval_level = level;
+                }
+            }
+
+            if let Some(auto_compress) = config.auto_compress {
+                self.auto_compress_enabled = auto_compress;
+            }
+
+            if let Some(allowed_paths) = config.allowed_paths {
+                let paths = self.parse_allowed_paths_from_signal(&serde_json::json!({
+                    "paths": allowed_paths
+                }));
+                if let Ok(mut guard) = self.path_guard.write() {
+                    guard.update_allowed_roots(paths.clone());
+                }
+                self.planning_root = Self::planning_root_for_allowed_paths(&paths);
+            }
+        }
+
+        self.context.max_tokens =
+            Self::effective_context_limit(&self.agent_config, &self.policy.phase);
+        self.max_steps = Self::effective_max_steps(&self.agent_config, &self.policy.phase);
+        self.rebuild_auto_approve_from_agent_config();
+        self.sync_runtime_models_from_agent_config();
+        Ok(())
+    }
+
     fn persist_workflow_agent_config_value(&self, key: &str, value: Value) {
         if let Ok(store) = self.context.main_store.write() {
             if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
@@ -5628,6 +5730,15 @@ impl WorkflowExecutor {
         sig_json: &Value,
         sig_type_enum: Option<SignalType>,
     ) -> Result<bool, WorkflowEngineError> {
+        if sig_type_enum == Some(SignalType::UpdatePhase) {
+            let Some((phase_str, phase)) = Self::parse_phase_from_signal(sig_json) else {
+                return Ok(false);
+            };
+            return self
+                .apply_runtime_phase_update(&phase_str, phase, false)
+                .await;
+        }
+
         if sig_type_enum == Some(SignalType::UpdateAllowedPaths) {
             let paths = self.parse_allowed_paths_from_signal(sig_json);
             log::info!(
@@ -5636,7 +5747,18 @@ impl WorkflowExecutor {
                 paths
             );
             if let Ok(mut guard) = self.path_guard.write() {
-                guard.update_allowed_roots(paths);
+                guard.update_allowed_roots(paths.clone());
+            }
+            self.planning_root = Self::planning_root_for_allowed_paths(&paths);
+            self.agent_config.allowed_paths = serde_json::to_string(
+                &paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .ok();
+            if self.policy.allows_planning_note_tools() {
+                self.rebuild_foundation_tools_for_runtime_update().await?;
             }
             return Ok(true);
         }
@@ -5726,6 +5848,28 @@ impl WorkflowExecutor {
                     "autoCompress",
                     serde_json::json!(enabled),
                 );
+            }
+            return Ok(true);
+        }
+
+        if sig_type_enum == Some(SignalType::RemoveAutoApprovedTool) {
+            if let Some(tool_name) = sig_json.get("tool_name").and_then(|v| v.as_str()) {
+                self.remove_auto_approved_tool(tool_name);
+                let tools = self.get_auto_approved_tools();
+                self.dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated { tools })
+                    .await?;
+            }
+            return Ok(true);
+        }
+
+        if sig_type_enum == Some(SignalType::RemoveShellPolicyItem) {
+            if let Some(pattern) = sig_json.get("pattern").and_then(|v| v.as_str()) {
+                if let Some(updated_policy) = self.remove_shell_policy_item(pattern).await {
+                    self.dispatch_ui_payload(GatewayPayload::ShellPolicyUpdated {
+                        policy: updated_policy,
+                    })
+                    .await?;
+                }
             }
             return Ok(true);
         }
@@ -6049,6 +6193,9 @@ impl WorkflowExecutor {
     /// Remove a tool from auto-approve list
     pub fn remove_auto_approved_tool(&mut self, tool_name: &str) {
         self.auto_approve.remove(tool_name);
+        let mut tools = self.get_auto_approved_tools();
+        tools.sort();
+        self.agent_config.auto_approve = serde_json::to_string(&tools).ok();
         log::info!(
             "WorkflowExecutor {}: Removed '{}' from auto-approve list",
             self.session_id,

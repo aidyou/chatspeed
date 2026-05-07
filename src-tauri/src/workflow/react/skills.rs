@@ -9,6 +9,8 @@ pub struct SkillManifest {
     pub name: String,
     #[serde(default = "default_version")]
     pub version: String,
+    #[serde(default = "default_source")]
+    pub source: String,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -36,6 +38,11 @@ pub struct ReferenceInfo {
 fn default_version() -> String {
     "1.0.0".to_string()
 }
+
+fn default_source() -> String {
+    "builtin".to_string()
+}
+
 pub struct SkillScanner {
     search_paths: Vec<PathBuf>,
 }
@@ -78,6 +85,7 @@ impl SkillScanner {
     /// Higher priority paths (earlier in search_paths) override lower ones.
     pub fn scan(&self) -> Result<HashMap<String, SkillManifest>, WorkflowEngineError> {
         let mut skills = HashMap::new();
+        let builtin_root = crate::RESOURCE_DIR.read().clone().join("skills");
 
         // Iterate in REVERSE to allow higher priority paths to overwrite at the end
         for path in self.search_paths.iter().rev() {
@@ -89,7 +97,12 @@ impl SkillScanner {
                 for entry in entries.flatten() {
                     let skill_dir = entry.path();
                     if skill_dir.is_dir() {
-                        if let Some(manifest) = self.try_load_skill(&skill_dir) {
+                        if let Some(mut manifest) = self.try_load_skill(&skill_dir) {
+                            manifest.source = if path == &builtin_root {
+                                "builtin".to_string()
+                            } else {
+                                "user".to_string()
+                            };
                             skills.insert(manifest.name.clone(), manifest);
                         }
                     }
@@ -141,6 +154,7 @@ impl SkillScanner {
                                     let manifest = SkillManifest {
                                         name: skill_name,
                                         version: "1.0.0".to_string(),
+                                        source: default_source(),
                                         description,
                                         tools: vec![],
                                         instructions: body_part.to_string(),

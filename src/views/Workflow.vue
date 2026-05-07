@@ -185,6 +185,7 @@
           :show-skill-suggestions="showSkillSuggestions"
           :show-file-suggestions="showFileSuggestions"
           :filtered-system-skills="filteredSystemSkills"
+          :grouped-skill-suggestions="groupedSkillSuggestions"
           :file-suggestions="fileSuggestions"
           :selected-skill-index="selectedSkillIndex"
           :selected-file-index="selectedFileIndex"
@@ -299,6 +300,7 @@ const showPlanningModeToggle = computed(() => {
 
 // System skills
 const systemSkills = ref([])
+const ALWAYS_ENABLED_SKILL_NAMES = ['help']
 const fetchSystemSkills = async () => {
   try {
     const result = await invokeWrapper('get_system_skills')
@@ -307,6 +309,27 @@ const fetchSystemSkills = async () => {
     console.error('Failed to fetch system skills:', error)
   }
 }
+
+const activeSkillAgent = computed(() => {
+  const workflowAgentId = workflowStore.currentWorkflow?.agentId
+  if (workflowAgentId) {
+    return agentStore.agents.find(agent => agent.id === workflowAgentId) || selectedAgent.value
+  }
+  return selectedAgent.value
+})
+
+const workflowInputSkills = computed(() => {
+  const agent = activeSkillAgent.value
+  if (!agent || agent.skillEnabled === false) return []
+
+  const configuredSelectedSkills = Array.isArray(agent.selectedSkills) ? agent.selectedSkills : null
+  if (configuredSelectedSkills === null) {
+    return systemSkills.value
+  }
+
+  const allowedNames = new Set([...configuredSelectedSkills, ...ALWAYS_ENABLED_SKILL_NAMES])
+  return systemSkills.value.filter(skill => allowedNames.has(skill.name))
+})
 
 // ============================================================
 // Composables with NO dependencies on local state
@@ -380,7 +403,7 @@ const inputComposable = useWorkflowInput({
   inputRef: computed(() => inputAreaRef.value?.inputRef),
   onSendMessage: null, // Will be set after core composable is initialized
   currentPaths: computed(() => currentPaths.value),
-  systemSkills: computed(() => systemSkills.value)
+  systemSkills: computed(() => workflowInputSkills.value)
 })
 
 const {
@@ -391,6 +414,7 @@ const {
   selectedFileIndex,
   fileSuggestions,
   filteredSystemSkills,
+  groupedSkillSuggestions,
   onInputKeyDown,
   onCompositionStart,
   onCompositionEnd,
