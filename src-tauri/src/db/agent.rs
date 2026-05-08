@@ -203,8 +203,18 @@ impl Agent {
     pub fn merge_config(&mut self, config_json: &str) {
         if let Some(config) = AgentConfig::from_json(config_json) {
             // Merge models
-            if config.models.is_some() {
-                self.models = config.models;
+            if let Some(config_models) = config.models {
+                let mut merged_models = self.models.clone().unwrap_or_default();
+                if config_models.plan.is_some() {
+                    merged_models.plan = config_models.plan;
+                }
+                if config_models.act.is_some() {
+                    merged_models.act = config_models.act;
+                }
+                if config_models.utility.is_some() {
+                    merged_models.utility = config_models.utility;
+                }
+                self.models = Some(merged_models);
             }
 
             // Merge shell_policy (Vec<ShellPolicyRule> -> JSON string)

@@ -104,12 +104,38 @@ footer.input-container {
         }
 
         .command-group-title {
-            padding: 6px 10px 4px;
+            padding: 0;
             font-size: 11px;
             font-weight: 600;
             color: var(--cs-text-color-secondary);
             text-transform: uppercase;
             letter-spacing: 0.04em;
+        }
+
+        .command-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 6px 10px 4px;
+        }
+
+        .command-group-action {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border: 0;
+            border-radius: var(--cs-border-radius-round);
+            background: transparent;
+            color: var(--cs-text-color-secondary);
+            cursor: pointer;
+
+            &:hover {
+                background-color: var(--cs-hover-bg-color);
+                color: var(--cs-text-color-primary);
+            }
         }
     }
 

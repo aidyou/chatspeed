@@ -10,6 +10,7 @@
       <el-tabs v-model="activeTab" class="model-tabs">
         <el-tab-pane label="PLAN" name="plan"></el-tab-pane>
         <el-tab-pane label="ACT" name="act"></el-tab-pane>
+        <el-tab-pane label="UTILITY" name="utility"></el-tab-pane>
       </el-tabs>
 
       <div class="model-item-compact">
@@ -157,12 +158,13 @@ const workflowThinkingLevelOptions = [
 
 const agentModels = reactive({
   plan: defaultModelConfig(),
-  act: defaultModelConfig()
+  act: defaultModelConfig(),
+  utility: defaultModelConfig()
 })
 
-const modelModes = reactive({ plan: 'provider', act: 'provider' })
-const proxyGroups = reactive({ plan: '', act: '' })
-const proxyAliases = reactive({ plan: '', act: '' })
+const modelModes = reactive({ plan: 'provider', act: 'provider', utility: 'provider' })
+const proxyGroups = reactive({ plan: '', act: '', utility: '' })
+const proxyAliases = reactive({ plan: '', act: '', utility: '' })
 
 const currentModel = computed(() => agentModels[activeTab.value])
 
@@ -250,7 +252,7 @@ const handleClose = (done) => {
 
 const handleSave = () => {
   const result = JSON.parse(JSON.stringify(agentModels))
-  for (const key of ['plan', 'act']) {
+  for (const key of ['plan', 'act', 'utility']) {
     result[key].thinking = result[key].thinkingEnabled
       ? {
         type: 'enabled',
@@ -262,6 +264,7 @@ const handleSave = () => {
   }
   if (modelModes.plan === 'proxy') result.plan.id = 0
   if (modelModes.act === 'proxy') result.act.id = 0
+  if (modelModes.utility === 'proxy') result.utility.id = 0
   
   emit('save', result)
   visible.value = false
@@ -271,6 +274,7 @@ const initFromStore = () => {
   // Reset
   agentModels.plan = defaultModelConfig()
   agentModels.act = defaultModelConfig()
+  agentModels.utility = defaultModelConfig()
 
   // 1. Get reference agent:
   // - Direct prop agent
@@ -284,6 +288,7 @@ const initFromStore = () => {
     const wfModels = currentWf.agentConfig.models
     if (wfModels.plan) agentModels.plan = normalizeModelDraft(wfModels.plan)
     if (wfModels.act) agentModels.act = normalizeModelDraft(wfModels.act)
+    if (wfModels.utility) agentModels.utility = normalizeModelDraft(wfModels.utility)
   } else if (!refAgent && workflowStore.workflows.length > 0) {
     // 1b. Fallback to last workflow's agent
     const lastWf = workflowStore.workflows[0]
@@ -296,6 +301,7 @@ const initFromStore = () => {
       const modelsObj = typeof refAgent.models === 'string' ? JSON.parse(refAgent.models) : refAgent.models
       if (modelsObj.plan) agentModels.plan = normalizeModelDraft(modelsObj.plan)
       if (modelsObj.act) agentModels.act = normalizeModelDraft(modelsObj.act)
+      if (modelsObj.utility) agentModels.utility = normalizeModelDraft(modelsObj.utility)
     } catch (e) {
       console.error('Failed to parse agent models:', e)
     }
@@ -312,11 +318,16 @@ const initFromStore = () => {
       agentModels.act.id = fallbackP.id
       agentModels.act.model = fallbackP.defaultModel
     }
+    if (!agentModels.utility.id && !agentModels.utility.model.includes('@')) {
+      agentModels.utility.id = fallbackP.id
+      agentModels.utility.model = fallbackP.defaultModel
+    }
   }
 
   // Parse UI states
   parseModelField(agentModels.plan, 'plan')
   parseModelField(agentModels.act, 'act')
+  parseModelField(agentModels.utility, 'utility')
 }
 
 onMounted(() => {

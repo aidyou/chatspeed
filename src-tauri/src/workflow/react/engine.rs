@@ -414,6 +414,7 @@ impl WorkflowExecutor {
     fn sync_runtime_skills_from_agent_config(&mut self) {
         self.available_skills =
             Self::filter_skills_for_agent(&self.discovered_skills, &self.agent_config);
+        self.llm_processor.agent_config = self.agent_config.clone();
         self.llm_processor.available_skills = self.available_skills.clone();
     }
 
@@ -2319,117 +2320,117 @@ impl WorkflowExecutor {
             .take()
             .ok_or_else(|| WorkflowEngineError::General("Signal receiver already taken".into()))?;
 
-        while self.state != WorkflowState::Completed
-            && self.state != WorkflowState::Error
-            && self.state != WorkflowState::Cancelled
-        {
-            if self.apply_startup_pending_sub_agent_completion().await? {
-                continue;
-            }
-
-            // IMPORTANT: Do NOT pre-drain user_message while already in waiting states.
-            // Waiting states must resume only through the unified wait branch below.
-            let is_waiting_state = self.state == WorkflowState::Paused
-                || self.state == WorkflowState::AwaitingUser
-                || self.state == WorkflowState::AwaitingApproval
-                || self.state == WorkflowState::AwaitingSubAgent;
-            if !is_waiting_state {
-                // Check stop/config/user-message queue signals at loop start (non-waiting only)
-                if self.check_stop_signal(&mut signal_rx).await? {
-                    break;
-                }
-            }
-
-            // Handle waiting states - wait for appropriate signal
-            if self.state == WorkflowState::Paused
-                || self.state == WorkflowState::AwaitingUser
-                || self.state == WorkflowState::AwaitingApproval
-                || self.state == WorkflowState::AwaitingSubAgent
+        loop {
+            while self.state != WorkflowState::Completed
+                && self.state != WorkflowState::Error
+                && self.state != WorkflowState::Cancelled
             {
-                if self.state == WorkflowState::AwaitingApproval
-                    && self.pending_approvals.is_empty()
-                {
-                    log::warn!(
-                        "[Workflow][session={}][phase=wait][event=orphaned_approval_wait] AwaitingApproval with no pending approvals; resuming thinking",
-                        self.session_id
-                    );
-                    self.update_state(WorkflowState::Thinking).await?;
+                if self.apply_startup_pending_sub_agent_completion().await? {
                     continue;
                 }
 
-                let wait_reason_enum = match &self.state {
-                    WorkflowState::Paused => Some(WaitReason::Confirmation),
-                    WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
-                    WorkflowState::AwaitingApproval => Some(WaitReason::Approval),
-                    WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
-                    _ => None,
-                };
+                // IMPORTANT: Do NOT pre-drain user_message while already in waiting states.
+                // Waiting states must resume only through the unified wait branch below.
+                let is_waiting_state = self.state == WorkflowState::Paused
+                    || self.state == WorkflowState::AwaitingUser
+                    || self.state == WorkflowState::AwaitingApproval
+                    || self.state == WorkflowState::AwaitingSubAgent;
+                if !is_waiting_state {
+                    // Check stop/config/user-message queue signals at loop start (non-waiting only)
+                    if self.check_stop_signal(&mut signal_rx).await? {
+                        break;
+                    }
+                }
 
-                log::info!(
+                // Handle waiting states - wait for appropriate signal
+                if self.state == WorkflowState::Paused
+                    || self.state == WorkflowState::AwaitingUser
+                    || self.state == WorkflowState::AwaitingApproval
+                    || self.state == WorkflowState::AwaitingSubAgent
+                {
+                    if self.state == WorkflowState::AwaitingApproval
+                        && self.pending_approvals.is_empty()
+                    {
+                        log::warn!(
+                        "[Workflow][session={}][phase=wait][event=orphaned_approval_wait] AwaitingApproval with no pending approvals; resuming thinking",
+                        self.session_id
+                    );
+                        self.update_state(WorkflowState::Thinking).await?;
+                        continue;
+                    }
+
+                    let wait_reason_enum = match &self.state {
+                        WorkflowState::Paused => Some(WaitReason::Confirmation),
+                        WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
+                        WorkflowState::AwaitingApproval => Some(WaitReason::Approval),
+                        WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
+                        _ => None,
+                    };
+
+                    log::info!(
                     "[Workflow][session={}][phase=wait][event=enter] Entering wait state, reason={:?}",
                     self.session_id,
                     wait_reason_enum
                 );
 
-                let signal_str = signal_rx
-                    .recv()
-                    .await
-                    .ok_or_else(|| WorkflowEngineError::General("Signal channel closed".into()))?;
+                    let signal_str = signal_rx.recv().await.ok_or_else(|| {
+                        WorkflowEngineError::General("Signal channel closed".into())
+                    })?;
 
-                let workflow_signal = WorkflowSignal::parse(&signal_str);
+                    let workflow_signal = WorkflowSignal::parse(&signal_str);
 
-                if matches!(wait_reason_enum, Some(WaitReason::Approval)) {
-                    if let RuntimeSignal::UserMessage {
-                        content,
-                        queued_user_message_id,
-                    } = parse_runtime_signal(&signal_str)
-                    {
-                        log::info!(
+                    if matches!(wait_reason_enum, Some(WaitReason::Approval)) {
+                        if let RuntimeSignal::UserMessage {
+                            content,
+                            queued_user_message_id,
+                        } = parse_runtime_signal(&signal_str)
+                        {
+                            log::info!(
                             "[Workflow][session={}][phase=wait][event=user_message_queued] Queueing user message while awaiting approval",
                             self.session_id
                         );
-                        self.enqueue_user_message(content, queued_user_message_id)
-                            .await?;
-                        continue;
+                            self.enqueue_user_message(content, queued_user_message_id)
+                                .await?;
+                            continue;
+                        }
                     }
-                }
 
-                if let Some(signal) = &workflow_signal {
-                    if !signal.is_valid_for(wait_reason_enum.as_ref()) {
-                        log::warn!(
+                    if let Some(signal) = &workflow_signal {
+                        if !signal.is_valid_for(wait_reason_enum.as_ref()) {
+                            log::warn!(
                             "[Workflow][session={}][phase=wait][event=signal_rejected] Signal '{}' is not valid for wait_reason {:?}",
                             self.session_id,
                             signal.type_name(),
                             wait_reason_enum
                         );
-                        // Continue waiting for a valid signal
-                        continue;
-                    }
+                            // Continue waiting for a valid signal
+                            continue;
+                        }
 
-                    log::info!(
+                        log::info!(
                         "[Workflow][session={}][phase=wait][event=signal_received] Signal '{}' accepted for wait_reason {:?}",
                         self.session_id,
                         signal.type_name(),
                         wait_reason_enum
                     );
-                }
+                    }
 
-                // Fall back to JSON parsing for legacy handling
-                let signal_json: Value = serde_json::from_str(&signal_str)
-                    .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
+                    // Fall back to JSON parsing for legacy handling
+                    let signal_json: Value = serde_json::from_str(&signal_str)
+                        .unwrap_or(serde_json::json!({ "type": "message", "content": signal_str }));
 
-                let signal_type = signal_json["type"].as_str().unwrap_or("unknown");
-                let signal_type_enum = SignalType::from_str(signal_type);
-                log::info!(
+                    let signal_type = signal_json["type"].as_str().unwrap_or("unknown");
+                    let signal_type_enum = SignalType::from_str(signal_type);
+                    log::info!(
                     "[Workflow][session={}][phase=wait] Signal received, type={}, wait_reason={:?}",
                     self.session_id,
                     signal_type,
                     wait_reason_enum
                 );
 
-                // DEBUG: Log all received signals to help diagnose empty message issue
-                #[cfg(debug_assertions)]
-                log::debug!(
+                    // DEBUG: Log all received signals to help diagnose empty message issue
+                    #[cfg(debug_assertions)]
+                    log::debug!(
                     "WorkflowExecutor {}: Received signal while {}: type={}, has_content={}, content={}",
                     self.session_id,
                     self.state,
@@ -2438,178 +2439,183 @@ impl WorkflowExecutor {
                     signal_json.get("content").and_then(|c| c.as_str()).unwrap_or("<none>")
                 );
 
-                if self
-                    .handle_runtime_config_signal(&signal_json, signal_type_enum)
-                    .await?
-                {
-                    continue;
-                }
+                    if self
+                        .handle_runtime_config_signal(&signal_json, signal_type_enum)
+                        .await?
+                    {
+                        continue;
+                    }
 
-                if signal_type_enum == Some(SignalType::Stop) {
-                    log::info!(
+                    if signal_type_enum == Some(SignalType::Stop) {
+                        log::info!(
                         "[Workflow][session={}][phase=wait][event=stop] Stop signal received in waiting state",
                         self.session_id
                     );
-                    self.update_state(WorkflowState::Cancelled).await?;
-                    self.signal_rx = Some(signal_rx);
-                    return Ok(());
-                }
+                        self.update_state(WorkflowState::Cancelled).await?;
+                        self.signal_rx = Some(signal_rx);
+                        return Ok(());
+                    }
 
-                // Handle structured WorkflowSignal
-                if let Some(signal) = workflow_signal {
-                    match signal {
-                        WorkflowSignal::RebroadcastPending => {
-                            log::info!(
-                                "WorkflowExecutor {}: Received RebroadcastPending signal",
-                                self.session_id
-                            );
-                            if self.state == WorkflowState::AwaitingApproval {
-                                let items = self.ordered_pending_approvals();
-                                for (id, info) in items {
-                                    let details_value = info
-                                        .get("details")
-                                        .cloned()
-                                        .unwrap_or(serde_json::Value::Null);
-                                    let _ = self
-                                        .dispatch_ui_payload(GatewayPayload::Confirm {
-                                            id,
-                                            action: info["name"]
-                                                .as_str()
-                                                .unwrap_or("unknown")
-                                                .to_string(),
-                                            details: details_value,
-                                            display_type: info
-                                                .get("display_type")
-                                                .and_then(|v| v.as_str())
-                                                .map(|s| s.to_string()),
-                                        })
-                                        .await;
+                    // Handle structured WorkflowSignal
+                    if let Some(signal) = workflow_signal {
+                        match signal {
+                            WorkflowSignal::RebroadcastPending => {
+                                log::info!(
+                                    "WorkflowExecutor {}: Received RebroadcastPending signal",
+                                    self.session_id
+                                );
+                                if self.state == WorkflowState::AwaitingApproval {
+                                    let items = self.ordered_pending_approvals();
+                                    for (id, info) in items {
+                                        let details_value = info
+                                            .get("details")
+                                            .cloned()
+                                            .unwrap_or(serde_json::Value::Null);
+                                        let _ = self
+                                            .dispatch_ui_payload(GatewayPayload::Confirm {
+                                                id,
+                                                action: info["name"]
+                                                    .as_str()
+                                                    .unwrap_or("unknown")
+                                                    .to_string(),
+                                                details: details_value,
+                                                display_type: info
+                                                    .get("display_type")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string()),
+                                            })
+                                            .await;
+                                    }
                                 }
+                                continue;
                             }
-                            continue;
-                        }
-                        WorkflowSignal::ApprovalDecision {
-                            tool_call_id,
-                            approved,
-                            approve_all,
-                            rejection_message,
-                        } => {
-                            let approval_status = if approved { "approved" } else { "rejected" };
-                            let execution_status = if approved {
-                                "approval_submitted"
-                            } else {
-                                "rejected"
-                            };
-                            let summary = if approved {
-                                rust_i18n::t!("workflow.executing").to_string()
-                            } else {
-                                rust_i18n::t!("workflow.user_rejected").to_string()
-                            };
-
-                            self.update_pending_approval_message_metadata(
-                                &tool_call_id,
-                                approval_status,
-                                execution_status,
-                                &summary,
-                                approved,
-                            )?;
-
-                            let event = WorkflowEvent::approval_resolved(
-                                self.session_id.clone(),
-                                tool_call_id.clone(),
+                            WorkflowSignal::ApprovalDecision {
+                                tool_call_id,
                                 approved,
                                 approve_all,
-                                Some(approval_status.to_string()),
-                                Some(execution_status.to_string()),
-                            );
-                            if let Err(e) = self.append_event(&event) {
-                                log::error!(
+                                rejection_message,
+                            } => {
+                                let approval_status =
+                                    if approved { "approved" } else { "rejected" };
+                                let execution_status = if approved {
+                                    "approval_submitted"
+                                } else {
+                                    "rejected"
+                                };
+                                let summary = if approved {
+                                    rust_i18n::t!("workflow.executing").to_string()
+                                } else {
+                                    rust_i18n::t!("workflow.user_rejected").to_string()
+                                };
+
+                                self.update_pending_approval_message_metadata(
+                                    &tool_call_id,
+                                    approval_status,
+                                    execution_status,
+                                    &summary,
+                                    approved,
+                                )?;
+
+                                let event = WorkflowEvent::approval_resolved(
+                                    self.session_id.clone(),
+                                    tool_call_id.clone(),
+                                    approved,
+                                    approve_all,
+                                    Some(approval_status.to_string()),
+                                    Some(execution_status.to_string()),
+                                );
+                                if let Err(e) = self.append_event(&event) {
+                                    log::error!(
                                     "[Workflow][session={}] workflow.event.append_failed - error={}",
                                     self.session_id,
                                     e
                                 );
-                            }
+                                }
 
-                            if let Err(e) = self
-                                .dispatch_ui_payload(GatewayPayload::ApprovalResolved {
-                                    tool_call_id: tool_call_id.clone(),
-                                    approved,
-                                    approve_all,
-                                    approval_status: Some(approval_status.to_string()),
-                                    execution_status: Some(execution_status.to_string()),
-                                })
-                                .await
-                            {
-                                log::warn!(
+                                if let Err(e) = self
+                                    .dispatch_ui_payload(GatewayPayload::ApprovalResolved {
+                                        tool_call_id: tool_call_id.clone(),
+                                        approved,
+                                        approve_all,
+                                        approval_status: Some(approval_status.to_string()),
+                                        execution_status: Some(execution_status.to_string()),
+                                    })
+                                    .await
+                                {
+                                    log::warn!(
                                     "[Workflow][session={}] workflow.ui_dispatch_failed - approval_resolved {}: {}",
                                     self.session_id,
                                     tool_call_id,
                                     e
                                 );
-                            }
+                                }
 
-                            if approved {
-                                // 1. Retrieve the stashed tool details from the server-side map
-                                let (tool_name, tool_args) = if let Some(stashed) =
-                                    self.pending_approvals.get(&tool_call_id)
-                                {
-                                    let name =
-                                        stashed["name"].as_str().unwrap_or("unknown").to_string();
-                                    let args = stashed["arguments"].clone();
-                                    (name, args)
-                                } else {
-                                    log::warn!(
+                                if approved {
+                                    // 1. Retrieve the stashed tool details from the server-side map
+                                    let (tool_name, tool_args) = if let Some(stashed) =
+                                        self.pending_approvals.get(&tool_call_id)
+                                    {
+                                        let name = stashed["name"]
+                                            .as_str()
+                                            .unwrap_or("unknown")
+                                            .to_string();
+                                        let args = stashed["arguments"].clone();
+                                        (name, args)
+                                    } else {
+                                        log::warn!(
                                         "WorkflowExecutor {}: Approval received for unknown ID: {}",
                                         self.session_id,
                                         tool_call_id
                                     );
-                                    ("unknown".to_string(), serde_json::json!({}))
-                                };
+                                        ("unknown".to_string(), serde_json::json!({}))
+                                    };
 
-                                log::info!(
-                                    "WorkflowExecutor {}: User APPROVED tool '{}'{} (ID: {})",
-                                    self.session_id,
-                                    tool_name,
-                                    if approve_all { " (Approve All)" } else { "" },
-                                    tool_call_id
-                                );
+                                    log::info!(
+                                        "WorkflowExecutor {}: User APPROVED tool '{}'{} (ID: {})",
+                                        self.session_id,
+                                        tool_name,
+                                        if approve_all { " (Approve All)" } else { "" },
+                                        tool_call_id
+                                    );
 
-                                if tool_name == TOOL_SUBMIT_PLAN {
-                                    self.transition_approved_plan(&tool_call_id, &tool_args)
-                                        .await?;
-                                    self.remove_pending_approval(&tool_call_id);
-                                    continue;
-                                }
+                                    if tool_name == TOOL_SUBMIT_PLAN {
+                                        self.transition_approved_plan(&tool_call_id, &tool_args)
+                                            .await?;
+                                        self.remove_pending_approval(&tool_call_id);
+                                        continue;
+                                    }
 
-                                if approve_all {
-                                    if tool_name == "bash" {
-                                        if let Some(cmd) =
-                                            tool_args.get("command").and_then(|v| v.as_str())
-                                        {
-                                            let wildcard_patterns =
-                                                Self::generate_shell_approval_patterns(cmd);
-                                            log::info!(
+                                    if approve_all {
+                                        if tool_name == "bash" {
+                                            if let Some(cmd) =
+                                                tool_args.get("command").and_then(|v| v.as_str())
+                                            {
+                                                let wildcard_patterns =
+                                                    Self::generate_shell_approval_patterns(cmd);
+                                                log::info!(
                                                 "WorkflowExecutor {}: Generated shell approval patterns {:?} for command '{}'",
                                                 self.session_id, wildcard_patterns, cmd
                                             );
 
-                                            if wildcard_patterns.is_empty() {
-                                                log::info!(
+                                                if wildcard_patterns.is_empty() {
+                                                    log::info!(
                                                     "WorkflowExecutor {}: No safe reusable shell approval pattern extracted from '{}'",
                                                     self.session_id,
                                                     cmd
                                                 );
-                                            }
+                                                }
 
-                                            let mut shell_policy_payload: Option<
-                                                Vec<crate::tools::ShellPolicyRule>,
-                                            > = None;
-                                            if !wildcard_patterns.is_empty() {
-                                                if let Ok(store) = self.context.main_store.write() {
-                                                    if let Ok(snapshot) = store
-                                                        .get_workflow_snapshot(&self.session_id)
+                                                let mut shell_policy_payload: Option<
+                                                    Vec<crate::tools::ShellPolicyRule>,
+                                                > = None;
+                                                if !wildcard_patterns.is_empty() {
+                                                    if let Ok(store) =
+                                                        self.context.main_store.write()
                                                     {
-                                                        let mut agent_config: serde_json::Value =
+                                                        if let Ok(snapshot) = store
+                                                            .get_workflow_snapshot(&self.session_id)
+                                                        {
+                                                            let mut agent_config: serde_json::Value =
                                                             snapshot
                                                                 .workflow
                                                                 .agent_config
@@ -2618,125 +2624,130 @@ impl WorkflowExecutor {
                                                                 })
                                                                 .unwrap_or(serde_json::json!({}));
 
-                                                        let existing_policy =
+                                                            let existing_policy =
                                                             Self::read_agent_config_shell_policy(
                                                                 &agent_config,
                                                             );
 
-                                                        let updated_policy =
+                                                            let updated_policy =
                                                             Self::build_shell_policy_with_patterns(
                                                                 &existing_policy,
                                                                 &wildcard_patterns,
                                                             );
 
-                                                        Self::write_agent_config_shell_policy(
-                                                            &mut agent_config,
-                                                            &updated_policy,
-                                                        );
+                                                            Self::write_agent_config_shell_policy(
+                                                                &mut agent_config,
+                                                                &updated_policy,
+                                                            );
 
-                                                        if let Ok(config_str) =
-                                                            serde_json::to_string(&agent_config)
-                                                        {
-                                                            let _ = store
-                                                                .update_workflow_agent_config(
-                                                                    &self.session_id,
-                                                                    &config_str,
-                                                                );
+                                                            if let Ok(config_str) =
+                                                                serde_json::to_string(&agent_config)
+                                                            {
+                                                                let _ = store
+                                                                    .update_workflow_agent_config(
+                                                                        &self.session_id,
+                                                                        &config_str,
+                                                                    );
+                                                            }
+                                                            shell_policy_payload =
+                                                                Some(updated_policy);
                                                         }
-                                                        shell_policy_payload = Some(updated_policy);
                                                     }
                                                 }
-                                            }
-                                            if let Some(policy) = shell_policy_payload {
-                                                self.agent_config.shell_policy =
-                                                    serde_json::to_string(&policy).ok();
-                                                if let Err(e) = self
-                                                    .dispatch_ui_payload(
-                                                        GatewayPayload::ShellPolicyUpdated {
-                                                            policy,
-                                                        },
-                                                    )
-                                                    .await
-                                                {
-                                                    log::error!(
+                                                if let Some(policy) = shell_policy_payload {
+                                                    self.agent_config.shell_policy =
+                                                        serde_json::to_string(&policy).ok();
+                                                    if let Err(e) = self
+                                                        .dispatch_ui_payload(
+                                                            GatewayPayload::ShellPolicyUpdated {
+                                                                policy,
+                                                            },
+                                                        )
+                                                        .await
+                                                    {
+                                                        log::error!(
                                                         "WorkflowExecutor {}: Failed to send shell policy update: {}",
                                                         self.session_id,
                                                         e
                                                     );
+                                                    }
                                                 }
                                             }
-                                        }
-                                    } else {
-                                        self.auto_approve.insert(tool_name.to_string());
+                                        } else {
+                                            self.auto_approve.insert(tool_name.to_string());
 
-                                        let tools = self.get_auto_approved_tools();
-                                        if let Err(e) = self
-                                            .dispatch_ui_payload(
-                                                GatewayPayload::AutoApprovedToolsUpdated {
-                                                    tools: tools.clone(),
-                                                },
-                                            )
-                                            .await
-                                        {
-                                            log::error!(
+                                            let tools = self.get_auto_approved_tools();
+                                            if let Err(e) = self
+                                                .dispatch_ui_payload(
+                                                    GatewayPayload::AutoApprovedToolsUpdated {
+                                                        tools: tools.clone(),
+                                                    },
+                                                )
+                                                .await
+                                            {
+                                                log::error!(
                                                 "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
                                                 self.session_id,
                                                 e
                                             );
-                                        }
+                                            }
 
-                                        if let Ok(store) = self.context.main_store.write() {
-                                            if let Ok(snapshot) =
-                                                store.get_workflow_snapshot(&self.session_id)
-                                            {
-                                                let mut agent_config: serde_json::Value = snapshot
-                                                    .workflow
-                                                    .agent_config
-                                                    .and_then(|s| serde_json::from_str(&s).ok())
-                                                    .unwrap_or(serde_json::json!({}));
-
-                                                Self::write_agent_config_auto_approve(
-                                                    &mut agent_config,
-                                                    &tools,
-                                                );
-
-                                                if let Ok(config_str) =
-                                                    serde_json::to_string(&agent_config)
+                                            if let Ok(store) = self.context.main_store.write() {
+                                                if let Ok(snapshot) =
+                                                    store.get_workflow_snapshot(&self.session_id)
                                                 {
-                                                    let _ = store.update_workflow_agent_config(
-                                                        &self.session_id,
-                                                        &config_str,
+                                                    let mut agent_config: serde_json::Value =
+                                                        snapshot
+                                                            .workflow
+                                                            .agent_config
+                                                            .and_then(|s| {
+                                                                serde_json::from_str(&s).ok()
+                                                            })
+                                                            .unwrap_or(serde_json::json!({}));
+
+                                                    Self::write_agent_config_auto_approve(
+                                                        &mut agent_config,
+                                                        &tools,
                                                     );
+
+                                                    if let Ok(config_str) =
+                                                        serde_json::to_string(&agent_config)
+                                                    {
+                                                        let _ = store.update_workflow_agent_config(
+                                                            &self.session_id,
+                                                            &config_str,
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
                                     }
-                                }
 
-                                // 2. Execution: MCP tools use global, native tools use local
-                                // Inject internal tool_call_id for streaming tools
-                                // Ensure tool_args is an object (parse if it's a JSON string from fallback)
-                                let tool_args_obj =
-                                    Self::normalize_tool_arguments_value(tool_args.clone());
-                                let enriched_args = Self::enrich_tool_arguments_with_call_id(
-                                    &tool_args_obj,
-                                    &tool_call_id,
-                                );
+                                    // 2. Execution: MCP tools use global, native tools use local
+                                    // Inject internal tool_call_id for streaming tools
+                                    // Ensure tool_args is an object (parse if it's a JSON string from fallback)
+                                    let tool_args_obj =
+                                        Self::normalize_tool_arguments_value(tool_args.clone());
+                                    let enriched_args = Self::enrich_tool_arguments_with_call_id(
+                                        &tool_args_obj,
+                                        &tool_call_id,
+                                    );
 
-                                self.append_tool_started_event(
-                                    &tool_call_id,
-                                    &tool_name,
-                                    &tool_args_obj,
-                                );
-                                self.dispatch_tool_started_payload(
-                                    &tool_call_id,
-                                    &tool_name,
-                                    &tool_args_obj,
-                                )
-                                .await;
+                                    self.append_tool_started_event(
+                                        &tool_call_id,
+                                        &tool_name,
+                                        &tool_args_obj,
+                                    );
+                                    self.dispatch_tool_started_payload(
+                                        &tool_call_id,
+                                        &tool_name,
+                                        &tool_args_obj,
+                                    )
+                                    .await;
 
-                                let result =
-                                    if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                                    let result = if tool_name
+                                        .contains(crate::tools::MCP_TOOL_NAME_SPLIT)
+                                    {
                                         self.global_tool_manager
                                             .tool_call(&tool_name, enriched_args)
                                             .await
@@ -2744,610 +2755,146 @@ impl WorkflowExecutor {
                                         self.tool_manager.tool_call(&tool_name, enriched_args).await
                                     };
 
-                                let tool_call_obj = serde_json::json!({
-                                    "id": tool_call_id,
-                                    "name": tool_name,
-                                    "arguments": tool_args
-                                });
+                                    let tool_call_obj = serde_json::json!({
+                                        "id": tool_call_id,
+                                        "name": tool_name,
+                                        "arguments": tool_args
+                                    });
 
-                                // 3. Post-processing and Notification
-                                let reinforced = self
-                                    .post_process_tool_result(
+                                    // 3. Post-processing and Notification
+                                    let reinforced = self
+                                        .post_process_tool_result(
+                                            &tool_name,
+                                            &tool_args,
+                                            &tool_call_obj,
+                                            result,
+                                        )
+                                        .await?;
+
+                                    // Mark as approved since this went through user approval
+                                    let mut metadata = serde_json::json!({
+                                        "tool_call_id": tool_call_id,
+                                        "tool_name": tool_name,
+                                        "tool_call": tool_call_obj,
+                                        "title": reinforced.title,
+                                        "summary": reinforced.summary,
+                                        "execution_status": if reinforced.is_error { "failed" } else { "completed" },
+                                        "is_error": reinforced.is_error,
+                                        "error_type": reinforced.error_type,
+                                        "display_type": reinforced.display_type,
+                                        "approval_status": "approved"
+                                    });
+                                    if let Some(details) =
+                                        self.build_tool_result_details(&tool_name, &tool_args)
+                                    {
+                                        metadata["details"] = details;
+                                    }
+                                    Self::enrich_tool_observation_metadata(
                                         &tool_name,
-                                        &tool_args,
-                                        &tool_call_obj,
-                                        result,
+                                        &mut metadata,
+                                        &reinforced,
+                                    );
+                                    self.add_message_and_notify_internal(
+                                        "tool".to_string(),
+                                        reinforced.content,
+                                        None,
+                                        None,
+                                        Some(StepType::Observe),
+                                        reinforced.is_error,
+                                        reinforced.error_type.clone(),
+                                        Some(metadata),
                                     )
                                     .await?;
 
-                                // Mark as approved since this went through user approval
-                                let mut metadata = serde_json::json!({
-                                    "tool_call_id": tool_call_id,
-                                    "tool_name": tool_name,
-                                    "tool_call": tool_call_obj,
-                                    "title": reinforced.title,
-                                    "summary": reinforced.summary,
-                                    "execution_status": if reinforced.is_error { "failed" } else { "completed" },
-                                    "is_error": reinforced.is_error,
-                                    "error_type": reinforced.error_type,
-                                    "display_type": reinforced.display_type,
-                                    "approval_status": "approved"
-                                });
-                                if let Some(details) =
-                                    self.build_tool_result_details(&tool_name, &tool_args)
-                                {
-                                    metadata["details"] = details;
-                                }
-                                Self::enrich_tool_observation_metadata(
-                                    &tool_name,
-                                    &mut metadata,
-                                    &reinforced,
-                                );
-                                self.add_message_and_notify_internal(
-                                    "tool".to_string(),
-                                    reinforced.content,
-                                    None,
-                                    None,
-                                    Some(StepType::Observe),
-                                    reinforced.is_error,
-                                    reinforced.error_type.clone(),
-                                    Some(metadata),
-                                )
-                                .await?;
-
-                                self.remove_pending_approval(&tool_call_id);
-                                if self.pending_approvals.is_empty() {
-                                    self.update_state(WorkflowState::Thinking).await?;
-                                }
-                            } else {
-                                let tool_name = if let Some(stashed) =
-                                    self.pending_approvals.get(&tool_call_id)
-                                {
-                                    stashed["name"].as_str().unwrap_or("unknown").to_string()
+                                    self.remove_pending_approval(&tool_call_id);
+                                    if self.pending_approvals.is_empty() {
+                                        self.update_state(WorkflowState::Thinking).await?;
+                                    }
                                 } else {
-                                    "unknown".to_string()
-                                };
+                                    let tool_name = if let Some(stashed) =
+                                        self.pending_approvals.get(&tool_call_id)
+                                    {
+                                        stashed["name"].as_str().unwrap_or("unknown").to_string()
+                                    } else {
+                                        "unknown".to_string()
+                                    };
 
-                                log::info!(
-                                    "WorkflowExecutor {}: User REJECTED tool '{}' (ID: {})",
-                                    self.session_id,
-                                    tool_name,
-                                    tool_call_id
-                                );
+                                    log::info!(
+                                        "WorkflowExecutor {}: User REJECTED tool '{}' (ID: {})",
+                                        self.session_id,
+                                        tool_name,
+                                        tool_call_id
+                                    );
 
-                                let pretty_title = ObservationReinforcer::generate_title(
-                                    &tool_name,
-                                    &serde_json::json!({}),
-                                    None,
-                                    None,
-                                );
-                                let observation = if tool_name == TOOL_SUBMIT_PLAN {
-                                    Self::build_plan_rejection_observation(
-                                        rejection_message.as_deref(),
-                                    )
-                                } else {
-                                    Self::build_rejection_observation(
+                                    let pretty_title = ObservationReinforcer::generate_title(
                                         &tool_name,
-                                        rejection_message.as_deref(),
+                                        &serde_json::json!({}),
+                                        None,
+                                        None,
+                                    );
+                                    let observation = if tool_name == TOOL_SUBMIT_PLAN {
+                                        Self::build_plan_rejection_observation(
+                                            rejection_message.as_deref(),
+                                        )
+                                    } else {
+                                        Self::build_rejection_observation(
+                                            &tool_name,
+                                            rejection_message.as_deref(),
+                                        )
+                                    };
+
+                                    self.add_message_and_notify_internal(
+                                        "user".to_string(),
+                                        observation,
+                                        None,
+                                        None,
+                                        Some(StepType::Observe),
+                                        true,
+                                        Some("UserRejected".to_string()),
+                                        Some(serde_json::json!({
+                                            "tool_call_id": tool_call_id,
+                                            "tool_name": tool_name,
+                                            "title": pretty_title,
+                                            "summary": "User rejected",
+                                            "execution_status": "rejected",
+                                            "is_error": true,
+                                            "error_type": "UserRejected",
+                                            "approval_status": "rejected"
+                                        })),
                                     )
-                                };
+                                    .await?;
 
-                                self.add_message_and_notify_internal(
-                                    "user".to_string(),
-                                    observation,
-                                    None,
-                                    None,
-                                    Some(StepType::Observe),
-                                    true,
-                                    Some("UserRejected".to_string()),
-                                    Some(serde_json::json!({
-                                        "tool_call_id": tool_call_id,
-                                        "tool_name": tool_name,
-                                        "title": pretty_title,
-                                        "summary": "User rejected",
-                                        "execution_status": "rejected",
-                                        "is_error": true,
-                                        "error_type": "UserRejected",
-                                        "approval_status": "rejected"
-                                    })),
-                                )
-                                .await?;
-
-                                self.remove_pending_approval(&tool_call_id);
-                                if self.pending_approvals.is_empty() {
-                                    self.update_state(WorkflowState::Thinking).await?;
+                                    self.remove_pending_approval(&tool_call_id);
+                                    if self.pending_approvals.is_empty() {
+                                        self.update_state(WorkflowState::Thinking).await?;
+                                    }
                                 }
+                                continue;
                             }
-                            continue;
-                        }
-                        WorkflowSignal::Continue => {
-                            log::info!(
+                            WorkflowSignal::Continue => {
+                                log::info!(
                                 "[Workflow][session={}][phase=wait][event=signal_received] Continue signal accepted for wait_reason {:?}",
                                 self.session_id,
                                 wait_reason_enum
                             );
-                            self.current_step = 0;
-                            self.max_steps += DEFAULT_MAX_STEPS;
-                            self.update_state(WorkflowState::Thinking).await?;
-                            continue;
-                        }
-                        WorkflowSignal::RemoveQueuedUserMessage {
-                            queued_user_message_id,
-                        } => {
-                            let removed = self
-                                .remove_queued_user_message(&queued_user_message_id)
-                                .await?;
-                            log::info!(
+                                self.current_step = 0;
+                                self.max_steps += DEFAULT_MAX_STEPS;
+                                self.update_state(WorkflowState::Thinking).await?;
+                                continue;
+                            }
+                            WorkflowSignal::RemoveQueuedUserMessage {
+                                queued_user_message_id,
+                            } => {
+                                let removed = self
+                                    .remove_queued_user_message(&queued_user_message_id)
+                                    .await?;
+                                log::info!(
                                 "[Workflow][session={}][phase=wait][event=queued_user_message_remove] queued_id={} removed={}",
                                 self.session_id,
                                 queued_user_message_id,
                                 removed
                             );
-                            continue;
-                        }
-                        WorkflowSignal::UserMessage { content, .. } => {
-                            let user_content = content.clone();
-                            self.add_message_and_notify_internal(
-                                "user".to_string(),
-                                content,
-                                None,
-                                None,
-                                None,
-                                false,
-                                None,
-                                None,
-                            )
-                            .await?;
-                            let event = WorkflowEvent::user_input_received(
-                                self.session_id.clone(),
-                                user_content,
-                            );
-                            if let Err(e) = self.append_event(&event) {
-                                log::error!(
-                                    "[Workflow][session={}] workflow.event.append_failed - error={}",
-                                    self.session_id,
-                                    e
-                                );
-                            }
-                            self.update_state(WorkflowState::Thinking).await?;
-                            continue;
-                        }
-                        WorkflowSignal::SubAgentComplete {
-                            sub_agent_id,
-                            result,
-                        } => {
-                            log::info!(
-                                "[Workflow][session={}][phase=wait][event=sub_agent_complete] Sub-agent {} completed with result {:?}",
-                                self.session_id,
-                                sub_agent_id,
-                                result
-                            );
-
-                            if !self
-                                .apply_sub_agent_completion(sub_agent_id.clone(), result)
-                                .await?
-                            {
-                                log::warn!(
-                                    "[Workflow][session={}][phase=wait][event=sub_agent_mismatch] Received completion for unexpected sub-agent {}. Expected: {:?}",
-                                    self.session_id,
-                                    sub_agent_id,
-                                    self.sub_agent_id
-                                );
-                            }
-                            continue;
-                        }
-                        WorkflowSignal::CompressionReady {
-                            compressed_until_message_id,
-                            summary,
-                        } => {
-                            self.apply_background_compression_ready(
-                                compressed_until_message_id,
-                                summary,
-                            )
-                            .await?;
-                            continue;
-                        }
-                        WorkflowSignal::CompressionFailed {
-                            compressed_until_message_id,
-                            error,
-                        } => {
-                            self.clear_background_compression_if_matches(
-                                compressed_until_message_id,
-                            );
-                            log::warn!(
-                                "[Workflow][session={}][phase=compression] Background rollup compression failed for boundary {}: {}",
-                                self.session_id,
-                                compressed_until_message_id,
-                                error
-                            );
-                            continue;
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Legacy fallback for request_confirm_broadcast
-                // Legacy fallback for request_confirm_broadcast (old signal name)
-                if signal_type_enum == Some(SignalType::LegacyRequestConfirmBroadcast) {
-                    log::info!(
-                        "WorkflowExecutor {}: Received request to re-broadcast pending confirmations",
-                        self.session_id
-                    );
-                    if self.state == WorkflowState::AwaitingApproval {
-                        let items = self.ordered_pending_approvals();
-                        for (id, info) in items {
-                            let details_value = info
-                                .get("details")
-                                .cloned()
-                                .unwrap_or(serde_json::Value::Null);
-                            let _ = self
-                                .dispatch_ui_payload(GatewayPayload::Confirm {
-                                    id,
-                                    action: info["name"].as_str().unwrap_or("unknown").to_string(),
-                                    details: details_value,
-                                    display_type: info
-                                        .get("display_type")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string()),
-                                })
-                                .await;
-                        }
-                    }
-                    continue;
-                }
-
-                // Legacy fallback for approval (old JSON format)
-                if signal_type_enum == Some(SignalType::Approval) {
-                    let approved = signal_json["approved"].as_bool().unwrap_or(false);
-                    let approve_all = signal_json["approve_all"].as_bool().unwrap_or(false);
-                    let rejection_message = signal_json["rejection_message"]
-                        .as_str()
-                        .map(|s| s.to_string());
-                    let signal_id = signal_json["id"].as_str().unwrap_or("unknown");
-
-                    if approved {
-                        // 1. Retrieve the stashed tool details from the server-side map
-                        let (tool_name, tool_args) = if let Some(stashed) =
-                            self.pending_approvals.get(signal_id)
-                        {
-                            let name = stashed["name"].as_str().unwrap_or("unknown").to_string();
-                            let args = stashed["arguments"].clone();
-                            (name, args)
-                        } else {
-                            log::warn!(
-                                "WorkflowExecutor {}: Approval received for unknown ID: {}",
-                                self.session_id,
-                                signal_id
-                            );
-                            // Fallback to signal payload if map lookup fails (legacy/edge case)
-                            let name = signal_json["tool_name"]
-                                .as_str()
-                                .unwrap_or("unknown")
-                                .to_string();
-                            let args = signal_json["tool_args"].clone();
-                            (name, args)
-                        };
-
-                        log::info!(
-                            "WorkflowExecutor {}: User APPROVED tool '{}'{} (ID: {})",
-                            self.session_id,
-                            tool_name,
-                            if approve_all { " (Approve All)" } else { "" },
-                            signal_id
-                        );
-
-                        if tool_name == TOOL_SUBMIT_PLAN {
-                            self.transition_approved_plan(signal_id, &tool_args).await?;
-                            self.remove_pending_approval(signal_id);
-                            continue;
-                        }
-
-                        if approve_all {
-                            if tool_name == "bash" {
-                                if let Some(cmd) = tool_args.get("command").and_then(|v| v.as_str())
-                                {
-                                    let wildcard_patterns =
-                                        Self::generate_shell_approval_patterns(cmd);
-                                    log::info!(
-                                        "WorkflowExecutor {}: Generated shell approval patterns {:?} for command '{}'",
-                                        self.session_id, wildcard_patterns, cmd
-                                    );
-
-                                    if wildcard_patterns.is_empty() {
-                                        log::info!(
-                                            "WorkflowExecutor {}: No safe reusable shell approval pattern extracted from '{}'",
-                                            self.session_id,
-                                            cmd
-                                        );
-                                    }
-
-                                    let mut shell_policy_payload: Option<
-                                        Vec<crate::tools::ShellPolicyRule>,
-                                    > = None;
-                                    if !wildcard_patterns.is_empty() {
-                                        if let Ok(store) = self.context.main_store.write() {
-                                            if let Ok(snapshot) =
-                                                store.get_workflow_snapshot(&self.session_id)
-                                            {
-                                                let mut agent_config: serde_json::Value = snapshot
-                                                    .workflow
-                                                    .agent_config
-                                                    .and_then(|s| serde_json::from_str(&s).ok())
-                                                    .unwrap_or(serde_json::json!({}));
-
-                                                let existing_policy =
-                                                    Self::read_agent_config_shell_policy(
-                                                        &agent_config,
-                                                    );
-
-                                                let updated_policy =
-                                                    Self::build_shell_policy_with_patterns(
-                                                        &existing_policy,
-                                                        &wildcard_patterns,
-                                                    );
-
-                                                Self::write_agent_config_shell_policy(
-                                                    &mut agent_config,
-                                                    &updated_policy,
-                                                );
-
-                                                if let Ok(config_str) =
-                                                    serde_json::to_string(&agent_config)
-                                                {
-                                                    let _ = store.update_workflow_agent_config(
-                                                        &self.session_id,
-                                                        &config_str,
-                                                    );
-                                                }
-                                                shell_policy_payload = Some(updated_policy);
-                                            }
-                                        }
-                                    }
-                                    if let Some(policy) = shell_policy_payload {
-                                        self.agent_config.shell_policy =
-                                            serde_json::to_string(&policy).ok();
-                                        if let Err(e) = self
-                                            .dispatch_ui_payload(
-                                                GatewayPayload::ShellPolicyUpdated { policy },
-                                            )
-                                            .await
-                                        {
-                                            log::error!(
-                                                "WorkflowExecutor {}: Failed to send shell policy update: {}",
-                                                self.session_id,
-                                                e
-                                            );
-                                        }
-                                    }
-                                }
-                            } else {
-                                self.auto_approve.insert(tool_name.to_string());
-
-                                let tools = self.get_auto_approved_tools();
-                                if let Err(e) = self
-                                    .dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated {
-                                        tools: tools.clone(),
-                                    })
-                                    .await
-                                {
-                                    log::error!(
-                                        "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
-                                        self.session_id,
-                                        e
-                                    );
-                                }
-
-                                if let Ok(store) = self.context.main_store.write() {
-                                    if let Ok(snapshot) =
-                                        store.get_workflow_snapshot(&self.session_id)
-                                    {
-                                        let mut agent_config: serde_json::Value = snapshot
-                                            .workflow
-                                            .agent_config
-                                            .and_then(|s| serde_json::from_str(&s).ok())
-                                            .unwrap_or(serde_json::json!({}));
-
-                                        Self::write_agent_config_auto_approve(
-                                            &mut agent_config,
-                                            &tools,
-                                        );
-
-                                        if let Ok(config_str) = serde_json::to_string(&agent_config)
-                                        {
-                                            let _ = store.update_workflow_agent_config(
-                                                &self.session_id,
-                                                &config_str,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // 2. Execution: MCP tools use global, native tools use local
-                        // Inject internal tool_call_id for streaming tools
-                        // Ensure tool_args is an object (parse if it's a JSON string from fallback)
-                        let tool_args_obj = Self::normalize_tool_arguments_value(tool_args.clone());
-                        let enriched_args =
-                            Self::enrich_tool_arguments_with_call_id(&tool_args_obj, signal_id);
-
-                        self.append_tool_started_event(signal_id, &tool_name, &tool_args_obj);
-                        self.dispatch_tool_started_payload(signal_id, &tool_name, &tool_args_obj)
-                            .await;
-
-                        let result = if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
-                            self.global_tool_manager
-                                .tool_call(&tool_name, enriched_args)
-                                .await
-                        } else {
-                            self.tool_manager.tool_call(&tool_name, enriched_args).await
-                        };
-
-                        let tool_call_obj = serde_json::json!({
-                            "id": signal_id,
-                            "name": tool_name,
-                            "arguments": tool_args
-                        });
-
-                        // 3. Post-processing and Notification
-                        let reinforced = self
-                            .post_process_tool_result(
-                                &tool_name,
-                                &tool_args,
-                                &tool_call_obj,
-                                result,
-                            )
-                            .await?;
-
-                        // Mark as approved since this went through user approval
-                        let mut metadata = serde_json::json!({
-                            "tool_call_id": signal_id,
-                            "tool_name": tool_name,
-                            "tool_call": tool_call_obj,
-                            "title": reinforced.title,
-                            "summary": reinforced.summary,
-                            "execution_status": if reinforced.is_error { "failed" } else { "completed" },
-                            "is_error": reinforced.is_error,
-                            "error_type": reinforced.error_type,
-                            "display_type": reinforced.display_type,
-                            "approval_status": "approved"
-                        });
-                        if let Some(details) =
-                            self.build_tool_result_details(&tool_name, &tool_args)
-                        {
-                            metadata["details"] = details;
-                        }
-                        Self::enrich_tool_observation_metadata(
-                            &tool_name,
-                            &mut metadata,
-                            &reinforced,
-                        );
-                        self.add_message_and_notify_internal(
-                            "tool".to_string(),
-                            reinforced.content,
-                            None,
-                            None,
-                            Some(StepType::Observe),
-                            reinforced.is_error,
-                            reinforced.error_type.clone(),
-                            Some(metadata),
-                        )
-                        .await?;
-                    } else {
-                        // Handle Rejection
-                        let (tool_name, tool_args) = if let Some(stashed) =
-                            self.pending_approvals.get(signal_id)
-                        {
-                            let name = stashed["name"].as_str().unwrap_or("unknown").to_string();
-                            let args = stashed["arguments"].clone();
-                            (name, args)
-                        } else {
-                            (
-                                signal_json["tool_name"]
-                                    .as_str()
-                                    .unwrap_or("unknown")
-                                    .to_string(),
-                                signal_json["tool_args"].clone(),
-                            )
-                        };
-
-                        log::info!(
-                            "WorkflowExecutor {}: User REJECTED tool '{}' (ID: {})",
-                            self.session_id,
-                            tool_name,
-                            signal_id
-                        );
-
-                        let pretty_title = {
-                            let primary_root = self
-                                .path_guard
-                                .read()
-                                .unwrap()
-                                .get_primary_root()
-                                .map(|p| p.to_path_buf());
-                            ObservationReinforcer::generate_title(
-                                &tool_name,
-                                &tool_args,
-                                None,
-                                primary_root.as_deref(),
-                            )
-                        };
-                        let observation = if tool_name == TOOL_SUBMIT_PLAN {
-                            Self::build_plan_rejection_observation(rejection_message.as_deref())
-                        } else {
-                            Self::build_rejection_observation(
-                                &tool_name,
-                                rejection_message.as_deref(),
-                            )
-                        };
-
-                        self.add_message_and_notify_internal(
-                            "user".to_string(),
-                            observation,
-                            None,
-                            None,
-                            Some(StepType::Observe),
-                            true,
-                            Some("UserRejected".to_string()),
-                            Some(serde_json::json!({
-                                "tool_call_id": signal_id,
-                                "tool_name": tool_name,
-                                "title": pretty_title,
-                                "summary": "User rejected",
-                                "execution_status": "rejected",
-                                "is_error": true,
-                                "error_type": "UserRejected",
-                                "approval_status": "rejected"
-                            })),
-                        )
-                        .await?;
-                    }
-
-                    // 4. Clean up the stashed approval entry
-                    self.remove_pending_approval(signal_id);
-                    if self.pending_approvals.is_empty() {
-                        self.update_state(WorkflowState::Thinking).await?;
-                    }
-                    continue;
-                }
-
-                // Handle structured WorkflowSignal
-                if let Some(signal) = WorkflowSignal::parse(&signal_str) {
-                    if signal.is_valid_for(wait_reason_enum.as_ref()) {
-                        match signal {
-                            WorkflowSignal::Continue => {
-                                log::info!(
-                                    "[Workflow][session={}][phase=wait][event=signal_received] Continue signal accepted for wait_reason {:?}",
-                                    self.session_id,
-                                    wait_reason_enum
-                                );
-                                self.current_step = 0;
-                                self.max_steps += DEFAULT_MAX_STEPS;
-                                self.update_state(WorkflowState::Thinking).await?;
-                            }
-                            WorkflowSignal::CompressionReady {
-                                compressed_until_message_id,
-                                summary,
-                            } => {
-                                self.apply_background_compression_ready(
-                                    compressed_until_message_id,
-                                    summary,
-                                )
-                                .await?;
-                            }
-                            WorkflowSignal::CompressionFailed {
-                                compressed_until_message_id,
-                                error,
-                            } => {
-                                self.clear_background_compression_if_matches(
-                                    compressed_until_message_id,
-                                );
-                                log::warn!(
-                                    "[Workflow][session={}][phase=compression] Background rollup compression failed for boundary {}: {}",
-                                    self.session_id,
-                                    compressed_until_message_id,
-                                    error
-                                );
+                                continue;
                             }
                             WorkflowSignal::UserMessage { content, .. } => {
                                 let user_content = content.clone();
@@ -3368,185 +2915,668 @@ impl WorkflowExecutor {
                                 );
                                 if let Err(e) = self.append_event(&event) {
                                     log::error!(
+                                    "[Workflow][session={}] workflow.event.append_failed - error={}",
+                                    self.session_id,
+                                    e
+                                );
+                                }
+                                self.update_state(WorkflowState::Thinking).await?;
+                                continue;
+                            }
+                            WorkflowSignal::SubAgentComplete {
+                                sub_agent_id,
+                                result,
+                            } => {
+                                log::info!(
+                                "[Workflow][session={}][phase=wait][event=sub_agent_complete] Sub-agent {} completed with result {:?}",
+                                self.session_id,
+                                sub_agent_id,
+                                result
+                            );
+
+                                if !self
+                                    .apply_sub_agent_completion(sub_agent_id.clone(), result)
+                                    .await?
+                                {
+                                    log::warn!(
+                                    "[Workflow][session={}][phase=wait][event=sub_agent_mismatch] Received completion for unexpected sub-agent {}. Expected: {:?}",
+                                    self.session_id,
+                                    sub_agent_id,
+                                    self.sub_agent_id
+                                );
+                                }
+                                continue;
+                            }
+                            WorkflowSignal::CompressionReady {
+                                compressed_until_message_id,
+                                summary,
+                            } => {
+                                self.apply_background_compression_ready(
+                                    compressed_until_message_id,
+                                    summary,
+                                )
+                                .await?;
+                                continue;
+                            }
+                            WorkflowSignal::CompressionFailed {
+                                compressed_until_message_id,
+                                error,
+                            } => {
+                                self.clear_background_compression_if_matches(
+                                    compressed_until_message_id,
+                                );
+                                log::warn!(
+                                "[Workflow][session={}][phase=compression] Background rollup compression failed for boundary {}: {}",
+                                self.session_id,
+                                compressed_until_message_id,
+                                error
+                            );
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Legacy fallback for request_confirm_broadcast
+                    // Legacy fallback for request_confirm_broadcast (old signal name)
+                    if signal_type_enum == Some(SignalType::LegacyRequestConfirmBroadcast) {
+                        log::info!(
+                        "WorkflowExecutor {}: Received request to re-broadcast pending confirmations",
+                        self.session_id
+                    );
+                        if self.state == WorkflowState::AwaitingApproval {
+                            let items = self.ordered_pending_approvals();
+                            for (id, info) in items {
+                                let details_value = info
+                                    .get("details")
+                                    .cloned()
+                                    .unwrap_or(serde_json::Value::Null);
+                                let _ = self
+                                    .dispatch_ui_payload(GatewayPayload::Confirm {
+                                        id,
+                                        action: info["name"]
+                                            .as_str()
+                                            .unwrap_or("unknown")
+                                            .to_string(),
+                                        details: details_value,
+                                        display_type: info
+                                            .get("display_type")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string()),
+                                    })
+                                    .await;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Legacy fallback for approval (old JSON format)
+                    if signal_type_enum == Some(SignalType::Approval) {
+                        let approved = signal_json["approved"].as_bool().unwrap_or(false);
+                        let approve_all = signal_json["approve_all"].as_bool().unwrap_or(false);
+                        let rejection_message = signal_json["rejection_message"]
+                            .as_str()
+                            .map(|s| s.to_string());
+                        let signal_id = signal_json["id"].as_str().unwrap_or("unknown");
+
+                        if approved {
+                            // 1. Retrieve the stashed tool details from the server-side map
+                            let (tool_name, tool_args) =
+                                if let Some(stashed) = self.pending_approvals.get(signal_id) {
+                                    let name =
+                                        stashed["name"].as_str().unwrap_or("unknown").to_string();
+                                    let args = stashed["arguments"].clone();
+                                    (name, args)
+                                } else {
+                                    log::warn!(
+                                        "WorkflowExecutor {}: Approval received for unknown ID: {}",
+                                        self.session_id,
+                                        signal_id
+                                    );
+                                    // Fallback to signal payload if map lookup fails (legacy/edge case)
+                                    let name = signal_json["tool_name"]
+                                        .as_str()
+                                        .unwrap_or("unknown")
+                                        .to_string();
+                                    let args = signal_json["tool_args"].clone();
+                                    (name, args)
+                                };
+
+                            log::info!(
+                                "WorkflowExecutor {}: User APPROVED tool '{}'{} (ID: {})",
+                                self.session_id,
+                                tool_name,
+                                if approve_all { " (Approve All)" } else { "" },
+                                signal_id
+                            );
+
+                            if tool_name == TOOL_SUBMIT_PLAN {
+                                self.transition_approved_plan(signal_id, &tool_args).await?;
+                                self.remove_pending_approval(signal_id);
+                                continue;
+                            }
+
+                            if approve_all {
+                                if tool_name == "bash" {
+                                    if let Some(cmd) =
+                                        tool_args.get("command").and_then(|v| v.as_str())
+                                    {
+                                        let wildcard_patterns =
+                                            Self::generate_shell_approval_patterns(cmd);
+                                        log::info!(
+                                        "WorkflowExecutor {}: Generated shell approval patterns {:?} for command '{}'",
+                                        self.session_id, wildcard_patterns, cmd
+                                    );
+
+                                        if wildcard_patterns.is_empty() {
+                                            log::info!(
+                                            "WorkflowExecutor {}: No safe reusable shell approval pattern extracted from '{}'",
+                                            self.session_id,
+                                            cmd
+                                        );
+                                        }
+
+                                        let mut shell_policy_payload: Option<
+                                            Vec<crate::tools::ShellPolicyRule>,
+                                        > = None;
+                                        if !wildcard_patterns.is_empty() {
+                                            if let Ok(store) = self.context.main_store.write() {
+                                                if let Ok(snapshot) =
+                                                    store.get_workflow_snapshot(&self.session_id)
+                                                {
+                                                    let mut agent_config: serde_json::Value =
+                                                        snapshot
+                                                            .workflow
+                                                            .agent_config
+                                                            .and_then(|s| {
+                                                                serde_json::from_str(&s).ok()
+                                                            })
+                                                            .unwrap_or(serde_json::json!({}));
+
+                                                    let existing_policy =
+                                                        Self::read_agent_config_shell_policy(
+                                                            &agent_config,
+                                                        );
+
+                                                    let updated_policy =
+                                                        Self::build_shell_policy_with_patterns(
+                                                            &existing_policy,
+                                                            &wildcard_patterns,
+                                                        );
+
+                                                    Self::write_agent_config_shell_policy(
+                                                        &mut agent_config,
+                                                        &updated_policy,
+                                                    );
+
+                                                    if let Ok(config_str) =
+                                                        serde_json::to_string(&agent_config)
+                                                    {
+                                                        let _ = store.update_workflow_agent_config(
+                                                            &self.session_id,
+                                                            &config_str,
+                                                        );
+                                                    }
+                                                    shell_policy_payload = Some(updated_policy);
+                                                }
+                                            }
+                                        }
+                                        if let Some(policy) = shell_policy_payload {
+                                            self.agent_config.shell_policy =
+                                                serde_json::to_string(&policy).ok();
+                                            if let Err(e) = self
+                                                .dispatch_ui_payload(
+                                                    GatewayPayload::ShellPolicyUpdated { policy },
+                                                )
+                                                .await
+                                            {
+                                                log::error!(
+                                                "WorkflowExecutor {}: Failed to send shell policy update: {}",
+                                                self.session_id,
+                                                e
+                                            );
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    self.auto_approve.insert(tool_name.to_string());
+
+                                    let tools = self.get_auto_approved_tools();
+                                    if let Err(e) = self
+                                        .dispatch_ui_payload(
+                                            GatewayPayload::AutoApprovedToolsUpdated {
+                                                tools: tools.clone(),
+                                            },
+                                        )
+                                        .await
+                                    {
+                                        log::error!(
+                                        "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
+                                        self.session_id,
+                                        e
+                                    );
+                                    }
+
+                                    if let Ok(store) = self.context.main_store.write() {
+                                        if let Ok(snapshot) =
+                                            store.get_workflow_snapshot(&self.session_id)
+                                        {
+                                            let mut agent_config: serde_json::Value = snapshot
+                                                .workflow
+                                                .agent_config
+                                                .and_then(|s| serde_json::from_str(&s).ok())
+                                                .unwrap_or(serde_json::json!({}));
+
+                                            Self::write_agent_config_auto_approve(
+                                                &mut agent_config,
+                                                &tools,
+                                            );
+
+                                            if let Ok(config_str) =
+                                                serde_json::to_string(&agent_config)
+                                            {
+                                                let _ = store.update_workflow_agent_config(
+                                                    &self.session_id,
+                                                    &config_str,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 2. Execution: MCP tools use global, native tools use local
+                            // Inject internal tool_call_id for streaming tools
+                            // Ensure tool_args is an object (parse if it's a JSON string from fallback)
+                            let tool_args_obj =
+                                Self::normalize_tool_arguments_value(tool_args.clone());
+                            let enriched_args =
+                                Self::enrich_tool_arguments_with_call_id(&tool_args_obj, signal_id);
+
+                            self.append_tool_started_event(signal_id, &tool_name, &tool_args_obj);
+                            self.dispatch_tool_started_payload(
+                                signal_id,
+                                &tool_name,
+                                &tool_args_obj,
+                            )
+                            .await;
+
+                            let result = if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                                self.global_tool_manager
+                                    .tool_call(&tool_name, enriched_args)
+                                    .await
+                            } else {
+                                self.tool_manager.tool_call(&tool_name, enriched_args).await
+                            };
+
+                            let tool_call_obj = serde_json::json!({
+                                "id": signal_id,
+                                "name": tool_name,
+                                "arguments": tool_args
+                            });
+
+                            // 3. Post-processing and Notification
+                            let reinforced = self
+                                .post_process_tool_result(
+                                    &tool_name,
+                                    &tool_args,
+                                    &tool_call_obj,
+                                    result,
+                                )
+                                .await?;
+
+                            // Mark as approved since this went through user approval
+                            let mut metadata = serde_json::json!({
+                                "tool_call_id": signal_id,
+                                "tool_name": tool_name,
+                                "tool_call": tool_call_obj,
+                                "title": reinforced.title,
+                                "summary": reinforced.summary,
+                                "execution_status": if reinforced.is_error { "failed" } else { "completed" },
+                                "is_error": reinforced.is_error,
+                                "error_type": reinforced.error_type,
+                                "display_type": reinforced.display_type,
+                                "approval_status": "approved"
+                            });
+                            if let Some(details) =
+                                self.build_tool_result_details(&tool_name, &tool_args)
+                            {
+                                metadata["details"] = details;
+                            }
+                            Self::enrich_tool_observation_metadata(
+                                &tool_name,
+                                &mut metadata,
+                                &reinforced,
+                            );
+                            self.add_message_and_notify_internal(
+                                "tool".to_string(),
+                                reinforced.content,
+                                None,
+                                None,
+                                Some(StepType::Observe),
+                                reinforced.is_error,
+                                reinforced.error_type.clone(),
+                                Some(metadata),
+                            )
+                            .await?;
+                        } else {
+                            // Handle Rejection
+                            let (tool_name, tool_args) =
+                                if let Some(stashed) = self.pending_approvals.get(signal_id) {
+                                    let name =
+                                        stashed["name"].as_str().unwrap_or("unknown").to_string();
+                                    let args = stashed["arguments"].clone();
+                                    (name, args)
+                                } else {
+                                    (
+                                        signal_json["tool_name"]
+                                            .as_str()
+                                            .unwrap_or("unknown")
+                                            .to_string(),
+                                        signal_json["tool_args"].clone(),
+                                    )
+                                };
+
+                            log::info!(
+                                "WorkflowExecutor {}: User REJECTED tool '{}' (ID: {})",
+                                self.session_id,
+                                tool_name,
+                                signal_id
+                            );
+
+                            let pretty_title = {
+                                let primary_root = self
+                                    .path_guard
+                                    .read()
+                                    .unwrap()
+                                    .get_primary_root()
+                                    .map(|p| p.to_path_buf());
+                                ObservationReinforcer::generate_title(
+                                    &tool_name,
+                                    &tool_args,
+                                    None,
+                                    primary_root.as_deref(),
+                                )
+                            };
+                            let observation = if tool_name == TOOL_SUBMIT_PLAN {
+                                Self::build_plan_rejection_observation(rejection_message.as_deref())
+                            } else {
+                                Self::build_rejection_observation(
+                                    &tool_name,
+                                    rejection_message.as_deref(),
+                                )
+                            };
+
+                            self.add_message_and_notify_internal(
+                                "user".to_string(),
+                                observation,
+                                None,
+                                None,
+                                Some(StepType::Observe),
+                                true,
+                                Some("UserRejected".to_string()),
+                                Some(serde_json::json!({
+                                    "tool_call_id": signal_id,
+                                    "tool_name": tool_name,
+                                    "title": pretty_title,
+                                    "summary": "User rejected",
+                                    "execution_status": "rejected",
+                                    "is_error": true,
+                                    "error_type": "UserRejected",
+                                    "approval_status": "rejected"
+                                })),
+                            )
+                            .await?;
+                        }
+
+                        // 4. Clean up the stashed approval entry
+                        self.remove_pending_approval(signal_id);
+                        if self.pending_approvals.is_empty() {
+                            self.update_state(WorkflowState::Thinking).await?;
+                        }
+                        continue;
+                    }
+
+                    // Handle structured WorkflowSignal
+                    if let Some(signal) = WorkflowSignal::parse(&signal_str) {
+                        if signal.is_valid_for(wait_reason_enum.as_ref()) {
+                            match signal {
+                                WorkflowSignal::Continue => {
+                                    log::info!(
+                                    "[Workflow][session={}][phase=wait][event=signal_received] Continue signal accepted for wait_reason {:?}",
+                                    self.session_id,
+                                    wait_reason_enum
+                                );
+                                    self.current_step = 0;
+                                    self.max_steps += DEFAULT_MAX_STEPS;
+                                    self.update_state(WorkflowState::Thinking).await?;
+                                }
+                                WorkflowSignal::CompressionReady {
+                                    compressed_until_message_id,
+                                    summary,
+                                } => {
+                                    self.apply_background_compression_ready(
+                                        compressed_until_message_id,
+                                        summary,
+                                    )
+                                    .await?;
+                                }
+                                WorkflowSignal::CompressionFailed {
+                                    compressed_until_message_id,
+                                    error,
+                                } => {
+                                    self.clear_background_compression_if_matches(
+                                        compressed_until_message_id,
+                                    );
+                                    log::warn!(
+                                    "[Workflow][session={}][phase=compression] Background rollup compression failed for boundary {}: {}",
+                                    self.session_id,
+                                    compressed_until_message_id,
+                                    error
+                                );
+                                }
+                                WorkflowSignal::UserMessage { content, .. } => {
+                                    let user_content = content.clone();
+                                    self.add_message_and_notify_internal(
+                                        "user".to_string(),
+                                        content,
+                                        None,
+                                        None,
+                                        None,
+                                        false,
+                                        None,
+                                        None,
+                                    )
+                                    .await?;
+                                    let event = WorkflowEvent::user_input_received(
+                                        self.session_id.clone(),
+                                        user_content,
+                                    );
+                                    if let Err(e) = self.append_event(&event) {
+                                        log::error!(
                                         "[Workflow][session={}] workflow.event.append_failed - error={}",
                                         self.session_id,
                                         e
                                     );
+                                    }
+                                    self.update_state(WorkflowState::Thinking).await?;
                                 }
-                                self.update_state(WorkflowState::Thinking).await?;
+                                _ => {}
                             }
-                            _ => {}
-                        }
-                    } else {
-                        log::warn!(
+                        } else {
+                            log::warn!(
                             "[Workflow][session={}][phase=wait][event=signal_rejected] Signal {:?} rejected for wait_reason {:?}",
                             self.session_id,
                             signal,
                             wait_reason_enum
                         );
+                        }
+                    } else {
+                        log::warn!(
+                            "[Workflow][session={}][phase=wait] Unknown signal type: {}, ignoring",
+                            self.session_id,
+                            signal_type
+                        );
                     }
-                } else {
-                    log::warn!(
-                        "[Workflow][session={}][phase=wait] Unknown signal type: {}, ignoring",
-                        self.session_id,
-                        signal_type
-                    );
+                    continue;
                 }
-                continue;
-            }
 
-            // Handle AwaitingAutoApproval state - trigger automatic transition
-            if self.state == WorkflowState::AwaitingAutoApproval {
-                log::info!(
-                    "WorkflowExecutor {}: Processing internal auto-approval signal...",
-                    self.session_id
-                );
+                // Handle AwaitingAutoApproval state - trigger automatic transition
+                if self.state == WorkflowState::AwaitingAutoApproval {
+                    log::info!(
+                        "WorkflowExecutor {}: Processing internal auto-approval signal...",
+                        self.session_id
+                    );
 
-                // 1. Find the latest SubmitPlan call in history to extract the finalized plan
-                let plan_content = self.context.messages.iter().rev().find_map(|m| {
-                    if let Some(meta) = &m.metadata {
-                        if let Some(tc) = meta.get("tool_calls").and_then(|v| v.as_array()) {
-                            for call in tc {
-                                if call["name"] == "submit_plan"
-                                    || call["function"]["name"] == "submit_plan"
-                                {
-                                    let args = call.get("arguments").or_else(|| {
-                                        call.get("function").and_then(|f| f.get("arguments"))
-                                    });
-                                    if let Some(val) = args {
-                                        let parsed = if let Some(s) = val.as_str() {
-                                            serde_json::from_str::<Value>(s).unwrap_or(val.clone())
-                                        } else {
-                                            val.clone()
-                                        };
-                                        return parsed
-                                            .get("plan")
-                                            .and_then(|p| p.as_str())
-                                            .map(|s| s.to_string());
+                    // 1. Find the latest SubmitPlan call in history to extract the finalized plan
+                    let plan_content = self.context.messages.iter().rev().find_map(|m| {
+                        if let Some(meta) = &m.metadata {
+                            if let Some(tc) = meta.get("tool_calls").and_then(|v| v.as_array()) {
+                                for call in tc {
+                                    if call["name"] == "submit_plan"
+                                        || call["function"]["name"] == "submit_plan"
+                                    {
+                                        let args = call.get("arguments").or_else(|| {
+                                            call.get("function").and_then(|f| f.get("arguments"))
+                                        });
+                                        if let Some(val) = args {
+                                            let parsed = if let Some(s) = val.as_str() {
+                                                serde_json::from_str::<Value>(s)
+                                                    .unwrap_or(val.clone())
+                                            } else {
+                                                val.clone()
+                                            };
+                                            return parsed
+                                                .get("plan")
+                                                .and_then(|p| p.as_str())
+                                                .map(|s| s.to_string());
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    None
-                });
+                        None
+                    });
 
-                if let Some(plan) = plan_content {
-                    log::info!(
+                    if let Some(plan) = plan_content {
+                        log::info!(
                         "WorkflowExecutor {}: Plan found, executing atomic transition to Implementation phase",
                         self.session_id
                     );
-                    let submit_plan_tool_call_id =
-                        self.context.messages.iter().rev().find_map(|m| {
-                            m.metadata.as_ref().and_then(|meta| {
-                                meta.get("tool_calls").and_then(|v| v.as_array()).and_then(
-                                    |calls| {
-                                        calls.iter().find_map(|call| {
-                                            let name = call
-                                                .get("name")
-                                                .and_then(|v| v.as_str())
-                                                .or_else(|| {
-                                                    call.get("function")
-                                                        .and_then(|f| f.get("name"))
-                                                        .and_then(|v| v.as_str())
-                                                });
-                                            if name == Some(TOOL_SUBMIT_PLAN) {
-                                                call.get("id")
+                        let submit_plan_tool_call_id =
+                            self.context.messages.iter().rev().find_map(|m| {
+                                m.metadata.as_ref().and_then(|meta| {
+                                    meta.get("tool_calls").and_then(|v| v.as_array()).and_then(
+                                        |calls| {
+                                            calls.iter().find_map(|call| {
+                                                let name = call
+                                                    .get("name")
                                                     .and_then(|v| v.as_str())
-                                                    .map(str::to_string)
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                    },
-                                )
-                            })
-                        });
+                                                    .or_else(|| {
+                                                        call.get("function")
+                                                            .and_then(|f| f.get("name"))
+                                                            .and_then(|v| v.as_str())
+                                                    });
+                                                if name == Some(TOOL_SUBMIT_PLAN) {
+                                                    call.get("id")
+                                                        .and_then(|v| v.as_str())
+                                                        .map(str::to_string)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                        },
+                                    )
+                                })
+                            });
 
-                    self.persist_approved_plan_anchor(&plan).await?;
+                        self.persist_approved_plan_anchor(&plan).await?;
 
-                    // B. Policy & State Reset
-                    let mut new_policy = ExecutionPolicy::implementation();
-                    new_policy.approval_level = self.policy.approval_level.clone();
-                    self.policy = new_policy;
-                    self.sync_runtime_limits();
+                        // B. Policy & State Reset
+                        let mut new_policy = ExecutionPolicy::implementation();
+                        new_policy.approval_level = self.policy.approval_level.clone();
+                        self.policy = new_policy;
+                        self.sync_runtime_limits();
 
-                    // Persist phase change to database
-                    let mut updated_agent_config: Option<Value> = None;
-                    if let Ok(store) = self.context.main_store.write() {
-                        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
-                            let mut agent_config: serde_json::Value = snapshot
-                                .workflow
-                                .agent_config
-                                .and_then(|s| serde_json::from_str(&s).ok())
-                                .unwrap_or(serde_json::json!({}));
-                            agent_config["phase"] =
-                                serde_json::json!(self.policy.phase.to_string());
-                            if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                                let _ = store
-                                    .update_workflow_agent_config(&self.session_id, &config_str);
+                        // Persist phase change to database
+                        let mut updated_agent_config: Option<Value> = None;
+                        if let Ok(store) = self.context.main_store.write() {
+                            if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                                let mut agent_config: serde_json::Value = snapshot
+                                    .workflow
+                                    .agent_config
+                                    .and_then(|s| serde_json::from_str(&s).ok())
+                                    .unwrap_or(serde_json::json!({}));
+                                agent_config["phase"] =
+                                    serde_json::json!(self.policy.phase.to_string());
+                                if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                                    let _ = store.update_workflow_agent_config(
+                                        &self.session_id,
+                                        &config_str,
+                                    );
+                                }
+                                updated_agent_config = Some(agent_config);
                             }
-                            updated_agent_config = Some(agent_config);
                         }
-                    }
 
-                    // Reset step count for the new phase to ensure clear history separation
-                    self.current_step = 0;
-                    self.consecutive_no_tool_calls = 0;
+                        // Reset step count for the new phase to ensure clear history separation
+                        self.current_step = 0;
+                        self.consecutive_no_tool_calls = 0;
 
-                    // C. Toolset Refresh: CRITICAL for giving the AI the right tools for the new phase
-                    self.register_foundation_tools().await?;
-                    self.dispatch_context_usage().await?;
-                    if let Some(agent_config) = updated_agent_config {
-                        self.dispatch_ui_payload(GatewayPayload::AgentConfigUpdated {
-                            agent_config,
-                        })
+                        // C. Toolset Refresh: CRITICAL for giving the AI the right tools for the new phase
+                        self.register_foundation_tools().await?;
+                        self.dispatch_context_usage().await?;
+                        if let Some(agent_config) = updated_agent_config {
+                            self.dispatch_ui_payload(GatewayPayload::AgentConfigUpdated {
+                                agent_config,
+                            })
+                            .await?;
+                        }
+                        self.append_approved_plan_observation(
+                            submit_plan_tool_call_id.as_deref(),
+                            &plan,
+                        )
                         .await?;
-                    }
-                    self.append_approved_plan_observation(
-                        submit_plan_tool_call_id.as_deref(),
-                        &plan,
-                    )
-                    .await?;
 
-                    self.update_state(WorkflowState::Thinking).await?;
-                    continue;
-                } else {
-                    log::warn!(
+                        self.update_state(WorkflowState::Thinking).await?;
+                        continue;
+                    } else {
+                        log::warn!(
                         "WorkflowExecutor {}: AwaitingAutoApproval triggered but no plan found in history. Reverting to thinking.",
                         self.session_id
                     );
-                    self.update_state(WorkflowState::Thinking).await?;
-                    continue;
+                        self.update_state(WorkflowState::Thinking).await?;
+                        continue;
+                    }
                 }
-            }
 
-            self.current_step += 1;
-            log::info!(
-                "[Workflow][session={}][step] Step {}/{}, approval_level={:?}",
-                self.session_id,
-                self.current_step,
-                self.max_steps,
-                self.policy.approval_level
-            );
+                self.current_step += 1;
+                log::info!(
+                    "[Workflow][session={}][step] Step {}/{}, approval_level={:?}",
+                    self.session_id,
+                    self.current_step,
+                    self.max_steps,
+                    self.policy.approval_level
+                );
 
-            // --- Max-step budget guard ---
-            if self.current_step > self.max_steps {
-                log::warn!(
+                // --- Max-step budget guard ---
+                if self.current_step > self.max_steps {
+                    log::warn!(
                     "WorkflowExecutor {}: Reached max steps ({}). Asking user for continuation.",
                     self.session_id,
                     self.max_steps
                 );
 
-                // In Full approval mode, auto-extend the step budget
-                if self.policy.approval_level == crate::workflow::react::policy::ApprovalLevel::Full
-                {
-                    log::info!(
-                        "WorkflowExecutor {}: Auto-extending step budget in Full approval mode",
-                        self.session_id
-                    );
-                    self.max_steps += DEFAULT_MAX_STEPS;
-                    self.context
+                    // In Full approval mode, auto-extend the step budget
+                    if self.policy.approval_level
+                        == crate::workflow::react::policy::ApprovalLevel::Full
+                    {
+                        log::info!(
+                            "WorkflowExecutor {}: Auto-extending step budget in Full approval mode",
+                            self.session_id
+                        );
+                        self.max_steps += DEFAULT_MAX_STEPS;
+                        self.context
                         .add_message(
                             "user".to_string(),
                             format!(
@@ -3563,470 +3593,498 @@ impl WorkflowExecutor {
                             None,
                         )
                         .await?;
-                } else {
-                    // In other approval modes, enter confirmation waiting
-                    // The unified waiting loop will handle Continue/Stop signals
-                    log::info!(
+                    } else {
+                        // In other approval modes, enter confirmation waiting
+                        // The unified waiting loop will handle Continue/Stop signals
+                        log::info!(
                         "WorkflowExecutor {}: Step budget exhausted ({}/{}), entering confirmation waiting",
                         self.session_id,
                         self.current_step,
                         self.max_steps
                     );
-                    self.update_state(WorkflowState::Paused).await?;
-                    continue;
-                }
-            } else if self.current_step == (self.max_steps * 4 / 5) {
-                // 80% warning — give the LLM a chance to wrap up gracefully
-                self.context
-                    .add_message(
-                        "user".to_string(),
-                        format!(
-                            "<SYSTEM_REMINDER>STEP BUDGET WARNING: You are at step {} of {}. \
+                        self.update_state(WorkflowState::Paused).await?;
+                        continue;
+                    }
+                } else if self.current_step == (self.max_steps * 4 / 5) {
+                    // 80% warning — give the LLM a chance to wrap up gracefully
+                    self.context
+                        .add_message(
+                            "user".to_string(),
+                            format!(
+                                "<SYSTEM_REMINDER>STEP BUDGET WARNING: You are at step {} of {}. \
                             Only {} steps remain. Start wrapping up: complete your most critical \
                             pending tasks and prepare a final answer. Avoid starting new research \
                             threads.</SYSTEM_REMINDER>",
-                            self.current_step,
-                            self.max_steps,
-                            self.max_steps - self.current_step
-                        ),
-                        None,
-                        None,
-                        Some(StepType::Observe),
-                        self.current_step as i32,
-                        false,
-                        None,
-                        None,
+                                self.current_step,
+                                self.max_steps,
+                                self.max_steps - self.current_step
+                            ),
+                            None,
+                            None,
+                            Some(StepType::Observe),
+                            self.current_step as i32,
+                            false,
+                            None,
+                            None,
+                        )
+                        .await?;
+                }
+
+                self.update_state(WorkflowState::Thinking).await?;
+
+                self.sync_runtime_models_from_agent_config();
+
+                let chat_interface = {
+                    let mut chats_guard = self.chat_state.chats.lock().await;
+                    let protocol = ChatProtocol::OpenAI;
+                    let chat_map = chats_guard
+                        .entry(protocol)
+                        .or_insert_with(std::collections::HashMap::new);
+                    chat_map
+                        .entry(self.session_id.clone())
+                        .or_insert_with(|| crate::create_chat!(self.context.main_store))
+                        .clone()
+                };
+
+                let available_tools = self
+                    .tool_manager
+                    .get_tool_calling_spec(None, None)
+                    .await
+                    .unwrap_or_default();
+
+                let (full_response, tool_calls_json, response_reasoning, usage) = self
+                    .llm_processor
+                    .call(
+                        &mut self.context,
+                        self.current_step,
+                        chat_interface,
+                        self.gateway.clone(),
+                        available_tools,
+                        self.max_steps,
+                        &self.policy,
+                        &mut signal_rx,
+                        true, // require_tool_call: ReAct main loop requires tool calls
                     )
                     .await?;
-            }
 
-            self.update_state(WorkflowState::Thinking).await?;
+                let invalid_tool_call_error = usage
+                    .as_ref()
+                    .and_then(|meta| meta.get("invalid_tool_call_error").and_then(|v| v.as_str()))
+                    .map(|s| s.to_string());
 
-            self.sync_runtime_models_from_agent_config();
-
-            let chat_interface = {
-                let mut chats_guard = self.chat_state.chats.lock().await;
-                let protocol = ChatProtocol::OpenAI;
-                let chat_map = chats_guard
-                    .entry(protocol)
-                    .or_insert_with(std::collections::HashMap::new);
-                chat_map
-                    .entry(self.session_id.clone())
-                    .or_insert_with(|| crate::create_chat!(self.context.main_store))
-                    .clone()
-            };
-
-            let available_tools = self
-                .tool_manager
-                .get_tool_calling_spec(None, None)
-                .await
-                .unwrap_or_default();
-
-            let (full_response, tool_calls_json, response_reasoning, usage) = self
-                .llm_processor
-                .call(
-                    &mut self.context,
-                    self.current_step,
-                    chat_interface,
-                    self.gateway.clone(),
-                    available_tools,
-                    self.max_steps,
-                    &self.policy,
-                    &mut signal_rx,
-                    true, // require_tool_call: ReAct main loop requires tool calls
-                )
-                .await?;
-
-            let invalid_tool_call_error = usage
-                .as_ref()
-                .and_then(|meta| meta.get("invalid_tool_call_error").and_then(|v| v.as_str()))
-                .map(|s| s.to_string());
-
-            let mut needs_compression = false;
-            let mut assistant_metadata = Self::sanitize_assistant_metadata_for_storage(usage);
-            if !tool_calls_json.is_empty() {
-                if let Ok(tc_val) = serde_json::from_str::<serde_json::Value>(&tool_calls_json) {
-                    // Extract strictly the array of tool calls to comply with OpenAI/Claude protocols.
-                    let calls_array = if let Some(array) = tc_val.as_array() {
-                        array.clone()
-                    } else if let Some(array) = tc_val.get("tool_calls").and_then(|v| v.as_array())
+                let mut needs_compression = false;
+                let mut assistant_metadata = Self::sanitize_assistant_metadata_for_storage(usage);
+                if !tool_calls_json.is_empty() {
+                    if let Ok(tc_val) = serde_json::from_str::<serde_json::Value>(&tool_calls_json)
                     {
-                        array.clone()
-                    } else if let Some(tool_obj) = tc_val.get("tool") {
-                        vec![tool_obj.clone()]
-                    } else if tc_val.is_object() && tc_val.get("name").is_some() {
-                        vec![tc_val]
-                    } else {
-                        vec![]
-                    };
+                        // Extract strictly the array of tool calls to comply with OpenAI/Claude protocols.
+                        let calls_array = if let Some(array) = tc_val.as_array() {
+                            array.clone()
+                        } else if let Some(array) =
+                            tc_val.get("tool_calls").and_then(|v| v.as_array())
+                        {
+                            array.clone()
+                        } else if let Some(tool_obj) = tc_val.get("tool") {
+                            vec![tool_obj.clone()]
+                        } else if tc_val.is_object() && tc_val.get("name").is_some() {
+                            vec![tc_val]
+                        } else {
+                            vec![]
+                        };
 
-                    if !calls_array.is_empty() {
-                        assistant_metadata["tool_calls"] = serde_json::json!(calls_array);
+                        if !calls_array.is_empty() {
+                            assistant_metadata["tool_calls"] = serde_json::json!(calls_array);
+                        }
                     }
                 }
-            }
 
-            // Stop has higher priority than persisting a new assistant tool-call turn.
-            // This closes the race window where stop arrives right after LLM returns.
-            if self.check_stop_signal(&mut signal_rx).await? {
-                log::info!(
+                // Stop has higher priority than persisting a new assistant tool-call turn.
+                // This closes the race window where stop arrives right after LLM returns.
+                if self.check_stop_signal(&mut signal_rx).await? {
+                    log::info!(
                     "[Workflow][session={}][phase=run_loop] Stop detected after LLM response; skipping assistant message commit",
                     self.session_id
                 );
-                break;
-            }
-
-            if !(full_response.trim().is_empty()
-                && tool_calls_json.is_empty()
-                && invalid_tool_call_error.is_some())
-            {
-                let compressed_signal = self
-                    .add_message_and_notify_internal(
-                        "assistant".to_string(),
-                        full_response.clone(),
-                        None,
-                        Some(response_reasoning),
-                        Some(StepType::Think),
-                        false,
-                        None,
-                        Some(assistant_metadata),
-                    )
-                    .await?;
-                if compressed_signal {
-                    needs_compression = true;
+                    break;
                 }
-            }
 
-            self.update_state(WorkflowState::Executing).await?;
-            let results_opt = match self
-                .execute_tools(full_response.clone(), tool_calls_json, &mut signal_rx)
-                .await
-            {
-                Ok(results) => Some(results),
-                Err(WorkflowEngineError::Cancelled(msg)) => {
-                    log::info!(
-                        "WorkflowExecutor {}: User cancelled operation: {}",
-                        self.session_id,
-                        msg
-                    );
-                    self.update_state(WorkflowState::Cancelled).await?;
-                    None
+                if !(full_response.trim().is_empty()
+                    && tool_calls_json.is_empty()
+                    && invalid_tool_call_error.is_some())
+                {
+                    let compressed_signal = self
+                        .add_message_and_notify_internal(
+                            "assistant".to_string(),
+                            full_response.clone(),
+                            None,
+                            Some(response_reasoning),
+                            Some(StepType::Think),
+                            false,
+                            None,
+                            Some(assistant_metadata),
+                        )
+                        .await?;
+                    if compressed_signal {
+                        needs_compression = true;
+                    }
                 }
-                Err(e) => return Err(e),
-            };
 
-            let Some((results, has_todo)) = results_opt else {
-                // Cancellation was handled, exit the loop
-                break;
-            };
+                self.update_state(WorkflowState::Executing).await?;
+                let results_opt = match self
+                    .execute_tools(full_response.clone(), tool_calls_json, &mut signal_rx)
+                    .await
+                {
+                    Ok(results) => Some(results),
+                    Err(WorkflowEngineError::Cancelled(msg)) => {
+                        log::info!(
+                            "WorkflowExecutor {}: User cancelled operation: {}",
+                            self.session_id,
+                            msg
+                        );
+                        self.update_state(WorkflowState::Cancelled).await?;
+                        None
+                    }
+                    Err(e) => return Err(e),
+                };
 
-            let mut observe_needs_compression = false;
+                let Some((results, has_todo)) = results_opt else {
+                    // Cancellation was handled, exit the loop
+                    break;
+                };
 
-            for (id, reinforced, original_call) in &results {
-                if Self::is_postponed_turn_block_result(reinforced) {
-                    log::info!(
+                let mut observe_needs_compression = false;
+
+                for (id, reinforced, original_call) in &results {
+                    if Self::is_postponed_turn_block_result(reinforced) {
+                        log::info!(
                         "[Workflow][session={}][phase=observe] Suppressing postponed tool observation '{}'",
                         self.session_id,
                         reinforced.title
                     );
-                    continue;
-                }
-
-                // Extract tool name from the original call for the metadata
-                let tool_name = original_call
-                    .get("name")
-                    .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-
-                // Build metadata with approval_status if present
-                let mut execution_status = if reinforced.is_error {
-                    "failed".to_string()
-                } else if reinforced.approval_status.as_deref() == Some("pending") {
-                    "pending_approval".to_string()
-                } else if reinforced.approval_status.as_deref() == Some("rejected") {
-                    "rejected".to_string()
-                } else {
-                    "completed".to_string()
-                };
-
-                let mut metadata = serde_json::json!({
-                    "tool_call_id": id,
-                    "tool_name": tool_name, // CRITICAL: Added for LlmProcessor's recovery logic
-                    "tool_call": original_call,
-                    "title": reinforced.title,
-                    "summary": reinforced.summary,
-                    "execution_status": execution_status,
-                    "is_error": reinforced.is_error,
-                    "error_type": reinforced.error_type,
-                    "display_type": reinforced.display_type
-                });
-
-                // Add approval_status if it exists in the reinforced result
-                if let Some(approval_status) = &reinforced.approval_status {
-                    metadata["approval_status"] = serde_json::json!(approval_status);
-                }
-                if reinforced.approval_status.as_deref() == Some("pending") {
-                    if let Some(pending_info) = self.pending_approvals.get(id) {
-                        if let Some(details) = pending_info.get("details") {
-                            metadata["details"] =
-                                Self::normalize_pending_tool_details(details.clone());
-                        }
+                        continue;
                     }
-                } else if let Some(args) = original_call.get("arguments").or_else(|| {
-                    original_call
-                        .get("function")
-                        .and_then(|value| value.get("arguments"))
-                }) {
-                    let normalized_args = Self::normalize_tool_arguments_value(args.clone());
-                    if let Some(details) =
-                        self.build_tool_result_details(tool_name, &normalized_args)
-                    {
-                        metadata["details"] = details;
-                    }
-                }
-                if let Some(observation_kind) = &reinforced.observation_kind {
-                    metadata["observation_kind"] =
-                        serde_json::to_value(observation_kind).unwrap_or(serde_json::Value::Null);
-                }
-                if let Some(observation_type) =
-                    Self::runtime_observation_type_for_reinforced(reinforced)
-                {
-                    enrich_runtime_observation_metadata(
-                        &mut metadata,
-                        observation_type,
-                        serde_json::json!({
-                            "tool_call_id": id,
-                            "tool_name": tool_name,
-                            "title": reinforced.title,
-                            "summary": reinforced.summary,
-                            "is_error": reinforced.is_error,
-                            "error_type": reinforced.error_type,
-                            "llm_content": reinforced
-                                .llm_content
-                                .clone()
-                                .unwrap_or_else(|| reinforced.content.clone()),
-                        }),
-                    );
-                }
-                Self::enrich_tool_observation_metadata(tool_name, &mut metadata, reinforced);
-                if tool_name == crate::tools::TOOL_SUB_AGENT_RUN {
-                    if let Ok(task_result) =
-                        serde_json::from_str::<serde_json::Value>(&reinforced.content)
-                    {
-                        if let Some(task_id) = task_result.get("task_id").and_then(|v| v.as_str()) {
-                            metadata["sub_agent_id"] = serde_json::json!(task_id);
-                        }
-                        if let Some(agent_name) =
-                            task_result.get("agent_name").and_then(|v| v.as_str())
-                        {
-                            metadata["sub_agent_name"] = serde_json::json!(agent_name);
-                        }
-                        if let Some(task) = task_result.get("task").and_then(|v| v.as_str()) {
-                            metadata["sub_agent_task"] = serde_json::json!(task);
-                        }
-                        if let Some(status) = task_result.get("status").and_then(|v| v.as_str()) {
-                            metadata["sub_agent_status"] = serde_json::json!(status);
-                            if status == "waiting" {
-                                execution_status = "waiting".to_string();
-                            }
-                        }
-                        if let Some(mode) = task_result.get("mode").and_then(|v| v.as_str()) {
-                            metadata["sub_agent_mode"] = serde_json::json!(mode);
-                            if mode == "call" && execution_status == "completed" {
-                                execution_status = "waiting".to_string();
-                            }
-                        }
-                    }
-                    metadata["execution_status"] = serde_json::json!(execution_status);
-                }
 
-                let tool_message_needs_compression = self
-                    .add_message_and_notify_internal(
-                        "tool".to_string(),
-                        reinforced.content.clone(),
-                        None,
-                        None,
-                        Some(StepType::Observe),
-                        reinforced.is_error,
-                        reinforced.error_type.clone(),
-                        Some(metadata),
-                    )
-                    .await?;
-                observe_needs_compression |= tool_message_needs_compression;
-            }
+                    // Extract tool name from the original call for the metadata
+                    let tool_name = original_call
+                        .get("name")
+                        .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
 
-            // Flush user messages queued during active execution after Observe stage completes.
-            let queued_applied = self.flush_queued_user_messages().await?;
-            if queued_applied {
-                self.current_step = 0;
-                self.consecutive_no_tool_calls = 0;
-                self.loop_detector.reset_tool_call_history();
-                self.loop_detector.reset_no_tool_response_history();
-            }
-
-            if self.state == WorkflowState::AwaitingSubAgent {
-                log::info!(
-                    "[Workflow][session={}][phase=run_loop] Child call is pending; entering wait branch",
-                    self.session_id
-                );
-                sleep(Duration::from_millis(50)).await;
-                continue;
-            }
-
-            if results.is_empty() {
-                self.loop_detector.reset_tool_call_history();
-                let repeated_no_tool_warning = self
-                    .loop_detector
-                    .record_no_tool_response_and_check(&full_response);
-                self.consecutive_no_tool_calls += 1;
-                log::warn!(
-                    "WorkflowExecutor {}: No tool calls in response (consecutive: {})",
-                    self.session_id,
-                    self.consecutive_no_tool_calls
-                );
-                let mut runtime_observation_type = RuntimeObservationType::NoToolCall;
-                let error_msg = if let Some(warning) = repeated_no_tool_warning {
-                    runtime_observation_type = RuntimeObservationType::LoopDetected;
-                    warning
-                } else if let Some(invalid_tool_call_error) = invalid_tool_call_error {
-                    runtime_observation_type = RuntimeObservationType::InvalidToolCall;
-                    format!(
-                        "<SYSTEM_REMINDER>Error: {}. Call exactly one available tool with a valid name and arguments.</SYSTEM_REMINDER>",
-                        invalid_tool_call_error
-                    )
-                } else if self.consecutive_no_tool_calls >= 3 {
-                    let remaining = self.max_steps.saturating_sub(self.current_step);
-                    let finish_tool = if self.is_child_agent_workflow() {
-                        "submit_result"
+                    // Build metadata with approval_status if present
+                    let mut execution_status = if reinforced.is_error {
+                        "failed".to_string()
+                    } else if reinforced.approval_status.as_deref() == Some("pending") {
+                        "pending_approval".to_string()
+                    } else if reinforced.approval_status.as_deref() == Some("rejected") {
+                        "rejected".to_string()
                     } else {
-                        "complete_workflow_with_summary"
+                        "completed".to_string()
                     };
-                    format!(
-                        "<SYSTEM_REMINDER>No tool calls for {} consecutive responses. Step budget: {}/{} used, {} remaining. If you are finished, provide a summary and call '{}'.</SYSTEM_REMINDER>",
-                        self.consecutive_no_tool_calls, self.current_step, self.max_steps, remaining, finish_tool
-                    )
-                } else {
-                    if self.is_child_agent_workflow() {
-                        "<SYSTEM_REMINDER>No tool call detected. Call a tool now; if the delegated task is done, use 'submit_result' with result and summary.</SYSTEM_REMINDER>".to_string()
-                    } else {
-                        "<SYSTEM_REMINDER>No tool call detected. Call a tool now; if the task is done, use 'complete_workflow_with_summary' with a valid summary.</SYSTEM_REMINDER>".to_string()
+
+                    let mut metadata = serde_json::json!({
+                        "tool_call_id": id,
+                        "tool_name": tool_name, // CRITICAL: Added for LlmProcessor's recovery logic
+                        "tool_call": original_call,
+                        "title": reinforced.title,
+                        "summary": reinforced.summary,
+                        "execution_status": execution_status,
+                        "is_error": reinforced.is_error,
+                        "error_type": reinforced.error_type,
+                        "display_type": reinforced.display_type
+                    });
+
+                    // Add approval_status if it exists in the reinforced result
+                    if let Some(approval_status) = &reinforced.approval_status {
+                        metadata["approval_status"] = serde_json::json!(approval_status);
                     }
-                };
-                let _ = self
-                    .add_message_and_notify_internal(
-                        "user".to_string(),
-                        error_msg.clone(),
-                        None,
-                        None,
-                        Some(StepType::Observe),
-                        false,
-                        None,
-                        Some(runtime_observation_metadata(
-                            runtime_observation_type,
+                    if reinforced.approval_status.as_deref() == Some("pending") {
+                        if let Some(pending_info) = self.pending_approvals.get(id) {
+                            if let Some(details) = pending_info.get("details") {
+                                metadata["details"] =
+                                    Self::normalize_pending_tool_details(details.clone());
+                            }
+                        }
+                    } else if let Some(args) = original_call.get("arguments").or_else(|| {
+                        original_call
+                            .get("function")
+                            .and_then(|value| value.get("arguments"))
+                    }) {
+                        let normalized_args = Self::normalize_tool_arguments_value(args.clone());
+                        if let Some(details) =
+                            self.build_tool_result_details(tool_name, &normalized_args)
+                        {
+                            metadata["details"] = details;
+                        }
+                    }
+                    if let Some(observation_kind) = &reinforced.observation_kind {
+                        metadata["observation_kind"] = serde_json::to_value(observation_kind)
+                            .unwrap_or(serde_json::Value::Null);
+                    }
+                    if let Some(observation_type) =
+                        Self::runtime_observation_type_for_reinforced(reinforced)
+                    {
+                        enrich_runtime_observation_metadata(
+                            &mut metadata,
+                            observation_type,
                             serde_json::json!({
-                                "consecutive_no_tool_calls": self.consecutive_no_tool_calls,
-                                "current_step": self.current_step,
-                                "max_steps": self.max_steps,
-                                "llm_content": error_msg,
+                                "tool_call_id": id,
+                                "tool_name": tool_name,
+                                "title": reinforced.title,
+                                "summary": reinforced.summary,
+                                "is_error": reinforced.is_error,
+                                "error_type": reinforced.error_type,
+                                "llm_content": reinforced
+                                    .llm_content
+                                    .clone()
+                                    .unwrap_or_else(|| reinforced.content.clone()),
                             }),
-                        )),
-                    )
-                    .await?;
-                if self.flush_queued_user_messages().await? {
+                        );
+                    }
+                    Self::enrich_tool_observation_metadata(tool_name, &mut metadata, reinforced);
+                    if tool_name == crate::tools::TOOL_SUB_AGENT_RUN {
+                        if let Ok(task_result) =
+                            serde_json::from_str::<serde_json::Value>(&reinforced.content)
+                        {
+                            if let Some(task_id) =
+                                task_result.get("task_id").and_then(|v| v.as_str())
+                            {
+                                metadata["sub_agent_id"] = serde_json::json!(task_id);
+                            }
+                            if let Some(agent_name) =
+                                task_result.get("agent_name").and_then(|v| v.as_str())
+                            {
+                                metadata["sub_agent_name"] = serde_json::json!(agent_name);
+                            }
+                            if let Some(task) = task_result.get("task").and_then(|v| v.as_str()) {
+                                metadata["sub_agent_task"] = serde_json::json!(task);
+                            }
+                            if let Some(status) = task_result.get("status").and_then(|v| v.as_str())
+                            {
+                                metadata["sub_agent_status"] = serde_json::json!(status);
+                                if status == "waiting" {
+                                    execution_status = "waiting".to_string();
+                                }
+                            }
+                            if let Some(mode) = task_result.get("mode").and_then(|v| v.as_str()) {
+                                metadata["sub_agent_mode"] = serde_json::json!(mode);
+                                if mode == "call" && execution_status == "completed" {
+                                    execution_status = "waiting".to_string();
+                                }
+                            }
+                        }
+                        metadata["execution_status"] = serde_json::json!(execution_status);
+                    }
+
+                    let tool_message_needs_compression = self
+                        .add_message_and_notify_internal(
+                            "tool".to_string(),
+                            reinforced.content.clone(),
+                            None,
+                            None,
+                            Some(StepType::Observe),
+                            reinforced.is_error,
+                            reinforced.error_type.clone(),
+                            Some(metadata),
+                        )
+                        .await?;
+                    observe_needs_compression |= tool_message_needs_compression;
+                }
+
+                // Flush user messages queued during active execution after Observe stage completes.
+                let queued_applied = self.flush_queued_user_messages().await?;
+                if queued_applied {
                     self.current_step = 0;
                     self.consecutive_no_tool_calls = 0;
                     self.loop_detector.reset_tool_call_history();
                     self.loop_detector.reset_no_tool_response_history();
                 }
-                if self.consecutive_no_tool_calls >= 3 {
-                    self.consecutive_no_tool_calls = 0;
+
+                if self.state == WorkflowState::AwaitingSubAgent {
+                    log::info!(
+                    "[Workflow][session={}][phase=run_loop] Child call is pending; entering wait branch",
+                    self.session_id
+                );
+                    sleep(Duration::from_millis(50)).await;
+                    continue;
                 }
-                // Skip further processing since there are no tool results
-                sleep(Duration::from_millis(100)).await;
-                continue;
-            } else {
-                self.consecutive_no_tool_calls = 0;
-                self.loop_detector.reset_no_tool_response_history();
-            }
 
-            let has_successful_finish_task =
-                results.iter().any(|(_, reinforced, original_call)| {
-                    if reinforced.is_error {
-                        return false;
-                    }
-                    let tool_name = original_call
-                        .get("name")
-                        .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    let is_terminal_tool = if self.is_child_agent_workflow() {
-                        tool_name == TOOL_SUBMIT_RESULT
+                if results.is_empty() {
+                    self.loop_detector.reset_tool_call_history();
+                    let repeated_no_tool_warning = self
+                        .loop_detector
+                        .record_no_tool_response_and_check(&full_response);
+                    self.consecutive_no_tool_calls += 1;
+                    log::warn!(
+                        "WorkflowExecutor {}: No tool calls in response (consecutive: {})",
+                        self.session_id,
+                        self.consecutive_no_tool_calls
+                    );
+                    let mut runtime_observation_type = RuntimeObservationType::NoToolCall;
+                    let error_msg = if let Some(warning) = repeated_no_tool_warning {
+                        runtime_observation_type = RuntimeObservationType::LoopDetected;
+                        warning
+                    } else if let Some(invalid_tool_call_error) = invalid_tool_call_error {
+                        runtime_observation_type = RuntimeObservationType::InvalidToolCall;
+                        format!(
+                        "<SYSTEM_REMINDER>Error: {}. Call exactly one available tool with a valid name and arguments.</SYSTEM_REMINDER>",
+                        invalid_tool_call_error
+                    )
+                    } else if self.consecutive_no_tool_calls >= 3 {
+                        let remaining = self.max_steps.saturating_sub(self.current_step);
+                        let finish_tool = if self.is_child_agent_workflow() {
+                            "submit_result"
+                        } else {
+                            "complete_workflow_with_summary"
+                        };
+                        format!(
+                        "<SYSTEM_REMINDER>No tool calls for {} consecutive responses. Step budget: {}/{} used, {} remaining. If you are finished, provide a summary and call '{}'.</SYSTEM_REMINDER>",
+                        self.consecutive_no_tool_calls, self.current_step, self.max_steps, remaining, finish_tool
+                    )
                     } else {
-                        tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                        if self.is_child_agent_workflow() {
+                            "<SYSTEM_REMINDER>No tool call detected. Call a tool now; if the delegated task is done, use 'submit_result' with result and summary.</SYSTEM_REMINDER>".to_string()
+                        } else {
+                            "<SYSTEM_REMINDER>No tool call detected. Call a tool now; if the task is done, use 'complete_workflow_with_summary' with a valid summary.</SYSTEM_REMINDER>".to_string()
+                        }
                     };
-                    is_terminal_tool
-                        && reinforced.approval_status.as_deref() != Some("pending")
-                        && reinforced.approval_status.as_deref() != Some("rejected")
-                });
-
-            if has_successful_finish_task {
-                self.update_state(WorkflowState::Completed).await?;
-                break;
-            }
-
-            if has_todo {
-                self.sync_todo_list().await?;
-            }
-
-            if needs_compression || observe_needs_compression {
-                if let Some((compression_candidate, compressed_until_message_id)) =
-                    self.context.build_pressure_compression_candidate()
-                {
                     let _ = self
-                        .run_blocking_compression(
-                            compression_candidate,
-                            compressed_until_message_id,
-                            "context_pressure",
+                        .add_message_and_notify_internal(
+                            "user".to_string(),
+                            error_msg.clone(),
+                            None,
+                            None,
+                            Some(StepType::Observe),
+                            false,
+                            None,
+                            Some(runtime_observation_metadata(
+                                runtime_observation_type,
+                                serde_json::json!({
+                                    "consecutive_no_tool_calls": self.consecutive_no_tool_calls,
+                                    "current_step": self.current_step,
+                                    "max_steps": self.max_steps,
+                                    "llm_content": error_msg,
+                                }),
+                            )),
                         )
                         .await?;
+                    if self.flush_queued_user_messages().await? {
+                        self.current_step = 0;
+                        self.consecutive_no_tool_calls = 0;
+                        self.loop_detector.reset_tool_call_history();
+                        self.loop_detector.reset_no_tool_response_history();
+                    }
+                    if self.consecutive_no_tool_calls >= 3 {
+                        self.consecutive_no_tool_calls = 0;
+                    }
+                    // Skip further processing since there are no tool results
+                    sleep(Duration::from_millis(100)).await;
+                    continue;
                 } else {
-                    log::info!(
+                    self.consecutive_no_tool_calls = 0;
+                    self.loop_detector.reset_no_tool_response_history();
+                }
+
+                let has_successful_finish_task =
+                    results.iter().any(|(_, reinforced, original_call)| {
+                        if reinforced.is_error {
+                            return false;
+                        }
+                        let tool_name = original_call
+                            .get("name")
+                            .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
+                        let is_terminal_tool = if self.is_child_agent_workflow() {
+                            tool_name == TOOL_SUBMIT_RESULT
+                        } else {
+                            tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                        };
+                        is_terminal_tool
+                            && reinforced.approval_status.as_deref() != Some("pending")
+                            && reinforced.approval_status.as_deref() != Some("rejected")
+                    });
+
+                if has_successful_finish_task {
+                    self.update_state(WorkflowState::Completed).await?;
+                    break;
+                }
+
+                if has_todo {
+                    self.sync_todo_list().await?;
+                }
+
+                if needs_compression || observe_needs_compression {
+                    if let Some((compression_candidate, compressed_until_message_id)) =
+                        self.context.build_pressure_compression_candidate()
+                    {
+                        let _ = self
+                            .run_blocking_compression(
+                                compression_candidate,
+                                compressed_until_message_id,
+                                "context_pressure",
+                            )
+                            .await?;
+                    } else {
+                        log::info!(
                         "[Workflow][session={}][phase=compression] Context exceeded 80% but no safe completed segment is available for blocking compression",
                         self.session_id
                     );
+                    }
                 }
+
+                sleep(Duration::from_millis(50)).await;
             }
 
-            sleep(Duration::from_millis(50)).await;
-        }
-
-        // === Memory Analysis After Workflow Completion ===
-        // Run only for successful completion to avoid extra model calls after stop/cancel.
-        if self.state == WorkflowState::Completed {
-            log::info!(
-                "[Workflow][session={}][phase=memory] Starting post-completion memory analysis",
-                self.session_id
-            );
-            if let Err(e) = self.analyze_and_update_memories().await {
-                log::warn!(
-                    "[Workflow][session={}][phase=memory] Memory analysis failed: {}",
-                    self.session_id,
-                    e
-                );
-                // Don't fail the workflow if memory analysis fails
-            } else {
+            // === Memory Analysis After Workflow Completion ===
+            // Run only for successful completion to avoid extra model calls after stop/cancel.
+            if self.state == WorkflowState::Completed {
                 log::info!(
-                    "[Workflow][session={}][phase=memory] Post-completion memory analysis finished",
+                    "[Workflow][session={}][phase=memory] Starting post-completion memory analysis",
                     self.session_id
                 );
+                if let Err(e) = self.analyze_and_update_memories().await {
+                    log::warn!(
+                        "[Workflow][session={}][phase=memory] Memory analysis failed: {}",
+                        self.session_id,
+                        e
+                    );
+                    // Don't fail the workflow if memory analysis fails
+                } else {
+                    log::info!(
+                        "[Workflow][session={}][phase=memory] Post-completion memory analysis finished",
+                        self.session_id
+                    );
+                }
+
+                // Drain any tail-end signals that arrived after the final observe flush but before
+                // completed-session cleanup. If a queued user message exists, reuse this hot
+                // executor instead of forcing a cold recovery path.
+                if self.check_stop_signal(&mut signal_rx).await? {
+                    break;
+                }
+
+                if self.flush_queued_user_messages().await? {
+                    log::info!(
+                        "[Workflow][session={}][phase=queue] Resuming completed session on hot executor because queued user messages arrived during completion finalization",
+                        self.session_id
+                    );
+                    self.current_step = 0;
+                    self.consecutive_no_tool_calls = 0;
+                    self.loop_detector.reset_tool_call_history();
+                    self.loop_detector.reset_no_tool_response_history();
+                    self.update_state(WorkflowState::Thinking).await?;
+                    continue;
+                }
+            } else {
+                log::info!(
+                    "[Workflow][session={}][phase=memory] Skip memory analysis for terminal state={}",
+                    self.session_id,
+                    self.state
+                );
             }
-        } else {
-            log::info!(
-                "[Workflow][session={}][phase=memory] Skip memory analysis for terminal state={}",
-                self.session_id,
-                self.state
-            );
+
+            break;
         }
 
         self.signal_rx = Some(signal_rx);
@@ -5791,6 +5849,61 @@ impl WorkflowExecutor {
                     self.dispatch_context_usage().await?;
                 }
             }
+            return Ok(true);
+        }
+
+        if sig_type_enum == Some(SignalType::UpdateSkillsConfig) {
+            let Some(skill_enabled) = sig_json.get("skill_enabled").and_then(|v| v.as_bool())
+            else {
+                return Ok(false);
+            };
+            let selected_skills = sig_json
+                .get("selected_skills")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+                .unwrap_or_default();
+
+            log::info!(
+                "WorkflowExecutor {}: Updating skills configuration, enabled={}, selected={}",
+                self.session_id,
+                skill_enabled,
+                selected_skills.len()
+            );
+
+            if let Ok(store) = self.context.main_store.write() {
+                if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                    let mut agent_config: serde_json::Value = snapshot
+                        .workflow
+                        .agent_config
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or(serde_json::json!({}));
+                    agent_config["skillEnabled"] = serde_json::json!(skill_enabled);
+                    agent_config["selectedSkills"] = serde_json::json!(selected_skills.clone());
+                    if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                        let _ = store.update_workflow_agent_config(&self.session_id, &config_str);
+                    }
+                }
+            }
+
+            self.agent_config.skill_enabled = Some(skill_enabled);
+            self.agent_config.selected_skills = serde_json::to_string(&selected_skills).ok();
+            self.sync_runtime_skills_from_agent_config();
+            self.rebuild_foundation_tools_for_runtime_update().await?;
+
+            let updated_agent_config = self
+                .context
+                .main_store
+                .read()
+                .ok()
+                .and_then(|store| store.get_workflow_snapshot(&self.session_id).ok())
+                .and_then(|snapshot| snapshot.workflow.agent_config)
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok());
+
+            if let Some(agent_config) = updated_agent_config {
+                self.dispatch_ui_payload(GatewayPayload::AgentConfigUpdated { agent_config })
+                    .await?;
+            }
+
             return Ok(true);
         }
 

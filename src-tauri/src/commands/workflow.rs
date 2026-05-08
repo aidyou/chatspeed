@@ -154,6 +154,7 @@ fn can_defer_runtime_config_signal_for_completed_session(signal_type: &str) -> b
             | "update_final_audit"
             | "update_auto_compress"
             | "update_model_config"
+            | "update_skills_config"
             | "update_approval_level"
             | "update_phase"
             | "remove_auto_approved_tool"
@@ -866,6 +867,34 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
     let defaults = build_agent_config_from_agent(agent, None, None);
     let mut changed = false;
 
+    let merge_missing_model_slots =
+        |config_models: &mut Option<crate::db::agent::AgentModels>,
+         default_models: &Option<crate::db::agent::AgentModels>| {
+            let Some(default_models) = default_models.as_ref() else {
+                return false;
+            };
+
+            let Some(existing_models) = config_models.as_mut() else {
+                *config_models = Some(default_models.clone());
+                return true;
+            };
+
+            let mut models_changed = false;
+            if existing_models.plan.is_none() && default_models.plan.is_some() {
+                existing_models.plan = default_models.plan.clone();
+                models_changed = true;
+            }
+            if existing_models.act.is_none() && default_models.act.is_some() {
+                existing_models.act = default_models.act.clone();
+                models_changed = true;
+            }
+            if existing_models.utility.is_none() && default_models.utility.is_some() {
+                existing_models.utility = default_models.utility.clone();
+                models_changed = true;
+            }
+            models_changed
+        };
+
     if config.allowed_paths.is_none() && defaults.allowed_paths.is_some() {
         config.allowed_paths = defaults.allowed_paths;
         changed = true;
@@ -890,8 +919,7 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
         config.selected_skills = defaults.selected_skills;
         changed = true;
     }
-    if config.models.is_none() && defaults.models.is_some() {
-        config.models = defaults.models;
+    if merge_missing_model_slots(&mut config.models, &defaults.models) {
         changed = true;
     }
     if config.max_contexts.is_none() && defaults.max_contexts.is_some() {
@@ -987,6 +1015,8 @@ pub async fn create_workflow(
             config.apply_overrides(&inherited_config);
         }
     }
+
+    fill_missing_agent_config_fields(&mut config, &agent);
 
     let agent_config_json = config.to_json();
 
@@ -3786,6 +3816,64 @@ pub async fn update_workflow_model_config(
         serde_json::json!({
             "type": "update_model_config",
             "configs": configs
+        }),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_workflow_skills_config(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    session_id: String,
+    skill_enabled: bool,
+    selected_skills: Vec<String>,
+) -> Result<(), String> {
+    let previous_config_json = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+        snapshot
+            .workflow
+            .agent_config
+            .unwrap_or_else(|| "{}".to_string())
+    };
+    {
+        let store = state.read().map_err(|e| e.to_string())?;
+
+        let snapshot = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?;
+
+        let mut config = snapshot
+            .workflow
+            .agent_config
+            .and_then(|s| AgentConfig::from_json(&s))
+            .unwrap_or_default();
+
+        config.skill_enabled = Some(skill_enabled);
+        config.selected_skills = Some(selected_skills.clone());
+
+        let new_config_str = config.to_json();
+        store
+            .update_workflow_agent_config(&session_id, &new_config_str)
+            .map_err(|e| e.to_string())?;
+    }
+
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "update_skills_config",
+            "skill_enabled": skill_enabled,
+            "selected_skills": selected_skills
         }),
     )
     .await?;

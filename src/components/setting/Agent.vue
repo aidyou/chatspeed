@@ -177,9 +177,15 @@
           </el-form-item>
           <el-form-item v-if="agentForm.skillEnabled" :label="$t('settings.agent.selectedSkills')"
             prop="selectedSkills">
-            <div v-if="sortedSystemSkills.length" class="skill-checklist">
+            <el-input
+              v-if="sortedSystemSkills.length"
+              v-model="skillSearchKeyword"
+              clearable
+              class="skill-search-input"
+              :placeholder="$t('workflow.skillsSearchPlaceholder')" />
+            <div v-if="filteredSystemSkills.length" class="skill-checklist">
               <el-checkbox-group v-model="agentForm.selectedSkills" class="skill-checklist__group">
-                <label v-for="skill in sortedSystemSkills" :key="skill.name" class="skill-checklist__item">
+                <label v-for="skill in filteredSystemSkills" :key="skill.name" class="skill-checklist__item">
                   <el-checkbox :value="skill.name">
                     <span class="skill-checklist__name">{{ skill.name }}</span>
                   </el-checkbox>
@@ -192,6 +198,9 @@
             <div class="form-tip">{{ $t('settings.agent.skillsHint') }}</div>
             <div v-if="!sortedSystemSkills.length" class="form-tip">
               {{ $t('settings.agent.noSkillsAvailable') }}
+            </div>
+            <div v-else-if="!filteredSystemSkills.length" class="form-tip">
+              {{ $t('workflow.skillsSearchEmpty') }}
             </div>
           </el-form-item>
         </el-tab-pane>
@@ -295,6 +304,7 @@ import { useModelStore } from '@/stores/model'
 import { useAgentStore } from '@/stores/agent'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { useSettingStore } from '@/stores/setting'
+import { useWorkflowStore } from '@/stores/workflow'
 import { AGENT_ROLE, AGENT_ROLE_OPTIONS } from '@/constants/agent'
 
 const { t } = useI18n()
@@ -303,6 +313,7 @@ const modelStore = useModelStore()
 const agentStore = useAgentStore()
 const proxyGroupStore = useProxyGroupStore()
 const settingStore = useSettingStore()
+const workflowStore = useWorkflowStore()
 const { agents, availableTools } = storeToRefs(agentStore)
 const ALWAYS_ENABLED_SKILL_NAMES = ['help']
 
@@ -312,6 +323,7 @@ const agentDialogVisible = ref(false)
 const editId = ref(null)
 const activeTab = ref('basic')
 const systemSkills = ref([])
+const skillSearchKeyword = ref('')
 const shouldBackfillSelectedSkills = ref(false)
 
 const allModelRoles = [{ key: 'plan' }, { key: 'act' }, { key: 'utility' }]
@@ -423,6 +435,12 @@ const sortedSystemSkills = computed(() => {
       }
       return a.name.localeCompare(b.name, 'zh-Hans')
     })
+})
+
+const filteredSystemSkills = computed(() => {
+  const query = skillSearchKeyword.value.trim().toLowerCase()
+  if (!query) return sortedSystemSkills.value
+  return sortedSystemSkills.value.filter(skill => skill.name.toLowerCase().includes(query))
 })
 
 const defaultSelectedSkillNames = computed(() => {
@@ -803,6 +821,22 @@ const normalizeAgentFormForSave = form => {
   return normalized
 }
 
+const syncCurrentWorkflowSkillsConfig = async (savedAgentId, finalForm) => {
+  const currentWorkflowId = workflowStore.currentWorkflowId
+  const currentWorkflowAgentId = workflowStore.currentWorkflow?.agentId
+  if (!currentWorkflowId || !savedAgentId || currentWorkflowAgentId !== savedAgentId) {
+    return
+  }
+
+  await invokeWrapper('update_workflow_skills_config', {
+    sessionId: currentWorkflowId,
+    skillEnabled: finalForm.skillEnabled !== false,
+    selectedSkills: finalForm.selectedSkills || []
+  })
+
+  await workflowStore.selectWorkflow(currentWorkflowId)
+}
+
 const getModelList = key => {
   const id = agentForm.value[key + 'Model']?.id
   return id ? modelStore.getModelProviderById(id)?.models || [] : []
@@ -990,6 +1024,7 @@ const editAgent = async id => {
     })
   }
 
+  skillSearchKeyword.value = ''
   agentDialogVisible.value = true
 }
 
@@ -1077,6 +1112,7 @@ const copyAgent = async id => {
     }
 
     allModelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
+    skillSearchKeyword.value = ''
     agentDialogVisible.value = true
   } catch (error) {
     showMessage(t('settings.agent.fetchFailed'), 'error')
@@ -1099,6 +1135,7 @@ const updateAgent = () => {
 
       try {
         await agentStore.saveAgent({ ...finalForm, id: editId.value })
+        await syncCurrentWorkflowSkillsConfig(editId.value, finalForm)
         showMessage(
           t(editId.value ? 'settings.agent.updateSuccess' : 'settings.agent.addSuccess'),
           'success'
@@ -1138,6 +1175,7 @@ const onDragEnd = () => {
 const onAgentDialogClose = () => {
   // Reset active tab to basic when dialog closes
   activeTab.value = 'basic'
+  skillSearchKeyword.value = ''
   // Clear form validation errors
   formRef.value?.resetFields()
 }
@@ -1214,6 +1252,10 @@ watch(
     font-size: 12px;
     color: var(--cs-text-color-secondary);
     line-height: 1.5;
+  }
+
+  .skill-search-input {
+    margin-bottom: 8px;
   }
 
   .skill-checklist {

@@ -204,7 +204,8 @@
           @update-approval-level="approvalLevel = $event"
           @update-selected-agent="onSelectedAgentChange"
           @create-new-workflow="createNewWorkflow"
-          @open-model-selector="openModelSelector" />
+          @open-model-selector="openModelSelector"
+          @open-skills-selector="openSkillsSelector" />
       </el-container>
     </div>
 
@@ -230,6 +231,13 @@
       :initial-tab="modelSelectorTab"
       :agent="selectedAgent"
       @save="onModelConfigSave" />
+
+    <WorkflowSkillsSelector
+      v-model="skillsSelectorVisible"
+      :current-workflow="currentWorkflow"
+      :agent="selectedAgent"
+      :system-skills="systemSkills"
+      @save="onSkillsConfigSave" />
   </div>
 </template>
 
@@ -249,6 +257,7 @@ import { useWindowStore } from '@/stores/window'
 import Titlebar from '@/components/window/Titlebar.vue'
 import StatusPanel from '@/components/workflow/StatusPanel.vue'
 import WorkflowModelSelector from '@/components/workflow/WorkflowModelSelector.vue'
+import WorkflowSkillsSelector from '@/components/workflow/WorkflowSkillsSelector.vue'
 import WorkflowSidebar from '@/components/workflow/WorkflowSidebar.vue'
 import WorkflowMessageList from '@/components/workflow/WorkflowMessageList.vue'
 import WorkflowInputArea from '@/components/workflow/WorkflowInputArea.vue'
@@ -300,6 +309,7 @@ const showPlanningModeToggle = computed(() => {
 
 // System skills
 const systemSkills = ref([])
+const skillsSelectorVisible = ref(false)
 const ALWAYS_ENABLED_SKILL_NAMES = ['help']
 const fetchSystemSkills = async () => {
   try {
@@ -318,11 +328,20 @@ const activeSkillAgent = computed(() => {
   return selectedAgent.value
 })
 
-const workflowInputSkills = computed(() => {
-  const agent = activeSkillAgent.value
-  if (!agent || agent.skillEnabled === false) return []
+const workflowSkillConfigSource = computed(() => {
+  if (workflowStore.currentWorkflow?.agentConfig) {
+    return workflowStore.currentWorkflow.agentConfig
+  }
+  return activeSkillAgent.value
+})
 
-  const configuredSelectedSkills = Array.isArray(agent.selectedSkills) ? agent.selectedSkills : null
+const workflowInputSkills = computed(() => {
+  const source = workflowSkillConfigSource.value
+  if (!source || source.skillEnabled === false) return []
+
+  const configuredSelectedSkills = Array.isArray(source.selectedSkills)
+    ? source.selectedSkills
+    : null
   if (configuredSelectedSkills === null) {
     return systemSkills.value
   }
@@ -445,6 +464,9 @@ const core = useWorkflowCore({
   processChunk,
   processReasoningChunk,
   setCompressionStatus,
+  openSkillsSelector: () => {
+    skillsSelectorVisible.value = true
+  },
   scrollToBottom: (force = false) => messageListRef.value?.scrollToBottom(force)
 })
 
@@ -527,6 +549,45 @@ const onSkillSelect = skill => {
   // We need to trigger send manually since originalOnSkillSelect doesn't have access to onSendMessage
   if (skill.type === 'command') {
     onSendMessage()
+  }
+}
+
+const openSkillsSelector = () => {
+  if (!currentWorkflowId.value && !selectedAgent.value) {
+    showMessage(t('workflow.noAgentError'), 'warning')
+    return
+  }
+  skillsSelectorVisible.value = true
+}
+
+const onSkillsConfigSave = async config => {
+  try {
+    if (currentWorkflowId.value) {
+      await invokeWrapper('update_workflow_skills_config', {
+        sessionId: currentWorkflowId.value,
+        skillEnabled: config.skillEnabled !== false,
+        selectedSkills: config.selectedSkills || []
+      })
+      await workflowStore.selectWorkflow(currentWorkflowId.value)
+    } else if (selectedAgent.value) {
+      const updatedAgent = {
+        ...selectedAgent.value,
+        skillEnabled: config.skillEnabled !== false,
+        selectedSkills: config.selectedSkills || []
+      }
+      await agentStore.saveAgent(updatedAgent)
+      await agentStore.fetchAgents()
+      selectedAgent.value =
+        agentStore.agents.find(agent => agent.id === updatedAgent.id) || updatedAgent
+    }
+
+    showMessage(t('common.saveSuccess'), 'success')
+  } catch (error) {
+    console.error('Failed to save workflow skills config:', error)
+    if (currentWorkflowId.value) {
+      await workflowStore.selectWorkflow(currentWorkflowId.value)
+    }
+    showMessage(t('common.saveFailed'), 'error')
   }
 }
 

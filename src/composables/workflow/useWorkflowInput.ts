@@ -33,6 +33,7 @@ export function useWorkflowInput({
     const builtinCommands = [
         { name: 'settings', description: 'Open settings window', type: 'command', group: 'chatspeed' },
         { name: 'models', description: 'Open model selection window', type: 'command', group: 'chatspeed' },
+        { name: 'skills-config', description: 'Open workflow skills settings', type: 'command', group: 'chatspeed' },
         { name: 'mcp', description: 'Open MCP settings', type: 'command', group: 'chatspeed' },
         { name: 'proxy', description: 'Open proxy settings', type: 'command', group: 'chatspeed' },
         { name: 'agent', description: 'Open agent settings', type: 'command', group: 'chatspeed' },

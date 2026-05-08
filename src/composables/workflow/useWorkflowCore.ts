@@ -33,6 +33,7 @@ export function useWorkflowCore({
     approvalLevel,
     finalAuditMode,
     autoCompressEnabled,
+    openSkillsSelector,
     pendingPaths,
     currentWorkflowId,
     currentWorkflow,
@@ -1298,6 +1299,10 @@ export function useWorkflowCore({
             openModelSelector()
             return true
         }
+        if (cmd === '/skills-config') {
+            openSkillsSelector?.()
+            return true
+        }
         return false
     }
 
@@ -1421,7 +1426,8 @@ export function useWorkflowCore({
                 const updatedAgent = {
                     ...selectedAgent.value,
                     planModel: configs.plan,
-                    actModel: configs.act
+                    actModel: configs.act,
+                    utilityModel: configs.utility
                 }
 
                 await agentStore.saveAgent(updatedAgent)

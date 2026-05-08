@@ -260,6 +260,13 @@ pub enum WorkflowSignal {
     UpdateModelConfig {
         configs: serde_json::Value,
     },
+    /// Update runtime skills configuration
+    UpdateSkillsConfig {
+        #[serde(alias = "skillEnabled")]
+        skill_enabled: bool,
+        #[serde(alias = "selectedSkills", default)]
+        selected_skills: Vec<String>,
+    },
     /// Remove a tool from auto-approve list
     RemoveAutoApprovedTool {
         tool_name: String,
@@ -306,6 +313,7 @@ impl WorkflowSignal {
             (WorkflowSignal::UpdatePhase { .. }, _) => true,
             (WorkflowSignal::UpdateAllowedPaths { .. }, _) => true,
             (WorkflowSignal::UpdateModelConfig { .. }, _) => true,
+            (WorkflowSignal::UpdateSkillsConfig { .. }, _) => true,
             (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
             (WorkflowSignal::RemoveShellPolicyItem { .. }, _) => true,
             (WorkflowSignal::RemoveQueuedUserMessage { .. }, _) => true,
@@ -339,6 +347,7 @@ impl WorkflowSignal {
             WorkflowSignal::UpdatePhase { .. } => "update_phase",
             WorkflowSignal::UpdateAllowedPaths { .. } => "update_allowed_paths",
             WorkflowSignal::UpdateModelConfig { .. } => "update_model_config",
+            WorkflowSignal::UpdateSkillsConfig { .. } => "update_skills_config",
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",
             WorkflowSignal::RemoveShellPolicyItem { .. } => "remove_shell_policy_item",
             WorkflowSignal::SubAgentComplete { .. } => "sub_agent_complete",

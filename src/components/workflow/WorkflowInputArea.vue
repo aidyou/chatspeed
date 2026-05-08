@@ -6,7 +6,18 @@
         v-for="group in groupedSkillSuggestions"
         :key="group.key"
         class="command-group">
-        <div class="command-group-title">{{ group.title }}</div>
+        <div class="command-group-header">
+          <div class="command-group-title">{{ group.title }}</div>
+          <button
+            v-if="group.key === 'installed'"
+            type="button"
+            class="command-group-action"
+            :title="$t('workflow.skillsConfigTitle')"
+            @mousedown.prevent
+            @click.stop="$emit('open-skills-selector')">
+            <cs name="setting" size="13px" />
+          </button>
+        </div>
         <div
           v-for="skill in group.items"
           :key="`${group.key}-${skill.name}`"
@@ -447,7 +458,8 @@ defineEmits([
   'update-approval-level',
   'update-selected-agent',
   'create-new-workflow',
-  'open-model-selector'
+  'open-model-selector',
+  'open-skills-selector'
 ])
 
 import { useWorkflowStore } from '@/stores/workflow'
