@@ -8,41 +8,92 @@
         </span>
       </el-tooltip>
     </div>
-    <Sortable v-if="agents.length > 0" class="list" item-key="id" :list="agents" :options="{
-      animation: 150,
-      ghostClass: 'ghost',
-      dragClass: 'drag',
-      draggable: '.draggable',
-      forceFallback: true,
-      bubbleScroll: true
-    }" @end="onDragEnd">
+    <Sortable v-if="groupedPrimaryAgents.length > 0" class="list agent-group-list" item-key="id"
+      :list="groupedPrimaryAgents" :options="{
+        animation: 150,
+        ghostClass: 'ghost',
+        dragClass: 'drag',
+        draggable: '.agent-group',
+        forceFallback: true,
+        bubbleScroll: true
+      }" @update="onPrimarySortUpdate" @end="onPrimaryDragEnd">
       <template #item="{ element }">
-        <div class="item draggable" :key="element.id">
-          <div class="label">
-            <avatar :text="element.name" :size="20" />
-            {{ element.name }}
+        <div class="agent-group" :key="element.id">
+          <div class="item draggable">
+            <div class="label">
+              <avatar :text="element.name" :size="20" />
+              {{ element.name }}
+            </div>
+
+            <div class="value">
+              <el-tooltip :content="$t('settings.agent.' + (element.disabled ? 'enable' : 'disable'))" placement="top"
+                :hide-after="0" :enterable="false" transition="none">
+                <el-switch :model-value="!element.disabled" @update:model-value="toggleAgentStatus(element)" />
+              </el-tooltip>
+              <el-tooltip :content="$t('settings.agent.edit')" placement="top" :hide-after="0" :enterable="false"
+                transition="none">
+                <div class="icon" @click="editAgent(element.id)" @mousedown.stop>
+                  <cs name="edit" size="16px" color="secondary" />
+                </div>
+              </el-tooltip>
+              <el-tooltip :content="$t('settings.agent.copy')" placement="top" :hide-after="0" :enterable="false"
+                transition="none">
+                <div class="icon" @click="copyAgent(element.id)" @mousedown.stop>
+                  <cs name="copy" size="16px" color="secondary" />
+                </div>
+              </el-tooltip>
+              <el-tooltip v-if="!element.isSystem" :content="$t('settings.agent.delete')" placement="top"
+                :hide-after="0" :enterable="false" transition="none">
+                <div class="icon" @click="deleteAgent(element.id)" @mousedown.stop>
+                  <cs name="trash" size="16px" color="secondary" />
+                </div>
+              </el-tooltip>
+            </div>
           </div>
 
-          <div class="value">
-            <el-tooltip :content="$t('settings.agent.edit')" placement="top" :hide-after="0" :enterable="false"
-              transition="none">
-              <div class="icon" @click="editAgent(element.id)" @mousedown.stop>
-                <cs name="edit" size="16px" color="secondary" />
+          <Sortable v-if="groupedChildAgents[element.id]?.length" class="agent-child-list" item-key="id"
+            :list="groupedChildAgents[element.id]" :options="{
+              animation: 150,
+              ghostClass: 'ghost',
+              dragClass: 'drag',
+              draggable: '.agent-child-item',
+              forceFallback: true,
+              bubbleScroll: true
+            }" @update="event => onChildSortUpdate(element.id, event)" @end="() => onChildDragEnd(element.id)">
+            <template #item="{ element: child }">
+              <div class="item draggable item--child agent-child-item" :key="child.id">
+                <div class="label label--child">
+                  <avatar :text="child.name" :size="18" />
+                  {{ child.name }}
+                </div>
+
+                <div class="value">
+                  <el-tooltip :content="$t('settings.agent.' + (child.disabled ? 'enable' : 'disable'))" placement="top"
+                    :hide-after="0" :enterable="false" transition="none">
+                    <el-switch :model-value="!child.disabled" @update:model-value="toggleAgentStatus(child)" />
+                  </el-tooltip>
+                  <el-tooltip :content="$t('settings.agent.edit')" placement="top" :hide-after="0" :enterable="false"
+                    transition="none">
+                    <div class="icon" @click="editAgent(child.id)" @mousedown.stop>
+                      <cs name="edit" size="16px" color="secondary" />
+                    </div>
+                  </el-tooltip>
+                  <el-tooltip :content="$t('settings.agent.copy')" placement="top" :hide-after="0" :enterable="false"
+                    transition="none">
+                    <div class="icon" @click="copyAgent(child.id)" @mousedown.stop>
+                      <cs name="copy" size="16px" color="secondary" />
+                    </div>
+                  </el-tooltip>
+                  <el-tooltip v-if="!child.isSystem" :content="$t('settings.agent.delete')" placement="top"
+                    :hide-after="0" :enterable="false" transition="none">
+                    <div class="icon" @click="deleteAgent(child.id)" @mousedown.stop>
+                      <cs name="trash" size="16px" color="secondary" />
+                    </div>
+                  </el-tooltip>
+                </div>
               </div>
-            </el-tooltip>
-            <el-tooltip :content="$t('settings.agent.copy')" placement="top" :hide-after="0" :enterable="false"
-              transition="none">
-              <div class="icon" @click="copyAgent(element.id)" @mousedown.stop>
-                <cs name="copy" size="16px" color="secondary" />
-              </div>
-            </el-tooltip>
-            <el-tooltip v-if="!element.isSystem" :content="$t('settings.agent.delete')" placement="top" :hide-after="0"
-              :enterable="false" transition="none">
-              <div class="icon" @click="deleteAgent(element.id)" @mousedown.stop>
-                <cs name="trash" size="16px" color="secondary" />
-              </div>
-            </el-tooltip>
-          </div>
+            </template>
+          </Sortable>
         </div>
       </template>
     </Sortable>
@@ -59,10 +110,10 @@
       <el-tabs v-model="activeTab">
         <el-tab-pane :label="$t('settings.agent.basicInfo')" name="basic">
           <el-form-item :label="$t('settings.agent.name')" prop="name">
-            <el-input v-model="agentForm.name" :disabled="isSystemAgentReadOnly" />
+            <el-input v-model="agentForm.name" :disabled="isSystemIdentityLocked" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.role')" prop="role">
-            <el-select v-model="agentForm.role" style="width: 100%" :disabled="isSystemAgentReadOnly">
+            <el-select v-model="agentForm.role" style="width: 100%" :disabled="isSystemIdentityLocked">
               <el-option v-for="option in AGENT_ROLE_OPTIONS" :key="option.value" :label="$t(option.labelKey)"
                 :value="option.value" />
             </el-select>
@@ -70,27 +121,27 @@
           <el-form-item v-if="agentForm.role === AGENT_ROLE.CHILD" :label="$t('settings.agent.parentAgent')"
             prop="parentAgentId">
             <el-select v-model="agentForm.parentAgentId" style="width: 100%" filterable
-              :disabled="isSystemAgentReadOnly">
+              :disabled="isSystemIdentityLocked">
               <el-option v-for="agent in primaryAgentOptions" :key="agent.id" :label="agent.name" :value="agent.id" />
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.description')" prop="description">
-            <el-input v-model="agentForm.description" type="textarea" :rows="2" :disabled="isSystemAgentReadOnly" />
+            <el-input v-model="agentForm.description" type="textarea" :rows="2" :disabled="isSystemIdentityLocked" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.agent.systemPrompt')" prop="systemPrompt">
+            <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="5" :disabled="isSystemPromptsLocked" />
+          </el-form-item>
+          <el-form-item v-if="agentForm.role !== AGENT_ROLE.CHILD" :label="$t('settings.agent.planningPrompt')"
+            prop="planningPrompt">
+            <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="5" :disabled="isSystemPromptsLocked"
+              :placeholder="$t('settings.agent.planningPromptPlaceholder')" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.disabled')" prop="disabled">
             <el-switch v-model="agentForm.disabled" />
           </el-form-item>
-          <el-form-item :label="$t('settings.agent.systemPrompt')" prop="systemPrompt">
-            <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="5" :disabled="isSystemAgentReadOnly" />
-          </el-form-item>
-          <el-form-item v-if="agentForm.role !== AGENT_ROLE.CHILD" :label="$t('settings.agent.planningPrompt')"
-            prop="planningPrompt">
-            <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="5" :disabled="isSystemAgentReadOnly"
-              :placeholder="$t('settings.agent.planningPromptPlaceholder')" />
-          </el-form-item>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.agent.models')" name="models" :disabled="isSystemAgentReadOnly">
+        <el-tab-pane :label="$t('settings.agent.models')" name="models">
           <div class="models-layout">
             <div class="model-item-compact" v-for="role in modelRoles" :key="role.key">
               <div class="header">
@@ -171,17 +222,13 @@
           </div>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.agent.skillsLabel')" name="skills" :disabled="isSystemAgentReadOnly">
+        <el-tab-pane :label="$t('settings.agent.skillsLabel')" name="skills">
           <el-form-item :label="$t('settings.agent.skillEnabled')" prop="skillEnabled">
             <el-switch v-model="agentForm.skillEnabled" />
           </el-form-item>
           <el-form-item v-if="agentForm.skillEnabled" :label="$t('settings.agent.selectedSkills')"
             prop="selectedSkills">
-            <el-input
-              v-if="sortedSystemSkills.length"
-              v-model="skillSearchKeyword"
-              clearable
-              class="skill-search-input"
+            <el-input v-if="sortedSystemSkills.length" v-model="skillSearchKeyword" clearable class="skill-search-input"
               :placeholder="$t('workflow.skillsSearchPlaceholder')" />
             <div v-if="filteredSystemSkills.length" class="skill-checklist">
               <el-checkbox-group v-model="agentForm.selectedSkills" class="skill-checklist__group">
@@ -205,7 +252,7 @@
           </el-form-item>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools" :disabled="isSystemAgentReadOnly">
+        <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools">
           <el-form-item :label="$t('settings.agent.approvalLevel')" prop="approvalLevel">
             <el-select v-model="agentForm.approvalLevel" style="width: 100%">
               <el-option :label="$t('settings.agent.approvalLevelDefault')" value="default" />
@@ -227,7 +274,7 @@
           </el-form-item>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.agent.security')" name="security" :disabled="isSystemAgentReadOnly">
+        <el-tab-pane :label="$t('settings.agent.security')" name="security">
           <div class="security-group">
             <div class="shell-policy-header">
               <h3>{{ $t('settings.agent.authorizedPaths') }}</h3>
@@ -324,7 +371,10 @@ const editId = ref(null)
 const activeTab = ref('basic')
 const systemSkills = ref([])
 const skillSearchKeyword = ref('')
+const defaultShellPolicies = ref([])
 const shouldBackfillSelectedSkills = ref(false)
+const groupedPrimaryAgents = ref([])
+const groupedChildAgents = ref({})
 
 const allModelRoles = [{ key: 'plan' }, { key: 'act' }, { key: 'utility' }]
 
@@ -465,7 +515,74 @@ const primaryAgentOptions = computed(() => {
   )
 })
 
+const compareAgentsByDisplayOrder = (a, b) => {
+  const hasSortIndexA = typeof a.sortIndex === 'number'
+  const hasSortIndexB = typeof b.sortIndex === 'number'
+
+  if (!hasSortIndexA && !hasSortIndexB) {
+    return 0
+  }
+
+  const sortIndexA = hasSortIndexA ? a.sortIndex : Number.MAX_SAFE_INTEGER
+  const sortIndexB = hasSortIndexB ? b.sortIndex : Number.MAX_SAFE_INTEGER
+
+  if (sortIndexA !== sortIndexB) {
+    return sortIndexA - sortIndexB
+  }
+
+  return (a.name || '').localeCompare(b.name || '', 'zh-Hans')
+}
+
+const syncGroupedAgentLists = () => {
+  const primaryAgents = []
+  const childGroups = {}
+
+  agents.value.forEach(agent => {
+    if ((agent.role || AGENT_ROLE.PRIMARY) === AGENT_ROLE.CHILD) {
+      const parentId = agent.parentAgentId
+      if (!parentId) {
+        return
+      }
+      if (!childGroups[parentId]) {
+        childGroups[parentId] = []
+      }
+      childGroups[parentId].push({ ...agent })
+      return
+    }
+
+    primaryAgents.push({ ...agent })
+    if (!childGroups[agent.id]) {
+      childGroups[agent.id] = []
+    }
+  })
+
+  primaryAgents.sort(compareAgentsByDisplayOrder)
+  Object.keys(childGroups).forEach(parentId => {
+    childGroups[parentId].sort(compareAgentsByDisplayOrder)
+  })
+
+  groupedPrimaryAgents.value = primaryAgents
+  groupedChildAgents.value = childGroups
+}
+
+const flattenGroupedAgents = () => {
+  const orderedAgents = []
+  groupedPrimaryAgents.value.forEach(primary => {
+    orderedAgents.push(primary)
+    const children = groupedChildAgents.value[primary.id] || []
+    children.forEach(child => {
+      orderedAgents.push({
+        ...child,
+        parentAgentId: primary.id
+      })
+    })
+  })
+  return orderedAgents
+}
+
 const isSystemAgentReadOnly = computed(() => !!editId.value && agentForm.value.isSystem)
+const isSystemIdentityLocked = computed(() => isSystemAgentReadOnly.value)
+const isSystemPromptsLocked = computed(() => isSystemAgentReadOnly.value)
 
 const canConfigureShellPolicy = computed(() => agentForm.value.role !== AGENT_ROLE.CHILD)
 
@@ -574,72 +691,19 @@ watch(
   { deep: true }
 )
 
-const DEFAULT_SHELL_POLICIES = [
-  { pattern: '^ls($| .*)', decision: 'allow' },
-  { pattern: '^pwd$', decision: 'allow' },
-  { pattern: '^cat .*', decision: 'allow' },
-  { pattern: '^git status$', decision: 'allow' },
-  { pattern: '^git log($| .*)', decision: 'allow' },
-  { pattern: '^git diff($| .*)', decision: 'allow' },
-  { pattern: '^grep .*', decision: 'allow' },
-  { pattern: '^find .*', decision: 'allow' },
-  { pattern: '^file($| .*)', decision: 'allow' },
-  { pattern: '^stat($| .*)', decision: 'allow' },
-  { pattern: '^head($| .*)', decision: 'allow' },
-  { pattern: '^tail($| .*)', decision: 'allow' },
-  { pattern: '^wc($| .*)', decision: 'allow' },
-  { pattern: '^du($| .*)', decision: 'allow' },
-  { pattern: '^df($| .*)', decision: 'allow' },
-  { pattern: '^ps($| .*)', decision: 'allow' },
-  { pattern: '^free($| .*)', decision: 'allow' },
-  { pattern: '^uname($| .*)', decision: 'allow' },
-  { pattern: '^whoami$', decision: 'allow' },
-  { pattern: '^id($| .*)', decision: 'allow' },
-  { pattern: '^env$', decision: 'allow' },
-  { pattern: '^printenv($| .*)', decision: 'allow' },
-  { pattern: '^date($| .*)', decision: 'allow' },
-  { pattern: '^cal($| .*)', decision: 'allow' },
-  { pattern: '^which($| .*)', decision: 'allow' },
-  { pattern: '^whereis($| .*)', decision: 'allow' },
-  { pattern: '^type($| .*)', decision: 'allow' },
-  { pattern: '^command($| .*)', decision: 'allow' },
-  { pattern: '^hostname$', decision: 'allow' },
-  { pattern: '^nproc$', decision: 'allow' },
-  { pattern: '^lscpu$', decision: 'allow' },
-  { pattern: '^lsmod$', decision: 'allow' },
-  { pattern: '^lsusb$', decision: 'allow' },
-  { pattern: '^lspci$', decision: 'allow' },
-  { pattern: '^lsblk($| .*)', decision: 'allow' },
-  { pattern: '^blkid($| .*)', decision: 'allow' },
-  { pattern: '^mount($| .*)', decision: 'allow' },
-  { pattern: '^getfacl($| .*)', decision: 'allow' },
-  { pattern: '^md5sum($| .*)', decision: 'allow' },
-  { pattern: '^sha256sum($| .*)', decision: 'allow' },
-  { pattern: '^base64($| .*)', decision: 'allow' },
-  { pattern: '^hexdump($| .*)', decision: 'allow' },
-  { pattern: '^od($| .*)', decision: 'allow' },
-  { pattern: '^git show($| .*)', decision: 'allow' },
-  { pattern: '^git branch($| .*)', decision: 'allow' },
-  { pattern: '^git remote($| .*)', decision: 'allow' },
-  { pattern: '^git tag($| .*)', decision: 'allow' },
-  { pattern: '^git rev-parse($| .*)', decision: 'allow' },
-  { pattern: '^git config --list($| .*)', decision: 'allow' },
-  { pattern: '^docker ps($| .*)', decision: 'allow' },
-  { pattern: '^docker images($| .*)', decision: 'allow' },
-  { pattern: '^docker inspect($| .*)', decision: 'allow' },
-  { pattern: '^systemctl status($| .*)', decision: 'allow' },
-  { pattern: '^iptables -L($| .*)', decision: 'allow' },
-  { pattern: '^ufw status($| .*)', decision: 'allow' },
-  { pattern: '^ss($| .*)', decision: 'allow' },
-  { pattern: '^netstat($| .*)', decision: 'allow' },
-  { pattern: '^ping($| .*)', decision: 'allow' },
-  { pattern: '^traceroute($| .*)', decision: 'allow' },
-  { pattern: '^dig($| .*)', decision: 'allow' },
-  { pattern: '^nslookup($| .*)', decision: 'allow' },
-  { pattern: '^tar -t.*', decision: 'allow' },
-  { pattern: '^zip -l($| .*)', decision: 'allow' },
-  { pattern: '^unzip -l($| .*)', decision: 'allow' }
-]
+const cloneDefaultShellPolicies = () => defaultShellPolicies.value.map(rule => ({ ...rule }))
+
+const ensureDefaultShellPoliciesLoaded = async () => {
+  if (defaultShellPolicies.value.length > 0) return
+
+  try {
+    const result = await invokeWrapper('get_default_shell_policy')
+    defaultShellPolicies.value = Array.isArray(result) ? result : []
+  } catch (error) {
+    console.error('Failed to load default shell policy:', error)
+    defaultShellPolicies.value = []
+  }
+}
 
 const addShellPolicyRule = () => {
   if (!agentForm.value.shellPolicy) agentForm.value.shellPolicy = []
@@ -719,10 +783,11 @@ const importDefaultShellPolicies = () => {
       cancelButtonText: t('common.cancel'),
       type: 'info'
     }
-  ).then(() => {
+  ).then(async () => {
+    await ensureDefaultShellPoliciesLoaded()
     if (!agentForm.value.shellPolicy) agentForm.value.shellPolicy = []
     // Add default policies if not already present
-    DEFAULT_SHELL_POLICIES.forEach(defaultRule => {
+    defaultShellPolicies.value.forEach(defaultRule => {
       const exists = agentForm.value.shellPolicy.some(
         rule => rule.pattern === defaultRule.pattern && rule.decision === defaultRule.decision
       )
@@ -757,6 +822,10 @@ const loadSystemSkills = async () => {
     console.error('Failed to load system skills:', error)
     systemSkills.value = []
   }
+}
+
+const loadDefaultShellPolicies = async () => {
+  await ensureDefaultShellPoliciesLoaded()
 }
 
 const setSelectedSkillsFromSource = selectedSkills => {
@@ -915,6 +984,7 @@ const parseModelField = (field, key) => {
 const editAgent = async id => {
   formRef.value?.resetFields()
   activeTab.value = 'basic'
+  await ensureDefaultShellPoliciesLoaded()
 
   if (id) {
     try {
@@ -965,11 +1035,11 @@ const editAgent = async id => {
         } catch (e) {
           console.error('Failed to parse shellPolicy JSON:', e)
           // Fallback to default policies
-          agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
+          agentForm.value.shellPolicy = cloneDefaultShellPolicies()
         }
       } else {
         // No shell policy, use defaults
-        agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
+        agentForm.value.shellPolicy = cloneDefaultShellPolicies()
       }
 
       agentForm.value.skillEnabled =
@@ -1010,7 +1080,7 @@ const editAgent = async id => {
     agentForm.value.autoApprove = availableTools.value
       .filter(tool => READ_ONLY_TOOLS.includes(tool.id))
       .map(tool => tool.id)
-    agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
+    agentForm.value.shellPolicy = cloneDefaultShellPolicies()
     agentForm.value.allowedPaths = []
     agentForm.value.role = AGENT_ROLE.PRIMARY
     agentForm.value.parentAgentId = null
@@ -1030,6 +1100,7 @@ const editAgent = async id => {
 
 const copyAgent = async id => {
   try {
+    await ensureDefaultShellPoliciesLoaded()
     const agentData = await agentStore.getAgent(id)
     if (!agentData) return
     agentForm.value = {
@@ -1037,7 +1108,7 @@ const copyAgent = async id => {
       ...agentData,
       id: null,
       isSystem: false,
-      disabled: false,
+      disabled: true,
       name: `${agentData.name}-Copy`
     }
     editId.value = null
@@ -1071,11 +1142,11 @@ const copyAgent = async id => {
       } catch (e) {
         console.error('Failed to parse shellPolicy JSON during copy:', e)
         // Fallback to default policies
-        agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
+        agentForm.value.shellPolicy = cloneDefaultShellPolicies()
       }
     } else {
       // No shell policy, use defaults
-      agentForm.value.shellPolicy = [...DEFAULT_SHELL_POLICIES]
+      agentForm.value.shellPolicy = cloneDefaultShellPolicies()
     }
 
     // Unpack 'allowedPaths' JSON field if it exists
@@ -1165,11 +1236,68 @@ const deleteAgent = id => {
   })
 }
 
-const onDragEnd = () => {
-  agentStore.updateAgentOrder(agents.value).catch(() => {
+const persistGroupedAgentOrder = () => {
+  agentStore.updateAgentOrder(flattenGroupedAgents()).catch(() => {
     showMessage(t('settings.agent.reorderFailed'), 'error')
     agentStore.fetchAgents()
   })
+}
+
+const reorderListByIndexes = (list, oldIndex, newIndex) => {
+  if (!Array.isArray(list) || oldIndex === null || newIndex === null || oldIndex === newIndex) {
+    return list
+  }
+
+  const nextList = [...list]
+  const [movedItem] = nextList.splice(oldIndex, 1)
+  if (!movedItem) {
+    return list
+  }
+  nextList.splice(newIndex, 0, movedItem)
+  return nextList
+}
+
+const onPrimarySortUpdate = event => {
+  const { oldIndex, newIndex } = event
+  groupedPrimaryAgents.value = reorderListByIndexes(
+    groupedPrimaryAgents.value,
+    oldIndex,
+    newIndex
+  )
+}
+
+const onChildSortUpdate = (parentId, event) => {
+  const { oldIndex, newIndex } = event
+  groupedChildAgents.value = {
+    ...groupedChildAgents.value,
+    [parentId]: reorderListByIndexes(groupedChildAgents.value[parentId] || [], oldIndex, newIndex)
+  }
+}
+
+const onPrimaryDragEnd = () => {
+  persistGroupedAgentOrder()
+}
+
+const onChildDragEnd = () => {
+  persistGroupedAgentOrder()
+}
+
+const toggleAgentStatus = async agent => {
+  const originalDisabled = agent.disabled
+  try {
+    const updatedAgent = {
+      ...agent,
+      disabled: !agent.disabled
+    }
+    await agentStore.saveAgent(updatedAgent)
+    agent.disabled = !agent.disabled
+    const actionText = agent.disabled ? 'disable' : 'enable'
+    showMessage(t(`settings.agent.${actionText}Success`, { name: agent.name }), 'success')
+  } catch (e) {
+    agent.disabled = originalDisabled
+    const actionText = originalDisabled ? 'enable' : 'disable'
+    showMessage(t(`settings.agent.${actionText}Failed`, { error: e.message || String(e), name: agent.name }), 'error')
+  }
 }
 
 const onAgentDialogClose = () => {
@@ -1183,8 +1311,17 @@ const onAgentDialogClose = () => {
 onMounted(() => {
   modelStore.updateModelStore()
   proxyGroupStore.getList()
+  loadDefaultShellPolicies()
   loadSystemSkills()
 })
+
+watch(
+  agents,
+  () => {
+    syncGroupedAgentLists()
+  },
+  { deep: true, immediate: true }
+)
 
 watch(
   () => agentForm.value.role,
@@ -1234,7 +1371,28 @@ watch(
 </script>
 
 <style lang="scss">
+.agent-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-group-list,
+.agent-child-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.item--child {
+  margin-left: var(--cs-space-sm);
+
+  .label--child {
+    padding-left: var(--cs-space-sm);
+  }
+}
+
 .agent-edit-dialog {
+
   .el-dialog__header {
     display: none;
   }

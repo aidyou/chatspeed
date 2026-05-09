@@ -185,6 +185,27 @@ fn ensure_agent_hierarchy_columns(conn: &Connection) -> Result<(), StoreError> {
         )?;
     }
 
+    if !column_exists(conn, "agents", "phase")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN phase TEXT DEFAULT 'standard'",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "agents", "sort_index")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "agents", "version")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_agents_parent_agent_id ON agents(parent_agent_id)",
         [],

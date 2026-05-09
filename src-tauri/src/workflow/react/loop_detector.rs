@@ -138,12 +138,12 @@ impl LoopDetector {
 
         if self.consecutive_no_tool_responses >= NO_TOOL_RESPONSE_REPEAT_THRESHOLD {
             Some(format!(
-                "<SYSTEM_REMINDER>LOOP DETECTED: You have produced the exact same assistant response {} times in a row without calling any tools.\n\
-                Repeating the same text is not progress. You MUST change strategy now:\n\
-                1. If you still need information, call an appropriate tool instead of repeating the same sentence.\n\
+                "<SYSTEM_REMINDER>LOOP DETECTED: You have produced the exact same assistant response {} times in a row without any new tool action.\n\
+                Brief reasoning-only turns are allowed, but repeating the same text is not progress. Change strategy now:\n\
+                1. Turn the analysis into one concrete tool action if more work is needed.\n\
                 2. If the task is actually complete, call the appropriate completion tool for this session.\n\
-                3. If you cannot continue because of a real limitation, explain the limitation once and then call 'ask_user' or the appropriate completion tool for this session.\n\
-                Do NOT output the same response again without a tool call.</SYSTEM_REMINDER>",
+                3. If you cannot continue because of a real limitation, explain it once and then use 'ask_user' or the appropriate completion tool for this session.\n\
+                Do not repeat the same response again without making progress.</SYSTEM_REMINDER>",
                 self.consecutive_no_tool_responses
             ))
         } else {

@@ -1,0 +1,35 @@
+schema_version: 1
+builtin_id: programming
+builtin_version: 1
+name: Programming
+description: A focused implementation agent for coding, debugging, refactoring, and delivering production-quality changes. Best used when the task is already understood and requires concrete code edits, validation, and follow-through.
+role: primary
+disabled: true
+prompts:
+  system: system.md
+  planning: planning.md
+config:
+  shell_policy: default
+  approval_level: default
+  auto_approve:
+    - glob
+    - grep
+    - list_dir
+    - read_file
+    - web_fetch
+    - web_search
+  available_tools:
+    - bash
+    - edit_file
+    - glob
+    - grep
+    - list_dir
+    - read_file
+    - web_fetch
+    - web_search
+    - write_file
+  final_audit: false
+  skill_enabled: true
+  selected_skills:
+    - commit
+  phase: standard

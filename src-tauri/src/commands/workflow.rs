@@ -793,6 +793,7 @@ fn build_agent_config_from_agent(
 
     config.final_audit = Some(final_audit.unwrap_or(agent.final_audit.unwrap_or(false)));
     config.skill_enabled = agent.skill_enabled;
+    config.phase = agent.phase.clone();
 
     if let Some(approve_str) = &agent.auto_approve {
         config.auto_approve = serde_json::from_str(approve_str).ok();
@@ -917,6 +918,10 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
     }
     if config.selected_skills.is_none() && defaults.selected_skills.is_some() {
         config.selected_skills = defaults.selected_skills;
+        changed = true;
+    }
+    if config.phase.is_none() && defaults.phase.is_some() {
+        config.phase = defaults.phase;
         changed = true;
     }
     if merge_missing_model_slots(&mut config.models, &defaults.models) {

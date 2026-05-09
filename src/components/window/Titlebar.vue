@@ -37,9 +37,7 @@
       <!-- center area -->
       <div class="center">
         <slot name="center"></slot>
-        <el-tooltip
-          placement="bottom"
-          v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
+        <el-tooltip placement="bottom" v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
           :content="t('common.newVersionReady')">
           <div class="menu icon-btn upperLayer restart" @click="updateStore.restartApp">
             <cs name="restart" />
@@ -53,7 +51,8 @@
         <slot name="right"></slot>
 
         <!-- menu show control -->
-        <el-dropdown @command="handleCommand" trigger="click" v-if="showMenuButton">
+        <el-dropdown @command="handleCommand" trigger="click" placement="bottom-end"
+          popper-class="titlebar-dropdown-popper" :popper-options="menuDropdownPopperOptions" v-if="showMenuButton">
           <div class="menu icon-btn upperLayer">
             <cs name="menu" />
           </div>
@@ -160,6 +159,28 @@ const menus = computed(() => {
 const showTitlebar = computed(() => {
   return !(isMacOS.value && isFullscreen.value)
 })
+
+const menuDropdownPopperOptions = {
+  modifiers: [
+    {
+      name: 'offset',
+      options: {
+        offset: [10, 10]
+      }
+    },
+    {
+      name: 'preventOverflow',
+      options: {
+        padding: {
+          top: 5,
+          right: 5,
+          bottom: 5,
+          left: 5
+        }
+      }
+    }
+  ]
+}
 
 const isFullscreen = ref(false)
 const appWindow = getCurrentWindow()
@@ -302,6 +323,10 @@ init()
 </script>
 
 <style lang="scss">
+.titlebar-dropdown-popper.el-dropdown__popper {
+  max-width: min(320px, calc(100vw - 15px));
+}
+
 .header {
   position: relative;
   display: flex;

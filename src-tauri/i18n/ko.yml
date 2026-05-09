@@ -1,377 +1,372 @@
+chat:
+  api_key_is_require_for_list_models: 모델 목록을 가져오려면 API 키가 필요합니다. 설정에서 유효한 API 키를 구성하십시오.
+  chat_not_found: 지정된 채팅 세션을 찾을 수 없습니다.
+  empty_chat_id: 채팅 ID는 비워 둘 수 없습니다.
+  empty_messages: 메시지 목록은 비워 둘 수 없습니다.
+  empty_model: 모델 이름은 비워 둘 수 없습니다.
+  empty_provider_id: 공급자 ID는 비워 둘 수 없습니다.
+  error:
+    api_request_failed: 'API 요청 실패, 공급자: %{provider}, 상태 코드: %{status_code}, 오류 세부 정보: %{details}'
+    failed_to_get_or_create_window_channel: '채팅 창 전용 통신 채널을 가져오거나 생성하지 못했습니다: %{error}'
+    invalid_input: '잘못된 입력: %{details}'
+    response_parse_failed: '%{provider}의 응답 구문 분석 실패: %{details}'
+    stream_processing_failed: '%{provider}의 데이터 스트림 처리 중 오류 발생: %{details}'
+    tool_call_serialization_failed: '도구 호출 직렬화 실패: %{details}'
+  failed_to_convert_language_code: '언어 코드 변환 실패: %{error}'
+  failed_to_create_file: '파일을 만들 수 없습니다: %{error}'
+  failed_to_detect_language: 언어 감지 실패
+  failed_to_get_available_languages: '사용 가능한 언어 목록 가져오기 실패: %{error}'
+  failed_to_write_file: '파일에 쓸 수 없습니다: %{error}'
+  invalid_api_protocol: '잘못된 API 프로토콜: %{protocol}'
+  note_already_exists: 해당 노트가 이미 존재하므로 다시 추가할 필요가 없습니다.
+  search_not_found: 지정된 검색 세션을 찾을 수 없습니다.
 command:
   clipboard:
-    failed_to_initialize: "클립보드 초기화 실패: %{error}"
-    failed_to_read: "클립보드 읽기 실패: %{error}"
-    failed_to_write: "클립보드 쓰기 실패: %{error}"
+    failed_to_initialize: '클립보드 초기화 실패: %{error}'
+    failed_to_read: '클립보드 읽기 실패: %{error}'
+    failed_to_write: '클립보드 쓰기 실패: %{error}'
   fs:
-    read_file_failed: "파일 읽기 실패: %{error}"
-    image_preview_failed: "이미지 미리보기 생성 실패: %{error}"
-    unknown_filename: "알수없는파일명.png"
+    image_preview_failed: '이미지 미리보기 생성 실패: %{error}'
+    read_file_failed: '파일 읽기 실패: %{error}'
+    unknown_filename: 알수없는파일명.png
   window:
-    failed_to_close: "창 닫기 실패: %{error}"
-
-chat:
-  error:
-    api_request_failed: "API 요청 실패, 공급자: %{provider}, 상태 코드: %{status_code}, 오류 세부 정보: %{details}"
-    invalid_input: "잘못된 입력: %{details}"
-    failed_to_get_or_create_window_channel: "채팅 창 전용 통신 채널을 가져오거나 생성하지 못했습니다: %{error}"
-    response_parse_failed: "%{provider}의 응답 구문 분석 실패: %{details}"
-    stream_processing_failed: "%{provider}의 데이터 스트림 처리 중 오류 발생: %{details}"
-    tool_call_serialization_failed: "도구 호출 직렬화 실패: %{details}"
-  api_key_is_require_for_list_models: "모델 목록을 가져오려면 API 키가 필요합니다. 설정에서 유효한 API 키를 구성하십시오."
-  chat_not_found: "지정된 채팅 세션을 찾을 수 없습니다."
-  empty_chat_id: "채팅 ID는 비워 둘 수 없습니다."
-  empty_messages: "메시지 목록은 비워 둘 수 없습니다."
-  empty_model: "모델 이름은 비워 둘 수 없습니다."
-  empty_provider_id: "공급자 ID는 비워 둘 수 없습니다."
-  failed_to_convert_language_code: "언어 코드 변환 실패: %{error}"
-  failed_to_create_file: "파일을 만들 수 없습니다: %{error}"
-  failed_to_detect_language: "언어 감지 실패"
-  failed_to_get_available_languages: "사용 가능한 언어 목록 가져오기 실패: %{error}"
-  failed_to_write_file: "파일에 쓸 수 없습니다: %{error}"
-  invalid_api_protocol: "잘못된 API 프로토콜: %{protocol}"
-  note_already_exists: "해당 노트가 이미 존재하므로 다시 추가할 필요가 없습니다."
-  search_not_found: "지정된 검색 세션을 찾을 수 없습니다."
-
+    failed_to_close: '창 닫기 실패: %{error}'
 db:
-  agent_name_exists: "에이전트 이름 '%{name}'이(가) 이미 존재합니다."
-  ai_model_not_found_by_id: "ID가 %{id}인 AI 모델을 찾을 수 없습니다."
-  ai_skill_not_found_by_id: "ID가 %{id}인 AI 기술을 찾을 수 없습니다."
-  already_exists: "데이터가 이미 존재합니다: %{error}"
-  conversation_not_found: "지정한 대화가 없거나 삭제되었거나 데이터베이스 예외가 발생했습니다."
-  database_error: "데이터베이스 오류: %{error}"
-  failed_to_initialize_database: "데이터베이스를 초기화할 수 없습니다: %{error}"
-  failed_to_lock_main_store: "데이터베이스 잠금 실패: %{error}"
-  failed_to_open_db_connection: "데이터베이스 연결을 열 수 없습니다: %{error}"
-  io_error: "IO 오류: %{error}"
-  json_error: "JSON 오류: %{error}"
-  json_parse_failed_mcp_config: "MCP 구성 JSON 구문 분석 실패: %{error}"
-  json_parse_failed_models: "모델 목록 JSON 구문 분석 실패: %{error}"
-  json_serialize_failed_mcp_config: "MCP 구성을 JSON으로 직렬화 실패: %{error}"
-  json_serialize_failed_metadata: "메타데이터를 JSON으로 직렬화 실패: %{error}"
-  mcp_not_found_by_id: "ID가 %{id}인 MCP 구성을 찾을 수 없습니다."
-  plugin_file_not_found_by_uuid: "UUID가 %{uuid}인 플러그인 파일을 찾을 수 없습니다."
-  plugin_invalid_runtime_type: "잘못된 플러그인 런타임 유형: %{runtime_type}"
-  plugin_json_deserialize_failed_input_schema: "플러그인 입력 스키마 JSON 구문 분석 실패: %{error}"
-  plugin_json_deserialize_failed_output_schema: "플러그인 출력 스키마 JSON 구문 분석 실패: %{error}"
-  plugin_json_serialize_failed_input_schema: "플러그인 입력 스키마를 JSON으로 직렬화 실패: %{error}"
-  plugin_json_serialize_failed_output_schema: "플러그인 출력 스키마를 JSON으로 직렬화 실패: %{error}"
-  plugin_not_found_by_uuid: "UUID가 %{uuid}인 플러그인을 찾을 수 없습니다."
-  tauri_error: "Tauri 오류: %{error}"
+  agent_name_exists: 에이전트 이름 '%{name}'이(가) 이미 존재합니다.
+  ai_model_not_found_by_id: ID가 %{id}인 AI 모델을 찾을 수 없습니다.
+  ai_skill_not_found_by_id: ID가 %{id}인 AI 기술을 찾을 수 없습니다.
+  already_exists: '데이터가 이미 존재합니다: %{error}'
   backup:
-    dir_not_found: "백업 디렉터리 '%{path}'를 찾을 수 없습니다."
-    failed_to_add_file_to_zip: "파일 '%{path}'을(를) ZIP에 추가하지 못했습니다: %{error}"
-    failed_to_create_backup_dir_at: "백업 디렉터리 '%{path}' 생성 실패: %{error}"
-    failed_to_create_cipher: "암호화 생성 실패: %{error}"
-    failed_to_create_dir_from_zip: "ZIP에서 디렉터리 '%{path}' 생성 실패: %{error}"
-    failed_to_create_encrypted_file: "암호화 파일 생성 실패: %{error}"
-    failed_to_create_file_from_zip: "ZIP에서 파일 '%{path}' 생성 실패: %{error}"
-    failed_to_create_mcp_sessions_dir: "MCP 세션 디렉터리 '%{path}' 생성 실패: %{error}"
-    failed_to_create_parent_dir_from_zip: "ZIP에서 상위 디렉터리 '%{path}' 생성 실패: %{error}"
-    failed_to_create_schema_dir: "스키마 디렉터리 '%{path}' 생성 실패: %{error}"
-    failed_to_create_shared_dir: "공유 디렉터리 '%{path}' 생성 실패: %{error}"
-    failed_to_create_static_dir: "정적 디렉터리 '%{path}' 생성 실패: %{error}"
-    failed_to_create_theme_dir: "테마 디렉터리 '%{path}' 생성 실패: %{error}"
-    failed_to_create_upload_dir: "업로드 디렉터리 '%{path}' 생성 실패: %{error}"
-    failed_to_create_zip_for_backup: "백업용 ZIP 파일 '%{path}' 생성 실패: %{error}"
-    failed_to_decode_key: "키 디코딩 실패: %{error}"
-    failed_to_decrypt_data: "데이터 복호화 실패: %{error}"
-    failed_to_encrypt_data: "데이터 암호화 실패: %{error}"
-    failed_to_finish_zip: "ZIP 파일 생성 완료 실패: %{error}"
-    failed_to_open_database_file: "데이터베이스 파일 열기 실패: %{error}"
-    failed_to_open_dest_db: "대상 데이터베이스 '%{path}' 열기 실패: %{error}"
-    failed_to_open_encrypted_file: "암호화 파일 열기 실패: %{error}"
-    failed_to_open_file_for_zip: "ZIP용 파일 '%{path}' 열기 실패: %{error}"
-    failed_to_open_zip: "ZIP 파일 '%{path}' 열기 실패: %{error}"
-    failed_to_read_backup_dir: "백업 디렉터리 '%{path}' 읽기 실패: %{error}"
-    failed_to_read_database_file: "데이터베이스 파일 읽기 실패: %{error}"
-    failed_to_read_encrypted_file: "암호화 파일 읽기 실패: %{error}"
-    failed_to_read_file_for_zip: "ZIP용 파일 내용 읽기 실패: %{error}"
-    failed_to_read_zip_archive: "ZIP 아카이브 읽기 실패: %{error}"
-    failed_to_read_zip_entry: "ZIP 항목 읽기 실패 (인덱스 %{index}): %{error}"
-    failed_to_set_permissions_from_zip: "ZIP에서 '%{path}' 권한 설정 실패: %{error}"
-    failed_to_strip_prefix_for_zip: "ZIP 경로 접두사 제거 실패 (기본 경로: '%{base}', 전체 경로: '%{full}'): %{error}"
-    failed_to_write_encrypted_file: "암호화 파일 쓰기 실패: %{error}"
-    failed_to_write_file_from_zip: "ZIP에서 파일 '%{path}' 쓰기 실패: %{error}"
-    failed_to_write_temp_db: "임시 데이터베이스 파일 '%{path}' 쓰기 실패: %{error}"
-    failed_to_write_to_zip: "ZIP 파일에 쓰기 실패: %{error}"
-    file_not_found: "백업 파일 '%{path}'를 찾을 수 없습니다."
-    invalid_magic_number: "마법 번호가 유효하지 않습니다"
-    some_files_skipped_restart_required: "일부 파일(예: MCP 세션 데이터베이스)이 사용 중이어서 복원할 수 없습니다. 복원을 완료하려면 애플리케이션을 다시 시작하세요."
-    unsupported_version: "지원되지 않는 버전입니다"
-
+    dir_not_found: 백업 디렉터리 '%{path}'를 찾을 수 없습니다.
+    failed_to_add_file_to_zip: '파일 ''%{path}''을(를) ZIP에 추가하지 못했습니다: %{error}'
+    failed_to_create_backup_dir_at: '백업 디렉터리 ''%{path}'' 생성 실패: %{error}'
+    failed_to_create_cipher: '암호화 생성 실패: %{error}'
+    failed_to_create_dir_from_zip: 'ZIP에서 디렉터리 ''%{path}'' 생성 실패: %{error}'
+    failed_to_create_encrypted_file: '암호화 파일 생성 실패: %{error}'
+    failed_to_create_file_from_zip: 'ZIP에서 파일 ''%{path}'' 생성 실패: %{error}'
+    failed_to_create_mcp_sessions_dir: 'MCP 세션 디렉터리 ''%{path}'' 생성 실패: %{error}'
+    failed_to_create_parent_dir_from_zip: 'ZIP에서 상위 디렉터리 ''%{path}'' 생성 실패: %{error}'
+    failed_to_create_schema_dir: '스키마 디렉터리 ''%{path}'' 생성 실패: %{error}'
+    failed_to_create_shared_dir: '공유 디렉터리 ''%{path}'' 생성 실패: %{error}'
+    failed_to_create_static_dir: '정적 디렉터리 ''%{path}'' 생성 실패: %{error}'
+    failed_to_create_theme_dir: '테마 디렉터리 ''%{path}'' 생성 실패: %{error}'
+    failed_to_create_upload_dir: '업로드 디렉터리 ''%{path}'' 생성 실패: %{error}'
+    failed_to_create_zip_for_backup: '백업용 ZIP 파일 ''%{path}'' 생성 실패: %{error}'
+    failed_to_decode_key: '키 디코딩 실패: %{error}'
+    failed_to_decrypt_data: '데이터 복호화 실패: %{error}'
+    failed_to_encrypt_data: '데이터 암호화 실패: %{error}'
+    failed_to_finish_zip: 'ZIP 파일 생성 완료 실패: %{error}'
+    failed_to_open_database_file: '데이터베이스 파일 열기 실패: %{error}'
+    failed_to_open_dest_db: '대상 데이터베이스 ''%{path}'' 열기 실패: %{error}'
+    failed_to_open_encrypted_file: '암호화 파일 열기 실패: %{error}'
+    failed_to_open_file_for_zip: 'ZIP용 파일 ''%{path}'' 열기 실패: %{error}'
+    failed_to_open_zip: 'ZIP 파일 ''%{path}'' 열기 실패: %{error}'
+    failed_to_read_backup_dir: '백업 디렉터리 ''%{path}'' 읽기 실패: %{error}'
+    failed_to_read_database_file: '데이터베이스 파일 읽기 실패: %{error}'
+    failed_to_read_encrypted_file: '암호화 파일 읽기 실패: %{error}'
+    failed_to_read_file_for_zip: 'ZIP용 파일 내용 읽기 실패: %{error}'
+    failed_to_read_zip_archive: 'ZIP 아카이브 읽기 실패: %{error}'
+    failed_to_read_zip_entry: 'ZIP 항목 읽기 실패 (인덱스 %{index}): %{error}'
+    failed_to_set_permissions_from_zip: 'ZIP에서 ''%{path}'' 권한 설정 실패: %{error}'
+    failed_to_strip_prefix_for_zip: 'ZIP 경로 접두사 제거 실패 (기본 경로: ''%{base}'', 전체 경로: ''%{full}''): %{error}'
+    failed_to_write_encrypted_file: '암호화 파일 쓰기 실패: %{error}'
+    failed_to_write_file_from_zip: 'ZIP에서 파일 ''%{path}'' 쓰기 실패: %{error}'
+    failed_to_write_temp_db: '임시 데이터베이스 파일 ''%{path}'' 쓰기 실패: %{error}'
+    failed_to_write_to_zip: 'ZIP 파일에 쓰기 실패: %{error}'
+    file_not_found: 백업 파일 '%{path}'를 찾을 수 없습니다.
+    invalid_magic_number: 마법 번호가 유효하지 않습니다
+    some_files_skipped_restart_required: '일부 파일(예: MCP 세션 데이터베이스)이 사용 중이어서 복원할 수 없습니다. 복원을 완료하려면 애플리케이션을 다시 시작하세요.'
+    unsupported_version: 지원되지 않는 버전입니다
+  conversation_not_found: 지정한 대화가 없거나 삭제되었거나 데이터베이스 예외가 발생했습니다.
+  database_error: '데이터베이스 오류: %{error}'
+  failed_to_initialize_database: '데이터베이스를 초기화할 수 없습니다: %{error}'
+  failed_to_lock_main_store: '데이터베이스 잠금 실패: %{error}'
+  failed_to_open_db_connection: '데이터베이스 연결을 열 수 없습니다: %{error}'
+  io_error: 'IO 오류: %{error}'
+  json_error: 'JSON 오류: %{error}'
+  json_parse_failed_mcp_config: 'MCP 구성 JSON 구문 분석 실패: %{error}'
+  json_parse_failed_models: '모델 목록 JSON 구문 분석 실패: %{error}'
+  json_serialize_failed_mcp_config: 'MCP 구성을 JSON으로 직렬화 실패: %{error}'
+  json_serialize_failed_metadata: '메타데이터를 JSON으로 직렬화 실패: %{error}'
+  mcp_not_found_by_id: ID가 %{id}인 MCP 구성을 찾을 수 없습니다.
+  plugin_file_not_found_by_uuid: UUID가 %{uuid}인 플러그인 파일을 찾을 수 없습니다.
+  plugin_invalid_runtime_type: '잘못된 플러그인 런타임 유형: %{runtime_type}'
+  plugin_json_deserialize_failed_input_schema: '플러그인 입력 스키마 JSON 구문 분석 실패: %{error}'
+  plugin_json_deserialize_failed_output_schema: '플러그인 출력 스키마 JSON 구문 분석 실패: %{error}'
+  plugin_json_serialize_failed_input_schema: '플러그인 입력 스키마를 JSON으로 직렬화 실패: %{error}'
+  plugin_json_serialize_failed_output_schema: '플러그인 출력 스키마를 JSON으로 직렬화 실패: %{error}'
+  plugin_not_found_by_uuid: UUID가 %{uuid}인 플러그인을 찾을 수 없습니다.
+  tauri_error: 'Tauri 오류: %{error}'
 http:
-  client_build_failed: "HTTP 클라이언트 빌드 실패: %{error}"
-  connection_failed: "연결 실패: %{error}"
-  download_failed: "다운로드 실패: %{error}"
-  failed_to_clone_request: "요청 재시도 시 요청 복제 실패"
-  failed_to_open_file: "파일을 열 수 없습니다, 경로: %{path}, 오류: %{error}"
-  failed_to_read_file: "파일을 읽을 수 없습니다, 경로: %{path}, 오류: %{error}"
-  headers_convert_failed: "요청 헤더 구성을 HttpHeader로 변환할 수 없습니다: %{error}"
-  mime_parse_failed: "MIME 유형을 구문 분석할 수 없습니다."
-  missing_url: "HTTP 요청에 URL 매개변수가 없습니다."
-  proxy_config_failed: "프록시 구성 실패: %{error}"
-  read_response_failed: "응답을 읽을 수 없습니다: %{error}"
-  request_failed: "요청 실패, 상태 코드: %{status}, 오류: %{error}"
-  request_timeout: "네트워크 요청 시간 초과, 네트워크 연결을 확인하거나 나중에 다시 시도하십시오."
-  response_too_large: "서버 측 데이터가 요청 제한을 초과했습니다. 서버 측 데이터 크기: %{content_length}, 요청 제한: %{max_size}"
-  server_downloads_dir_not_found: "다운로드 디렉터리를 찾을 수 없습니다."
-  server_failed_to_get_app_data_dir: "애플리케이션 데이터 디렉터리 검색 실패: %{error}"
-  server_failed_to_save_file: "파일 저장 실패: %{error}"
-  server_file_saved_successfully: "파일이 성공적으로 저장되었습니다."
-  server_no_available_ports: "%{start_port}-%{max_port} 범위에서 사용 가능한 포트를 찾을 수 없습니다."
-  server_startup_failed: "서버 시작 실패: %{error}"
-
+  client_build_failed: 'HTTP 클라이언트 빌드 실패: %{error}'
+  connection_failed: '연결 실패: %{error}'
+  download_failed: '다운로드 실패: %{error}'
+  failed_to_clone_request: 요청 재시도 시 요청 복제 실패
+  failed_to_open_file: '파일을 열 수 없습니다, 경로: %{path}, 오류: %{error}'
+  failed_to_read_file: '파일을 읽을 수 없습니다, 경로: %{path}, 오류: %{error}'
+  headers_convert_failed: '요청 헤더 구성을 HttpHeader로 변환할 수 없습니다: %{error}'
+  mime_parse_failed: MIME 유형을 구문 분석할 수 없습니다.
+  missing_url: HTTP 요청에 URL 매개변수가 없습니다.
+  proxy_config_failed: '프록시 구성 실패: %{error}'
+  read_response_failed: '응답을 읽을 수 없습니다: %{error}'
+  request_failed: '요청 실패, 상태 코드: %{status}, 오류: %{error}'
+  request_timeout: 네트워크 요청 시간 초과, 네트워크 연결을 확인하거나 나중에 다시 시도하십시오.
+  response_too_large: '서버 측 데이터가 요청 제한을 초과했습니다. 서버 측 데이터 크기: %{content_length}, 요청 제한: %{max_size}'
+  server_downloads_dir_not_found: 다운로드 디렉터리를 찾을 수 없습니다.
+  server_failed_to_get_app_data_dir: '애플리케이션 데이터 디렉터리 검색 실패: %{error}'
+  server_failed_to_save_file: '파일 저장 실패: %{error}'
+  server_file_saved_successfully: 파일이 성공적으로 저장되었습니다.
+  server_no_available_ports: '%{start_port}-%{max_port} 범위에서 사용 가능한 포트를 찾을 수 없습니다.'
+  server_startup_failed: '서버 시작 실패: %{error}'
 main:
-  failed_to_create_log_directory: "로그 디렉터리를 만들 수 없습니다."
-  failed_to_create_log_file: "로그 파일을 만들 수 없습니다."
-  failed_to_create_note_window: "노트 창 생성 실패: %{error}"
-  failed_to_create_settings_window: "설정 창 생성 실패: %{error}"
-  failed_to_create_webview_window: "WebView 창 생성 실패: %{error}"
-  failed_to_emit_event: "이벤트 보내기 실패: %{error}"
-  failed_to_find_window_with_label: "레이블이 있는 창을 찾을 수 없습니다: %{label}"
-  failed_to_get_current_monitor: "현재 모니터 가져오기 실패: %{error}"
-  failed_to_get_window_size: "창 크기 가져오기 실패: %{error}"
-  failed_to_initialize_logger: "로거를 초기화할 수 없습니다."
-  failed_to_navigate_to_url: "URL로 이동 실패: %{url}, 오류: %{error}"
-  failed_to_set_window_always_on_top: "창을 항상 위에 고정하는 데 실패했습니다: %{error}"
-  failed_to_set_window_position: "창 위치 설정 실패: %{error}"
-  invalid_direction: "잘못된 방향, 현재는 다음만 지원됩니다: left->왼쪽, right->오른쪽"
-  window_not_ready: "창이 준비되지 않았습니다."
+  failed_to_create_log_directory: 로그 디렉터리를 만들 수 없습니다.
+  failed_to_create_log_file: 로그 파일을 만들 수 없습니다.
+  failed_to_create_note_window: '노트 창 생성 실패: %{error}'
+  failed_to_create_settings_window: '설정 창 생성 실패: %{error}'
+  failed_to_create_webview_window: 'WebView 창 생성 실패: %{error}'
+  failed_to_emit_event: '이벤트 보내기 실패: %{error}'
+  failed_to_find_window_with_label: '레이블이 있는 창을 찾을 수 없습니다: %{label}'
+  failed_to_get_current_monitor: '현재 모니터 가져오기 실패: %{error}'
+  failed_to_get_window_size: '창 크기 가져오기 실패: %{error}'
+  failed_to_initialize_logger: 로거를 초기화할 수 없습니다.
+  failed_to_navigate_to_url: 'URL로 이동 실패: %{url}, 오류: %{error}'
+  failed_to_set_window_always_on_top: '창을 항상 위에 고정하는 데 실패했습니다: %{error}'
+  failed_to_set_window_position: '창 위치 설정 실패: %{error}'
+  invalid_direction: '잘못된 방향, 현재는 다음만 지원됩니다: left->왼쪽, right->오른쪽'
   shortcut:
-    failed_to_unregister_old: "이전 단축키 등록 해제 실패: %{error}"
-    failed_to_unregister_existing: "기존 단축키 등록 해제 실패: %{error}"
-    invalid_format: "잘못된 단축키 형식: %{shortcut}"
-
+    failed_to_unregister_existing: '기존 단축키 등록 해제 실패: %{error}'
+    failed_to_unregister_old: '이전 단축키 등록 해제 실패: %{error}'
+    invalid_format: '잘못된 단축키 형식: %{shortcut}'
+  window_not_ready: 창이 준비되지 않았습니다.
 mcp:
-  config:
-    name_must_be_non_empty: "MCP 구성 이름은 비워 둘 수 없습니다. 유효한 구성 이름을 입력하십시오."
-    sse_url_must_be_non_empty: "MCP 구성의 SSE URL은 비워 둘 수 없습니다."
-    stdio_args_must_be_non_empty: "MCP 구성의 시작 매개변수는 비워 둘 수 없습니다."
-    stdio_command_must_be_non_empty: "MCP 구성의 시작 명령은 비워 둘 수 없습니다."
   client:
-    config_error_for_server: "MCP 서버 '%{server_name}' 구성 오류: %{error}"
-    config_mismatch: "MCP 구성 불일치, 생성 중인 MCP 클라이언트 %{client}, 구성 유형: %{protocol_type}"
-    failed_to_call_tool: "MCP 도구 호출 실패 - %{server_name}::%{tool_name}(%{args}), 오류: %{error}"
-    http_service_start_failed: "MCP HTTP 서비스 시작 실패 (URL: %{url}), 원인: %{error}"
-    http_url_cant_be_empty: "MCP HTTP 클라이언트 URL 매개변수는 비워 둘 수 없습니다"
-    list_tools_timeout: "%{name} 도구 목록 가져오기 시간 초과"
-    no_running: "MCP 클라이언트 '%{client}'가 실행 중이 아닙니다. 구성을 확인하고 서비스를 다시 시작하십시오."
-    sse_service_start_failed: "SSE 서비스 시작 실패 (URL: %{url}), 원인: %{error}"
-    sse_transport_start_failed: "SSE 전송 시작 실패 (URL: %{url}), 원인: %{error}"
-    sse_url_cant_be_empty: "SSE 클라이언트의 URL 매개변수는 비워 둘 수 없습니다."
-    stdio_args_cant_be_empty: "stdio 클라이언트의 args 매개변수는 비워 둘 수 없습니다."
-    stdio_command_cant_be_empty: "stdio 클라이언트의 시작 명령 매개변수 command는 비워 둘 수 없습니다."
-    stdio_command_not_found_no_help: "MCP 서비스를 시작하지 못했습니다: '%{command}' 명령을 찾을 수 없습니다 (원래 오류: %{original_error}). 명령이 설치되어 있고 시스템의 PATH 환경 변수에 있는지 확인하십시오."
-    stdio_command_not_found_with_help: "MCP 서비스를 시작하지 못했습니다: '%{command}' 명령을 찾을 수 없습니다 (원래 오류: %{original_error})."
-    stdio_npx_not_found_help: "이는 일반적으로 Node.js가 올바르게 설치되지 않았거나 'npx' 명령이 시스템의 PATH 환경 변수에 없음을 의미합니다. Node.js 설치를 확인하십시오."
-    stdio_process_creation_failed: "Stdio 프로세스 생성 실패 (명령: %{command}), 원인: %{error}"
-    stdio_service_start_failed: "Stdio 서비스 시작 실패 (명령: %{command}), 원인: %{error}"
-    stdio_uvx_not_found_help: "이는 Python 환경 또는 '%{command}' 도구가 올바르게 설정되지 않았거나 시스템의 PATH 환경 변수에 없음을 의미할 수 있습니다. Python 및 '%{command}' 설정을 확인하십시오."
+    config_error_for_server: 'MCP 서버 ''%{server_name}'' 구성 오류: %{error}'
+    config_mismatch: 'MCP 구성 불일치, 생성 중인 MCP 클라이언트 %{client}, 구성 유형: %{protocol_type}'
+    failed_to_call_tool: 'MCP 도구 호출 실패 - %{server_name}::%{tool_name}(%{args}), 오류: %{error}'
+    http_service_start_failed: 'MCP HTTP 서비스 시작 실패 (URL: %{url}), 원인: %{error}'
+    http_url_cant_be_empty: MCP HTTP 클라이언트 URL 매개변수는 비워 둘 수 없습니다
+    list_tools_timeout: '%{name} 도구 목록 가져오기 시간 초과'
+    no_running: MCP 클라이언트 '%{client}'가 실행 중이 아닙니다. 구성을 확인하고 서비스를 다시 시작하십시오.
+    sse_service_start_failed: 'SSE 서비스 시작 실패 (URL: %{url}), 원인: %{error}'
+    sse_transport_start_failed: 'SSE 전송 시작 실패 (URL: %{url}), 원인: %{error}'
+    sse_url_cant_be_empty: SSE 클라이언트의 URL 매개변수는 비워 둘 수 없습니다.
+    stdio_args_cant_be_empty: stdio 클라이언트의 args 매개변수는 비워 둘 수 없습니다.
+    stdio_command_cant_be_empty: stdio 클라이언트의 시작 명령 매개변수 command는 비워 둘 수 없습니다.
+    stdio_command_not_found_no_help: 'MCP 서비스를 시작하지 못했습니다: ''%{command}'' 명령을 찾을 수 없습니다 (원래 오류: %{original_error}). 명령이 설치되어
+      있고 시스템의 PATH 환경 변수에 있는지 확인하십시오.'
+    stdio_command_not_found_with_help: 'MCP 서비스를 시작하지 못했습니다: ''%{command}'' 명령을 찾을 수 없습니다 (원래 오류: %{original_error}).'
+    stdio_npx_not_found_help: 이는 일반적으로 Node.js가 올바르게 설치되지 않았거나 'npx' 명령이 시스템의 PATH 환경 변수에 없음을 의미합니다. Node.js 설치를 확인하십시오.
+    stdio_process_creation_failed: 'Stdio 프로세스 생성 실패 (명령: %{command}), 원인: %{error}'
+    stdio_service_start_failed: 'Stdio 서비스 시작 실패 (명령: %{command}), 원인: %{error}'
+    stdio_uvx_not_found_help: 이는 Python 환경 또는 '%{command}' 도구가 올바르게 설정되지 않았거나 시스템의 PATH 환경 변수에 없음을 의미할 수 있습니다. Python 및 '%{command}'
+      설정을 확인하십시오.
+  config:
+    name_must_be_non_empty: MCP 구성 이름은 비워 둘 수 없습니다. 유효한 구성 이름을 입력하십시오.
+    sse_url_must_be_non_empty: MCP 구성의 SSE URL은 비워 둘 수 없습니다.
+    stdio_args_must_be_non_empty: MCP 구성의 시작 매개변수는 비워 둘 수 없습니다.
+    stdio_command_must_be_non_empty: MCP 구성의 시작 명령은 비워 둘 수 없습니다.
   error:
-    client_call_failed: "MCP 클라이언트 호출 실패: %{error}"
-    client_config_failed: "MCP 클라이언트 구성 실패: %{error}"
-    client_start_failed: "MCP 클라이언트 시작 실패: %{error}"
-    client_status_failed: "MCP 클라이언트 상태 가져오기 실패: %{error}"
-    client_stop_failed: "MCP 클라이언트 중지 실패: %{error}"
-    io_error: "MCP I/O 오류: %{error}"
-    not_found_error: "MCP '%{name}'을(를) 찾을 수 없습니다."
-    serialization_error: "MCP 직렬화/역직렬화 오류: %{error}"
-    server_initialization_failed: "MCP 서버 초기화 실패: %{error}"
-    server_internal_error: "MCP 서버 내부 오류: %{error}"
-    server_tool_execution_failed: "MCP 서버 도구 실행 실패: %{error}"
-    server_tool_not_found: "MCP 서버 도구를 찾을 수 없습니다: %{tool_name}"
-    server_unknown_error: "MCP 서버 알 수 없는 오류: %{error}"
-    state_change_failed: "MCP 상태 변경 실패: %{error}"
-    store_error: "MCP 저장소 오류: %{error}"
-    timeout_error: "MCP 작업 시간 초과: %{error}"
-    cannot_restart_disabled_server: "비활성화된 MCP 서버를 다시 시작할 수 없습니다. 먼저 활성화하십시오."
-    cannot_refresh_disabled_server: "비활성화된 MCP 서버를 새로 고칠 수 없습니다."
-  op_in_progress_error: "이 서버에서는 이미 작업이 진행 중입니다. 나중에 다시 시도해 주세요."
+    cannot_refresh_disabled_server: 비활성화된 MCP 서버를 새로 고칠 수 없습니다.
+    cannot_restart_disabled_server: 비활성화된 MCP 서버를 다시 시작할 수 없습니다. 먼저 활성화하십시오.
+    client_call_failed: 'MCP 클라이언트 호출 실패: %{error}'
+    client_config_failed: 'MCP 클라이언트 구성 실패: %{error}'
+    client_start_failed: 'MCP 클라이언트 시작 실패: %{error}'
+    client_status_failed: 'MCP 클라이언트 상태 가져오기 실패: %{error}'
+    client_stop_failed: 'MCP 클라이언트 중지 실패: %{error}'
+    io_error: 'MCP I/O 오류: %{error}'
+    not_found_error: MCP '%{name}'을(를) 찾을 수 없습니다.
+    serialization_error: 'MCP 직렬화/역직렬화 오류: %{error}'
+    server_initialization_failed: 'MCP 서버 초기화 실패: %{error}'
+    server_internal_error: 'MCP 서버 내부 오류: %{error}'
+    server_tool_execution_failed: 'MCP 서버 도구 실행 실패: %{error}'
+    server_tool_not_found: 'MCP 서버 도구를 찾을 수 없습니다: %{tool_name}'
+    server_unknown_error: 'MCP 서버 알 수 없는 오류: %{error}'
+    state_change_failed: 'MCP 상태 변경 실패: %{error}'
+    store_error: 'MCP 저장소 오류: %{error}'
+    timeout_error: 'MCP 작업 시간 초과: %{error}'
+  op_in_progress_error: 이 서버에서는 이미 작업이 진행 중입니다. 나중에 다시 시도해 주세요.
   proxy:
-    service_description: "MCP 프록시 서버 - 활성화된 모든 MCP 도구에 대한 통합 액세스를 제공합니다."
-    tool_execution_error: "도구 실행 오류: %{error}"
-    tool_not_found: "MCP 도구 '%{tool_name}' 을(를) 찾을 수 없습니다"
-
+    service_description: MCP 프록시 서버 - 활성화된 모든 MCP 도구에 대한 통합 액세스를 제공합니다.
+    tool_execution_error: '도구 실행 오류: %{error}'
+    tool_not_found: MCP 도구 '%{tool_name}' 을(를) 찾을 수 없습니다
 network:
-  client_build_error: "HTTP 클라이언트 빌드 실패: %{error}"
-  header_error: "요청 헤더 생성 실패: %{error}"
-  proxy_error: "프록시 구성 실패: %{error}"
-  request_failed: "요청 실패: %{error}"
-  response_read_error: "응답 읽기 실패: %{error}"
-
+  client_build_error: 'HTTP 클라이언트 빌드 실패: %{error}'
+  header_error: '요청 헤더 생성 실패: %{error}'
+  proxy_error: '프록시 구성 실패: %{error}'
+  request_failed: '요청 실패: %{error}'
+  response_read_error: '응답 읽기 실패: %{error}'
 proxy:
   error:
-    internal_server_error: "내부 서버 오류: %{error}"
-    invalid_api_key: "잘못된 API 키입니다. 키가 올바른지 또는 만료되었는지 확인하고 설정에서 업데이트하십시오."
-    invalid_protocol: "모델 구성의 프로토콜이 잘못되었습니다: %{protocol}."
-    invalid_request_format: "잘못된 요청 형식: %{error}"
-    invalid_request: "잘못된 요청: %{error}"
-    missing_auth_header: "요청에 인증 정보가 없습니다. API 키가 올바르게 구성되었는지 확인하십시오."
-    model_alias_not_found: "모델 별칭 '%{alias}'을(를) 찾을 수 없습니다."
-    model_details_fetch_failed: "공급자 ID %{id}에 대한 모델 세부 정보를 가져오지 못했습니다."
-    no_backend_targets: "모델 별칭 '%{alias}'에 구성된 백엔드 대상이 없습니다."
-    no_keys_configured: "서버에 구성된 프록시 액세스 키가 없습니다. 관련 키를 구성하려면 관리자에게 문의하십시오."
-    retry_exceeded: "요청 재시도 횟수가 한도에 도달했습니다. 서버가 429 상태 코드를 계속 반환하고 있습니다 (요청이 너무 많습니다). 나중에 다시 시도하거나 재시도 횟수 설정을 늘려주세요."
-    store_lock_failed: "저장소에 액세스하지 못했습니다: %{error}"
+    internal_server_error: '내부 서버 오류: %{error}'
+    invalid_api_key: 잘못된 API 키입니다. 키가 올바른지 또는 만료되었는지 확인하고 설정에서 업데이트하십시오.
+    invalid_protocol: '모델 구성의 프로토콜이 잘못되었습니다: %{protocol}.'
+    invalid_request: '잘못된 요청: %{error}'
+    invalid_request_format: '잘못된 요청 형식: %{error}'
+    missing_auth_header: 요청에 인증 정보가 없습니다. API 키가 올바르게 구성되었는지 확인하십시오.
+    model_alias_not_found: 모델 별칭 '%{alias}'을(를) 찾을 수 없습니다.
+    model_details_fetch_failed: 공급자 ID %{id}에 대한 모델 세부 정보를 가져오지 못했습니다.
+    no_backend_targets: 모델 별칭 '%{alias}'에 구성된 백엔드 대상이 없습니다.
+    no_keys_configured: 서버에 구성된 프록시 액세스 키가 없습니다. 관련 키를 구성하려면 관리자에게 문의하십시오.
+    retry_exceeded: 요청 재시도 횟수가 한도에 도달했습니다. 서버가 429 상태 코드를 계속 반환하고 있습니다 (요청이 너무 많습니다). 나중에 다시 시도하거나 재시도 횟수 설정을 늘려주세요.
+    store_lock_failed: '저장소에 액세스하지 못했습니다: %{error}'
   group:
-    not_found_by_name: "그룹 이름 '%{name}'(으)로 프록시 그룹을 찾지 못했습니다."
-
+    not_found_by_name: 그룹 이름 '%{name}'(으)로 프록시 그룹을 찾지 못했습니다.
 sensitive:
   filter:
-    email: "[이메일]"
-    ip_address: "[IP 주소]"
-    credit_card: "[신용카드]"
-    international_credit_card: "[국제 신용카드]"
-    unionpay: "[은련카드]"
-    chinese_id_card: "[신분증 번호]"
-    chinese_mobile: "[휴대폰 번호]"
-    chinese_name: "[이름]"
-    english_mobile: "[전화번호]"
-    english_name: "[이름]"
-    chinese_landline: "[일반전화]"
-    chinese_address: "[주소]"
-    english_address: "[주소]"
-    chinese_company: "[회사명]"
-    english_company: "[회사명]"
-    chinese_project: "[프로젝트명]"
-    english_project: "[프로젝트명]"
-    chinese_financial: "[금액]"
-    english_financial: "[금액]"
-    bank_account: "[은행 계좌]"
-    bank_name: "[거래 은행]"
-    wechat_id: "[WeChat ID]"
-    qq_number: "[QQ 번호]"
-    custom_block: "[필터링됨]"
-
+    bank_account: '[은행 계좌]'
+    bank_name: '[거래 은행]'
+    chinese_address: '[주소]'
+    chinese_company: '[회사명]'
+    chinese_financial: '[금액]'
+    chinese_id_card: '[신분증 번호]'
+    chinese_landline: '[일반전화]'
+    chinese_mobile: '[휴대폰 번호]'
+    chinese_name: '[이름]'
+    chinese_project: '[프로젝트명]'
+    credit_card: '[신용카드]'
+    custom_block: '[필터링됨]'
+    email: '[이메일]'
+    english_address: '[주소]'
+    english_company: '[회사명]'
+    english_financial: '[금액]'
+    english_mobile: '[전화번호]'
+    english_name: '[이름]'
+    english_project: '[프로젝트명]'
+    international_credit_card: '[국제 신용카드]'
+    ip_address: '[IP 주소]'
+    qq_number: '[QQ 번호]'
+    unionpay: '[은련카드]'
+    wechat_id: '[WeChat ID]'
 setting:
-  failed_to_create_upload_dir: "업로드 디렉터리 '%{path}' 생성 실패: %{error}"
-  failed_to_move_logo_file: "로고 파일 이동 실패: '%{from}'에서 '%{to}'로, 오류: %{error}"
-  failed_to_save_logo_thumbnail: "로고 썸네일 저장 실패: %{error}"
-  failed_to_update_shortcut: "바로 가기 업데이트 실패: %{error}"
-  file_not_exists: "파일이 존재하지 않습니다: %{file_path}"
-
-tray:
-  about: "정보"
-  agent: "에이전트"
-  assistant: "도우미"
-  chat: "채팅"
-  mcp: "MCP"
-  model: "모델"
-  note: "스마트 노트"
-  proxy: "프록시"
-  proxy_switcher: "프록시 전환"
-  workflow: "워크플로"
-  quit: "종료"
-  settings: "설정"
-  skill: "기술"
-
+  failed_to_create_upload_dir: '업로드 디렉터리 ''%{path}'' 생성 실패: %{error}'
+  failed_to_move_logo_file: '로고 파일 이동 실패: ''%{from}''에서 ''%{to}''로, 오류: %{error}'
+  failed_to_save_logo_thumbnail: '로고 썸네일 저장 실패: %{error}'
+  failed_to_update_shortcut: '바로 가기 업데이트 실패: %{error}'
+  file_not_exists: '파일이 존재하지 않습니다: %{file_path}'
 tools:
-  failed_to_get_model: "%{model_type} 모델 가져오기 실패"
-  function_not_found: "워크플로에서 도구 함수를 찾을 수 없습니다: %{name}"
-  keyword_must_be_non_empty: "키워드(query) 매개변수는 비어 있지 않은 문자열 또는 비어 있지 않은 배열이어야 합니다."
-  max_retries_exceeded: "최대 재시도 횟수 초과: %{item}"
-  mcp_stop_failed_details: "MCP 서버 '%{server_name}' 중지 실패: %{details}"
-  url_invalid: "URL 매개변수 형식이 잘못되었습니다. http:// 또는 https://로 시작해야 합니다: %{url}"
-  url_must_be_string: "URL 매개변수는 문자열이어야 합니다."
-  url_must_not_be_empty: "URL 매개변수는 비워 둘 수 없습니다."
-  web_scraper_failed: "웹 스크래핑 실패 (URL: %{url}): %{details}"
   error:
-    function_already_exists: "함수가 이미 존재합니다: %{name}"
-    auth_error: "인증 오류"
-    config: "구성 오류"
-    execution_failed: "도구 실행 실패: %{details}"
-    fatal: "치명적인 오류"
-    function_not_found: "함수를 찾을 수 없음"
-    initialization: "초기화 오류"
-    invalid_params: "잘못된 매개변수: %{details}"
-    io_error: "IO 오류: %{details}"
-    mcp_server_not_found: "MCP 서버를 찾을 수 없음"
-    network_error: "네트워크 오류"
-    serialization: "직렬화 오류"
-    state_change_failed: "상태 변경 실패"
-    store: "저장소 오류"
-    timeout: "시간 초과"
+    auth_error: 인증 오류
+    config: 구성 오류
+    execution_failed: '도구 실행 실패: %{details}'
+    fatal: 치명적인 오류
+    function_already_exists: '함수가 이미 존재합니다: %{name}'
+    function_not_found: 함수를 찾을 수 없음
+    initialization: 초기화 오류
+    invalid_params: '잘못된 매개변수: %{details}'
+    io_error: 'IO 오류: %{details}'
+    mcp_server_not_found: MCP 서버를 찾을 수 없음
+    network_error: 네트워크 오류
+    serialization: 직렬화 오류
+    state_change_failed: 상태 변경 실패
+    store: 저장소 오류
+    timeout: 시간 초과
+  failed_to_get_model: '%{model_type} 모델 가져오기 실패'
+  function_not_found: '워크플로에서 도구 함수를 찾을 수 없습니다: %{name}'
+  keyword_must_be_non_empty: 키워드(query) 매개변수는 비어 있지 않은 문자열 또는 비어 있지 않은 배열이어야 합니다.
+  max_retries_exceeded: '최대 재시도 횟수 초과: %{item}'
+  mcp_stop_failed_details: 'MCP 서버 ''%{server_name}'' 중지 실패: %{details}'
   search:
-    google_api_key_empty: "Google 검색 API 키는 비워 둘 수 없습니다"
-    google_cx_empty: "Google 검색 엔진 ID는 비워 둘 수 없습니다"
-    serper_api_key_empty: "Serper API 키는 비워 둘 수 없습니다"
-    tavily_api_key_empty: "Tavily API 키는 비워 둘 수 없습니다"
-
+    google_api_key_empty: Google 검색 API 키는 비워 둘 수 없습니다
+    google_cx_empty: Google 검색 엔진 ID는 비워 둘 수 없습니다
+    serper_api_key_empty: Serper API 키는 비워 둘 수 없습니다
+    tavily_api_key_empty: Tavily API 키는 비워 둘 수 없습니다
+  url_invalid: 'URL 매개변수 형식이 잘못되었습니다. http:// 또는 https://로 시작해야 합니다: %{url}'
+  url_must_be_string: URL 매개변수는 문자열이어야 합니다.
+  url_must_not_be_empty: URL 매개변수는 비워 둘 수 없습니다.
+  web_scraper_failed: '웹 스크래핑 실패 (URL: %{url}): %{details}'
+tray:
+  about: 정보
+  agent: 에이전트
+  assistant: 도우미
+  chat: 채팅
+  mcp: MCP
+  model: 모델
+  note: 스마트 노트
+  proxy: 프록시
+  proxy_switcher: 프록시 전환
+  quit: 종료
+  settings: 설정
+  skill: 기술
+  workflow: 워크플로
 updater:
   errors:
-    config: "업데이터 구성 오류: %{error}"
-    download: "업데이트 다운로드 또는 설치 실패: %{error}"
-    install: "업데이트 설치 실패: %{error}"
-    io_error: "IO 오류"
-    lock_error: "잠금 오류"
-    update_not_found: "현재 최신 버전이며 사용 가능한 업데이트가 없습니다."
-    update_request: "업데이트 요청 실패: %{error}"
-    version_mismatch: "버전 불일치, 예상 설치 버전이 서버에서 제공한 업데이트 버전과 다릅니다. 업데이트를 다시 확인하십시오."
-    version_parse: "버전 구문 분석 오류: 예상 버전 '%{version}', 오류: %{error}"
-
+    config: '업데이터 구성 오류: %{error}'
+    download: '업데이트 다운로드 또는 설치 실패: %{error}'
+    install: '업데이트 설치 실패: %{error}'
+    io_error: IO 오류
+    lock_error: 잠금 오류
+    update_not_found: 현재 최신 버전이며 사용 가능한 업데이트가 없습니다.
+    update_request: '업데이트 요청 실패: %{error}'
+    version_mismatch: 버전 불일치, 예상 설치 버전이 서버에서 제공한 업데이트 버전과 다릅니다. 업데이트를 다시 확인하십시오.
+    version_parse: '버전 구문 분석 오류: 예상 버전 ''%{version}'', 오류: %{error}'
 workflow:
-  awaiting_approval: "사용자 승인 대기 중"
-  array_index_out_of_bounds: "배열 인덱스 범위를 벗어났습니다: %{index}"
-  bool_not_supported: "부울 유형은 이 작업을 지원하지 않습니다: %{operator}"
-  bracket_not_match: "괄호가 일치하지 않습니다: %{condition}"
-  cancel_notification_error: "워크플로 취소 신호 전송 실패"
-  cancelled: "사용자가 작업을 취소했습니다."
-  cannot_access_path: "경로에 액세스할 수 없습니다: %{path}, 값이 객체/배열이 아닙니다."
-  circular_dependency: "노드 간 순환 종속성 존재: %{nodes}"
-  compression_in_progress: "컨텍스트 압축 중..."
-  dependency_not_found: "노드 '%{node_id}'가 종속된 노드 '%{id}'가 존재하지 않습니다."
-  duplicate_node_id: "중복된 노드 ID: %{id}"
-  edge_reference_missing: "에지 참조가 없습니다: %{from} -> %{to}"
-  incomplete_execution: "워크플로 실행이 완료되지 않았습니다. 누락된 노드: %{missing}"
-  invalid_array_index: "잘못된 배열 인덱스: %{index}"
-  invalid_graph: "잘못된 그래프: %{reason}"
-  invalid_loop_input: "루프 노드 입력은 배열 또는 객체여야 하지만 다음을 받았습니다: %{input}"
-  invalid_node_id: "잘못된 노드 ID `%{id}`, 문자, 숫자, 밑줄, 하이픈만 허용되며 문자로 시작해야 합니다."
-  invalid_node_output: "잘못된 노드 출력, ID: %{id}, 출력: %{output}, 노드 출력 필드 이름은 문자, 숫자, 밑줄, 하이픈만 포함해야 하며 문자로 시작해야 합니다. 출력 필드 이름은 'item'이 될 수 없습니다."
-  invalid_node_type: "잘못된 노드 유형: %{node_type}"
-  invalid_state_transition: "잘못된 상태 전환: %{current}에서 %{new}로"
-  invalid_state: "잘못된 상태 전환, 현재 상태: %{current}, 새 상태: %{new}"
-  interrupted_by_restart: "애플리케이션 재시작으로 중단됨"
-  invalid_workflow_json: "잘못된 워크플로 구성: %{error}"
-  json_path_not_found: "JSON 경로를 찾을 수 없습니다: %{path}"
-  left_value_not_number: "왼쪽 값이 숫자 유형이 아닙니다."
-  nested_group: "중첩된 그룹은 허용되지 않습니다: 그룹 '%{id}'는 다른 그룹을 포함할 수 없습니다."
-  node_output_not_found: "노드 '%{node_id}'의 출력을 찾을 수 없습니다, 경로: %{path}"
-  not_bool_value: "값이 부울 유형이 아닙니다."
-  pause_notification_error: "워크플로 일시 중지 신호 전송 실패"
-  resume_notification_error: "워크플로 재개 신호 전송 실패"
-  right_value_not_number: "오른쪽 값이 숫자 유형이 아닙니다."
-  self_dependency: "노드 '%{node_id}'는 자신에게 종속될 수 없습니다."
-  state_notification_error: "워크플로 상태 알림 실패"
-  string_not_supported: "문자열 유형은 이 작업을 지원하지 않습니다: %{operator}"
-  task_join_error: "작업 실행 실패: %{error}"
-  user_rejected: "사용자가 거부했습니다"
-  type_mismatch: "유형 불일치 작업: %{operator}, 왼쪽 값 유형: %{left_type}, 오른쪽 값 유형: %{right_type}"
-  unsupported_operator: "지원되지 않는 연산자: %{operator}"
-  unsupported_type_combination: "지원되지 않는 유형 조합 연산자: %{operator}"
-  validation: "유효성 검사 오류: %{msg}"
-  task_finished: "작업 완료"
-  summary:
-    submit_plan: "계획 제출"
-    todo_create: "작업 생성"
-    todo_update: "작업 '%{subject}' 을 (를) %{status} (으) 로 업데이트"
-    todo_list: "할 일 목록 가져오기"
-    todo_get: "작업 세부 정보 가져오기"
-    todo_status_done: "완료"
-    todo_status_in_progress: "진행 중"
-    todo_status_pending: "대기 중"
-    todo_status_failed: "실패"
-    todo_status_data_missing: "데이터 누락"
+  array_index_out_of_bounds: '배열 인덱스 범위를 벗어났습니다: %{index}'
+  awaiting_approval: 사용자 승인 대기 중
+  bool_not_supported: '부울 유형은 이 작업을 지원하지 않습니다: %{operator}'
+  bracket_not_match: '괄호가 일치하지 않습니다: %{condition}'
+  cancel_notification_error: 워크플로 취소 신호 전송 실패
+  cancelled: 사용자가 작업을 취소했습니다.
+  cannot_access_path: '경로에 액세스할 수 없습니다: %{path}, 값이 객체/배열이 아닙니다.'
+  circular_dependency: '노드 간 순환 종속성 존재: %{nodes}'
+  compression_in_progress: 컨텍스트 압축 중...
+  continue: 계속
+  dependency_not_found: 노드 '%{node_id}'가 종속된 노드 '%{id}'가 존재하지 않습니다.
+  duplicate_node_id: '중복된 노드 ID: %{id}'
+  edge_reference_missing: '에지 참조가 없습니다: %{from} -> %{to}'
   error:
-    cancelled: "사용자에 의해 작업이 취소됨"
-    config: "구성 오류"
-    context: "컨텍스트 오류"
-    execution: "실행 오류"
-    initialization: "초기화 오류"
-    invalid_graph: "잘못된 그래프"
-    invalid_state: "잘못된 상태"
-    io: "IO 오류"
-    other: "기타 오류"
-    serialization: "직렬화 오류"
-    store: "저장소 오류"
+    cancelled: 사용자에 의해 작업이 취소됨
+    config: 구성 오류
+    context: 컨텍스트 오류
+    execution: 실행 오류
+    initialization: 초기화 오류
+    invalid_graph: 잘못된 그래프
+    invalid_state: 잘못된 상태
+    io: IO 오류
+    other: 기타 오류
+    serialization: 직렬화 오류
+    store: 저장소 오류
+  incomplete_execution: '워크플로 실행이 완료되지 않았습니다. 누락된 노드: %{missing}'
+  interrupted_by_restart: 애플리케이션 재시작으로 중단됨
+  invalid_array_index: '잘못된 배열 인덱스: %{index}'
+  invalid_graph: '잘못된 그래프: %{reason}'
+  invalid_loop_input: '루프 노드 입력은 배열 또는 객체여야 하지만 다음을 받았습니다: %{input}'
+  invalid_node_id: 잘못된 노드 ID `%{id}`, 문자, 숫자, 밑줄, 하이픈만 허용되며 문자로 시작해야 합니다.
+  invalid_node_output: '잘못된 노드 출력, ID: %{id}, 출력: %{output}, 노드 출력 필드 이름은 문자, 숫자, 밑줄, 하이픈만 포함해야 하며 문자로 시작해야 합니다. 출력 필드 이름은
+    ''item''이 될 수 없습니다.'
+  invalid_node_type: '잘못된 노드 유형: %{node_type}'
+  invalid_state: '잘못된 상태 전환, 현재 상태: %{current}, 새 상태: %{new}'
+  invalid_state_transition: '잘못된 상태 전환: %{current}에서 %{new}로'
+  invalid_workflow_json: '잘못된 워크플로 구성: %{error}'
+  json_path_not_found: 'JSON 경로를 찾을 수 없습니다: %{path}'
+  left_value_not_number: 왼쪽 값이 숫자 유형이 아닙니다.
+  nested_group: '중첩된 그룹은 허용되지 않습니다: 그룹 ''%{id}''는 다른 그룹을 포함할 수 없습니다.'
+  node_output_not_found: '노드 ''%{node_id}''의 출력을 찾을 수 없습니다, 경로: %{path}'
+  not_bool_value: 값이 부울 유형이 아닙니다.
+  pause_notification_error: 워크플로 일시 중지 신호 전송 실패
+  resume_notification_error: 워크플로 재개 신호 전송 실패
+  right_value_not_number: 오른쪽 값이 숫자 유형이 아닙니다.
+  self_dependency: 노드 '%{node_id}'는 자신에게 종속될 수 없습니다.
+  state_notification_error: 워크플로 상태 알림 실패
+  stepBudgetExhausted: 현재 단계가 모두 소진되었습니다 (%{current}/%{max}). 하지만 작업은 아직 완료되지 않았습니다. 계속하시겠습니까?
+  stop: 중지
+  string_not_supported: '문자열 유형은 이 작업을 지원하지 않습니다: %{operator}'
+  summary:
+    edit_file: 편집됨
+    submit_plan: 계획 제출
+    todo_create: 작업 생성
+    todo_get: 작업 세부 정보 가져오기
+    todo_list: 할 일 목록 가져오기
+    todo_status_data_missing: 데이터 누락
+    todo_status_done: 완료
+    todo_status_failed: 실패
+    todo_status_in_progress: 진행 중
+    todo_status_pending: 대기 중
+    todo_update: 작업 '%{subject}' 을 (를) %{status} (으) 로 업데이트
+    write_file: 작성됨
+  task_finished: 작업 완료
+  task_join_error: '작업 실행 실패: %{error}'
+  type_mismatch: '유형 불일치 작업: %{operator}, 왼쪽 값 유형: %{left_type}, 오른쪽 값 유형: %{right_type}'
+  unsupported_operator: '지원되지 않는 연산자: %{operator}'
+  unsupported_type_combination: '지원되지 않는 유형 조합 연산자: %{operator}'
+  user_rejected: 사용자가 거부했습니다
+  validation: '유효성 검사 오류: %{msg}'

@@ -1,0 +1,34 @@
+schema_version: 1
+builtin_id: code-browser
+builtin_version: 1
+name: Code Browser
+description: A read-only code analysis agent for scanning the codebase,
+  understanding architecture, tracing execution paths, and collecting
+  implementation context. It cannot edit files, write files, change Git state,
+  commit, or perform implementation.
+role: child
+parent_builtin_id: programming
+disabled: true
+prompts:
+  system: system.md
+config:
+  shell_policy: none
+  approval_level: default
+  auto_approve:
+    - glob
+    - grep
+    - list_dir
+    - read_file
+    - web_fetch
+    - web_search
+  available_tools:
+    - glob
+    - grep
+    - list_dir
+    - read_file
+    - web_fetch
+    - web_search
+  final_audit: false
+  skill_enabled: false
+  selected_skills: []
+  phase: standard

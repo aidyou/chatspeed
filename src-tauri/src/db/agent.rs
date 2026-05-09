@@ -137,10 +137,16 @@ pub struct Agent {
     pub skill_enabled: Option<bool>,
     /// JSON array of enabled skill names for this agent
     pub selected_skills: Option<String>,
+    /// Default workflow phase for this agent
+    pub phase: Option<String>,
     /// Whether this agent is a built-in system agent
     pub is_system: Option<bool>,
     /// Whether this agent is disabled from workflow selection/delegation
     pub disabled: Option<bool>,
+    /// Built-in definition version used for system agent upgrades
+    pub version: Option<i32>,
+    /// UI ordering index for agent lists
+    pub sort_index: Option<i32>,
     /// Maximum context length (in tokens)
     pub max_contexts: Option<i32>,
     /// Creation timestamp
@@ -169,6 +175,7 @@ impl Agent {
         approval_level: Option<String>,
         skill_enabled: Option<bool>,
         selected_skills: Option<String>,
+        phase: Option<String>,
         is_system: Option<bool>,
         disabled: Option<bool>,
         max_contexts: Option<i32>,
@@ -190,8 +197,11 @@ impl Agent {
             approval_level,
             skill_enabled,
             selected_skills,
+            phase,
             is_system,
             disabled,
+            version: None,
+            sort_index: None,
             max_contexts,
             created_at: None,
             updated_at: None,
@@ -252,6 +262,11 @@ impl Agent {
                 self.selected_skills = serde_json::to_string(&skills).ok();
             }
 
+            // Merge phase
+            if config.phase.is_some() {
+                self.phase = config.phase;
+            }
+
             // Merge available_tools (Vec<String> -> JSON string)
             if let Some(tools) = config.available_tools {
                 self.available_tools = serde_json::to_string(&tools).ok();
@@ -292,8 +307,11 @@ impl From<&Row<'_>> for Agent {
             approval_level: row.get("approval_level").ok(),
             skill_enabled: row.get("skill_enabled").ok(),
             selected_skills: row.get("selected_skills").ok(),
+            phase: row.get("phase").ok(),
             is_system: row.get("is_system").ok(),
             disabled: row.get("disabled").ok(),
+            version: row.get("version").ok(),
+            sort_index: row.get("sort_index").ok(),
             max_contexts: row.get("max_contexts").ok(),
             created_at: row.get("created_at").ok(),
             updated_at: row.get("updated_at").ok(),
@@ -323,6 +341,12 @@ impl MainStore {
             ));
         }
 
+        let new_sort_index: i32 = tx.query_row(
+            "SELECT COALESCE(MAX(sort_index), -1) FROM agents",
+            [],
+            |row| row.get(0),
+        )?;
+
         // Serialize JSON fields
         let models_json = agent
             .models
@@ -337,8 +361,8 @@ impl MainStore {
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, is_system, disabled, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, phase, is_system, disabled, version, sort_index, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 agent.id,
                 agent.name,
@@ -356,8 +380,11 @@ impl MainStore {
                 agent.approval_level,
                 agent.skill_enabled,
                 selected_skills_json,
+                agent.phase,
                 agent.is_system,
                 agent.disabled,
+                agent.version,
+                agent.sort_index.unwrap_or(new_sort_index + 1),
                 agent.max_contexts,
             ],
         )?;
@@ -385,6 +412,9 @@ impl MainStore {
                 .filter(|v| *v)
                 .map(|_| current.name.clone())
         });
+        let persisted_sort_index = existing_agent
+            .as_ref()
+            .and_then(|current| current.sort_index);
         let effective_name = persisted_name.unwrap_or_else(|| agent.name.clone());
 
         // Check for name uniqueness on other agents
@@ -430,11 +460,14 @@ impl MainStore {
                 approval_level = ?13,
                 skill_enabled = ?14,
                 selected_skills = ?15,
-                is_system = ?16,
-                disabled = ?17,
-                max_contexts = ?18,
+                phase = ?16,
+                is_system = ?17,
+                disabled = ?18,
+                version = ?19,
+                sort_index = ?20,
+                max_contexts = ?21,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?19",
+             WHERE id = ?22",
             params![
                 effective_name,
                 agent.description,
@@ -451,8 +484,11 @@ impl MainStore {
                 agent.approval_level,
                 agent.skill_enabled,
                 selected_skills_json,
+                agent.phase,
                 agent.is_system,
                 agent.disabled,
+                agent.version,
+                agent.sort_index.or(persisted_sort_index),
                 agent.max_contexts,
                 agent.id,
             ],
@@ -507,13 +543,7 @@ impl MainStore {
 
         let mut stmt = conn.prepare(
             "SELECT * FROM agents
-             ORDER BY
-                CASE COALESCE(role, agent_type, 'primary')
-                    WHEN 'primary' THEN 0
-                    ELSE 1
-                END,
-                COALESCE(parent_agent_id, id),
-                name",
+             ORDER BY sort_index ASC, name",
         )?;
 
         let agents = stmt
@@ -535,7 +565,7 @@ impl MainStore {
              WHERE COALESCE(role, agent_type, 'primary') = 'child'
                AND parent_agent_id = ?1
                AND COALESCE(disabled, 0) = 0
-             ORDER BY name",
+             ORDER BY sort_index ASC, name",
         )?;
 
         let agents = stmt
@@ -543,5 +573,20 @@ impl MainStore {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(agents)
+    }
+
+    /// Updates the persisted ordering for agents.
+    pub fn update_agent_order(&self, agent_ids: Vec<String>) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        for (index, id) in agent_ids.iter().enumerate() {
+            conn.execute(
+                "UPDATE agents SET sort_index = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                params![index as i64, id],
+            )?;
+        }
+        Ok(())
     }
 }

@@ -1,382 +1,378 @@
+chat:
+  api_key_is_require_for_list_models: Getting model list requires API key, please configure a valid API key in settings
+  chat_not_found: Specified chat session not found
+  empty_chat_id: Chat ID cannot be empty
+  empty_messages: Message list cannot be empty
+  empty_model: Model name cannot be empty
+  empty_provider_id: Provider ID cannot be empty
+  error:
+    api_request_failed: 'API request failed, provider: %{provider}, status code: %{status_code}, error details: %{details}'
+    failed_to_get_or_create_window_channel: 'Failed to get or create chat window dedicated communication channel: %{error}'
+    invalid_input: 'Invalid input: %{details}'
+    response_parse_failed: 'Failed to parse response from %{provider}: %{details}'
+    stream_processing_failed: 'Error processing stream from %{provider}: %{details}'
+    tool_call_serialization_failed: 'Tool call serialization failed: %{details}'
+  failed_to_convert_language_code: 'Failed to convert language code: %{error}'
+  failed_to_create_file: 'Failed to create file: %{error}'
+  failed_to_detect_language: Failed to detect language
+  failed_to_get_available_languages: 'Failed to get available languages list: %{error}'
+  failed_to_write_file: 'Failed to write file: %{error}'
+  invalid_api_protocol: 'Invalid API protocol: %{protocol}'
+  note_already_exists: This note already exists, no need to add again
+  search_not_found: Specified search session not found
 command:
   clipboard:
-    failed_to_initialize: "Failed to initialize clipboard: %{error}"
-    failed_to_read: "Failed to read clipboard: %{error}"
-    failed_to_write: "Failed to write clipboard: %{error}"
+    failed_to_initialize: 'Failed to initialize clipboard: %{error}'
+    failed_to_read: 'Failed to read clipboard: %{error}'
+    failed_to_write: 'Failed to write clipboard: %{error}'
   fs:
-    read_file_failed: "Failed to read file: %{error}"
-    image_preview_failed: "Failed to generate image preview: %{error}"
-    unknown_filename: "UnknownFileName.png"
+    image_preview_failed: 'Failed to generate image preview: %{error}'
+    read_file_failed: 'Failed to read file: %{error}'
+    unknown_filename: UnknownFileName.png
   window:
-    failed_to_close: "Failed to close window: %{error}"
-
-chat:
-  error:
-    api_request_failed: "API request failed, provider: %{provider}, status code: %{status_code}, error details: %{details}"
-    invalid_input: "Invalid input: %{details}"
-    failed_to_get_or_create_window_channel: "Failed to get or create chat window dedicated communication channel: %{error}"
-    response_parse_failed: "Failed to parse response from %{provider}: %{details}"
-    stream_processing_failed: "Error processing stream from %{provider}: %{details}"
-    tool_call_serialization_failed: "Tool call serialization failed: %{details}"
-  api_key_is_require_for_list_models: "Getting model list requires API key, please configure a valid API key in settings"
-  chat_not_found: "Specified chat session not found"
-  empty_chat_id: "Chat ID cannot be empty"
-  empty_messages: "Message list cannot be empty"
-  empty_model: "Model name cannot be empty"
-  empty_provider_id: "Provider ID cannot be empty"
-  failed_to_convert_language_code: "Failed to convert language code: %{error}"
-  failed_to_create_file: "Failed to create file: %{error}"
-  failed_to_detect_language: "Failed to detect language"
-  failed_to_get_available_languages: "Failed to get available languages list: %{error}"
-  failed_to_write_file: "Failed to write file: %{error}"
-  invalid_api_protocol: "Invalid API protocol: %{protocol}"
-  note_already_exists: "This note already exists, no need to add again"
-  search_not_found: "Specified search session not found"
-
+    failed_to_close: 'Failed to close window: %{error}'
 db:
-  agent_name_exists: "Agent name '%{name}' already exists"
-  ai_model_not_found_by_id: "AI model with ID %{id} not found"
-  ai_skill_not_found_by_id: "AI skill with ID %{id} not found"
-  already_exists: "Data already exists: %{error}"
-  conversation_not_found: "Specified conversation does not exist, it may have been deleted or a database error occurred"
-  database_error: "Database error: %{error}"
-  failed_to_initialize_database: "Failed to initialize database: %{error}"
-  failed_to_lock_main_store: "Failed to lock main store: %{error}"
-  failed_to_open_db_connection: "Failed to open database connection: %{error}"
-  io_error: "IO error: %{error}"
-  json_error: "JSON error: %{error}"
-  json_parse_failed_mcp_config: "Failed to parse MCP config JSON: %{error}"
-  json_parse_failed_models: "Failed to parse model list JSON: %{error}"
-  json_serialize_failed_mcp_config: "Failed to serialize MCP config to JSON: %{error}"
-  json_serialize_failed_metadata: "Failed to serialize metadata to JSON: %{error}"
-  mcp_not_found_by_id: "MCP config with ID %{id} not found"
-  plugin_file_not_found_by_uuid: "Plugin file with UUID %{uuid} not found"
-  plugin_invalid_runtime_type: "Invalid plugin runtime type: %{runtime_type}"
-  plugin_json_deserialize_failed_input_schema: "Failed to deserialize plugin input schema JSON: %{error}"
-  plugin_json_deserialize_failed_output_schema: "Failed to deserialize plugin output schema JSON: %{error}"
-  plugin_json_serialize_failed_input_schema: "Failed to serialize plugin input schema to JSON: %{error}"
-  plugin_json_serialize_failed_output_schema: "Failed to serialize plugin output schema to JSON: %{error}"
-  plugin_not_found_by_uuid: "Plugin with UUID %{uuid} not found"
-  tauri_error: "Tauri error: %{error}"
+  agent_name_exists: Agent name '%{name}' already exists
+  ai_model_not_found_by_id: AI model with ID %{id} not found
+  ai_skill_not_found_by_id: AI skill with ID %{id} not found
+  already_exists: 'Data already exists: %{error}'
   backup:
-    dir_not_found: "Backup directory '%{path}' not found"
-    failed_to_add_file_to_zip: "Failed to add file '%{path}' to ZIP: %{error}"
-    failed_to_create_backup_dir_at: "Failed to create backup directory '%{path}': %{error}"
-    failed_to_create_cipher: "Failed to create cipher: %{error}"
-    failed_to_create_dir_from_zip: "Failed to create directory '%{path}' from ZIP: %{error}"
-    failed_to_create_encrypted_file: "Failed to create encrypted file: %{error}"
-    failed_to_create_file_from_zip: "Failed to create file '%{path}' from ZIP: %{error}"
-    failed_to_create_mcp_sessions_dir: "Failed to create MCP sessions directory '%{path}': %{error}"
-    failed_to_create_parent_dir_from_zip: "Failed to create parent directory '%{path}' from ZIP: %{error}"
-    failed_to_create_schema_dir: "Failed to create schema directory '%{path}': %{error}"
-    failed_to_create_shared_dir: "Failed to create shared directory '%{path}': %{error}"
-    failed_to_create_static_dir: "Failed to create static directory '%{path}': %{error}"
-    failed_to_create_theme_dir: "Failed to create theme directory '%{path}': %{error}"
-    failed_to_create_upload_dir: "Failed to create upload directory '%{path}': %{error}"
-    failed_to_create_zip_for_backup: "Failed to create ZIP file '%{path}' for backup: %{error}"
-    failed_to_decode_key: "Failed to decode key: %{error}"
-    failed_to_decrypt_data: "Failed to decrypt data: %{error}"
-    failed_to_encrypt_data: "Failed to encrypt data: %{error}"
-    failed_to_finish_zip: "Failed to finish ZIP file creation: %{error}"
-    failed_to_open_database_file: "Failed to open database file: %{error}"
-    failed_to_open_dest_db: "Failed to open destination database '%{path}': %{error}"
-    failed_to_open_encrypted_file: "Failed to open encrypted file: %{error}"
-    failed_to_open_file_for_zip: "Failed to open file '%{path}' for ZIP: %{error}"
-    failed_to_open_zip: "Failed to open ZIP file '%{path}': %{error}"
-    failed_to_read_backup_dir: "Failed to read backup directory '%{path}': %{error}"
-    failed_to_read_database_file: "Failed to read database file: %{error}"
-    failed_to_read_encrypted_file: "Failed to read encrypted file: %{error}"
-    failed_to_read_file_for_zip: "Failed to read file content for ZIP: %{error}"
-    failed_to_read_zip_archive: "Failed to read ZIP archive: %{error}"
-    failed_to_read_zip_entry: "Failed to read ZIP entry (index %{index}): %{error}"
-    failed_to_set_permissions_from_zip: "Failed to set permissions for '%{path}' from ZIP: %{error}"
-    failed_to_strip_prefix_for_zip: "Failed to strip path prefix for ZIP (base path: '%{base}', full path: '%{full}'): %{error}"
-    failed_to_write_encrypted_file: "Failed to write encrypted file: %{error}"
-    failed_to_write_file_from_zip: "Failed to write file '%{path}' from ZIP: %{error}"
-    failed_to_write_temp_db: "Failed to write temporary database file %{path}: %{error}"
-    failed_to_write_to_zip: "Failed to write to ZIP file: %{error}"
-    file_not_found: "Backup file '%{path}' not found"
-    invalid_magic_number: "Invalid magic number"
-    some_files_skipped_restart_required: "Some files (such as MCP session database) could not be restored because they are currently in use. Please restart the application to complete the restoration."
-    unsupported_version: "Unsupported version"
-
+    dir_not_found: Backup directory '%{path}' not found
+    failed_to_add_file_to_zip: 'Failed to add file ''%{path}'' to ZIP: %{error}'
+    failed_to_create_backup_dir_at: 'Failed to create backup directory ''%{path}'': %{error}'
+    failed_to_create_cipher: 'Failed to create cipher: %{error}'
+    failed_to_create_dir_from_zip: 'Failed to create directory ''%{path}'' from ZIP: %{error}'
+    failed_to_create_encrypted_file: 'Failed to create encrypted file: %{error}'
+    failed_to_create_file_from_zip: 'Failed to create file ''%{path}'' from ZIP: %{error}'
+    failed_to_create_mcp_sessions_dir: 'Failed to create MCP sessions directory ''%{path}'': %{error}'
+    failed_to_create_parent_dir_from_zip: 'Failed to create parent directory ''%{path}'' from ZIP: %{error}'
+    failed_to_create_schema_dir: 'Failed to create schema directory ''%{path}'': %{error}'
+    failed_to_create_shared_dir: 'Failed to create shared directory ''%{path}'': %{error}'
+    failed_to_create_static_dir: 'Failed to create static directory ''%{path}'': %{error}'
+    failed_to_create_theme_dir: 'Failed to create theme directory ''%{path}'': %{error}'
+    failed_to_create_upload_dir: 'Failed to create upload directory ''%{path}'': %{error}'
+    failed_to_create_zip_for_backup: 'Failed to create ZIP file ''%{path}'' for backup: %{error}'
+    failed_to_decode_key: 'Failed to decode key: %{error}'
+    failed_to_decrypt_data: 'Failed to decrypt data: %{error}'
+    failed_to_encrypt_data: 'Failed to encrypt data: %{error}'
+    failed_to_finish_zip: 'Failed to finish ZIP file creation: %{error}'
+    failed_to_open_database_file: 'Failed to open database file: %{error}'
+    failed_to_open_dest_db: 'Failed to open destination database ''%{path}'': %{error}'
+    failed_to_open_encrypted_file: 'Failed to open encrypted file: %{error}'
+    failed_to_open_file_for_zip: 'Failed to open file ''%{path}'' for ZIP: %{error}'
+    failed_to_open_zip: 'Failed to open ZIP file ''%{path}'': %{error}'
+    failed_to_read_backup_dir: 'Failed to read backup directory ''%{path}'': %{error}'
+    failed_to_read_database_file: 'Failed to read database file: %{error}'
+    failed_to_read_encrypted_file: 'Failed to read encrypted file: %{error}'
+    failed_to_read_file_for_zip: 'Failed to read file content for ZIP: %{error}'
+    failed_to_read_zip_archive: 'Failed to read ZIP archive: %{error}'
+    failed_to_read_zip_entry: 'Failed to read ZIP entry (index %{index}): %{error}'
+    failed_to_set_permissions_from_zip: 'Failed to set permissions for ''%{path}'' from ZIP: %{error}'
+    failed_to_strip_prefix_for_zip: 'Failed to strip path prefix for ZIP (base path: ''%{base}'', full path: ''%{full}''):
+      %{error}'
+    failed_to_write_encrypted_file: 'Failed to write encrypted file: %{error}'
+    failed_to_write_file_from_zip: 'Failed to write file ''%{path}'' from ZIP: %{error}'
+    failed_to_write_temp_db: 'Failed to write temporary database file %{path}: %{error}'
+    failed_to_write_to_zip: 'Failed to write to ZIP file: %{error}'
+    file_not_found: Backup file '%{path}' not found
+    invalid_magic_number: Invalid magic number
+    some_files_skipped_restart_required: Some files (such as MCP session database) could not be restored because they are
+      currently in use. Please restart the application to complete the restoration.
+    unsupported_version: Unsupported version
+  conversation_not_found: Specified conversation does not exist, it may have been deleted or a database error occurred
+  database_error: 'Database error: %{error}'
+  failed_to_initialize_database: 'Failed to initialize database: %{error}'
+  failed_to_lock_main_store: 'Failed to lock main store: %{error}'
+  failed_to_open_db_connection: 'Failed to open database connection: %{error}'
+  io_error: 'IO error: %{error}'
+  json_error: 'JSON error: %{error}'
+  json_parse_failed_mcp_config: 'Failed to parse MCP config JSON: %{error}'
+  json_parse_failed_models: 'Failed to parse model list JSON: %{error}'
+  json_serialize_failed_mcp_config: 'Failed to serialize MCP config to JSON: %{error}'
+  json_serialize_failed_metadata: 'Failed to serialize metadata to JSON: %{error}'
+  mcp_not_found_by_id: MCP config with ID %{id} not found
+  plugin_file_not_found_by_uuid: Plugin file with UUID %{uuid} not found
+  plugin_invalid_runtime_type: 'Invalid plugin runtime type: %{runtime_type}'
+  plugin_json_deserialize_failed_input_schema: 'Failed to deserialize plugin input schema JSON: %{error}'
+  plugin_json_deserialize_failed_output_schema: 'Failed to deserialize plugin output schema JSON: %{error}'
+  plugin_json_serialize_failed_input_schema: 'Failed to serialize plugin input schema to JSON: %{error}'
+  plugin_json_serialize_failed_output_schema: 'Failed to serialize plugin output schema to JSON: %{error}'
+  plugin_not_found_by_uuid: Plugin with UUID %{uuid} not found
+  tauri_error: 'Tauri error: %{error}'
 http:
-  client_build_failed: "Failed to create HTTP client: %{error}"
-  connection_failed: "Connection failed: %{error}"
-  download_failed: "Download failed: %{error}"
-  failed_to_clone_request: "Failed to clone request when retrying"
-  failed_to_open_file: "Failed to open file, path: %{path}, error: %{error}"
-  failed_to_read_file: "Failed to read file, path: %{path}, error: %{error}"
-  headers_convert_failed: "Failed to convert request header config to HttpHeader: %{error}"
-  mime_parse_failed: "Failed to parse MIME type"
-  missing_url: "HTTP request missing URL parameter"
-  proxy_config_failed: "Failed to configure proxy: %{error}"
-  read_response_failed: "Failed to read response: %{error}"
-  request_failed: "Request failed, status code: %{status}, error: %{error}"
-  request_timeout: "Network request timeout, please check network connection or try again later"
-  response_too_large: "Server data size exceeds request limit, server data size: %{content_length}, request limit: %{max_size}"
-  server_downloads_dir_not_found: "Downloads directory not found"
-  server_failed_to_get_app_data_dir: "Failed to retrieve application data directory: %{error}"
-  server_failed_to_save_file: "Failed to save file: %{error}"
-  server_file_saved_successfully: "File saved successfully"
-  server_no_available_ports: "No available port found in range %{start_port}-%{max_port}"
-  server_startup_failed: "Failed to start server: %{error}"
-
+  client_build_failed: 'Failed to create HTTP client: %{error}'
+  connection_failed: 'Connection failed: %{error}'
+  download_failed: 'Download failed: %{error}'
+  failed_to_clone_request: Failed to clone request when retrying
+  failed_to_open_file: 'Failed to open file, path: %{path}, error: %{error}'
+  failed_to_read_file: 'Failed to read file, path: %{path}, error: %{error}'
+  headers_convert_failed: 'Failed to convert request header config to HttpHeader: %{error}'
+  mime_parse_failed: Failed to parse MIME type
+  missing_url: HTTP request missing URL parameter
+  proxy_config_failed: 'Failed to configure proxy: %{error}'
+  read_response_failed: 'Failed to read response: %{error}'
+  request_failed: 'Request failed, status code: %{status}, error: %{error}'
+  request_timeout: Network request timeout, please check network connection or try again later
+  response_too_large: 'Server data size exceeds request limit, server data size: %{content_length}, request limit: %{max_size}'
+  server_downloads_dir_not_found: Downloads directory not found
+  server_failed_to_get_app_data_dir: 'Failed to retrieve application data directory: %{error}'
+  server_failed_to_save_file: 'Failed to save file: %{error}'
+  server_file_saved_successfully: File saved successfully
+  server_no_available_ports: No available port found in range %{start_port}-%{max_port}
+  server_startup_failed: 'Failed to start server: %{error}'
 main:
-  failed_to_create_log_directory: "Failed to create log directory"
-  failed_to_create_log_file: "Failed to create log file"
-  failed_to_create_note_window: "Failed to create note window: %{error}"
-  failed_to_create_settings_window: "Failed to create settings window: %{error}"
-  failed_to_create_webview_window: "Failed to create WebView window: %{error}"
-  failed_to_emit_event: "Failed to send event: %{error}"
-  failed_to_find_window_with_label: "Failed to find window with label: %{label}"
-  failed_to_get_current_monitor: "Failed to get current monitor: %{error}"
-  failed_to_get_window_size: "Failed to get window size: %{error}"
-  failed_to_initialize_logger: "Failed to initialize logger"
-  failed_to_navigate_to_url: "Failed to navigate to URL: %{url}, error: %{error}"
-  failed_to_set_window_always_on_top: "Failed to set window always on top: %{error}"
-  failed_to_set_window_position: "Failed to set window position: %{error}"
-  invalid_direction: "Invalid direction, currently only supported: left->left, right->right"
-  window_not_ready: "Window not ready yet"
+  failed_to_create_log_directory: Failed to create log directory
+  failed_to_create_log_file: Failed to create log file
+  failed_to_create_note_window: 'Failed to create note window: %{error}'
+  failed_to_create_settings_window: 'Failed to create settings window: %{error}'
+  failed_to_create_webview_window: 'Failed to create WebView window: %{error}'
+  failed_to_emit_event: 'Failed to send event: %{error}'
+  failed_to_find_window_with_label: 'Failed to find window with label: %{label}'
+  failed_to_get_current_monitor: 'Failed to get current monitor: %{error}'
+  failed_to_get_window_size: 'Failed to get window size: %{error}'
+  failed_to_initialize_logger: Failed to initialize logger
+  failed_to_navigate_to_url: 'Failed to navigate to URL: %{url}, error: %{error}'
+  failed_to_set_window_always_on_top: 'Failed to set window always on top: %{error}'
+  failed_to_set_window_position: 'Failed to set window position: %{error}'
+  invalid_direction: 'Invalid direction, currently only supported: left->left, right->right'
   shortcut:
-    failed_to_unregister_old: "Failed to unregister old shortcut: %{error}"
-    failed_to_unregister_existing: "Failed to unregister existing shortcut: %{error}"
-    invalid_format: "Invalid shortcut format: %{shortcut}"
-
+    failed_to_unregister_existing: 'Failed to unregister existing shortcut: %{error}'
+    failed_to_unregister_old: 'Failed to unregister old shortcut: %{error}'
+    invalid_format: 'Invalid shortcut format: %{shortcut}'
+  window_not_ready: Window not ready yet
 mcp:
-  config:
-    name_must_be_non_empty: "MCP config name cannot be empty, please enter a valid config name"
-    sse_url_must_be_non_empty: "MCP config SSE URL cannot be empty"
-    stdio_args_must_be_non_empty: "MCP config 'Startup Arguments' cannot be empty"
-    stdio_command_must_be_non_empty: "MCP config 'Startup Command' cannot be empty"
   client:
-    config_error_for_server: "MCP server '%{server_name}' configuration error: %{error}"
-    config_mismatch: "MCP configuration mismatch, creating MCP client %{client}, config type: %{protocol_type}"
-    failed_to_call_tool: "Failed to call MCP tool - %{server_name}::%{tool_name}(%{args}), error: %{error}"
-    http_service_start_failed: "Failed to start MCP HTTP service (URL: %{url}), reason: %{error}"
-    http_url_cant_be_empty: "MCP HTTP client URL parameter cannot be empty"
-    list_tools_timeout: "Timeout getting tool list for %{name}"
-    no_running: "MCP client '%{client}' not running, please check configuration and restart service"
-    sse_service_start_failed: "Failed to start SSE service (URL: %{url}), reason: %{error}"
-    sse_transport_start_failed: "Failed to start SSE transport (URL: %{url}), reason: %{error}"
-    sse_url_cant_be_empty: "SSE client URL parameter cannot be empty"
-    stdio_args_cant_be_empty: "Stdio client args parameter cannot be empty"
-    stdio_command_cant_be_empty: "Stdio client 'Startup Command' parameter cannot be empty"
-    stdio_command_not_found_no_help: 'Failed to start MCP service: command "%{command}" not found (original error: %{original_error}). Please ensure the command is installed and in your system''s PATH environment variable.'
+    config_error_for_server: 'MCP server ''%{server_name}'' configuration error: %{error}'
+    config_mismatch: 'MCP configuration mismatch, creating MCP client %{client}, config type: %{protocol_type}'
+    failed_to_call_tool: 'Failed to call MCP tool - %{server_name}::%{tool_name}(%{args}), error: %{error}'
+    http_service_start_failed: 'Failed to start MCP HTTP service (URL: %{url}), reason: %{error}'
+    http_url_cant_be_empty: MCP HTTP client URL parameter cannot be empty
+    list_tools_timeout: Timeout getting tool list for %{name}
+    no_running: MCP client '%{client}' not running, please check configuration and restart service
+    sse_service_start_failed: 'Failed to start SSE service (URL: %{url}), reason: %{error}'
+    sse_transport_start_failed: 'Failed to start SSE transport (URL: %{url}), reason: %{error}'
+    sse_url_cant_be_empty: SSE client URL parameter cannot be empty
+    stdio_args_cant_be_empty: Stdio client args parameter cannot be empty
+    stdio_command_cant_be_empty: Stdio client 'Startup Command' parameter cannot be empty
+    stdio_command_not_found_no_help: 'Failed to start MCP service: command "%{command}" not found (original error: %{original_error}).
+      Please ensure the command is installed and in your system''s PATH environment variable.'
     stdio_command_not_found_with_help: 'Failed to start MCP service: command "%{command}" not found (original error: %{original_error}).'
-    stdio_npx_not_found_help: "This usually means Node.js is not properly installed, or 'npx' command is not in your system's PATH environment variable. Please check your Node.js installation."
-    stdio_process_creation_failed: "Failed to create Stdio process (command: %{command}), reason: %{error}"
-    stdio_service_start_failed: "Failed to start Stdio service (command: %{command}), reason: %{error}"
-    stdio_uvx_not_found_help: 'This might mean your Python environment or "%{command}" tool is not properly set up, or it''s not in your system''s PATH environment variable. Please check your Python and "%{command}" setup.'
+    stdio_npx_not_found_help: This usually means Node.js is not properly installed, or 'npx' command is not in your system's
+      PATH environment variable. Please check your Node.js installation.
+    stdio_process_creation_failed: 'Failed to create Stdio process (command: %{command}), reason: %{error}'
+    stdio_service_start_failed: 'Failed to start Stdio service (command: %{command}), reason: %{error}'
+    stdio_uvx_not_found_help: This might mean your Python environment or "%{command}" tool is not properly set up, or it's
+      not in your system's PATH environment variable. Please check your Python and "%{command}" setup.
+  config:
+    name_must_be_non_empty: MCP config name cannot be empty, please enter a valid config name
+    sse_url_must_be_non_empty: MCP config SSE URL cannot be empty
+    stdio_args_must_be_non_empty: MCP config 'Startup Arguments' cannot be empty
+    stdio_command_must_be_non_empty: MCP config 'Startup Command' cannot be empty
   error:
-    client_call_failed: "MCP client call failed: %{error}"
-    client_config_failed: "MCP client configuration failed: %{error}"
-    client_start_failed: "MCP client startup failed: %{error}"
-    client_status_failed: "MCP client status retrieval failed: %{error}"
-    client_stop_failed: "MCP client stop failed: %{error}"
-    io_error: "MCP I/O error: %{error}"
-    not_found_error: "MCP '%{name}' not found error"
-    serialization_error: "MCP serialization/deserialization error: %{error}"
-    server_initialization_failed: "MCP server initialization failed: %{error}"
-    server_internal_error: "MCP server internal error: %{error}"
-    server_tool_execution_failed: "MCP server tool execution failed: %{error}"
-    server_tool_not_found: "MCP server tool not found: %{tool_name}"
-    server_unknown_error: "MCP server unknown error: %{error}"
-    state_change_failed: "MCP state change failed: %{error}"
-    store_error: "MCP store error: %{error}"
-    timeout_error: "MCP operation timeout: %{error}"
-    cannot_restart_disabled_server: "Cannot restart disabled MCP server. Please enable it first."
-    cannot_refresh_disabled_server: "Cannot refresh disabled MCP server."
-  op_in_progress_error: "An operation is already in progress for this server. Please try again later."
+    cannot_refresh_disabled_server: Cannot refresh disabled MCP server.
+    cannot_restart_disabled_server: Cannot restart disabled MCP server. Please enable it first.
+    client_call_failed: 'MCP client call failed: %{error}'
+    client_config_failed: 'MCP client configuration failed: %{error}'
+    client_start_failed: 'MCP client startup failed: %{error}'
+    client_status_failed: 'MCP client status retrieval failed: %{error}'
+    client_stop_failed: 'MCP client stop failed: %{error}'
+    io_error: 'MCP I/O error: %{error}'
+    not_found_error: MCP '%{name}' not found error
+    serialization_error: 'MCP serialization/deserialization error: %{error}'
+    server_initialization_failed: 'MCP server initialization failed: %{error}'
+    server_internal_error: 'MCP server internal error: %{error}'
+    server_tool_execution_failed: 'MCP server tool execution failed: %{error}'
+    server_tool_not_found: 'MCP server tool not found: %{tool_name}'
+    server_unknown_error: 'MCP server unknown error: %{error}'
+    state_change_failed: 'MCP state change failed: %{error}'
+    store_error: 'MCP store error: %{error}'
+    timeout_error: 'MCP operation timeout: %{error}'
+  op_in_progress_error: An operation is already in progress for this server. Please try again later.
   proxy:
-    service_description: "MCP proxy server - provides unified access to all enabled MCP tools"
-    tool_execution_error: "Tool execution error: %{error}"
-    tool_not_found: "MCP tool '%{tool_name}' not found"
-
+    service_description: MCP proxy server - provides unified access to all enabled MCP tools
+    tool_execution_error: 'Tool execution error: %{error}'
+    tool_not_found: MCP tool '%{tool_name}' not found
 network:
-  client_build_error: "Failed to create HTTP client: %{error}"
-  header_error: "Failed to create request header: %{error}"
-  proxy_error: "Failed to configure proxy: %{error}"
-  request_failed: "Request failed: %{error}"
-  response_read_error: "Failed to read response: %{error}"
-
+  client_build_error: 'Failed to create HTTP client: %{error}'
+  header_error: 'Failed to create request header: %{error}'
+  proxy_error: 'Failed to configure proxy: %{error}'
+  request_failed: 'Request failed: %{error}'
+  response_read_error: 'Failed to read response: %{error}'
 proxy:
   error:
-    internal_server_error: "Internal server error: %{error}"
-    invalid_api_key: "Invalid API key, please check if the key is correct or expired, and update in settings"
-    invalid_protocol: "Invalid protocol in model configuration: %{protocol}."
-    invalid_request_format: "Invalid request format: %{error}"
-    invalid_request: "Invalid request: %{error}"
-    missing_auth_header: "Request missing authorization information, please ensure API key is properly configured"
-    model_alias_not_found: "Model alias '%{alias}' not found."
-    model_details_fetch_failed: "Failed to fetch model details for provider_id %{id}."
-    no_backend_targets: "Model alias '%{alias}' has no backend targets configured."
-    no_keys_configured: "Server has no proxy access keys configured, please contact administrator to configure relevant keys"
-    retry_exceeded: "Request retry count exceeded. The server continuously returns 429 status code (too many requests). Please try again later or increase the retry count setting."
-    store_lock_failed: "Failed to access store: %{error}"
+    internal_server_error: 'Internal server error: %{error}'
+    invalid_api_key: Invalid API key, please check if the key is correct or expired, and update in settings
+    invalid_protocol: 'Invalid protocol in model configuration: %{protocol}.'
+    invalid_request: 'Invalid request: %{error}'
+    invalid_request_format: 'Invalid request format: %{error}'
+    missing_auth_header: Request missing authorization information, please ensure API key is properly configured
+    model_alias_not_found: Model alias '%{alias}' not found.
+    model_details_fetch_failed: Failed to fetch model details for provider_id %{id}.
+    no_backend_targets: Model alias '%{alias}' has no backend targets configured.
+    no_keys_configured: Server has no proxy access keys configured, please contact administrator to configure relevant keys
+    retry_exceeded: Request retry count exceeded. The server continuously returns 429 status code (too many requests). Please
+      try again later or increase the retry count setting.
+    store_lock_failed: 'Failed to access store: %{error}'
   group:
-    not_found_by_name: "Failed to find proxy group by group name '%{name}'"
-
+    not_found_by_name: Failed to find proxy group by group name '%{name}'
 sensitive:
   filter:
-    email: "[Email]"
-    ip_address: "[IP Address]"
-    credit_card: "[Credit Card]"
-    international_credit_card: "[International Credit Card]"
-    unionpay: "[UnionPay Card]"
-    chinese_id_card: "[ID Card]"
-    chinese_mobile: "[Mobile Number]"
-    chinese_name: "[Name]"
-    english_mobile: "[Phone Number]"
-    english_name: "[Name]"
-    chinese_landline: "[Landline]"
-    chinese_address: "[Address]"
-    english_address: "[Address]"
-    chinese_company: "[Company Name]"
-    english_company: "[Company Name]"
-    chinese_project: "[Project Name]"
-    english_project: "[Project Name]"
-    chinese_financial: "[Amount]"
-    english_financial: "[Amount]"
-    bank_account: "[Bank Account]"
-    bank_name: "[Bank Name]"
-    wechat_id: "[WeChat ID]"
-    qq_number: "[QQ Number]"
-    custom_block: "[Filtered]"
-
+    bank_account: '[Bank Account]'
+    bank_name: '[Bank Name]'
+    chinese_address: '[Address]'
+    chinese_company: '[Company Name]'
+    chinese_financial: '[Amount]'
+    chinese_id_card: '[ID Card]'
+    chinese_landline: '[Landline]'
+    chinese_mobile: '[Mobile Number]'
+    chinese_name: '[Name]'
+    chinese_project: '[Project Name]'
+    credit_card: '[Credit Card]'
+    custom_block: '[Filtered]'
+    email: '[Email]'
+    english_address: '[Address]'
+    english_company: '[Company Name]'
+    english_financial: '[Amount]'
+    english_mobile: '[Phone Number]'
+    english_name: '[Name]'
+    english_project: '[Project Name]'
+    international_credit_card: '[International Credit Card]'
+    ip_address: '[IP Address]'
+    qq_number: '[QQ Number]'
+    unionpay: '[UnionPay Card]'
+    wechat_id: '[WeChat ID]'
 setting:
-  failed_to_create_upload_dir: "Failed to create upload directory '%{path}': %{error}"
-  failed_to_move_logo_file: "Failed to move logo file: from '%{from}' to '%{to}', error: %{error}"
-  failed_to_save_logo_thumbnail: "Failed to save logo thumbnail: %{error}"
-  failed_to_update_shortcut: "Failed to update shortcut: %{error}"
-  file_not_exists: "File does not exist: %{file_path}"
-
+  failed_to_create_upload_dir: 'Failed to create upload directory ''%{path}'': %{error}'
+  failed_to_move_logo_file: 'Failed to move logo file: from ''%{from}'' to ''%{to}'', error: %{error}'
+  failed_to_save_logo_thumbnail: 'Failed to save logo thumbnail: %{error}'
+  failed_to_update_shortcut: 'Failed to update shortcut: %{error}'
+  file_not_exists: 'File does not exist: %{file_path}'
 tools:
-  failed_to_get_model: "Failed to get %{model_type} model"
-  function_not_found: "Tool function not found in workflow: %{name}"
-  keyword_must_be_non_empty: "Keyword (query) parameter must be non-empty string or non-empty array"
-  max_retries_exceeded: "Maximum retry count exceeded: %{item}"
-  mcp_stop_failed_details: "Failed to stop MCP server '%{server_name}': %{details}"
-  url_invalid: "URL parameter format error, must start with http:// or https://: %{url}"
-  url_must_be_string: "URL parameter must be a string"
-  url_must_not_be_empty: "URL parameter cannot be empty"
-  web_scraper_failed: "Web scraping failed (URL: %{url}): %{details}"
   error:
-    function_already_exists: "Function already exists: %{name}"
-    auth_error: "Authentication error"
-    config: "Configuration error"
-    execution_failed: "Tool execution failed: %{details}"
-    fatal: "Fatal error"
-    function_not_found: "Function not found"
-    initialization: "Initialization error"
-    invalid_params: "Invalid parameters: %{details}"
-    io_error: "I/O error: %{details}"
-    mcp_server_not_found: "MCP server not found"
-    network_error: "Network error"
-    serialization: "Serialization error"
-    state_change_failed: "State change failed"
-    store: "Store error"
-    timeout: "Timeout"
+    auth_error: Authentication error
+    config: Configuration error
+    execution_failed: 'Tool execution failed: %{details}'
+    fatal: Fatal error
+    function_already_exists: 'Function already exists: %{name}'
+    function_not_found: Function not found
+    initialization: Initialization error
+    invalid_params: 'Invalid parameters: %{details}'
+    io_error: 'I/O error: %{details}'
+    mcp_server_not_found: MCP server not found
+    network_error: Network error
+    serialization: Serialization error
+    state_change_failed: State change failed
+    store: Store error
+    timeout: Timeout
+  failed_to_get_model: Failed to get %{model_type} model
+  function_not_found: 'Tool function not found in workflow: %{name}'
+  keyword_must_be_non_empty: Keyword (query) parameter must be non-empty string or non-empty array
+  max_retries_exceeded: 'Maximum retry count exceeded: %{item}'
+  mcp_stop_failed_details: 'Failed to stop MCP server ''%{server_name}'': %{details}'
   search:
-    google_api_key_empty: "Google Search API key cannot be empty"
-    google_cx_empty: "Google Search Engine ID cannot be empty"
-    serper_api_key_empty: "Serper API key cannot be empty"
-    tavily_api_key_empty: "Tavily API key cannot be empty"
-
+    google_api_key_empty: Google Search API key cannot be empty
+    google_cx_empty: Google Search Engine ID cannot be empty
+    serper_api_key_empty: Serper API key cannot be empty
+    tavily_api_key_empty: Tavily API key cannot be empty
+  url_invalid: 'URL parameter format error, must start with http:// or https://: %{url}'
+  url_must_be_string: URL parameter must be a string
+  url_must_not_be_empty: URL parameter cannot be empty
+  web_scraper_failed: 'Web scraping failed (URL: %{url}): %{details}'
 tray:
-  about: "About"
-  agent: "Agent"
-  assistant: "Assistant"
-  chat: "Chat"
-  mcp: "MCP"
-  model: "Model"
-  note: "Note"
-  proxy: "Proxy"
-  proxy_switcher: "Proxy Switcher"
-  workflow: "Workflow"
-  quit: "Quit"
-  settings: "Settings"
-  skill: "Skill"
-
+  about: About
+  agent: Agent
+  assistant: Assistant
+  chat: Chat
+  mcp: MCP
+  model: Model
+  note: Note
+  proxy: Proxy
+  proxy_switcher: Proxy Switcher
+  quit: Quit
+  settings: Settings
+  skill: Skill
+  workflow: Workflow
 updater:
   errors:
-    config: "Updater configuration error: %{error}"
-    download: "Failed to download or install update: %{error}"
-    install: "Failed to install update: %{error}"
-    io_error: "I/O error"
-    lock_error: "Lock error"
-    update_not_found: "Currently the latest version, no available updates"
-    update_request: "Update request failed: %{error}"
-    version_mismatch: "Version mismatch, expected installation version differs from server-provided update version, please recheck for updates"
-    version_parse: "Version parsing error: expected version '%{version}', error: %{error}"
-
+    config: 'Updater configuration error: %{error}'
+    download: 'Failed to download or install update: %{error}'
+    install: 'Failed to install update: %{error}'
+    io_error: I/O error
+    lock_error: Lock error
+    update_not_found: Currently the latest version, no available updates
+    update_request: 'Update request failed: %{error}'
+    version_mismatch: Version mismatch, expected installation version differs from server-provided update version, please
+      recheck for updates
+    version_parse: 'Version parsing error: expected version ''%{version}'', error: %{error}'
 workflow:
-  awaiting_approval: "Awaiting approval"
-  stepBudgetExhausted: "Current steps exhausted (%{current}/%{max}), but the task is not yet complete. Do you want to continue?"
-  continue: "Continue"
-  stop: "Stop"
-  array_index_out_of_bounds: "Array index out of bounds: %{index}"
-  bool_not_supported: "Boolean type does not support this operation: %{operator}"
-  bracket_not_match: "Brackets do not match: %{condition}"
-  cancel_notification_error: "Failed to send workflow cancellation signal"
-  cancelled: "Operation was cancelled by user"
-  cannot_access_path: "Cannot access path: %{path}, because value is not object/array"
-  circular_dependency: "Circular dependency exists between nodes: %{nodes}"
-  compression_in_progress: "Compressing context..."
-  dependency_not_found: "Node '%{node_id}' depends on node '%{id}' which does not exist"
-  duplicate_node_id: "Duplicate node ID: %{id}"
-  edge_reference_missing: "Edge reference does not exist: %{from} -> %{to}"
-  incomplete_execution: "Workflow execution incomplete, missing nodes: %{missing}"
-  invalid_array_index: "Invalid array index: %{index}"
-  invalid_graph: "Invalid graph: %{reason}"
-  invalid_loop_input: "Loop node input must be array or object, but received: %{input}"
-  invalid_node_id: "Invalid node ID `%{id}`, only letters, numbers, underscores and hyphens allowed, and must start with a letter"
-  invalid_node_output: "Invalid node output, id: %{id}, output: %{output}, node output field names only allow letters, numbers, underscores and hyphens, and must start with a letter, output field name cannot be: item"
-  invalid_node_type: "Invalid node type: %{node_type}"
-  invalid_state_transition: "Invalid state transition: from %{current} to %{new}"
-  invalid_state: "Invalid state transition, current state: %{current}, new state: %{new}"
-  interrupted_by_restart: "Interrupted by application restart"
-  invalid_workflow_json: "Invalid workflow configuration: %{error}"
-  json_path_not_found: "JSON path not found: %{path}"
-  left_value_not_number: "Left value is not number type"
-  nested_group: "Nested groups not allowed: group '%{id}' cannot contain other groups"
-  node_output_not_found: "Cannot find output of node '%{node_id}', path: %{path}"
-  not_bool_value: "Value is not boolean type"
-  pause_notification_error: "Failed to send workflow pause signal"
-  resume_notification_error: "Failed to send workflow resume signal"
-  right_value_not_number: "Right value is not number type"
-  self_dependency: "Node '%{node_id}' cannot depend on itself"
-  state_notification_error: "Workflow state notification failed"
-  string_not_supported: "String type does not support this operation: %{operator}"
-  task_join_error: "Task execution failed: %{error}"
-  user_rejected: "User rejected"
-  type_mismatch: "Type mismatch operation: %{operator}, left value type is %{left_type}, right value type is %{right_type}"
-  unsupported_operator: "Unsupported operator: %{operator}"
-  unsupported_type_combination: "Unsupported type combination operator: %{operator}"
-  validation: "Validation error: %{details}"
-  task_finished: "Task completed"
-  summary:
-    edit_file: "Edited"
-    submit_plan: "Submit plan"
-    todo_create: "Create task"
-    todo_update: "Update task: %{subject} -> %{status}"
-    todo_list: "Get todo list"
-    todo_get: "Get task details"
-    todo_status_done: "Done"
-    todo_status_in_progress: "In Progress"
-    todo_status_pending: "Pending"
-    todo_status_failed: "Failed"
-    write_file: "Written"
-    todo_status_data_missing: "Data missing"
+  array_index_out_of_bounds: 'Array index out of bounds: %{index}'
+  awaiting_approval: Awaiting approval
+  bool_not_supported: 'Boolean type does not support this operation: %{operator}'
+  bracket_not_match: 'Brackets do not match: %{condition}'
+  cancel_notification_error: Failed to send workflow cancellation signal
+  cancelled: Operation was cancelled by user
+  cannot_access_path: 'Cannot access path: %{path}, because value is not object/array'
+  circular_dependency: 'Circular dependency exists between nodes: %{nodes}'
+  compression_in_progress: Compressing context...
+  continue: Continue
+  dependency_not_found: Node '%{node_id}' depends on node '%{id}' which does not exist
+  duplicate_node_id: 'Duplicate node ID: %{id}'
+  edge_reference_missing: 'Edge reference does not exist: %{from} -> %{to}'
   error:
-    cancelled: "Operation cancelled by user"
-    config: "Configuration error"
-    context: "Context error"
-    execution: "Execution error"
-    initialization: "Initialization error"
-    invalid_graph: "Invalid graph"
-    invalid_state: "Invalid state"
-    io: "I/O error"
-    other: "Other error"
-    serialization: "Serialization error"
-    store: "Store error"
+    cancelled: Operation cancelled by user
+    config: Configuration error
+    context: Context error
+    execution: Execution error
+    initialization: Initialization error
+    invalid_graph: Invalid graph
+    invalid_state: Invalid state
+    io: I/O error
+    other: Other error
+    serialization: Serialization error
+    store: Store error
+  incomplete_execution: 'Workflow execution incomplete, missing nodes: %{missing}'
+  interrupted_by_restart: Interrupted by application restart
+  invalid_array_index: 'Invalid array index: %{index}'
+  invalid_graph: 'Invalid graph: %{reason}'
+  invalid_loop_input: 'Loop node input must be array or object, but received: %{input}'
+  invalid_node_id: Invalid node ID `%{id}`, only letters, numbers, underscores and hyphens allowed, and must start with a
+    letter
+  invalid_node_output: 'Invalid node output, id: %{id}, output: %{output}, node output field names only allow letters, numbers,
+    underscores and hyphens, and must start with a letter, output field name cannot be: item'
+  invalid_node_type: 'Invalid node type: %{node_type}'
+  invalid_state: 'Invalid state transition, current state: %{current}, new state: %{new}'
+  invalid_state_transition: 'Invalid state transition: from %{current} to %{new}'
+  invalid_workflow_json: 'Invalid workflow configuration: %{error}'
+  json_path_not_found: 'JSON path not found: %{path}'
+  left_value_not_number: Left value is not number type
+  nested_group: 'Nested groups not allowed: group ''%{id}'' cannot contain other groups'
+  node_output_not_found: 'Cannot find output of node ''%{node_id}'', path: %{path}'
+  not_bool_value: Value is not boolean type
+  pause_notification_error: Failed to send workflow pause signal
+  resume_notification_error: Failed to send workflow resume signal
+  right_value_not_number: Right value is not number type
+  self_dependency: Node '%{node_id}' cannot depend on itself
+  state_notification_error: Workflow state notification failed
+  stepBudgetExhausted: Current steps exhausted (%{current}/%{max}), but the task is not yet complete. Do you want to continue?
+  stop: Stop
+  string_not_supported: 'String type does not support this operation: %{operator}'
+  summary:
+    edit_file: Edited
+    submit_plan: Submit plan
+    todo_create: Create task
+    todo_get: Get task details
+    todo_list: Get todo list
+    todo_status_data_missing: Data missing
+    todo_status_done: Done
+    todo_status_failed: Failed
+    todo_status_in_progress: In Progress
+    todo_status_pending: Pending
+    todo_update: 'Update task: %{subject} -> %{status}'
+    write_file: Written
+  task_finished: Task completed
+  task_join_error: 'Task execution failed: %{error}'
+  type_mismatch: 'Type mismatch operation: %{operator}, left value type is %{left_type}, right value type is %{right_type}'
+  unsupported_operator: 'Unsupported operator: %{operator}'
+  unsupported_type_combination: 'Unsupported type combination operator: %{operator}'
+  user_rejected: User rejected
+  validation: 'Validation error: %{details}'

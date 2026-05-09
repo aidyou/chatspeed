@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -215,7 +216,9 @@ impl WebviewScraper {
                         // Fallback probe: poll URL status every 500ms
                         let start = Instant::now();
                         loop {
-                            if let Ok(current_url) = webview.url() {
+                            if let Ok(Ok(current_url)) =
+                                catch_unwind(AssertUnwindSafe(|| webview.url()))
+                            {
                                 let current_url_str = current_url.as_str();
                                 // If we've reached the target URL (ignoring fragments/queries for basic match)
                                 if current_url_str.contains(url) || (url.contains("://") && current_url_str.len() > 10 && !current_url_str.contains("index.html")) {
@@ -225,6 +228,8 @@ impl WebviewScraper {
                                         break;
                                     }
                                 }
+                            } else {
+                                log::debug!("Fallback probe skipped webview.url() because URL is not available yet");
                             }
                             tokio::time::sleep(Duration::from_millis(500)).await;
                             if start.elapsed() >= fast_ready_timeout { break; }

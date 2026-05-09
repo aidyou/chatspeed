@@ -1,0 +1,34 @@
+schema_version: 1
+builtin_id: marketing
+builtin_version: 1
+name: Marketing
+description: Professional marketing and growth execution agent for SaaS, AI products, developer tools, and technical products.
+role: primary
+disabled: true
+prompts:
+  system: system.md
+  planning: planning.md
+config:
+  shell_policy: default
+  approval_level: default
+  auto_approve:
+    - edit_file
+    - glob
+    - grep
+    - list_dir
+    - read_file
+    - web_fetch
+    - web_search
+    - write_file
+  available_tools:
+    - glob
+    - grep
+    - list_dir
+    - read_file
+    - web_fetch
+    - web_search
+  final_audit: false
+  skill_enabled: true
+  selected_skills:
+    - commit
+  phase: standard

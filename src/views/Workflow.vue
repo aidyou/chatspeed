@@ -872,6 +872,34 @@ watch(
   { deep: true }
 )
 
+watch(
+  () => agentStore.primaryAgents,
+  newAgents => {
+    const workflowAgentId = workflowStore.currentWorkflow?.agentId
+    if (workflowAgentId) {
+      const workflowAgent = newAgents.find(agent => agent.id === workflowAgentId)
+      if (workflowAgent && selectedAgent.value !== workflowAgent) {
+        selectedAgent.value = workflowAgent
+      }
+      return
+    }
+
+    const selectedAgentId = selectedAgent.value?.id
+    if (selectedAgentId) {
+      const remappedAgent = newAgents.find(agent => agent.id === selectedAgentId)
+      if (remappedAgent && selectedAgent.value !== remappedAgent) {
+        selectedAgent.value = remappedAgent
+      }
+      return
+    }
+
+    if (!selectedAgent.value && newAgents.length > 0) {
+      selectedAgent.value = newAgents[0]
+    }
+  },
+  { deep: true, immediate: true }
+)
+
 onMounted(async () => {
   unlistenFocusInput.value = await listen('cs://workflow-focus-input', event => {
     if (event.payload && event.payload.windowLabel === settingStore.windowLabel) {
@@ -889,10 +917,6 @@ onMounted(async () => {
   await workflowStore.loadWorkflows()
   await agentStore.fetchAgents()
   await fetchSystemSkills()
-
-  if (agentStore.primaryAgents.length > 0) {
-    selectedAgent.value = agentStore.primaryAgents[0]
-  }
 
   // Restore the last selected workflow if it still exists.
   const initialWorkflowId = resolveInitialWorkflowId()

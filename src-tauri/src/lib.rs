@@ -1,4 +1,5 @@
 mod ai;
+mod builtin_agents;
 mod ccproxy;
 mod commands;
 mod constants;
@@ -145,7 +146,9 @@ pub async fn run() -> crate::error::Result<()> {
             delete_agent,
             get_agent,
             get_all_agents,
+            update_agent_order,
             get_available_tools,
+            get_default_shell_policy,
 
             // settings
             get_all_config,
@@ -360,7 +363,9 @@ pub async fn run() -> crate::error::Result<()> {
                     }
                 }
             }
-            // When the user clicks on the close button of a window, everything except the settings window is only hidden.
+            // When the user clicks on the close button, main/assistant/workflow are hidden.
+            // The settings window is briefly hidden and then force-destroyed on macOS to avoid
+            // WKWebView close-time layer tree races while still releasing resources.
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 match window.label() {
                     // For these windows, we just hide them.
@@ -377,6 +382,42 @@ pub async fn run() -> crate::error::Result<()> {
                             #[cfg(debug_assertions)]
                             log::debug!("Window '{}' is already hidden", window.label());
                         }
+                    }
+                    "settings" | "note" => {
+                        api.prevent_close();
+
+                        if window.is_visible().unwrap_or(false) {
+                            if let Err(e) = window.hide() {
+                                warn!("Failed to hide window '{}': {}", window.label(), e);
+                            }
+                        }
+
+                        let app_handle = window.app_handle().clone();
+                        spawn(async move {
+                            #[cfg(target_os = "macos")]
+                            let destroy_delay = Duration::from_millis(120);
+
+                            #[cfg(not(target_os = "macos"))]
+                            let destroy_delay = Duration::from_millis(0);
+
+                            tokio::time::sleep(destroy_delay).await;
+
+                            if let Some(settings_window) = app_handle.get_webview_window("settings")
+                            {
+                                if settings_window.is_visible().unwrap_or(false) {
+                                    log::debug!(
+                                        "Skip destroying settings window because it became visible again"
+                                    );
+                                    return;
+                                }
+
+                                if let Err(e) = settings_window.destroy() {
+                                    warn!("Failed to destroy window 'settings': {}", e);
+                                } else {
+                                    log::debug!("Window 'settings' destroyed after delayed hide");
+                                }
+                            }
+                        });
                     }
                     _ => {
                         log::debug!("Window '{}' closed", window.label());
@@ -587,6 +628,12 @@ pub async fn run() -> crate::error::Result<()> {
             // and frontend code may call commands that require MainStore state before setup completes.
             // See: https://github.com/tauri-apps/tauri/issues/xxxx (race condition with window creation)
             app.manage(main_store.clone());
+
+            if let Err(e) =
+                builtin_agents::sync_builtin_agents_if_needed(&app.handle(), main_store.clone())
+            {
+                log::error!("Failed to synchronize built-in agents: {}", e);
+            }
 
             // Setup language
             if let Ok(c) = main_store.clone().read() {

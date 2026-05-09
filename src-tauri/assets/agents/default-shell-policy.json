@@ -1,0 +1,354 @@
+[
+  {
+    "pattern": "^base64($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^blkid($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cal($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cat .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^command($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^date($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^df($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^dig($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker images($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker inspect($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker ps($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^du($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^env$",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^file($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^find .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^free($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^getfacl($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git branch($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git config --list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git diff($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git log($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git remote($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git rev-parse($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git show($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git status($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git tag($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^grep .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^head($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^hexdump($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^hostname$",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^id($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^iptables -L($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ls($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^lsblk($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^lscpu($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^lsmod($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^lspci($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^lsusb($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^md5sum($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mount($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^netstat($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^nproc($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^nslookup($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^od($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ping($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^printenv($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ps($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pwd($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^rg($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^sha256sum($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ss($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^stat($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^systemctl status($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^tail($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^tar -t.*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^traceroute($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^type($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ufw status($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uname($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^unzip -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^wc($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^whereis($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^which($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^whoami($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^zip -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^certutil -hashfile .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^dir($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^fc($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^findstr .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-ChildItem($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-Command($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-ComputerInfo($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-Content($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-FileHash($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-Item($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-Location($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-NetIPAddress($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-NetTCPConnection($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-Process($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-Service($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ipconfig($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Resolve-DnsName($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Select-String .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^systeminfo($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^tasklist($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Test-Path .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^type .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^where($| .*)",
+    "decision": "allow"
+  }
+]

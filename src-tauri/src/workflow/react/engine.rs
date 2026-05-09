@@ -3663,7 +3663,7 @@ impl WorkflowExecutor {
                         self.max_steps,
                         &self.policy,
                         &mut signal_rx,
-                        true, // require_tool_call: ReAct main loop requires tool calls
+                        false, // allow brief reasoning-only turns; runtime still converges via tool observations and completion tools
                     )
                     .await?;
 
@@ -3910,6 +3910,8 @@ impl WorkflowExecutor {
                 }
 
                 if results.is_empty() {
+                    const NO_TOOL_MEDIUM_REMINDER_THRESHOLD: u32 = 3;
+                    const NO_TOOL_STRONG_REMINDER_THRESHOLD: u32 = 5;
                     self.loop_detector.reset_tool_call_history();
                     let repeated_no_tool_warning = self
                         .loop_detector
@@ -3921,61 +3923,71 @@ impl WorkflowExecutor {
                         self.consecutive_no_tool_calls
                     );
                     let mut runtime_observation_type = RuntimeObservationType::NoToolCall;
-                    let error_msg = if let Some(warning) = repeated_no_tool_warning {
+                    let reminder_msg = if let Some(warning) = repeated_no_tool_warning {
                         runtime_observation_type = RuntimeObservationType::LoopDetected;
-                        warning
+                        Some(warning)
                     } else if let Some(invalid_tool_call_error) = invalid_tool_call_error {
                         runtime_observation_type = RuntimeObservationType::InvalidToolCall;
-                        format!(
-                        "<SYSTEM_REMINDER>Error: {}. Call exactly one available tool with a valid name and arguments.</SYSTEM_REMINDER>",
-                        invalid_tool_call_error
-                    )
-                    } else if self.consecutive_no_tool_calls >= 3 {
+                        Some(format!(
+                            "<SYSTEM_REMINDER>Error: {}. Choose one valid tool call that best advances the task, and make sure the tool name and arguments match the available schema.</SYSTEM_REMINDER>",
+                            invalid_tool_call_error
+                        ))
+                    } else if self.consecutive_no_tool_calls >= NO_TOOL_STRONG_REMINDER_THRESHOLD {
                         let remaining = self.max_steps.saturating_sub(self.current_step);
                         let finish_tool = if self.is_child_agent_workflow() {
                             "submit_result"
                         } else {
                             "complete_workflow_with_summary"
                         };
-                        format!(
-                        "<SYSTEM_REMINDER>No tool calls for {} consecutive responses. Step budget: {}/{} used, {} remaining. If you are finished, provide a summary and call '{}'.</SYSTEM_REMINDER>",
-                        self.consecutive_no_tool_calls, self.current_step, self.max_steps, remaining, finish_tool
-                    )
-                    } else {
-                        if self.is_child_agent_workflow() {
-                            "<SYSTEM_REMINDER>No tool call detected. Call a tool now; if the delegated task is done, use 'submit_result' with result and summary.</SYSTEM_REMINDER>".to_string()
+                        Some(format!(
+                            "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. This workflow should now converge on a concrete next step. Convert your analysis into the smallest useful tool action, or if the task is already complete, call '{}' with a complete summary. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
+                            self.consecutive_no_tool_calls,
+                            finish_tool,
+                            self.current_step,
+                            self.max_steps,
+                            remaining
+                        ))
+                    } else if self.consecutive_no_tool_calls >= NO_TOOL_MEDIUM_REMINDER_THRESHOLD {
+                        Some(if self.is_child_agent_workflow() {
+                            "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Brief reasoning-only turns are allowed, but they should now resolve into one concrete tool action. Choose the smallest useful next tool, or call 'submit_result' if the delegated task is complete.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>No tool call detected. Call a tool now; if the task is done, use 'complete_workflow_with_summary' with a valid summary.</SYSTEM_REMINDER>".to_string()
-                        }
+                            "<SYSTEM_REMINDER>This workflow is action-oriented. Brief reasoning-only turns are allowed, but they should now resolve into one concrete tool action. Choose the smallest useful next tool, or call 'complete_workflow_with_summary' if the task is complete.</SYSTEM_REMINDER>".to_string()
+                        })
+                    } else {
+                        Some(if self.is_child_agent_workflow() {
+                            "<SYSTEM_REMINDER>This delegated workflow advances through tool-mediated observations. If your analysis is sufficient, choose one concrete next tool now. If the delegated task is already complete, call 'submit_result'.</SYSTEM_REMINDER>".to_string()
+                        } else {
+                            "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. If your analysis is sufficient, choose one concrete next tool now. If the task is already complete, call 'complete_workflow_with_summary'.</SYSTEM_REMINDER>".to_string()
+                        })
                     };
-                    let _ = self
-                        .add_message_and_notify_internal(
-                            "user".to_string(),
-                            error_msg.clone(),
-                            None,
-                            None,
-                            Some(StepType::Observe),
-                            false,
-                            None,
-                            Some(runtime_observation_metadata(
-                                runtime_observation_type,
-                                serde_json::json!({
-                                    "consecutive_no_tool_calls": self.consecutive_no_tool_calls,
-                                    "current_step": self.current_step,
-                                    "max_steps": self.max_steps,
-                                    "llm_content": error_msg,
-                                }),
-                            )),
-                        )
-                        .await?;
+
+                    if let Some(reminder_msg) = reminder_msg {
+                        let _ = self
+                            .add_message_and_notify_internal(
+                                "user".to_string(),
+                                reminder_msg.clone(),
+                                None,
+                                None,
+                                Some(StepType::Observe),
+                                false,
+                                None,
+                                Some(runtime_observation_metadata(
+                                    runtime_observation_type,
+                                    serde_json::json!({
+                                        "consecutive_no_tool_calls": self.consecutive_no_tool_calls,
+                                        "current_step": self.current_step,
+                                        "max_steps": self.max_steps,
+                                        "llm_content": reminder_msg,
+                                    }),
+                                )),
+                            )
+                            .await?;
+                    }
                     if self.flush_queued_user_messages().await? {
                         self.current_step = 0;
                         self.consecutive_no_tool_calls = 0;
                         self.loop_detector.reset_tool_call_history();
                         self.loop_detector.reset_no_tool_response_history();
-                    }
-                    if self.consecutive_no_tool_calls >= 3 {
-                        self.consecutive_no_tool_calls = 0;
                     }
                     // Skip further processing since there are no tool results
                     sleep(Duration::from_millis(100)).await;

@@ -8,6 +8,7 @@ use tauri::State;
 
 use crate::{
     ai::interaction::chat_completion::ChatState,
+    builtin_agents::load_default_shell_policy_from_resources,
     db::{Agent, MainStore},
 };
 
@@ -33,12 +34,22 @@ pub async fn update_agent(
     let effective_agent =
         if let Some(existing) = store.get_agent(&agent.id).map_err(|e| e.to_string())? {
             if existing.is_system.unwrap_or(false) {
-                let mut locked = existing.clone();
-                locked.disabled = agent.disabled.or(existing.disabled);
-                locked
+                let mut updated = agent;
+                updated.id = existing.id.clone();
+                updated.name = existing.name.clone();
+                updated.description = existing.description.clone();
+                updated.role = existing.role.clone();
+                updated.parent_agent_id = existing.parent_agent_id.clone();
+                updated.system_prompt = existing.system_prompt.clone();
+                updated.planning_prompt = existing.planning_prompt.clone();
+                updated.is_system = existing.is_system;
+                updated.version = existing.version;
+                updated.sort_index = existing.sort_index;
+                updated
             } else {
                 let mut updated = agent;
                 updated.is_system = Some(false);
+                updated.sort_index = existing.sort_index;
                 updated
             }
         } else {
@@ -89,7 +100,24 @@ pub async fn get_all_agents(
 }
 
 #[tauri::command]
+pub async fn update_agent_order(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    agent_ids: Vec<String>,
+) -> Result<(), String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .update_agent_order(agent_ids)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn get_available_tools(chat_state: State<'_, Arc<ChatState>>) -> Result<Value, String> {
     let native_meta = chat_state.tool_manager.get_all_native_tool_metadata().await;
     Ok(json!(native_meta))
+}
+
+#[tauri::command]
+pub async fn get_default_shell_policy() -> Result<Value, String> {
+    Ok(json!(load_default_shell_policy_from_resources()?))
 }

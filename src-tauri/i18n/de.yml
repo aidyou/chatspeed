@@ -1,377 +1,389 @@
+chat:
+  api_key_is_require_for_list_models: Für das Abrufen der Modellliste ist ein API-Schlüssel erforderlich. Bitte konfigurieren
+    Sie einen gültigen API-Schlüssel in den Einstellungen.
+  chat_not_found: Angegebene Chat-Sitzung nicht gefunden
+  empty_chat_id: Chat-ID darf nicht leer sein
+  empty_messages: Nachrichtenliste darf nicht leer sein
+  empty_model: Modellname darf nicht leer sein
+  empty_provider_id: Anbieter-ID darf nicht leer sein
+  error:
+    api_request_failed: 'API-Anfrage fehlgeschlagen, Anbieter: %{provider}, Statuscode: %{status_code}, Fehlerdetails: %{details}'
+    failed_to_get_or_create_window_channel: 'Abrufen oder Erstellen des dedizierten Chatfenster-Kommunikationskanals fehlgeschlagen:
+      %{error}'
+    invalid_input: 'Ungültige Eingabe: %{details}'
+    response_parse_failed: 'Antwort von %{provider} konnte nicht verarbeitet werden: %{details}'
+    stream_processing_failed: 'Fehler bei der Verarbeitung des Datenstroms von %{provider}: %{details}'
+    tool_call_serialization_failed: 'Serialisierung des Werkzeugaufrufs fehlgeschlagen: %{details}'
+  failed_to_convert_language_code: 'Sprachcode konnte nicht konvertiert werden: %{error}'
+  failed_to_create_file: 'Datei konnte nicht erstellt werden: %{error}'
+  failed_to_detect_language: Sprache konnte nicht erkannt werden
+  failed_to_get_available_languages: 'Liste der verfügbaren Sprachen konnte nicht abgerufen werden: %{error}'
+  failed_to_write_file: 'Datei konnte nicht geschrieben werden: %{error}'
+  invalid_api_protocol: 'Ungültiges API-Protokoll: %{protocol}'
+  note_already_exists: Diese Notiz ist bereits vorhanden und muss nicht erneut hinzugefügt werden
+  search_not_found: Angegebene Suchsitzung nicht gefunden
 command:
   clipboard:
-    failed_to_initialize: "Initialisierung des Clipboards fehlgeschlagen: %{error}"
-    failed_to_read: "Lesen des Clipboards fehlgeschlagen: %{error}"
-    failed_to_write: "Schreiben in das Clipboard fehlgeschlagen: %{error}"
+    failed_to_initialize: 'Initialisierung des Clipboards fehlgeschlagen: %{error}'
+    failed_to_read: 'Lesen des Clipboards fehlgeschlagen: %{error}'
+    failed_to_write: 'Schreiben in das Clipboard fehlgeschlagen: %{error}'
   fs:
-    read_file_failed: "Lesen der Datei fehlgeschlagen: %{error}"
-    image_preview_failed: "Bildvorschau konnte nicht generiert werden: %{error}"
-    unknown_filename: "Unbekannter Dateiname.png"
+    image_preview_failed: 'Bildvorschau konnte nicht generiert werden: %{error}'
+    read_file_failed: 'Lesen der Datei fehlgeschlagen: %{error}'
+    unknown_filename: Unbekannter Dateiname.png
   window:
-    failed_to_close: "Fenster konnte nicht geschlossen werden: %{error}"
-
-chat:
-  error:
-    api_request_failed: "API-Anfrage fehlgeschlagen, Anbieter: %{provider}, Statuscode: %{status_code}, Fehlerdetails: %{details}"
-    invalid_input: "Ungültige Eingabe: %{details}"
-    failed_to_get_or_create_window_channel: "Abrufen oder Erstellen des dedizierten Chatfenster-Kommunikationskanals fehlgeschlagen: %{error}"
-    response_parse_failed: "Antwort von %{provider} konnte nicht verarbeitet werden: %{details}"
-    stream_processing_failed: "Fehler bei der Verarbeitung des Datenstroms von %{provider}: %{details}"
-    tool_call_serialization_failed: "Serialisierung des Werkzeugaufrufs fehlgeschlagen: %{details}"
-  api_key_is_require_for_list_models: "Für das Abrufen der Modellliste ist ein API-Schlüssel erforderlich. Bitte konfigurieren Sie einen gültigen API-Schlüssel in den Einstellungen."
-  chat_not_found: "Angegebene Chat-Sitzung nicht gefunden"
-  empty_chat_id: "Chat-ID darf nicht leer sein"
-  empty_messages: "Nachrichtenliste darf nicht leer sein"
-  empty_model: "Modellname darf nicht leer sein"
-  empty_provider_id: "Anbieter-ID darf nicht leer sein"
-  failed_to_convert_language_code: "Sprachcode konnte nicht konvertiert werden: %{error}"
-  failed_to_create_file: "Datei konnte nicht erstellt werden: %{error}"
-  failed_to_detect_language: "Sprache konnte nicht erkannt werden"
-  failed_to_get_available_languages: "Liste der verfügbaren Sprachen konnte nicht abgerufen werden: %{error}"
-  failed_to_write_file: "Datei konnte nicht geschrieben werden: %{error}"
-  invalid_api_protocol: "Ungültiges API-Protokoll: %{protocol}"
-  note_already_exists: "Diese Notiz ist bereits vorhanden und muss nicht erneut hinzugefügt werden"
-  search_not_found: "Angegebene Suchsitzung nicht gefunden"
-
+    failed_to_close: 'Fenster konnte nicht geschlossen werden: %{error}'
 db:
-  agent_name_exists: "Agentenname '%{name}' ist bereits vorhanden"
-  ai_model_not_found_by_id: "KI-Modell mit ID %{id} nicht gefunden"
-  ai_skill_not_found_by_id: "KI-Fähigkeit mit ID %{id} nicht gefunden"
-  already_exists: "Daten bereits vorhanden: %{error}"
-  conversation_not_found: "Die angegebene Konversation existiert nicht. Sie wurde möglicherweise gelöscht oder es ist ein Datenbankfehler aufgetreten"
-  database_error: "Datenbankfehler: %{error}"
-  failed_to_initialize_database: "Datenbank konnte nicht initialisiert werden: %{error}"
-  failed_to_lock_main_store: "Datenbank konnte nicht gesperrt werden: %{error}"
-  failed_to_open_db_connection: "Datenbankverbindung konnte nicht geöffnet werden: %{error}"
-  io_error: "E/A-Fehler: %{error}"
-  json_error: "JSON-Fehler: %{error}"
-  json_parse_failed_mcp_config: "MCP-Konfigurations-JSON konnte nicht verarbeitet werden: %{error}"
-  json_parse_failed_models: "Modelllisten-JSON konnte nicht verarbeitet werden: %{error}"
-  json_serialize_failed_mcp_config: "MCP-Konfiguration konnte nicht in JSON serialisiert werden: %{error}"
-  json_serialize_failed_metadata: "Metadaten konnten nicht in JSON serialisiert werden: %{error}"
-  mcp_not_found_by_id: "MCP-Konfiguration mit ID %{id} nicht gefunden"
-  plugin_file_not_found_by_uuid: "Plugin-Datei mit UUID %{uuid} nicht gefunden"
-  plugin_invalid_runtime_type: "Ungültiger Plugin-Laufzeittyp: %{runtime_type}"
-  plugin_json_deserialize_failed_input_schema: "Plugin-Eingabeschema-JSON konnte nicht verarbeitet werden: %{error}"
-  plugin_json_deserialize_failed_output_schema: "Plugin-Ausgabeschema-JSON konnte nicht verarbeitet werden: %{error}"
-  plugin_json_serialize_failed_input_schema: "Plugin-Eingabeschema konnte nicht in JSON serialisiert werden: %{error}"
-  plugin_json_serialize_failed_output_schema: "Plugin-Ausgabeschema konnte nicht in JSON serialisiert werden: %{error}"
-  plugin_not_found_by_uuid: "Plugin mit UUID %{uuid} nicht gefunden"
-  tauri_error: "Tauri-Fehler: %{error}"
+  agent_name_exists: Agentenname '%{name}' ist bereits vorhanden
+  ai_model_not_found_by_id: KI-Modell mit ID %{id} nicht gefunden
+  ai_skill_not_found_by_id: KI-Fähigkeit mit ID %{id} nicht gefunden
+  already_exists: 'Daten bereits vorhanden: %{error}'
   backup:
-    dir_not_found: "Sicherungsverzeichnis '%{path}' nicht gefunden"
-    failed_to_add_file_to_zip: "Datei '%{path}' konnte nicht zum ZIP-Archiv hinzugefügt werden: %{error}"
-    failed_to_create_backup_dir_at: "Sicherungsverzeichnis '%{path}' konnte nicht erstellt werden: %{error}"
-    failed_to_create_cipher: "Chiffre konnte nicht erstellt werden: %{error}"
-    failed_to_create_dir_from_zip: "Verzeichnis '%{path}' konnte nicht aus ZIP-Archiv erstellt werden: %{error}"
-    failed_to_create_encrypted_file: "Verschlüsselte Datei konnte nicht erstellt werden: %{error}"
-    failed_to_create_file_from_zip: "Datei '%{path}' konnte nicht aus ZIP-Archiv erstellt werden: %{error}"
-    failed_to_create_mcp_sessions_dir: "MCP-Sitzungsverzeichnis '%{path}' konnte nicht erstellt werden: %{error}"
-    failed_to_create_parent_dir_from_zip: "Übergeordnetes Verzeichnis '%{path}' konnte nicht aus ZIP-Archiv erstellt werden: %{error}"
-    failed_to_create_schema_dir: "Schemaverzeichnis '%{path}' konnte nicht erstellt werden: %{error}"
-    failed_to_create_shared_dir: "Freigabeverzeichnis '%{path}' konnte nicht erstellt werden: %{error}"
-    failed_to_create_static_dir: "Statisches Verzeichnis '%{path}' konnte nicht erstellt werden: %{error}"
-    failed_to_create_theme_dir: "Themenverzeichnis '%{path}' konnte nicht erstellt werden: %{error}"
-    failed_to_create_upload_dir: "Upload-Verzeichnis '%{path}' konnte nicht erstellt werden: %{error}"
-    failed_to_create_zip_for_backup: "ZIP-Datei '%{path}' für die Sicherung konnte nicht erstellt werden: %{error}"
-    failed_to_decode_key: "Schlüssel konnte nicht dekodiert werden: %{error}"
-    failed_to_decrypt_data: "Daten konnten nicht entschlüsselt werden: %{error}"
-    failed_to_encrypt_data: "Daten konnten nicht verschlüsselt werden: %{error}"
-    failed_to_finish_zip: "Erstellung der ZIP-Datei konnte nicht abgeschlossen werden: %{error}"
-    failed_to_open_database_file: "Datenbankdatei konnte nicht geöffnet werden: %{error}"
-    failed_to_open_dest_db: "Zieldatenbank '%{path}' konnte nicht geöffnet werden: %{error}"
-    failed_to_open_encrypted_file: "Verschlüsselte Datei konnte nicht geöffnet werden: %{error}"
-    failed_to_open_file_for_zip: "Datei '%{path}' für ZIP konnte nicht geöffnet werden: %{error}"
-    failed_to_open_zip: "ZIP-Datei '%{path}' konnte nicht geöffnet werden: %{error}"
-    failed_to_read_backup_dir: "Sicherungsverzeichnis '%{path}' konnte nicht gelesen werden: %{error}"
-    failed_to_read_database_file: "Datenbankdatei konnte nicht gelesen werden: %{error}"
-    failed_to_read_encrypted_file: "Verschlüsselte Datei konnte nicht gelesen werden: %{error}"
-    failed_to_read_file_for_zip: "Dateiinhalt für ZIP konnte nicht gelesen werden: %{error}"
-    failed_to_read_zip_archive: "ZIP-Archiv konnte nicht gelesen werden: %{error}"
-    failed_to_read_zip_entry: "ZIP-Eintrag konnte nicht gelesen werden (Index %{index}): %{error}"
-    failed_to_set_permissions_from_zip: "Berechtigungen für '%{path}' aus ZIP konnten nicht festgelegt werden: %{error}"
-    failed_to_strip_prefix_for_zip: "Pfadpräfix für ZIP konnte nicht entfernt werden (Basispfad: '%{base}', vollständiger Pfad: '%{full}'): %{error}"
-    failed_to_write_encrypted_file: "Verschlüsselte Datei konnte nicht geschrieben werden: %{error}"
-    failed_to_write_file_from_zip: "Datei '%{path}' konnte nicht aus ZIP geschrieben werden: %{error}"
-    failed_to_write_temp_db: "Temporäre Datenbankdatei '%{path}' konnte nicht geschrieben werden: %{error}"
-    failed_to_write_to_zip: "In ZIP-Datei konnte nicht geschrieben werden: %{error}"
-    file_not_found: "Sicherungsdatei '%{path}' nicht gefunden"
-    invalid_magic_number: "Ungültige magische Zahl"
-    some_files_skipped_restart_required: "Einige Dateien (z. B. MCP-Sitzungsdatenbank) konnten nicht wiederhergestellt werden, da sie derzeit verwendet werden. Bitte starten Sie die Anwendung neu, um die Wiederherstellung abzuschließen."
-    unsupported_version: "Nicht unterstützte Version"
-
+    dir_not_found: Sicherungsverzeichnis '%{path}' nicht gefunden
+    failed_to_add_file_to_zip: 'Datei ''%{path}'' konnte nicht zum ZIP-Archiv hinzugefügt werden: %{error}'
+    failed_to_create_backup_dir_at: 'Sicherungsverzeichnis ''%{path}'' konnte nicht erstellt werden: %{error}'
+    failed_to_create_cipher: 'Chiffre konnte nicht erstellt werden: %{error}'
+    failed_to_create_dir_from_zip: 'Verzeichnis ''%{path}'' konnte nicht aus ZIP-Archiv erstellt werden: %{error}'
+    failed_to_create_encrypted_file: 'Verschlüsselte Datei konnte nicht erstellt werden: %{error}'
+    failed_to_create_file_from_zip: 'Datei ''%{path}'' konnte nicht aus ZIP-Archiv erstellt werden: %{error}'
+    failed_to_create_mcp_sessions_dir: 'MCP-Sitzungsverzeichnis ''%{path}'' konnte nicht erstellt werden: %{error}'
+    failed_to_create_parent_dir_from_zip: 'Übergeordnetes Verzeichnis ''%{path}'' konnte nicht aus ZIP-Archiv erstellt werden:
+      %{error}'
+    failed_to_create_schema_dir: 'Schemaverzeichnis ''%{path}'' konnte nicht erstellt werden: %{error}'
+    failed_to_create_shared_dir: 'Freigabeverzeichnis ''%{path}'' konnte nicht erstellt werden: %{error}'
+    failed_to_create_static_dir: 'Statisches Verzeichnis ''%{path}'' konnte nicht erstellt werden: %{error}'
+    failed_to_create_theme_dir: 'Themenverzeichnis ''%{path}'' konnte nicht erstellt werden: %{error}'
+    failed_to_create_upload_dir: 'Upload-Verzeichnis ''%{path}'' konnte nicht erstellt werden: %{error}'
+    failed_to_create_zip_for_backup: 'ZIP-Datei ''%{path}'' für die Sicherung konnte nicht erstellt werden: %{error}'
+    failed_to_decode_key: 'Schlüssel konnte nicht dekodiert werden: %{error}'
+    failed_to_decrypt_data: 'Daten konnten nicht entschlüsselt werden: %{error}'
+    failed_to_encrypt_data: 'Daten konnten nicht verschlüsselt werden: %{error}'
+    failed_to_finish_zip: 'Erstellung der ZIP-Datei konnte nicht abgeschlossen werden: %{error}'
+    failed_to_open_database_file: 'Datenbankdatei konnte nicht geöffnet werden: %{error}'
+    failed_to_open_dest_db: 'Zieldatenbank ''%{path}'' konnte nicht geöffnet werden: %{error}'
+    failed_to_open_encrypted_file: 'Verschlüsselte Datei konnte nicht geöffnet werden: %{error}'
+    failed_to_open_file_for_zip: 'Datei ''%{path}'' für ZIP konnte nicht geöffnet werden: %{error}'
+    failed_to_open_zip: 'ZIP-Datei ''%{path}'' konnte nicht geöffnet werden: %{error}'
+    failed_to_read_backup_dir: 'Sicherungsverzeichnis ''%{path}'' konnte nicht gelesen werden: %{error}'
+    failed_to_read_database_file: 'Datenbankdatei konnte nicht gelesen werden: %{error}'
+    failed_to_read_encrypted_file: 'Verschlüsselte Datei konnte nicht gelesen werden: %{error}'
+    failed_to_read_file_for_zip: 'Dateiinhalt für ZIP konnte nicht gelesen werden: %{error}'
+    failed_to_read_zip_archive: 'ZIP-Archiv konnte nicht gelesen werden: %{error}'
+    failed_to_read_zip_entry: 'ZIP-Eintrag konnte nicht gelesen werden (Index %{index}): %{error}'
+    failed_to_set_permissions_from_zip: 'Berechtigungen für ''%{path}'' aus ZIP konnten nicht festgelegt werden: %{error}'
+    failed_to_strip_prefix_for_zip: 'Pfadpräfix für ZIP konnte nicht entfernt werden (Basispfad: ''%{base}'', vollständiger
+      Pfad: ''%{full}''): %{error}'
+    failed_to_write_encrypted_file: 'Verschlüsselte Datei konnte nicht geschrieben werden: %{error}'
+    failed_to_write_file_from_zip: 'Datei ''%{path}'' konnte nicht aus ZIP geschrieben werden: %{error}'
+    failed_to_write_temp_db: 'Temporäre Datenbankdatei ''%{path}'' konnte nicht geschrieben werden: %{error}'
+    failed_to_write_to_zip: 'In ZIP-Datei konnte nicht geschrieben werden: %{error}'
+    file_not_found: Sicherungsdatei '%{path}' nicht gefunden
+    invalid_magic_number: Ungültige magische Zahl
+    some_files_skipped_restart_required: Einige Dateien (z. B. MCP-Sitzungsdatenbank) konnten nicht wiederhergestellt werden,
+      da sie derzeit verwendet werden. Bitte starten Sie die Anwendung neu, um die Wiederherstellung abzuschließen.
+    unsupported_version: Nicht unterstützte Version
+  conversation_not_found: Die angegebene Konversation existiert nicht. Sie wurde möglicherweise gelöscht oder es ist ein Datenbankfehler
+    aufgetreten
+  database_error: 'Datenbankfehler: %{error}'
+  failed_to_initialize_database: 'Datenbank konnte nicht initialisiert werden: %{error}'
+  failed_to_lock_main_store: 'Datenbank konnte nicht gesperrt werden: %{error}'
+  failed_to_open_db_connection: 'Datenbankverbindung konnte nicht geöffnet werden: %{error}'
+  io_error: 'E/A-Fehler: %{error}'
+  json_error: 'JSON-Fehler: %{error}'
+  json_parse_failed_mcp_config: 'MCP-Konfigurations-JSON konnte nicht verarbeitet werden: %{error}'
+  json_parse_failed_models: 'Modelllisten-JSON konnte nicht verarbeitet werden: %{error}'
+  json_serialize_failed_mcp_config: 'MCP-Konfiguration konnte nicht in JSON serialisiert werden: %{error}'
+  json_serialize_failed_metadata: 'Metadaten konnten nicht in JSON serialisiert werden: %{error}'
+  mcp_not_found_by_id: MCP-Konfiguration mit ID %{id} nicht gefunden
+  plugin_file_not_found_by_uuid: Plugin-Datei mit UUID %{uuid} nicht gefunden
+  plugin_invalid_runtime_type: 'Ungültiger Plugin-Laufzeittyp: %{runtime_type}'
+  plugin_json_deserialize_failed_input_schema: 'Plugin-Eingabeschema-JSON konnte nicht verarbeitet werden: %{error}'
+  plugin_json_deserialize_failed_output_schema: 'Plugin-Ausgabeschema-JSON konnte nicht verarbeitet werden: %{error}'
+  plugin_json_serialize_failed_input_schema: 'Plugin-Eingabeschema konnte nicht in JSON serialisiert werden: %{error}'
+  plugin_json_serialize_failed_output_schema: 'Plugin-Ausgabeschema konnte nicht in JSON serialisiert werden: %{error}'
+  plugin_not_found_by_uuid: Plugin mit UUID %{uuid} nicht gefunden
+  tauri_error: 'Tauri-Fehler: %{error}'
 http:
-  client_build_failed: "HTTP-Client konnte nicht erstellt werden: %{error}"
-  connection_failed: "Verbindung fehlgeschlagen: %{error}"
-  download_failed: "Download fehlgeschlagen: %{error}"
-  failed_to_clone_request: "Anfrage konnte bei Wiederholung nicht geklont werden"
-  failed_to_open_file: "Datei konnte nicht geöffnet werden, Pfad: %{path}, Fehler: %{error}"
-  failed_to_read_file: "Datei konnte nicht gelesen werden, Pfad: %{path}, Fehler: %{error}"
-  headers_convert_failed: "Anfrage-Header-Konfiguration konnte nicht in HttpHeader konvertiert werden: %{error}"
-  mime_parse_failed: "MIME-Typ konnte nicht verarbeitet werden"
-  missing_url: "URL-Parameter für HTTP-Anfrage fehlt"
-  proxy_config_failed: "Proxy-Konfiguration fehlgeschlagen: %{error}"
-  read_response_failed: "Antwort konnte nicht gelesen werden: %{error}"
-  request_failed: "Anfrage fehlgeschlagen, Statuscode: %{status}, Fehler: %{error}"
-  request_timeout: "Netzwerk-Timeout. Bitte prüfen Sie Ihre Internetverbindung oder versuchen Sie es später erneut."
-  response_too_large: "Die Serverdaten überschreiten das Anfragelimit. Datengröße: %{content_length}, Limit: %{max_size}"
-  server_downloads_dir_not_found: "Download-Verzeichnis nicht gefunden"
-  server_failed_to_get_app_data_dir: "Anwendungsdatenverzeichnis konnte nicht abgerufen werden: %{error}"
-  server_failed_to_save_file: "Datei konnte nicht gespeichert werden: %{error}"
-  server_file_saved_successfully: "Datei erfolgreich gespeichert"
-  server_no_available_ports: "Kein verfügbarer Port im Bereich %{start_port}-%{max_port} gefunden"
-  server_startup_failed: "Start des Servers fehlgeschlagen: %{error}"
-
+  client_build_failed: 'HTTP-Client konnte nicht erstellt werden: %{error}'
+  connection_failed: 'Verbindung fehlgeschlagen: %{error}'
+  download_failed: 'Download fehlgeschlagen: %{error}'
+  failed_to_clone_request: Anfrage konnte bei Wiederholung nicht geklont werden
+  failed_to_open_file: 'Datei konnte nicht geöffnet werden, Pfad: %{path}, Fehler: %{error}'
+  failed_to_read_file: 'Datei konnte nicht gelesen werden, Pfad: %{path}, Fehler: %{error}'
+  headers_convert_failed: 'Anfrage-Header-Konfiguration konnte nicht in HttpHeader konvertiert werden: %{error}'
+  mime_parse_failed: MIME-Typ konnte nicht verarbeitet werden
+  missing_url: URL-Parameter für HTTP-Anfrage fehlt
+  proxy_config_failed: 'Proxy-Konfiguration fehlgeschlagen: %{error}'
+  read_response_failed: 'Antwort konnte nicht gelesen werden: %{error}'
+  request_failed: 'Anfrage fehlgeschlagen, Statuscode: %{status}, Fehler: %{error}'
+  request_timeout: Netzwerk-Timeout. Bitte prüfen Sie Ihre Internetverbindung oder versuchen Sie es später erneut.
+  response_too_large: 'Die Serverdaten überschreiten das Anfragelimit. Datengröße: %{content_length}, Limit: %{max_size}'
+  server_downloads_dir_not_found: Download-Verzeichnis nicht gefunden
+  server_failed_to_get_app_data_dir: 'Anwendungsdatenverzeichnis konnte nicht abgerufen werden: %{error}'
+  server_failed_to_save_file: 'Datei konnte nicht gespeichert werden: %{error}'
+  server_file_saved_successfully: Datei erfolgreich gespeichert
+  server_no_available_ports: Kein verfügbarer Port im Bereich %{start_port}-%{max_port} gefunden
+  server_startup_failed: 'Start des Servers fehlgeschlagen: %{error}'
 main:
-  failed_to_create_log_directory: "Protokollverzeichnis konnte nicht erstellt werden"
-  failed_to_create_log_file: "Protokolldatei konnte nicht erstellt werden"
-  failed_to_create_note_window: "Notizfenster konnte nicht erstellt werden: %{error}"
-  failed_to_create_settings_window: "Einstellungsfenster konnte nicht erstellt werden: %{error}"
-  failed_to_create_webview_window: "WebView-Fenster konnte nicht erstellt werden: %{error}"
-  failed_to_emit_event: "Ereignis konnte nicht gesendet werden: %{error}"
-  failed_to_find_window_with_label: "Fenster mit Label nicht gefunden: %{label}"
-  failed_to_get_current_monitor: "Aktueller Monitor konnte nicht abgerufen werden: %{error}"
-  failed_to_get_window_size: "Fenstergröße konnte nicht abgerufen werden: %{error}"
-  failed_to_initialize_logger: "Logger konnte nicht initialisiert werden"
-  failed_to_navigate_to_url: "Navigation zur URL fehlgeschlagen: %{url}, Fehler: %{error}"
-  failed_to_set_window_always_on_top: "Fenster konnte nicht dauerhaft im Vordergrund gehalten werden: %{error}"
-  failed_to_set_window_position: "Fensterposition konnte nicht gesetzt werden: %{error}"
-  invalid_direction: "Ungültige Richtung, aktuell wird nur unterstützt: left->links, right->rechts"
-  window_not_ready: "Fenster ist noch nicht bereit"
+  failed_to_create_log_directory: Protokollverzeichnis konnte nicht erstellt werden
+  failed_to_create_log_file: Protokolldatei konnte nicht erstellt werden
+  failed_to_create_note_window: 'Notizfenster konnte nicht erstellt werden: %{error}'
+  failed_to_create_settings_window: 'Einstellungsfenster konnte nicht erstellt werden: %{error}'
+  failed_to_create_webview_window: 'WebView-Fenster konnte nicht erstellt werden: %{error}'
+  failed_to_emit_event: 'Ereignis konnte nicht gesendet werden: %{error}'
+  failed_to_find_window_with_label: 'Fenster mit Label nicht gefunden: %{label}'
+  failed_to_get_current_monitor: 'Aktueller Monitor konnte nicht abgerufen werden: %{error}'
+  failed_to_get_window_size: 'Fenstergröße konnte nicht abgerufen werden: %{error}'
+  failed_to_initialize_logger: Logger konnte nicht initialisiert werden
+  failed_to_navigate_to_url: 'Navigation zur URL fehlgeschlagen: %{url}, Fehler: %{error}'
+  failed_to_set_window_always_on_top: 'Fenster konnte nicht dauerhaft im Vordergrund gehalten werden: %{error}'
+  failed_to_set_window_position: 'Fensterposition konnte nicht gesetzt werden: %{error}'
+  invalid_direction: 'Ungültige Richtung, aktuell wird nur unterstützt: left->links, right->rechts'
   shortcut:
-    failed_to_unregister_old: "Abmeldung des alten Tastenkürzels fehlgeschlagen: %{error}"
-    failed_to_unregister_existing: "Abmeldung des vorhandenen Tastenkürzels fehlgeschlagen: %{error}"
-    invalid_format: "Ungültiges Tastenkürzelformat: %{shortcut}"
-
+    failed_to_unregister_existing: 'Abmeldung des vorhandenen Tastenkürzels fehlgeschlagen: %{error}'
+    failed_to_unregister_old: 'Abmeldung des alten Tastenkürzels fehlgeschlagen: %{error}'
+    invalid_format: 'Ungültiges Tastenkürzelformat: %{shortcut}'
+  window_not_ready: Fenster ist noch nicht bereit
 mcp:
-  config:
-    name_must_be_non_empty: "Der MCP-Konfigurationsname darf nicht leer sein. Bitte geben Sie einen gültigen Namen ein."
-    sse_url_must_be_non_empty: "Die SSE-URL der MCP-Konfiguration darf nicht leer sein"
-    stdio_args_must_be_non_empty: "Startparameter der MCP-Konfiguration dürfen nicht leer sein"
-    stdio_command_must_be_non_empty: "Startbefehl der MCP-Konfiguration darf nicht leer sein"
   client:
-    config_error_for_server: "Konfigurationsfehler für MCP-Server '%{server_name}': %{error}"
-    config_mismatch: "MCP-Konfiguration stimmt nicht überein, erstellter MCP-Client %{client}, Konfigurationstyp: %{protocol_type}"
-    failed_to_call_tool: "Aufruf des MCP-Werkzeugs fehlgeschlagen - %{server_name}::%{tool_name}(%{args}), Fehler: %{error}"
-    http_service_start_failed: "Start des MCP HTTP-Dienstes fehlgeschlagen (URL: %{url}), Grund: %{error}"
-    http_url_cant_be_empty: "URL-Parameter des MCP HTTP-Clients darf nicht leer sein"
-    list_tools_timeout: "Timeout beim Abrufen der Werkzeugliste für %{name}"
-    no_running: "MCP-Client '%{client}' nicht gestartet. Bitte Konfiguration überprüfen und Dienst neu starten."
-    sse_service_start_failed: "Start des SSE-Dienstes fehlgeschlagen (URL: %{url}), Grund: %{error}"
-    sse_transport_start_failed: "Start des SSE-Transports fehlgeschlagen (URL: %{url}), Grund: %{error}"
-    sse_url_cant_be_empty: "URL-Parameter des SSE-Clients darf nicht leer sein"
-    stdio_args_cant_be_empty: "Args-Parameter des Stdio-Clients dürfen nicht leer sein"
-    stdio_command_cant_be_empty: "Command-Parameter Startbefehl des Stdio-Clients darf nicht leer sein"
-    stdio_command_not_found_no_help: 'MCP-Dienst konnte nicht gestartet werden: Befehl "%{command}" nicht gefunden (Originalfehler: %{original_error}). Bitte stellen Sie sicher, dass der Befehl installiert und in der PATH-Umgebungsvariable Ihres Systems vorhanden ist.'
-    stdio_command_not_found_with_help: 'MCP-Dienst konnte nicht gestartet werden: Befehl "%{command}" nicht gefunden (Originalfehler: %{original_error}).'
-    stdio_npx_not_found_help: "Dies bedeutet normalerweise, dass Node.js nicht korrekt installiert ist oder der Befehl 'npx' nicht in der PATH-Umgebungsvariable Ihres Systems vorhanden ist. Bitte überprüfen Sie Ihre Node.js-Installation."
-    stdio_process_creation_failed: "Erstellung des Stdio-Prozesses fehlgeschlagen (Befehl: %{command}), Grund: %{error}"
-    stdio_service_start_failed: "Start des Stdio-Dienstes fehlgeschlagen (Befehl: %{command}), Grund: %{error}"
-    stdio_uvx_not_found_help: 'Dies könnte bedeuten, dass Ihre Python-Umgebung oder das Werkzeug "%{command}" nicht korrekt eingerichtet ist oder sich nicht in der PATH-Umgebungsvariable Ihres Systems befindet. Bitte überprüfen Sie Ihre Python- und "%{command}"-Einrichtung.'
+    config_error_for_server: 'Konfigurationsfehler für MCP-Server ''%{server_name}'': %{error}'
+    config_mismatch: 'MCP-Konfiguration stimmt nicht überein, erstellter MCP-Client %{client}, Konfigurationstyp: %{protocol_type}'
+    failed_to_call_tool: 'Aufruf des MCP-Werkzeugs fehlgeschlagen - %{server_name}::%{tool_name}(%{args}), Fehler: %{error}'
+    http_service_start_failed: 'Start des MCP HTTP-Dienstes fehlgeschlagen (URL: %{url}), Grund: %{error}'
+    http_url_cant_be_empty: URL-Parameter des MCP HTTP-Clients darf nicht leer sein
+    list_tools_timeout: Timeout beim Abrufen der Werkzeugliste für %{name}
+    no_running: MCP-Client '%{client}' nicht gestartet. Bitte Konfiguration überprüfen und Dienst neu starten.
+    sse_service_start_failed: 'Start des SSE-Dienstes fehlgeschlagen (URL: %{url}), Grund: %{error}'
+    sse_transport_start_failed: 'Start des SSE-Transports fehlgeschlagen (URL: %{url}), Grund: %{error}'
+    sse_url_cant_be_empty: URL-Parameter des SSE-Clients darf nicht leer sein
+    stdio_args_cant_be_empty: Args-Parameter des Stdio-Clients dürfen nicht leer sein
+    stdio_command_cant_be_empty: Command-Parameter Startbefehl des Stdio-Clients darf nicht leer sein
+    stdio_command_not_found_no_help: 'MCP-Dienst konnte nicht gestartet werden: Befehl "%{command}" nicht gefunden (Originalfehler:
+      %{original_error}). Bitte stellen Sie sicher, dass der Befehl installiert und in der PATH-Umgebungsvariable Ihres Systems
+      vorhanden ist.'
+    stdio_command_not_found_with_help: 'MCP-Dienst konnte nicht gestartet werden: Befehl "%{command}" nicht gefunden (Originalfehler:
+      %{original_error}).'
+    stdio_npx_not_found_help: Dies bedeutet normalerweise, dass Node.js nicht korrekt installiert ist oder der Befehl 'npx'
+      nicht in der PATH-Umgebungsvariable Ihres Systems vorhanden ist. Bitte überprüfen Sie Ihre Node.js-Installation.
+    stdio_process_creation_failed: 'Erstellung des Stdio-Prozesses fehlgeschlagen (Befehl: %{command}), Grund: %{error}'
+    stdio_service_start_failed: 'Start des Stdio-Dienstes fehlgeschlagen (Befehl: %{command}), Grund: %{error}'
+    stdio_uvx_not_found_help: Dies könnte bedeuten, dass Ihre Python-Umgebung oder das Werkzeug "%{command}" nicht korrekt
+      eingerichtet ist oder sich nicht in der PATH-Umgebungsvariable Ihres Systems befindet. Bitte überprüfen Sie Ihre Python-
+      und "%{command}"-Einrichtung.
+  config:
+    name_must_be_non_empty: Der MCP-Konfigurationsname darf nicht leer sein. Bitte geben Sie einen gültigen Namen ein.
+    sse_url_must_be_non_empty: Die SSE-URL der MCP-Konfiguration darf nicht leer sein
+    stdio_args_must_be_non_empty: Startparameter der MCP-Konfiguration dürfen nicht leer sein
+    stdio_command_must_be_non_empty: Startbefehl der MCP-Konfiguration darf nicht leer sein
   error:
-    client_call_failed: "MCP-Client-Aufruf fehlgeschlagen: %{error}"
-    client_config_failed: "MCP-Client-Konfiguration fehlgeschlagen: %{error}"
-    client_start_failed: "MCP-Client-Start fehlgeschlagen: %{error}"
-    client_status_failed: "MCP-Client-Statusabfrage fehlgeschlagen: %{error}"
-    client_stop_failed: "MCP-Client-Stopp fehlgeschlagen: %{error}"
-    io_error: "MCP E/A-Fehler: %{error}"
-    not_found_error: "MCP '%{name}' nicht gefunden Fehler"
-    serialization_error: "MCP-Serialisierungs-/Deserialisierungsfehler: %{error}"
-    server_initialization_failed: "MCP-Server-Initialisierung fehlgeschlagen: %{error}"
-    server_internal_error: "MCP-Server interner Fehler: %{error}"
-    server_tool_execution_failed: "MCP-Server-Werkzeugausführung fehlgeschlagen: %{error}"
-    server_tool_not_found: "MCP-Server-Werkzeug nicht gefunden: %{tool_name}"
-    server_unknown_error: "MCP-Server unbekannter Fehler: %{error}"
-    state_change_failed: "MCP-Statusänderung fehlgeschlagen: %{error}"
-    store_error: "MCP-Speicherfehler: %{error}"
-    timeout_error: "MCP-Operation Zeitüberschreitung: %{error}"
-    cannot_restart_disabled_server: "Deaktivierter MCP-Server kann nicht neu gestartet werden. Bitte aktivieren Sie ihn zuerst."
-    cannot_refresh_disabled_server: "Deaktivierter MCP-Server kann nicht aktualisiert werden."
-  op_in_progress_error: "Ein Vorgang ist bereits für diesen Server in Bearbeitung. Bitte versuchen Sie es später erneut."
+    cannot_refresh_disabled_server: Deaktivierter MCP-Server kann nicht aktualisiert werden.
+    cannot_restart_disabled_server: Deaktivierter MCP-Server kann nicht neu gestartet werden. Bitte aktivieren Sie ihn zuerst.
+    client_call_failed: 'MCP-Client-Aufruf fehlgeschlagen: %{error}'
+    client_config_failed: 'MCP-Client-Konfiguration fehlgeschlagen: %{error}'
+    client_start_failed: 'MCP-Client-Start fehlgeschlagen: %{error}'
+    client_status_failed: 'MCP-Client-Statusabfrage fehlgeschlagen: %{error}'
+    client_stop_failed: 'MCP-Client-Stopp fehlgeschlagen: %{error}'
+    io_error: 'MCP E/A-Fehler: %{error}'
+    not_found_error: MCP '%{name}' nicht gefunden Fehler
+    serialization_error: 'MCP-Serialisierungs-/Deserialisierungsfehler: %{error}'
+    server_initialization_failed: 'MCP-Server-Initialisierung fehlgeschlagen: %{error}'
+    server_internal_error: 'MCP-Server interner Fehler: %{error}'
+    server_tool_execution_failed: 'MCP-Server-Werkzeugausführung fehlgeschlagen: %{error}'
+    server_tool_not_found: 'MCP-Server-Werkzeug nicht gefunden: %{tool_name}'
+    server_unknown_error: 'MCP-Server unbekannter Fehler: %{error}'
+    state_change_failed: 'MCP-Statusänderung fehlgeschlagen: %{error}'
+    store_error: 'MCP-Speicherfehler: %{error}'
+    timeout_error: 'MCP-Operation Zeitüberschreitung: %{error}'
+  op_in_progress_error: Ein Vorgang ist bereits für diesen Server in Bearbeitung. Bitte versuchen Sie es später erneut.
   proxy:
-    service_description: "MCP-Proxyserver - bietet einheitlichen Zugriff auf alle aktivierten MCP-Tools"
-    tool_execution_error: "Werkzeugausführungsfehler: %{error}"
-    tool_not_found: "MCP-Werkzeug '%{tool_name}' nicht gefunden"
-
+    service_description: MCP-Proxyserver - bietet einheitlichen Zugriff auf alle aktivierten MCP-Tools
+    tool_execution_error: 'Werkzeugausführungsfehler: %{error}'
+    tool_not_found: MCP-Werkzeug '%{tool_name}' nicht gefunden
 network:
-  client_build_error: "HTTP-Client konnte nicht erstellt werden: %{error}"
-  header_error: "Anfrage-Header konnte nicht erstellt werden: %{error}"
-  proxy_error: "Proxy-Konfiguration fehlgeschlagen: %{error}"
-  request_failed: "Anfrage fehlgeschlagen: %{error}"
-  response_read_error: "Antwort konnte nicht gelesen werden: %{error}"
-
+  client_build_error: 'HTTP-Client konnte nicht erstellt werden: %{error}'
+  header_error: 'Anfrage-Header konnte nicht erstellt werden: %{error}'
+  proxy_error: 'Proxy-Konfiguration fehlgeschlagen: %{error}'
+  request_failed: 'Anfrage fehlgeschlagen: %{error}'
+  response_read_error: 'Antwort konnte nicht gelesen werden: %{error}'
 proxy:
   error:
-    internal_server_error: "Interner Serverfehler: %{error}"
-    invalid_api_key: "Ungültiger API-Schlüssel. Bitte prüfen Sie, ob der Schlüssel korrekt ist oder abgelaufen ist, und aktualisieren Sie ihn in den Einstellungen."
-    invalid_protocol: "Ungültiges Protokoll in der Modellkonfiguration: %{protocol}."
-    invalid_request_format: "Ungültiges Anfrageformat: %{error}"
-    invalid_request: "Ungültige Anfrage: %{error}"
-    missing_auth_header: "Autorisierungsinformationen in der Anfrage fehlen. Bitte stellen Sie sicher, dass der API-Schlüssel korrekt konfiguriert ist."
-    model_alias_not_found: "Modellalias '%{alias}' nicht gefunden."
-    model_details_fetch_failed: "Modelldetails für provider_id %{id} konnten nicht abgerufen werden."
-    no_backend_targets: "Für den Modellalias '%{alias}' sind keine Backend-Ziele konfiguriert."
-    no_keys_configured: "Auf dem Server sind keine Proxy-Zugriffsschlüssel konfiguriert. Bitte wenden Sie sich an den Administrator, um entsprechende Schlüssel zu konfigurieren."
-    retry_exceeded: "Anfrage-Wiederholungsversuch überschritten. Der Server gibt kontinuierlich den Statuscode 429 zurück (zu viele Anfragen). Bitte versuchen Sie es später erneut oder erhöhen Sie die Einstellung für Wiederholungsversuche."
-    store_lock_failed: "Zugriff auf den Speicher fehlgeschlagen: %{error}"
+    internal_server_error: 'Interner Serverfehler: %{error}'
+    invalid_api_key: Ungültiger API-Schlüssel. Bitte prüfen Sie, ob der Schlüssel korrekt ist oder abgelaufen ist, und aktualisieren
+      Sie ihn in den Einstellungen.
+    invalid_protocol: 'Ungültiges Protokoll in der Modellkonfiguration: %{protocol}.'
+    invalid_request: 'Ungültige Anfrage: %{error}'
+    invalid_request_format: 'Ungültiges Anfrageformat: %{error}'
+    missing_auth_header: Autorisierungsinformationen in der Anfrage fehlen. Bitte stellen Sie sicher, dass der API-Schlüssel
+      korrekt konfiguriert ist.
+    model_alias_not_found: Modellalias '%{alias}' nicht gefunden.
+    model_details_fetch_failed: Modelldetails für provider_id %{id} konnten nicht abgerufen werden.
+    no_backend_targets: Für den Modellalias '%{alias}' sind keine Backend-Ziele konfiguriert.
+    no_keys_configured: Auf dem Server sind keine Proxy-Zugriffsschlüssel konfiguriert. Bitte wenden Sie sich an den Administrator,
+      um entsprechende Schlüssel zu konfigurieren.
+    retry_exceeded: Anfrage-Wiederholungsversuch überschritten. Der Server gibt kontinuierlich den Statuscode 429 zurück (zu
+      viele Anfragen). Bitte versuchen Sie es später erneut oder erhöhen Sie die Einstellung für Wiederholungsversuche.
+    store_lock_failed: 'Zugriff auf den Speicher fehlgeschlagen: %{error}'
   group:
-    not_found_by_name: "Proxy-Gruppe mit dem Namen '%{name}' konnte nicht gefunden werden"
-
+    not_found_by_name: Proxy-Gruppe mit dem Namen '%{name}' konnte nicht gefunden werden
 sensitive:
   filter:
-    email: "[E-Mail]"
-    ip_address: "[IP-Adresse]"
-    credit_card: "[Kreditkarte]"
-    international_credit_card: "[Int. Kreditkarte]"
-    unionpay: "[UnionPay-Karte]"
-    chinese_id_card: "[ID-Karte]"
-    chinese_mobile: "[Mobilnummer]"
-    chinese_name: "[Name (chinesisch)]"
-    english_mobile: "[Telefonnummer]"
-    english_name: "[Name (englisch)]"
-    chinese_landline: "[Festnetz]"
-    chinese_address: "[Adresse]"
-    english_address: "[Adresse]"
-    chinese_company: "[Firmenname]"
-    english_company: "[Firmenname]"
-    chinese_project: "[Projektname]"
-    english_project: "[Projektname]"
-    chinese_financial: "[Betrag]"
-    english_financial: "[Betrag]"
-    bank_account: "[Bankkonto]"
-    bank_name: "[Bankname]"
-    wechat_id: "[WeChat-ID]"
-    qq_number: "[QQ-Nummer]"
-    custom_block: "[Gefiltert]"
-
+    bank_account: '[Bankkonto]'
+    bank_name: '[Bankname]'
+    chinese_address: '[Adresse]'
+    chinese_company: '[Firmenname]'
+    chinese_financial: '[Betrag]'
+    chinese_id_card: '[ID-Karte]'
+    chinese_landline: '[Festnetz]'
+    chinese_mobile: '[Mobilnummer]'
+    chinese_name: '[Name (chinesisch)]'
+    chinese_project: '[Projektname]'
+    credit_card: '[Kreditkarte]'
+    custom_block: '[Gefiltert]'
+    email: '[E-Mail]'
+    english_address: '[Adresse]'
+    english_company: '[Firmenname]'
+    english_financial: '[Betrag]'
+    english_mobile: '[Telefonnummer]'
+    english_name: '[Name (englisch)]'
+    english_project: '[Projektname]'
+    international_credit_card: '[Int. Kreditkarte]'
+    ip_address: '[IP-Adresse]'
+    qq_number: '[QQ-Nummer]'
+    unionpay: '[UnionPay-Karte]'
+    wechat_id: '[WeChat-ID]'
 setting:
-  failed_to_create_upload_dir: "Upload-Verzeichnis '%{path}' konnte nicht erstellt werden: %{error}"
-  failed_to_move_logo_file: "Logo-Datei konnte nicht verschoben werden: von '%{from}' nach '%{to}', Fehler: %{error}"
-  failed_to_save_logo_thumbnail: "Logo-Miniaturansicht konnte nicht gespeichert werden: %{error}"
-  failed_to_update_shortcut: "Verknüpfung konnte nicht aktualisiert werden: %{error}"
-  file_not_exists: "Datei existiert nicht: %{file_path}"
-
+  failed_to_create_upload_dir: 'Upload-Verzeichnis ''%{path}'' konnte nicht erstellt werden: %{error}'
+  failed_to_move_logo_file: 'Logo-Datei konnte nicht verschoben werden: von ''%{from}'' nach ''%{to}'', Fehler: %{error}'
+  failed_to_save_logo_thumbnail: 'Logo-Miniaturansicht konnte nicht gespeichert werden: %{error}'
+  failed_to_update_shortcut: 'Verknüpfung konnte nicht aktualisiert werden: %{error}'
+  file_not_exists: 'Datei existiert nicht: %{file_path}'
 tools:
-  failed_to_get_model: "Abrufen des %{model_type}-Modells fehlgeschlagen"
-  function_not_found: "Werkzeugfunktion im Workflow nicht gefunden: %{name}"
-  keyword_must_be_non_empty: "Keyword(query)-Parameter muss ein nicht leerer String oder ein nicht leeres Array sein"
-  max_retries_exceeded: "Maximale Anzahl an Wiederholungsversuchen überschritten: %{item}"
-  mcp_stop_failed_details: "Stoppen des MCP-Servers '%{server_name}' fehlgeschlagen: %{details}"
-  url_invalid: "URL-Parameterformatfehler, muss mit http:// oder https:// beginnen: %{url}"
-  url_must_be_string: "URL-Parameter muss ein String sein"
-  url_must_not_be_empty: "URL-Parameter darf nicht leer sein"
-  web_scraper_failed: "Web-Scraping fehlgeschlagen (URL: %{url}): %{details}"
   error:
-    function_already_exists: "Funktion existiert bereits: %{name}"
-    auth_error: "Authentifizierungsfehler"
-    config: "Konfigurationsfehler"
-    execution_failed: "Werkzeugausführung fehlgeschlagen: %{details}"
-    fatal: "Fataler Fehler"
-    function_not_found: "Funktion nicht gefunden"
-    initialization: "Initialisierungsfehler"
-    invalid_params: "Ungültige Parameter: %{details}"
-    io_error: "E/A-Fehler: %{details}"
-    mcp_server_not_found: "MCP-Server nicht gefunden"
-    network_error: "Netzwerkfehler"
-    serialization: "Serialisierungsfehler"
-    state_change_failed: "Statusänderung fehlgeschlagen"
-    store: "Speicherfehler"
-    timeout: "Zeitüberschreitung"
+    auth_error: Authentifizierungsfehler
+    config: Konfigurationsfehler
+    execution_failed: 'Werkzeugausführung fehlgeschlagen: %{details}'
+    fatal: Fataler Fehler
+    function_already_exists: 'Funktion existiert bereits: %{name}'
+    function_not_found: Funktion nicht gefunden
+    initialization: Initialisierungsfehler
+    invalid_params: 'Ungültige Parameter: %{details}'
+    io_error: 'E/A-Fehler: %{details}'
+    mcp_server_not_found: MCP-Server nicht gefunden
+    network_error: Netzwerkfehler
+    serialization: Serialisierungsfehler
+    state_change_failed: Statusänderung fehlgeschlagen
+    store: Speicherfehler
+    timeout: Zeitüberschreitung
+  failed_to_get_model: Abrufen des %{model_type}-Modells fehlgeschlagen
+  function_not_found: 'Werkzeugfunktion im Workflow nicht gefunden: %{name}'
+  keyword_must_be_non_empty: Keyword(query)-Parameter muss ein nicht leerer String oder ein nicht leeres Array sein
+  max_retries_exceeded: 'Maximale Anzahl an Wiederholungsversuchen überschritten: %{item}'
+  mcp_stop_failed_details: 'Stoppen des MCP-Servers ''%{server_name}'' fehlgeschlagen: %{details}'
   search:
-    google_api_key_empty: "Google Search API-Schlüssel darf nicht leer sein"
-    google_cx_empty: "Google Suchmaschinen-ID darf nicht leer sein"
-    serper_api_key_empty: "Serper API-Schlüssel darf nicht leer sein"
-    tavily_api_key_empty: "Tavily API-Schlüssel darf nicht leer sein"
-
+    google_api_key_empty: Google Search API-Schlüssel darf nicht leer sein
+    google_cx_empty: Google Suchmaschinen-ID darf nicht leer sein
+    serper_api_key_empty: Serper API-Schlüssel darf nicht leer sein
+    tavily_api_key_empty: Tavily API-Schlüssel darf nicht leer sein
+  url_invalid: 'URL-Parameterformatfehler, muss mit http:// oder https:// beginnen: %{url}'
+  url_must_be_string: URL-Parameter muss ein String sein
+  url_must_not_be_empty: URL-Parameter darf nicht leer sein
+  web_scraper_failed: 'Web-Scraping fehlgeschlagen (URL: %{url}): %{details}'
 tray:
-  about: "Über"
-  agent: "Agent"
-  assistant: "Assistent"
-  chat: "Chat"
-  mcp: "MCP"
-  model: "Modell"
-  note: "Smart-Notizen"
-  proxy: "Proxy"
-  proxy_switcher: "Proxy-Umschalter"
-  workflow: "Workflow"
-  quit: "Beenden"
-  settings: "Einstellungen"
-  skill: "Fähigkeit"
-
+  about: Über
+  agent: Agent
+  assistant: Assistent
+  chat: Chat
+  mcp: MCP
+  model: Modell
+  note: Smart-Notizen
+  proxy: Proxy
+  proxy_switcher: Proxy-Umschalter
+  quit: Beenden
+  settings: Einstellungen
+  skill: Fähigkeit
+  workflow: Workflow
 updater:
   errors:
-    config: "Updater-Konfigurationsfehler: %{error}"
-    download: "Update konnte nicht heruntergeladen oder installiert werden: %{error}"
-    install: "Update-Installation fehlgeschlagen: %{error}"
-    io_error: "E/A-Fehler"
-    lock_error: "Sperrfehler"
-    update_not_found: "Sie verwenden bereits die neueste Version - keine Updates verfügbar"
-    update_request: "Update-Anfrage fehlgeschlagen: %{error}"
-    version_mismatch: "Versionskonflikt - die erwartete Installationsversion unterscheidet sich von der vom Server bereitgestellten Update-Version. Bitte suchen Sie erneut nach Updates."
-    version_parse: "Fehler beim Verarbeiten der Version: erwartete Version '%{version}', Fehler: %{error}"
-
+    config: 'Updater-Konfigurationsfehler: %{error}'
+    download: 'Update konnte nicht heruntergeladen oder installiert werden: %{error}'
+    install: 'Update-Installation fehlgeschlagen: %{error}'
+    io_error: E/A-Fehler
+    lock_error: Sperrfehler
+    update_not_found: Sie verwenden bereits die neueste Version - keine Updates verfügbar
+    update_request: 'Update-Anfrage fehlgeschlagen: %{error}'
+    version_mismatch: Versionskonflikt - die erwartete Installationsversion unterscheidet sich von der vom Server bereitgestellten
+      Update-Version. Bitte suchen Sie erneut nach Updates.
+    version_parse: 'Fehler beim Verarbeiten der Version: erwartete Version ''%{version}'', Fehler: %{error}'
 workflow:
-  awaiting_approval: "Wartet auf Genehmigung"
-  array_index_out_of_bounds: "Array-Index außerhalb der Grenzen: %{index}"
-  bool_not_supported: "Boolescher Typ unterstützt diese Operation nicht: %{operator}"
-  bracket_not_match: "Klammern stimmen nicht überein: %{condition}"
-  cancel_notification_error: "Senden des Workflow-Abbruchsignals fehlgeschlagen"
-  cancelled: "Operation wurde vom Benutzer abgebrochen"
-  cannot_access_path: "Zugriff auf Pfad %{path} nicht möglich, da Wert kein Objekt/Array ist"
-  circular_dependency: "Zirkuläre Abhängigkeit zwischen Knoten: %{nodes}"
-  compression_in_progress: "Kontext wird komprimiert..."
-  dependency_not_found: "Von Knoten '%{node_id}' abhängiger Knoten '%{id}' nicht vorhanden"
-  duplicate_node_id: "Doppelte Knoten-ID: %{id}"
-  edge_reference_missing: "Kantenreferenz nicht vorhanden: %{from} -> %{to}"
-  incomplete_execution: "Workflow-Ausführung unvollständig, fehlende Knoten: %{missing}"
-  invalid_array_index: "Ungültiger Array-Index: %{index}"
-  invalid_graph: "Ungültiger Graph: %{reason}"
-  invalid_loop_input: "Schleifenknoteneingabe muss Array oder Objekt sein, empfangen: %{input}"
-  invalid_node_id: "Ungültige Knoten-ID `%{id}`. Nur Buchstaben, Zahlen, Unterstriche und Bindestriche sind erlaubt. Die ID muss mit einem Buchstaben beginnen."
-  invalid_node_output: "Ungültige Knotenausgabe (ID: %{id}, Ausgabe: %{output}). Ausgabefeldnamen dürfen nur Buchstaben, Zahlen, Unterstriche und Bindestriche enthalten und müssen mit einem Buchstaben beginnen. Der Name 'item' ist nicht erlaubt."
-  invalid_node_type: "Ungültiger Knotentyp: %{node_type}"
-  invalid_state_transition: "Ungültiger Zustandsübergang: Von %{current} nach %{new}"
-  invalid_state: "Ungültiger Zustandsübergang, aktueller Zustand: %{current}, neuer Zustand: %{new}"
-  interrupted_by_restart: "Durch Neustart der Anwendung unterbrochen"
-  invalid_workflow_json: "Ungültige Workflow-Konfiguration: %{error}"
-  json_path_not_found: "Json-Pfad nicht gefunden: %{path}"
-  left_value_not_number: "Linker Wert ist kein numerischer Typ"
-  nested_group: "Verschachtelte Gruppen sind nicht erlaubt. Gruppe '%{id}' darf keine anderen Gruppen enthalten."
-  node_output_not_found: "Ausgabe von Knoten '%{node_id}' nicht gefunden, Pfad: %{path}"
-  not_bool_value: "Wert ist kein boolescher Typ"
-  pause_notification_error: "Senden des Workflow-Pausensignals fehlgeschlagen"
-  resume_notification_error: "Senden des Workflow-Fortsetzungssignals fehlgeschlagen"
-  right_value_not_number: "Rechter Wert ist kein numerischer Typ"
-  self_dependency: "Knoten '%{node_id}' kann nicht von sich selbst abhängen"
-  state_notification_error: "Workflow-Statusbenachrichtigung fehlgeschlagen"
-  string_not_supported: "String-Typ unterstützt diese Operation nicht: %{operator}"
-  task_join_error: "Aufgabenausführung fehlgeschlagen: %{error}"
-  user_rejected: "Benutzer hat abgelehnt"
-  type_mismatch: "Typenkonflikt bei Operation: %{operator}, linker Werttyp %{left_type}, rechter Werttyp %{right_type}"
-  unsupported_operator: "Nicht unterstützter Operator: %{operator}"
-  unsupported_type_combination: "Nicht unterstützter Typkombinationsoperator: %{operator}"
-  validation: "Validierungsfehler: %{msg}"
-  task_finished: "Aufgabe abgeschlossen"
-  summary:
-    submit_plan: "Plan einreichen"
-    todo_create: "Aufgabe erstellen"
-    todo_update: "Aufgabe '%{subject}' auf %{status} aktualisieren"
-    todo_list: "Todo-Liste abrufen"
-    todo_get: "Aufgabendetails abrufen"
-    todo_status_done: "Erledigt"
-    todo_status_in_progress: "In Arbeit"
-    todo_status_pending: "Ausstehend"
-    todo_status_failed: "Fehlgeschlagen"
-    todo_status_data_missing: "Daten fehlen"
+  array_index_out_of_bounds: 'Array-Index außerhalb der Grenzen: %{index}'
+  awaiting_approval: Wartet auf Genehmigung
+  bool_not_supported: 'Boolescher Typ unterstützt diese Operation nicht: %{operator}'
+  bracket_not_match: 'Klammern stimmen nicht überein: %{condition}'
+  cancel_notification_error: Senden des Workflow-Abbruchsignals fehlgeschlagen
+  cancelled: Operation wurde vom Benutzer abgebrochen
+  cannot_access_path: Zugriff auf Pfad %{path} nicht möglich, da Wert kein Objekt/Array ist
+  circular_dependency: 'Zirkuläre Abhängigkeit zwischen Knoten: %{nodes}'
+  compression_in_progress: Kontext wird komprimiert...
+  continue: Weiter
+  dependency_not_found: Von Knoten '%{node_id}' abhängiger Knoten '%{id}' nicht vorhanden
+  duplicate_node_id: 'Doppelte Knoten-ID: %{id}'
+  edge_reference_missing: 'Kantenreferenz nicht vorhanden: %{from} -> %{to}'
   error:
-    cancelled: "Vorgang vom Benutzer abgebrochen"
-    config: "Konfigurationsfehler"
-    context: "Kontextfehler"
-    execution: "Ausführungsfehler"
-    initialization: "Initialisierungsfehler"
-    invalid_graph: "Ungültiger Graph"
-    invalid_state: "Ungültiger Zustand"
-    io: "E/A-Fehler"
-    other: "Anderer Fehler"
-    serialization: "Serialisierungsfehler"
-    store: "Speicherfehler"
+    cancelled: Vorgang vom Benutzer abgebrochen
+    config: Konfigurationsfehler
+    context: Kontextfehler
+    execution: Ausführungsfehler
+    initialization: Initialisierungsfehler
+    invalid_graph: Ungültiger Graph
+    invalid_state: Ungültiger Zustand
+    io: E/A-Fehler
+    other: Anderer Fehler
+    serialization: Serialisierungsfehler
+    store: Speicherfehler
+  incomplete_execution: 'Workflow-Ausführung unvollständig, fehlende Knoten: %{missing}'
+  interrupted_by_restart: Durch Neustart der Anwendung unterbrochen
+  invalid_array_index: 'Ungültiger Array-Index: %{index}'
+  invalid_graph: 'Ungültiger Graph: %{reason}'
+  invalid_loop_input: 'Schleifenknoteneingabe muss Array oder Objekt sein, empfangen: %{input}'
+  invalid_node_id: Ungültige Knoten-ID `%{id}`. Nur Buchstaben, Zahlen, Unterstriche und Bindestriche sind erlaubt. Die ID
+    muss mit einem Buchstaben beginnen.
+  invalid_node_output: 'Ungültige Knotenausgabe (ID: %{id}, Ausgabe: %{output}). Ausgabefeldnamen dürfen nur Buchstaben, Zahlen,
+    Unterstriche und Bindestriche enthalten und müssen mit einem Buchstaben beginnen. Der Name ''item'' ist nicht erlaubt.'
+  invalid_node_type: 'Ungültiger Knotentyp: %{node_type}'
+  invalid_state: 'Ungültiger Zustandsübergang, aktueller Zustand: %{current}, neuer Zustand: %{new}'
+  invalid_state_transition: 'Ungültiger Zustandsübergang: Von %{current} nach %{new}'
+  invalid_workflow_json: 'Ungültige Workflow-Konfiguration: %{error}'
+  json_path_not_found: 'Json-Pfad nicht gefunden: %{path}'
+  left_value_not_number: Linker Wert ist kein numerischer Typ
+  nested_group: Verschachtelte Gruppen sind nicht erlaubt. Gruppe '%{id}' darf keine anderen Gruppen enthalten.
+  node_output_not_found: 'Ausgabe von Knoten ''%{node_id}'' nicht gefunden, Pfad: %{path}'
+  not_bool_value: Wert ist kein boolescher Typ
+  pause_notification_error: Senden des Workflow-Pausensignals fehlgeschlagen
+  resume_notification_error: Senden des Workflow-Fortsetzungssignals fehlgeschlagen
+  right_value_not_number: Rechter Wert ist kein numerischer Typ
+  self_dependency: Knoten '%{node_id}' kann nicht von sich selbst abhängen
+  state_notification_error: Workflow-Statusbenachrichtigung fehlgeschlagen
+  stepBudgetExhausted: Die aktuellen Schritte sind erschöpft (%{current}/%{max}), aber die Aufgabe ist noch nicht abgeschlossen.
+    Möchtest du fortfahren?
+  stop: Stopp
+  string_not_supported: 'String-Typ unterstützt diese Operation nicht: %{operator}'
+  summary:
+    edit_file: Bearbeitet
+    submit_plan: Plan einreichen
+    todo_create: Aufgabe erstellen
+    todo_get: Aufgabendetails abrufen
+    todo_list: Todo-Liste abrufen
+    todo_status_data_missing: Daten fehlen
+    todo_status_done: Erledigt
+    todo_status_failed: Fehlgeschlagen
+    todo_status_in_progress: In Arbeit
+    todo_status_pending: Ausstehend
+    todo_update: Aufgabe '%{subject}' auf %{status} aktualisieren
+    write_file: Geschrieben
+  task_finished: Aufgabe abgeschlossen
+  task_join_error: 'Aufgabenausführung fehlgeschlagen: %{error}'
+  type_mismatch: 'Typenkonflikt bei Operation: %{operator}, linker Werttyp %{left_type}, rechter Werttyp %{right_type}'
+  unsupported_operator: 'Nicht unterstützter Operator: %{operator}'
+  unsupported_type_combination: 'Nicht unterstützter Typkombinationsoperator: %{operator}'
+  user_rejected: Benutzer hat abgelehnt
+  validation: 'Validierungsfehler: %{msg}'

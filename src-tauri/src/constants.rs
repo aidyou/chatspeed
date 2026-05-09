@@ -38,6 +38,8 @@ pub const CFG_CCPROXY_LOG_TO_FILE: &str = "chat_completion_proxy_log_to_file";
 pub const CFG_CCPROXY_LOG_PROXY_TO_FILE: &str = "chat_completion_proxy_log_proxy_to_file";
 pub const CFG_CCPROXY_RETRY_ON_429: &str = "chat_completion_proxy_retry_on_429";
 pub const CFG_CCPROXY_RETRY_ON_429_DEFAULT: u32 = 0;
+pub const CFG_BUILTIN_AGENTS_LAST_SYNCED_APP_VERSION: &str =
+    "builtin_agents_last_synced_app_version";
 pub const CFG_SEARCH_ENGINE: &str = "search_engine";
 pub const CFG_SCRAPER_DEBUG_MODE: &str = "scraper_debug_mode";
 pub const DEFAULT_WEB_SEARCH_TOOL: &str = "WebSearch";

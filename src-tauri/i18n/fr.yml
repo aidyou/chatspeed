@@ -1,377 +1,395 @@
+chat:
+  api_key_is_require_for_list_models: Une clé API est requise pour obtenir la liste des modèles. Veuillez configurer une clé
+    API valide dans les paramètres.
+  chat_not_found: Session de discussion spécifiée non trouvée
+  empty_chat_id: L'ID de la discussion ne peut pas être vide
+  empty_messages: La liste des messages ne peut pas être vide
+  empty_model: Le nom du modèle ne peut pas être vide
+  empty_provider_id: L'ID du fournisseur ne peut pas être vide
+  error:
+    api_request_failed: 'La requête API a échoué, fournisseur : %{provider}, code d''état : %{status_code}, détails de l''erreur
+      : %{details}'
+    failed_to_get_or_create_window_channel: 'Échec de l''obtention ou de la création du canal de communication dédié de la
+      fenêtre de discussion : %{error}'
+    invalid_input: 'Saisie non valide : %{details}'
+    response_parse_failed: 'Échec de l''analyse de la réponse de %{provider} : %{details}'
+    stream_processing_failed: 'Erreur lors du traitement du flux de données de %{provider} : %{details}'
+    tool_call_serialization_failed: 'Échec de la sérialisation de l''appel d''outil : %{details}'
+  failed_to_convert_language_code: 'Échec de la conversion du code de langue : %{error}'
+  failed_to_create_file: 'Échec de la création du fichier : %{error}'
+  failed_to_detect_language: Échec de la détection de la langue
+  failed_to_get_available_languages: 'Échec de l''obtention de la liste des langues disponibles : %{error}'
+  failed_to_write_file: 'Échec de l''écriture dans le fichier : %{error}'
+  invalid_api_protocol: 'Protocole API non valide : %{protocol}'
+  note_already_exists: Cette note existe déjà, il n'est pas nécessaire de l'ajouter à nouveau
+  search_not_found: Session de recherche spécifiée non trouvée
 command:
   clipboard:
-    failed_to_initialize: "Échec de l'initialisation du presse-papiers : %{error}"
-    failed_to_read: "Échec de la lecture du presse-papiers : %{error}"
-    failed_to_write: "Échec de l'écriture dans le presse-papiers : %{error}"
+    failed_to_initialize: 'Échec de l''initialisation du presse-papiers : %{error}'
+    failed_to_read: 'Échec de la lecture du presse-papiers : %{error}'
+    failed_to_write: 'Échec de l''écriture dans le presse-papiers : %{error}'
   fs:
-    read_file_failed: "Échec de la lecture du fichier : %{error}"
-    image_preview_failed: "Échec de la génération de l'aperçu de l'image : %{error}"
-    unknown_filename: "NomDeFichierInconnu.png"
+    image_preview_failed: 'Échec de la génération de l''aperçu de l''image : %{error}'
+    read_file_failed: 'Échec de la lecture du fichier : %{error}'
+    unknown_filename: NomDeFichierInconnu.png
   window:
-    failed_to_close: "Échec de la fermeture de la fenêtre : %{error}"
-
-chat:
-  error:
-    api_request_failed: "La requête API a échoué, fournisseur : %{provider}, code d'état : %{status_code}, détails de l'erreur : %{details}"
-    invalid_input: "Saisie non valide : %{details}"
-    failed_to_get_or_create_window_channel: "Échec de l'obtention ou de la création du canal de communication dédié de la fenêtre de discussion : %{error}"
-    response_parse_failed: "Échec de l'analyse de la réponse de %{provider} : %{details}"
-    stream_processing_failed: "Erreur lors du traitement du flux de données de %{provider} : %{details}"
-    tool_call_serialization_failed: "Échec de la sérialisation de l'appel d'outil : %{details}"
-  api_key_is_require_for_list_models: "Une clé API est requise pour obtenir la liste des modèles. Veuillez configurer une clé API valide dans les paramètres."
-  chat_not_found: "Session de discussion spécifiée non trouvée"
-  empty_chat_id: "L'ID de la discussion ne peut pas être vide"
-  empty_messages: "La liste des messages ne peut pas être vide"
-  empty_model: "Le nom du modèle ne peut pas être vide"
-  empty_provider_id: "L'ID du fournisseur ne peut pas être vide"
-  failed_to_convert_language_code: "Échec de la conversion du code de langue : %{error}"
-  failed_to_create_file: "Échec de la création du fichier : %{error}"
-  failed_to_detect_language: "Échec de la détection de la langue"
-  failed_to_get_available_languages: "Échec de l'obtention de la liste des langues disponibles : %{error}"
-  failed_to_write_file: "Échec de l'écriture dans le fichier : %{error}"
-  invalid_api_protocol: "Protocole API non valide : %{protocol}"
-  note_already_exists: "Cette note existe déjà, il n'est pas nécessaire de l'ajouter à nouveau"
-  search_not_found: "Session de recherche spécifiée non trouvée"
-
+    failed_to_close: 'Échec de la fermeture de la fenêtre : %{error}'
 db:
-  agent_name_exists: "Le nom de l'agent '%{name}' existe déjà"
-  ai_model_not_found_by_id: "Modèle d'IA avec l'ID %{id} non trouvé"
-  ai_skill_not_found_by_id: "Compétence d'IA avec l'ID %{id} non trouvée"
-  already_exists: "Les données existent déjà : %{error}"
-  conversation_not_found: "La conversation spécifiée n'existe pas, elle a peut-être été supprimée ou une exception de base de données s'est produite"
-  database_error: "Erreur de base de données : %{error}"
-  failed_to_initialize_database: "Échec de l'initialisation de la base de données : %{error}"
-  failed_to_lock_main_store: "Échec du verrouillage de la base de données : %{error}"
-  failed_to_open_db_connection: "Échec de l'ouverture de la connexion à la base de données : %{error}"
-  io_error: "Erreur d'E/S : %{error}"
-  json_error: "Erreur JSON : %{error}"
-  json_parse_failed_mcp_config: "Échec de l'analyse du JSON de configuration MCP : %{error}"
-  json_parse_failed_models: "Échec de l'analyse du JSON de la liste de modèles : %{error}"
-  json_serialize_failed_mcp_config: "Échec de la sérialisation de la configuration MCP en JSON : %{error}"
-  json_serialize_failed_metadata: "Échec de la sérialisation des métadonnées en JSON : %{error}"
-  mcp_not_found_by_id: "Configuration MCP avec l'ID %{id} non trouvée"
-  plugin_file_not_found_by_uuid: "Fichier de plugin avec l'UUID %{uuid} non trouvé"
-  plugin_invalid_runtime_type: "Type d'exécution de plugin non valide : %{runtime_type}"
-  plugin_json_deserialize_failed_input_schema: "Échec de l'analyse du JSON du schéma d'entrée du plugin : %{error}"
-  plugin_json_deserialize_failed_output_schema: "Échec de l'analyse du JSON du schéma de sortie du plugin : %{error}"
-  plugin_json_serialize_failed_input_schema: "Échec de la sérialisation du schéma d'entrée du plugin en JSON : %{error}"
-  plugin_json_serialize_failed_output_schema: "Échec de la sérialisation du schéma de sortie du plugin en JSON : %{error}"
-  plugin_not_found_by_uuid: "Plugin avec l'UUID %{uuid} non trouvé"
-  tauri_error: "Erreur Tauri : %{error}"
+  agent_name_exists: Le nom de l'agent '%{name}' existe déjà
+  ai_model_not_found_by_id: Modèle d'IA avec l'ID %{id} non trouvé
+  ai_skill_not_found_by_id: Compétence d'IA avec l'ID %{id} non trouvée
+  already_exists: 'Les données existent déjà : %{error}'
   backup:
-    dir_not_found: "Répertoire de sauvegarde '%{path}' non trouvé"
-    failed_to_add_file_to_zip: "Échec de l'ajout du fichier '%{path}' au ZIP : %{error}"
-    failed_to_create_backup_dir_at: "Échec de la création du répertoire de sauvegarde à '%{path}' : %{error}"
-    failed_to_create_cipher: "Échec de la création du chiffre : %{error}"
-    failed_to_create_dir_from_zip: "Échec de la création du répertoire '%{path}' à partir du ZIP : %{error}"
-    failed_to_create_encrypted_file: "Échec de la création du fichier chiffré : %{error}"
-    failed_to_create_file_from_zip: "Échec de la création du fichier '%{path}' à partir du ZIP : %{error}"
-    failed_to_create_mcp_sessions_dir: "Échec de la création du répertoire de sessions MCP '%{path}' : %{error}"
-    failed_to_create_parent_dir_from_zip: "Échec de la création du répertoire parent '%{path}' à partir du ZIP : %{error}"
-    failed_to_create_schema_dir: "Échec de la création du répertoire de schémas '%{path}' : %{error}"
-    failed_to_create_shared_dir: "Échec de la création du répertoire partagé '%{path}' : %{error}"
-    failed_to_create_static_dir: "Échec de la création du répertoire statique '%{path}' : %{error}"
-    failed_to_create_theme_dir: "Échec de la création du répertoire de thèmes '%{path}' : %{error}"
-    failed_to_create_upload_dir: "Échec de la création du répertoire de téléversement '%{path}' : %{error}"
-    failed_to_create_zip_for_backup: "Échec de la création du fichier ZIP '%{path}' pour la sauvegarde : %{error}"
-    failed_to_decode_key: "Échec du décodage de la clé : %{error}"
-    failed_to_decrypt_data: "Échec du déchiffrement des données : %{error}"
-    failed_to_encrypt_data: "Échec du chiffrement des données : %{error}"
-    failed_to_finish_zip: "Échec de la finalisation de la création du fichier ZIP : %{error}"
-    failed_to_open_database_file: "Échec de l'ouverture du fichier de base de données : %{error}"
-    failed_to_open_dest_db: "Échec de l'ouverture de la base de données de destination '%{path}' : %{error}"
-    failed_to_open_encrypted_file: "Échec de l'ouverture du fichier chiffré : %{error}"
-    failed_to_open_file_for_zip: "Échec de l'ouverture du fichier '%{path}' pour le ZIP : %{error}"
-    failed_to_open_zip: "Échec de l'ouverture du fichier ZIP '%{path}' : %{error}"
-    failed_to_read_backup_dir: "Échec de la lecture du répertoire de sauvegarde '%{path}' : %{error}"
-    failed_to_read_database_file: "Échec de la lecture du fichier de base de données : %{error}"
-    failed_to_read_encrypted_file: "Échec de la lecture du fichier chiffré : %{error}"
-    failed_to_read_file_for_zip: "Échec de la lecture du contenu du fichier pour le ZIP : %{error}"
-    failed_to_read_zip_archive: "Échec de la lecture de l'archive ZIP : %{error}"
-    failed_to_read_zip_entry: "Échec de la lecture de l'entrée ZIP (index %{index}) : %{error}"
-    failed_to_set_permissions_from_zip: "Échec de la définition des autorisations pour '%{path}' à partir du ZIP : %{error}"
-    failed_to_strip_prefix_for_zip: "Échec de la suppression du préfixe de chemin pour le ZIP (chemin de base : '%{base}', chemin complet : '%{full}') : %{error}"
-    failed_to_write_encrypted_file: "Échec de l'écriture du fichier chiffré : %{error}"
-    failed_to_write_file_from_zip: "Échec de l'écriture du fichier '%{path}' à partir du ZIP : %{error}"
-    failed_to_write_temp_db: "Échec de l'écriture du fichier de base de données temporaire '%{path}' : %{error}"
-    failed_to_write_to_zip: "Échec de l'écriture dans le fichier ZIP : %{error}"
-    file_not_found: "Fichier de sauvegarde '%{path}' non trouvé"
-    invalid_magic_number: "Numéro magique invalide"
-    some_files_skipped_restart_required: "Certains fichiers (tels que la base de données de session MCP) n'ont pas pu être restaurés car ils sont actuellement utilisés. Veuillez redémarrer l'application pour terminer la restauration."
-    unsupported_version: "Version non prise en charge"
-
+    dir_not_found: Répertoire de sauvegarde '%{path}' non trouvé
+    failed_to_add_file_to_zip: 'Échec de l''ajout du fichier ''%{path}'' au ZIP : %{error}'
+    failed_to_create_backup_dir_at: 'Échec de la création du répertoire de sauvegarde à ''%{path}'' : %{error}'
+    failed_to_create_cipher: 'Échec de la création du chiffre : %{error}'
+    failed_to_create_dir_from_zip: 'Échec de la création du répertoire ''%{path}'' à partir du ZIP : %{error}'
+    failed_to_create_encrypted_file: 'Échec de la création du fichier chiffré : %{error}'
+    failed_to_create_file_from_zip: 'Échec de la création du fichier ''%{path}'' à partir du ZIP : %{error}'
+    failed_to_create_mcp_sessions_dir: 'Échec de la création du répertoire de sessions MCP ''%{path}'' : %{error}'
+    failed_to_create_parent_dir_from_zip: 'Échec de la création du répertoire parent ''%{path}'' à partir du ZIP : %{error}'
+    failed_to_create_schema_dir: 'Échec de la création du répertoire de schémas ''%{path}'' : %{error}'
+    failed_to_create_shared_dir: 'Échec de la création du répertoire partagé ''%{path}'' : %{error}'
+    failed_to_create_static_dir: 'Échec de la création du répertoire statique ''%{path}'' : %{error}'
+    failed_to_create_theme_dir: 'Échec de la création du répertoire de thèmes ''%{path}'' : %{error}'
+    failed_to_create_upload_dir: 'Échec de la création du répertoire de téléversement ''%{path}'' : %{error}'
+    failed_to_create_zip_for_backup: 'Échec de la création du fichier ZIP ''%{path}'' pour la sauvegarde : %{error}'
+    failed_to_decode_key: 'Échec du décodage de la clé : %{error}'
+    failed_to_decrypt_data: 'Échec du déchiffrement des données : %{error}'
+    failed_to_encrypt_data: 'Échec du chiffrement des données : %{error}'
+    failed_to_finish_zip: 'Échec de la finalisation de la création du fichier ZIP : %{error}'
+    failed_to_open_database_file: 'Échec de l''ouverture du fichier de base de données : %{error}'
+    failed_to_open_dest_db: 'Échec de l''ouverture de la base de données de destination ''%{path}'' : %{error}'
+    failed_to_open_encrypted_file: 'Échec de l''ouverture du fichier chiffré : %{error}'
+    failed_to_open_file_for_zip: 'Échec de l''ouverture du fichier ''%{path}'' pour le ZIP : %{error}'
+    failed_to_open_zip: 'Échec de l''ouverture du fichier ZIP ''%{path}'' : %{error}'
+    failed_to_read_backup_dir: 'Échec de la lecture du répertoire de sauvegarde ''%{path}'' : %{error}'
+    failed_to_read_database_file: 'Échec de la lecture du fichier de base de données : %{error}'
+    failed_to_read_encrypted_file: 'Échec de la lecture du fichier chiffré : %{error}'
+    failed_to_read_file_for_zip: 'Échec de la lecture du contenu du fichier pour le ZIP : %{error}'
+    failed_to_read_zip_archive: 'Échec de la lecture de l''archive ZIP : %{error}'
+    failed_to_read_zip_entry: 'Échec de la lecture de l''entrée ZIP (index %{index}) : %{error}'
+    failed_to_set_permissions_from_zip: 'Échec de la définition des autorisations pour ''%{path}'' à partir du ZIP : %{error}'
+    failed_to_strip_prefix_for_zip: 'Échec de la suppression du préfixe de chemin pour le ZIP (chemin de base : ''%{base}'',
+      chemin complet : ''%{full}'') : %{error}'
+    failed_to_write_encrypted_file: 'Échec de l''écriture du fichier chiffré : %{error}'
+    failed_to_write_file_from_zip: 'Échec de l''écriture du fichier ''%{path}'' à partir du ZIP : %{error}'
+    failed_to_write_temp_db: 'Échec de l''écriture du fichier de base de données temporaire ''%{path}'' : %{error}'
+    failed_to_write_to_zip: 'Échec de l''écriture dans le fichier ZIP : %{error}'
+    file_not_found: Fichier de sauvegarde '%{path}' non trouvé
+    invalid_magic_number: Numéro magique invalide
+    some_files_skipped_restart_required: Certains fichiers (tels que la base de données de session MCP) n'ont pas pu être
+      restaurés car ils sont actuellement utilisés. Veuillez redémarrer l'application pour terminer la restauration.
+    unsupported_version: Version non prise en charge
+  conversation_not_found: La conversation spécifiée n'existe pas, elle a peut-être été supprimée ou une exception de base
+    de données s'est produite
+  database_error: 'Erreur de base de données : %{error}'
+  failed_to_initialize_database: 'Échec de l''initialisation de la base de données : %{error}'
+  failed_to_lock_main_store: 'Échec du verrouillage de la base de données : %{error}'
+  failed_to_open_db_connection: 'Échec de l''ouverture de la connexion à la base de données : %{error}'
+  io_error: 'Erreur d''E/S : %{error}'
+  json_error: 'Erreur JSON : %{error}'
+  json_parse_failed_mcp_config: 'Échec de l''analyse du JSON de configuration MCP : %{error}'
+  json_parse_failed_models: 'Échec de l''analyse du JSON de la liste de modèles : %{error}'
+  json_serialize_failed_mcp_config: 'Échec de la sérialisation de la configuration MCP en JSON : %{error}'
+  json_serialize_failed_metadata: 'Échec de la sérialisation des métadonnées en JSON : %{error}'
+  mcp_not_found_by_id: Configuration MCP avec l'ID %{id} non trouvée
+  plugin_file_not_found_by_uuid: Fichier de plugin avec l'UUID %{uuid} non trouvé
+  plugin_invalid_runtime_type: 'Type d''exécution de plugin non valide : %{runtime_type}'
+  plugin_json_deserialize_failed_input_schema: 'Échec de l''analyse du JSON du schéma d''entrée du plugin : %{error}'
+  plugin_json_deserialize_failed_output_schema: 'Échec de l''analyse du JSON du schéma de sortie du plugin : %{error}'
+  plugin_json_serialize_failed_input_schema: 'Échec de la sérialisation du schéma d''entrée du plugin en JSON : %{error}'
+  plugin_json_serialize_failed_output_schema: 'Échec de la sérialisation du schéma de sortie du plugin en JSON : %{error}'
+  plugin_not_found_by_uuid: Plugin avec l'UUID %{uuid} non trouvé
+  tauri_error: 'Erreur Tauri : %{error}'
 http:
-  client_build_failed: "Échec de la création du client HTTP : %{error}"
-  connection_failed: "Échec de la connexion : %{error}"
-  download_failed: "Échec du téléchargement : %{error}"
-  failed_to_clone_request: "Échec du clonage de la requête lors de la nouvelle tentative"
-  failed_to_open_file: "Échec de l'ouverture du fichier, chemin : %{path}, erreur : %{error}"
-  failed_to_read_file: "Échec de la lecture du fichier, chemin : %{path}, erreur : %{error}"
-  headers_convert_failed: "Échec de la conversion de la configuration de l'en-tête de la requête en HttpHeader : %{error}"
-  mime_parse_failed: "Échec de l'analyse du type MIME"
-  missing_url: "Paramètre d'URL manquant dans la requête HTTP"
-  proxy_config_failed: "Échec de la configuration du proxy : %{error}"
-  read_response_failed: "Échec de la lecture de la réponse : %{error}"
-  request_failed: "Échec de la requête, code d'état : %{status}, erreur : %{error}"
-  request_timeout: "Délai d'attente de la requête réseau, veuillez vérifier la connexion réseau ou réessayer plus tard"
-  response_too_large: "La taille des données côté serveur dépasse la limite de la requête, taille des données côté serveur : %{content_length}, limite de la requête : %{max_size}"
-  server_downloads_dir_not_found: "Répertoire de téléchargement non trouvé"
-  server_failed_to_get_app_data_dir: "Échec de la récupération du répertoire des données de l'application : %{error}"
-  server_failed_to_save_file: "Échec de l'enregistrement du fichier : %{error}"
-  server_file_saved_successfully: "Fichier enregistré avec succès"
-  server_no_available_ports: "Aucun port disponible trouvé dans la plage %{start_port}-%{max_port}"
-  server_startup_failed: "Échec du démarrage du serveur : %{error}"
-
+  client_build_failed: 'Échec de la création du client HTTP : %{error}'
+  connection_failed: 'Échec de la connexion : %{error}'
+  download_failed: 'Échec du téléchargement : %{error}'
+  failed_to_clone_request: Échec du clonage de la requête lors de la nouvelle tentative
+  failed_to_open_file: 'Échec de l''ouverture du fichier, chemin : %{path}, erreur : %{error}'
+  failed_to_read_file: 'Échec de la lecture du fichier, chemin : %{path}, erreur : %{error}'
+  headers_convert_failed: 'Échec de la conversion de la configuration de l''en-tête de la requête en HttpHeader : %{error}'
+  mime_parse_failed: Échec de l'analyse du type MIME
+  missing_url: Paramètre d'URL manquant dans la requête HTTP
+  proxy_config_failed: 'Échec de la configuration du proxy : %{error}'
+  read_response_failed: 'Échec de la lecture de la réponse : %{error}'
+  request_failed: 'Échec de la requête, code d''état : %{status}, erreur : %{error}'
+  request_timeout: Délai d'attente de la requête réseau, veuillez vérifier la connexion réseau ou réessayer plus tard
+  response_too_large: 'La taille des données côté serveur dépasse la limite de la requête, taille des données côté serveur
+    : %{content_length}, limite de la requête : %{max_size}'
+  server_downloads_dir_not_found: Répertoire de téléchargement non trouvé
+  server_failed_to_get_app_data_dir: 'Échec de la récupération du répertoire des données de l''application : %{error}'
+  server_failed_to_save_file: 'Échec de l''enregistrement du fichier : %{error}'
+  server_file_saved_successfully: Fichier enregistré avec succès
+  server_no_available_ports: Aucun port disponible trouvé dans la plage %{start_port}-%{max_port}
+  server_startup_failed: 'Échec du démarrage du serveur : %{error}'
 main:
-  failed_to_create_log_directory: "Échec de la création du répertoire des journaux"
-  failed_to_create_log_file: "Échec de la création du fichier journal"
-  failed_to_create_note_window: "Échec de la création de la fenêtre de note : %{error}"
-  failed_to_create_settings_window: "Échec de la création de la fenêtre des paramètres : %{error}"
-  failed_to_create_webview_window: "Échec de la création de la fenêtre WebView : %{error}"
-  failed_to_emit_event: "Échec de l'envoi de l'événement : %{error}"
-  failed_to_find_window_with_label: "Échec de la recherche de la fenêtre avec l'étiquette : %{label}"
-  failed_to_get_current_monitor: "Échec de l'obtention du moniteur actuel : %{error}"
-  failed_to_get_window_size: "Échec de l'obtention de la taille de la fenêtre : %{error}"
-  failed_to_initialize_logger: "Échec de l'initialisation du journaliseur"
-  failed_to_navigate_to_url: "Échec de la navigation vers l'URL : %{url}, erreur : %{error}"
-  failed_to_set_window_always_on_top: "Échec de la configuration de la fenêtre pour qu'elle soit toujours au premier plan : %{error}"
-  failed_to_set_window_position: "Échec de la définition de la position de la fenêtre : %{error}"
-  invalid_direction: "Direction invalide, actuellement uniquement pris en charge : left->gauche, right->droite"
-  window_not_ready: "La fenêtre n'est pas encore prête"
+  failed_to_create_log_directory: Échec de la création du répertoire des journaux
+  failed_to_create_log_file: Échec de la création du fichier journal
+  failed_to_create_note_window: 'Échec de la création de la fenêtre de note : %{error}'
+  failed_to_create_settings_window: 'Échec de la création de la fenêtre des paramètres : %{error}'
+  failed_to_create_webview_window: 'Échec de la création de la fenêtre WebView : %{error}'
+  failed_to_emit_event: 'Échec de l''envoi de l''événement : %{error}'
+  failed_to_find_window_with_label: 'Échec de la recherche de la fenêtre avec l''étiquette : %{label}'
+  failed_to_get_current_monitor: 'Échec de l''obtention du moniteur actuel : %{error}'
+  failed_to_get_window_size: 'Échec de l''obtention de la taille de la fenêtre : %{error}'
+  failed_to_initialize_logger: Échec de l'initialisation du journaliseur
+  failed_to_navigate_to_url: 'Échec de la navigation vers l''URL : %{url}, erreur : %{error}'
+  failed_to_set_window_always_on_top: 'Échec de la configuration de la fenêtre pour qu''elle soit toujours au premier plan
+    : %{error}'
+  failed_to_set_window_position: 'Échec de la définition de la position de la fenêtre : %{error}'
+  invalid_direction: 'Direction invalide, actuellement uniquement pris en charge : left->gauche, right->droite'
   shortcut:
-    failed_to_unregister_old: "Échec de la désinscription de l'ancien raccourci : %{error}"
-    failed_to_unregister_existing: "Échec de la désinscription du raccourci existant : %{error}"
-    invalid_format: "Format de raccourci non valide : %{shortcut}"
-
+    failed_to_unregister_existing: 'Échec de la désinscription du raccourci existant : %{error}'
+    failed_to_unregister_old: 'Échec de la désinscription de l''ancien raccourci : %{error}'
+    invalid_format: 'Format de raccourci non valide : %{shortcut}'
+  window_not_ready: La fenêtre n'est pas encore prête
 mcp:
-  config:
-    name_must_be_non_empty: "Le nom de la configuration MCP ne peut pas être vide, veuillez saisir un nom de configuration valide"
-    sse_url_must_be_non_empty: "L'URL SSE de la configuration MCP ne peut pas être vide"
-    stdio_args_must_be_non_empty: "Les Arguments de démarrage de la configuration MCP ne peuvent pas être vides"
-    stdio_command_must_be_non_empty: "La Commande de démarrage de la configuration MCP ne peut pas être vide"
   client:
-    config_error_for_server: "Erreur de configuration du serveur MCP '%{server_name}' : %{error}"
-    config_mismatch: "Inadéquation de la configuration MCP, client MCP créé %{client}, type de configuration : %{protocol_type}"
-    failed_to_call_tool: "Échec de l'appel de l'outil MCP - %{server_name}::%{tool_name}(%{args}), erreur : %{error}"
-    http_service_start_failed: "Échec du démarrage du service MCP HTTP (URL : %{url}), raison : %{error}"
-    http_url_cant_be_empty: "Le paramètre d'URL du client MCP HTTP ne peut pas être vide"
-    list_tools_timeout: "Délai d'attente pour l'obtention de la liste d'outils pour %{name}"
-    no_running: "Le client MCP '%{client}' n'est pas en cours d'exécution, veuillez vérifier la configuration et redémarrer le service"
-    sse_service_start_failed: "Échec du démarrage du service SSE (URL : %{url}), raison : %{error}"
-    sse_transport_start_failed: "Échec du démarrage du transport SSE (URL : %{url}), raison : %{error}"
-    sse_url_cant_be_empty: "Le paramètre d'URL du client SSE ne peut pas être vide"
-    stdio_args_cant_be_empty: "Le paramètre d'arguments du client stdio ne peut pas être vide"
-    stdio_command_cant_be_empty: "Le paramètre de commande Commande de démarrage du client stdio ne peut pas être vide"
-    stdio_command_not_found_no_help: 'Échec du démarrage du service MCP : commande "%{command}" non trouvée (erreur d''origine : %{original_error}). Veuillez vous assurer que la commande est installée et dans la variable d''environnement PATH de votre système.'
-    stdio_command_not_found_with_help: 'Échec du démarrage du service MCP : commande "%{command}" non trouvée (erreur d''origine : %{original_error}).'
-    stdio_npx_not_found_help: "Cela signifie généralement que Node.js n'est pas correctement installé ou que la commande 'npx' ne se trouve pas dans la variable d'environnement PATH de votre système. Veuillez vérifier votre installation de Node.js."
-    stdio_process_creation_failed: "Échec de la création du processus Stdio (commande : %{command}), raison : %{error}"
-    stdio_service_start_failed: "Échec du démarrage du service Stdio (commande : %{command}), raison : %{error}"
-    stdio_uvx_not_found_help: 'Cela peut signifier que votre environnement Python ou l''outil "%{command}" n''est pas correctement configuré ou qu''il ne se trouve pas dans la variable d''environnement PATH de votre système. Veuillez vérifier votre configuration de Python et de "%{command}".'
+    config_error_for_server: 'Erreur de configuration du serveur MCP ''%{server_name}'' : %{error}'
+    config_mismatch: 'Inadéquation de la configuration MCP, client MCP créé %{client}, type de configuration : %{protocol_type}'
+    failed_to_call_tool: 'Échec de l''appel de l''outil MCP - %{server_name}::%{tool_name}(%{args}), erreur : %{error}'
+    http_service_start_failed: 'Échec du démarrage du service MCP HTTP (URL : %{url}), raison : %{error}'
+    http_url_cant_be_empty: Le paramètre d'URL du client MCP HTTP ne peut pas être vide
+    list_tools_timeout: Délai d'attente pour l'obtention de la liste d'outils pour %{name}
+    no_running: Le client MCP '%{client}' n'est pas en cours d'exécution, veuillez vérifier la configuration et redémarrer
+      le service
+    sse_service_start_failed: 'Échec du démarrage du service SSE (URL : %{url}), raison : %{error}'
+    sse_transport_start_failed: 'Échec du démarrage du transport SSE (URL : %{url}), raison : %{error}'
+    sse_url_cant_be_empty: Le paramètre d'URL du client SSE ne peut pas être vide
+    stdio_args_cant_be_empty: Le paramètre d'arguments du client stdio ne peut pas être vide
+    stdio_command_cant_be_empty: Le paramètre de commande Commande de démarrage du client stdio ne peut pas être vide
+    stdio_command_not_found_no_help: 'Échec du démarrage du service MCP : commande "%{command}" non trouvée (erreur d''origine
+      : %{original_error}). Veuillez vous assurer que la commande est installée et dans la variable d''environnement PATH
+      de votre système.'
+    stdio_command_not_found_with_help: 'Échec du démarrage du service MCP : commande "%{command}" non trouvée (erreur d''origine
+      : %{original_error}).'
+    stdio_npx_not_found_help: Cela signifie généralement que Node.js n'est pas correctement installé ou que la commande 'npx'
+      ne se trouve pas dans la variable d'environnement PATH de votre système. Veuillez vérifier votre installation de Node.js.
+    stdio_process_creation_failed: 'Échec de la création du processus Stdio (commande : %{command}), raison : %{error}'
+    stdio_service_start_failed: 'Échec du démarrage du service Stdio (commande : %{command}), raison : %{error}'
+    stdio_uvx_not_found_help: Cela peut signifier que votre environnement Python ou l'outil "%{command}" n'est pas correctement
+      configuré ou qu'il ne se trouve pas dans la variable d'environnement PATH de votre système. Veuillez vérifier votre
+      configuration de Python et de "%{command}".
+  config:
+    name_must_be_non_empty: Le nom de la configuration MCP ne peut pas être vide, veuillez saisir un nom de configuration
+      valide
+    sse_url_must_be_non_empty: L'URL SSE de la configuration MCP ne peut pas être vide
+    stdio_args_must_be_non_empty: Les Arguments de démarrage de la configuration MCP ne peuvent pas être vides
+    stdio_command_must_be_non_empty: La Commande de démarrage de la configuration MCP ne peut pas être vide
   error:
-    client_call_failed: "Échec de l'appel client MCP : %{error}"
-    client_config_failed: "Échec de la configuration client MCP : %{error}"
-    client_start_failed: "Échec du démarrage client MCP : %{error}"
-    client_status_failed: "Échec de la récupération du statut client MCP : %{error}"
-    client_stop_failed: "Échec de l'arrêt client MCP : %{error}"
-    io_error: "Erreur E/S MCP : %{error}"
-    not_found_error: "Erreur MCP '%{name}' introuvable"
-    serialization_error: "Erreur de sérialisation/désérialisation MCP : %{error}"
-    server_initialization_failed: "Échec de l'initialisation du serveur MCP : %{error}"
-    server_internal_error: "Erreur interne du serveur MCP : %{error}"
-    server_tool_execution_failed: "Échec de l'exécution de l'outil du serveur MCP : %{error}"
-    server_tool_not_found: "Outil du serveur MCP introuvable : %{tool_name}"
-    server_unknown_error: "Erreur inconnue du serveur MCP : %{error}"
-    state_change_failed: "Échec du changement d'état MCP : %{error}"
-    store_error: "Erreur de stockage MCP : %{error}"
-    timeout_error: "Délai d'attente de l'opération MCP : %{error}"
-    cannot_restart_disabled_server: "Impossible de redémarrer le serveur MCP désactivé. Veuillez l'activer d'abord."
-    cannot_refresh_disabled_server: "Impossible d'actualiser le serveur MCP désactivé."
-  op_in_progress_error: "Une opération est déjà en cours pour ce serveur. Veuillez réessayer plus tard."
+    cannot_refresh_disabled_server: Impossible d'actualiser le serveur MCP désactivé.
+    cannot_restart_disabled_server: Impossible de redémarrer le serveur MCP désactivé. Veuillez l'activer d'abord.
+    client_call_failed: 'Échec de l''appel client MCP : %{error}'
+    client_config_failed: 'Échec de la configuration client MCP : %{error}'
+    client_start_failed: 'Échec du démarrage client MCP : %{error}'
+    client_status_failed: 'Échec de la récupération du statut client MCP : %{error}'
+    client_stop_failed: 'Échec de l''arrêt client MCP : %{error}'
+    io_error: 'Erreur E/S MCP : %{error}'
+    not_found_error: Erreur MCP '%{name}' introuvable
+    serialization_error: 'Erreur de sérialisation/désérialisation MCP : %{error}'
+    server_initialization_failed: 'Échec de l''initialisation du serveur MCP : %{error}'
+    server_internal_error: 'Erreur interne du serveur MCP : %{error}'
+    server_tool_execution_failed: 'Échec de l''exécution de l''outil du serveur MCP : %{error}'
+    server_tool_not_found: 'Outil du serveur MCP introuvable : %{tool_name}'
+    server_unknown_error: 'Erreur inconnue du serveur MCP : %{error}'
+    state_change_failed: 'Échec du changement d''état MCP : %{error}'
+    store_error: 'Erreur de stockage MCP : %{error}'
+    timeout_error: 'Délai d''attente de l''opération MCP : %{error}'
+  op_in_progress_error: Une opération est déjà en cours pour ce serveur. Veuillez réessayer plus tard.
   proxy:
-    service_description: "Serveur proxy MCP - fournit un accès unifié à tous les outils MCP activés"
-    tool_execution_error: "Erreur d'exécution de l'outil : %{error}"
-    tool_not_found: "Outil MCP '%{tool_name}' introuvable"
-
+    service_description: Serveur proxy MCP - fournit un accès unifié à tous les outils MCP activés
+    tool_execution_error: 'Erreur d''exécution de l''outil : %{error}'
+    tool_not_found: Outil MCP '%{tool_name}' introuvable
 network:
-  client_build_error: "Échec de la création du client HTTP : %{error}"
-  header_error: "Échec de la création de l'en-tête de la requête : %{error}"
-  proxy_error: "Échec de la configuration du proxy : %{error}"
-  request_failed: "Échec de la requête : %{error}"
-  response_read_error: "Échec de la lecture de la réponse : %{error}"
-
+  client_build_error: 'Échec de la création du client HTTP : %{error}'
+  header_error: 'Échec de la création de l''en-tête de la requête : %{error}'
+  proxy_error: 'Échec de la configuration du proxy : %{error}'
+  request_failed: 'Échec de la requête : %{error}'
+  response_read_error: 'Échec de la lecture de la réponse : %{error}'
 proxy:
   error:
-    internal_server_error: "Erreur interne du serveur : %{error}"
-    invalid_api_key: "Clé API non valide, veuillez vérifier si la clé est correcte ou a expiré, et mettez-la à jour dans les paramètres"
-    invalid_protocol: "Protocole non valide dans la configuration du modèle : %{protocol}."
-    invalid_request_format: "Format de requête non valide : %{error}"
-    invalid_request: "Requête non valide : %{error}"
-    missing_auth_header: "Informations d'autorisation manquantes dans la requête, veuillez vous assurer que la clé API est correctement configurée"
-    model_alias_not_found: "Alias de modèle '%{alias}' non trouvé."
-    model_details_fetch_failed: "Échec de la récupération des détails du modèle pour l'ID de fournisseur %{id}."
-    no_backend_targets: "L'alias de modèle '%{alias}' n'a aucune cible de backend configurée."
-    no_keys_configured: "Le serveur n'a aucune clé d'accès proxy configurée. Veuillez contacter l'administrateur pour configurer les clés pertinentes."
-    retry_exceeded: "Nombre maximal de tentatives de demande atteint. Le serveur renvoie continuellement le code d'état 429 (trop de demandes). Veuillez réessayer plus tard ou augmenter le paramètre de nombre de tentatives."
-    store_lock_failed: "Échec de l'accès au stockage : %{error}"
+    internal_server_error: 'Erreur interne du serveur : %{error}'
+    invalid_api_key: Clé API non valide, veuillez vérifier si la clé est correcte ou a expiré, et mettez-la à jour dans les
+      paramètres
+    invalid_protocol: 'Protocole non valide dans la configuration du modèle : %{protocol}.'
+    invalid_request: 'Requête non valide : %{error}'
+    invalid_request_format: 'Format de requête non valide : %{error}'
+    missing_auth_header: Informations d'autorisation manquantes dans la requête, veuillez vous assurer que la clé API est
+      correctement configurée
+    model_alias_not_found: Alias de modèle '%{alias}' non trouvé.
+    model_details_fetch_failed: Échec de la récupération des détails du modèle pour l'ID de fournisseur %{id}.
+    no_backend_targets: L'alias de modèle '%{alias}' n'a aucune cible de backend configurée.
+    no_keys_configured: Le serveur n'a aucune clé d'accès proxy configurée. Veuillez contacter l'administrateur pour configurer
+      les clés pertinentes.
+    retry_exceeded: Nombre maximal de tentatives de demande atteint. Le serveur renvoie continuellement le code d'état 429
+      (trop de demandes). Veuillez réessayer plus tard ou augmenter le paramètre de nombre de tentatives.
+    store_lock_failed: 'Échec de l''accès au stockage : %{error}'
   group:
-    not_found_by_name: "Échec de la recherche du groupe de proxy par nom de groupe '%{name}'"
-
+    not_found_by_name: Échec de la recherche du groupe de proxy par nom de groupe '%{name}'
 sensitive:
   filter:
-    email: "[E-mail]"
-    ip_address: "[Adresse IP]"
-    credit_card: "[Carte de crédit]"
-    international_credit_card: "[Carte de crédit int.]"
-    unionpay: "[Carte UnionPay]"
-    chinese_id_card: "[Carte d'identité]"
-    chinese_mobile: "[Numéro mobile]"
-    chinese_name: "[Nom]"
-    english_mobile: "[Numéro de téléphone]"
-    english_name: "[Nom]"
-    chinese_landline: "[Téléphone fixe]"
-    chinese_address: "[Adresse]"
-    english_address: "[Adresse]"
-    chinese_company: "[Nom de l'entreprise]"
-    english_company: "[Nom de l'entreprise]"
-    chinese_project: "[Nom du projet]"
-    english_project: "[Nom du projet]"
-    chinese_financial: "[Montant]"
-    english_financial: "[Montant]"
-    bank_account: "[Compte bancaire]"
-    bank_name: "[Nom de la banque]"
-    wechat_id: "[ID WeChat]"
-    qq_number: "[Numéro QQ]"
-    custom_block: "[Filtré]"
-
+    bank_account: '[Compte bancaire]'
+    bank_name: '[Nom de la banque]'
+    chinese_address: '[Adresse]'
+    chinese_company: '[Nom de l''entreprise]'
+    chinese_financial: '[Montant]'
+    chinese_id_card: '[Carte d''identité]'
+    chinese_landline: '[Téléphone fixe]'
+    chinese_mobile: '[Numéro mobile]'
+    chinese_name: '[Nom]'
+    chinese_project: '[Nom du projet]'
+    credit_card: '[Carte de crédit]'
+    custom_block: '[Filtré]'
+    email: '[E-mail]'
+    english_address: '[Adresse]'
+    english_company: '[Nom de l''entreprise]'
+    english_financial: '[Montant]'
+    english_mobile: '[Numéro de téléphone]'
+    english_name: '[Nom]'
+    english_project: '[Nom du projet]'
+    international_credit_card: '[Carte de crédit int.]'
+    ip_address: '[Adresse IP]'
+    qq_number: '[Numéro QQ]'
+    unionpay: '[Carte UnionPay]'
+    wechat_id: '[ID WeChat]'
 setting:
-  failed_to_create_upload_dir: "Échec de la création du répertoire de téléversement '%{path}' : %{error}"
-  failed_to_move_logo_file: "Échec du déplacement du fichier de logo : de '%{from}' à '%{to}', erreur : %{error}"
-  failed_to_save_logo_thumbnail: "Échec de l'enregistrement de la miniature du logo : %{error}"
-  failed_to_update_shortcut: "Échec de la mise à jour du raccourci : %{error}"
-  file_not_exists: "Le fichier n'existe pas : %{file_path}"
-
+  failed_to_create_upload_dir: 'Échec de la création du répertoire de téléversement ''%{path}'' : %{error}'
+  failed_to_move_logo_file: 'Échec du déplacement du fichier de logo : de ''%{from}'' à ''%{to}'', erreur : %{error}'
+  failed_to_save_logo_thumbnail: 'Échec de l''enregistrement de la miniature du logo : %{error}'
+  failed_to_update_shortcut: 'Échec de la mise à jour du raccourci : %{error}'
+  file_not_exists: 'Le fichier n''existe pas : %{file_path}'
 tools:
-  failed_to_get_model: "Échec de l'obtention du modèle %{model_type}"
-  function_not_found: "Fonction d'outil non trouvée dans le flux de travail : %{name}"
-  keyword_must_be_non_empty: "Le paramètre de mot-clé (query) doit être une chaîne non vide ou un tableau non vide"
-  max_retries_exceeded: "Nombre maximal de tentatives dépassé : %{item}"
-  mcp_stop_failed_details: "Échec de l'arrêt du serveur MCP '%{server_name}' : %{details}"
-  url_invalid: "Erreur de format du paramètre d'URL, doit commencer par http:// ou https:// : %{url}"
-  url_must_be_string: "Le paramètre d'URL doit être une chaîne"
-  url_must_not_be_empty: "Le paramètre d'URL ne peut pas être vide"
-  web_scraper_failed: "Échec de l'exploration du Web (URL : %{url}) : %{details}"
   error:
-    function_already_exists: "La fonction existe déjà : %{name}"
-    auth_error: "Erreur d'authentification"
-    config: "Erreur de configuration"
-    execution_failed: "Échec de l'exécution de l'outil : %{details}"
-    fatal: "Erreur fatale"
-    function_not_found: "Fonction introuvable"
-    initialization: "Erreur d'initialisation"
-    invalid_params: "Paramètres invalides : %{details}"
-    io_error: "Erreur d'E/S : %{details}"
-    mcp_server_not_found: "Serveur MCP introuvable"
-    network_error: "Erreur réseau"
-    serialization: "Erreur de sérialisation"
-    state_change_failed: "Échec du changement d'état"
-    store: "Erreur de stockage"
-    timeout: "Délai d'attente dépassé"
+    auth_error: Erreur d'authentification
+    config: Erreur de configuration
+    execution_failed: 'Échec de l''exécution de l''outil : %{details}'
+    fatal: Erreur fatale
+    function_already_exists: 'La fonction existe déjà : %{name}'
+    function_not_found: Fonction introuvable
+    initialization: Erreur d'initialisation
+    invalid_params: 'Paramètres invalides : %{details}'
+    io_error: 'Erreur d''E/S : %{details}'
+    mcp_server_not_found: Serveur MCP introuvable
+    network_error: Erreur réseau
+    serialization: Erreur de sérialisation
+    state_change_failed: Échec du changement d'état
+    store: Erreur de stockage
+    timeout: Délai d'attente dépassé
+  failed_to_get_model: Échec de l'obtention du modèle %{model_type}
+  function_not_found: 'Fonction d''outil non trouvée dans le flux de travail : %{name}'
+  keyword_must_be_non_empty: Le paramètre de mot-clé (query) doit être une chaîne non vide ou un tableau non vide
+  max_retries_exceeded: 'Nombre maximal de tentatives dépassé : %{item}'
+  mcp_stop_failed_details: 'Échec de l''arrêt du serveur MCP ''%{server_name}'' : %{details}'
   search:
-    google_api_key_empty: "La clé API de recherche Google ne peut pas être vide"
-    google_cx_empty: "L'ID du moteur de recherche Google ne peut pas être vide"
-    serper_api_key_empty: "La clé API Serper ne peut pas être vide"
-    tavily_api_key_empty: "La clé API Tavily ne peut pas être vide"
-
+    google_api_key_empty: La clé API de recherche Google ne peut pas être vide
+    google_cx_empty: L'ID du moteur de recherche Google ne peut pas être vide
+    serper_api_key_empty: La clé API Serper ne peut pas être vide
+    tavily_api_key_empty: La clé API Tavily ne peut pas être vide
+  url_invalid: 'Erreur de format du paramètre d''URL, doit commencer par http:// ou https:// : %{url}'
+  url_must_be_string: Le paramètre d'URL doit être une chaîne
+  url_must_not_be_empty: Le paramètre d'URL ne peut pas être vide
+  web_scraper_failed: 'Échec de l''exploration du Web (URL : %{url}) : %{details}'
 tray:
-  about: "À propos"
-  agent: "Agent"
-  assistant: "Assistant"
-  chat: "Discussion"
-  mcp: "MCP"
-  model: "Modèle"
-  note: "Note intelligente"
-  proxy: "Proxy"
-  proxy_switcher: "Sélecteur de proxy"
-  quit: "Quitter"
-  settings: "Paramètres"
-  skill: "Compétence"
-  workflow: "Flux de travail"
-
+  about: À propos
+  agent: Agent
+  assistant: Assistant
+  chat: Discussion
+  mcp: MCP
+  model: Modèle
+  note: Note intelligente
+  proxy: Proxy
+  proxy_switcher: Sélecteur de proxy
+  quit: Quitter
+  settings: Paramètres
+  skill: Compétence
+  workflow: Flux de travail
 updater:
   errors:
-    config: "Erreur de configuration du programme de mise à jour : %{error}"
-    download: "Échec du téléchargement ou de l'installation de la mise à jour : %{error}"
-    install: "Échec de l'installation de la mise à jour : %{error}"
-    io_error: "Erreur d'E/S"
-    lock_error: "Erreur de verrouillage"
-    update_not_found: "Version actuelle la plus récente, aucune mise à jour disponible"
-    update_request: "Échec de la demande de mise à jour : %{error}"
-    version_mismatch: "Incompatibilité de version, la version d'installation attendue diffère de la version de mise à jour fournie par le serveur, veuillez revérifier les mises à jour"
-    version_parse: "Erreur d'analyse de version : version attendue '%{version}', erreur : %{error}"
-
+    config: 'Erreur de configuration du programme de mise à jour : %{error}'
+    download: 'Échec du téléchargement ou de l''installation de la mise à jour : %{error}'
+    install: 'Échec de l''installation de la mise à jour : %{error}'
+    io_error: Erreur d'E/S
+    lock_error: Erreur de verrouillage
+    update_not_found: Version actuelle la plus récente, aucune mise à jour disponible
+    update_request: 'Échec de la demande de mise à jour : %{error}'
+    version_mismatch: Incompatibilité de version, la version d'installation attendue diffère de la version de mise à jour
+      fournie par le serveur, veuillez revérifier les mises à jour
+    version_parse: 'Erreur d''analyse de version : version attendue ''%{version}'', erreur : %{error}'
 workflow:
-  awaiting_approval: "En attente d'approbation"
-  array_index_out_of_bounds: "Indice de tableau hors limites : %{index}"
-  bool_not_supported: "Le type booléen ne prend pas en charge cette opération : %{operator}"
-  bracket_not_match: "Les parenthèses ne correspondent pas : %{condition}"
-  cancel_notification_error: "Échec de l'envoi du signal d'annulation du flux de travail"
-  cancelled: "Opération annulée par l'utilisateur"
-  cannot_access_path: "Impossible d'accéder au chemin : %{path}, car la valeur n'est pas un objet/tableau"
-  circular_dependency: "Une dépendance circulaire existe entre les nœuds : %{nodes}"
-  compression_in_progress: "Compression du contexte en cours..."
-  dependency_not_found: "Le nœud '%{node_id}' dépend du nœud '%{id}' qui n'existe pas"
-  duplicate_node_id: "ID de nœud en double : %{id}"
-  edge_reference_missing: "La référence d'arête n'existe pas : %{from} -> %{to}"
-  incomplete_execution: "Exécution incomplète du flux de travail, nœuds manquants : %{missing}"
-  invalid_array_index: "Indice de tableau non valide : %{index}"
-  invalid_graph: "Graphe non valide : %{reason}"
-  invalid_loop_input: "L'entrée du nœud de boucle doit être un tableau ou un objet, mais a reçu : %{input}"
-  invalid_node_id: "ID de nœud non valide `%{id}`, seules les lettres, les chiffres, les traits de soulignement et les traits d'union sont autorisés, et doit commencer par une lettre"
-  invalid_node_output: "Sortie de nœud non valide, id : %{id}, sortie : %{output}, les noms de champ de sortie de nœud n'autorisent que les lettres, les chiffres, les traits de soulignement et les traits d'union, et doivent commencer par une lettre, le nom de champ de sortie ne peut pas être : item"
-  invalid_node_type: "Type de nœud non valide : %{node_type}"
-  invalid_state_transition: "Transition d'état non valide : de %{current} à %{new}"
-  invalid_state: "Transition d'état non valide, état actuel : %{current}, nouvel état : %{new}"
-  interrupted_by_restart: "Interrompu par le redémarrage de l'application"
-  invalid_workflow_json: "Configuration de flux de travail non valide : %{error}"
-  json_path_not_found: "Chemin JSON non trouvé : %{path}"
-  left_value_not_number: "La valeur de gauche n'est pas un type de nombre"
-  nested_group: "Les groupes imbriqués ne sont pas autorisés : le groupe '%{id}' ne peut pas contenir d'autres groupes"
-  node_output_not_found: "Impossible de trouver la sortie du nœud '%{node_id}', chemin : %{path}"
-  not_bool_value: "La valeur n'est pas un type booléen"
-  pause_notification_error: "Échec de l'envoi du signal de pause du flux de travail"
-  resume_notification_error: "Échec de l'envoi du signal de reprise du flux de travail"
-  right_value_not_number: "La valeur de droite n'est pas un type de nombre"
-  self_dependency: "Le nœud '%{node_id}' ne peut pas dépendre de lui-même"
-  state_notification_error: "Échec de la notification d'état du flux de travail"
-  string_not_supported: "Le type de chaîne ne prend pas en charge cette opération : %{operator}"
-  task_join_error: "Échec de l'exécution de la tâche : %{error}"
-  user_rejected: "L'utilisateur a refusé"
-  type_mismatch: "Opération d'incompatibilité de types : %{operator}, le type de la valeur de gauche est %{left_type}, le type de la valeur de droite est %{right_type}"
-  unsupported_operator: "Opérateur non pris en charge : %{operator}"
-  unsupported_type_combination: "Opérateur de combinaison de types non pris en charge : %{operator}"
-  validation: "Erreur de validation : %{msg}"
-  task_finished: "Tâche terminée"
-  summary:
-    submit_plan: "Soumettre le plan"
-    todo_create: "Créer une tâche"
-    todo_update: "Mettre à jour la tâche : %{subject} -> %{status}"
-    todo_list: "Obtenir la liste des tâches"
-    todo_get: "Obtenir les détails de la tâche"
-    todo_status_done: "Terminé"
-    todo_status_in_progress: "En cours"
-    todo_status_pending: "En attente"
-    todo_status_failed: "Échoué"
-    todo_status_data_missing: "Données manquantes"
+  array_index_out_of_bounds: 'Indice de tableau hors limites : %{index}'
+  awaiting_approval: En attente d'approbation
+  bool_not_supported: 'Le type booléen ne prend pas en charge cette opération : %{operator}'
+  bracket_not_match: 'Les parenthèses ne correspondent pas : %{condition}'
+  cancel_notification_error: Échec de l'envoi du signal d'annulation du flux de travail
+  cancelled: Opération annulée par l'utilisateur
+  cannot_access_path: 'Impossible d''accéder au chemin : %{path}, car la valeur n''est pas un objet/tableau'
+  circular_dependency: 'Une dépendance circulaire existe entre les nœuds : %{nodes}'
+  compression_in_progress: Compression du contexte en cours...
+  continue: Continuer
+  dependency_not_found: Le nœud '%{node_id}' dépend du nœud '%{id}' qui n'existe pas
+  duplicate_node_id: 'ID de nœud en double : %{id}'
+  edge_reference_missing: 'La référence d''arête n''existe pas : %{from} -> %{to}'
   error:
-    cancelled: "Opération annulée par l'utilisateur"
-    config: "Erreur de configuration"
-    context: "Erreur de contexte"
-    execution: "Erreur d'exécution"
-    initialization: "Erreur d'initialisation"
-    invalid_graph: "Graphe invalide"
-    invalid_state: "État invalide"
-    io: "Erreur d'E/S"
-    other: "Autre erreur"
-    serialization: "Erreur de sérialisation"
-    store: "Erreur de stockage"
+    cancelled: Opération annulée par l'utilisateur
+    config: Erreur de configuration
+    context: Erreur de contexte
+    execution: Erreur d'exécution
+    initialization: Erreur d'initialisation
+    invalid_graph: Graphe invalide
+    invalid_state: État invalide
+    io: Erreur d'E/S
+    other: Autre erreur
+    serialization: Erreur de sérialisation
+    store: Erreur de stockage
+  incomplete_execution: 'Exécution incomplète du flux de travail, nœuds manquants : %{missing}'
+  interrupted_by_restart: Interrompu par le redémarrage de l'application
+  invalid_array_index: 'Indice de tableau non valide : %{index}'
+  invalid_graph: 'Graphe non valide : %{reason}'
+  invalid_loop_input: 'L''entrée du nœud de boucle doit être un tableau ou un objet, mais a reçu : %{input}'
+  invalid_node_id: ID de nœud non valide `%{id}`, seules les lettres, les chiffres, les traits de soulignement et les traits
+    d'union sont autorisés, et doit commencer par une lettre
+  invalid_node_output: 'Sortie de nœud non valide, id : %{id}, sortie : %{output}, les noms de champ de sortie de nœud n''autorisent
+    que les lettres, les chiffres, les traits de soulignement et les traits d''union, et doivent commencer par une lettre,
+    le nom de champ de sortie ne peut pas être : item'
+  invalid_node_type: 'Type de nœud non valide : %{node_type}'
+  invalid_state: 'Transition d''état non valide, état actuel : %{current}, nouvel état : %{new}'
+  invalid_state_transition: 'Transition d''état non valide : de %{current} à %{new}'
+  invalid_workflow_json: 'Configuration de flux de travail non valide : %{error}'
+  json_path_not_found: 'Chemin JSON non trouvé : %{path}'
+  left_value_not_number: La valeur de gauche n'est pas un type de nombre
+  nested_group: 'Les groupes imbriqués ne sont pas autorisés : le groupe ''%{id}'' ne peut pas contenir d''autres groupes'
+  node_output_not_found: 'Impossible de trouver la sortie du nœud ''%{node_id}'', chemin : %{path}'
+  not_bool_value: La valeur n'est pas un type booléen
+  pause_notification_error: Échec de l'envoi du signal de pause du flux de travail
+  resume_notification_error: Échec de l'envoi du signal de reprise du flux de travail
+  right_value_not_number: La valeur de droite n'est pas un type de nombre
+  self_dependency: Le nœud '%{node_id}' ne peut pas dépendre de lui-même
+  state_notification_error: Échec de la notification d'état du flux de travail
+  stepBudgetExhausted: Le nombre d’étapes actuel est épuisé (%{current}/%{max}), mais la tâche n’est pas encore terminée.
+    Voulez-vous continuer ?
+  stop: Arrêter
+  string_not_supported: 'Le type de chaîne ne prend pas en charge cette opération : %{operator}'
+  summary:
+    edit_file: Modifié
+    submit_plan: Soumettre le plan
+    todo_create: Créer une tâche
+    todo_get: Obtenir les détails de la tâche
+    todo_list: Obtenir la liste des tâches
+    todo_status_data_missing: Données manquantes
+    todo_status_done: Terminé
+    todo_status_failed: Échoué
+    todo_status_in_progress: En cours
+    todo_status_pending: En attente
+    todo_update: 'Mettre à jour la tâche : %{subject} -> %{status}'
+    write_file: Écrit
+  task_finished: Tâche terminée
+  task_join_error: 'Échec de l''exécution de la tâche : %{error}'
+  type_mismatch: 'Opération d''incompatibilité de types : %{operator}, le type de la valeur de gauche est %{left_type}, le
+    type de la valeur de droite est %{right_type}'
+  unsupported_operator: 'Opérateur non pris en charge : %{operator}'
+  unsupported_type_combination: 'Opérateur de combinaison de types non pris en charge : %{operator}'
+  user_rejected: L'utilisateur a refusé
+  validation: 'Erreur de validation : %{msg}'
