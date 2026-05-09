@@ -111,6 +111,7 @@ mod tests {
                 tools: vec![],
                 skill_dir: None,
                 references: vec![],
+                source: "".to_string(),
             },
         );
 
@@ -124,6 +125,7 @@ mod tests {
                 tools: vec![],
                 skill_dir: None,
                 references: vec![],
+                source: "".to_string(),
             },
         );
 
@@ -226,6 +228,7 @@ mod tests {
                 tools: vec![],
                 skill_dir: None,
                 references: vec![],
+                source: "".to_string(),
             },
         );
 
@@ -262,6 +265,7 @@ mod tests {
                 tools: vec![],
                 skill_dir: None,
                 references: vec![],
+                source: "".to_string(),
             },
         );
 
