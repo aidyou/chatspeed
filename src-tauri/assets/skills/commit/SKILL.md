@@ -1,91 +1,75 @@
 ---
 name: commit
-description: Create well-formatted commits with conventional commit messages. Use this skill when the user wants to create a commit.
+description: Create well-formatted Git commits with conventional commit messages. Use this skill when the user wants to create a commit.
 ---
 
-# Claude Command: Commit
+# Commit
+Create well-formatted Git commits using real Git commands and Conventional Commits.
 
-This skill helps you create well-formatted commits following the Conventional Commits specification.
+## Core Rule
+Use actual Git commands such as `git status`, `git diff`, `git add`, and `git commit`.
+Do not call `/commit` or any nonexistent custom commit command.
 
-## Usage
+## Options
+The user may request behavior such as:
+- skip verification
+- simple or detailed commit message
+- a specific commit type, such as `feat`, `fix`, or `docs`
+Treat these as instructions for how to perform the Git workflow, not as command-line options to a custom command.
 
-Basic usage:
-```
-/commit
-```
+## Workflow
+1. Inspect Git status and staged files.
+2. Inspect recent commit history to match the repository's commit message style and language.
+3. Analyze staged and unstaged changes with `git diff` and `git diff --staged`.
+4. Detect whether changes should be split into atomic commits.
+5. Run relevant project checks unless the user asks to skip verification.
+6. Stage only the files that belong in the commit.
+7. Generate a Conventional Commit message.
+8. Use `git commit` to create the commit.
+9. Summarize what was committed and what was verified.
 
-With options:
-```
-/commit --no-verify
-/commit --style=full
-/commit --style=full --type=feat
-```
+## Pre-commit Checks
+Unless the user asks to skip verification, run the project's relevant checks before committing.
+Prefer existing package scripts or project conventions, such as lint, test, build, typecheck, or docs generation.
+Only run checks that exist in the project. Do not invent scripts.
 
-## Skill Options
+## Staging Rules
+- If files are already staged, commit only the staged changes unless the user asks otherwise.
+- If no files are staged, stage the relevant modified and new files for the requested change.
+- Do not stage unrelated files.
+- Do not overwrite, discard, reset, clean, or remove user changes.
+- Ask before staging changes whose purpose is unclear or unrelated.
 
-- `--no-verify`: Skip pre-commit checks (lint, build, generate:docs)
-- `--style=simple|full`:
-  - `simple` (default): Creates concise single-line commit messages
-  - `full`: Creates detailed commit messages with body and footer sections
-- `--type=<type>`: Specify the commit type (overrides automatic detection)
-
-## What This Skill Does
-
-1. **Pre-commit checks** (unless `--no-verify`):
-   - `pnpm lint` - ensure code quality
-   - `pnpm build` - verify build succeeds
-   - `pnpm generate:docs` - update documentation
-
-2. **File staging**:
-   - Check staged files with `git status`
-   - If no files staged, automatically add all modified/new files with `git add`
-
-3. **Change analysis**:
-   - Run `git diff` to understand changes
-   - Detect if multiple logical changes should be split
-   - Suggest atomic commits when appropriate
-
-4. **Commit message creation**:
-   - Generate messages following Conventional Commits specification
-   - Apply appropriate emoji prefixes
-   - Add detailed body/footer in full style mode
-
-## Conventional Commits Format
-
-### Simple Style (Default)
-```
+## Commit Message Language
+Match the repository's existing commit message language.
+Rules:
+- Inspect recent commit messages before generating a new commit message.
+- Use the dominant language from recent user/project commits.
+  - Mostly Chinese history → write the description/body in Chinese.
+  - Mostly English history → write the description/body in English.
+- Keep Conventional Commit types in English, such as `feat`, `fix`, `docs`, `refactor`.
+- If the repository has no commit history:
+  - prefer English for open-source or public projects
+  - for private projects, use the language that best matches the README, docs, issue text, or user request
+- If history is mixed with no clear dominant language, use the language of the user's current request.
+## Conventional Commit Format
+Simple style:
+```text
 <emoji> <type>[optional scope]: <description>
 ```
-Example: `✨ feat(auth): add JWT token validation`
-
-### Full Style
+Example:
+```text
+✨ feat(auth): add JWT token validation
 ```
+Full style:
+```text
 <emoji> <type>[optional scope]: <description>
-
 <body>
-
 <footer>
 ```
+Use full style for breaking changes, complex features, multi-system changes, or bug fixes that need explanation.
 
-Example:
-```
-✨ feat(auth): add JWT token validation
-
-Implement JWT token validation middleware that:
-- Validates token signature and expiration
-- Extracts user claims from payload
-- Adds user context to request object
-- Handles refresh token rotation
-
-This change improves security by ensuring all protected
-routes validate authentication tokens properly.
-
-BREAKING CHANGE: API now requires Bearer token for all authenticated endpoints
-Closes: #123
-```
-
-## Commit Types & Emojis
-
+## Commit Types
 | Type       | Emoji | Description      | When to Use                          |
 | ---------- | ----- | ---------------- | ------------------------------------ |
 | `feat`     | ✨     | New feature      | Adding new functionality             |
@@ -100,138 +84,35 @@ Closes: #123
 | `build`    | 📦     | Build system     | Changes affecting build system       |
 | `revert`   | ⏪     | Revert           | Reverting previous commit            |
 
-## Body Section Guidelines (Full Style)
-
-The body should:
-- Explain **what** changed and **why** (not how)
-- Use bullet points for multiple changes
-- Include motivation for the change
-- Contrast behavior with previous behavior
-- Reference related issues or decisions
-- Be wrapped at 72 characters per line
-
-Good body example:
-```
-Previously, the application allowed unauthenticated access to
-user profile endpoints, creating a security vulnerability.
-
-This commit adds comprehensive authentication middleware that:
-- Validates JWT tokens on all protected routes
-- Implements proper token refresh logic
-- Adds rate limiting to prevent brute force attacks
-- Logs authentication failures for monitoring
-
-The change follows OAuth 2.0 best practices and improves
-overall application security posture.
-```
-
-## Footer Section Guidelines (Full Style)
-
-Footer contains:
-- **Breaking changes**: Start with `BREAKING CHANGE:`
-- **Issue references**: `Closes:`, `Fixes:`, `Refs:`
-- **Review references**: `Reviewed-by:`, `Approved-by:`
-
-Example footers:
-```
+## Message Guidelines
+- Use imperative mood: `add`, not `added`.
+- Keep the subject concise, preferably under 50 characters and no more than 72.
+- Do not end the subject with a period.
+- Use a clear scope when helpful, such as `auth`, `api`, `ui`, `db`, `config`, or `deps`.
+- In full style, explain what changed and why, not low-level implementation details.
+- Wrap body lines around 72 characters.
+- Use footers for breaking changes and issue references.
+Footer examples:
+```text
 BREAKING CHANGE: rename config.auth to config.authentication
-Closes: #123, #124
+Closes: #123
+Fixes: #456
+Refs: #789
 ```
 
-## Scope Guidelines
+## Commit Splitting
+Suggest splitting commits when changes include:
+- mixed types, such as feature work plus unrelated fixes
+- unrelated concerns
+- dependency updates mixed with implementation changes
+- broad changes across unrelated modules
+- generated files or formatting mixed with logic changes
+Do not split automatically unless the user approves or the workflow clearly supports multiple commits.
 
-Scope should be:
-- A noun describing the section of codebase
-- Consistent across the project
-- Brief and meaningful
-
-Common scopes:
-- `api`, `auth`, `ui`, `db`, `config`, `deps`
-- Component names: `button`, `modal`, `header`
-- Module names: `parser`, `compiler`, `validator`
-
-## Commit Splitting Strategy
-
-Automatically suggest splitting when detecting:
-1. **Mixed types**: Features + fixes in same commit
-2. **Multiple concerns**: Unrelated changes
-3. **Large scope**: Changes across many modules
-4. **File patterns**: Source + test + docs together
-5. **Dependencies**: Dependency updates mixed with features
-
-## Best Practices
-
-### DO:
-- ✅ Write in present tense, imperative mood ("add" not "added")
-- ✅ Keep first line under 50 characters (72 max)
-- ✅ Capitalize first letter of description
-- ✅ No period at end of subject line
-- ✅ Separate subject from body with blank line
-- ✅ Use body to explain what and why vs. how
-- ✅ Reference issues and breaking changes
-
-### DON'T:
-- ❌ Mix multiple logical changes in one commit
-- ❌ Include implementation details in subject
-- ❌ Use past tense ("added" instead of "add")
-- ❌ Make commits too large to review
-- ❌ Commit broken code (unless WIP)
-- ❌ Include sensitive information
-
-## Examples
-
-### Simple Style Examples
-```bash
-✨ feat: add user registration flow
-🐛 fix: resolve memory leak in event handler
-📝 docs: update API endpoints documentation
-♻️ refactor: simplify authentication logic
-⚡️ perf: optimize database query performance
-🔧 chore: update build dependencies
-```
-
-### Full Style Example
-```bash
-✨ feat(auth): implement OAuth2 authentication flow
-
-Add complete OAuth2 authentication system supporting multiple
-providers (Google, GitHub, Microsoft). The implementation
-follows RFC 6749 specification and includes:
-
-- Authorization code flow with PKCE
-- Refresh token rotation
-- Scope-based permissions
-- Session management with Redis
-- Rate limiting per client
-
-This provides users with secure single sign-on capabilities
-while maintaining backwards compatibility with existing
-JWT authentication.
-
-BREAKING CHANGE: /api/auth endpoints now require client_id parameter
-Closes: #456, #457
-Refs: RFC-6749, RFC-7636
-```
-
-## Workflow
-
-1. Analyze changes to determine commit type and scope
-2. Check if changes should be split into multiple commits
-3. For each commit:
-   - Stage appropriate files
-   - Generate commit message based on style setting
-   - If full style, create detailed body and footer
-   - Execute git commit with generated message
-4. Provide summary of committed changes
-
-## Important Notes
-
-- Default style is `simple` for quick, everyday commits
-- Use `full` style for:
-  - Breaking changes
-  - Complex features
-  - Bug fixes requiring explanation
-  - Changes affecting multiple systems
-- The tool will intelligently detect when full style might be beneficial and suggest it
-- Always review the generated message before confirming
-- Pre-commit checks help maintain code quality
+## Safety
+- Do not call `/commit` or any nonexistent custom commit command.
+- Use real Git commands only.
+- Do not commit broken code unless the user explicitly wants a WIP commit.
+- Do not include secrets, credentials, tokens, private keys, or sensitive data.
+- Do not create branches, stashes, resets, checkouts, cleanups, or pushes without explicit approval.
+- Only create a commit when the user explicitly asked for one.
