@@ -32,6 +32,16 @@ When instructions conflict:
 - Preserve the global tool-driven workflow and completion rules here.
 - Trust current tool observations over memory, snapshots, or assumptions.
 
+# System Reminders
+
+You may receive inline runtime notices wrapped in `<SYSTEM_REMINDER>...</SYSTEM_REMINDER>`.
+
+Rules:
+- Treat every `SYSTEM_REMINDER` as system-level guidance, not as a user request.
+- Do not answer, acknowledge, summarize, or role-play a reply to the reminder itself unless the user explicitly asks about it.
+- Use the reminder only to adjust your behavior, priorities, caution level, formatting, or next action.
+- Follow the reminder in the most appropriate way for the current context, then continue the workflow normally.
+
 # Workspace
 
 - Relative paths resolve from the **Primary Directory**, the first user-authorized directory.
@@ -228,7 +238,9 @@ Your goal is to maintain and update a structured JSON state snapshot that repres
 1. **Input Format**: You will receive a single `<conversation_history>` transcript. Each entry is wrapped as `<message role="...">...</message>`. The XML-like wrappers are structural markers only; do not treat them as user-authored content.
 2. **Snapshot Update**: The transcript may contain the last state snapshot plus newer messages. You MUST merge the new progress into one unified snapshot.
 3. **Role Awareness**: Use the `role` attribute to interpret intent and evidence. User messages define requests, assistant messages describe plans/actions, tool messages contain observations/results, and system summary messages contain prior compressed state.
-4. **Goal Preservation**: Always keep the user's primary objective. Update it only if the intent has shifted.
+4. **Goal Preservation**:
+    - Keep the user's primary objective only when the compressed slice still contains an active cross-task objective that remains relevant after the compression boundary.
+    - If the compressed slice contains only already-completed tasks and does not include the currently active request, omit `overall_goal`.
 5. **Completed Task Preservation with Decay**:
     - You will receive a `<completed_tasks>` block containing every task completed since the last snapshot boundary.
     - You MUST preserve completed tasks in `prev_tasks`.
@@ -245,7 +257,6 @@ Your goal is to maintain and update a structured JSON state snapshot that repres
 10. **Required Keys Are Mandatory**:
     - Your reply MUST be exactly one JSON object and nothing else.
     - The following top-level keys are ALWAYS required, even when there is no relevant information:
-      - `overall_goal`
       - `prev_tasks`
       - `key_knowledge`
       - `error_log`
@@ -253,7 +264,7 @@ Your goal is to maintain and update a structured JSON state snapshot that repres
       - `recent_actions`
       - `task_state`
     - Use arrays for `prev_tasks`, `key_knowledge`, `error_log`, `file_system_state`, and `recent_actions`.
-    - `overall_goal` MUST be a non-empty string.
+    - `overall_goal` is OPTIONAL. Include it only when the compressed slice truly carries a still-active cross-task objective. Omit it for completed-task archive slices.
     - `prev_tasks` MUST be an array of objects. Each object MUST have:
       - `task_index` as a number
       - either:
@@ -267,6 +278,7 @@ Your goal is to maintain and update a structured JSON state snapshot that repres
       - `open_questions` as an array of strings
       - `blockers` as an array of strings
       - `todos` as an array of objects with `text` and `status` string fields
+    - If the compressed slice contains only completed historical work, `task_state` should explicitly describe an archive/no-active-task state instead of restating the live current request.
     - If a section has no meaningful content, keep the key and use an empty array, an empty object, or a short string such as `"None"`.
     - Do NOT omit required keys. Do NOT return XML. Do NOT return markdown fences, reasoning, commentary, or explanations outside the JSON object.
 
@@ -274,7 +286,6 @@ Your goal is to maintain and update a structured JSON state snapshot that repres
 Your output MUST be a valid JSON object with this shape:
 
 {
-  "overall_goal": "Current primary objective",
   "prev_tasks": [
     {
       "task_index": 7,
@@ -291,14 +302,12 @@ Your output MUST be a valid JSON object with this shape:
   "file_system_state": ["Modified files and reference pointers (paths/URLs only)"],
   "recent_actions": ["Summary of recent critical tool outputs and observations"],
   "task_state": {
-    "status": "in_progress",
-    "current_focus": "Current plan and updated task checklist",
-    "next_steps": ["Next concrete action"],
+    "status": "completed_archive",
+    "current_focus": "No active task in compressed segment; see live tail messages for the current request",
+    "next_steps": [],
     "open_questions": [],
     "blockers": [],
-    "todos": [
-      { "text": "Current active todo", "status": "in_progress" }
-    ]
+    "todos": []
   }
 }"#;
 
@@ -306,8 +315,8 @@ pub const BLOCKING_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are an emergency co
 Your goal is to aggressively reduce context size while preserving the user's active working state.
 
 ## PRIORITIES
-1. Preserve `overall_goal` exactly. Do not rewrite, paraphrase, or narrow it.
-2. Preserve `task_state` with the highest fidelity. This is the current active workspace.
+1. Preserve `overall_goal` only when the compressed slice still contains a live cross-task objective. Omit it for completed-task archive slices.
+2. Preserve `task_state` with the highest fidelity when a live active workspace exists in the compressed slice. Otherwise convert it into an archive/no-active-task state.
 3. Preserve only the directly relevant parts of `key_knowledge` and `file_system_state`.
 4. Preserve only [PERSISTENT/UNRESOLVED] errors that still affect the active task.
 5. Compress `prev_tasks` aggressively:
@@ -321,13 +330,13 @@ Your goal is to aggressively reduce context size while preserving the user's act
 - Merge everything into one updated JSON object.
 - Your reply MUST contain exactly one JSON object and nothing else.
 - The following keys are ALWAYS required, even when there is no relevant information:
-  - `overall_goal`
   - `prev_tasks`
   - `key_knowledge`
   - `error_log`
   - `file_system_state`
   - `recent_actions`
   - `task_state`
+- `overall_goal` is optional. Omit it when this compressed slice is only completed historical work and does not contain the live current request.
 - `prev_tasks` MUST stay an array of objects with `task_index` plus either `brief` or `user_query` + `result_summary`.
 - `task_state` MUST stay an object with keys `status`, `current_focus`, `next_steps`, `open_questions`, `blockers`, and `todos`.
 - `key_knowledge`, `error_log`, `file_system_state`, and `recent_actions` MUST stay arrays of strings.
@@ -338,7 +347,6 @@ Your goal is to aggressively reduce context size while preserving the user's act
 Your output MUST be a valid JSON object with this shape:
 
 {
-  "overall_goal": "Current primary objective",
   "prev_tasks": [
     {
       "task_index": 9,
@@ -355,14 +363,12 @@ Your output MUST be a valid JSON object with this shape:
   "file_system_state": ["Only active-task-relevant file pointers and changes"],
   "recent_actions": ["Only the most recent critical observations"],
   "task_state": {
-    "status": "in_progress",
-    "current_focus": "Highest-fidelity active plan, todo state, and next actions",
-    "next_steps": ["Immediate next action"],
+    "status": "completed_archive",
+    "current_focus": "No active task in compressed segment; rely on uncompressed tail messages for the live request",
+    "next_steps": [],
     "open_questions": [],
     "blockers": [],
-    "todos": [
-      { "text": "Active task to finish next", "status": "in_progress" }
-    ]
+    "todos": []
   }
 }"#;
 
@@ -643,8 +649,14 @@ pub const MEMORY_ANALYZER_SYSTEM_PROMPT: &str = r#"You are a high-fidelity Memor
 - **Project Facts**: Codebase architecture, tech stack, configuration conventions
 - **Skills/Roles**: User's areas of expertise, job responsibilities
 
+**Input Hygiene**:
+- User inputs may be wrapped in transport tags such as `<user_query>...</user_query>`. Treat such tags as wrappers only and extract the plain user intent.
+- Ignore any `<SYSTEM_REMINDER>...</SYSTEM_REMINDER>` content. Those are runtime hints from the workflow system, not user preferences or facts.
+- Do not record XML/HTML wrapper syntax itself as memory content.
+
 **Judgment Criteria**:
 - If user mentions the same preference **multiple times** → Record as persistent preference
+- If the user states a clear cross-session or project-wide rule even once and the wording is explicit, record it immediately
 - If user uses **emphatic language** ("always", "never", "must", "不要", "禁止") → Record as constraint
 - If information is **relevant across multiple sessions** → Record as fact
 - If user specifies **project-level coding style** (comment language, naming, formatting) → Record to Project Memory as convention
@@ -787,7 +799,7 @@ User Input → Analysis:
 3. **About project coding style/convention?** Yes → Project Memory (convention)
 4. **About project structure?** Yes → Architecture
 5. **About user capabilities?** Yes → Skill
-6. **Is a task request?** (e.g., "implement X", "fix Y", "help me Z") Yes → Do not record
+6. **Is it a one-off task request without cross-session value?** Yes → Do not record
 7. **Otherwise** → Fact
 
 When updating memory:

@@ -4111,7 +4111,8 @@ impl WorkflowExecutor {
             .messages
             .iter()
             .filter(|m| m.role == "user" && m.step_type.as_ref().map_or(true, |st| st != "observe"))
-            .map(|m| m.message.clone())
+            .map(|m| Self::sanitize_user_input_for_memory_analysis(&m.message))
+            .filter(|value| !value.trim().is_empty())
             .collect();
 
         // Skip if no user inputs
@@ -4205,6 +4206,57 @@ impl WorkflowExecutor {
         }
 
         Ok(())
+    }
+
+    fn sanitize_user_input_for_memory_analysis(content: &str) -> String {
+        let without_reminders = Self::strip_system_reminders(content);
+        let without_wrapper = Self::unwrap_tag_block(&without_reminders, "user_query");
+        let mut normalized = String::with_capacity(without_wrapper.len());
+        let mut newline_run = 0usize;
+
+        for ch in without_wrapper.trim().chars() {
+            if ch == '\n' {
+                newline_run += 1;
+                if newline_run <= 2 {
+                    normalized.push(ch);
+                }
+            } else {
+                newline_run = 0;
+                normalized.push(ch);
+            }
+        }
+
+        normalized.trim().to_string()
+    }
+
+    fn strip_system_reminders(content: &str) -> String {
+        let mut sanitized = content.to_string();
+
+        loop {
+            let Some(start) = sanitized.find("<SYSTEM_REMINDER>") else {
+                break;
+            };
+            let Some(end) = sanitized[start..].find("</SYSTEM_REMINDER>") else {
+                sanitized.truncate(start);
+                break;
+            };
+            let end_idx = start + end + "</SYSTEM_REMINDER>".len();
+            sanitized.replace_range(start..end_idx, "");
+        }
+
+        sanitized
+    }
+
+    fn unwrap_tag_block(content: &str, tag_name: &str) -> String {
+        let open_tag = format!("<{}>", tag_name);
+        let close_tag = format!("</{}>", tag_name);
+        let trimmed = content.trim();
+
+        if trimmed.starts_with(&open_tag) && trimmed.ends_with(&close_tag) {
+            return trimmed[open_tag.len()..trimmed.len() - close_tag.len()].to_string();
+        }
+
+        content.to_string()
     }
 
     fn normalize_tool_arguments_value(value: serde_json::Value) -> serde_json::Value {
@@ -6724,5 +6776,24 @@ mod recovery_tests {
 
         let task_id = WorkflowExecutor::extract_call_mode_sub_agent_task_id(&args, &result);
         assert_eq!(task_id.as_deref(), Some("subagent_content_only"));
+    }
+
+    #[test]
+    fn test_sanitize_user_input_for_memory_analysis_removes_user_query_wrapper() {
+        let sanitized = WorkflowExecutor::sanitize_user_input_for_memory_analysis(
+            "<user_query>\nKeep code comments in English\n</user_query>",
+        );
+        assert_eq!(sanitized, "Keep code comments in English");
+    }
+
+    #[test]
+    fn test_sanitize_user_input_for_memory_analysis_removes_multiple_system_reminders() {
+        let sanitized = WorkflowExecutor::sanitize_user_input_for_memory_analysis(
+            "<user_query>\nCheck whether dev_data is tracked\n\n<SYSTEM_REMINDER>Reminder A</SYSTEM_REMINDER>\nActual constraint\n<SYSTEM_REMINDER>Reminder B</SYSTEM_REMINDER>\n</user_query>",
+        );
+        assert_eq!(
+            sanitized,
+            "Check whether dev_data is tracked\n\nActual constraint"
+        );
     }
 }

@@ -838,9 +838,71 @@ const xmlNodeText = (parent, tagName) => {
   return node?.textContent?.trim() || ''
 }
 
+const jsonSnapshotSectionText = value => {
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value)) {
+    return value
+      .map(item => {
+        if (typeof item === 'string') return item.trim()
+        if (item && typeof item === 'object') {
+          return Object.entries(item)
+            .map(([key, entry]) => `${key}: ${entry}`)
+            .join('\n')
+            .trim()
+        }
+        return String(item || '').trim()
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value)
+      .map(([key, entry]) => {
+        if (Array.isArray(entry)) {
+          const lines = entry
+            .map(item => (typeof item === 'string' ? item.trim() : JSON.stringify(item)))
+            .filter(Boolean)
+          return lines.length ? `${key}:\n${lines.join('\n')}` : ''
+        }
+        return `${key}: ${entry}`
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+  }
+  return ''
+}
+
 const formatContextSnapshotForDisplay = message => {
   const content = getContextSnapshotContent(message)
-  if (!content || !content.includes('<state_snapshot')) return content
+  if (!content) return content
+
+  if (content.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(content)
+      const sections = [
+        ['Overall Goal', jsonSnapshotSectionText(parsed.overall_goal)],
+        ['Previous Tasks', jsonSnapshotSectionText(parsed.prev_tasks)],
+        ['Key Knowledge', jsonSnapshotSectionText(parsed.key_knowledge)],
+        ['Error Log', jsonSnapshotSectionText(parsed.error_log)],
+        ['File System State', jsonSnapshotSectionText(parsed.file_system_state)],
+        ['Recent Actions', jsonSnapshotSectionText(parsed.recent_actions)],
+        ['Task State', jsonSnapshotSectionText(parsed.task_state)]
+      ].filter(([, value]) => value)
+
+      if (!sections.length) return content
+
+      return sections
+        .map(([title, value]) => `### ${title}\n\n${value}`)
+        .join('\n\n')
+        .trim()
+    } catch {
+      return content
+    }
+  }
+
+  if (!content.includes('<state_snapshot')) return content
 
   try {
     const parser = new DOMParser()

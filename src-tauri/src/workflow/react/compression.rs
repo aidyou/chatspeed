@@ -81,12 +81,22 @@ impl ContextCompressor {
         }
 
         let completed_tasks = Self::render_completed_tasks(incremental_messages);
+        let completed_history_only =
+            Self::compression_scope_contains_only_completed_history(incremental_messages);
 
         // 4. Strategic Summary (LLM Call)
         let user_prompt = if last_summary_idx.is_some() {
-            "Please update the existing state snapshot with the new information provided above. Output only the updated JSON object."
+            if completed_history_only {
+                "Please update the existing state snapshot with the new completed-task archive information provided above. This compression slice contains only already-completed tasks and does NOT contain the currently active user request or active workspace. Do NOT preserve or invent an `overall_goal` from older work unless this slice itself contains a still-active cross-task objective. For this archive slice, `task_state` should describe an archive/no-active-task state rather than the live current request. Output only the updated JSON object."
+            } else {
+                "Please update the existing state snapshot with the new information provided above. Output only the updated JSON object."
+            }
         } else {
-            "Create the first state snapshot JSON object based on the conversation history provided above."
+            if completed_history_only {
+                "Create the first completed-task archive snapshot JSON object based on the conversation history provided above. This compression slice contains only already-completed tasks and does NOT contain the currently active user request or active workspace. Do NOT add an `overall_goal` unless this slice itself contains a still-active cross-task objective. `task_state` should describe an archive/no-active-task state rather than a live current request."
+            } else {
+                "Create the first state snapshot JSON object based on the conversation history provided above."
+            }
         };
 
         let summary = self
@@ -240,7 +250,7 @@ impl ContextCompressor {
             "[sMASK]",
         ];
 
-        let mut sanitized = content.to_string();
+        let mut sanitized = Self::strip_system_reminders(content);
         for token in SPECIAL_TOKENS {
             sanitized = sanitized.replace(token, "");
         }
@@ -250,6 +260,24 @@ impl ContextCompressor {
             .collect::<Vec<_>>()
             .join(" ");
         sanitized.trim().to_string()
+    }
+
+    fn strip_system_reminders(content: &str) -> String {
+        let mut sanitized = content.to_string();
+
+        loop {
+            let Some(start) = sanitized.find("<SYSTEM_REMINDER>") else {
+                break;
+            };
+            let Some(end) = sanitized[start..].find("</SYSTEM_REMINDER>") else {
+                sanitized.truncate(start);
+                break;
+            };
+            let end_idx = start + end + "</SYSTEM_REMINDER>".len();
+            sanitized.replace_range(start..end_idx, "");
+        }
+
+        sanitized
     }
 
     fn should_skip_message_for_compression(message: &WorkflowMessage) -> bool {
@@ -384,6 +412,21 @@ impl ContextCompressor {
             && approval_status != "rejected"
     }
 
+    fn compression_scope_contains_only_completed_history(messages: &[WorkflowMessage]) -> bool {
+        let latest_completion_idx = messages
+            .iter()
+            .rposition(Self::is_successful_completion_message);
+
+        let Some(latest_completion_idx) = latest_completion_idx else {
+            return false;
+        };
+
+        !messages
+            .iter()
+            .skip(latest_completion_idx + 1)
+            .any(|message| message.message_kind != "summary")
+    }
+
     fn escape_xml_text(value: &str) -> String {
         value
             .replace('&', "&amp;")
@@ -429,7 +472,6 @@ impl ContextCompressor {
 
         if trimmed.starts_with("<state_snapshot>") && trimmed.ends_with("</state_snapshot>") {
             let required_tags = [
-                "<overall_goal>",
                 "<prev_tasks>",
                 "<key_knowledge>",
                 "<error_log>",
@@ -460,7 +502,6 @@ impl ContextCompressor {
             .ok_or_else(|| "response must be a single JSON object".to_string())?;
 
         let required_keys = [
-            "overall_goal",
             "prev_tasks",
             "key_knowledge",
             "error_log",
@@ -481,7 +522,9 @@ impl ContextCompressor {
             ));
         }
 
-        Self::validate_non_empty_string_field(&parsed["overall_goal"], "overall_goal")?;
+        if object.contains_key("overall_goal") {
+            Self::validate_non_empty_string_field(&parsed["overall_goal"], "overall_goal")?;
+        }
         Self::validate_prev_tasks(&parsed["prev_tasks"])?;
         Self::validate_string_array(&parsed["key_knowledge"], "key_knowledge")?;
         Self::validate_string_array(&parsed["error_log"], "error_log")?;
@@ -620,7 +663,7 @@ impl ContextCompressor {
         };
 
         format!(
-            "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. Reason: {}. Return exactly one non-empty JSON object and nothing else. You MUST include all required keys every time, even when a section has no information: overall_goal, prev_tasks, key_knowledge, error_log, file_system_state, recent_actions, task_state. `overall_goal` must be a non-empty string. `prev_tasks` must be an array of objects with task_index plus either brief or user_query + result_summary. `task_state` must be an object with status, current_focus, next_steps, open_questions, blockers, and todos. The lists key_knowledge, error_log, file_system_state, and recent_actions must be arrays of strings. Do NOT return XML, reasoning-only text, markdown fences, or explanations. {}</SYSTEM_REMINDER>",
+            "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. Reason: {}. Return exactly one non-empty JSON object and nothing else. You MUST include all required keys every time, even when a section has no information: prev_tasks, key_knowledge, error_log, file_system_state, recent_actions, task_state. `overall_goal` is optional and should be omitted for completed-history archive slices unless a still-active cross-task objective truly remains in the compressed scope. `prev_tasks` must be an array of objects with task_index plus either brief or user_query + result_summary. `task_state` must be an object with status, current_focus, next_steps, open_questions, blockers, and todos. The lists key_knowledge, error_log, file_system_state, and recent_actions must be arrays of strings. Do NOT return XML, reasoning-only text, markdown fences, or explanations. {}</SYSTEM_REMINDER>",
             validation_error,
             prev_tasks_requirement
         )
@@ -670,6 +713,14 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_message_content_for_compression_removes_system_reminders() {
+        let sanitized = ContextCompressor::sanitize_message_content_for_compression(
+            "Primary result\n<SYSTEM_REMINDER>Runtime hint</SYSTEM_REMINDER>\nFollow-up fact",
+        );
+        assert_eq!(sanitized, "Primary result Follow-up fact");
+    }
+
+    #[test]
     fn render_history_as_transcript_preserves_roles_without_replaying_chat_roles() {
         let transcript = ContextCompressor::render_history_as_transcript(&[
             serde_json::json!({"role":"user","content":"task"}),
@@ -693,6 +744,12 @@ mod tests {
     #[test]
     fn validate_summary_result_accepts_json_snapshot_shape() {
         let valid = r#"{"overall_goal":"x","prev_tasks":[],"key_knowledge":[],"error_log":[],"file_system_state":[],"recent_actions":[],"task_state":{"status":"in_progress","current_focus":"focus","next_steps":["step"],"open_questions":[],"blockers":[],"todos":[{"text":"todo","status":"in_progress"}]}}"#;
+        assert!(ContextCompressor::validate_summary_result(valid).is_ok());
+    }
+
+    #[test]
+    fn validate_summary_result_accepts_json_snapshot_without_overall_goal() {
+        let valid = r#"{"prev_tasks":[],"key_knowledge":[],"error_log":[],"file_system_state":[],"recent_actions":[],"task_state":{"status":"completed_archive","current_focus":"No active task in compressed segment","next_steps":[],"open_questions":[],"blockers":[],"todos":[]}}"#;
         assert!(ContextCompressor::validate_summary_result(valid).is_ok());
     }
 
