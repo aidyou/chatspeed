@@ -2,11 +2,54 @@
 
 # Release Notes
 
-## [2.0.0]
+## [2.0.0] - planning
 
 ### ⚠️ Breaking Changes
 
-- **MCP Proxy SSE Removal**: Completely removed SSE (Server-Sent Events) support from the MCP proxy server. The system now exclusively uses the more stable **Streamable HTTP** protocol (`/mcp/http`) for unified tool access.
+- **Workflow is now a first-class module in ChatSpeed**: `2.0.0` introduces the new Workflow module as a major product capability, not a minor extension of the chat flow. It adds plan/act separation, tool-driven task execution, approvals, child-agent collaboration, recovery, context compression, memory extraction, and deep integration with Skills, MCP, and `AGENTS.md`.
+- **Removed SSE as a public MCP proxy server transport**: When ChatSpeed acts as an **MCP proxy server**, it no longer exposes an SSE (Server-Sent Events) server endpoint. Tool access is now unified on the more stable **Streamable HTTP** transport at `/mcp/http`.
+  - This change only affects ChatSpeed's own MCP proxy server endpoint surface.
+  - **Client support for connecting to external SSE-based MCP servers remains available** and has not been removed.
+
+### 🚀 New Features
+
+- **New Workflow engine**:
+  - Added a dedicated task-oriented workflow experience, separate from normal chat sessions.
+  - The core design is **tool-driven**: instead of behaving like an extended chat thread, the workflow advances through tool calls, observations, approvals, and explicit completion submission. This makes it especially suitable for coding, debugging, and real execution-heavy tasks.
+  - Added support for Planning / Act model separation, along with coordination between primary agents and child agents.
+  - Added **true multi-workflow background concurrency**: users can run multiple workflows at the same time and switch between them freely instead of being locked into a single active task thread.
+  - Added a full task lifecycle including approvals, pause/stop flows, intermediate-state recovery, and continuing after completion.
+- **Workflow context system**:
+  - Added structured events, snapshots, replay recovery, and hot recovery for better resilience after interruptions.
+  - Introduced **intelligent tiered context compression**: the system compresses around task boundaries, completed work, and current task state, preserving what remains relevant to the active goal instead of relying on naive truncation.
+  - This significantly improves long-running coding workflows. In real coding-task tests with `deepseek-v4`, prompt cache hit rates can reach roughly **96%**.
+  - Added project memory, global memory, and task-state summarization for long-running tasks.
+- **Built-in agent system**:
+  - Added a built-in agent definition system for both primary and child agents, designed to evolve with app releases.
+  - Built-in agents preserve official prompt and role definitions while still allowing user configuration for models, tools, security rules, and skills.
+- **Workflow safety and controllable execution**:
+  - Added tool whitelisting, auto-approval, shell policy, allowed-path validation, and related execution guardrails.
+  - Added full signal-based control flows for approvals, resume/continue, user follow-up input, and runtime configuration updates.
+  - Added **intelligent approval reminders across multiple agents** so pending approvals remain visible and easier to manage when several workflows and agents are active at the same time.
+- **Workflow interaction and configuration UX**:
+  - Added dedicated workflow UIs for models, skills, status, approvals, and tools.
+  - Added workflow skill selection, built-in agents, model status panels, and slash commands.
+  - Added integrated MCP tool support, Skills composition, shell configuration, and agent-level configuration so workflows can combine built-in capabilities with external tool ecosystems.
+
+### 🪄 Improvements
+
+- **CCProxy / proxy module overhaul**:
+  - Continued strengthening of protocol adaptation and field mapping across OpenAI, Claude, Gemini, Ollama, and related ecosystems.
+  - Improved compatibility for multi-vendor reasoning / thinking modes, making reasoning-capable models behave more consistently.
+  - Reworked tool-compat mode and tool-call parsing to better tolerate complex outputs and vendor-specific formatting differences.
+  - Refined routing, model detection, statistics recording, and direct-forward behavior for stronger stability in complex proxy setups.
+- **Configuration and resource management**:
+  - Improved i18n coverage, configuration synchronization, and default resource management for built-in agents, skills, and proxy features.
+
+### 🐞 Bug Fixes
+
+- **Proxy and integration stability fixes**:
+  - Resolved a range of stability issues around MCP tool integration, protocol adaptation, empty-response observation, tool-compat mode, and protocol edge cases.
 
 ---
 

@@ -80,7 +80,7 @@
 //!
 //! 4.  **Hierarchical Router Composition**:
 //!     -   The `routes` function assembles the final `Router` using a strict priority order:
-//!         **Fixed Prefixes** (MCP/SSE) > **Direct Routes** (/v1) > **Global Compat** (/compat) > **Grouped Routes** (/{group}).
+//!         **Fixed Prefixes** (MCP/HTTP) > **Direct Routes** (/v1) > **Global Compat** (/compat) > **Grouped Routes** (/{group}).
 //!     -   This ordering prevents route shadowing, ensuring that static protocol paths are
 //!         not misidentified as dynamic group names.
 //!
