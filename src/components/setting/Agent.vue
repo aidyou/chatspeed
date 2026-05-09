@@ -149,10 +149,10 @@
                 <el-radio-group v-model="modelModes[role.key]" size="small">
                   <el-radio-button value="provider">{{
                     $t('settings.agent.modeProvider')
-                    }}</el-radio-button>
+                  }}</el-radio-button>
                   <el-radio-button value="proxy">{{
                     $t('settings.agent.modeProxy')
-                    }}</el-radio-button>
+                  }}</el-radio-button>
                 </el-radio-group>
               </div>
               <div class="body">
@@ -1374,6 +1374,11 @@ watch(
 .agent-group {
   display: flex;
   flex-direction: column;
+  border-bottom: 1px solid var(--cs-border-color);
+
+  &:last-child {
+    border-bottom: none;
+  }
 }
 
 .agent-group-list,

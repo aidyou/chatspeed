@@ -1,13 +1,10 @@
 schema_version: 1
-builtin_id: code-browser
+builtin_id: code-explorer
 builtin_version: 1
-name: Code Browser
-description: A read-only code analysis agent for scanning the codebase,
-  understanding architecture, tracing execution paths, and collecting
-  implementation context. It cannot edit files, write files, change Git state,
-  commit, or perform implementation.
+name: Code Explorer
+description: A read-only code analysis agent for scanning the codebase, understanding architecture, tracing execution paths, and collecting implementation context. It cannot edit files, write files, change Git state, commit, or perform implementation.
 role: child
-parent_builtin_id: programming
+parent_builtin_id: coding
 disabled: true
 prompts:
   system: system.md
