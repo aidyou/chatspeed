@@ -12,6 +12,21 @@
       </div>
       <div class="content-container">
         <div class="content" v-if="message.role === 'user'">
+          <div v-if="message.metadata?.attachments?.length > 0" class="workflow-message-attachments">
+            <div
+              v-for="(attachment, attachmentIndex) in message.metadata.attachments"
+              :key="`${message.displayId || message.id || attachmentIndex}_attachment_${attachmentIndex}`"
+              class="workflow-message-attachment-item">
+              <el-image
+                v-if="attachment.type === 'image'"
+                :src="attachment.url"
+                :preview-src-list="[attachment.url]"
+                :initial-index="0"
+                fit="cover"
+                class="workflow-message-attachment-image"
+                preview-teleported />
+            </div>
+          </div>
           <div v-if="getAskUserResponseItems(message).length > 0" class="ask-user-response-card">
             <div class="ask-user-response-title">{{ $t('workflow.askUser.responseTitle') }}</div>
             <div
@@ -1915,6 +1930,25 @@ defineExpose({
 </script>
 
 <style scoped lang="scss">
+.workflow-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.workflow-message-attachment-item {
+  display: flex;
+}
+
+.workflow-message-attachment-image {
+  width: 88px;
+  height: 88px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--cs-border-color);
+}
+
 .user-message-wrap {
   position: relative;
   --user-message-line-height-multiplier: 1.6;

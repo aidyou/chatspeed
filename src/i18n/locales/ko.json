@@ -176,6 +176,8 @@
       "add": "에이전트 추가",
       "addPath": "경로 추가",
       "addSuccess": "에이전트가 성공적으로 추가되었습니다!",
+      "allowShell": "Shell 실행 허용",
+      "allowShellTip": "활성화하면 이 에이전트가 bash 도구를 사용할 수 있습니다. 개별 명령은 여전히 Shell 감사 규칙과 승인 정책의 적용을 받습니다.",
       "approvalLevel": "승인 레벨",
       "approvalLevelDefault": "에이전트 설정 따름",
       "approvalLevelFull": "전체 개방 (고위험)",
@@ -203,6 +205,8 @@
       "enableFailed": "에이전트 \"{name}\" 활성화 실패: {error}",
       "enableSuccess": "에이전트 \"{name}\"이 활성화되었습니다.",
       "fetchFailed": "에이전트 가져오기 실패",
+      "imageRecognitionPrompt": "이미지 인식 프롬프트",
+      "imageRecognitionPromptPlaceholder": "비워 두면 기본 이미지 분석 프롬프트를 사용합니다. 사용자 지정 시 인식 초점과 출력 형식을 설명하세요.",
       "finalAudit": "최종 감사",
       "models": "모델",
       "modeProvider": "공급자",
@@ -250,6 +254,7 @@
       "toolsLabel": "도구",
       "updateSuccess": "에이전트가 성공적으로 업데이트되었습니다!",
       "utilityModel": "보조 모델",
+      "visionModel": "비전 모델",
       "workingDirectory": "작업 디렉토리"
     },
     "general": {

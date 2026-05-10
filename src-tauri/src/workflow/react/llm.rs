@@ -79,11 +79,13 @@ impl LlmProcessor {
                 }
                 RuntimeSignal::UserMessage {
                     content,
+                    attached_context,
+                    metadata,
                     queued_user_message_id,
                 } => {
                     let queued_id = queued_user_message_id
                         .unwrap_or_else(|| format!("queued_{}", crate::ccproxy::get_tool_id()));
-                    stash_user_message(session_id, queued_id, content);
+                    stash_user_message(session_id, queued_id, content, attached_context, metadata);
                 }
                 RuntimeSignal::Other { .. } => stash_runtime_signal(session_id, signal),
             }
@@ -510,11 +512,23 @@ impl LlmProcessor {
                                                     "Stopped during empty-response retry backoff".into(),
                                                 ));
                                             }
-                                            RuntimeSignal::UserMessage { content, queued_user_message_id } => {
+                                            RuntimeSignal::UserMessage { content, attached_context, metadata, queued_user_message_id } => {
                                                 let queued_id = queued_user_message_id.unwrap_or_else(|| {
                                                     format!("queued_{}", crate::ccproxy::get_tool_id())
                                                 });
-                                                stash_user_message(&self.session_id, queued_id.clone(), content.clone());
+                                                stash_user_message(
+                                                    &self.session_id,
+                                                    queued_id.clone(),
+                                                    content.clone(),
+                                                    attached_context,
+                                                    metadata.clone(),
+                                                );
+                                                let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
+                                                if !ui_metadata.is_object() {
+                                                    ui_metadata = serde_json::json!({});
+                                                }
+                                                ui_metadata["queued_user_message_id"] = serde_json::json!(queued_id);
+                                                ui_metadata["queue_status"] = serde_json::json!("queued");
                                                 let _ = gateway.send(
                                                     &self.session_id,
                                                     GatewayPayload::Message {
@@ -525,10 +539,7 @@ impl LlmProcessor {
                                                         step_index: 0,
                                                         is_error: false,
                                                         error_type: None,
-                                                        metadata: Some(serde_json::json!({
-                                                            "queued_user_message_id": queued_id,
-                                                            "queue_status": "queued"
-                                                        })),
+                                                        metadata: Some(ui_metadata),
                                                     },
                                                 ).await;
                                             }
@@ -622,11 +633,23 @@ impl LlmProcessor {
                                                 "Stopped during retry backoff".into(),
                                             ));
                                         }
-                                        RuntimeSignal::UserMessage { content, queued_user_message_id } => {
+                                        RuntimeSignal::UserMessage { content, attached_context, metadata, queued_user_message_id } => {
                                             let queued_id = queued_user_message_id.unwrap_or_else(|| {
                                                 format!("queued_{}", crate::ccproxy::get_tool_id())
                                             });
-                                            stash_user_message(&self.session_id, queued_id.clone(), content.clone());
+                                            stash_user_message(
+                                                &self.session_id,
+                                                queued_id.clone(),
+                                                content.clone(),
+                                                attached_context,
+                                                metadata.clone(),
+                                            );
+                                            let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
+                                            if !ui_metadata.is_object() {
+                                                ui_metadata = serde_json::json!({});
+                                            }
+                                            ui_metadata["queued_user_message_id"] = serde_json::json!(queued_id);
+                                            ui_metadata["queue_status"] = serde_json::json!("queued");
                                             let _ = gateway.send(
                                                 &self.session_id,
                                                 GatewayPayload::Message {
@@ -637,10 +660,7 @@ impl LlmProcessor {
                                                     step_index: current_step as i32,
                                                     is_error: false,
                                                     error_type: None,
-                                                    metadata: Some(serde_json::json!({
-                                                        "queued_user_message_id": queued_id,
-                                                        "queue_status": "queued"
-                                                    })),
+                                                    metadata: Some(ui_metadata),
                                                 },
                                             ).await;
                                         }

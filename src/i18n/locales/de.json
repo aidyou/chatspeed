@@ -176,6 +176,8 @@
       "add": "Agent hinzufügen",
       "addPath": "Pfad hinzufügen",
       "addSuccess": "Agent erfolgreich hinzugefügt!",
+      "allowShell": "Shell-Ausführung erlauben",
+      "allowShellTip": "Wenn aktiviert, kann der Agent das bash-Werkzeug verwenden. Einzelne Befehle unterliegen weiterhin den Shell-Prüfregeln und der Genehmigungsrichtlinie.",
       "approvalLevel": "Genehmigungsstufe",
       "approvalLevelDefault": "Nach Agentenkonfiguration",
       "approvalLevelFull": "Vollständig (Hochrisiko)",
@@ -203,6 +205,8 @@
       "enableFailed": "Agent „{name}“ konnte nicht aktiviert werden: {error}",
       "enableSuccess": "Agent „{name}“ wurde aktiviert.",
       "fetchFailed": "Fehler beim Abrufen des Agenten",
+      "imageRecognitionPrompt": "Prompt für Bilderkennung",
+      "imageRecognitionPromptPlaceholder": "Leer lassen, um den Standard-Prompt für die Bildanalyse zu verwenden. Bei Anpassung beschreiben Sie den Erkennungsschwerpunkt und den gewünschten Ausgabestil.",
       "finalAudit": "Abschlussprüfung durchführen",
       "models": "Modelle",
       "modeProvider": "Anbieter",
@@ -250,6 +254,7 @@
       "toolsLabel": "Tools",
       "updateSuccess": "Agent erfolgreich aktualisiert!",
       "utilityModel": "Hilfsmodell",
+      "visionModel": "Vision-Modell",
       "workingDirectory": "Arbeitsverzeichnis"
     },
     "general": {

@@ -176,6 +176,8 @@
       "add": "添加智能体",
       "addPath": "添加路径",
       "addSuccess": "智能体添加成功！",
+      "allowShell": "允许执行 Shell",
+      "allowShellTip": "启用后，智能体可使用 bash 工具。具体命令仍受 Shell 审计规则和审批策略约束。",
       "approvalLevel": "审批级别",
       "approvalLevelDefault": "按智能体配置",
       "approvalLevelFull": "全开 (高风险)",
@@ -203,6 +205,8 @@
       "enableFailed": "启用智能体“{name}”失败：{error}",
       "enableSuccess": "智能体“{name}”已启用。",
       "fetchFailed": "获取智能体失败",
+      "imageRecognitionPrompt": "图片识别提示词",
+      "imageRecognitionPromptPlaceholder": "留空则使用默认图片分析提示词。若自定义，请描述你希望的识别重点和输出风格。",
       "finalAudit": "执行终审",
       "models": "模型配置",
       "modeProvider": "供应商",
@@ -250,6 +254,7 @@
       "toolsLabel": "工具",
       "updateSuccess": "智能体更新成功！",
       "utilityModel": "辅助模型",
+      "visionModel": "视觉模型",
       "workingDirectory": "工作目录"
     },
     "general": {

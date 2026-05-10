@@ -176,6 +176,8 @@
       "add": "新增智能體",
       "addPath": "新增路徑",
       "addSuccess": "智能體新增成功！",
+      "allowShell": "允許執行 Shell",
+      "allowShellTip": "啟用後，智能體可使用 bash 工具。具體命令仍受 Shell 審計規則和審批策略約束。",
       "approvalLevel": "審批級別",
       "approvalLevelDefault": "按智能體配置",
       "approvalLevelFull": "全開 (高風險)",
@@ -203,6 +205,8 @@
       "enableFailed": "啟用智能體「{name}」失敗：{error}",
       "enableSuccess": "智能體「{name}」已啟用。",
       "fetchFailed": "取得智能體失敗",
+      "imageRecognitionPrompt": "圖片辨識提示詞",
+      "imageRecognitionPromptPlaceholder": "留空時將使用預設圖片分析提示詞。若自訂，請描述你希望的辨識重點與輸出風格。",
       "finalAudit": "執行終審",
       "models": "模型",
       "modeProvider": "供應商",
@@ -250,6 +254,7 @@
       "toolsLabel": "工具",
       "updateSuccess": "智能體更新成功！",
       "utilityModel": "輔助模型",
+      "visionModel": "視覺模型",
       "workingDirectory": "工作目錄"
     },
     "general": {

@@ -9,6 +9,8 @@ pub enum RuntimeSignal {
     Stop,
     UserMessage {
         content: String,
+        attached_context: Option<String>,
+        metadata: Option<serde_json::Value>,
         queued_user_message_id: Option<String>,
     },
     Other {
@@ -34,6 +36,11 @@ pub fn parse_runtime_signal(raw: &str) -> RuntimeSignal {
     ) {
         return RuntimeSignal::UserMessage {
             content: parsed["content"].as_str().unwrap_or("").to_string(),
+            attached_context: parsed["attached_context"]
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| parsed["attachedContext"].as_str().map(|s| s.to_string())),
+            metadata: parsed.get("metadata").cloned(),
             queued_user_message_id: parsed["queued_user_message_id"]
                 .as_str()
                 .map(|s| s.to_string())
@@ -130,9 +137,26 @@ impl SignalType {
     }
 }
 
-fn stashed_user_messages() -> &'static dashmap::DashMap<String, VecDeque<(String, String)>> {
-    static STASHED: OnceLock<dashmap::DashMap<String, VecDeque<(String, String)>>> =
-        OnceLock::new();
+fn stashed_user_messages() -> &'static dashmap::DashMap<
+    String,
+    VecDeque<(
+        String,
+        String,
+        Option<String>,
+        Option<serde_json::Value>,
+    )>,
+> {
+    static STASHED: OnceLock<
+        dashmap::DashMap<
+            String,
+            VecDeque<(
+                String,
+                String,
+                Option<String>,
+                Option<serde_json::Value>,
+            )>,
+        >,
+    > = OnceLock::new();
     STASHED.get_or_init(dashmap::DashMap::new)
 }
 
@@ -142,11 +166,17 @@ fn stashed_runtime_signals() -> &'static dashmap::DashMap<String, VecDeque<Strin
 }
 
 /// Stores a user message that was observed in a temporary signal consumer (e.g. retry backoff).
-pub fn stash_user_message(session_id: &str, queued_id: String, content: String) {
+pub fn stash_user_message(
+    session_id: &str,
+    queued_id: String,
+    content: String,
+    attached_context: Option<String>,
+    metadata: Option<serde_json::Value>,
+) {
     let mut entry = stashed_user_messages()
         .entry(session_id.to_string())
         .or_default();
-    entry.push_back((queued_id, content));
+    entry.push_back((queued_id, content, attached_context, metadata));
 }
 
 /// Stores a runtime signal that must be handled by the workflow engine loop.
@@ -158,7 +188,9 @@ pub fn stash_runtime_signal(session_id: &str, signal: String) {
 }
 
 /// Drains all stashed user messages for a session in FIFO order.
-pub fn take_stashed_user_messages(session_id: &str) -> Vec<(String, String)> {
+pub fn take_stashed_user_messages(
+    session_id: &str,
+) -> Vec<(String, String, Option<String>, Option<serde_json::Value>)> {
     if let Some((_, mut queue)) = stashed_user_messages().remove(session_id) {
         let mut drained = Vec::new();
         while let Some(msg) = queue.pop_front() {

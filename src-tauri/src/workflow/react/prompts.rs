@@ -218,6 +218,18 @@ Available child agents:
 {{child_agents}}
 </CHILD_AGENT_DIRECTORY>"#;
 
+pub const DEFAULT_IMAGE_RECOGNITION_PROMPT: &str = r#"Analyze the provided image for software implementation work.
+
+Prioritize:
+- layout structure, regions, and hierarchy
+- all visible text and labels
+- components, controls, and interaction states
+- spacing, alignment, sizing, and grouping
+- colors, borders, shadows, and visual emphasis
+- responsive or repeated patterns when they are visible
+
+Output concise but implementation-oriented notes that help recreate the design accurately in HTML/CSS or application UI code. If something is unclear, call out the uncertainty explicitly instead of guessing."#;
+
 pub const CHILD_AGENT_COMPLETION_PROMPT: &str = r#"<CHILD_AGENT_COMPLETION>
 You are executing as a child agent.
 

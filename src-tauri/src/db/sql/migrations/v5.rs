@@ -171,6 +171,13 @@ fn ensure_agent_hierarchy_columns(conn: &Connection) -> Result<(), StoreError> {
         conn.execute("ALTER TABLE agents ADD COLUMN selected_skills TEXT", [])?;
     }
 
+    if !column_exists(conn, "agents", "image_recognition_prompt")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN image_recognition_prompt TEXT",
+            [],
+        )?;
+    }
+
     if !column_exists(conn, "agents", "is_system")? {
         conn.execute(
             "ALTER TABLE agents ADD COLUMN is_system BOOLEAN NOT NULL DEFAULT 0",

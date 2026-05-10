@@ -12,6 +12,52 @@ use crate::{
     db::{Agent, MainStore},
 };
 
+fn filter_tool_list_json(raw: Option<String>, blocked_tool: &str) -> Option<String> {
+    let tools = raw
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|tool| tool != blocked_tool)
+        .collect::<Vec<_>>();
+    Some(serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string()))
+}
+
+fn sanitize_agent_for_persistence(agent: &mut Agent) {
+    let available_tools = agent
+        .available_tools
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    let has_bash = available_tools
+        .iter()
+        .any(|tool| tool == crate::tools::TOOL_BASH);
+
+    if !has_bash {
+        agent.auto_approve =
+            filter_tool_list_json(agent.auto_approve.clone(), crate::tools::TOOL_BASH);
+    }
+
+    if agent.role.as_deref() != Some("child") {
+        return;
+    }
+
+    agent.planning_prompt = None;
+    agent.image_recognition_prompt = None;
+    agent.available_tools = filter_tool_list_json(agent.available_tools.clone(), crate::tools::TOOL_BASH);
+    agent.auto_approve = filter_tool_list_json(agent.auto_approve.clone(), crate::tools::TOOL_BASH);
+    agent.allowed_paths = Some("[]".to_string());
+    agent.shell_policy = Some("[]".to_string());
+    agent.skill_enabled = Some(false);
+    agent.selected_skills = Some("[]".to_string());
+
+    if let Some(models) = agent.models.as_mut() {
+        models.plan = None;
+        models.vision = None;
+        models.utility = None;
+    }
+}
+
 #[tauri::command]
 pub async fn add_agent(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
@@ -20,6 +66,8 @@ pub async fn add_agent(
 ) -> Result<String, String> {
     agent.id = tsid_generator.generate().map_err(|e| e.to_string())?;
     agent.is_system = Some(false);
+    agent.version = Some(agent.version.unwrap_or(0));
+    sanitize_agent_for_persistence(&mut agent);
     let store = state.read().map_err(|e| e.to_string())?;
     let id = store.add_agent(&agent).map_err(|e| e.to_string())?;
     Ok(id)
@@ -49,14 +97,18 @@ pub async fn update_agent(
             } else {
                 let mut updated = agent;
                 updated.is_system = Some(false);
+                updated.version = existing.version.or(Some(0));
                 updated.sort_index = existing.sort_index;
                 updated
             }
         } else {
             let mut updated = agent;
             updated.is_system = Some(false);
+            updated.version = Some(updated.version.unwrap_or(0));
             updated
         };
+    let mut effective_agent = effective_agent;
+    sanitize_agent_for_persistence(&mut effective_agent);
     store
         .update_agent(&effective_agent)
         .map_err(|e| e.to_string())?;
@@ -120,4 +172,9 @@ pub async fn get_available_tools(chat_state: State<'_, Arc<ChatState>>) -> Resul
 #[tauri::command]
 pub async fn get_default_shell_policy() -> Result<Value, String> {
     Ok(json!(load_default_shell_policy_from_resources()?))
+}
+
+#[tauri::command]
+pub async fn get_default_image_recognition_prompt() -> Result<String, String> {
+    Ok(crate::workflow::react::prompts::DEFAULT_IMAGE_RECOGNITION_PROMPT.to_string())
 }

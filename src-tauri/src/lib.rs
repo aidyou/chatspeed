@@ -149,6 +149,7 @@ pub async fn run() -> crate::error::Result<()> {
             update_agent_order,
             get_available_tools,
             get_default_shell_policy,
+            get_default_image_recognition_prompt,
 
             // settings
             get_all_config,

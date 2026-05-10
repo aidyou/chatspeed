@@ -61,6 +61,16 @@
     </div>
     <StatusNotifier />
     <div class="input">
+      <div v-if="attachments.length > 0" class="workflow-attachments">
+        <div v-for="attachment in attachments" :key="attachment.id" class="workflow-attachment-item">
+          <img :src="attachment.url" :alt="attachment.name" class="workflow-attachment-preview" />
+          <span class="workflow-attachment-name">{{ attachment.name }}</span>
+          <cs
+            name="close"
+            class="workflow-attachment-remove"
+            @click="$emit('remove-attachment', attachment.id)" />
+        </div>
+      </div>
       <el-input
         ref="inputRef"
         v-model="inputMessage"
@@ -69,7 +79,8 @@
         :placeholder="$t('chat.inputMessagePlaceholder', { at: '/' })"
         @keydown="onInputKeyDown"
         @compositionstart="onCompositionStart"
-        @compositionend="onCompositionEnd" />
+        @compositionend="onCompositionEnd"
+        @paste="handlePaste" />
 
       <div class="input-footer">
         <div class="footer-left">
@@ -90,6 +101,17 @@
           </div>
 
           <div class="icons">
+            <el-tooltip
+              v-if="canAttachImages"
+              placement="top"
+              :content="$t('chat.addAttachment')"
+              :hide-after="0"
+              :enterable="false">
+              <label class="icon-btn upperLayer" @click="$emit('open-image-dialog')">
+                <cs name="attachment" class="small" />
+              </label>
+            </el-tooltip>
+
             <el-tooltip
               v-if="showPlanningModeToggle"
               placement="top"
@@ -397,6 +419,14 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  attachments: {
+    type: Array,
+    default: () => []
+  },
+  canAttachImages: {
+    type: Boolean,
+    default: false
+  },
   showSkillSuggestions: {
     type: Boolean,
     default: false
@@ -437,6 +467,10 @@ const props = defineProps({
     type: Function,
     required: true
   },
+  onPasteInput: {
+    type: Function,
+    default: null
+  },
   onSkillSelect: {
     type: Function,
     required: true
@@ -459,7 +493,9 @@ defineEmits([
   'update-selected-agent',
   'create-new-workflow',
   'open-model-selector',
-  'open-skills-selector'
+  'open-skills-selector',
+  'open-image-dialog',
+  'remove-attachment'
 ])
 
 import { useWorkflowStore } from '@/stores/workflow'
@@ -509,13 +545,66 @@ const inputRef = ref(null)
 const inputMessage = defineModel('inputMessage', { type: String, default: '' })
 
 const canSendMessage = computed(
-  () => inputMessage.value.trim() !== '' && props.selectedAgent && !isStopping.value
+  () =>
+    (inputMessage.value.trim() !== '' || props.attachments.length > 0) &&
+    props.selectedAgent &&
+    !isStopping.value
 )
 
 const canEditAgent = computed(() => props.canEditAgent)
+
+const handlePaste = event => {
+  if (!props.canAttachImages || typeof props.onPasteInput !== 'function') {
+    return
+  }
+  props.onPasteInput(event)
+}
 
 defineExpose({
   inputRef,
   focus: () => inputRef.value?.focus()
 })
 </script>
+
+<style scoped lang="scss">
+.workflow-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.workflow-attachment-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--cs-border-color);
+  border-radius: 10px;
+  background: var(--cs-bg-elevated, var(--cs-bg-color));
+}
+
+.workflow-attachment-preview {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.workflow-attachment-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--cs-font-size-sm);
+}
+
+.workflow-attachment-remove {
+  cursor: pointer;
+  flex-shrink: 0;
+  color: var(--cs-text-secondary);
+}
+</style>

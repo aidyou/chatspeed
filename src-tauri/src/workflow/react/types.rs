@@ -209,6 +209,10 @@ pub enum WorkflowSignal {
     /// User provides text input (for AwaitingUser state)
     UserMessage {
         content: String,
+        #[serde(default)]
+        attached_context: Option<String>,
+        #[serde(default)]
+        metadata: Option<serde_json::Value>,
         #[serde(default, alias = "queuedUserMessageId")]
         queued_user_message_id: Option<String>,
     },
@@ -613,6 +617,8 @@ mod tests {
         // UserMessage is only valid for UserInput waiting
         let user_msg = WorkflowSignal::UserMessage {
             content: "test".to_string(),
+            attached_context: None,
+            metadata: None,
             queued_user_message_id: None,
         };
         assert!(user_msg.is_valid_for(Some(&WaitReason::UserInput)));

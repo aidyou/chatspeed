@@ -2,6 +2,9 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invokeWrapper } from '@/libs/tauri'
 import { useSettingStore } from '@/stores/setting'
+import { getFileExtension } from '@/libs/fs'
+
+const IMAGE_FILE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'])
 
 /**
  * Composable for managing input handling
@@ -11,7 +14,8 @@ export function useWorkflowInput({
     inputRef,
     onSendMessage: onSendMessageCallback,
     currentPaths,
-    systemSkills = ref([])
+    systemSkills = ref([]),
+    onImageFileSelect = null
 }) {
     const { t } = useI18n()
     const settingStore = useSettingStore()
@@ -163,11 +167,46 @@ export function useWorkflowInput({
         }
     }
 
-    const onFileSelect = (file) => {
+    const onFileSelect = async (file) => {
         ignoreNextSearch.value = true
         const cursorPosition = inputRef.value?.$el.querySelector('textarea').selectionStart || 0
         const textBeforeCursor = inputMessage.value.slice(0, cursorPosition)
         const textAfterCursor = inputMessage.value.slice(cursorPosition)
+        const isImageFile =
+            !file.is_directory && IMAGE_FILE_EXTENSIONS.has(getFileExtension(file.path || file.relative_path || ''))
+
+        if (isImageFile && typeof onImageFileSelect === 'function') {
+            const handled = await onImageFileSelect(file)
+            if (handled === true || handled === 'handled') {
+                const newTextBefore = textBeforeCursor.replace(/@([^\s]*)$/, '')
+                inputMessage.value = newTextBefore + textAfterCursor
+                showFileSuggestions.value = false
+                selectedFileIndex.value = 0
+
+                nextTick(() => {
+                    if (inputRef.value) {
+                        inputRef.value.focus()
+                        const newPos = newTextBefore.length
+                        const textarea = inputRef.value?.$el.querySelector('textarea')
+                        if (textarea) {
+                            textarea.setSelectionRange(newPos, newPos)
+                        }
+                    }
+                    setTimeout(() => {
+                        ignoreNextSearch.value = false
+                    }, 100)
+                })
+                return
+            }
+            if (handled === 'blocked') {
+                showFileSuggestions.value = false
+                selectedFileIndex.value = 0
+                setTimeout(() => {
+                    ignoreNextSearch.value = false
+                }, 100)
+                return
+            }
+        }
 
         // Smart path display: primary directory uses relative path, others use absolute path
         let displayPath: string

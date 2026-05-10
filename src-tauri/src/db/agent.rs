@@ -99,6 +99,7 @@ pub struct ModelConfig {
 pub struct AgentModels {
     pub plan: Option<ModelConfig>,
     pub act: Option<ModelConfig>,
+    pub vision: Option<ModelConfig>,
     pub utility: Option<ModelConfig>,
 }
 
@@ -119,6 +120,8 @@ pub struct Agent {
     pub system_prompt: String,
     /// Prompt for the planning phase
     pub planning_prompt: Option<String>,
+    /// Prompt for image recognition preprocessing
+    pub image_recognition_prompt: Option<String>,
     /// JSON array of available tool IDs
     pub available_tools: Option<String>,
     /// JSON array of tools that can be executed without user confirmation
@@ -166,6 +169,7 @@ impl Agent {
         parent_agent_id: Option<String>,
         system_prompt: String,
         planning_prompt: Option<String>,
+        image_recognition_prompt: Option<String>,
         available_tools: Option<String>,
         auto_approve: Option<String>,
         models: Option<AgentModels>,
@@ -188,6 +192,7 @@ impl Agent {
             parent_agent_id,
             system_prompt,
             planning_prompt,
+            image_recognition_prompt,
             available_tools,
             auto_approve,
             models,
@@ -220,6 +225,9 @@ impl Agent {
                 }
                 if config_models.act.is_some() {
                     merged_models.act = config_models.act;
+                }
+                if config_models.vision.is_some() {
+                    merged_models.vision = config_models.vision;
                 }
                 if config_models.utility.is_some() {
                     merged_models.utility = config_models.utility;
@@ -295,6 +303,7 @@ impl From<&Row<'_>> for Agent {
             parent_agent_id: row.get("parent_agent_id").ok(),
             system_prompt: row.get("system_prompt").unwrap_or_default(),
             planning_prompt: row.get("planning_prompt").ok(),
+            image_recognition_prompt: row.get("image_recognition_prompt").ok(),
             available_tools: row.get("available_tools").ok(),
             auto_approve: row.get("auto_approve").ok(),
             models: row
@@ -361,8 +370,8 @@ impl MainStore {
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, phase, is_system, disabled, version, sort_index, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, phase, is_system, disabled, version, sort_index, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
             params![
                 agent.id,
                 agent.name,
@@ -371,6 +380,7 @@ impl MainStore {
                 agent.parent_agent_id,
                 agent.system_prompt,
                 agent.planning_prompt,
+                agent.image_recognition_prompt,
                 available_tools_json,
                 auto_approve_json,
                 models_json,
@@ -383,7 +393,7 @@ impl MainStore {
                 agent.phase,
                 agent.is_system,
                 agent.disabled,
-                agent.version,
+                agent.version.unwrap_or(0),
                 agent.sort_index.unwrap_or(new_sort_index + 1),
                 agent.max_contexts,
             ],
@@ -451,23 +461,24 @@ impl MainStore {
                 parent_agent_id = ?4,
                 system_prompt = ?5,
                 planning_prompt = ?6,
-                available_tools = ?7,
-                auto_approve = ?8,
-                models = ?9,
-                shell_policy = ?10,
-                allowed_paths = ?11,
-                final_audit = ?12,
-                approval_level = ?13,
-                skill_enabled = ?14,
-                selected_skills = ?15,
-                phase = ?16,
-                is_system = ?17,
-                disabled = ?18,
-                version = ?19,
-                sort_index = ?20,
-                max_contexts = ?21,
+                image_recognition_prompt = ?7,
+                available_tools = ?8,
+                auto_approve = ?9,
+                models = ?10,
+                shell_policy = ?11,
+                allowed_paths = ?12,
+                final_audit = ?13,
+                approval_level = ?14,
+                skill_enabled = ?15,
+                selected_skills = ?16,
+                phase = ?17,
+                is_system = ?18,
+                disabled = ?19,
+                version = ?20,
+                sort_index = ?21,
+                max_contexts = ?22,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?22",
+             WHERE id = ?23",
             params![
                 effective_name,
                 agent.description,
@@ -475,6 +486,7 @@ impl MainStore {
                 agent.parent_agent_id,
                 agent.system_prompt,
                 agent.planning_prompt,
+                agent.image_recognition_prompt,
                 available_tools_json,
                 auto_approve_json,
                 models_json,
@@ -487,7 +499,7 @@ impl MainStore {
                 agent.phase,
                 agent.is_system,
                 agent.disabled,
-                agent.version,
+                agent.version.unwrap_or(0),
                 agent.sort_index.or(persisted_sort_index),
                 agent.max_contexts,
                 agent.id,
@@ -507,11 +519,94 @@ impl MainStore {
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         let tx = conn.transaction()?;
 
-        // Delete the agent
-        tx.execute(
-            "DELETE FROM agents WHERE id = ?1 OR parent_agent_id = ?1",
-            params![id],
-        )?;
+        let agent_ids = {
+            let mut stmt = tx.prepare(
+                "WITH RECURSIVE agent_tree(id, depth) AS (
+                    SELECT id, 0 FROM agents WHERE id = ?1
+                    UNION ALL
+                    SELECT agents.id, agent_tree.depth + 1
+                    FROM agents
+                    JOIN agent_tree ON agents.parent_agent_id = agent_tree.id
+                )
+                SELECT id FROM agent_tree ORDER BY depth DESC",
+            )?;
+            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
+            let mut ids = Vec::new();
+            for row in rows {
+                ids.push(row?);
+            }
+            ids
+        };
+
+        if agent_ids.is_empty() {
+            tx.commit()?;
+            return Ok(());
+        }
+
+        let workflow_ids = {
+            let mut stmt = tx.prepare(
+                "WITH RECURSIVE agent_tree(id) AS (
+                    SELECT id FROM agents WHERE id = ?1
+                    UNION ALL
+                    SELECT agents.id
+                    FROM agents
+                    JOIN agent_tree ON agents.parent_agent_id = agent_tree.id
+                ),
+                workflow_tree(id, depth) AS (
+                    SELECT id, 0
+                    FROM workflows
+                    WHERE agent_id IN (SELECT id FROM agent_tree)
+                    UNION ALL
+                    SELECT workflows.id, workflow_tree.depth + 1
+                    FROM workflows
+                    JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+                )
+                SELECT id
+                FROM workflow_tree
+                GROUP BY id
+                ORDER BY MAX(depth) DESC",
+            )?;
+            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
+            let mut ids = Vec::new();
+            for row in rows {
+                ids.push(row?);
+            }
+            ids
+        };
+
+        for workflow_id in &workflow_ids {
+            tx.execute(
+                "DELETE FROM workflow_context_messages WHERE session_id = ?1",
+                params![workflow_id],
+            )?;
+            tx.execute(
+                "DELETE FROM workflow_messages WHERE session_id = ?1",
+                params![workflow_id],
+            )?;
+            tx.execute(
+                "DELETE FROM workflow_snapshots WHERE session_id = ?1",
+                params![workflow_id],
+            )?;
+            if let Err(e) = tx.execute(
+                "DELETE FROM workflow_events WHERE session_id = ?1",
+                params![workflow_id],
+            ) {
+                log::error!(
+                    "[Agent][id={}] Failed to delete workflow events for session {} (non-fatal, continuing): {}",
+                    id,
+                    workflow_id,
+                    e
+                );
+            }
+        }
+
+        for workflow_id in &workflow_ids {
+            tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+        }
+
+        for agent_id in &agent_ids {
+            tx.execute("DELETE FROM agents WHERE id = ?1", params![agent_id])?;
+        }
 
         tx.commit()?;
 
@@ -588,5 +683,125 @@ impl MainStore {
             )?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn create_test_store() -> MainStore {
+        let dir = tempdir().expect("failed to create temp dir");
+        let db_path = dir.path().join("agent_test.db");
+        MainStore::new(db_path).expect("failed to create MainStore")
+    }
+
+    fn make_agent(id: &str, name: &str, parent_agent_id: Option<&str>) -> Agent {
+        Agent {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: Some(format!("Description for {}", name)),
+            role: Some(if parent_agent_id.is_some() {
+                "child".to_string()
+            } else {
+                "primary".to_string()
+            }),
+            parent_agent_id: parent_agent_id.map(ToString::to_string),
+            system_prompt: format!("System prompt for {}", name),
+            planning_prompt: None,
+            image_recognition_prompt: None,
+            available_tools: Some("[]".to_string()),
+            auto_approve: Some("[]".to_string()),
+            models: None,
+            shell_policy: Some("[]".to_string()),
+            allowed_paths: Some("[]".to_string()),
+            final_audit: Some(false),
+            approval_level: Some("default".to_string()),
+            skill_enabled: Some(true),
+            selected_skills: None,
+            phase: Some("standard".to_string()),
+            is_system: Some(false),
+            disabled: Some(false),
+            version: None,
+            sort_index: None,
+            max_contexts: Some(128000),
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn test_add_agent_defaults_version_to_zero() {
+        let store = create_test_store();
+        let agent = make_agent("agent-primary", "Primary Agent", None);
+
+        store
+            .add_agent(&agent)
+            .expect("failed to add custom agent without explicit version");
+
+        let stored = store
+            .get_agent("agent-primary")
+            .expect("failed to load saved agent")
+            .expect("saved agent should exist");
+        assert_eq!(
+            stored.version,
+            Some(0),
+            "custom agents should persist with version 0 when UI omits it"
+        );
+    }
+
+    #[test]
+    fn test_delete_agent_removes_descendant_workflows_before_agents() {
+        let store = create_test_store();
+
+        store
+            .add_agent(&make_agent("agent-primary", "Primary Agent", None))
+            .expect("failed to add primary agent");
+        store
+            .add_agent(&make_agent("agent-child", "Child Agent", Some("agent-primary")))
+            .expect("failed to add child agent");
+
+        store
+            .create_workflow("workflow-parent", "Parent query", "agent-primary", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "workflow-child",
+                "Child query",
+                "agent-child",
+                None,
+                Some("workflow-parent"),
+            )
+            .expect("failed to create child workflow");
+
+        store
+            .delete_agent("agent-primary")
+            .expect("failed to delete agent tree");
+
+        let conn = store
+            .conn
+            .lock()
+            .expect("failed to lock db connection for delete assertion");
+        let remaining_agents: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM agents WHERE id IN ('agent-primary', 'agent-child')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to count remaining agents");
+        let remaining_workflows: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM workflows WHERE id IN ('workflow-parent', 'workflow-child')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to count remaining workflows");
+
+        assert_eq!(remaining_agents, 0, "agent tree should be deleted");
+        assert_eq!(
+            remaining_workflows, 0,
+            "workflows bound to the deleted agents should be removed first"
+        );
     }
 }

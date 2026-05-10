@@ -176,6 +176,8 @@
       "add": "Add Agent",
       "addPath": "Add Path",
       "addSuccess": "Agent added successfully!",
+      "allowShell": "Allow Shell Execution",
+      "allowShellTip": "When enabled, the agent can use the bash tool. Specific commands are still governed by shell audit rules and approval policy.",
       "approvalLevel": "Approval Level",
       "approvalLevelDefault": "Follow Agent Configuration",
       "approvalLevelFull": "Full Open (High Risk)",
@@ -203,6 +205,8 @@
       "enableFailed": "Failed to enable agent \"{name}\": {error}",
       "enableSuccess": "Agent \"{name}\" has been enabled.",
       "fetchFailed": "Failed to fetch agent",
+      "imageRecognitionPrompt": "Image Recognition Prompt",
+      "imageRecognitionPromptPlaceholder": "Leave blank to use the default image analysis prompt. If customizing, describe the recognition focus and output style you want.",
       "finalAudit": "Final Audit",
       "models": "Model Configuration",
       "modeProvider": "Provider",
@@ -250,6 +254,7 @@
       "toolsLabel": "Tools",
       "updateSuccess": "Agent updated successfully!",
       "utilityModel": "Utility Model",
+      "visionModel": "Vision Model",
       "workingDirectory": "Working Directory"
     },
     "general": {

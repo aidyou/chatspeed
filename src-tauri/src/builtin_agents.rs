@@ -56,6 +56,8 @@ struct BuiltinAgentPrompts {
     system: String,
     #[serde(default)]
     planning: Option<String>,
+    #[serde(default)]
+    image_recognition: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -96,6 +98,7 @@ struct BuiltinAgentDefinition {
     manifest: BuiltinAgentManifest,
     system_prompt: String,
     planning_prompt: Option<String>,
+    image_recognition_prompt: Option<String>,
 }
 
 fn builtin_agent_db_id(builtin_id: &str) -> String {
@@ -174,11 +177,18 @@ fn load_builtin_agent_definition(agent_dir: &Path) -> Result<BuiltinAgentDefinit
         .as_deref()
         .map(|path| read_prompt_file(agent_dir, path))
         .transpose()?;
+    let image_recognition_prompt = manifest
+        .prompts
+        .image_recognition
+        .as_deref()
+        .map(|path| read_prompt_file(agent_dir, path))
+        .transpose()?;
 
     Ok(BuiltinAgentDefinition {
         manifest,
         system_prompt,
         planning_prompt,
+        image_recognition_prompt,
     })
 }
 
@@ -263,6 +273,7 @@ fn definition_to_agent(
             .map(builtin_agent_db_id),
         system_prompt: definition.system_prompt.clone(),
         planning_prompt: definition.planning_prompt.clone(),
+        image_recognition_prompt: definition.image_recognition_prompt.clone(),
         available_tools: serialize_json(&manifest.config.available_tools),
         auto_approve: serialize_json(&manifest.config.auto_approve),
         models: manifest.config.models.clone(),
@@ -320,6 +331,7 @@ fn sync_single_builtin_agent(
             updated.parent_agent_id = desired.parent_agent_id;
             updated.system_prompt = desired.system_prompt;
             updated.planning_prompt = desired.planning_prompt;
+            updated.image_recognition_prompt = desired.image_recognition_prompt;
             updated.is_system = Some(true);
             updated.version = Some(definition.manifest.builtin_version);
             store.update_agent(&updated).map_err(|e| e.to_string())?;

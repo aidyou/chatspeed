@@ -820,6 +820,7 @@ fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
         for model in [
             &mut validated_models.plan,
             &mut validated_models.act,
+            &mut validated_models.vision,
             &mut validated_models.utility,
         ] {
             if let Some(m) = model {
@@ -887,6 +888,10 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
             }
             if existing_models.act.is_none() && default_models.act.is_some() {
                 existing_models.act = default_models.act.clone();
+                models_changed = true;
+            }
+            if existing_models.vision.is_none() && default_models.vision.is_some() {
+                existing_models.vision = default_models.vision.clone();
                 models_changed = true;
             }
             if existing_models.utility.is_none() && default_models.utility.is_some() {
@@ -1451,6 +1456,7 @@ async fn append_initial_prompt_to_executor(
     raw_prompt: &str,
     clean_prompt: &str,
     attached_context: &str,
+    message_metadata: Option<Value>,
     related_task_summary: Option<&str>,
     begin_new_segment: bool,
 ) -> Result<(), crate::workflow::react::error::WorkflowEngineError> {
@@ -1514,7 +1520,7 @@ async fn append_initial_prompt_to_executor(
                 None,
                 false,
                 None,
-                None,
+                message_metadata,
             )
             .await?;
     } else {
@@ -1529,6 +1535,7 @@ async fn try_resume_completed_live_session(
     raw_prompt: &str,
     clean_prompt: &str,
     attached_context: &str,
+    message_metadata: Option<Value>,
     related_task_summary: Option<&str>,
     gateway: &Arc<TauriGateway>,
     workflow_manager: &Arc<WorkflowManager>,
@@ -1575,6 +1582,7 @@ async fn try_resume_completed_live_session(
             raw_prompt,
             clean_prompt,
             attached_context,
+            message_metadata,
             related_task_summary,
             true,
         )
@@ -1920,6 +1928,38 @@ fn signal_json_content(signal: &str) -> Option<String> {
         .and_then(|value| value["content"].as_str().map(|content| content.to_string()))
 }
 
+fn signal_json_attached_context(signal: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(signal)
+        .ok()
+        .and_then(|value| {
+            value["attached_context"]
+                .as_str()
+                .map(|content| content.to_string())
+                .or_else(|| {
+                    value["attachedContext"]
+                        .as_str()
+                        .map(|content| content.to_string())
+                })
+        })
+}
+
+fn signal_json_metadata(signal: &str) -> Option<Value> {
+    serde_json::from_str::<serde_json::Value>(signal)
+        .ok()
+        .and_then(|value| value.get("metadata").cloned())
+}
+
+fn combine_attached_context(base: String, extra: Option<String>) -> String {
+    let extra = extra.unwrap_or_default();
+    if base.is_empty() {
+        return extra;
+    }
+    if extra.is_empty() {
+        return base;
+    }
+    format!("{}\n\n{}", base, extra)
+}
+
 #[tauri::command]
 pub async fn workflow_start(
     app: tauri::AppHandle,
@@ -1932,6 +1972,8 @@ pub async fn workflow_start(
     session_id: String,
     agent_id: String,
     initial_prompt: Option<String>,
+    initial_metadata: Option<Value>,
+    initial_attached_context: Option<String>,
     planning_mode: Option<bool>,
 ) -> Result<String, String> {
     log::info!(
@@ -1954,6 +1996,7 @@ pub async fn workflow_start(
         raw_prompt,
         clean_prompt,
         attached_context,
+        initial_message_metadata,
         allowed_paths,
         workflow_status,
         existing_messages,
@@ -1992,7 +2035,15 @@ pub async fn workflow_start(
             (prompt.clone(), String::new())
         };
 
-        (prompt, p, att, paths, wf.status.clone(), snapshot.messages)
+        (
+            prompt,
+            p,
+            combine_attached_context(att, initial_attached_context.clone()),
+            initial_metadata.clone(),
+            paths,
+            wf.status.clone(),
+            snapshot.messages,
+        )
     };
 
     let mut agent_config = {
@@ -2062,6 +2113,7 @@ pub async fn workflow_start(
             &raw_prompt,
             &clean_prompt,
             &attached_context,
+            initial_message_metadata.clone(),
             related_task_summary.as_deref(),
             &gateway_arc,
             &workflow_manager_arc,
@@ -2221,6 +2273,7 @@ pub async fn workflow_start(
                 &raw_prompt,
                 &clean_prompt,
                 &attached_context,
+                initial_message_metadata.clone(),
                 related_task_summary.as_deref(),
                 is_terminal_workflow,
             )
@@ -2801,6 +2854,8 @@ pub async fn workflow_signal(
                 session_id.clone(),
                 workflow_snapshot.workflow.agent_id.clone(),
                 signal_json_content(&signal),
+                signal_json_metadata(&signal),
+                signal_json_attached_context(&signal),
                 None,
             )
             .await?;
@@ -2983,6 +3038,8 @@ pub async fn workflow_signal(
                     } else {
                         val["content"].as_str().map(|content| content.to_string())
                     },
+                    signal_json_metadata(&signal),
+                    signal_json_attached_context(&signal),
                     None,
                 )
                 .await?;
@@ -3063,6 +3120,8 @@ pub async fn workflow_signal(
                     workflow_snapshot.workflow.agent_id.clone(),
                     None,
                     None,
+                    None,
+                    None,
                 )
                 .await?;
 
@@ -3108,6 +3167,8 @@ pub async fn workflow_signal(
                     workflow_manager,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
+                    None,
+                    None,
                     None,
                     None,
                 )
@@ -3184,6 +3245,8 @@ pub async fn workflow_signal(
                     workflow_snapshot.workflow.agent_id.clone(),
                     None,
                     None,
+                    None,
+                    None,
                 )
                 .await?;
 
@@ -3240,6 +3303,8 @@ pub async fn workflow_signal(
                     workflow_manager,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
+                    None,
+                    None,
                     None,
                     None,
                 )

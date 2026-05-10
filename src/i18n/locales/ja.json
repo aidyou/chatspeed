@@ -176,6 +176,8 @@
       "add": "エージェントを追加",
       "addPath": "パスを追加",
       "addSuccess": "エージェントが正常に追加されました！",
+      "allowShell": "Shell 実行を許可",
+      "allowShellTip": "有効にすると、このエージェントは bash ツールを使用できます。個々のコマンドは引き続き Shell 監査ルールと承認ポリシーの対象です。",
       "approvalLevel": "承認レベル",
       "approvalLevelDefault": "エージェント設定に従う",
       "approvalLevelFull": "フルオープン（高リスク）",
@@ -203,6 +205,8 @@
       "enableFailed": "エージェント「{name}」を有効化できませんでした：{error}",
       "enableSuccess": "エージェント「{name}」を有効化しました。",
       "fetchFailed": "エージェントの取得に失敗しました",
+      "imageRecognitionPrompt": "画像認識プロンプト",
+      "imageRecognitionPromptPlaceholder": "空欄の場合は既定の画像分析プロンプトを使用します。カスタマイズする場合は、認識の重点と出力形式を指定してください。",
       "finalAudit": "最終監査",
       "models": "モデル",
       "modeProvider": "プロバイダー",
@@ -250,6 +254,7 @@
       "toolsLabel": "ツール",
       "updateSuccess": "エージェントが正常に更新されました！",
       "utilityModel": "補助モデル",
+      "visionModel": "ビジョンモデル",
       "workingDirectory": "作業ディレクトリ"
     },
     "general": {

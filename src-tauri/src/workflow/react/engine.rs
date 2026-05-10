@@ -139,7 +139,8 @@ pub struct WorkflowExecutor {
     /// Optional dispatcher for event distribution (Phase 6)
     pub dispatcher: Option<Arc<Dispatcher>>,
     /// Buffered user messages received during non-waiting execution stages.
-    pub queued_user_messages: VecDeque<(String, String)>,
+    pub queued_user_messages:
+        VecDeque<(String, String, Option<String>, Option<serde_json::Value>)>,
     /// Phase 7: ID of sub-agent this session is waiting for (Call model)
     pub sub_agent_id: Option<String>,
     /// Phase 7: All sub-agent session IDs created by this parent session.
@@ -2382,6 +2383,8 @@ impl WorkflowExecutor {
                     if matches!(wait_reason_enum, Some(WaitReason::Approval)) {
                         if let RuntimeSignal::UserMessage {
                             content,
+                            attached_context,
+                            metadata,
                             queued_user_message_id,
                         } = parse_runtime_signal(&signal_str)
                         {
@@ -2389,7 +2392,12 @@ impl WorkflowExecutor {
                             "[Workflow][session={}][phase=wait][event=user_message_queued] Queueing user message while awaiting approval",
                             self.session_id
                         );
-                            self.enqueue_user_message(content, queued_user_message_id)
+                            self.enqueue_user_message(
+                                content,
+                                attached_context,
+                                metadata,
+                                queued_user_message_id,
+                            )
                                 .await?;
                             continue;
                         }
@@ -6077,13 +6085,20 @@ impl WorkflowExecutor {
                 }
                 RuntimeSignal::UserMessage {
                     content,
+                    attached_context,
+                    metadata,
                     queued_user_message_id,
                 } => {
                     log::info!(
                         "[Workflow][session={}][phase=signal] Queueing user message during active execution",
                         self.session_id
                     );
-                    self.enqueue_user_message(content, queued_user_message_id)
+                    self.enqueue_user_message(
+                        content,
+                        attached_context,
+                        metadata,
+                        queued_user_message_id,
+                    )
                         .await?;
                 }
                 RuntimeSignal::Other {
@@ -6179,8 +6194,11 @@ impl WorkflowExecutor {
         }
 
         // Also drain user messages stashed by temporary signal consumers (e.g. LLM retry backoff).
-        for (queued_id, content) in take_stashed_user_messages(&self.session_id) {
-            self.queued_user_messages.push_back((queued_id, content));
+        for (queued_id, content, attached_context, metadata) in
+            take_stashed_user_messages(&self.session_id)
+        {
+            self.queued_user_messages
+                .push_back((queued_id, content, attached_context, metadata));
         }
 
         Ok(false)
@@ -6246,6 +6264,8 @@ impl WorkflowExecutor {
     async fn enqueue_user_message(
         &mut self,
         content: String,
+        attached_context: Option<String>,
+        metadata: Option<serde_json::Value>,
         queued_user_message_id: Option<String>,
     ) -> Result<(), WorkflowEngineError> {
         let queued_id = queued_user_message_id.unwrap_or_else(|| {
@@ -6254,8 +6274,19 @@ impl WorkflowExecutor {
                 .unwrap_or_else(|_| format!("queued_{}", crate::ccproxy::get_tool_id()))
         });
 
-        self.queued_user_messages
-            .push_back((queued_id.clone(), content.clone()));
+        self.queued_user_messages.push_back((
+            queued_id.clone(),
+            content.clone(),
+            attached_context,
+            metadata.clone(),
+        ));
+
+        let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
+        if !ui_metadata.is_object() {
+            ui_metadata = serde_json::json!({});
+        }
+        ui_metadata["queued_user_message_id"] = serde_json::json!(queued_id);
+        ui_metadata["queue_status"] = serde_json::json!("queued");
 
         // Immediate frontend ack: show user message instantly with queued status.
         self.dispatch_ui_payload(GatewayPayload::Message {
@@ -6266,10 +6297,7 @@ impl WorkflowExecutor {
             step_index: self.current_step as i32,
             is_error: false,
             error_type: None,
-            metadata: Some(serde_json::json!({
-                "queued_user_message_id": queued_id,
-                "queue_status": "queued"
-            })),
+            metadata: Some(ui_metadata),
         })
         .await?;
 
@@ -6282,7 +6310,7 @@ impl WorkflowExecutor {
     ) -> Result<bool, WorkflowEngineError> {
         let before = self.queued_user_messages.len();
         self.queued_user_messages
-            .retain(|(queued_id, _)| queued_id != queued_user_message_id);
+            .retain(|(queued_id, _, _, _)| queued_id != queued_user_message_id);
         let removed = self.queued_user_messages.len() != before;
 
         if removed {
@@ -6317,19 +6345,25 @@ impl WorkflowExecutor {
         }
 
         let mut applied = false;
-        while let Some((queued_id, user_content)) = self.queued_user_messages.pop_front() {
+        while let Some((queued_id, user_content, attached_context, metadata)) =
+            self.queued_user_messages.pop_front()
+        {
+            let mut persisted_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
+            if !persisted_metadata.is_object() {
+                persisted_metadata = serde_json::json!({});
+            }
+            persisted_metadata["queued_user_message_id"] = serde_json::json!(queued_id);
+            persisted_metadata["queue_status"] = serde_json::json!("applied");
+
             self.add_message_and_notify_internal(
                 "user".to_string(),
                 user_content.clone(),
-                None,
+                attached_context,
                 None,
                 None,
                 false,
                 None,
-                Some(serde_json::json!({
-                    "queued_user_message_id": queued_id,
-                    "queue_status": "applied"
-                })),
+                Some(persisted_metadata),
             )
             .await?;
             let event = WorkflowEvent::user_input_received(self.session_id.clone(), user_content);

@@ -176,6 +176,8 @@
       "add": "Ajouter un agent",
       "addPath": "Ajouter un chemin",
       "addSuccess": "Agent ajouté avec succès !",
+      "allowShell": "Autoriser l'exécution du Shell",
+      "allowShellTip": "Lorsque cette option est activée, l'agent peut utiliser l'outil bash. Les commandes spécifiques restent soumises aux règles d'audit Shell et à la politique d'approbation.",
       "approvalLevel": "Niveau d'approbation",
       "approvalLevelDefault": "Suivre la configuration de l'agent",
       "approvalLevelFull": "Ouverture complète (risque élevé)",
@@ -203,6 +205,8 @@
       "enableFailed": "Échec de l’activation de l’agent « {name} » : {error}",
       "enableSuccess": "L’agent « {name} » a été activé.",
       "fetchFailed": "Échec de la récupération de l'agent",
+      "imageRecognitionPrompt": "Prompt de reconnaissance d'image",
+      "imageRecognitionPromptPlaceholder": "Laissez vide pour utiliser le prompt d'analyse d'image par défaut. Si vous le personnalisez, décrivez le focus de reconnaissance et le style de sortie attendus.",
       "finalAudit": "Audit final",
       "models": "Modèles",
       "modeProvider": "Fournisseur",
@@ -250,6 +254,7 @@
       "toolsLabel": "Outils",
       "updateSuccess": "Agent mis à jour avec succès !",
       "utilityModel": "Modèle utilitaire",
+      "visionModel": "Modèle de vision",
       "workingDirectory": "Répertoire de travail"
     },
     "general": {

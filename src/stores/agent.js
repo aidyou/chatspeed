@@ -17,6 +17,7 @@ import { sendSyncState } from '@/libs/sync';
  * @property {string[] | null} selectedSkills - Explicitly enabled skill names.
  * @property {Object} planModel - The model used for planning.
  * @property {Object} actModel - The model used for acting.
+ * @property {Object} visionModel - The model used for image recognition.
  * @property {Object} utilityModel - The model used for workflow utility tasks.
  * @property {Object} codingModel - The model used for coding tasks.
  * @property {Object} copywritingModel - The model used for writing tasks.
@@ -50,6 +51,7 @@ const _transformFromBackend = (backendAgent) => {
   let models = {
     plan: { ...defaultModel },
     act: { ...defaultModel },
+    vision: { ...defaultModel },
     utility: { ...defaultModel }
   };
 
@@ -60,6 +62,9 @@ const _transformFromBackend = (backendAgent) => {
     }
     if (backendAgent.models.act) {
       models.act = { ...defaultModel, ...backendAgent.models.act };
+    }
+    if (backendAgent.models.vision) {
+      models.vision = { ...defaultModel, ...backendAgent.models.vision };
     }
     if (backendAgent.models.utility) {
       models.utility = { ...defaultModel, ...backendAgent.models.utility };
@@ -74,6 +79,7 @@ const _transformFromBackend = (backendAgent) => {
     parentAgentId: backendAgent.parent_agent_id || null,
     systemPrompt: backendAgent.system_prompt,
     planningPrompt: backendAgent.planning_prompt,
+    imageRecognitionPrompt: backendAgent.image_recognition_prompt || '',
 
     // These are JSON strings, need to parse
     availableTools: backendAgent.available_tools ? JSON.parse(backendAgent.available_tools) : [],
@@ -82,6 +88,7 @@ const _transformFromBackend = (backendAgent) => {
     // Models are already objects
     planModel: models.plan,
     actModel: models.act,
+    visionModel: models.vision,
     utilityModel: models.utility,
     // These are JSON strings, need to parse
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
@@ -125,6 +132,7 @@ const _transformToBackend = (frontendAgent) => {
   const modelsObj = {
     plan: buildModelConfig(frontendAgent.planModel),
     act: buildModelConfig(frontendAgent.actModel),
+    vision: buildModelConfig(frontendAgent.visionModel),
     utility: buildModelConfig(frontendAgent.utilityModel)
   };
 
@@ -136,6 +144,7 @@ const _transformToBackend = (frontendAgent) => {
     parent_agent_id: frontendAgent.role === AGENT_ROLE.CHILD ? (frontendAgent.parentAgentId || null) : null,
     system_prompt: frontendAgent.systemPrompt.trim(),
     planning_prompt: frontendAgent.planningPrompt?.trim() || '',
+    image_recognition_prompt: frontendAgent.imageRecognitionPrompt?.trim() || '',
     // JSON strings
     available_tools: JSON.stringify(frontendAgent.availableTools || []),
     auto_approve: JSON.stringify(frontendAgent.autoApprove || []),
