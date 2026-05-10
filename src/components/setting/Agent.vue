@@ -1717,7 +1717,7 @@ watch(
   }
 
   .skill-checklist {
-    max-height: 260px;
+    max-height: 500px;
     overflow-y: auto;
     border: 1px solid var(--cs-border-color);
     border-radius: var(--cs-border-radius-md);
@@ -1751,9 +1751,10 @@ watch(
       font-size: 12px;
       color: var(--cs-text-color-secondary);
       padding-left: 26px;
-      white-space: nowrap;
+      /* white-space: nowrap;
+      text-overflow: ellipsis; */
+      max-height: 100px;
       overflow: hidden;
-      text-overflow: ellipsis;
       line-height: 1.4;
     }
   }
