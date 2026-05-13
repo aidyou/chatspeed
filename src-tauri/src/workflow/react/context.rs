@@ -7,6 +7,8 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
+const CONTEXT_PRESSURE_COMPRESSION_THRESHOLD: f64 = 0.75;
+
 /// ContextManager is responsible for managing and persisting the conversation context for a ReAct session.
 pub struct ContextManager {
     pub session_id: String,
@@ -131,7 +133,13 @@ impl ContextManager {
     }
 
     fn estimate_context_message_tokens(message: &WorkflowContextMessage) -> f64 {
-        crate::ccproxy::utils::token_estimator::estimate_tokens(&message.message)
+        let mut total = crate::ccproxy::utils::token_estimator::estimate_tokens(&message.message);
+
+        if let Some(reasoning) = message.reasoning.as_deref() {
+            total += crate::ccproxy::utils::token_estimator::estimate_tokens(reasoning);
+        }
+
+        total
     }
 
     fn rebuild_compacted_messages(
@@ -647,13 +655,18 @@ impl ContextManager {
         };
         self.context_messages.push(persisted_context);
 
-        // Check if compression is needed (80% threshold)
+        // Check if compression is needed.
+        // This estimate is based on projected runtime context only and does not fully include
+        // the later injected system prompt layers, so keep a conservative safety margin.
         // Estimate from the currently retained context only.
         // Do not sum per-request usage.total_tokens across messages because those values
         // already include the full prompt history for each request and would double-count.
         let total_tokens = self.current_token_estimate() as f64;
 
-        Ok((persisted, total_tokens > (self.max_tokens as f64 * 0.8)))
+        Ok((
+            persisted,
+            total_tokens > (self.max_tokens as f64 * CONTEXT_PRESSURE_COMPRESSION_THRESHOLD),
+        ))
     }
 
     pub async fn compress(
@@ -744,6 +757,8 @@ impl ContextManager {
 #[cfg(test)]
 mod tests {
     use super::ContextManager;
+    use crate::ccproxy::utils::token_estimator::estimate_tokens;
+    use crate::db::WorkflowContextMessage;
     use crate::db::{Agent, MainStore, WorkflowMessage};
     use crate::libs::tsid::TsidGenerator;
     use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
@@ -766,20 +781,21 @@ mod tests {
             Some("primary".to_string()),
             None,
             "You are a test agent.".to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(false),
-            Some("default".to_string()),
-            Some(false),
-            None,
-            None,
-            Some(false),
-            Some(false),
-            Some(4096),
+            None,        // planning_prompt
+            None,        // image_recognition_prompt
+            None,        // available_tools
+            None,        // auto_approve
+            None,        // models
+            None,        // shell_policy
+            None,        // allowed_paths
+            Some(false), // final_audit
+            None,        // approval_level
+            Some(false), // skill_enabled
+            None,        // selected_skills
+            None,        // phase
+            Some(false), // is_system
+            Some(false), // disabled
+            Some(4096),  // max_contexts
         );
 
         let store_guard = store.write().expect("lock poisoned");
@@ -789,6 +805,28 @@ mod tests {
         store_guard
             .create_workflow(session_id, "Initial query", "test-agent", None, None)
             .expect("failed to create workflow");
+    }
+
+    #[test]
+    fn current_token_estimate_includes_reasoning_content() {
+        let message = WorkflowContextMessage {
+            id: None,
+            session_id: "session".to_string(),
+            segment_id: 0,
+            role: "assistant".to_string(),
+            message: "Visible answer".to_string(),
+            reasoning: Some("Hidden reasoning".to_string()),
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            metadata: None,
+            source_message_id: None,
+            created_at: None,
+        };
+
+        let expected = estimate_tokens("Visible answer") + estimate_tokens("Hidden reasoning");
+        let actual = ContextManager::estimate_context_message_tokens(&message);
+
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test]

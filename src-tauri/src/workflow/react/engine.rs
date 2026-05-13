@@ -139,8 +139,7 @@ pub struct WorkflowExecutor {
     /// Optional dispatcher for event distribution (Phase 6)
     pub dispatcher: Option<Arc<Dispatcher>>,
     /// Buffered user messages received during non-waiting execution stages.
-    pub queued_user_messages:
-        VecDeque<(String, String, Option<String>, Option<serde_json::Value>)>,
+    pub queued_user_messages: VecDeque<(String, String, Option<String>, Option<serde_json::Value>)>,
     /// Phase 7: ID of sub-agent this session is waiting for (Call model)
     pub sub_agent_id: Option<String>,
     /// Phase 7: All sub-agent session IDs created by this parent session.
@@ -2398,7 +2397,7 @@ impl WorkflowExecutor {
                                 metadata,
                                 queued_user_message_id,
                             )
-                                .await?;
+                            .await?;
                             continue;
                         }
                     }
@@ -4047,7 +4046,7 @@ impl WorkflowExecutor {
                             .await?;
                     } else {
                         log::info!(
-                        "[Workflow][session={}][phase=compression] Context exceeded 80% but no safe completed segment is available for blocking compression",
+                        "[Workflow][session={}][phase=compression] Context exceeded the compression pressure threshold but no safe completed segment is available for blocking compression",
                         self.session_id
                     );
                     }
@@ -6099,7 +6098,7 @@ impl WorkflowExecutor {
                         metadata,
                         queued_user_message_id,
                     )
-                        .await?;
+                    .await?;
                 }
                 RuntimeSignal::Other {
                     signal,

@@ -44,7 +44,8 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) {
 
     agent.planning_prompt = None;
     agent.image_recognition_prompt = None;
-    agent.available_tools = filter_tool_list_json(agent.available_tools.clone(), crate::tools::TOOL_BASH);
+    agent.available_tools =
+        filter_tool_list_json(agent.available_tools.clone(), crate::tools::TOOL_BASH);
     agent.auto_approve = filter_tool_list_json(agent.auto_approve.clone(), crate::tools::TOOL_BASH);
     agent.allowed_paths = Some("[]".to_string());
     agent.shell_policy = Some("[]".to_string());

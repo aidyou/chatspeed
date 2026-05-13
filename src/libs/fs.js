@@ -14,6 +14,20 @@ export const imagePreview = async (path) => {
   }
 };
 
+/**
+ * Copy original image to local static server and return source URL
+ * @param {string} path - file path
+ * @returns {Promise<string | null>} - source URL or null
+ */
+export const imageSourceUrl = async (path) => {
+  try {
+    return await invoke('image_source_url', { imagePath: path })
+  } catch (error) {
+    console.error(error)
+    return null
+  }
+}
+
 
 /**
  * Get file extension

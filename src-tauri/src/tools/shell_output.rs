@@ -3,6 +3,8 @@ use serde_json::json;
 
 const MAX_DISPLAY_CHARS: usize = 30_000;
 const GENERIC_LLM_MAX_LINES: usize = 40;
+const EXPLICIT_SHAPED_LLM_MAX_LINES: usize = 240;
+const EXPLICIT_SHAPED_LLM_MAX_CHARS: usize = 20_000;
 const BUILD_LLM_TAIL_LINES: usize = 20;
 const TEST_LLM_TAIL_LINES: usize = 30;
 const GIT_LOG_HEAD_LINES: usize = 30;
@@ -79,6 +81,10 @@ fn reduce_shell_output_for_llm(
         return reduce_git_log_output(raw_content);
     }
 
+    if is_explicitly_shaped_read_output(&normalized_command) {
+        return reduce_explicitly_shaped_output(raw_content);
+    }
+
     if raw_content.lines().count() > 120 || raw_content.chars().count() > 8_000 {
         return reduce_generic_output(raw_content, GENERIC_LLM_MAX_LINES);
     }
@@ -124,6 +130,15 @@ fn is_plain_node_build(command: &str) -> bool {
 
 fn is_plain_frontend_build(command: &str) -> bool {
     command.ends_with("pnpm build") || command.ends_with("pnpm tauri build")
+}
+
+fn is_explicitly_shaped_read_output(command: &str) -> bool {
+    command.contains("| head ")
+        || command.contains("| tail ")
+        || command.starts_with("head ")
+        || command.starts_with("tail ")
+        || command.contains("sed -n ")
+        || command.contains("awk ")
 }
 
 fn reduce_build_like_output(raw_content: &str, tail_lines: usize) -> String {
@@ -223,6 +238,32 @@ fn reduce_generic_output(raw_content: &str, tail_lines_count: usize) -> String {
     )
 }
 
+fn reduce_explicitly_shaped_output(raw_content: &str) -> String {
+    if raw_content.lines().count() <= EXPLICIT_SHAPED_LLM_MAX_LINES
+        && raw_content.chars().count() <= EXPLICIT_SHAPED_LLM_MAX_CHARS
+    {
+        return raw_content.to_string();
+    }
+
+    let lines: Vec<&str> = raw_content.lines().collect();
+    let head_count = EXPLICIT_SHAPED_LLM_MAX_LINES / 2;
+    let tail_count = EXPLICIT_SHAPED_LLM_MAX_LINES.saturating_sub(head_count);
+    let head = lines
+        .iter()
+        .take(head_count)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tail = lines
+        .iter()
+        .skip(lines.len().saturating_sub(tail_count))
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("{}\n[truncated middle output]\n{}", head, tail)
+}
+
 fn tail_lines(text: &str, count: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(count);
@@ -317,5 +358,43 @@ mod tests {
         assert!(llm_content.contains("Changed files:"));
         assert!(llm_content.contains("src/main.rs"));
         assert!(!llm_content.contains("@@ -1 +1 @@"));
+    }
+
+    #[test]
+    fn explicitly_shaped_head_output_is_preserved_for_llm() {
+        let stdout = (1..=180)
+            .map(|i| format!("knowledge line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = build_shell_tool_result("ksp load abc123 2>&1 | head -200", 0, &stdout, "");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm_content should be a string");
+
+        assert!(llm_content.contains("knowledge line 1"));
+        assert!(llm_content.contains("knowledge line 180"));
+        assert!(!llm_content.contains("[truncated previous output]"));
+    }
+
+    #[test]
+    fn oversized_explicitly_shaped_output_keeps_head_and_tail() {
+        let stdout = (1..=400)
+            .map(|i| format!("slice {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = build_shell_tool_result("sed -n '1,400p' notes.md", 0, &stdout, "");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm_content should be a string");
+
+        assert!(llm_content.contains("slice 1"));
+        assert!(llm_content.contains("slice 400"));
+        assert!(llm_content.contains("[truncated middle output]"));
     }
 }

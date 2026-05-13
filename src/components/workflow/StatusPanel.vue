@@ -389,6 +389,7 @@ const workflowPhase = computed(() =>
     : 'standard'
 )
 const planModelConfig = computed(() => workflowModels.value.plan || null)
+const visionModelConfig = computed(() => workflowModels.value.vision || null)
 const activeWorkModelConfig = computed(() => {
   const models = workflowModels.value
   return workflowPhase.value === 'planning' ? models.plan || models.act : models.act || models.plan
@@ -475,6 +476,17 @@ const modelStatusRows = computed(() => {
       sourceClass: utilityModelStatus.value.sourceClass
     })
   }
+  if (visionModelConfig.value?.model) {
+    const fullName = getModelDisplayName(visionModelConfig.value)
+    rows.push({
+      key: 'vision',
+      label: translateOrFallback('workflow.statusPanel.visionModel', 'Vision'),
+      fullName,
+      shortName: fullName,
+      source: translateOrFallback('workflow.statusPanel.direct', 'Direct'),
+      sourceClass: 'direct'
+    })
+  }
   if (titleModelStatus.value?.config?.model) {
     const fullName = getModelDisplayName(titleModelStatus.value.config)
     rows.push({
@@ -513,11 +525,6 @@ const maxContexts = computed(() => {
 })
 
 const totalTokens = computed(() => {
-  const currentContextTokens = workflowStore.currentWorkflow?.executionContext?.currentContextTokens
-  if (typeof currentContextTokens === 'number' && currentContextTokens >= 0) {
-    return currentContextTokens
-  }
-
   // Find the most recent message with usage information
   const lastAssistantMsg = [...messages.value]
     .reverse()
@@ -535,24 +542,27 @@ const totalTokens = computed(() => {
   const meta = lastAssistantMsg.metadata
   // 1. Try ChatMetadata style (nested tokens object)
   if (meta.tokens) {
-    return meta.tokens.total || meta.tokens.prompt + meta.tokens.completion || 0
+    const prompt = meta.tokens.prompt || meta.tokens.input || meta.tokens.prompt_tokens || 0
+    if (prompt > 0) return prompt
   }
 
   // 2. Try usage object style
   if (meta.usage) {
     const u = meta.usage
-    return (
-      u.total_tokens ||
-      (u.input_tokens || u.prompt_tokens || 0) + (u.output_tokens || u.completion_tokens || 0) ||
-      0
-    )
+    const prompt = u.input_tokens || u.prompt_tokens || 0
+    if (prompt > 0) return prompt
   }
 
   // 3. Fallback to flattened style
-  const input = meta.input_tokens || meta.prompt_tokens || 0
-  const output = meta.output_tokens || meta.completion_tokens || 0
-  const total = meta.total_tokens || input + output
-  return total || 0
+  const prompt = meta.input_tokens || meta.prompt_tokens || 0
+  if (prompt > 0) return prompt
+
+  const currentContextTokens = workflowStore.currentWorkflow?.executionContext?.currentContextTokens
+  if (typeof currentContextTokens === 'number' && currentContextTokens >= 0) {
+    return currentContextTokens
+  }
+
+  return 0
 })
 
 const contextUsagePercent = computed(() => {

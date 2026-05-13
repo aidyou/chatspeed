@@ -237,6 +237,7 @@ pub async fn run() -> crate::error::Result<()> {
             get_env,
             // fs
             image_preview,
+            image_source_url,
             read_text_file,
             read_git_base_text_file,
             get_git_status,

@@ -86,29 +86,8 @@ pub async fn handle_direct_forward(
         CCProxyError::InternalError(format!("Failed to deserialize request body: {}", e))
     })?;
 
-    // Estimate input tokens from text content in the request body
-    let mut text_for_estimation = String::new();
-    if let Some(messages) = body_json.get("messages").and_then(|m| m.as_array()) {
-        for msg in messages {
-            if let Some(content) = msg.get("content") {
-                if let Some(text) = content.as_str() {
-                    text_for_estimation.push_str(text);
-                } else if let Some(parts) = content.as_array() {
-                    for part in parts {
-                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                            text_for_estimation.push_str(text);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if let Some(system) = body_json.get("system").and_then(|s| s.as_str()) {
-        text_for_estimation.push_str(system);
-    }
-
     let estimated_input_tokens =
-        crate::ccproxy::utils::token_estimator::estimate_tokens(&text_for_estimation);
+        crate::ccproxy::utils::token_estimator::estimate_known_request_json_tokens(&body_json);
 
     // Merge proxy parameters into the body (Client > Model Config)
     ModelResolver::merge_parameters_json(&mut body_json, &proxy_model);

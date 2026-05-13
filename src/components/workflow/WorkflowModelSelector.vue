@@ -11,6 +11,7 @@
         <el-tab-pane label="PLAN" name="plan"></el-tab-pane>
         <el-tab-pane label="ACT" name="act"></el-tab-pane>
         <el-tab-pane label="UTILITY" name="utility"></el-tab-pane>
+        <el-tab-pane label="VISION" name="vision"></el-tab-pane>
       </el-tabs>
 
       <div class="model-item-compact">
@@ -150,6 +151,7 @@ const thinkingLevelFromBudget = (budget) => {
   return 'low'
 }
 const budgetFromThinkingLevel = (level) => THINKING_LEVEL_TO_BUDGET[level] || THINKING_LEVEL_TO_BUDGET.low
+const isThinkingEnabled = thinking => String(thinking?.type || '').toLowerCase() === 'enabled'
 const workflowThinkingLevelOptions = [
   { value: 'low', label: 'settings.model.reasoningLow' },
   { value: 'medium', label: 'settings.model.reasoningMedium' },
@@ -159,12 +161,13 @@ const workflowThinkingLevelOptions = [
 const agentModels = reactive({
   plan: defaultModelConfig(),
   act: defaultModelConfig(),
-  utility: defaultModelConfig()
+  utility: defaultModelConfig(),
+  vision: defaultModelConfig()
 })
 
-const modelModes = reactive({ plan: 'provider', act: 'provider', utility: 'provider' })
-const proxyGroups = reactive({ plan: '', act: '', utility: '' })
-const proxyAliases = reactive({ plan: '', act: '', utility: '' })
+const modelModes = reactive({ plan: 'provider', act: 'provider', utility: 'provider', vision: 'provider' })
+const proxyGroups = reactive({ plan: '', act: '', utility: '', vision: '' })
+const proxyAliases = reactive({ plan: '', act: '', utility: '', vision: '' })
 
 const currentModel = computed(() => agentModels[activeTab.value])
 
@@ -181,7 +184,7 @@ const normalizeModelDraft = (model) => ({
   ...defaultModelConfig(),
   ...(model || {}),
   thinking: model?.thinking || null,
-  thinkingEnabled: !!model?.thinking,
+  thinkingEnabled: isThinkingEnabled(model?.thinking),
   thinkingLevel: thinkingLevelFromBudget(model?.thinking?.budgetTokens)
 })
 
@@ -195,7 +198,7 @@ const applyProviderModelOverrides = (modelId) => {
     currentModel.value.temperature = selected.temperature
   }
   currentModel.value.thinking = selected.thinking || null
-  currentModel.value.thinkingEnabled = !!selected.thinking
+  currentModel.value.thinkingEnabled = isThinkingEnabled(selected.thinking)
   currentModel.value.thinkingLevel = thinkingLevelFromBudget(selected.thinking?.budgetTokens)
   if (selected.contextSize !== undefined && selected.contextSize !== null) {
     currentModel.value.contextSize = selected.contextSize
@@ -252,19 +255,22 @@ const handleClose = (done) => {
 
 const handleSave = () => {
   const result = JSON.parse(JSON.stringify(agentModels))
-  for (const key of ['plan', 'act', 'utility']) {
+  for (const key of ['plan', 'act', 'utility', 'vision']) {
     result[key].thinking = result[key].thinkingEnabled
       ? {
-        type: 'enabled',
-        budgetTokens: budgetFromThinkingLevel(result[key].thinkingLevel)
-      }
-      : null
+          type: 'enabled',
+          budgetTokens: budgetFromThinkingLevel(result[key].thinkingLevel)
+        }
+      : {
+          type: 'disabled'
+        }
     delete result[key].thinkingEnabled
     delete result[key].thinkingLevel
   }
   if (modelModes.plan === 'proxy') result.plan.id = 0
   if (modelModes.act === 'proxy') result.act.id = 0
   if (modelModes.utility === 'proxy') result.utility.id = 0
+  if (modelModes.vision === 'proxy') result.vision.id = 0
   
   emit('save', result)
   visible.value = false
@@ -275,6 +281,7 @@ const initFromStore = () => {
   agentModels.plan = defaultModelConfig()
   agentModels.act = defaultModelConfig()
   agentModels.utility = defaultModelConfig()
+  agentModels.vision = defaultModelConfig()
 
   // 1. Get reference agent:
   // - Direct prop agent
@@ -289,6 +296,7 @@ const initFromStore = () => {
     if (wfModels.plan) agentModels.plan = normalizeModelDraft(wfModels.plan)
     if (wfModels.act) agentModels.act = normalizeModelDraft(wfModels.act)
     if (wfModels.utility) agentModels.utility = normalizeModelDraft(wfModels.utility)
+    if (wfModels.vision) agentModels.vision = normalizeModelDraft(wfModels.vision)
   } else if (!refAgent && workflowStore.workflows.length > 0) {
     // 1b. Fallback to last workflow's agent
     const lastWf = workflowStore.workflows[0]
@@ -302,6 +310,7 @@ const initFromStore = () => {
       if (modelsObj.plan) agentModels.plan = normalizeModelDraft(modelsObj.plan)
       if (modelsObj.act) agentModels.act = normalizeModelDraft(modelsObj.act)
       if (modelsObj.utility) agentModels.utility = normalizeModelDraft(modelsObj.utility)
+      if (modelsObj.vision) agentModels.vision = normalizeModelDraft(modelsObj.vision)
     } catch (e) {
       console.error('Failed to parse agent models:', e)
     }
@@ -322,12 +331,17 @@ const initFromStore = () => {
       agentModels.utility.id = fallbackP.id
       agentModels.utility.model = fallbackP.defaultModel
     }
+    if (!agentModels.vision.id && !agentModels.vision.model.includes('@')) {
+      agentModels.vision.id = fallbackP.id
+      agentModels.vision.model = fallbackP.defaultModel
+    }
   }
 
   // Parse UI states
   parseModelField(agentModels.plan, 'plan')
   parseModelField(agentModels.act, 'act')
   parseModelField(agentModels.utility, 'utility')
+  parseModelField(agentModels.vision, 'vision')
 }
 
 onMounted(() => {

@@ -5,6 +5,7 @@ use std::convert::Infallible;
 use std::sync::{Arc, RwLock};
 
 use super::OutputAdapter;
+use crate::ccproxy::utils::token_estimator::resolve_usage_with_estimate;
 use crate::ccproxy::{
     adapter::unified::{SseStatus, UnifiedEmbeddingResponse, UnifiedResponse, UnifiedStreamChunk},
     helper::sse::Event,
@@ -82,16 +83,14 @@ impl OutputAdapter for ClaudeOutputAdapter {
                 (0.0, 0.0)
             };
 
-        let input_tokens = if response.usage.input_tokens > 0 {
-            response.usage.input_tokens
-        } else {
-            estimated_input_tokens_f64.ceil() as u64
-        };
-        let output_tokens = if response.usage.output_tokens > 0 {
-            response.usage.output_tokens
-        } else {
-            estimated_output_tokens_f64.ceil() as u64
-        };
+        let (input_tokens, output_tokens) = resolve_usage_with_estimate(
+            "claude",
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            estimated_input_tokens_f64,
+            estimated_output_tokens_f64,
+            "response",
+        );
 
         let claude_response = ClaudeNativeResponse {
             id: response_id,
@@ -228,16 +227,14 @@ impl OutputAdapter for ClaudeOutputAdapter {
                         (0.0, 0.0)
                     };
 
-                let input_tokens = if usage.input_tokens > 0 {
-                    usage.input_tokens
-                } else {
-                    estimated_input_tokens_f64.ceil() as u64
-                };
-                let output_tokens = if usage.output_tokens > 0 {
-                    usage.output_tokens
-                } else {
-                    estimated_output_tokens_f64.ceil() as u64
-                };
+                let (input_tokens, output_tokens) = resolve_usage_with_estimate(
+                    "claude",
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    estimated_input_tokens_f64,
+                    estimated_output_tokens_f64,
+                    "stream_stop",
+                );
 
                 let mut usage_data = json!({
                     "output_tokens": output_tokens,

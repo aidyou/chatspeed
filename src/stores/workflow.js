@@ -1027,6 +1027,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
       content: message.content || '',
       status: message.status || 'queued',
       sent: !!message.sent,
+      acknowledged: !!message.acknowledged,
+      attachedContext: message.attachedContext || null,
+      metadata: message.metadata || null,
       createdAt: message.createdAt || Date.now(),
     });
   };
@@ -1038,6 +1041,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messageQueue.value[index] = {
       ...messageQueue.value[index],
       sent: true,
+    };
+  };
+
+  const acknowledgeQueuedMessageSent = (id) => {
+    if (!id) return;
+    const index = messageQueue.value.findIndex((item) => item.id === id);
+    if (index === -1) return;
+    messageQueue.value[index] = {
+      ...messageQueue.value[index],
+      sent: true,
+      acknowledged: true,
       status: 'queued',
     };
   };
@@ -1080,13 +1094,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
         if (queuedId) {
           const existing = messageQueue.value.find((item) => item.id === queuedId);
           if (existing) {
-            markQueuedMessageSent(queuedId);
+            acknowledgeQueuedMessageSent(queuedId);
           } else {
             addMessageToQueue({
               id: queuedId,
               content: message.message || message.content || '',
               status: 'queued',
               sent: true,
+              acknowledged: true,
             });
           }
         }
@@ -1382,6 +1397,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     addMessage,
     addMessageToQueue,
     markQueuedMessageSent,
+    acknowledgeQueuedMessageSent,
     removeQueuedMessage,
     acknowledgeQueuedMessage,
     shiftQueuedMessage,

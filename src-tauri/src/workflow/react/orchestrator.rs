@@ -1920,20 +1920,21 @@ mod tests {
             Some("primary".to_string()),
             None,
             "Parent diagnostic system prompt".to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(false),
-            None,
-            Some(false),
-            None,
-            None,
-            Some(false),
-            Some(false),
-            None,
+            None,        // planning_prompt
+            None,        // image_recognition_prompt
+            None,        // available_tools
+            None,        // auto_approve
+            None,        // models
+            None,        // shell_policy
+            None,        // allowed_paths
+            Some(false), // final_audit
+            None,        // approval_level
+            Some(false), // skill_enabled
+            None,        // selected_skills
+            None,        // phase
+            Some(false), // is_system
+            Some(false), // disabled
+            None,        // max_contexts
         );
         let parent_session_id = "diagnostic_parent_session";
         {
@@ -1966,20 +1967,21 @@ mod tests {
                 Some("child".to_string()),
                 Some("diagnostic-parent-agent".to_string()),
                 "You read project modules and report concise findings.".to_string(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(false),
-                None,
-                Some(false),
-                None,
-                None,
-                Some(false),
-                Some(false),
-                None,
+                None,        // planning_prompt
+                None,        // image_recognition_prompt
+                None,        // available_tools
+                None,        // auto_approve
+                None,        // models
+                None,        // shell_policy
+                None,        // allowed_paths
+                Some(false), // final_audit
+                None,        // approval_level
+                Some(false), // skill_enabled
+                None,        // selected_skills
+                None,        // phase
+                Some(false), // is_system
+                Some(false), // disabled
+                None,        // max_contexts
             )]);
 
         let prompt = "Scan module `src-tauri/src/workflow/react/orchestrator.rs`. \
@@ -2058,20 +2060,21 @@ mod tests {
             Some("primary".to_string()),
             None,
             "Parent prompt".to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(false),
-            None,
-            Some(true),
-            None,
-            None,
-            Some(false),
-            Some(false),
-            None,
+            None,        // planning_prompt
+            None,        // image_recognition_prompt
+            None,        // available_tools
+            None,        // auto_approve
+            None,        // models
+            None,        // shell_policy
+            None,        // allowed_paths
+            Some(false), // final_audit
+            None,        // approval_level
+            Some(false), // skill_enabled
+            None,        // selected_skills
+            None,        // phase
+            Some(true),  // is_system
+            Some(false), // disabled
+            None,        // max_contexts
         );
         let child_agent = crate::db::Agent::new(
             "child-agent".to_string(),
@@ -2080,7 +2083,8 @@ mod tests {
             Some("child".to_string()),
             Some(parent_agent.id.clone()),
             "Child prompt".to_string(),
-            None,
+            None, // planning_prompt
+            None, // image_recognition_prompt
             Some(
                 serde_json::to_string(&vec![
                     crate::tools::TOOL_READ_FILE,
@@ -2088,22 +2092,22 @@ mod tests {
                     crate::tools::TOOL_SUB_AGENT_RUN,
                 ])
                 .expect("tools json"),
-            ),
+            ), // available_tools
             Some(
                 serde_json::to_string(&vec![crate::tools::TOOL_READ_FILE, crate::tools::TOOL_BASH])
                     .expect("auto approve json"),
-            ),
-            None,
-            None,
-            None,
-            Some(false),
-            None,
-            Some(false),
-            None,
-            None,
-            Some(false),
-            Some(false),
-            None,
+            ), // auto_approve
+            None, // models
+            None, // shell_policy
+            None, // allowed_paths
+            Some(false), // final_audit
+            None, // approval_level
+            Some(false), // skill_enabled
+            None, // selected_skills
+            None, // phase
+            Some(false), // is_system
+            Some(false), // disabled
+            None, // max_contexts
         );
         let parent_session_id = "parent-session";
         let child_session_id = "subagent_child_test";
@@ -2237,20 +2241,21 @@ mod tests {
             Some("primary".to_string()),
             None,
             "Parent diagnostic system prompt".to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(false),
-            None,
-            Some(false),
-            None,
-            None,
-            Some(false),
-            Some(false),
-            None,
+            None,        // planning_prompt
+            None,        // image_recognition_prompt
+            None,        // available_tools
+            None,        // auto_approve
+            None,        // models
+            None,        // shell_policy
+            None,        // allowed_paths
+            Some(false), // final_audit
+            None,        // approval_level
+            Some(false), // skill_enabled
+            None,        // selected_skills
+            None,        // phase
+            Some(false), // is_system
+            Some(false), // disabled
+            None,        // max_contexts
         );
         let parent_config = AgentConfig {
             allowed_paths: Some(vec![repo_root().to_string_lossy().to_string()]),

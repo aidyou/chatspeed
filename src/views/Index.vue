@@ -1125,7 +1125,10 @@ const analyzeImagesWithVisionModel = async (imageAttachments, textAttachments, u
 
   // Add all images to the same message
   for (const attachment of imageAttachments) {
-    visionMessage.content.push({ type: 'image_url', image_url: { url: attachment.url } })
+    visionMessage.content.push({
+      type: 'image_url',
+      image_url: { url: attachment.sourceUrl || attachment.url }
+    })
   }
 
   // Add text attachments content to the vision prompt
@@ -1271,6 +1274,7 @@ const dispatchChatCompletion = async (messageId = null) => {
         name: a.name,
         size: a.size,
         url: a.url || null,
+        sourceUrl: a.sourceUrl || a.url || null,
         content: a.content || null
       }))
     }
@@ -1299,7 +1303,10 @@ const dispatchChatCompletion = async (messageId = null) => {
       }
 
       for (const attachment of imageAttachments) {
-        visionMessage.content.push({ type: 'image_url', image_url: { url: attachment.url } })
+        visionMessage.content.push({
+          type: 'image_url',
+          image_url: { url: attachment.sourceUrl || attachment.url }
+        })
       }
 
       if (textAttachments.length > 0) {
@@ -2387,6 +2394,7 @@ const handleImageFile = async file => {
           type: 'image',
           name: rawFile.name,
           url: e.target.result,
+          sourceUrl: e.target.result,
           size: rawFile.size
         })
         resolve()

@@ -1,4 +1,5 @@
 use super::OutputAdapter;
+use crate::ccproxy::utils::token_estimator::resolve_usage_with_estimate;
 use crate::ccproxy::{
     adapter::unified::{SseStatus, UnifiedEmbeddingResponse, UnifiedResponse, UnifiedStreamChunk},
     helper::sse::Event,
@@ -78,16 +79,16 @@ impl OutputAdapter for OllamaOutputAdapter {
                 (0.0, 0.0)
             };
 
-        let prompt_eval_count = if response.usage.input_tokens > 0 {
-            response.usage.input_tokens as u32
-        } else {
-            estimated_input_tokens_f64.ceil() as u32
-        };
-        let eval_count = if response.usage.output_tokens > 0 {
-            response.usage.output_tokens as u32
-        } else {
-            estimated_output_tokens_f64.ceil() as u32
-        };
+        let (input_tokens, output_tokens) = resolve_usage_with_estimate(
+            "ollama",
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            estimated_input_tokens_f64,
+            estimated_output_tokens_f64,
+            "response",
+        );
+        let prompt_eval_count = input_tokens as u32;
+        let eval_count = output_tokens as u32;
 
         let ollama_response = OllamaChatCompletionResponse {
             model: response.model,
@@ -233,16 +234,16 @@ impl OutputAdapter for OllamaOutputAdapter {
                         (0.0, 0.0)
                     };
 
-                let prompt_eval_count = if usage.input_tokens > 0 {
-                    usage.input_tokens as u32
-                } else {
-                    estimated_input_tokens_f64.ceil() as u32
-                };
-                let eval_count = if usage.output_tokens > 0 {
-                    usage.output_tokens as u32
-                } else {
-                    estimated_output_tokens_f64.ceil() as u32
-                };
+                let (input_tokens, output_tokens) = resolve_usage_with_estimate(
+                    "ollama",
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    estimated_input_tokens_f64,
+                    estimated_output_tokens_f64,
+                    "stream_stop",
+                );
+                let prompt_eval_count = input_tokens as u32;
+                let eval_count = output_tokens as u32;
 
                 Some(OllamaStreamResponse {
                     model: model_id,

@@ -908,6 +908,7 @@
       "titleModel": "Title",
       "todos": "Tasks",
       "totalCalls": "Total calls",
+      "visionModel": "Vision",
       "utilityFallback": "Utility Fallback",
       "utilityModel": "Utility",
       "workFallback": "Work Fallback",

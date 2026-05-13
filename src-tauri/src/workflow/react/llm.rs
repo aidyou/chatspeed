@@ -1390,6 +1390,17 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
         "InvalidParams" => {
             "<SYSTEM_REMINDER>Check the tool schema and required argument types.</SYSTEM_REMINDER>".to_string()
         }
+        "Other" => {
+            if tool_name == "edit_file" {
+                if content.contains("old_string was not found") {
+                    return "<SYSTEM_REMINDER>`edit_file` could not find old_string exactly. Re-read the file and copy old_string from inside the structured `<file_content ...>...</file_content>` block only. Do not include visible read_file line numbers, separators, or guessed whitespace.</SYSTEM_REMINDER>".to_string();
+                }
+                if content.contains("old_string is not unique") {
+                    return "<SYSTEM_REMINDER>`edit_file` found multiple matches for old_string. Re-read a narrower region and include more surrounding context from the structured `<file_content ...>...</file_content>` block so the target becomes unique, or use replace_all only if every occurrence should change.</SYSTEM_REMINDER>".to_string();
+                }
+            }
+            "<SYSTEM_REMINDER>Review the error and try a different approach if needed.</SYSTEM_REMINDER>".to_string()
+        }
         "NoToolCall" => {
             if tool_name == crate::tools::TOOL_SUBMIT_RESULT {
                 "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Brief reasoning-only turns are allowed, but you should soon choose a concrete tool action. If the delegated task is finished, call 'submit_result' with both `result` and `summary`.</SYSTEM_REMINDER>".to_string()
@@ -1438,9 +1449,9 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
                         "<SYSTEM_REMINDER>Command failed. Check syntax and required dependencies.</SYSTEM_REMINDER>".to_string()
                     }
                 }
-                _ => "<SYSTEM_REMINDER>Use this error to choose the next step.</SYSTEM_REMINDER>".to_string()
-            }
-        }
+        _ => "<SYSTEM_REMINDER>Use this error to choose the next step.</SYSTEM_REMINDER>".to_string()
+    }
+}
     }
 }
 

@@ -759,11 +759,21 @@ mod tests {
             .add_agent(&make_agent("agent-primary", "Primary Agent", None))
             .expect("failed to add primary agent");
         store
-            .add_agent(&make_agent("agent-child", "Child Agent", Some("agent-primary")))
+            .add_agent(&make_agent(
+                "agent-child",
+                "Child Agent",
+                Some("agent-primary"),
+            ))
             .expect("failed to add child agent");
 
         store
-            .create_workflow("workflow-parent", "Parent query", "agent-primary", None, None)
+            .create_workflow(
+                "workflow-parent",
+                "Parent query",
+                "agent-primary",
+                None,
+                None,
+            )
             .expect("failed to create parent workflow");
         store
             .create_workflow(

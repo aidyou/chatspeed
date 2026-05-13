@@ -1,4 +1,5 @@
 use super::OutputAdapter;
+use crate::ccproxy::utils::token_estimator::resolve_usage_with_estimate;
 use crate::ccproxy::{
     adapter::unified::{
         SseStatus, UnifiedEmbeddingResponse, UnifiedFunctionCallPart, UnifiedResponse,
@@ -78,16 +79,14 @@ impl OutputAdapter for GeminiOutputAdapter {
                 (0.0, 0.0)
             };
 
-        let input_tokens = if response.usage.input_tokens > 0 {
-            response.usage.input_tokens
-        } else {
-            estimated_input_tokens_f64.ceil() as u64
-        };
-        let output_tokens = if response.usage.output_tokens > 0 {
-            response.usage.output_tokens
-        } else {
-            estimated_output_tokens_f64.ceil() as u64
-        };
+        let (input_tokens, output_tokens) = resolve_usage_with_estimate(
+            "gemini",
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            estimated_input_tokens_f64,
+            estimated_output_tokens_f64,
+            "response",
+        );
 
         let usage = GeminiUsageMetadata {
             prompt_token_count: input_tokens,
@@ -242,16 +241,14 @@ impl OutputAdapter for GeminiOutputAdapter {
                         (0.0, 0.0)
                     };
 
-                let input_tokens = if usage.input_tokens > 0 {
-                    usage.input_tokens
-                } else {
-                    estimated_input_tokens_f64.ceil() as u64
-                };
-                let output_tokens = if usage.output_tokens > 0 {
-                    usage.output_tokens
-                } else {
-                    estimated_output_tokens_f64.ceil() as u64
-                };
+                let (input_tokens, output_tokens) = resolve_usage_with_estimate(
+                    "gemini",
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    estimated_input_tokens_f64,
+                    estimated_output_tokens_f64,
+                    "stream_stop",
+                );
 
                 // Build the complete response in one go
                 let end_event = serde_json::json!({

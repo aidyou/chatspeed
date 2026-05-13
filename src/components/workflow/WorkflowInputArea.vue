@@ -63,8 +63,20 @@
     <div class="input">
       <div v-if="attachments.length > 0" class="workflow-attachments">
         <div v-for="attachment in attachments" :key="attachment.id" class="workflow-attachment-item">
-          <img :src="attachment.url" :alt="attachment.name" class="workflow-attachment-preview" />
+          <div
+            v-if="attachment.uploading"
+            class="workflow-attachment-preview workflow-attachment-preview-loading">
+            <span class="workflow-attachment-spinner" />
+          </div>
+          <img
+            v-else
+            :src="attachment.url"
+            :alt="attachment.name"
+            class="workflow-attachment-preview" />
           <span class="workflow-attachment-name">{{ attachment.name }}</span>
+          <span v-if="attachment.uploading" class="workflow-attachment-status">
+            {{ $t('chat.preparingAttachments') }}
+          </span>
           <cs
             name="close"
             class="workflow-attachment-remove"
@@ -548,6 +560,7 @@ const canSendMessage = computed(
   () =>
     (inputMessage.value.trim() !== '' || props.attachments.length > 0) &&
     props.selectedAgent &&
+    !props.attachments.some(attachment => attachment.uploading) &&
     !isStopping.value
 )
 
@@ -593,6 +606,22 @@ defineExpose({
   flex-shrink: 0;
 }
 
+.workflow-attachment-preview-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--cs-fill-color-light, rgba(0, 0, 0, 0.06));
+}
+
+.workflow-attachment-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--cs-border-color);
+  border-top-color: var(--el-color-primary);
+  border-radius: 50%;
+  animation: workflow-attachment-spin 0.8s linear infinite;
+}
+
 .workflow-attachment-name {
   flex: 1;
   min-width: 0;
@@ -602,9 +631,25 @@ defineExpose({
   font-size: var(--cs-font-size-sm);
 }
 
+.workflow-attachment-status {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--cs-text-secondary);
+}
+
 .workflow-attachment-remove {
   cursor: pointer;
   flex-shrink: 0;
   color: var(--cs-text-secondary);
+}
+
+@keyframes workflow-attachment-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

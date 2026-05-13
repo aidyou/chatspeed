@@ -170,6 +170,7 @@ fn execute_read_file(
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     let mut lines = Vec::new();
+    let mut raw_lines = Vec::new();
     let mut total_chars = 0usize;
     let end_offset = offset.saturating_add(limit);
     let mut truncated_by_limit = false;
@@ -213,6 +214,7 @@ fn execute_read_file(
         }
         total_chars += rendered_len;
         lines.push(rendered_line);
+        raw_lines.push(content);
     }
 
     let lines_returned = lines.len();
@@ -237,6 +239,16 @@ fn execute_read_file(
 
     let truncated = truncated_by_limit || truncated_by_size;
     let last_line_number = offset + lines_returned;
+    let llm_content = build_read_file_llm_content(
+        &display_path,
+        offset,
+        last_line_number,
+        &raw_lines,
+        truncated_by_limit,
+        truncated_by_size,
+        total_lines,
+        next_offset,
+    );
 
     if truncated {
         let truncated_body = lines.join("\n");
@@ -271,6 +283,7 @@ fn execute_read_file(
                 "truncated": true,
                 "truncated_by_size": truncated_by_size,
                 "truncated_by_limit": truncated_by_limit,
+                "llm_content": llm_content,
                 "next_offset": resume_offset,
                 "file_size_bytes": file_size_bytes,
                 "total_lines": total_lines
@@ -294,11 +307,69 @@ fn execute_read_file(
             "limit": limit,
             "lines_returned": lines_returned,
             "truncated": truncated,
+            "llm_content": llm_content,
             "next_offset": Value::Null,
             "file_size_bytes": file_size_bytes,
             "total_lines": total_lines
         })),
     ))
+}
+
+fn build_read_file_llm_content(
+    display_path: &str,
+    offset: usize,
+    last_line_number: usize,
+    raw_lines: &[String],
+    truncated_by_limit: bool,
+    truncated_by_size: bool,
+    total_lines: usize,
+    next_offset: Option<usize>,
+) -> String {
+    let exact_content = raw_lines.join("\n");
+    let escaped_path = escape_xml_attribute(display_path);
+    let mut sections = vec![
+        format!(
+            "<file_content path=\"{}\" offset=\"{}\" end_line=\"{}\" total_lines=\"{}\" truncated=\"{}\">",
+            escaped_path,
+            offset,
+            last_line_number,
+            total_lines,
+            if truncated_by_limit || truncated_by_size {
+                "true"
+            } else {
+                "false"
+            }
+        ),
+        exact_content,
+        "</file_content>".to_string(),
+        "<SYSTEM_REMINDER>`file_content` contains the exact file bytes for the returned line range, without read_file line-number prefixes. When calling edit_file, copy old_string from inside <file_content> only. For a follow-up read after this block, use read_file offset=end_line.</SYSTEM_REMINDER>".to_string(),
+    ];
+
+    if truncated_by_size {
+        sections.push(format!(
+            "<SYSTEM_REMINDER>Partial file through line {} of {}. Continue with read_file offset={} and a narrower range if more exact content is needed.</SYSTEM_REMINDER>",
+            last_line_number,
+            total_lines,
+            next_offset.unwrap_or(offset + raw_lines.len())
+        ));
+    } else if truncated_by_limit {
+        sections.push(format!(
+            "<SYSTEM_REMINDER>Stopped at line {} of {} due to the requested limit. Continue with read_file offset={} if more exact content is needed.</SYSTEM_REMINDER>",
+            last_line_number,
+            total_lines,
+            next_offset.unwrap_or(offset + raw_lines.len())
+        ));
+    }
+
+    sections.join("\n")
+}
+
+fn escape_xml_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn execute_edit_file(
@@ -453,6 +524,7 @@ impl ToolDefinition for ReadFile {
         - Any single line longer than 10000 characters returns an error instead of being truncated\n\
         - Total returned file content is capped below the workflow observation truncation threshold; if exceeded, the tool returns <truncated_content> plus a SYSTEM_REMINDER with file size, total lines, and the next suggested offset\n\
         - Results are returned using cat -n style format: right-aligned 1-based line number, tab, then line content\n\
+        - In workflow LLM context, this tool also provides a structured `<file_content path=\"...\" offset=\"...\" end_line=\"...\" total_lines=\"...\" truncated=\"...\">...</file_content>` block containing the exact returned file content without line-number prefixes\n\
         - If output stops because limit was reached, a SYSTEM_REMINDER tells you the next offset to continue from\n\
         - If output reaches EOF before the limit, a SYSTEM_REMINDER tells you not to reread the same offset\n\
         - This tool can only read text files, not directories. To inspect a directory, use list_dir.\n\
@@ -609,7 +681,8 @@ impl ToolDefinition for EditFile {
         "Performs exact string replacements in files.\n\n\
         Usage:\n\
         - Ensure you have viewed the relevant file content (e.g., via `read_file` or user-provided context) to confirm exact text and indentation before editing.\n\
-        - When editing, preserve the exact indentation (tabs/spaces). If you used `read_file`, remember its output format: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in `old_string` or `new_string`.\n\
+        - When editing, preserve the exact indentation (tabs/spaces). If you used `read_file`, prefer copying `old_string` from inside the structured `<file_content ...>...</file_content>` block in LLM context because that block contains the exact file content without display line numbers.\n\
+        - The visible `read_file` output still includes `cat -n` style prefixes for readability. Never include any part of that display line-number prefix or separator in `old_string` or `new_string`.\n\
         - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n\
         - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n\
         - The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.\n\
@@ -694,6 +767,7 @@ impl ToolDefinition for PlanReadNote {
     fn description(&self) -> &str {
         "Reads the fixed planning note from `.cs/note.md` in the active workspace during strict manual plan mode.\n\
         This tool can only access that planning note and cannot read arbitrary workspace files.\n\
+        In workflow LLM context, it also provides the exact returned note content inside a structured `<file_content ...>...</file_content>` block for precise follow-up edits.\n\
         Use this tool to review your planning draft or research notes before calling `submit_plan`."
     }
 
@@ -824,6 +898,7 @@ impl ToolDefinition for PlanEditNote {
     fn description(&self) -> &str {
         "Edits the fixed planning note at `.cs/note.md` using exact string replacement.\n\
         This tool cannot touch arbitrary workspace files.\n\
+        If you previously used `plan_read_note`, prefer copying `old_string` from inside the structured `<file_content ...>...</file_content>` block in LLM context.\n\
         Use this after `plan_read_note` when you need a precise update to the planning document."
     }
 
@@ -1186,6 +1261,32 @@ mod tests {
         assert_eq!(structured["truncated_by_size"].as_bool(), Some(true));
         assert!(structured["next_offset"].as_u64().is_some());
         assert_eq!(structured["total_lines"].as_u64(), Some(120));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_includes_exact_llm_content_without_line_numbers() {
+        let tool = ReadFile::default();
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        fs::write(&path, "func test() {\n\tcall()\n    spaced()\n}\n").unwrap();
+
+        let result = tool
+            .call(json!({
+                "file_path": path
+            }))
+            .await
+            .unwrap();
+
+        let structured = result.structured_content.unwrap();
+        let llm_content = structured["llm_content"].as_str().unwrap_or_default();
+
+        assert!(llm_content.contains("<file_content "));
+        assert!(llm_content.contains("offset=\"0\""));
+        assert!(llm_content.contains("truncated=\"false\""));
+        assert!(llm_content.contains("\tcall()"));
+        assert!(llm_content.contains("    spaced()"));
+        assert!(!llm_content.contains("     2\t"));
     }
 
     #[tokio::test]
@@ -1557,7 +1658,7 @@ mod tests {
         "Performs exact string replacements in files.\n\n\
         Usage:\n\
         - Ensure you have viewed the full content of the file (e.g., via `read_file` or user-provided context) to confirm exact text and indentation before editing. \n\
-        - When editing, ensure you preserve the exact indentation (tabs/spaces). If you used `read_file`, remember its output format: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.\n\
+        - When editing, ensure you preserve the exact indentation (tabs/spaces). If you used `read_file`, prefer copying old_string from inside the structured <file_content ...>...</file_content> block in LLM context because that block contains the exact file content without display line numbers. Never include any part of the visible read_file line number prefix in the old_string or new_string.\n\
         - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n\
         - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n\
         - The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.\n\

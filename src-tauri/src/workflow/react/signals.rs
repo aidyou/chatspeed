@@ -139,22 +139,12 @@ impl SignalType {
 
 fn stashed_user_messages() -> &'static dashmap::DashMap<
     String,
-    VecDeque<(
-        String,
-        String,
-        Option<String>,
-        Option<serde_json::Value>,
-    )>,
+    VecDeque<(String, String, Option<String>, Option<serde_json::Value>)>,
 > {
     static STASHED: OnceLock<
         dashmap::DashMap<
             String,
-            VecDeque<(
-                String,
-                String,
-                Option<String>,
-                Option<serde_json::Value>,
-            )>,
+            VecDeque<(String, String, Option<String>, Option<serde_json::Value>)>,
         >,
     > = OnceLock::new();
     STASHED.get_or_init(dashmap::DashMap::new)

@@ -1,8 +1,9 @@
 use std::path::Path;
 
-use crate::libs::fs::save_thumbnail_image;
+use crate::libs::fs::{get_file_name, save_thumbnail_image};
 use crate::HTTP_SERVER;
 use crate::HTTP_SERVER_TMP_DIR;
+use crate::HTTP_SERVER_UPLOAD_DIR;
 use rust_i18n::t;
 use std::borrow::Cow;
 use std::fs;
@@ -347,4 +348,38 @@ pub async fn image_preview(
     };
 
     Ok(format!("{}/tmp/{}", http_server, file_name))
+}
+
+#[tauri::command]
+pub async fn image_source_url(image_path: &std::path::Path) -> Result<String> {
+    let upload_dir = HTTP_SERVER_UPLOAD_DIR.read().clone();
+    let original_dir = Path::new(&upload_dir).join("workflow-source");
+    std::fs::create_dir_all(&original_dir).map_err(|e| AppError::General {
+        message: format!(
+            "Failed to create workflow source image directory '{}': {}",
+            original_dir.display(),
+            e
+        ),
+    })?;
+
+    let file_name = get_file_name(image_path);
+    let save_path = original_dir.join(file_name.clone());
+    std::fs::copy(image_path, &save_path).map_err(|e| AppError::General {
+        message: format!(
+            "Failed to copy source image '{}' to '{}': {}",
+            image_path.display(),
+            save_path.display(),
+            e
+        ),
+    })?;
+
+    let mut http_server = HTTP_SERVER.read().clone();
+    if http_server.is_empty() {
+        http_server = "http://127.0.0.1:21914".to_string()
+    };
+
+    Ok(format!(
+        "{}/upload/workflow-source/{}",
+        http_server, file_name
+    ))
 }

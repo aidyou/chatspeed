@@ -509,9 +509,10 @@ mod tests {
                 Some("primary".to_string()),
                 None,
                 "System prompt".to_string(),
-                None,
-                None,
-                None,
+                None, // planning_prompt
+                None, // image_recognition_prompt
+                None, // available_tools
+                None, // auto_approve
                 None, // models
                 None, // shell_policy
                 None, // allowed_paths

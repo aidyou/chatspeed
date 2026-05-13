@@ -253,7 +253,7 @@ import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 import { ElMessageBox } from 'element-plus'
 import { invokeWrapper } from '@/libs/tauri'
-import { imagePreview } from '@/libs/fs'
+import { imagePreview, imageSourceUrl } from '@/libs/fs'
 import { showMessage, Uuid } from '@/libs/util'
 
 import { useWorkflowStore } from '@/stores/workflow'
@@ -581,12 +581,25 @@ function generateAttachmentId() {
   return `workflow_attachment_${Uuid()}`
 }
 
-function addImageAttachment(attachment) {
-  imageAttachments.value.push({
+function createPendingImageAttachment(attachment) {
+  const pendingAttachment = {
     id: generateAttachmentId(),
     type: 'image',
+    uploading: true,
     ...attachment
-  })
+  }
+  imageAttachments.value.push(pendingAttachment)
+  return pendingAttachment
+}
+
+function updateImageAttachment(id, updates) {
+  const attachment = imageAttachments.value.find(item => item.id === id)
+  if (!attachment) {
+    return false
+  }
+
+  Object.assign(attachment, updates)
+  return true
 }
 
 function removeImageAttachment(id) {
@@ -606,20 +619,26 @@ async function addImageAttachmentFromPath(path, name = '') {
     return false
   }
 
+  const pendingAttachment = createPendingImageAttachment({
+    name: String(name || path.split(/[/\\]/).pop() || 'image'),
+    path,
+    size: 0
+  })
+
   try {
-    const previewUrl = await imagePreview(path)
-    if (!previewUrl) {
+    const [previewUrl, sourceUrl] = await Promise.all([imagePreview(path), imageSourceUrl(path)])
+    if (!previewUrl || !sourceUrl) {
       throw new Error(t('chat.unsupportedFileType'))
     }
 
-    addImageAttachment({
-      name: String(name || path.split(/[/\\]/).pop() || 'image'),
-      path,
-      size: 0,
-      url: previewUrl
+    updateImageAttachment(pendingAttachment.id, {
+      url: previewUrl,
+      sourceUrl,
+      uploading: false
     })
     return true
   } catch (error) {
+    removeImageAttachment(pendingAttachment.id)
     console.error('Failed to add workflow image attachment from path:', error)
     showMessage(t('chat.errorOnAddAttachment', { error: error.message || String(error) }), 'error')
     return false
@@ -632,8 +651,14 @@ async function addImageAttachmentFromFile(file) {
     return false
   }
 
+  let pendingAttachment = null
+
   try {
     const rawFile = file.raw || file
+    pendingAttachment = createPendingImageAttachment({
+      name: rawFile.name,
+      size: rawFile.size
+    })
     const url = await new Promise((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = event => resolve(event.target?.result)
@@ -645,13 +670,16 @@ async function addImageAttachmentFromFile(file) {
       throw new Error(t('chat.unsupportedFileType'))
     }
 
-    addImageAttachment({
-      name: rawFile.name,
-      size: rawFile.size,
-      url
+    updateImageAttachment(pendingAttachment.id, {
+      url,
+      sourceUrl: url,
+      uploading: false
     })
     return true
   } catch (error) {
+    if (typeof pendingAttachment?.id === 'string') {
+      removeImageAttachment(pendingAttachment.id)
+    }
     console.error('Failed to add workflow image attachment:', error)
     showMessage(t('chat.errorOnAddAttachment', { error: error.message || String(error) }), 'error')
     return false
@@ -726,7 +754,10 @@ async function analyzeImageAttachments(attachments, userMessage) {
   }
 
   for (const attachment of attachments) {
-    visionMessage.content.push({ type: 'image_url', image_url: { url: attachment.url } })
+    visionMessage.content.push({
+      type: 'image_url',
+      image_url: { url: attachment.sourceUrl || attachment.url }
+    })
   }
 
   const visionChatId = `workflow_vision_${Uuid()}`
@@ -736,15 +767,39 @@ async function analyzeImageAttachments(attachments, userMessage) {
   let timeoutId = null
   let unlistenFn = null
 
+  const normalizeVisionErrorMessage = error => {
+    const raw = String(error?.message || error || '').trim()
+    if (!raw) {
+      return 'Vision analysis failed'
+    }
+
+    const sizeMatch = raw.match(/input size exceed limit\s+(\d+)x(\d+),\s*current input:\((\d+),\s*(\d+)\)/i)
+    if (sizeMatch) {
+      const [, limitW, limitH, currentW, currentH] = sizeMatch
+      return t('chat.errorOnAddAttachment', {
+        error: `Image size ${currentW}x${currentH} exceeds model limit ${limitW}x${limitH}`
+      })
+    }
+
+    return raw
+  }
+
   try {
     const result = await new Promise(async (resolve, reject) => {
       let fullContent = ''
       let finished = false
 
+      const rejectOnce = error => {
+        if (finished) return
+        finished = true
+        reject(error)
+      }
+
       try {
-        unlistenFn = await listen('chat_message', event => {
+        unlistenFn = await listen('chat_stream', event => {
           const payload = event.payload
-          if (payload.chatId !== visionChatId) {
+          const payloadChatId = payload.chatId || payload.chat_id
+          if (payloadChatId !== visionChatId) {
             return
           }
 
@@ -760,8 +815,7 @@ async function analyzeImageAttachments(attachments, userMessage) {
           }
 
           if (payload.type === 'error') {
-            finished = true
-            reject(new Error(payload.chunk || 'Vision analysis failed'))
+            rejectOnce(new Error(normalizeVisionErrorMessage(payload.chunk || payload.message)))
           }
         })
       } catch (error) {
@@ -771,7 +825,7 @@ async function analyzeImageAttachments(attachments, userMessage) {
 
       timeoutId = window.setTimeout(() => {
         if (!finished) {
-          reject(new Error('Vision analysis timeout'))
+          rejectOnce(new Error('Vision analysis timeout'))
         }
       }, 60000)
 
@@ -788,7 +842,7 @@ async function analyzeImageAttachments(attachments, userMessage) {
           metadata: {}
         })
       } catch (error) {
-        reject(error)
+        rejectOnce(new Error(normalizeVisionErrorMessage(error)))
       }
     })
 
@@ -823,7 +877,8 @@ function buildImageAttachmentMetadata(attachments) {
       type: 'image',
       name: attachment.name,
       size: attachment.size || 0,
-      url: attachment.url
+      url: attachment.url,
+      sourceUrl: attachment.sourceUrl || attachment.url
     }))
   }
 }
@@ -837,9 +892,6 @@ inputComposable.onSendMessage.value = async () => {
   if (!rawMessage && backupAttachments.length === 0) {
     return
   }
-
-  clearInput()
-  clearImageAttachments()
 
   let attachedContext = null
   let metadata = null
@@ -862,10 +914,17 @@ inputComposable.onSendMessage.value = async () => {
     return
   }
 
+  clearInput()
+  clearImageAttachments()
+
   const wasCommand = await coreOnSendMessage(rawMessage, {
     attachedContext,
     metadata
   })
+  if (wasCommand === false) {
+    inputMessage.value = backupMessage
+    imageAttachments.value = backupAttachments
+  }
   return wasCommand
 }
 

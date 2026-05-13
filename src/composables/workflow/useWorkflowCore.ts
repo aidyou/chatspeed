@@ -432,7 +432,10 @@ export function useWorkflowCore({
         if (BLOCKING_WAIT_REASONS.includes(waitReason.value)) return
         if (!workflowStore.messageQueue?.length) return
 
-        const deferred = workflowStore.messageQueue.filter((item) => !item.sent)
+        const shouldRetryUnacknowledged = !hasLiveSession.value
+        const deferred = workflowStore.messageQueue.filter((item) =>
+            shouldRetryUnacknowledged ? !item.acknowledged : !item.sent
+        )
         for (const item of deferred) {
             try {
                 await sendUserMessageSignal(currentWorkflowId.value, item.content, item.id, {
@@ -724,7 +727,6 @@ export function useWorkflowCore({
                     console.log(`[Workflow][state] ${prevState} -> ${payload.state} | wait_reason: ${payload.wait_reason || 'null'} | isWaiting: ${isWaiting}`)
 
                     if (TERMINAL_STATUSES.includes((payload.state || '').toLowerCase())) {
-                        workflowStore.setHasLiveSession(false)
                         workflowStore.loadWorkflows().catch((error) => {
                             console.warn('[Workflow] Failed to refresh workflows after terminal state:', error)
                         })
@@ -1033,13 +1035,13 @@ export function useWorkflowCore({
     const startNewWorkflow = async (prompt, options = {}) => {
         if (!selectedAgent.value) {
             console.error('No agent selected')
-            return
+            return false
         }
 
         const visiblePrompt = typeof prompt === 'string' ? prompt : ''
         const hasVisiblePrompt = visiblePrompt.trim() !== ''
         const hasAttachedContext = Boolean(options.attachedContext)
-        if (!hasVisiblePrompt && !hasAttachedContext) return
+        if (!hasVisiblePrompt && !hasAttachedContext) return false
 
         try {
             console.log('Starting workflow...')
@@ -1075,7 +1077,7 @@ export function useWorkflowCore({
                         planningMode: planningMode.value
                     })
                     console.log('Workflow engine started successfully')
-                    return
+                    return true
                 }
             }
 
@@ -1159,9 +1161,11 @@ export function useWorkflowCore({
                 planningMode: planningMode.value
             })
             console.log('Workflow engine started successfully')
+            return true
         } catch (error) {
             console.error('Failed to start workflow:', error)
             showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+            return false
         }
     }
 
@@ -1181,7 +1185,7 @@ export function useWorkflowCore({
 
         if (!currentWorkflowId.value) {
             // Start brand new workflow
-            await startNewWorkflow(message, options)
+            return await startNewWorkflow(message, options)
         } else {
             const currentStatus = String(workflowStore.currentWorkflow?.status || '').toLowerCase()
             if (currentStatus === WORKFLOW_STATUSES.STOPPING) {
@@ -1189,12 +1193,12 @@ export function useWorkflowCore({
                     t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
                     'warning'
                 )
-                return
+                return false
             }
             // 2. Decide: Signal or Re-start?
             // Phase 3: Use unified waiting check - all waiting states should send signal
             // Backend will validate signal type based on wait_reason
-            if (isRunning.value || isWaiting.value) {
+            if (hasLiveSession.value || isRunning.value || isWaiting.value) {
                 const shouldQueueLocally =
                     isRunning.value || waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
                 let queuedId = null
@@ -1209,7 +1213,8 @@ export function useWorkflowCore({
                             waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
                                 ? 'pending_approval'
                                 : 'queued',
-                        sent: false
+                        sent: false,
+                        acknowledged: false
                     })
                 }
 
@@ -1234,11 +1239,14 @@ export function useWorkflowCore({
                     if (queuedId) {
                         workflowStore.markQueuedMessageSent(queuedId)
                     }
+                    return true
                 } catch (error) {
                     if (queuedId) {
                         workflowStore.removeQueuedMessage(queuedId)
                     }
                     console.error('Failed to send signal:', error)
+                    showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+                    return false
                 }
             } else {
                 // Engine is stopped (Completed, Error, or Cancelled).
@@ -1255,6 +1263,7 @@ export function useWorkflowCore({
                         initialAttachedContext: options.attachedContext || null,
                         planningMode: planningMode.value
                     })
+                    return true
                 } catch (error) {
                     const errorText = String(error)
                     if (errorText.includes('Session is stopping')) {
@@ -1262,7 +1271,7 @@ export function useWorkflowCore({
                             t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
                             'warning'
                         )
-                        return
+                        return false
                     }
                     // Recovery path: session is already active in manager, route as user_message signal.
                     if (errorText.includes('Session already exists')) {
@@ -1274,17 +1283,21 @@ export function useWorkflowCore({
                                 null,
                                 options
                             )
-                            return
+                            return true
                         } catch (signalError) {
                             console.error('Failed to fallback to workflow_signal after Session already exists:', signalError)
                             showMessage(t('workflow.startFailed', { error: String(signalError) }), 'error')
+                            return false
                         }
                     }
                     console.error('Failed to resume workflow:', error)
                     showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+                    return false
                 }
             }
         }
+
+        return false
     }
 
     const removeQueuedMessage = async (queuedId) => {
@@ -1462,7 +1475,8 @@ export function useWorkflowCore({
                     ...selectedAgent.value,
                     planModel: configs.plan,
                     actModel: configs.act,
-                    utilityModel: configs.utility
+                    utilityModel: configs.utility,
+                    visionModel: configs.vision
                 }
 
                 await agentStore.saveAgent(updatedAgent)
