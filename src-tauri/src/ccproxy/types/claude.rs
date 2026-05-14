@@ -89,6 +89,16 @@ pub struct ClaudeNativeTool {
     pub description: Option<String>,
     #[serde(default)]
     pub input_schema: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_examples: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eager_input_streaming: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defer_loading: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_callers: Option<Vec<String>>,
 }
 
 /// Metadata for Claude requests
@@ -125,6 +135,7 @@ pub struct ClaudeCacheControl {
 #[serde(tag = "type")]
 pub enum ClaudeToolChoice {
     Auto,
+    None,
     Any,
     Tool { name: String },
 }

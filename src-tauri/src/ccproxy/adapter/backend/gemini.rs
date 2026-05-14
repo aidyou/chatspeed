@@ -632,14 +632,19 @@ impl BackendAdapter for GeminiBackendAdapter {
         });
 
         let gemini_tool_config = unified_request.tool_choice.as_ref().map(|choice| {
-            let mode = match choice {
-                UnifiedToolChoice::None => "NONE".to_string(),
-                UnifiedToolChoice::Auto => "AUTO".to_string(),
-                UnifiedToolChoice::Required => "ANY".to_string(),
-                UnifiedToolChoice::Tool { name: _ } => "ANY".to_string(),
+            let (mode, allowed_function_names) = match choice {
+                UnifiedToolChoice::None => ("NONE".to_string(), None),
+                UnifiedToolChoice::Auto => ("AUTO".to_string(), None),
+                UnifiedToolChoice::Required => ("ANY".to_string(), None),
+                UnifiedToolChoice::Tool { name } => {
+                    ("ANY".to_string(), Some(vec![name.clone()]))
+                }
             };
             GeminiToolConfig {
-                function_calling_config: Some(GeminiFunctionCallingConfig { mode }),
+                function_calling_config: Some(GeminiFunctionCallingConfig {
+                    mode,
+                    allowed_function_names,
+                }),
             }
         });
 
@@ -1162,7 +1167,10 @@ impl BackendAdapter for GeminiBackendAdapter {
 #[cfg(test)]
 mod tests {
     use super::{GeminiBackendAdapter, GEMINI_DUMMY_THOUGHT_SIGNATURE};
-    use crate::ccproxy::adapter::unified::{UnifiedContentBlock, UnifiedMessage, UnifiedRole};
+    use crate::ccproxy::adapter::unified::{
+        UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedToolChoice,
+    };
+    use crate::ccproxy::types::gemini::GeminiRequest;
     use serde_json::json;
 
     #[test]
@@ -1207,5 +1215,52 @@ mod tests {
         let parts = GeminiBackendAdapter::build_native_message_parts(&tool_msg);
         assert!(parts[0].thought_signature.is_none());
         assert!(parts[0].function_response.is_some());
+    }
+
+    #[tokio::test]
+    async fn specific_tool_choice_emits_allowed_function_names() {
+        let client = reqwest::Client::new();
+        let mut headers = reqwest::header::HeaderMap::new();
+        let mut unified_request = UnifiedRequest {
+            model: "gemini-2.5-flash".to_string(),
+            messages: vec![UnifiedMessage {
+                role: UnifiedRole::User,
+                content: vec![UnifiedContentBlock::Text {
+                    text: "hi".to_string(),
+                }],
+                reasoning_content: None,
+            }],
+            tool_choice: Some(UnifiedToolChoice::Tool {
+                name: "get_weather".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let request = GeminiBackendAdapter
+            .adapt_request(
+                &client,
+                &mut unified_request,
+                "test-key",
+                "https://example.com",
+                "gemini-2.5-flash",
+                false,
+                &mut headers,
+            )
+            .await
+            .expect("request should build")
+            .build()
+            .expect("request should finalize");
+
+        let body = request.body().and_then(|body| body.as_bytes()).unwrap();
+        let payload: GeminiRequest =
+            serde_json::from_slice(body).expect("payload should deserialize");
+
+        let allowed = payload
+            .tool_config
+            .and_then(|config| config.function_calling_config)
+            .and_then(|config| config.allowed_function_names)
+            .expect("allowed function names should exist");
+
+        assert_eq!(allowed, vec!["get_weather".to_string()]);
     }
 }

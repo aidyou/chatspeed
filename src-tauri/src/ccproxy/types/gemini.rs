@@ -96,6 +96,8 @@ pub struct GeminiToolConfig {
 #[serde(rename_all = "camelCase")]
 pub struct GeminiFunctionCallingConfig {
     pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_function_names: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

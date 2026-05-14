@@ -205,6 +205,7 @@ pub fn from_claude(
 
     let tool_choice = req.tool_choice.map(|choice| match choice {
         ClaudeToolChoice::Auto => UnifiedToolChoice::Auto,
+        ClaudeToolChoice::None => UnifiedToolChoice::None,
         ClaudeToolChoice::Any => UnifiedToolChoice::Required, // Claude's 'any' is closer to OpenAI's 'required'.
         ClaudeToolChoice::Tool { name } => UnifiedToolChoice::Tool { name },
     });

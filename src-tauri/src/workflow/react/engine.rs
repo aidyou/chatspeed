@@ -366,6 +366,34 @@ impl WorkflowExecutor {
             .or_else(|| Self::phase_runtime_model(agent_config, phase))
     }
 
+    fn model_thinking_explicitly_disabled(
+        model_config: Option<&crate::db::agent::ModelConfig>,
+    ) -> bool {
+        model_config
+            .and_then(|config| config.thinking.as_ref())
+            .is_some_and(|thinking| thinking.r#type.eq_ignore_ascii_case("disabled"))
+    }
+
+    fn resolve_runtime_reasoning_enabled(
+        selected_model: Option<&crate::db::agent::ModelConfig>,
+        actual_config: Option<&crate::db::ModelConfig>,
+        model_name: &str,
+    ) -> bool {
+        if Self::model_thinking_explicitly_disabled(selected_model) {
+            return false;
+        }
+
+        if let Some(crate::db::ModelConfig {
+            reasoning: Some(true),
+            ..
+        }) = actual_config
+        {
+            return true;
+        }
+
+        crate::ai::util::is_reasoning_supported(&model_name.to_lowercase())
+    }
+
     fn filter_skills_for_agent(
         discovered_skills: &HashMap<String, SkillManifest>,
         agent_config: &Agent,
@@ -455,15 +483,8 @@ impl WorkflowExecutor {
         self.llm_processor.agent_config = self.agent_config.clone();
         self.llm_processor.active_provider_id = provider_id;
         self.llm_processor.active_model_name = model_name.clone();
-        self.llm_processor.reasoning = if let Some(crate::db::ModelConfig {
-            reasoning: Some(true),
-            ..
-        }) = actual_config
-        {
-            true
-        } else {
-            crate::ai::util::is_reasoning_supported(&model_name.to_lowercase())
-        };
+        self.llm_processor.reasoning =
+            Self::resolve_runtime_reasoning_enabled(selected_model, actual_config.as_ref(), &model_name);
 
         self.intelligence_manager.active_provider_id = provider_id;
         self.intelligence_manager.active_model_name = model_name.clone();
@@ -1093,16 +1114,16 @@ impl WorkflowExecutor {
         // Initialize reasoning flag by piercing proxy if necessary
         let actual_config =
             executor.resolve_actual_model_config(initial_provider_id, &initial_model_name);
-        if let Some(crate::db::ModelConfig {
-            reasoning: Some(true),
-            ..
-        }) = actual_config
-        {
-            executor.llm_processor.reasoning = true;
-        } else {
-            executor.llm_processor.reasoning =
-                crate::ai::util::is_reasoning_supported(&initial_model_name.to_lowercase());
-        }
+        let initial_selected_model = executor
+            .agent_config
+            .models
+            .as_ref()
+            .and_then(|models| models.act.as_ref());
+        executor.llm_processor.reasoning = Self::resolve_runtime_reasoning_enabled(
+            initial_selected_model,
+            actual_config.as_ref(),
+            &initial_model_name,
+        );
 
         executor
     }

@@ -9,9 +9,11 @@ pub struct OllamaChatCompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub format: Option<String>, // "json"
+    pub format: Option<Value>, // "json" or a JSON schema object
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<OllamaOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub think: Option<Value>, // bool or "high" / "medium" / "low"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_alive: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -352,7 +352,7 @@ impl BackendAdapter for OllamaBackendAdapter {
                     // Try to extract format from response_format
                     if let Some(format_type) = rf.get("type") {
                         if format_type == "json_object" {
-                            Some("json".to_string())
+                            Some(serde_json::Value::String("json".to_string()))
                         } else {
                             None
                         }
@@ -360,6 +360,7 @@ impl BackendAdapter for OllamaBackendAdapter {
                         None
                     }
                 })
+                .or_else(|| unified_request.response_schema.clone())
                 .or_else(|| {
                     // Fallback to response_mime_type for backward compatibility
                     unified_request
@@ -367,7 +368,7 @@ impl BackendAdapter for OllamaBackendAdapter {
                         .as_ref()
                         .and_then(|mime| {
                             if mime == "application/json" {
-                                Some("json".to_string())
+                                Some(serde_json::Value::String("json".to_string()))
                             } else {
                                 None
                             }
@@ -385,6 +386,9 @@ impl BackendAdapter for OllamaBackendAdapter {
                 frequency_penalty: unified_request.frequency_penalty,
                 seed: unified_request.seed,
                 ..Default::default()
+            }),
+            think: unified_request.thinking.as_ref().and_then(|thinking| {
+                thinking.include_thoughts.map(serde_json::Value::Bool)
             }),
             keep_alive: unified_request
                 .keep_alive

@@ -102,17 +102,38 @@ pub fn from_ollama(
         logprobs: None,
         top_logprobs: None,
         metadata: None,
-        thinking: None,
-        cache_control: None,
-        safety_settings: None,
-        response_mime_type: req.format.and_then(|f| {
-            if f == "json" {
-                Some("application/json".to_string())
-            } else {
-                None
+        thinking: req.think.as_ref().and_then(|think| {
+            match think {
+                serde_json::Value::Bool(true) => Some(crate::ccproxy::adapter::unified::UnifiedThinking {
+                    budget_tokens: None,
+                    include_thoughts: Some(true),
+                }),
+                serde_json::Value::Bool(false) => Some(crate::ccproxy::adapter::unified::UnifiedThinking {
+                    budget_tokens: None,
+                    include_thoughts: Some(false),
+                }),
+                serde_json::Value::String(level) if !level.trim().is_empty() => Some(
+                    crate::ccproxy::adapter::unified::UnifiedThinking {
+                        budget_tokens: None,
+                        include_thoughts: Some(true),
+                    },
+                ),
+                _ => None,
             }
         }),
-        response_schema: None,
+        cache_control: None,
+        safety_settings: None,
+        response_mime_type: req.format.as_ref().and_then(|f| match f {
+            serde_json::Value::String(format) if format == "json" => {
+                Some("application/json".to_string())
+            }
+            serde_json::Value::Object(_) => Some("application/json".to_string()),
+            _ => None,
+        }),
+        response_schema: req.format.as_ref().and_then(|f| match f {
+            serde_json::Value::Object(_) => Some(f.clone()),
+            _ => None,
+        }),
         cached_content: None,
         tool_compat_mode,
         keep_alive: req
@@ -243,4 +264,42 @@ pub fn from_ollama_embed(req: OllamaEmbedRequest) -> Result<UnifiedEmbeddingRequ
         task_type: None,
         title: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::from_ollama;
+    use crate::ccproxy::types::ollama::OllamaChatCompletionRequest;
+    use serde_json::json;
+
+    #[test]
+    fn ollama_schema_format_maps_to_json_response_schema() {
+        let req: OllamaChatCompletionRequest = serde_json::from_value(json!({
+            "model": "qwen3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "format": {
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string"}
+                },
+                "required": ["answer"]
+            },
+            "think": true
+        }))
+        .expect("request should deserialize");
+
+        let unified = from_ollama(req, false).expect("conversion should succeed");
+        assert_eq!(
+            unified.response_mime_type.as_deref(),
+            Some("application/json")
+        );
+        assert!(unified.response_schema.is_some());
+        assert_eq!(
+            unified
+                .thinking
+                .as_ref()
+                .and_then(|thinking| thinking.include_thoughts),
+            Some(true)
+        );
+    }
 }

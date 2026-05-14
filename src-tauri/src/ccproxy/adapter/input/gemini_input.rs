@@ -82,12 +82,23 @@ pub fn from_gemini(
     let tool_choice = req
         .tool_config
         .map(|config| match config.function_calling_config {
-            Some(config) => match config.mode.as_str() {
-                "NONE" => UnifiedToolChoice::None,
-                "AUTO" => UnifiedToolChoice::Auto,
-                "ANY" => UnifiedToolChoice::Required,
-                _ => UnifiedToolChoice::Auto,
-            },
+            Some(config) => {
+                let allowed = config.allowed_function_names.unwrap_or_default();
+                match config.mode.as_str() {
+                    "NONE" => UnifiedToolChoice::None,
+                    "AUTO" => UnifiedToolChoice::Auto,
+                    "ANY" | "VALIDATED" => {
+                        if allowed.len() == 1 {
+                            UnifiedToolChoice::Tool {
+                                name: allowed[0].clone(),
+                            }
+                        } else {
+                            UnifiedToolChoice::Required
+                        }
+                    }
+                    _ => UnifiedToolChoice::Auto,
+                }
+            }
             None => UnifiedToolChoice::Auto,
         });
 
@@ -293,4 +304,36 @@ pub fn from_gemini_embedding(
         task_type: req.task_type,
         title: req.title,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::from_gemini;
+    use crate::ccproxy::adapter::unified::UnifiedToolChoice;
+    use crate::ccproxy::types::gemini::GeminiRequest;
+    use serde_json::json;
+
+    #[test]
+    fn single_allowed_function_name_maps_to_specific_tool_choice() {
+        let req: GeminiRequest = serde_json::from_value(json!({
+            "contents": [{"role": "user", "parts": [{"text": "weather"}]}],
+            "toolConfig": {
+                "functionCallingConfig": {
+                    "mode": "ANY",
+                    "allowedFunctionNames": ["get_weather"]
+                }
+            }
+        }))
+        .expect("request should deserialize");
+
+        let unified = from_gemini(req, false, "generateContent".to_string())
+            .expect("conversion should succeed");
+
+        assert_eq!(
+            unified.tool_choice,
+            Some(UnifiedToolChoice::Tool {
+                name: "get_weather".to_string()
+            })
+        );
+    }
 }

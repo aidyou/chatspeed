@@ -264,6 +264,7 @@ impl LlmProcessor {
             let (tx, mut rx) = mpsc::channel::<Arc<crate::ai::traits::chat::ChatResponse>>(100);
             let session_id_for_rx = self.session_id.clone();
             let gateway_for_rx = gateway.clone();
+            let reasoning_enabled_for_rx = self.reasoning;
             let allowed_tool_names: HashSet<String> =
                 tools.iter().map(|tool| tool.name.clone()).collect();
 
@@ -290,15 +291,17 @@ impl LlmProcessor {
                                 plain_text.push_str(&chunk.chunk);
                             }
                             MessageType::Reasoning => {
-                                gateway_for_rx
-                                    .send(
-                                        &session_id_for_rx,
-                                        GatewayPayload::ReasoningChunk {
-                                            content: chunk.chunk.clone(),
-                                        },
-                                    )
-                                    .await?;
-                                full_reasoning.push_str(&chunk.chunk);
+                                if reasoning_enabled_for_rx {
+                                    gateway_for_rx
+                                        .send(
+                                            &session_id_for_rx,
+                                            GatewayPayload::ReasoningChunk {
+                                                content: chunk.chunk.clone(),
+                                            },
+                                        )
+                                        .await?;
+                                    full_reasoning.push_str(&chunk.chunk);
+                                }
                             }
                             MessageType::ToolCalls => {
                                 match Self::normalize_and_validate_tool_calls(
@@ -421,7 +424,7 @@ impl LlmProcessor {
                     if let Some((cleaned_content, extracted_reasoning)) =
                         Self::extract_leading_native_think_block(&plain_text)
                     {
-                        if !extracted_reasoning.is_empty() {
+                        if self.reasoning && !extracted_reasoning.is_empty() {
                             if !full_reasoning.is_empty() {
                                 full_reasoning.push_str("\n\n");
                             }

@@ -397,13 +397,18 @@ impl BackendAdapter for ClaudeBackendAdapter {
                     name: tool.name.clone(),
                     description: tool.description.clone(),
                     input_schema: tool.input_schema.clone(),
+                    input_examples: None,
+                    strict: None,
+                    eager_input_streaming: None,
+                    defer_loading: None,
+                    allowed_callers: None,
                 })
                 .collect()
         });
 
         let claude_tool_choice = unified_request.tool_choice.as_ref().map(|choice| {
             match choice {
-                UnifiedToolChoice::None => ClaudeToolChoice::Auto, // Claude doesn't have a direct 'none'
+                UnifiedToolChoice::None => ClaudeToolChoice::None,
                 UnifiedToolChoice::Auto => ClaudeToolChoice::Auto,
                 UnifiedToolChoice::Required => ClaudeToolChoice::Any,
                 UnifiedToolChoice::Tool { name } => ClaudeToolChoice::Tool { name: name.clone() },

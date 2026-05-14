@@ -41,6 +41,16 @@ pub fn from_openai(
                 }
                 continue;
             }
+            Some("developer") => {
+                if let Some(OpenAIMessageContent::Text(text)) = msg.content {
+                    system_prompt = Some(format!(
+                        "{}{}\n",
+                        system_prompt.unwrap_or_default(),
+                        text.trim()
+                    ));
+                }
+                continue;
+            }
             Some("user") => UnifiedRole::User,
             Some("assistant") => UnifiedRole::Assistant,
             Some("tool") => UnifiedRole::Tool,
@@ -316,4 +326,29 @@ pub fn from_openai_embedding(
         task_type: None,
         title: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::from_openai;
+    use crate::ccproxy::adapter::unified::UnifiedRole;
+    use crate::ccproxy::types::openai::OpenAIChatCompletionRequest;
+    use serde_json::json;
+
+    #[test]
+    fn developer_messages_are_folded_into_system_prompt() {
+        let req: OpenAIChatCompletionRequest = serde_json::from_value(json!({
+            "model": "gpt-5.2",
+            "messages": [
+                {"role": "developer", "content": "Follow policy A."},
+                {"role": "user", "content": "Hello"}
+            ]
+        }))
+        .expect("request should deserialize");
+
+        let unified = from_openai(req, false).expect("conversion should succeed");
+        assert_eq!(unified.system_prompt.as_deref(), Some("Follow policy A."));
+        assert_eq!(unified.messages.len(), 1);
+        assert_eq!(unified.messages[0].role, UnifiedRole::User);
+    }
 }
