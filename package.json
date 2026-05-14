@@ -35,7 +35,7 @@
     "markmap-common": "^0.18",
     "markmap-lib": "^0.18",
     "markmap-view": "^0.18",
-    "mermaid": "^11.14.0",
+    "mermaid": "^11.15.0",
     "pdfjs-dist": "^5.4.530",
     "pinia": "^3.0.3",
     "sortablejs": "^1.15.6",
@@ -71,6 +71,7 @@
       "postcss": "8.5.10",
       "rollup": "4.60.3",
       "undici": "7.24.0",
+      "uuid@11": "11.1.1",
       "yaml": "2.8.3"
     }
   }
