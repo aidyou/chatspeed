@@ -483,8 +483,11 @@ impl WorkflowExecutor {
         self.llm_processor.agent_config = self.agent_config.clone();
         self.llm_processor.active_provider_id = provider_id;
         self.llm_processor.active_model_name = model_name.clone();
-        self.llm_processor.reasoning =
-            Self::resolve_runtime_reasoning_enabled(selected_model, actual_config.as_ref(), &model_name);
+        self.llm_processor.reasoning = Self::resolve_runtime_reasoning_enabled(
+            selected_model,
+            actual_config.as_ref(),
+            &model_name,
+        );
 
         self.intelligence_manager.active_provider_id = provider_id;
         self.intelligence_manager.active_model_name = model_name.clone();
@@ -4046,6 +4049,15 @@ impl WorkflowExecutor {
                     });
 
                 if has_successful_finish_task {
+                    if queued_applied {
+                        log::info!(
+                            "[Workflow][session={}][phase=queue] Finish tool completed, but queued user messages were applied in the same turn; continuing on the hot executor instead of entering Completed",
+                            self.session_id
+                        );
+                        self.update_state(WorkflowState::Thinking).await?;
+                        sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
                     self.update_state(WorkflowState::Completed).await?;
                     break;
                 }

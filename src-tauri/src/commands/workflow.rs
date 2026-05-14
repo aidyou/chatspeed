@@ -162,6 +162,15 @@ fn can_defer_runtime_config_signal_for_completed_session(signal_type: &str) -> b
     )
 }
 
+fn should_inject_terminal_user_message_into_live_session(
+    managed_status: Option<ManagedSessionStatus>,
+) -> bool {
+    matches!(
+        managed_status,
+        Some(ManagedSessionStatus::Active | ManagedSessionStatus::Waiting)
+    )
+}
+
 async fn inject_runtime_config_signal(
     gateway: &Arc<TauriGateway>,
     workflow_manager: &Arc<WorkflowManager>,
@@ -2838,6 +2847,45 @@ pub async fn workflow_signal(
             );
 
         if should_force_recovery_for_terminal_user_message {
+            let managed_status_for_terminal_user_message =
+                workflow_manager_arc.get_session_status(&session_id);
+            if should_inject_terminal_user_message_into_live_session(
+                managed_status_for_terminal_user_message.clone(),
+            ) {
+                log::info!(
+                    "[Workflow][session={}][phase=signal] Snapshot is terminal but live session status is {:?}; injecting user message into the hot executor instead of rebuilding",
+                    session_id,
+                    managed_status_for_terminal_user_message
+                );
+                match gateway_arc.inject_input(&session_id, signal.clone()).await {
+                    Ok(_) => {
+                        return Ok("Signal injected".to_string());
+                    }
+                    Err(e) => {
+                        if is_stale_gateway_injection_error(&e) {
+                            log::info!(
+                                "[Workflow][session={}][phase=signal] Hot terminal-session injection hit stale gateway state: {}. Falling back to completed-session recovery.",
+                                session_id,
+                                e
+                            );
+                            workflow_manager_arc.remove_session(&session_id);
+                            WorkflowManager::unregister_session_signal_tx_with_source(
+                                &session_id,
+                                "workflow_signal.recovery.terminal_user_message_stale_injection",
+                            );
+                            gateway_arc
+                                .unregister_session_with_source(
+                                    &session_id,
+                                    "workflow_signal.recovery.terminal_user_message_stale_injection",
+                                )
+                                .await;
+                        } else {
+                            return Err(format!("Gateway injection failed: {}", e));
+                        }
+                    }
+                }
+            }
+
             log::info!(
                 "[Workflow][session={}][phase=signal] Live session is completed and snapshot is terminal (status={}). Treating user message as completed-session resume request.",
                 session_id,
@@ -4422,5 +4470,25 @@ mod tests {
         let result = previous_completed_task_context(&messages).expect("expected previous task");
         assert_eq!(result.0, "Fix the captcha modal");
         assert_eq!(result.1, "Structured completion summary");
+    }
+
+    #[test]
+    fn test_should_inject_terminal_user_message_into_live_session() {
+        assert!(should_inject_terminal_user_message_into_live_session(Some(
+            ManagedSessionStatus::Active
+        )));
+        assert!(should_inject_terminal_user_message_into_live_session(Some(
+            ManagedSessionStatus::Waiting
+        )));
+        assert!(!should_inject_terminal_user_message_into_live_session(
+            Some(ManagedSessionStatus::Completed)
+        ));
+        assert!(!should_inject_terminal_user_message_into_live_session(
+            Some(ManagedSessionStatus::Stopping)
+        ));
+        assert!(!should_inject_terminal_user_message_into_live_session(
+            Some(ManagedSessionStatus::Failed)
+        ));
+        assert!(!should_inject_terminal_user_message_into_live_session(None));
     }
 }
