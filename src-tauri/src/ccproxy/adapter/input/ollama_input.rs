@@ -102,24 +102,26 @@ pub fn from_ollama(
         logprobs: None,
         top_logprobs: None,
         metadata: None,
-        thinking: req.think.as_ref().and_then(|think| {
-            match think {
-                serde_json::Value::Bool(true) => Some(crate::ccproxy::adapter::unified::UnifiedThinking {
+        thinking: req.think.as_ref().and_then(|think| match think {
+            serde_json::Value::Bool(true) => {
+                Some(crate::ccproxy::adapter::unified::UnifiedThinking {
                     budget_tokens: None,
                     include_thoughts: Some(true),
-                }),
-                serde_json::Value::Bool(false) => Some(crate::ccproxy::adapter::unified::UnifiedThinking {
+                })
+            }
+            serde_json::Value::Bool(false) => {
+                Some(crate::ccproxy::adapter::unified::UnifiedThinking {
                     budget_tokens: None,
                     include_thoughts: Some(false),
-                }),
-                serde_json::Value::String(level) if !level.trim().is_empty() => Some(
-                    crate::ccproxy::adapter::unified::UnifiedThinking {
-                        budget_tokens: None,
-                        include_thoughts: Some(true),
-                    },
-                ),
-                _ => None,
+                })
             }
+            serde_json::Value::String(level) if !level.trim().is_empty() => {
+                Some(crate::ccproxy::adapter::unified::UnifiedThinking {
+                    budget_tokens: None,
+                    include_thoughts: Some(true),
+                })
+            }
+            _ => None,
         }),
         cache_control: None,
         safety_settings: None,

@@ -5,6 +5,7 @@ const MAX_DISPLAY_CHARS: usize = 30_000;
 const GENERIC_LLM_MAX_LINES: usize = 40;
 const EXPLICIT_SHAPED_LLM_MAX_LINES: usize = 240;
 const EXPLICIT_SHAPED_LLM_MAX_CHARS: usize = 20_000;
+const KSP_LLM_PRESERVE_CHARS: usize = 15_000;
 const BUILD_LLM_TAIL_LINES: usize = 20;
 const TEST_LLM_TAIL_LINES: usize = 30;
 const GIT_LOG_HEAD_LINES: usize = 30;
@@ -85,6 +86,11 @@ fn reduce_shell_output_for_llm(
         return reduce_explicitly_shaped_output(raw_content);
     }
 
+    if is_ksp_command(&normalized_command) && raw_content.chars().count() <= KSP_LLM_PRESERVE_CHARS
+    {
+        return raw_content.to_string();
+    }
+
     if raw_content.lines().count() > 120 || raw_content.chars().count() > 8_000 {
         return reduce_generic_output(raw_content, GENERIC_LLM_MAX_LINES);
     }
@@ -130,6 +136,13 @@ fn is_plain_node_build(command: &str) -> bool {
 
 fn is_plain_frontend_build(command: &str) -> bool {
     command.ends_with("pnpm build") || command.ends_with("pnpm tauri build")
+}
+
+fn is_ksp_command(command: &str) -> bool {
+    command == "ksp"
+        || command.starts_with("ksp ")
+        || command.contains(" ksp ")
+        || command.contains("/ksp ")
 }
 
 fn is_explicitly_shaped_read_output(command: &str) -> bool {
@@ -396,5 +409,46 @@ mod tests {
         assert!(llm_content.contains("slice 1"));
         assert!(llm_content.contains("slice 400"));
         assert!(llm_content.contains("[truncated middle output]"));
+    }
+
+    #[test]
+    fn ksp_output_under_15k_is_preserved_for_llm() {
+        let stdout = (1..=180)
+            .map(|i| format!("knowledge result line {:03} {}", i, "x".repeat(40)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(stdout.chars().count() < super::KSP_LLM_PRESERVE_CHARS);
+
+        let result =
+            build_shell_tool_result("ksp search --keywords \"ctp,spi\" --json", 0, &stdout, "");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm_content should be a string");
+
+        assert_eq!(llm_content, format!("Exit code: 0\n\nstdout:\n{}", stdout));
+        assert!(!llm_content.contains("[truncated previous output]"));
+    }
+
+    #[test]
+    fn ksp_output_over_15k_still_uses_generic_reduction() {
+        let stdout = (1..=320)
+            .map(|i| format!("knowledge result line {:03} {}", i, "y".repeat(80)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(stdout.chars().count() > super::KSP_LLM_PRESERVE_CHARS);
+
+        let result = build_shell_tool_result("ksp load ctp-callback-threading", 0, &stdout, "");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm_content should be a string");
+
+        assert!(llm_content.starts_with("[truncated previous output]"));
+        assert!(llm_content.contains("knowledge result line 320"));
     }
 }

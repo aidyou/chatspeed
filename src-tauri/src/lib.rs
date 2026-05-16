@@ -292,6 +292,7 @@ pub async fn run() -> crate::error::Result<()> {
             workflow_stop,
             get_workflow_events,
             get_workflow_dispatcher_metrics,
+            get_workflow_efficiency_report,
 
             // dev tools
             test_scrape,

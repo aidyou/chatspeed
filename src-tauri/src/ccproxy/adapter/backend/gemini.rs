@@ -636,9 +636,7 @@ impl BackendAdapter for GeminiBackendAdapter {
                 UnifiedToolChoice::None => ("NONE".to_string(), None),
                 UnifiedToolChoice::Auto => ("AUTO".to_string(), None),
                 UnifiedToolChoice::Required => ("ANY".to_string(), None),
-                UnifiedToolChoice::Tool { name } => {
-                    ("ANY".to_string(), Some(vec![name.clone()]))
-                }
+                UnifiedToolChoice::Tool { name } => ("ANY".to_string(), Some(vec![name.clone()])),
             };
             GeminiToolConfig {
                 function_calling_config: Some(GeminiFunctionCallingConfig {

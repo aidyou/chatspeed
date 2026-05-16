@@ -406,14 +406,15 @@ impl BackendAdapter for ClaudeBackendAdapter {
                 .collect()
         });
 
-        let claude_tool_choice = unified_request.tool_choice.as_ref().map(|choice| {
-            match choice {
+        let claude_tool_choice = unified_request
+            .tool_choice
+            .as_ref()
+            .map(|choice| match choice {
                 UnifiedToolChoice::None => ClaudeToolChoice::None,
                 UnifiedToolChoice::Auto => ClaudeToolChoice::Auto,
                 UnifiedToolChoice::Required => ClaudeToolChoice::Any,
                 UnifiedToolChoice::Tool { name } => ClaudeToolChoice::Tool { name: name.clone() },
-            }
-        });
+            });
 
         let injection_pos = unified_request
             .prompt_injection_position

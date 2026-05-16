@@ -35,6 +35,7 @@
   - Added dedicated workflow UIs for models, skills, status, approvals, and tools.
   - Added workflow skill selection, built-in agents, model status panels, and slash commands.
   - Added integrated MCP tool support, Skills composition, shell configuration, and agent-level configuration so workflows can combine built-in capabilities with external tool ecosystems.
+  - Added image-recognition support to workflow-capable agents so execution-oriented tasks can incorporate screenshots and other visual inputs more naturally.
 
 ### 🪄 Improvements
 
@@ -45,11 +46,26 @@
   - Refined routing, model detection, statistics recording, and direct-forward behavior for stronger stability in complex proxy setups.
 - **Configuration and resource management**:
   - Improved i18n coverage, configuration synchronization, and default resource management for built-in agents, skills, and proxy features.
+- **Workflow runtime and interaction polish**:
+  - Refined workflow context carryover, compression boundaries, and prompt guidance to make long-running execution sessions more stable and less likely to drift.
+  - Improved workflow model configuration UX and runtime synchronization so per-workflow model settings, thinking toggles, and related controls apply more predictably.
+  - Renamed and polished built-in agent presets and editor surfaces for clearer role boundaries and better readability.
+- **Protocol-alignment updates for recent provider behavior**:
+  - Improved compatibility for newer OpenAI-compatible and vendor-specific fields, including better handling of reasoning controls, tool configuration, and schema-shaped request options.
+  - Strengthened Claude, Gemini, and Ollama request adaptation so tool-choice semantics, function-calling constraints, and structured-output formats map more accurately across protocols.
+- **Frontend dependency maintenance**:
+  - Updated vulnerable frontend dependencies, including `mermaid` and `uuid` resolution paths, to reduce known security exposure ahead of the `2.0.0` release.
 
 ### 🐞 Bug Fixes
 
 - **Proxy and integration stability fixes**:
   - Resolved a range of stability issues around MCP tool integration, protocol adaptation, empty-response observation, tool-compat mode, and protocol edge cases.
+- **Workflow completion and resume fixes**:
+  - Fixed a stubborn race where follow-up user messages submitted near workflow completion could be queued and rendered but fail to trigger the next execution turn.
+  - Fixed hot-resume edge cases around completed sessions, final completion-tool calls, and terminal-session signal routing that could surface `Session already exists` errors during valid follow-up input.
+  - Fixed cases where disabling thinking in workflow model selection did not fully suppress reasoning output for reasoning-capable models.
+- **Provider-compatibility fixes**:
+  - Fixed several cross-provider request-mapping gaps in the proxy layer, including newer role handling, tool-choice semantics, function-calling constraints, and structured-output request fields.
 
 ---
 

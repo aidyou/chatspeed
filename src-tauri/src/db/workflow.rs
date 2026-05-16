@@ -8,6 +8,7 @@ use crate::workflow::react::types::ExecutionContext;
 use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
 // =================================================
 //  Structs
@@ -76,6 +77,44 @@ pub struct WorkflowContextMessage {
 pub struct WorkflowSnapshot {
     pub workflow: Workflow,
     pub messages: Vec<WorkflowMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowEfficiencyMetrics {
+    pub total_tool_calls: u32,
+    pub search_calls: u32,
+    pub read_calls: u32,
+    pub edit_calls: u32,
+    pub verification_calls: u32,
+    pub no_match_searches: u32,
+    pub parallel_search_rounds: u32,
+    pub parallel_read_rounds: u32,
+    pub repeated_read_files: u32,
+    pub repeated_read_events: u32,
+    pub batch_edit_rounds: u32,
+    pub pre_edit_read_coverage: u32,
+    pub convergence_score: u32,
+    pub execution_score: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowEfficiencySessionReport {
+    pub session_id: String,
+    pub parent_session_id: Option<String>,
+    pub title: Option<String>,
+    pub user_query: String,
+    pub status: String,
+    pub metrics: WorkflowEfficiencyMetrics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowEfficiencyReport {
+    pub root_session_id: String,
+    pub main_agent: WorkflowEfficiencySessionReport,
+    pub sub_agents: Vec<WorkflowEfficiencySessionReport>,
 }
 
 // =================================================
@@ -175,6 +214,101 @@ impl From<&Row<'_>> for WorkflowContextMessage {
 // =================================================
 
 impl MainStore {
+    pub fn get_workflow_efficiency_report(
+        &self,
+        session_id: &str,
+    ) -> Result<WorkflowEfficiencyReport, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let root_workflow: Workflow = conn.query_row(
+            "SELECT * FROM workflows WHERE id = ?1",
+            params![session_id],
+            |row| Ok(Workflow::from(row)),
+        )?;
+
+        let mut stmt = conn.prepare(
+            "WITH RECURSIVE workflow_tree AS (
+                SELECT *
+                FROM workflows
+                WHERE id = ?1
+                UNION ALL
+                SELECT workflows.*
+                FROM workflows
+                JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+            )
+            SELECT *
+            FROM workflow_tree
+            ORDER BY CASE WHEN id = ?1 THEN 0 ELSE 1 END, created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| Ok(Workflow::from(row)))?;
+
+        let mut reports = Vec::new();
+        for row in rows {
+            let workflow = row?;
+            let messages = self.list_workflow_context_messages_for_session_locked(
+                &conn,
+                workflow.id.as_deref().unwrap_or_default(),
+            )?;
+            let metrics = compute_efficiency_metrics(&messages);
+            reports.push(WorkflowEfficiencySessionReport {
+                session_id: workflow.id.clone().unwrap_or_default(),
+                parent_session_id: workflow.parent_session_id.clone(),
+                title: workflow.title.clone(),
+                user_query: workflow.user_query.clone(),
+                status: workflow.status.clone(),
+                metrics,
+            });
+        }
+
+        let main_agent = reports
+            .iter()
+            .find(|report| report.session_id == session_id)
+            .cloned()
+            .unwrap_or_else(|| WorkflowEfficiencySessionReport {
+                session_id: session_id.to_string(),
+                parent_session_id: root_workflow.parent_session_id.clone(),
+                title: root_workflow.title.clone(),
+                user_query: root_workflow.user_query.clone(),
+                status: root_workflow.status.clone(),
+                metrics: WorkflowEfficiencyMetrics::default(),
+            });
+
+        let sub_agents = reports
+            .into_iter()
+            .filter(|report| report.session_id != session_id)
+            .collect();
+
+        Ok(WorkflowEfficiencyReport {
+            root_session_id: session_id.to_string(),
+            main_agent,
+            sub_agents,
+        })
+    }
+
+    fn list_workflow_context_messages_for_session_locked(
+        &self,
+        conn: &rusqlite::Connection,
+        session_id: &str,
+    ) -> Result<Vec<WorkflowContextMessage>, StoreError> {
+        let mut stmt = conn.prepare(
+            "SELECT *
+             FROM workflow_context_messages
+             WHERE session_id = ?1
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| {
+            Ok(WorkflowContextMessage::from(row))
+        })?;
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?);
+        }
+        Ok(messages)
+    }
+
     pub fn create_workflow(
         &self,
         id: &str,
@@ -845,6 +979,300 @@ impl MainStore {
     }
 }
 
+fn compute_efficiency_metrics(messages: &[WorkflowContextMessage]) -> WorkflowEfficiencyMetrics {
+    let mut metrics = WorkflowEfficiencyMetrics::default();
+    let mut read_counts: HashMap<String, u32> = HashMap::new();
+    let mut seen_read_files: HashSet<String> = HashSet::new();
+    let mut edited_files: HashSet<String> = HashSet::new();
+    let mut read_before_edit_files: HashSet<String> = HashSet::new();
+
+    for message in messages {
+        if message.role == "assistant" {
+            let tool_calls = extract_tool_calls_from_metadata(message.metadata.as_ref());
+            let search_count = tool_calls
+                .iter()
+                .filter(|tool_call| is_search_tool(&tool_call.name))
+                .count();
+            let read_count = tool_calls
+                .iter()
+                .filter(|tool_call| is_read_tool(&tool_call.name))
+                .count();
+            let edit_count = tool_calls
+                .iter()
+                .filter(|tool_call| is_edit_tool(&tool_call.name))
+                .count();
+
+            if search_count >= 2 {
+                metrics.parallel_search_rounds += 1;
+            }
+            if read_count >= 2 {
+                metrics.parallel_read_rounds += 1;
+            }
+            if edit_count >= 2 {
+                metrics.batch_edit_rounds += 1;
+            }
+            continue;
+        }
+
+        if message.role != "tool" {
+            continue;
+        }
+
+        let tool_name = extract_tool_name(message.metadata.as_ref());
+        if matches!(
+            tool_name.as_deref(),
+            Some("complete_workflow_with_summary" | "answer_user")
+        ) {
+            continue;
+        }
+
+        metrics.total_tool_calls += 1;
+
+        if let Some(tool_name) = tool_name.as_deref() {
+            if is_search_tool(tool_name) {
+                metrics.search_calls += 1;
+                if message.message.contains("[No matches found]") {
+                    metrics.no_match_searches += 1;
+                }
+            }
+
+            if is_read_tool(tool_name) {
+                metrics.read_calls += 1;
+                for path in extract_paths_for_tool(message, tool_name) {
+                    let count = read_counts.entry(path.clone()).or_insert(0);
+                    *count += 1;
+                    seen_read_files.insert(path);
+                }
+            }
+
+            if is_edit_tool(tool_name) {
+                metrics.edit_calls += 1;
+                for path in extract_paths_for_tool(message, tool_name) {
+                    if seen_read_files.contains(&path) {
+                        read_before_edit_files.insert(path.clone());
+                    }
+                    edited_files.insert(path);
+                }
+            }
+
+            if is_verification_tool(tool_name, message.metadata.as_ref()) {
+                metrics.verification_calls += 1;
+            }
+        }
+    }
+
+    metrics.repeated_read_files = read_counts.values().filter(|count| **count > 1).count() as u32;
+    metrics.repeated_read_events = read_counts
+        .values()
+        .map(|count| count.saturating_sub(1))
+        .sum();
+
+    metrics.pre_edit_read_coverage = if edited_files.is_empty() {
+        100
+    } else {
+        ((read_before_edit_files.len() as f64 / edited_files.len() as f64) * 100.0).round() as u32
+    };
+
+    metrics.convergence_score = score_convergence(&metrics);
+    metrics.execution_score = score_execution(&metrics);
+
+    metrics
+}
+
+#[derive(Debug, Clone)]
+struct ToolCallShape {
+    name: String,
+}
+
+fn extract_tool_calls_from_metadata(metadata: Option<&Value>) -> Vec<ToolCallShape> {
+    metadata
+        .and_then(|meta| meta.get("tool_calls"))
+        .and_then(|tool_calls| tool_calls.as_array())
+        .map(|tool_calls| {
+            tool_calls
+                .iter()
+                .filter_map(|tool_call| {
+                    tool_call
+                        .get("function")
+                        .and_then(|function| function.get("name"))
+                        .and_then(|name| name.as_str())
+                        .map(|name| ToolCallShape {
+                            name: name.to_string(),
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn extract_tool_name(metadata: Option<&Value>) -> Option<String> {
+    metadata
+        .and_then(|meta| meta.get("tool_name"))
+        .and_then(|tool_name| tool_name.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            metadata
+                .and_then(|meta| meta.get("tool_call"))
+                .and_then(|tool_call| tool_call.get("function"))
+                .and_then(|function| function.get("name"))
+                .and_then(|name| name.as_str())
+                .map(str::to_string)
+        })
+}
+
+fn is_search_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "glob" | "grep" | "list_dir" | "search_workspace_files" | "web_search"
+    )
+}
+
+fn is_read_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read_file" | "read_git_base_text_file" | "web_fetch"
+    )
+}
+
+fn is_edit_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "edit_file" | "write_file")
+}
+
+fn is_verification_tool(tool_name: &str, metadata: Option<&Value>) -> bool {
+    if !matches!(tool_name, "bash" | "execute_command") {
+        return false;
+    }
+
+    let Some(command_text) = metadata
+        .and_then(|meta| meta.get("tool_call"))
+        .and_then(|tool_call| tool_call.get("function"))
+        .and_then(|function| function.get("arguments"))
+        .and_then(|arguments| arguments.as_str())
+    else {
+        return false;
+    };
+
+    let command_text = command_text.to_ascii_lowercase();
+    [
+        "cargo check",
+        "cargo test",
+        "cargo clippy",
+        "npm test",
+        "pnpm test",
+        "pnpm lint",
+        "pnpm build",
+        "go test",
+        "pytest",
+        "vitest",
+        "jest",
+        "ruff check",
+    ]
+    .iter()
+    .any(|needle| command_text.contains(needle))
+}
+
+fn extract_paths_for_tool(message: &WorkflowContextMessage, tool_name: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    if matches!(tool_name, "read_file" | "read_git_base_text_file") {
+        if let Some(path) = extract_file_content_path(&message.message) {
+            paths.push(path);
+        }
+    }
+
+    if let Some(arguments) = message
+        .metadata
+        .as_ref()
+        .and_then(|meta| meta.get("tool_call"))
+        .and_then(|tool_call| tool_call.get("function"))
+        .and_then(|function| function.get("arguments"))
+        .and_then(|arguments| arguments.as_str())
+        .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+    {
+        collect_paths_from_json(&arguments, &mut paths);
+    }
+
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn extract_file_content_path(message: &str) -> Option<String> {
+    let marker = "<file_content path=\"";
+    let start = message.find(marker)? + marker.len();
+    let rest = &message[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+fn collect_paths_from_json(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, inner) in map {
+                let lower = key.to_ascii_lowercase();
+                let should_collect = matches!(
+                    lower.as_str(),
+                    "file_path" | "path" | "relative_path" | "target_file"
+                );
+                if should_collect {
+                    if let Some(path) = inner.as_str() {
+                        output.push(path.to_string());
+                    }
+                }
+                collect_paths_from_json(inner, output);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_paths_from_json(item, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn score_convergence(metrics: &WorkflowEfficiencyMetrics) -> u32 {
+    let mut score: i32 = 72;
+    score += ((metrics.parallel_search_rounds.min(2)) as i32) * 4;
+    score += ((metrics.parallel_read_rounds.min(2)) as i32) * 3;
+    score -= ((metrics.no_match_searches.min(3)) as i32) * 5;
+    score -= ((metrics.repeated_read_events.min(8)) as i32) * 2;
+
+    if metrics.edit_calls > 0 || metrics.verification_calls > 0 {
+        score += 6;
+    }
+
+    if metrics.total_tool_calls > 0 && metrics.search_calls == 0 && metrics.read_calls > 0 {
+        score += 2;
+    }
+
+    score.clamp(35, 95) as u32
+}
+
+fn score_execution(metrics: &WorkflowEfficiencyMetrics) -> u32 {
+    let mut score: i32 = 72;
+
+    if metrics.edit_calls > 0 {
+        score += ((metrics.pre_edit_read_coverage as i32) * 12) / 100;
+        score += ((metrics.batch_edit_rounds.min(2)) as i32) * 3;
+        if metrics.pre_edit_read_coverage < 50 {
+            score -= 8;
+        }
+    }
+
+    if metrics.verification_calls > 0 {
+        score += 10;
+    } else if metrics.edit_calls > 0 {
+        score -= 10;
+    }
+
+    if metrics.edit_calls == 0 && metrics.verification_calls == 0 {
+        score += 2;
+    }
+
+    score.clamp(45, 96) as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1060,6 +1488,195 @@ mod tests {
             count, 0,
             "parent and sub-agent workflow rows should be deleted"
         );
+    }
+
+    #[test]
+    fn test_get_workflow_efficiency_report_splits_main_and_sub_agents() {
+        let store = create_test_store();
+
+        store
+            .create_workflow("main-session", "Main task", "agent-main", None, None)
+            .expect("failed to create main workflow");
+        store
+            .create_workflow(
+                "subagent-child",
+                "Explore task",
+                "agent-child",
+                None,
+                Some("main-session"),
+            )
+            .expect("failed to create sub workflow");
+
+        store
+            .add_workflow_context_message(&WorkflowContextMessage {
+                id: None,
+                session_id: "main-session".to_string(),
+                segment_id: 1,
+                role: "assistant".to_string(),
+                message: "Read and edit".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: Some(serde_json::json!({
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "{\"file_path\":\"src/main.rs\"}"
+                            }
+                        },
+                        {
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "{\"file_path\":\"src/lib.rs\"}"
+                            }
+                        }
+                    ]
+                })),
+                source_message_id: None,
+                created_at: None,
+            })
+            .expect("failed to add main assistant context");
+        store
+            .add_workflow_context_message(&WorkflowContextMessage {
+                id: None,
+                session_id: "main-session".to_string(),
+                segment_id: 1,
+                role: "tool".to_string(),
+                message: "<file_content path=\"src/main.rs\">fn main() {}</file_content>"
+                    .to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: Some(serde_json::json!({
+                    "tool_name": "read_file",
+                    "tool_call": {
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"file_path\":\"src/main.rs\"}"
+                        }
+                    }
+                })),
+                source_message_id: None,
+                created_at: None,
+            })
+            .expect("failed to add main read tool");
+        store
+            .add_workflow_context_message(&WorkflowContextMessage {
+                id: None,
+                session_id: "main-session".to_string(),
+                segment_id: 1,
+                role: "tool".to_string(),
+                message: "{\"file_path\":\"src/main.rs\"}".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: Some(serde_json::json!({
+                    "tool_name": "edit_file",
+                    "tool_call": {
+                        "function": {
+                            "name": "edit_file",
+                            "arguments": "{\"file_path\":\"src/main.rs\"}"
+                        }
+                    }
+                })),
+                source_message_id: None,
+                created_at: None,
+            })
+            .expect("failed to add main edit tool");
+        store
+            .add_workflow_context_message(&WorkflowContextMessage {
+                id: None,
+                session_id: "main-session".to_string(),
+                segment_id: 1,
+                role: "tool".to_string(),
+                message: "ok".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: Some(serde_json::json!({
+                    "tool_name": "bash",
+                    "tool_call": {
+                        "function": {
+                            "name": "bash",
+                            "arguments": "{\"command\":\"cargo check\"}"
+                        }
+                    }
+                })),
+                source_message_id: None,
+                created_at: None,
+            })
+            .expect("failed to add main verification tool");
+
+        store
+            .add_workflow_context_message(&WorkflowContextMessage {
+                id: None,
+                session_id: "subagent-child".to_string(),
+                segment_id: 1,
+                role: "assistant".to_string(),
+                message: "Search in parallel".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: Some(serde_json::json!({
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "grep",
+                                "arguments": "{\"pattern\":\"foo\"}"
+                            }
+                        },
+                        {
+                            "function": {
+                                "name": "glob",
+                                "arguments": "{\"pattern\":\"*.rs\"}"
+                            }
+                        }
+                    ]
+                })),
+                source_message_id: None,
+                created_at: None,
+            })
+            .expect("failed to add sub assistant context");
+        store
+            .add_workflow_context_message(&WorkflowContextMessage {
+                id: None,
+                session_id: "subagent-child".to_string(),
+                segment_id: 1,
+                role: "tool".to_string(),
+                message: "[No matches found]".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: Some(serde_json::json!({
+                    "tool_name": "grep",
+                    "tool_call": {
+                        "function": {
+                            "name": "grep",
+                            "arguments": "{\"pattern\":\"foo\"}"
+                        }
+                    }
+                })),
+                source_message_id: None,
+                created_at: None,
+            })
+            .expect("failed to add sub grep tool");
+
+        let report = store
+            .get_workflow_efficiency_report("main-session")
+            .expect("failed to build efficiency report");
+
+        assert_eq!(report.main_agent.session_id, "main-session");
+        assert_eq!(report.sub_agents.len(), 1);
+        assert_eq!(report.sub_agents[0].session_id, "subagent-child");
+        assert_eq!(report.main_agent.metrics.read_calls, 1);
+        assert_eq!(report.main_agent.metrics.edit_calls, 1);
+        assert_eq!(report.main_agent.metrics.verification_calls, 1);
+        assert_eq!(report.main_agent.metrics.pre_edit_read_coverage, 100);
+        assert_eq!(report.sub_agents[0].metrics.parallel_search_rounds, 1);
+        assert_eq!(report.sub_agents[0].metrics.no_match_searches, 1);
+        assert!(report.main_agent.metrics.convergence_score >= 60);
+        assert!(report.main_agent.metrics.execution_score >= 80);
     }
 
     #[test]

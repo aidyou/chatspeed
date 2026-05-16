@@ -53,6 +53,12 @@
             @click="activeTab = 'models'">
             {{ t('workflow.statusPanel.modelsTab') || 'Models' }}
           </button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'efficiency' }"
+            @click="activeTab = 'efficiency'">
+            {{ translateOrFallback('workflow.statusPanel.efficiencyTab', 'Efficiency') }}
+          </button>
         </div>
 
         <template v-if="activeTab === 'main'">
@@ -240,6 +246,212 @@
           <span>{{ t('workflow.statusPanel.noModels') || 'No model configuration' }}</span>
         </div>
 
+        <template v-if="activeTab === 'efficiency'">
+          <div class="section">
+            <div class="section-header">
+              <cs name="skill-piechart" size="14px" />
+              <span>{{
+                translateOrFallback('workflow.statusPanel.efficiencyTitle', 'Efficiency Analysis')
+              }}</span>
+              <span v-if="efficiencyLastUpdatedLabel" class="section-meta">
+                {{ efficiencyLastUpdatedLabel }}
+              </span>
+              <button
+                class="refresh-btn"
+                :disabled="efficiencyLoading"
+                @click="refreshEfficiencyReport">
+                <cs
+                  name="refresh"
+                  size="12px"
+                  :class="{ 'cs-spin': efficiencyLoading }" />
+                <span>{{
+                  translateOrFallback('workflow.statusPanel.refresh', 'Refresh')
+                }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="efficiencyError" class="efficiency-error">
+            {{ efficiencyError }}
+          </div>
+
+          <div v-else-if="efficiencyLoading && !efficiencyMainAgent" class="empty-state">
+            <cs name="loading" size="28px" class="cs-spin" />
+            <span>{{ translateOrFallback('workflow.statusPanel.loading', 'Loading...') }}</span>
+          </div>
+
+          <template v-else-if="efficiencyMainAgent">
+            <div class="section">
+              <div class="section-header">
+                <cs name="agent" size="14px" />
+                <span>{{ translateOrFallback('workflow.statusPanel.mainAgent', 'Main Agent') }}</span>
+              </div>
+              <div class="efficiency-card">
+                <div class="efficiency-card-header">
+                  <span class="efficiency-card-title">{{
+                    getEfficiencySessionTitle(efficiencyMainAgent)
+                  }}</span>
+                  <span class="efficiency-status" :class="efficiencyMainAgent.status">{{
+                    efficiencyMainAgent.status
+                  }}</span>
+                </div>
+                <div class="score-row">
+                  <div class="score-pill" :class="scoreClass(efficiencyMainAgent.metrics.convergenceScore)">
+                    <span class="score-label">{{
+                      translateOrFallback('workflow.statusPanel.convergenceScore', 'Convergence')
+                    }}</span>
+                    <span class="score-value">{{ efficiencyMainAgent.metrics.convergenceScore }}</span>
+                  </div>
+                  <div
+                    class="score-pill"
+                    :class="scoreClass(efficiencyMainAgent.metrics.executionScore)">
+                    <span class="score-label">{{
+                      translateOrFallback('workflow.statusPanel.executionScore', 'Execution')
+                    }}</span>
+                    <span class="score-value">{{ efficiencyMainAgent.metrics.executionScore }}</span>
+                  </div>
+                </div>
+                <div class="score-hint">
+                  {{
+                    translateOrFallback(
+                      'workflow.statusPanel.scoreHint',
+                      'The two scores are a rough health summary; the chips below are raw counts.'
+                    )
+                  }}
+                </div>
+                <div class="metric-grid">
+                  <div class="metric-chip">
+                    <span class="metric-name">{{
+                      translateOrFallback('workflow.statusPanel.searchCalls', 'Search')
+                    }}</span>
+                    <span class="metric-value">{{ efficiencyMainAgent.metrics.searchCalls }}</span>
+                  </div>
+                  <div class="metric-chip">
+                    <span class="metric-name">{{
+                      translateOrFallback('workflow.statusPanel.readCalls', 'Read')
+                    }}</span>
+                    <span class="metric-value">{{ efficiencyMainAgent.metrics.readCalls }}</span>
+                  </div>
+                  <div class="metric-chip">
+                    <span class="metric-name">{{
+                      translateOrFallback('workflow.statusPanel.editCalls', 'Edit')
+                    }}</span>
+                    <span class="metric-value">{{ efficiencyMainAgent.metrics.editCalls }}</span>
+                  </div>
+                  <div class="metric-chip">
+                    <span class="metric-name">{{
+                      translateOrFallback('workflow.statusPanel.verificationCalls', 'Verify')
+                    }}</span>
+                    <span class="metric-value">{{
+                      efficiencyMainAgent.metrics.verificationCalls
+                    }}</span>
+                  </div>
+                  <div class="metric-chip">
+                    <span class="metric-name">{{
+                      translateOrFallback('workflow.statusPanel.parallelRounds', 'Parallel')
+                    }}</span>
+                    <span class="metric-value">{{
+                      efficiencyMainAgent.metrics.parallelSearchRounds +
+                      efficiencyMainAgent.metrics.parallelReadRounds
+                    }}</span>
+                  </div>
+                  <div class="metric-chip">
+                    <span class="metric-name">{{
+                      translateOrFallback('workflow.statusPanel.repeatReads', 'Repeat Read')
+                    }}</span>
+                    <span class="metric-value">{{
+                      efficiencyMainAgent.metrics.repeatedReadEvents
+                    }}</span>
+                  </div>
+                </div>
+                <div class="efficiency-notes">
+                  <span>{{
+                    translateOrFallback(
+                      'workflow.statusPanel.preEditCoverage',
+                      'Pre-edit read coverage'
+                    )
+                  }}</span>
+                  <strong>{{ efficiencyMainAgent.metrics.preEditReadCoverage }}%</strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="section-header">
+                <cs name="agent" size="14px" />
+                <span>{{ translateOrFallback('workflow.statusPanel.subAgents', 'Sub Agents') }}</span>
+                <span class="section-meta">{{ efficiencySubAgents.length }}</span>
+              </div>
+              <div v-if="efficiencySubAgents.length === 0" class="empty-state compact">
+                <cs name="agent" size="24px" />
+                <span>{{
+                  translateOrFallback('workflow.statusPanel.noSubAgents', 'No sub agents yet')
+                }}</span>
+              </div>
+              <ul v-else class="efficiency-agent-list">
+                <li
+                  v-for="agent in efficiencySubAgents"
+                  :key="agent.sessionId"
+                  class="efficiency-agent-item">
+                  <div class="efficiency-card-header">
+                    <span class="efficiency-card-title">{{ getEfficiencySessionTitle(agent) }}</span>
+                    <span class="efficiency-status" :class="agent.status">{{ agent.status }}</span>
+                  </div>
+                  <div class="score-row compact">
+                    <div class="score-pill" :class="scoreClass(agent.metrics.convergenceScore)">
+                      <span class="score-label">{{
+                        translateOrFallback('workflow.statusPanel.convergenceScore', 'Convergence')
+                      }}</span>
+                        <span class="score-value">{{ agent.metrics.convergenceScore }}</span>
+                    </div>
+                    <div
+                      class="score-pill"
+                      :class="scoreClass(agent.metrics.executionScore)">
+                      <span class="score-label">{{
+                        translateOrFallback('workflow.statusPanel.executionScore', 'Execution')
+                      }}</span>
+                      <span class="score-value">{{ agent.metrics.executionScore }}</span>
+                    </div>
+                  </div>
+                  <div class="metric-grid compact">
+                    <div class="metric-chip">
+                      <span class="metric-name">{{
+                        translateOrFallback('workflow.statusPanel.searchCalls', 'Search')
+                      }}</span>
+                      <span class="metric-value">{{ agent.metrics.searchCalls }}</span>
+                    </div>
+                    <div class="metric-chip">
+                      <span class="metric-name">{{
+                        translateOrFallback('workflow.statusPanel.readCalls', 'Read')
+                      }}</span>
+                      <span class="metric-value">{{ agent.metrics.readCalls }}</span>
+                    </div>
+                    <div class="metric-chip">
+                      <span class="metric-name">{{
+                        translateOrFallback('workflow.statusPanel.editCalls', 'Edit')
+                      }}</span>
+                      <span class="metric-value">{{ agent.metrics.editCalls }}</span>
+                    </div>
+                    <div class="metric-chip">
+                      <span class="metric-name">{{
+                        translateOrFallback('workflow.statusPanel.repeatReads', 'Repeat Read')
+                      }}</span>
+                      <span class="metric-value">{{ agent.metrics.repeatedReadEvents }}</span>
+                    </div>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </template>
+
+          <div v-else class="empty-state">
+            <cs name="skill-piechart" size="28px" />
+            <span>{{
+              translateOrFallback('workflow.statusPanel.noEfficiencyData', 'No efficiency data yet')
+            }}</span>
+          </div>
+        </template>
+
         <!-- Empty state -->
         <div
           v-if="activeTab === 'main' && todoList.length === 0 && recentOperations.length === 0"
@@ -320,7 +532,7 @@ const toolLedger = computed(() => workflowStore.toolList || [])
 const currentWorkflow = computed(() => workflowStore.currentWorkflow)
 
 // Panel dimensions
-const PANEL_WIDTH = 280
+const PANEL_WIDTH = 350
 const PANEL_HEIGHT = 200
 const COLLAPSED_WIDTH = 140
 const COLLAPSED_HEIGHT = 40
@@ -329,6 +541,11 @@ const DEFAULT_RIGHT = 20
 const DEFAULT_TOP = 200
 const CHILD_AGENT_LIMIT = 5
 const childSnapshotProgress = ref(new Map())
+const efficiencyReport = ref(null)
+const efficiencyLoading = ref(false)
+const efficiencyError = ref('')
+const efficiencyLoadedForSession = ref('')
+const efficiencyLastUpdatedAt = ref(0)
 const MIN_TOP_GAP = 5
 const DRAG_START_THRESHOLD = 4
 
@@ -944,6 +1161,67 @@ const childAgentSummaries = computed(() => {
     .slice(0, CHILD_AGENT_LIMIT)
 })
 
+const efficiencyMainAgent = computed(() => efficiencyReport.value?.mainAgent || null)
+const efficiencySubAgents = computed(() => efficiencyReport.value?.subAgents || [])
+const efficiencyLastUpdatedLabel = computed(() => {
+  if (!efficiencyLastUpdatedAt.value) return ''
+  return new Date(efficiencyLastUpdatedAt.value).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+})
+
+const getEfficiencySessionTitle = session => {
+  if (!session) return ''
+  return session.title || session.userQuery || session.sessionId
+}
+
+const scoreClass = score => {
+  if (score >= 80) return 'high'
+  if (score >= 60) return 'medium'
+  return 'low'
+}
+
+const loadEfficiencyReport = async ({ force = false } = {}) => {
+  const sessionId = workflowStore.currentWorkflowId
+  if (!sessionId) {
+    efficiencyReport.value = null
+    efficiencyLoadedForSession.value = ''
+    efficiencyError.value = ''
+    return
+  }
+
+  if (
+    !force &&
+    efficiencyLoadedForSession.value === sessionId &&
+    efficiencyReport.value &&
+    !efficiencyError.value
+  ) {
+    return
+  }
+
+  if (efficiencyLoading.value) return
+
+  efficiencyLoading.value = true
+  efficiencyError.value = ''
+  try {
+    const report = await invokeWrapper('get_workflow_efficiency_report', { sessionId })
+    efficiencyReport.value = report
+    efficiencyLoadedForSession.value = sessionId
+    efficiencyLastUpdatedAt.value = Date.now()
+  } catch (error) {
+    efficiencyError.value =
+      error?.message ||
+      translateOrFallback('workflow.statusPanel.loadFailed', 'Failed to load efficiency report')
+  } finally {
+    efficiencyLoading.value = false
+  }
+}
+
+const refreshEfficiencyReport = () => {
+  loadEfficiencyReport({ force: true })
+}
+
 const refreshChildSnapshots = async () => {
   const ids = childSessionIdsFromSource.value.slice(-CHILD_AGENT_LIMIT)
   if (!ids.length) {
@@ -1404,6 +1682,19 @@ watch(
     }
     activeTab.value = 'main'
     childSnapshotProgress.value = new Map()
+    efficiencyReport.value = null
+    efficiencyLoadedForSession.value = ''
+    efficiencyError.value = ''
+    efficiencyLastUpdatedAt.value = 0
+  }
+)
+
+watch(
+  () => activeTab.value,
+  newTab => {
+    if (newTab === 'efficiency') {
+      loadEfficiencyReport()
+    }
   }
 )
 
@@ -1434,7 +1725,7 @@ watch(
   position: fixed;
   right: 20px;
   bottom: 100px;
-  width: 280px;
+  width: 350px;
   background: var(--cs-bg-color);
   border: 1px solid var(--cs-border-color);
   border-radius: var(--cs-border-radius-lg);
@@ -1548,25 +1839,46 @@ watch(
 
 .panel-tabs {
   display: flex;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 4px;
   margin-bottom: 12px;
+  padding: 4px;
+  border-radius: var(--cs-border-radius-md);
+  background: var(--cs-bg-color-light);
+  border: 1px solid var(--cs-border-color-light);
 
   .tab-btn {
-    border: 1px solid var(--cs-border-color);
-    background: var(--cs-bg-color-light);
+    flex: 0 1 auto;
+    min-width: fit-content;
+    border: 1px solid transparent;
+    background: transparent;
     color: var(--cs-text-color-secondary);
     border-radius: var(--cs-border-radius);
-    padding: 4px 10px;
+    padding: 7px 8px;
     font-size: var(--cs-font-size-xs);
+    font-weight: 600;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
+    white-space: nowrap;
+    transition:
+      background-color 0.2s ease,
+      border-color 0.2s ease,
+      color 0.2s ease,
+      box-shadow 0.2s ease;
 
     &.active {
       color: var(--el-color-primary);
-      border-color: var(--el-color-primary-light-5);
-      background: var(--el-color-primary-light-9);
+      border-color: rgba(64, 158, 255, 0.18);
+      background: var(--cs-bg-color);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    }
+
+    &:hover:not(.active) {
+      color: var(--cs-text-color-primary);
+      background: rgba(255, 255, 255, 0.45);
     }
   }
 
@@ -1581,6 +1893,31 @@ watch(
     align-items: center;
     justify-content: center;
     padding: 0 4px;
+  }
+}
+
+.refresh-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--cs-border-color);
+  background: var(--cs-bg-color-light);
+  color: var(--cs-text-color-secondary);
+  border-radius: var(--cs-border-radius);
+  padding: 3px 8px;
+  font-size: 10px;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    color: var(--el-color-primary);
+    border-color: var(--el-color-primary-light-5);
+    background: var(--el-color-primary-light-9);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 }
 
@@ -1614,6 +1951,173 @@ watch(
       letter-spacing: 0;
     }
   }
+}
+
+.efficiency-error {
+  padding: 10px 12px;
+  border-radius: var(--cs-border-radius-sm);
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+  font-size: var(--cs-font-size-xs);
+  margin-bottom: 12px;
+}
+
+.efficiency-card,
+.efficiency-agent-item {
+  padding: 10px 12px;
+  border-radius: var(--cs-border-radius-sm);
+  background: var(--cs-bg-color-light);
+  border: 1px solid var(--cs-border-color);
+}
+
+.efficiency-agent-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.efficiency-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.efficiency-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cs-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.efficiency-status {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.5;
+  background: var(--cs-bg-color);
+  color: var(--cs-text-color-secondary);
+
+  &.running,
+  &.thinking,
+  &.pending {
+    color: var(--el-color-primary);
+  }
+
+  &.completed,
+  &.success {
+    color: var(--el-color-success);
+  }
+
+  &.error,
+  &.failed,
+  &.cancelled {
+    color: var(--el-color-danger);
+  }
+}
+
+.score-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+
+  &.compact {
+    margin-bottom: 8px;
+  }
+}
+
+.score-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--cs-border-radius-sm);
+  background: var(--cs-bg-color);
+  border: 1px solid var(--cs-border-color);
+
+  &.high {
+    border-color: rgba(103, 194, 58, 0.4);
+  }
+
+  &.medium {
+    border-color: rgba(230, 162, 60, 0.4);
+  }
+
+  &.low {
+    border-color: rgba(245, 108, 108, 0.35);
+  }
+}
+
+.score-label {
+  font-size: 10px;
+  color: var(--cs-text-color-secondary);
+  text-transform: uppercase;
+}
+
+.score-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--cs-text-color-primary);
+}
+
+.score-hint {
+  margin-bottom: 10px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--cs-text-color-placeholder);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+
+  &.compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.metric-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: var(--cs-border-radius-sm);
+  background: var(--cs-bg-color);
+}
+
+.metric-name {
+  font-size: 10px;
+  color: var(--cs-text-color-placeholder);
+  text-transform: uppercase;
+}
+
+.metric-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cs-text-color-primary);
+  font-family: var(--cs-font-family-mono, monospace);
+}
+
+.efficiency-notes {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--cs-text-color-secondary);
 }
 
 .child-agent-list {
@@ -2112,6 +2616,10 @@ watch(
 
   span {
     font-size: var(--cs-font-size-sm);
+  }
+
+  &.compact {
+    padding: 16px 12px;
   }
 }
 

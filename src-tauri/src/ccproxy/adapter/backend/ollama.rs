@@ -387,9 +387,10 @@ impl BackendAdapter for OllamaBackendAdapter {
                 seed: unified_request.seed,
                 ..Default::default()
             }),
-            think: unified_request.thinking.as_ref().and_then(|thinking| {
-                thinking.include_thoughts.map(serde_json::Value::Bool)
-            }),
+            think: unified_request
+                .thinking
+                .as_ref()
+                .and_then(|thinking| thinking.include_thoughts.map(serde_json::Value::Bool)),
             keep_alive: unified_request
                 .keep_alive
                 .as_deref()

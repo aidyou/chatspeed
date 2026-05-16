@@ -1,7 +1,10 @@
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
-use crate::db::{Agent, AgentConfig, MainStore, Workflow, WorkflowMessage, WorkflowSnapshot};
+use crate::db::{
+    Agent, AgentConfig, MainStore, Workflow, WorkflowEfficiencyReport, WorkflowMessage,
+    WorkflowSnapshot,
+};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::child_tasks::get_sub_agent_registry;
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
@@ -1931,6 +1934,15 @@ fn is_resumable_from_context_for_user_message(ctx: Option<&ExecutionContext>) ->
     }
 }
 
+fn can_resume_user_message_from_recovery(
+    ctx: Option<&ExecutionContext>,
+    snapshot_status: &str,
+) -> bool {
+    compat_is_terminal_snapshot_status(snapshot_status)
+        || is_resumable_from_context_for_user_message(ctx)
+        || (ctx.is_none() && compat_is_resumable_snapshot_status_for_user_message(snapshot_status))
+}
+
 fn signal_json_content(signal: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(signal)
         .ok()
@@ -3042,12 +3054,10 @@ pub async fn workflow_signal(
 
                 // When recovery_context is None (for example a brand-new workflow with no
                 // persisted execution history yet), fall back to the durable workflow status.
-                let is_resumable =
-                    is_resumable_from_context_for_user_message(recovery_context.as_ref())
-                        || (recovery_context.is_none()
-                            && compat_is_resumable_snapshot_status_for_user_message(
-                                &workflow_snapshot.workflow.status,
-                            ));
+                let is_resumable = can_resume_user_message_from_recovery(
+                    recovery_context.as_ref(),
+                    &workflow_snapshot.workflow.status,
+                );
 
                 if !is_resumable {
                     log::info!(
@@ -4345,6 +4355,17 @@ pub async fn get_workflow_dispatcher_metrics(
         .ok_or_else(|| format!("No dispatcher metrics found for session {}", session_id))
 }
 
+#[tauri::command]
+pub async fn get_workflow_efficiency_report(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+) -> Result<WorkflowEfficiencyReport, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    store
+        .get_workflow_efficiency_report(&session_id)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4395,6 +4416,25 @@ mod tests {
         running.state = RuntimeState::Running;
         assert!(!is_resumable_from_context_for_user_message(Some(&running)));
         assert!(!is_resumable_from_context_for_user_message(None));
+    }
+
+    #[test]
+    fn test_can_resume_user_message_from_recovery_prefers_terminal_snapshot() {
+        let mut running = ExecutionContext::new("session-5".to_string());
+        running.state = RuntimeState::Running;
+
+        assert!(can_resume_user_message_from_recovery(
+            Some(&running),
+            "cancelled"
+        ));
+        assert!(can_resume_user_message_from_recovery(
+            Some(&running),
+            "completed"
+        ));
+        assert!(!can_resume_user_message_from_recovery(
+            Some(&running),
+            "executing"
+        ));
     }
 
     #[test]

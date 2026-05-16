@@ -141,9 +141,10 @@ impl PathGuard {
     }
 
     pub fn is_authorized_root(&self, path: &Path) -> bool {
-        let physical_path = path
+        let requested_path = Self::normalize_requested_path(path);
+        let physical_path = requested_path
             .canonicalize()
-            .unwrap_or_else(|_| Self::normalize_path(path));
+            .unwrap_or_else(|_| Self::normalize_path(&requested_path));
         if Self::is_sensitive_path(&physical_path) {
             return false;
         }
@@ -201,6 +202,24 @@ impl PathGuard {
         ret
     }
 
+    fn normalize_requested_path(path: &Path) -> PathBuf {
+        let normalized = Self::normalize_path(path);
+
+        #[cfg(target_os = "macos")]
+        {
+            let tmp_root = Path::new("/tmp");
+            if normalized == tmp_root {
+                return std::env::temp_dir();
+            }
+
+            if let Ok(relative) = normalized.strip_prefix(tmp_root) {
+                return std::env::temp_dir().join(relative);
+            }
+        }
+
+        normalized
+    }
+
     fn resolve_physical_path(path: &Path) -> PathBuf {
         if let Ok(canonical) = path.canonicalize() {
             return canonical;
@@ -245,7 +264,8 @@ impl PathGuard {
             }
         };
 
-        let final_path = Self::resolve_physical_path(&abs_path);
+        let requested_path = Self::normalize_requested_path(&abs_path);
+        let final_path = Self::resolve_physical_path(&requested_path);
 
         if Self::is_sensitive_path(&final_path) {
             return Err(WorkflowEngineError::Security(format!(
@@ -479,5 +499,26 @@ mod tests {
             .validate(&ws.join("f.txt"), true, true, false)
             .is_err());
         assert!(guard.validate(&sb.join("f.txt"), true, true, false).is_ok());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_path_guard_maps_tmp_alias_into_process_temp_dir() {
+        let guard = PathGuard::new(vec![], vec![std::env::temp_dir()], vec![]);
+        assert!(guard
+            .validate(
+                Path::new("/tmp/chatspeed-security-test.txt"),
+                false,
+                true,
+                false,
+            )
+            .is_ok());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_path_guard_treats_tmp_alias_as_authorized_root() {
+        let guard = PathGuard::new(vec![], vec![std::env::temp_dir()], vec![]);
+        assert!(guard.is_authorized_root(Path::new("/tmp")));
     }
 }

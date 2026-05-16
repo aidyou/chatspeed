@@ -22,4 +22,6 @@ pub use mcp::Mcp;
 pub use note::{Note, NoteTag};
 pub use proxy_group::ProxyGroup;
 pub use types::{AiModel, AiSkill, CcproxyStat, Conversation, ModelConfig, ThinkingConfig};
-pub use workflow::{Workflow, WorkflowContextMessage, WorkflowMessage, WorkflowSnapshot};
+pub use workflow::{
+    Workflow, WorkflowContextMessage, WorkflowEfficiencyReport, WorkflowMessage, WorkflowSnapshot,
+};

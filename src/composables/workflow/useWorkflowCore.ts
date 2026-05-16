@@ -712,13 +712,21 @@ export function useWorkflowCore({
             // Phase 9: Error boundary - capture UI update exceptions
             safeExecute(() => {
                 const payload = event.payload
-
-                // Any event from this channel means the session is live on backend.
-                if (workflowStore.currentWorkflowId === sessionId) {
+                const markSessionLiveFromNonTerminalEvent = () => {
+                    if (workflowStore.currentWorkflowId !== sessionId) return
+                    const currentStatus = String(workflowStore.currentWorkflow?.status || '').toLowerCase()
+                    if (TERMINAL_STATUSES.includes(currentStatus)) return
                     workflowStore.setHasLiveSession(true)
                 }
 
                 if (payload.type === 'state') {
+                    const isTerminalState = TERMINAL_STATUSES.includes(
+                        String(payload.state || '').toLowerCase()
+                    )
+                    if (workflowStore.currentWorkflowId === sessionId) {
+                        workflowStore.setHasLiveSession(!isTerminalState)
+                    }
+
                     const prevState = workflowStore.currentWorkflow?.status
                     const prevWaitReason = workflowStore.waitReason
                     workflowStore.updateWorkflowStatus(sessionId, payload.state, payload.wait_reason || null)
@@ -756,16 +764,19 @@ export function useWorkflowCore({
                         })
                     }
                 } else if (payload.type === 'chunk') {
+                    markSessionLiveFromNonTerminalEvent()
                     if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Direct text chunk from LLM or StreamParser
                     processChunk(payload.content)
                     scrollToBottom()
                 } else if (payload.type === 'reasoning_chunk') {
+                    markSessionLiveFromNonTerminalEvent()
                     if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Thinking chunk
                     processReasoningChunk(payload.content)
                     scrollToBottom()
                 } else if (payload.type === 'message') {
+                    markSessionLiveFromNonTerminalEvent()
                     if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // ReAct engine sends incremental messages or chunks
                     workflowStore.addMessage({
@@ -786,11 +797,13 @@ export function useWorkflowCore({
                     // Only auto-scroll when the user is still pinned near the bottom.
                     scrollToBottom()
                 } else if (payload.type === 'confirm') {
+                    markSessionLiveFromNonTerminalEvent()
                     // Current-session approvals are rendered inline in tool messages.
                     workflowStore.clearApprovalSubmission(sessionId, payload.id)
                     upsertPendingApprovalEntry(sessionId, payload)
                     playApprovalNotificationSound()
                 } else if (payload.type === 'approval_resolved') {
+                    markSessionLiveFromNonTerminalEvent()
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     if (payload.approved) {
@@ -803,18 +816,23 @@ export function useWorkflowCore({
                         workflowStore.markToolRejected(payload.tool_call_id)
                     }
                 } else if (payload.type === 'tool_started') {
+                    markSessionLiveFromNonTerminalEvent()
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     workflowStore.markToolApprovedRunning(payload.tool_call_id)
                 } else if (payload.type === 'queued_user_message_removed') {
+                    markSessionLiveFromNonTerminalEvent()
                     workflowStore.removeQueuedMessage(payload.queued_user_message_id)
                 } else if (payload.type === 'retry_status') {
+                    markSessionLiveFromNonTerminalEvent()
                     if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Handle 429 retry status
                     setRetryStatus(payload)
                 } else if (payload.type === 'sync_todo') {
+                    markSessionLiveFromNonTerminalEvent()
                     workflowStore.setTodoList(payload.todo_list)
                 } else if (payload.type === 'agent_config_updated') {
+                    markSessionLiveFromNonTerminalEvent()
                     const nextConfig = payload.agent_config || {}
                     applyWorkflowConfigToLocalStore(nextConfig)
                     if (workflowStore.currentWorkflow?.id === sessionId) {
@@ -829,27 +847,34 @@ export function useWorkflowCore({
                         isSyncingWorkflowConfig.value = false
                     }
                 } else if (payload.type === 'compression_status') {
+                    markSessionLiveFromNonTerminalEvent()
                     // Handle context compression status
                     setCompressionStatus(sessionId, payload.is_compressing, payload.message)
                     if (payload.is_compressing) {
                         scrollToBottom()
                     }
                 } else if (payload.type === 'context_usage') {
+                    markSessionLiveFromNonTerminalEvent()
                     workflowStore.setCurrentContextTokens(
                         sessionId,
                         payload.current_context_tokens ?? payload.total_tokens,
                         payload.max_context_tokens
                     )
                 } else if (payload.type === 'sub_agent_progress') {
+                    markSessionLiveFromNonTerminalEvent()
                     workflowStore.upsertSubAgentProgress(payload)
                 } else if (payload.type === 'notification') {
+                    markSessionLiveFromNonTerminalEvent()
                     if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     workflowStore.setNotification(payload.message, payload.category)
                 } else if (payload.type === 'auto_approved_tools_updated') {
+                    markSessionLiveFromNonTerminalEvent()
                     workflowStore.setAutoApprovedTools(payload.tools)
                 } else if (payload.type === 'shell_policy_updated') {
+                    markSessionLiveFromNonTerminalEvent()
                     workflowStore.setShellPolicy(payload.policy)
                 } else if (payload.type === 'tool_stream') {
+                    markSessionLiveFromNonTerminalEvent()
                     // Handle tool streaming output
                     const { tool_id, output } = payload
                     workflowStore.appendToolStream(tool_id, output)
