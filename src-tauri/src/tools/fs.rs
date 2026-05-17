@@ -8,6 +8,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const PLANNING_NOTE_FILE: &str = "note.md";
 const DEFAULT_READ_FILE_LIMIT: usize = 800;
@@ -78,6 +79,45 @@ fn should_skip_list_dir_entry(name: &str) -> bool {
 
 fn planning_note_path(planning_root: &Path) -> PathBuf {
     planning_root.join(PLANNING_NOTE_FILE)
+}
+
+fn timestamp_millis() -> Result<u128, ToolError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .map_err(|e| ToolError::IoError(format!("Failed to read system clock: {}", e)))
+}
+
+fn sanitize_backup_name_component(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '-' => ch,
+            _ => '_',
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "file".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn overwrite_backup_path(path: &Path) -> Result<PathBuf, ToolError> {
+    let timestamp = timestamp_millis()?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ToolError::InvalidParams(format!(
+                "Cannot create overwrite backup for path without a valid file name: {}",
+                path.display()
+            ))
+        })?;
+    let sanitized_name = sanitize_backup_name_component(file_name);
+    Ok(std::env::temp_dir().join(format!(
+        "chatspeed-write-file-backup-{sanitized_name}-{timestamp}.bak"
+    )))
 }
 
 #[derive(Clone)]
@@ -591,7 +631,8 @@ impl ToolDefinition for WriteFile {
         "Writes a file to the local filesystem.\n\n\
         Usage:\n\
         - This tool is only for creating brand-new files.\n\
-        - If a file already exists at the provided path, this tool fails; use `edit_file` instead.\n\
+        - If a file already exists at the provided path, this tool fails unless you explicitly pass `overwrite: true`.\n\
+        - When `overwrite: true` is used, the existing file is first backed up to a timestamped file in the system temporary directory before the new content is written.\n\
         - Parent directories are created automatically when they do not already exist.\n\
         - Use a relative path when creating files under the primary working directory.\n\
         - For other authorized directories, use an absolute path.\n\
@@ -615,7 +656,8 @@ impl ToolDefinition for WriteFile {
                 "type": "object",
                 "properties": {
                     "file_path": { "type": "string", "description": "Path to the new file. Use a relative path under the primary working directory, or an absolute path for other authorized directories. Parent directories are created automatically." },
-                    "content": { "type": "string", "description": "The content to write to the file" }
+                    "content": { "type": "string", "description": "The content to write to the file" },
+                    "overwrite": { "type": "boolean", "description": "Allow replacing an existing file. When true, the existing file is backed up to a timestamped file in the system temporary directory first.", "default": false }
                 },
                 "required": ["file_path", "content"]
             }),
@@ -633,13 +675,36 @@ impl ToolDefinition for WriteFile {
         let content = params["content"]
             .as_str()
             .ok_or(ToolError::InvalidParams("content is required".to_string()))?;
+        let overwrite = params["overwrite"].as_bool().unwrap_or(false);
         let path = resolve_tool_path(path_str, self.path_guard.as_ref());
+        let mut backup_path: Option<PathBuf> = None;
+        let mut overwritten = false;
 
         if path.exists() {
-            return Err(ToolError::InvalidParams(format!(
-                "file_path already exists: {}. `write_file` can only create new files; use `edit_file` to modify existing files",
-                path.display()
-            )));
+            if path.is_dir() {
+                return Err(ToolError::InvalidParams(format!(
+                    "file_path points to a directory, not a file: {}",
+                    path.display()
+                )));
+            }
+
+            if !overwrite {
+                return Err(ToolError::InvalidParams(format!(
+                    "file_path already exists: {}. `write_file` can only create new files unless `overwrite: true` is provided; use `edit_file` for precise modifications",
+                    path.display()
+                )));
+            }
+
+            let backup = overwrite_backup_path(&path)?;
+            fs::copy(&path, &backup).map_err(|e| {
+                ToolError::IoError(format!(
+                    "Failed to create overwrite backup {}: {}",
+                    backup.display(),
+                    e
+                ))
+            })?;
+            backup_path = Some(backup);
+            overwritten = true;
         }
 
         // Ensure parent directories exist for new files
@@ -651,11 +716,17 @@ impl ToolDefinition for WriteFile {
             .map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
 
         Ok(ToolCallResult::success(
-            Some("New file created successfully.".to_string()),
+            Some(if overwritten {
+                "File written successfully; existing file was backed up first.".to_string()
+            } else {
+                "New file created successfully.".to_string()
+            }),
             Some(json!({
                 "file_path": path.to_string_lossy(),
                 "display_path": display_path_for_tool_output(&path, self.path_guard.as_ref()),
-                "bytes_written": content.len()
+                "bytes_written": content.len(),
+                "overwritten": overwritten,
+                "backup_path": backup_path.as_ref().map(|value| value.to_string_lossy().to_string())
             })),
         ))
     }
@@ -1378,16 +1449,38 @@ mod tests {
 
         let result = tool.call(params).await.unwrap();
         assert_eq!(result.content.unwrap(), "New file created successfully.");
+        let structured = result.structured_content.unwrap();
         assert_eq!(
-            result.structured_content.unwrap()["bytes_written"]
-                .as_u64()
-                .unwrap(),
+            structured["bytes_written"].as_u64().unwrap(),
             content.len() as u64
         );
+        assert_eq!(structured["overwritten"].as_bool(), Some(false));
+        assert!(structured["backup_path"].is_null());
 
         // Verify file was written
         let actual_content = fs::read_to_string(&path).unwrap();
         assert_eq!(actual_content, content);
+    }
+
+    #[tokio::test]
+    async fn test_write_file_new_with_overwrite_flag_does_not_report_overwrite() {
+        let tool = WriteFile::default();
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+
+        let result = tool
+            .call(json!({
+                "file_path": path.to_string_lossy().to_string(),
+                "content": "Hello, World!",
+                "overwrite": true
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(result.content.unwrap(), "New file created successfully.");
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["overwritten"].as_bool(), Some(false));
+        assert!(structured["backup_path"].is_null());
     }
 
     #[tokio::test]
@@ -1411,7 +1504,7 @@ mod tests {
         match result.unwrap_err() {
             ToolError::InvalidParams(msg) => {
                 assert!(msg.contains("file_path already exists"));
-                assert!(msg.contains("edit_file"));
+                assert!(msg.contains("overwrite: true"));
             }
             other => panic!("Expected InvalidParams error, got {:?}", other),
         }
@@ -1419,6 +1512,40 @@ mod tests {
         // Verify existing content is unchanged
         let actual_content = fs::read_to_string(&path).unwrap();
         assert_eq!(actual_content, "original content");
+    }
+
+    #[tokio::test]
+    async fn test_write_file_existing_file_with_overwrite_creates_backup() {
+        let tool = WriteFile::default();
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_path_buf();
+        let path_str = path.to_string_lossy().to_string();
+
+        fs::write(&path, "original content").unwrap();
+
+        let result = tool
+            .call(json!({
+                "file_path": path_str,
+                "content": "new content",
+                "overwrite": true
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.content.unwrap(),
+            "File written successfully; existing file was backed up first."
+        );
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["overwritten"].as_bool(), Some(true));
+
+        let backup_path = structured["backup_path"]
+            .as_str()
+            .expect("backup path should be present");
+        assert!(backup_path.ends_with(".bak"));
+        assert!(backup_path.starts_with(std::env::temp_dir().to_string_lossy().as_ref()));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new content");
+        assert_eq!(fs::read_to_string(backup_path).unwrap(), "original content");
     }
 
     #[tokio::test]

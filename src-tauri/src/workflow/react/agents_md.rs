@@ -8,6 +8,7 @@ use regex::Regex;
 use std::path::{Path, PathBuf};
 
 /// Scope of AGENTS.md file.
+#[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentsScope {
     Global,

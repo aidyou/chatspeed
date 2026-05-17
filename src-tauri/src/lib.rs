@@ -555,19 +555,20 @@ pub async fn run() -> crate::error::Result<()> {
 
         // Setup the application with necessary configurations and state management
         .setup(|app| {
-        // Initialize the logger - this is critical and must stay here
-        setup_logger(&app);
+            // Initialize the logger - this is critical and must stay here
+            setup_logger(&app);
 
-        // Initialize RESOURCE_DIR for production
-        #[cfg(not(debug_assertions))]
-        {
-            if let Ok(res_path) = app.path().resource_dir() {
-                *crate::RESOURCE_DIR.write() = res_path;
-                log::info!("RESOURCE_DIR initialized at: {:?}", *crate::RESOURCE_DIR.read());
+            // Initialize RESOURCE_DIR for production
+            #[cfg(not(debug_assertions))]
+            {
+                if let Ok(res_path) = app.path().resource_dir() {
+                    *crate::RESOURCE_DIR.write() = res_path;
+                    log::info!("RESOURCE_DIR initialized at: {:?}", *crate::RESOURCE_DIR.read());
+                }
             }
-        }
 
-        // Initialize the main store            #[cfg(debug_assertions)]
+            // Initialize the main store
+            #[cfg(debug_assertions)]
             let db_path = {
                 let dev_dir = &*crate::STORE_DIR.read();
                 dev_dir.join("chatspeed.db")
@@ -575,15 +576,15 @@ pub async fn run() -> crate::error::Result<()> {
 
             #[cfg(not(debug_assertions))]
             let db_path = {
-                let app_local_data_dir = app
-                    .path()
-                    .app_data_dir()
-                    .unwrap_or_else(|e| {
-                        eprintln!("CRITICAL: Failed to get app data dir: {}", e);
-                        std::path::PathBuf::from("./") // Fallback to current dir
-                    });
+                let app_local_data_dir = app.path().app_data_dir().unwrap_or_else(|e| {
+                    eprintln!("CRITICAL: Failed to get app data dir: {}", e);
+                    std::path::PathBuf::from("./") // Fallback to current dir
+                });
                 if let Err(e) = std::fs::create_dir_all(&app_local_data_dir) {
-                    eprintln!("CRITICAL: Failed to create app data dir at {:?}: {}", app_local_data_dir, e);
+                    eprintln!(
+                        "CRITICAL: Failed to create app data dir at {:?}: {}",
+                        app_local_data_dir, e
+                    );
                 }
                 app_local_data_dir.join("chatspeed.db")
             };
