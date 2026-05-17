@@ -306,7 +306,10 @@
             </div>
             <div class="input">
               <!-- Attachments area -->
-              <div class="attachments-area" v-if="attachments.length > 0">
+              <div
+                class="attachments-area"
+                :class="{ submitting: isSubmittingMessage }"
+                v-if="attachments.length > 0 || isPreparingSubmission">
                 <div v-for="attachment in attachments" :key="attachment.id" class="attachment-item">
                   <img
                     v-if="attachment.type === 'image'"
@@ -317,7 +320,12 @@
                   <cs
                     name="close"
                     class="attachment-remove"
-                    @click="removeAttachment(attachment.id)" />
+                    :class="{ disabled: isSubmittingMessage }"
+                    @click="!isSubmittingMessage && removeAttachment(attachment.id)" />
+                </div>
+                <div v-if="isPreparingSubmission" class="attachment-submit-status">
+                  <cs name="loading" class="cs-spin" />
+                  <span>{{ inputStatusText }}</span>
                 </div>
               </div>
 
@@ -327,7 +335,7 @@
                 v-model="inputMessage"
                 type="textarea"
                 :autosize="{ minRows: 1, maxRows: 10 }"
-                :disabled="!canChat"
+                :disabled="!canChat || isSubmittingMessage"
                 :placeholder="$t('chat.inputMessagePlaceholder', { at: '@' })"
                 @keydown.enter="onKeyEnter"
                 @keydown="onKeyDown"
@@ -360,7 +368,9 @@
                     :hide-after="0"
                     :enterable="false"
                     placement="top">
-                    <label @click="onOpenFileDialog">
+                    <label
+                      :class="{ disabled: isSubmittingMessage }"
+                      @click="!isSubmittingMessage && onOpenFileDialog()">
                       <cs name="attachment" class="small" />
                     </label>
                   </el-tooltip>
@@ -434,7 +444,8 @@
                   </el-tooltip>
                 </div>
                 <div class="icons">
-                  <cs name="stop" @click="onStopChat" v-if="isChatting" />
+                  <cs name="stop" @click="onStopChat" v-if="isChatting && !isPreparingSubmission" />
+                  <cs v-else-if="isPreparingSubmission" name="loading" class="cs-spin" />
                   <cs
                     v-else
                     name="send"
@@ -637,6 +648,7 @@ const replyMessage = ref('')
 const composing = ref(false)
 const compositionJustEnded = ref(false)
 const isChatting = ref(false)
+const isPreparingSubmission = ref(false)
 const lastChatId = ref('')
 const titleChatId = ref('')
 
@@ -709,8 +721,13 @@ const canCreateNewConversation = computed(() => canChat.value)
  * and should not be sending a message and message is not empty.
  */
 const canSendMessage = computed(
-  () => canChat.value && !isChatting.value && !isEmpty(inputMessage.value.trim())
+  () =>
+    canChat.value &&
+    !isSubmittingMessage.value &&
+    (!isEmpty(inputMessage.value.trim()) || attachments.value.length > 0)
 )
+const isSubmittingMessage = computed(() => isPreparingSubmission.value || isChatting.value)
+const inputStatusText = computed(() => chatState.value.step || t('chat.preparingAttachments'))
 
 /**
  * Check if the current skill is a translation skill
@@ -1239,6 +1256,10 @@ const dispatchChatCompletion = async (messageId = null) => {
     return
   }
 
+  if (isSubmittingMessage.value && !messageId) {
+    return
+  }
+
   if (chatStore.currentConversationId < 1) {
     await chatStore.getCurrentConversationId()
   }
@@ -1252,6 +1273,7 @@ const dispatchChatCompletion = async (messageId = null) => {
   let visionAnalysisResult = ''
 
   // 2. Clear UI state immediately to show progress bar
+  isPreparingSubmission.value = true
   inputMessage.value = ''
   attachments.value = []
   chatState.value = getDefaultChatState()
@@ -1288,6 +1310,7 @@ const dispatchChatCompletion = async (messageId = null) => {
         inputMessage.value = backupMessage
         attachments.value = backupAttachments
         isChatting.value = false
+        isPreparingSubmission.value = false
         showMessage(t('settings.general.visionModelRequired'), 'error')
         return
       }
@@ -1370,6 +1393,7 @@ const dispatchChatCompletion = async (messageId = null) => {
           error: error.message || 'Vision failed'
         })
         isChatting.value = false
+        isPreparingSubmission.value = false
         return
       }
     } else {
@@ -1422,6 +1446,7 @@ const dispatchChatCompletion = async (messageId = null) => {
 
   if (!finalMessageToSend) {
     isChatting.value = false
+    isPreparingSubmission.value = false
     return
   }
 
@@ -1480,6 +1505,7 @@ const dispatchChatCompletion = async (messageId = null) => {
       nextTick(scrollToBottom)
 
       try {
+        isPreparingSubmission.value = false
         await invokeWrapper('chat_completion', {
           providerId: currentModel.value.id,
           model: currentModel.value.defaultModel,
@@ -1496,6 +1522,7 @@ const dispatchChatCompletion = async (messageId = null) => {
       } catch (error) {
         chatErrorMessage.value = t('chat.errorOnSendMessage', { error: String(error) })
         isChatting.value = false
+        isPreparingSubmission.value = false
       }
     })
     .catch(error => {
@@ -1504,6 +1531,7 @@ const dispatchChatCompletion = async (messageId = null) => {
       attachments.value = backupAttachments
       chatErrorMessage.value = t('chat.errorOnSaveMessage', { error: String(error) })
       isChatting.value = false
+      isPreparingSubmission.value = false
     })
 }
 
@@ -2122,6 +2150,7 @@ const onStopChat = () => {
     .finally(() => {
       lastChatId.value = ''
       isChatting.value = false
+      isPreparingSubmission.value = false
       chatState.value = getDefaultChatState()
 
       nextTick(() => {
@@ -3163,6 +3192,10 @@ const onTakeNote = message => {
   background: var(--cs-bg-color-light);
   border-radius: var(--cs-border-radius-sm);
   margin-bottom: var(--cs-space-sm);
+
+  &.submitting {
+    opacity: 0.9;
+  }
 }
 
 .attachment-item {
@@ -3204,6 +3237,21 @@ const onTakeNote = message => {
   &:hover {
     color: var(--cs-color-danger);
   }
+
+  &.disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    pointer-events: none;
+  }
+}
+
+.attachment-submit-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cs-space-xs);
+  padding: var(--cs-space-xs) var(--cs-space-sm);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
 }
 
 .upload-area {

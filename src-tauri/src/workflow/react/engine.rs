@@ -963,8 +963,9 @@ impl WorkflowExecutor {
             sandbox_paths.push(home.join(".chatspeed"));
         }
 
-        // Ensure sandbox directories exist before creating PathGuard
-        for path in &sandbox_paths {
+        // Keep the planning workspace lazy: `.cs` under an authorized root should only
+        // be created when a planning tool actually writes to it, not during engine init.
+        for path in sandbox_paths.iter().filter(|path| **path != planning_root) {
             if !path.exists() {
                 if let Err(e) = std::fs::create_dir_all(path) {
                     log::warn!(

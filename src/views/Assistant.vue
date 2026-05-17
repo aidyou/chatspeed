@@ -3,7 +3,10 @@
     <header class="header">
       <div class="input-container">
         <!-- Attachments area -->
-        <div class="attachments-area" v-if="attachments.length > 0">
+        <div
+          class="attachments-area"
+          :class="{ submitting: isSubmittingMessage }"
+          v-if="attachments.length > 0 || isPreparingSubmission">
           <div
             v-for="attachment in attachments"
             :key="attachment.id"
@@ -14,7 +17,15 @@
               class="attachment-preview" />
             <cs v-else name="file" class="attachment-icon" />
             <span class="attachment-name">{{ attachment.name }}</span>
-            <cs name="close" class="attachment-remove" @click="removeAttachment(attachment.id)" />
+            <cs
+              name="close"
+              class="attachment-remove"
+              :class="{ disabled: isSubmittingMessage }"
+              @click="!isSubmittingMessage && removeAttachment(attachment.id)" />
+          </div>
+          <div v-if="isPreparingSubmission" class="attachment-submit-status upperLayer">
+            <cs name="loading" class="cs-spin" />
+            <span>{{ inputStatusText }}</span>
           </div>
         </div>
 
@@ -23,7 +34,7 @@
           ref="inputRef"
           v-model="inputMessage"
           type="textarea"
-          :disabled="!canChat"
+          :disabled="!canChat || isSubmittingMessage"
           :autosize="{ minRows: 3, maxRows: 5 }"
           :placeholder="$t('assistant.chatPlaceholder')"
           @input="onInput"
@@ -49,7 +60,10 @@
             :hide-after="0"
             :enterable="false"
             placement="right">
-            <cs name="attachment" @click="onOpenFileDialog" />
+            <cs
+              :name="isPreparingSubmission ? 'loading' : 'attachment'"
+              :class="{ 'cs-spin': isPreparingSubmission, disabled: isSubmittingMessage }"
+              @click="!isSubmittingMessage && onOpenFileDialog()" />
           </el-tooltip>
 
           <!-- sensitive filtering switch -->
@@ -372,6 +386,7 @@ const compositionJustEnded = ref(false)
 const userMessage = ref('')
 const chatErrorMessage = ref('')
 const isChatting = ref(false)
+const isPreparingSubmission = ref(false)
 const lastChatId = ref()
 
 // Attachments
@@ -452,6 +467,14 @@ watch(
 )
 
 const canChat = computed(() => modelStore.getAvailableProviders.length > 0)
+const canSendMessage = computed(
+  () =>
+    canChat.value &&
+    !isSubmittingMessage.value &&
+    (!!inputMessage.value?.trim() || attachments.value.length > 0)
+)
+const isSubmittingMessage = computed(() => isPreparingSubmission.value || isChatting.value)
+const inputStatusText = computed(() => chatState.value.step || t('chat.preparingAttachments'))
 
 const skillIndex = ref(0)
 const skills = computed(() => {
@@ -671,7 +694,11 @@ const proxyType = computed(() => {
  * Dispatch chat completion event to the backend
  */
 const dispatchChatCompletion = async () => {
-  if ((!inputMessage.value?.trim() && attachments.value.length === 0) || !canChat.value) {
+  if (!canSendMessage.value) {
+    return
+  }
+
+  if (isSubmittingMessage.value) {
     return
   }
 
@@ -684,6 +711,7 @@ const dispatchChatCompletion = async () => {
   let visionAnalysisResult = ''
 
   // 2. Initialize state immediately and clear input
+  isPreparingSubmission.value = true
   inputMessage.value = ''
   attachments.value = []
   chatErrorMessage.value = ''
@@ -719,6 +747,7 @@ const dispatchChatCompletion = async () => {
         inputMessage.value = backupMessage
         attachments.value = backupAttachments
         isChatting.value = false
+        isPreparingSubmission.value = false
         showMessage(t('settings.general.visionModelRequired'), 'error')
         return
       }
@@ -796,6 +825,7 @@ const dispatchChatCompletion = async () => {
         attachments.value = backupAttachments
         chatErrorMessage.value = t('chat.errorOnAddAttachment', { error: error.message })
         isChatting.value = false
+        isPreparingSubmission.value = false
         return
       }
     } else {
@@ -814,6 +844,7 @@ const dispatchChatCompletion = async () => {
 
   if (!finalMessageToSend) {
     isChatting.value = false
+    isPreparingSubmission.value = false
     return
   }
 
@@ -836,6 +867,7 @@ const dispatchChatCompletion = async () => {
   const messages = await chatPreProcess(quotedMessage, [], currentSkill.value, metadata)
   if (isEmpty(messages)) {
     isChatting.value = false
+    isPreparingSubmission.value = false
     return
   }
 
@@ -849,6 +881,7 @@ const dispatchChatCompletion = async () => {
   nextTick(scrollToBottomIfNeeded)
 
   try {
+    isPreparingSubmission.value = false
     await invokeWrapper('chat_completion', {
       providerId: currentModelProvider.value.id,
       model: currentModelProvider.value.defaultModel,
@@ -864,6 +897,7 @@ const dispatchChatCompletion = async () => {
   } catch (error) {
     chatErrorMessage.value = t('chat.errorOnSendMessage', { error: String(error) })
     isChatting.value = false
+    isPreparingSubmission.value = false
   }
 }
 const payloadMetadata = ref({})
@@ -1812,6 +1846,10 @@ const onAddModel = async () => {
   background: var(--cs-bg-color-light);
   border-radius: var(--cs-border-radius-sm);
   margin-bottom: var(--cs-space-sm);
+
+  &.submitting {
+    opacity: 0.9;
+  }
 }
 
 .attachment-item {
@@ -1853,6 +1891,21 @@ const onAddModel = async () => {
   &:hover {
     color: var(--cs-color-danger);
   }
+
+  &.disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    pointer-events: none;
+  }
+}
+
+.attachment-submit-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cs-space-xs);
+  padding: var(--cs-space-xs) var(--cs-space-sm);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
 }
 
 .upload-area {
