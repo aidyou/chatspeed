@@ -12,7 +12,7 @@
               <span class="diff-prefix" :data-prefix="line.prefix" aria-hidden="true"></span>
               <span class="diff-line-number">{{ line.lineNumber }}</span>
               <span class="diff-separator">|</span>
-              <span class="diff-content">{{ line.content }}</span>
+              <span class="diff-content" v-html="line.html"></span>
             </div>
           </div>
         </div>
@@ -64,6 +64,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import * as Diff from 'diff'
+import hljs from 'highlight.js'
 import MarkdownSimple from '@/components/workflow/MarkdownSimple.vue'
 
 const props = defineProps({
@@ -106,6 +107,34 @@ const emit = defineEmits([
 ])
 
 useI18n()
+
+const LANGUAGE_MAP = {
+  rs: 'rust',
+  js: 'javascript',
+  jsx: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  vue: 'xml',
+  py: 'python',
+  php: 'php',
+  go: 'go',
+  java: 'java',
+  kt: 'kotlin',
+  swift: 'swift',
+  css: 'css',
+  scss: 'scss',
+  html: 'xml',
+  xml: 'xml',
+  json: 'json',
+  yaml: 'yaml',
+  yml: 'yaml',
+  toml: 'toml',
+  md: 'markdown',
+  sh: 'bash',
+  zsh: 'bash'
+}
+
+const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
 
 const decodeCompatJsonPayload = value => {
   if (typeof value !== 'string') return value
@@ -203,6 +232,19 @@ const filePath = computed(() => {
   return data?.display_path || data?.file_path || data?.path || ''
 })
 
+const language = computed(() => {
+  const ext = filePath.value.split('.').pop()?.toLowerCase() || ''
+  return LANGUAGE_MAP[ext] || ''
+})
+
+const escapeHtml = value =>
+  String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+
 const diffLines = computed(() => {
   if (!isEditAction.value) return ''
   const data = detailsObject.value
@@ -212,6 +254,7 @@ const diffLines = computed(() => {
         prefix: ' ',
         lineNumber: '',
         content: props.details || '',
+        html: escapeHtml(props.details || ''),
         type: 'context'
       }
     ]
@@ -223,37 +266,119 @@ const diffLines = computed(() => {
   return generateDiffLines(oldStr, newStr, startLine, data)
 })
 
-const createDiffLine = (prefix, lineNumber, content, type) => ({
+const splitHighlightedHtmlByLines = html => {
+  const lines = []
+  const openTags = []
+  let currentLine = ''
+  let index = 0
+
+  const closeOpenTags = () => openTags.map(tag => tag.closeTag).reverse().join('')
+  const reopenOpenTags = () => openTags.map(tag => tag.openTag).join('')
+
+  while (index < html.length) {
+    const char = html[index]
+
+    if (char === '<') {
+      const tagEnd = html.indexOf('>', index)
+      if (tagEnd === -1) {
+        currentLine += html.slice(index)
+        break
+      }
+
+      const rawTag = html.slice(index, tagEnd + 1)
+      currentLine += rawTag
+
+      if (rawTag.startsWith('</')) {
+        openTags.pop()
+      } else {
+        const tagContent = rawTag.slice(1, -1).trim()
+        const tagName = tagContent.split(/\s+/)[0]?.replace(/\/$/, '').toLowerCase()
+        const isSelfClosing = rawTag.endsWith('/>') || VOID_TAGS.has(tagName)
+        if (!isSelfClosing && tagName) {
+          openTags.push({
+            openTag: rawTag,
+            closeTag: `</${tagName}>`
+          })
+        }
+      }
+
+      index = tagEnd + 1
+      continue
+    }
+
+    if (char === '\n') {
+      lines.push(currentLine ? `${currentLine}${closeOpenTags()}` : '&nbsp;')
+      currentLine = reopenOpenTags()
+      index += 1
+      continue
+    }
+
+    currentLine += char
+    index += 1
+  }
+
+  lines.push(currentLine ? `${currentLine}${closeOpenTags()}` : '&nbsp;')
+  return lines
+}
+
+const highlightBlock = (content, languageName) => {
+  if (!content) return ['&nbsp;']
+  try {
+    if (languageName) {
+      return splitHighlightedHtmlByLines(hljs.highlight(content, { language: languageName }).value)
+    }
+    return splitHighlightedHtmlByLines(hljs.highlightAuto(content).value)
+  } catch {
+    return splitHighlightedHtmlByLines(hljs.highlightAuto(content).value)
+  }
+}
+
+const createDiffLine = (prefix, lineNumber, content, html, type) => ({
   prefix,
   lineNumber,
   content,
+  html,
   type
 })
 
 // Use diff library to generate proper line-by-line diff
-const appendContextLines = (diff, lines, startLine, type = 'context') => {
+const appendContextLines = (diff, lines, startLine, htmlLines, type = 'context') => {
   if (!Array.isArray(lines) || !lines.length) return
   lines.forEach((line, index) => {
-    diff.push(createDiffLine(' ', (startLine + index).toString(), line, type))
+    diff.push(
+      createDiffLine(
+        ' ',
+        (startLine + index).toString(),
+        line,
+        htmlLines[index] || '&nbsp;',
+        type
+      )
+    )
   })
 }
 
 const generateDiffLines = (oldStr, newStr, startLine = 1, contextData = {}) => {
   const diff = []
+  const highlightedOldLines = highlightBlock(oldStr, language.value)
+  const highlightedNewLines = highlightBlock(newStr, language.value)
+  const highlightedBeforeLines = highlightBlock((contextData.context_before || []).join('\n'), language.value)
+  const highlightedAfterLines = highlightBlock((contextData.context_after || []).join('\n'), language.value)
   appendContextLines(
     diff,
     contextData.context_before,
     contextData.context_before_start_line ||
       Math.max(1, startLine - (contextData.context_before?.length || 0)),
+    highlightedBeforeLines,
     'context'
   )
 
   if (oldStr === newStr) {
-    diff.push(createDiffLine(' ', '', '(No visible changes)', 'context'))
+    diff.push(createDiffLine(' ', '', '(No visible changes)', '(No visible changes)', 'context'))
     appendContextLines(
       diff,
       contextData.context_after,
       contextData.context_after_start_line || startLine,
+      highlightedAfterLines,
       'context'
     )
     return diff
@@ -261,19 +386,28 @@ const generateDiffLines = (oldStr, newStr, startLine = 1, contextData = {}) => {
 
   if (!oldStr && newStr) {
     const insertionLine = startLine.toString()
-    diff.push(createDiffLine('-', insertionLine, '(empty)', 'removed'))
+    diff.push(createDiffLine('-', insertionLine, '(empty)', '(empty)', 'removed'))
     const lines = newStr.split('\n')
     if (lines[lines.length - 1] === '') {
       lines.pop()
     }
     lines.forEach((line, index) => {
       const lineNum = startLine + index
-      diff.push(createDiffLine('+', lineNum.toString(), line, 'added'))
+      diff.push(
+        createDiffLine(
+          '+',
+          lineNum.toString(),
+          line,
+          highlightedNewLines[index] || '&nbsp;',
+          'added'
+        )
+      )
     })
     appendContextLines(
       diff,
       contextData.context_after,
       contextData.context_after_start_line || startLine + lines.length,
+      highlightedAfterLines,
       'context'
     )
     return diff
@@ -282,6 +416,8 @@ const generateDiffLines = (oldStr, newStr, startLine = 1, contextData = {}) => {
   const changes = Diff.diffLines(oldStr, newStr)
   let currentLineOld = startLine
   let currentLineNew = startLine
+  let highlightedOldIndex = 0
+  let highlightedNewIndex = 0
 
   changes.forEach(change => {
     const lines = change.value.split('\n')
@@ -293,26 +429,57 @@ const generateDiffLines = (oldStr, newStr, startLine = 1, contextData = {}) => {
 
     lines.forEach(line => {
       if (change.added) {
-        diff.push(createDiffLine('+', currentLineNew.toString(), line, 'added'))
+        diff.push(
+          createDiffLine(
+            '+',
+            currentLineNew.toString(),
+            line,
+            highlightedNewLines[highlightedNewIndex] || '&nbsp;',
+            'added'
+          )
+        )
         currentLineNew++
+        highlightedNewIndex++
       } else if (change.removed) {
-        diff.push(createDiffLine('-', currentLineOld.toString(), line, 'removed'))
+        diff.push(
+          createDiffLine(
+            '-',
+            currentLineOld.toString(),
+            line,
+            highlightedOldLines[highlightedOldIndex] || '&nbsp;',
+            'removed'
+          )
+        )
         currentLineOld++
+        highlightedOldIndex++
       } else {
-        diff.push(createDiffLine(' ', currentLineOld.toString(), line, 'context'))
+        diff.push(
+          createDiffLine(
+            ' ',
+            currentLineOld.toString(),
+            line,
+            highlightedNewLines[highlightedNewIndex] ||
+              highlightedOldLines[highlightedOldIndex] ||
+              '&nbsp;',
+            'context'
+          )
+        )
         currentLineOld++
         currentLineNew++
+        highlightedOldIndex++
+        highlightedNewIndex++
       }
     })
   })
 
   if (diff.length === 0) {
-    diff.push(createDiffLine(' ', '', '(No visible changes)', 'context'))
+    diff.push(createDiffLine(' ', '', '(No visible changes)', '(No visible changes)', 'context'))
   }
   appendContextLines(
     diff,
     contextData.context_after,
     contextData.context_after_start_line || currentLineNew,
+    highlightedAfterLines,
     'context'
   )
   return diff
@@ -459,8 +626,6 @@ const onReject = () => {
         max-height: min(48vh, 520px);
         overflow: auto;
         background: var(--cs-bg-color-light);
-        // border-radius: var(--cs-border-radius-sm);
-        // border: 1px solid var(--cs-border-color);
         font-family: var(--cs-font-family-mono);
         font-size: var(--cs-font-size-sm);
 
@@ -471,13 +636,11 @@ const onReject = () => {
           white-space: pre;
 
           &.added {
-            // background: color-mix(in srgb, var(--el-color-success) 12%, transparent);
-            color: var(--el-color-success-dark-2);
+            background: rgba(103, 194, 58, 0.12);
           }
 
           &.removed {
-            // background: color-mix(in srgb, var(--el-color-danger) 12%, transparent);
-            color: var(--el-color-danger-dark-2);
+            background: rgba(245, 108, 108, 0.12);
           }
 
           &.context {
@@ -515,6 +678,11 @@ const onReject = () => {
         .diff-content {
           overflow-x: auto;
           padding-right: 8px;
+        }
+
+        :deep(.hljs) {
+          background: transparent;
+          padding: 0;
         }
       }
     }

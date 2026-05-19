@@ -1677,6 +1677,7 @@ onUnmounted(() => {
 watch(
   () => workflowStore.currentWorkflowId,
   newId => {
+    const wasCollapsed = isCollapsed.value
     if (newId && isCollapsed.value) {
       isCollapsed.value = false
     }
@@ -1686,6 +1687,13 @@ watch(
     efficiencyLoadedForSession.value = ''
     efficiencyError.value = ''
     efficiencyLastUpdatedAt.value = 0
+
+    nextTick(() => {
+      if (wasCollapsed && isVisible.value) {
+        restorePositionForMode(getPanelMode())
+      }
+      constrainPosition()
+    })
   }
 )
 
@@ -1726,6 +1734,8 @@ watch(
   right: 20px;
   bottom: 100px;
   width: 350px;
+  max-width: min(350px, calc(100vw - 12px));
+  box-sizing: border-box;
   background: var(--cs-bg-color);
   border: 1px solid var(--cs-border-color);
   border-radius: var(--cs-border-radius-lg);
@@ -1834,6 +1844,7 @@ watch(
 .panel-body {
   max-height: 600px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px;
 }
 

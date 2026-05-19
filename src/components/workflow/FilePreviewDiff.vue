@@ -36,53 +36,112 @@ const props = defineProps({
   }
 })
 
+const LANGUAGE_MAP = {
+  rs: 'rust',
+  js: 'javascript',
+  jsx: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  vue: 'xml',
+  py: 'python',
+  php: 'php',
+  go: 'go',
+  java: 'java',
+  kt: 'kotlin',
+  swift: 'swift',
+  css: 'css',
+  scss: 'scss',
+  html: 'xml',
+  xml: 'xml',
+  json: 'json',
+  yaml: 'yaml',
+  yml: 'yaml',
+  toml: 'toml',
+  md: 'markdown',
+  sh: 'bash',
+  zsh: 'bash'
+}
+
+const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
+
 const language = computed(() => {
   const ext = props.filePath.split('.').pop()?.toLowerCase() || ''
-  const mapping = {
-    rs: 'rust',
-    js: 'javascript',
-    jsx: 'javascript',
-    ts: 'typescript',
-    tsx: 'typescript',
-    vue: 'xml',
-    py: 'python',
-    go: 'go',
-    java: 'java',
-    kt: 'kotlin',
-    swift: 'swift',
-    css: 'css',
-    scss: 'scss',
-    html: 'xml',
-    xml: 'xml',
-    json: 'json',
-    yaml: 'yaml',
-    yml: 'yaml',
-    toml: 'toml',
-    md: 'markdown',
-    sh: 'bash',
-    zsh: 'bash'
-  }
-  return mapping[ext] || ''
+  return LANGUAGE_MAP[ext] || ''
 })
 
-const highlightLine = line => {
-  if (!line) return '&nbsp;'
-  if (!language.value) {
-    return hljs.highlightAuto(line).value
-  }
+const highlightBlock = (content, languageName) => {
+  if (!content) return ['&nbsp;']
   try {
-    return hljs.highlight(line, { language: language.value }).value
+    if (languageName) {
+      return splitHighlightedHtmlByLines(hljs.highlight(content, { language: languageName }).value)
+    }
+    return splitHighlightedHtmlByLines(hljs.highlightAuto(content).value)
   } catch {
-    return hljs.highlightAuto(line).value
+    return splitHighlightedHtmlByLines(hljs.highlightAuto(content).value)
   }
 }
 
-const createDiffLine = (prefix, oldLineNumber, newLineNumber, content, type) => ({
+const splitHighlightedHtmlByLines = html => {
+  const lines = []
+  const openTags = []
+  let currentLine = ''
+  let index = 0
+
+  const closeOpenTags = () => openTags.map(tag => tag.closeTag).reverse().join('')
+  const reopenOpenTags = () => openTags.map(tag => tag.openTag).join('')
+
+  while (index < html.length) {
+    const char = html[index]
+
+    if (char === '<') {
+      const tagEnd = html.indexOf('>', index)
+      if (tagEnd === -1) {
+        currentLine += html.slice(index)
+        break
+      }
+
+      const rawTag = html.slice(index, tagEnd + 1)
+      currentLine += rawTag
+
+      if (rawTag.startsWith('</')) {
+        openTags.pop()
+      } else {
+        const tagContent = rawTag.slice(1, -1).trim()
+        const tagName = tagContent.split(/\s+/)[0]?.replace(/\/$/, '').toLowerCase()
+        const isSelfClosing = rawTag.endsWith('/>') || VOID_TAGS.has(tagName)
+        if (!isSelfClosing && tagName) {
+          openTags.push({
+            openTag: rawTag,
+            closeTag: `</${tagName}>`
+          })
+        }
+      }
+
+      index = tagEnd + 1
+      continue
+    }
+
+    if (char === '\n') {
+      lines.push(currentLine ? `${currentLine}${closeOpenTags()}` : '&nbsp;')
+      currentLine = reopenOpenTags()
+      index += 1
+      continue
+    }
+
+    currentLine += char
+    index += 1
+  }
+
+  lines.push(currentLine ? `${currentLine}${closeOpenTags()}` : '&nbsp;')
+  return lines
+}
+
+const createDiffLine = (prefix, oldLineNumber, newLineNumber, content, html, type) => ({
   prefix,
   oldLineNumber,
   newLineNumber,
   content,
-  html: highlightLine(content),
+  html,
   type
 })
 
@@ -90,6 +149,8 @@ const diffLines = computed(() => {
   const oldStr = props.oldContent ?? ''
   const newStr = props.newContent ?? ''
   const lines = []
+  const highlightedOldLines = highlightBlock(oldStr, language.value)
+  const highlightedNewLines = highlightBlock(newStr, language.value)
 
   if (oldStr === newStr) {
     const rawLines = newStr.split('\n')
@@ -98,7 +159,7 @@ const diffLines = computed(() => {
     }
     rawLines.forEach((line, index) => {
       const lineNo = (index + 1).toString()
-      lines.push(createDiffLine(' ', lineNo, lineNo, line, 'context'))
+      lines.push(createDiffLine(' ', lineNo, lineNo, line, highlightedNewLines[index] || '&nbsp;', 'context'))
     })
     return lines
   }
@@ -115,15 +176,42 @@ const diffLines = computed(() => {
 
     rawLines.forEach(line => {
       if (change.added) {
-        lines.push(createDiffLine('+', '', currentLineNew.toString(), line, 'added'))
+        lines.push(
+          createDiffLine(
+            '+',
+            '',
+            currentLineNew.toString(),
+            line,
+            highlightedNewLines[currentLineNew - 1] || '&nbsp;',
+            'added'
+          )
+        )
         currentLineNew += 1
       } else if (change.removed) {
-        lines.push(createDiffLine('-', currentLineOld.toString(), '', line, 'removed'))
+        lines.push(
+          createDiffLine(
+            '-',
+            currentLineOld.toString(),
+            '',
+            line,
+            highlightedOldLines[currentLineOld - 1] || '&nbsp;',
+            'removed'
+          )
+        )
         currentLineOld += 1
       } else {
         const oldLine = currentLineOld.toString()
         const newLine = currentLineNew.toString()
-        lines.push(createDiffLine(' ', oldLine, newLine, line, 'context'))
+        lines.push(
+          createDiffLine(
+            ' ',
+            oldLine,
+            newLine,
+            line,
+            highlightedNewLines[currentLineNew - 1] || highlightedOldLines[currentLineOld - 1] || '&nbsp;',
+            'context'
+          )
+        )
         currentLineOld += 1
         currentLineNew += 1
       }
@@ -131,7 +219,7 @@ const diffLines = computed(() => {
   })
 
   if (!lines.length) {
-    lines.push(createDiffLine(' ', '', '', '(No visible changes)', 'context'))
+    lines.push(createDiffLine(' ', '', '', '(No visible changes)', '(No visible changes)', 'context'))
   }
 
   return lines

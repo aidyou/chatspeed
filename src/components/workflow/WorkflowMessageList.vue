@@ -360,8 +360,27 @@
                   </span>
                 </div>
                 <!-- Final Result -->
-                <MarkdownSimple
+                <file-preview-diff
                   v-if="
+                    message.metadata?.approval_status !== 'pending' &&
+                    shouldShowToolRawContent(message) &&
+                    message.toolDisplay.displayType === 'diff' &&
+                    getStructuredDiffPayload(message)
+                  "
+                  :file-path="
+                    getStructuredDiffPayload(message).display_path ||
+                    getStructuredDiffPayload(message).file_path ||
+                    getStructuredDiffPayload(message).path ||
+                    ''
+                  "
+                  :old-content="getStructuredDiffPayload(message).old_string || ''"
+                  :new-content="
+                    getStructuredDiffPayload(message).new_string ??
+                    getStructuredDiffPayload(message).content ??
+                    ''
+                  " />
+                <MarkdownSimple
+                  v-else-if="
                     message.metadata?.approval_status !== 'pending' &&
                     shouldShowToolRawContent(message) &&
                     message.toolDisplay.displayType === 'diff'
@@ -665,6 +684,7 @@ import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
 import ApprovalDialog from './ApprovalDialog.vue'
+import FilePreviewDiff from './FilePreviewDiff.vue'
 import MarkdownSimple from './MarkdownSimple.vue'
 import { useWorkflowStore } from '@/stores/workflow'
 import { WORKFLOW_STATUSES, WORKFLOW_WAIT_REASONS } from '@/composables/workflow/signalTypes'
@@ -1003,6 +1023,36 @@ const getApprovalDetailsPayload = message => {
   }
 
   return props.removeSystemReminder(message?.message || '')
+}
+
+const getStructuredDiffPayload = message => {
+  const isStructuredDiffPayload = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    const hasPath =
+      typeof value.file_path === 'string' ||
+      typeof value.path === 'string' ||
+      typeof value.display_path === 'string'
+    const hasEditFields =
+      value.old_string !== undefined ||
+      value.new_string !== undefined ||
+      value.content !== undefined
+    return hasPath && hasEditFields
+  }
+
+  const detailsPayload = getApprovalDetailsPayload(message)
+  if (isStructuredDiffPayload(detailsPayload)) {
+    return detailsPayload
+  }
+
+  const rawContent = props.removeSystemReminder(message?.message || '')
+  if (typeof rawContent !== 'string' || !rawContent.trim()) return null
+
+  try {
+    const parsed = JSON.parse(rawContent)
+    return isStructuredDiffPayload(parsed) ? parsed : null
+  } catch {
+    return null
+  }
 }
 
 const isFinishTaskMessage = message => {
