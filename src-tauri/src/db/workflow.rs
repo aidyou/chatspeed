@@ -38,6 +38,9 @@ fn default_workflow_status() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowMessage {
+    /// Durable workflow transcript history.
+    /// This is the authoritative message record for audit, replay fallback,
+    /// UI rendering, and semantic reporting.
     pub id: Option<i64>,
     pub session_id: String,
     pub role: String,
@@ -59,7 +62,11 @@ pub struct WorkflowMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkflowContextMessage {
+pub struct WorkflowAiContextMessage {
+    /// AI-only projected context cache.
+    /// This is derived from `WorkflowMessage` using explicit projection rules
+    /// and exists only to feed the LLM efficiently.
+    /// It is rebuildable and must not be used as recovery, UI, or reporting authority.
     pub id: Option<i64>,
     pub session_id: String,
     pub segment_id: i32,
@@ -75,6 +82,9 @@ pub struct WorkflowContextMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowSnapshot {
+    /// Snapshot payload returned to commands/UI.
+    /// Transcript authority comes from `messages`; runtime recovery authority
+    /// comes separately from `workflow_snapshots` via `ExecutionContext`.
     pub workflow: Workflow,
     pub messages: Vec<WorkflowMessage>,
 }
@@ -186,7 +196,7 @@ impl From<&Row<'_>> for WorkflowEventRecord {
     }
 }
 
-impl From<&Row<'_>> for WorkflowContextMessage {
+impl From<&Row<'_>> for WorkflowAiContextMessage {
     fn from(row: &Row<'_>) -> Self {
         let metadata_str: Option<String> = row.get("metadata").ok();
         let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
@@ -248,7 +258,7 @@ impl MainStore {
         let mut reports = Vec::new();
         for row in rows {
             let workflow = row?;
-            let messages = self.list_workflow_context_messages_for_session_locked(
+            let messages = self.list_workflow_messages_for_session_locked(
                 &conn,
                 workflow.id.as_deref().unwrap_or_default(),
             )?;
@@ -288,20 +298,18 @@ impl MainStore {
         })
     }
 
-    fn list_workflow_context_messages_for_session_locked(
+    fn list_workflow_messages_for_session_locked(
         &self,
         conn: &rusqlite::Connection,
         session_id: &str,
-    ) -> Result<Vec<WorkflowContextMessage>, StoreError> {
+    ) -> Result<Vec<WorkflowMessage>, StoreError> {
         let mut stmt = conn.prepare(
             "SELECT *
-             FROM workflow_context_messages
+             FROM workflow_messages
              WHERE session_id = ?1
              ORDER BY id ASC",
         )?;
-        let rows = stmt.query_map(params![session_id], |row| {
-            Ok(WorkflowContextMessage::from(row))
-        })?;
+        let rows = stmt.query_map(params![session_id], |row| Ok(WorkflowMessage::from(row)))?;
         let mut messages = Vec::new();
         for row in rows {
             messages.push(row?);
@@ -463,24 +471,13 @@ impl MainStore {
             return Ok(false);
         };
 
-        let first_context_id: Option<i64> = tx
-            .query_row(
-                "SELECT MIN(id)
-                 FROM workflow_context_messages
-                 WHERE session_id = ?1 AND source_message_id >= ?2",
-                params![session_id, assistant_anchor_id],
-                |row| row.get(0),
-            )
-            .optional()?
-            .flatten();
-
-        if let Some(first_context_id) = first_context_id {
-            tx.execute(
-                "DELETE FROM workflow_context_messages
-                 WHERE session_id = ?1 AND id >= ?2",
-                params![session_id, first_context_id],
-            )?;
-        }
+        // `workflow_context_messages` is an AI-only cache derived from transcript history.
+        // After deleting a tail turn from durable history, partial cache surgery is brittle.
+        // Clear the whole session cache and let the runtime rebuild it from authority data.
+        tx.execute(
+            "DELETE FROM workflow_context_messages WHERE session_id = ?1",
+            params![session_id],
+        )?;
 
         tx.execute(
             "DELETE FROM workflow_messages
@@ -611,10 +608,10 @@ impl MainStore {
         Ok(())
     }
 
-    pub fn add_workflow_context_message(
+    pub fn add_workflow_ai_context_message(
         &self,
-        msg: &WorkflowContextMessage,
-    ) -> Result<WorkflowContextMessage, StoreError> {
+        msg: &WorkflowAiContextMessage,
+    ) -> Result<WorkflowAiContextMessage, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -647,23 +644,22 @@ impl MainStore {
         Ok(new_msg)
     }
 
-    pub fn get_latest_workflow_context_segment_id(
+    pub fn delete_workflow_ai_context_segment(
         &self,
         session_id: &str,
-    ) -> Result<Option<i32>, StoreError> {
+        segment_id: i32,
+    ) -> Result<(), StoreError> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
-        conn.query_row(
-            "SELECT MAX(segment_id) FROM workflow_context_messages WHERE session_id = ?1",
-            params![session_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map(|value| value.flatten())
-        .map_err(StoreError::from)
+        conn.execute(
+            "DELETE FROM workflow_context_messages WHERE session_id = ?1 AND segment_id = ?2",
+            params![session_id, segment_id],
+        )?;
+
+        Ok(())
     }
 
     pub fn update_workflow_status(&self, id: &str, status: &str) -> Result<(), StoreError> {
@@ -979,7 +975,7 @@ impl MainStore {
     }
 }
 
-fn compute_efficiency_metrics(messages: &[WorkflowContextMessage]) -> WorkflowEfficiencyMetrics {
+fn compute_efficiency_metrics(messages: &[WorkflowMessage]) -> WorkflowEfficiencyMetrics {
     let mut metrics = WorkflowEfficiencyMetrics::default();
     let mut read_counts: HashMap<String, u32> = HashMap::new();
     let mut seen_read_files: HashSet<String> = HashSet::new();
@@ -1171,7 +1167,7 @@ fn is_verification_tool(tool_name: &str, metadata: Option<&Value>) -> bool {
     .any(|needle| command_text.contains(needle))
 }
 
-fn extract_paths_for_tool(message: &WorkflowContextMessage, tool_name: &str) -> Vec<String> {
+fn extract_paths_for_tool(message: &WorkflowMessage, tool_name: &str) -> Vec<String> {
     let mut paths = Vec::new();
 
     if matches!(tool_name, "read_file" | "read_git_base_text_file") {
@@ -1508,15 +1504,16 @@ mod tests {
             .expect("failed to create sub workflow");
 
         store
-            .add_workflow_context_message(&WorkflowContextMessage {
+            .add_workflow_message(&WorkflowMessage {
                 id: None,
                 session_id: "main-session".to_string(),
-                segment_id: 1,
                 role: "assistant".to_string(),
                 message: "Read and edit".to_string(),
                 reasoning: None,
                 message_kind: "message".to_string(),
                 message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
                 metadata: Some(serde_json::json!({
                     "tool_calls": [
                         {
@@ -1533,21 +1530,26 @@ mod tests {
                         }
                     ]
                 })),
-                source_message_id: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
                 created_at: None,
             })
             .expect("failed to add main assistant context");
         store
-            .add_workflow_context_message(&WorkflowContextMessage {
+            .add_workflow_message(&WorkflowMessage {
                 id: None,
                 session_id: "main-session".to_string(),
-                segment_id: 1,
                 role: "tool".to_string(),
                 message: "<file_content path=\"src/main.rs\">fn main() {}</file_content>"
                     .to_string(),
                 reasoning: None,
                 message_kind: "message".to_string(),
                 message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
                 metadata: Some(serde_json::json!({
                     "tool_name": "read_file",
                     "tool_call": {
@@ -1557,20 +1559,25 @@ mod tests {
                         }
                     }
                 })),
-                source_message_id: None,
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
                 created_at: None,
             })
             .expect("failed to add main read tool");
         store
-            .add_workflow_context_message(&WorkflowContextMessage {
+            .add_workflow_message(&WorkflowMessage {
                 id: None,
                 session_id: "main-session".to_string(),
-                segment_id: 1,
                 role: "tool".to_string(),
                 message: "{\"file_path\":\"src/main.rs\"}".to_string(),
                 reasoning: None,
                 message_kind: "message".to_string(),
                 message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
                 metadata: Some(serde_json::json!({
                     "tool_name": "edit_file",
                     "tool_call": {
@@ -1580,20 +1587,25 @@ mod tests {
                         }
                     }
                 })),
-                source_message_id: None,
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
                 created_at: None,
             })
             .expect("failed to add main edit tool");
         store
-            .add_workflow_context_message(&WorkflowContextMessage {
+            .add_workflow_message(&WorkflowMessage {
                 id: None,
                 session_id: "main-session".to_string(),
-                segment_id: 1,
                 role: "tool".to_string(),
                 message: "ok".to_string(),
                 reasoning: None,
                 message_kind: "message".to_string(),
                 message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
                 metadata: Some(serde_json::json!({
                     "tool_name": "bash",
                     "tool_call": {
@@ -1603,21 +1615,26 @@ mod tests {
                         }
                     }
                 })),
-                source_message_id: None,
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
                 created_at: None,
             })
             .expect("failed to add main verification tool");
 
         store
-            .add_workflow_context_message(&WorkflowContextMessage {
+            .add_workflow_message(&WorkflowMessage {
                 id: None,
                 session_id: "subagent-child".to_string(),
-                segment_id: 1,
                 role: "assistant".to_string(),
                 message: "Search in parallel".to_string(),
                 reasoning: None,
                 message_kind: "message".to_string(),
                 message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
                 metadata: Some(serde_json::json!({
                     "tool_calls": [
                         {
@@ -1634,20 +1651,25 @@ mod tests {
                         }
                     ]
                 })),
-                source_message_id: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
                 created_at: None,
             })
             .expect("failed to add sub assistant context");
         store
-            .add_workflow_context_message(&WorkflowContextMessage {
+            .add_workflow_message(&WorkflowMessage {
                 id: None,
                 session_id: "subagent-child".to_string(),
-                segment_id: 1,
                 role: "tool".to_string(),
                 message: "[No matches found]".to_string(),
                 reasoning: None,
                 message_kind: "message".to_string(),
                 message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
                 metadata: Some(serde_json::json!({
                     "tool_name": "grep",
                     "tool_call": {
@@ -1657,7 +1679,11 @@ mod tests {
                         }
                     }
                 })),
-                source_message_id: None,
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
                 created_at: None,
             })
             .expect("failed to add sub grep tool");
@@ -1783,7 +1809,7 @@ mod tests {
             .expect("failed to add tool message");
 
         store
-            .add_workflow_context_message(&WorkflowContextMessage {
+            .add_workflow_ai_context_message(&WorkflowAiContextMessage {
                 id: None,
                 session_id: session_id.to_string(),
                 segment_id: 1,
@@ -1798,7 +1824,7 @@ mod tests {
             })
             .expect("failed to add assistant context message");
         store
-            .add_workflow_context_message(&WorkflowContextMessage {
+            .add_workflow_ai_context_message(&WorkflowAiContextMessage {
                 id: None,
                 session_id: session_id.to_string(),
                 segment_id: 1,

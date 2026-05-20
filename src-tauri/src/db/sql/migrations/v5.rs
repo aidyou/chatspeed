@@ -55,7 +55,9 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "idx_workflow_messages_session_id",
         "CREATE INDEX IF NOT EXISTS idx_workflow_messages_session_id ON workflow_messages(session_id)"
     ),
-    // Workflow context projection table for AI-only prompt history
+    // Workflow context projection table for AI-only prompt history.
+    // This table is a rebuildable cache for LLM-ready context and must not
+    // become authority for UI rendering, recovery, or reporting semantics.
     (
         "workflow_context_messages",
         "CREATE TABLE IF NOT EXISTS workflow_context_messages (
@@ -79,7 +81,8 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "CREATE INDEX IF NOT EXISTS idx_workflow_context_messages_session_segment_id
          ON workflow_context_messages(session_id, segment_id, id)"
     ),
-    // Workflow snapshots table for ExecutionContext recovery
+    // Workflow snapshots table for structured ExecutionContext recovery.
+    // This is runtime-state authority, not transcript authority.
     (
         "workflow_snapshots",
         "CREATE TABLE IF NOT EXISTS workflow_snapshots (
@@ -273,6 +276,8 @@ pub fn ensure(conn: &Connection) -> Result<(), StoreError> {
     ensure_agent_hierarchy_columns(conn)?;
     ensure_workflow_parent_column(conn)?;
     ensure_workflow_message_columns(conn)?;
+    // Keep the AI projection cache table present for existing databases.
+    // Even though it is persisted, it remains rebuildable derived data.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS workflow_context_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

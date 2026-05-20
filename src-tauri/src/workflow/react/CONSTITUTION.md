@@ -231,6 +231,11 @@ If a special preview policy is needed, it must preserve semantic renderability.
 
 `messages` is the source of truth for transcript history.
 
+Database implication:
+
+- `workflow_messages` is authoritative transcript storage
+- audit, replay fallback, and semantic reporting must prefer it over derived caches
+
 ### 8.2 `context_messages` is a projection, not an independent state machine
 
 `context_messages` exists to feed the LLM efficiently.
@@ -238,6 +243,20 @@ If a special preview policy is needed, it must preserve semantic renderability.
 It must be rebuilt from runtime history according to explicit rules.
 
 It must not accumulate hidden semantics through ad-hoc clone/append mutation.
+
+Database implication:
+
+- `workflow_context_messages` is a rebuildable AI-context cache
+- it must not become authority for recovery, audit, reporting, or UI semantics
+- active AI segment boundaries must recover from transcript/snapshot authority, not from cache rows
+- if cache contents conflict with durable history, durable history wins and cache must be rebuilt
+
+Consumer boundary implication:
+
+- AI may read in-memory `context_messages` and persisted `workflow_context_messages` as cache
+- recovery must not depend on `workflow_context_messages`
+- UI must not depend on `workflow_context_messages` for semantic correctness
+- reports and metrics must not depend on `workflow_context_messages`
 
 ### 8.3 Context rebuild must be rule-driven
 
@@ -256,6 +275,28 @@ When a new task starts after completed work, the projection must preserve exactl
 
 It must not depend on whatever happened to remain in a previous projection.
 
+Current required carryover contract:
+
+- AI context must preserve the latest compression summary when one exists
+- AI context must preserve the most recent completed task after that summary
+- AI context must preserve the current unfinished task
+- older completed tasks may be rolled into summary, but must not silently replace the retained latest completed task
+
+Unless the compression algorithm is intentionally redesigned, changes that weaken this carryover contract are prohibited.
+
+### 8.5 Compression thresholds are part of the design contract
+
+Compression behavior is not an implementation detail. It is part of the workflow model.
+
+Current required thresholds:
+
+- pressure compression must preserve the latest completed task and only compress older completed work
+- initial task-boundary rollup must not trigger until three completed tasks exist and a new active task has resumed
+- after a summary already exists, rollup must continue to preserve the latest completed task and only compress older completed work
+- the system must not collapse AI context to only the current task while removing both summary and latest completed-task carryover
+
+Do not change these thresholds or retention rules unless the workflow compression design itself is explicitly being revised.
+
 ## 9. Recovery Law
 
 ### 9.1 Snapshot first, replay fallback
@@ -264,6 +305,13 @@ Recovery must continue to prefer:
 
 1. valid snapshot
 2. structured replay fallback
+
+Database implication:
+
+- `workflow_snapshots` is the structured recovery authority
+- snapshot contents must remain structural runtime state, not a second transcript
+- `current_segment_id` belongs to structured recovery authority and must be persisted in snapshot state
+- transcript reconstruction from snapshot text is prohibited
 
 ### 9.2 Command-layer recovery cannot become a parallel state engine
 
@@ -276,6 +324,14 @@ Any temporary fallback based on legacy persisted status strings must be treated 
 When recovery cannot be trusted, the workflow must fail safely and observably.
 
 Silent best-effort recovery that may execute with unknown state is prohibited.
+
+### 9.4 Cache corruption is rebuilt, not interpreted
+
+If `workflow_context_messages` is missing, stale, or corrupted, the correct action is rebuild.
+
+Recovery must not reinterpret cache rows as hidden authority.
+
+If `workflow_messages` and `workflow_context_messages` disagree, `workflow_messages` wins.
 
 ## 10. UI Contract Law
 

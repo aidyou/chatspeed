@@ -738,6 +738,18 @@ impl LlmProcessor {
         let mut history: Vec<serde_json::Value> = Vec::new();
         let mut deferred_system_observations: Vec<(Option<String>, String)> = Vec::new();
 
+        let latest_tool_message_index: HashMap<String, usize> = raw_history
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, message)| {
+                let tool_call_id = message
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("tool_call_id").and_then(|value| value.as_str()))?;
+                (message.role == "tool").then_some((tool_call_id.to_string(), idx))
+            })
+            .collect();
+
         // If a tool call has both an approval preview (pending) and a later final observation
         // (approved/executed), keep only the final one in LLM context to avoid duplicate tool
         // observations for the same action.
@@ -762,7 +774,7 @@ impl LlmProcessor {
             })
             .collect();
 
-        for m in raw_history {
+        for (raw_idx, m) in raw_history.into_iter().enumerate() {
             // As part of defensive programming, filter out system messages
             if m.role == "system" {
                 continue;
@@ -786,11 +798,19 @@ impl LlmProcessor {
 
             if m.role == "tool" {
                 if let Some(meta) = &m.metadata {
+                    let tool_call_id = meta.get("tool_call_id").and_then(|v| v.as_str());
+
+                    if tool_call_id
+                        .and_then(|id| latest_tool_message_index.get(id))
+                        .is_some_and(|latest_idx| *latest_idx != raw_idx)
+                    {
+                        continue;
+                    }
+
                     let approval_status = meta
                         .get("approval_status")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    let tool_call_id = meta.get("tool_call_id").and_then(|v| v.as_str());
 
                     if approval_status == "pending"
                         && tool_call_id
@@ -1014,7 +1034,66 @@ impl LlmProcessor {
             }
         }
 
-        history
+        let mut protocol_safe_history = Vec::with_capacity(history.len());
+        let mut pending_tool_call_ids: Option<HashSet<String>> = None;
+
+        for msg in history {
+            let role = msg.get("role").and_then(|value| value.as_str()).unwrap_or("");
+            match role {
+                "assistant" => {
+                    pending_tool_call_ids = msg
+                        .get("tool_calls")
+                        .and_then(|value| value.as_array())
+                        .map(|tool_calls| {
+                            tool_calls
+                                .iter()
+                                .filter_map(|tool_call| {
+                                    tool_call
+                                        .get("id")
+                                        .and_then(|value| value.as_str())
+                                        .or_else(|| {
+                                            tool_call
+                                                .get("tool_call_id")
+                                                .and_then(|value| value.as_str())
+                                        })
+                                        .map(str::to_string)
+                                })
+                                .collect::<HashSet<_>>()
+                        })
+                        .filter(|tool_calls| !tool_calls.is_empty());
+                    protocol_safe_history.push(msg);
+                }
+                "tool" => {
+                    let Some(tool_call_id) = msg
+                        .get("tool_call_id")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                    else {
+                        continue;
+                    };
+
+                    let Some(open_tool_calls) = pending_tool_call_ids.as_mut() else {
+                        continue;
+                    };
+
+                    if !open_tool_calls.remove(&tool_call_id) {
+                        continue;
+                    }
+
+                    protocol_safe_history.push(msg);
+
+                    if open_tool_calls.is_empty() {
+                        pending_tool_call_ids = None;
+                    }
+                }
+                _ => {
+                    pending_tool_call_ids = None;
+                    protocol_safe_history.push(msg);
+                }
+            }
+        }
+
+        protocol_safe_history
     }
 
     fn harden_untrusted_tool_observation(content: String, tool_name: Option<&str>) -> String {
@@ -1878,6 +1957,74 @@ mod tests {
             history[0]["reasoning_content"].as_str().unwrap_or_default(),
             "First hidden step\n\nSecond hidden step"
         );
+    }
+
+    #[test]
+    fn normalize_history_keeps_only_latest_tool_message_for_same_tool_call_id() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Write the file", None, None),
+            message(
+                "assistant",
+                "",
+                Some("think"),
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool_write",
+                        "type": "function",
+                        "function": { "name": "write_file", "arguments": "{}" }
+                    }]
+                })),
+            ),
+            message(
+                "tool",
+                "Preview of pending write",
+                Some("observe"),
+                Some(json!({
+                    "tool_call_id": "tool_write",
+                    "tool_name": "write_file",
+                    "approval_status": "pending"
+                })),
+            ),
+            message(
+                "tool",
+                "{\"bytes_written\":128}",
+                Some("observe"),
+                Some(json!({
+                    "tool_call_id": "tool_write",
+                    "tool_name": "write_file",
+                    "approval_status": "approved"
+                })),
+            ),
+        ]);
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[2]["role"], "tool");
+        assert_eq!(history[2]["tool_call_id"], "tool_write");
+        assert!(history[2]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("bytes_written"));
+    }
+
+    #[test]
+    fn normalize_history_drops_tool_messages_without_immediate_tool_call_anchor() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Continue", None, None),
+            message("assistant", "I am thinking.", Some("think"), None),
+            message(
+                "tool",
+                "late tool result",
+                Some("observe"),
+                Some(json!({
+                    "tool_call_id": "tool_late",
+                    "tool_name": "read_file"
+                })),
+            ),
+        ]);
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0]["role"], "user");
+        assert_eq!(history[1]["role"], "assistant");
     }
 
     #[test]

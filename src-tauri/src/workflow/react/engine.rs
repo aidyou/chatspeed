@@ -801,7 +801,8 @@ impl ReActExecutor for WorkflowExecutor {
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
         self.context
             .begin_new_task_segment_from_runtime_projection()
-            .await
+            .await?;
+        self.save_snapshot().await
     }
 
     async fn begin_execution_context_from_approved_plan(
@@ -809,7 +810,8 @@ impl ReActExecutor for WorkflowExecutor {
     ) -> Result<(), WorkflowEngineError> {
         self.context
             .begin_execution_segment_from_approved_plan()
-            .await
+            .await?;
+        self.save_snapshot().await
     }
 
     async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError> {
@@ -1864,6 +1866,7 @@ impl WorkflowExecutor {
         self.context
             .begin_execution_segment_from_approved_plan()
             .await?;
+        self.save_snapshot().await?;
 
         let mut new_policy = ExecutionPolicy::implementation();
         new_policy.approval_level = self.policy.approval_level.clone();
@@ -6538,6 +6541,7 @@ impl WorkflowExecutor {
             session_id: self.session_id.clone(),
             state,
             wait_reason,
+            current_segment_id: self.context.current_segment_id,
             current_step: self.current_step,
             max_steps: self.max_steps,
             pending_tools,

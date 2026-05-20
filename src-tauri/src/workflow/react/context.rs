@@ -1,21 +1,25 @@
-use crate::db::{MainStore, WorkflowContextMessage, WorkflowMessage};
+use crate::db::{MainStore, WorkflowAiContextMessage, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
 use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
 use crate::workflow::react::error::WorkflowEngineError;
+use crate::workflow::react::runtime_observation::{
+    is_runtime_observation, RuntimeObservationLlmVisibility,
+};
 use crate::workflow::react::types::StepType;
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 const CONTEXT_PRESSURE_COMPRESSION_THRESHOLD: f64 = 0.75;
 
-/// ContextManager is responsible for managing and persisting the conversation context for a ReAct session.
+/// ContextManager manages durable transcript history plus the AI-only context projection cache.
 pub struct ContextManager {
     pub session_id: String,
     pub main_store: Arc<std::sync::RwLock<MainStore>>,
     pub max_tokens: usize,
     pub messages: Vec<WorkflowMessage>,
-    pub context_messages: Vec<WorkflowContextMessage>,
+    pub ai_context_messages: Vec<WorkflowAiContextMessage>,
     pub current_segment_id: i32,
     pub tsid_generator: Arc<TsidGenerator>,
     /// Semaphore to control concurrent operations if needed
@@ -132,7 +136,7 @@ impl ContextManager {
             .rposition(Self::is_compression_summary_message)
     }
 
-    fn estimate_context_message_tokens(message: &WorkflowContextMessage) -> f64 {
+    fn estimate_context_message_tokens(message: &WorkflowAiContextMessage) -> f64 {
         let mut total = crate::ccproxy::utils::token_estimator::estimate_tokens(&message.message);
 
         if let Some(reasoning) = message.reasoning.as_deref() {
@@ -174,7 +178,7 @@ impl ContextManager {
     }
 
     pub fn current_token_estimate(&self) -> usize {
-        self.context_messages
+        self.ai_context_messages
             .iter()
             .map(Self::estimate_context_message_tokens)
             .sum::<f64>()
@@ -265,7 +269,7 @@ impl ContextManager {
             main_store,
             max_tokens,
             messages: Vec::new(),
-            context_messages: Vec::new(),
+            ai_context_messages: Vec::new(),
             current_segment_id: 1,
             tsid_generator,
             semaphore: Arc::new(Semaphore::new(3)), // Restore to 3 concurrent calls
@@ -274,23 +278,28 @@ impl ContextManager {
 
     /// Loads history from database, starting from the last summary if exists.
     pub async fn load_history(&mut self) -> Result<(), WorkflowEngineError> {
-        let snapshot = {
+        let (snapshot, execution_context) = {
             let store = self.main_store.read().map_err(|e| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
             })?;
-            store.get_workflow_snapshot(&self.session_id)?
+            (
+                store.get_workflow_snapshot(&self.session_id)?,
+                store.get_execution_context(&self.session_id)?,
+            )
         };
         self.messages = Self::rebuild_compacted_messages(&snapshot.messages, self.max_tokens);
-        let segment_id = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
-            store
-                .get_latest_workflow_context_segment_id(&self.session_id)?
-                .unwrap_or(1)
-        };
-        self.current_segment_id = segment_id;
-        self.rebuild_context_projection_from_runtime_messages(false, false)
+        let transcript_segment_id = self
+            .messages
+            .iter()
+            .map(|message| message.segment_id)
+            .max()
+            .unwrap_or(1);
+        let recovery_segment_id = execution_context
+            .as_ref()
+            .map(|ctx| ctx.current_segment_id)
+            .unwrap_or(1);
+        self.current_segment_id = transcript_segment_id.max(recovery_segment_id).max(1);
+        self.rebuild_context_projection_from_runtime_messages(false, true)
             .await?;
 
         Ok(())
@@ -318,57 +327,129 @@ impl ContextManager {
         Self::merge_attached_context(&message.message, message.attached_context.as_deref())
     }
 
-    fn should_wrap_as_user_query(&self, role: &str, step_type: Option<&StepType>) -> bool {
-        role == "user"
-            && step_type != Some(&StepType::Observe)
-            && !self
-                .context_messages
-                .iter()
-                .any(|message| message.role == "user")
+    fn llm_visibility(metadata: Option<&serde_json::Value>) -> Option<RuntimeObservationLlmVisibility> {
+        metadata
+            .and_then(|meta| meta.get("llm_visibility"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
     }
 
-    fn project_context_message(
-        &self,
+    fn latest_tool_message_index(source_messages: &[WorkflowMessage]) -> HashMap<String, usize> {
+        source_messages
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, message)| {
+                let tool_call_id = message
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("tool_call_id").and_then(|value| value.as_str()))?;
+                (message.role == "tool").then_some((tool_call_id.to_string(), idx))
+            })
+            .collect()
+    }
+
+    fn should_project_message_for_llm(
         message: &WorkflowMessage,
-        step_type: Option<&StepType>,
-    ) -> WorkflowContextMessage {
-        let merged_content = Self::content_for_context_projection(message);
-        let final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
-            let plan = message
-                .metadata
-                .as_ref()
-                .and_then(|meta| meta.get("plan_content"))
-                .and_then(|value| value.as_str())
-                .unwrap_or("");
-            let todos = message
-                .metadata
-                .as_ref()
-                .and_then(|meta| meta.get("todo_content"))
-                .and_then(|value| value.as_str())
-                .unwrap_or("[]");
-            format!(
-                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
-                plan, todos
-            )
-        } else if self.should_wrap_as_user_query(&message.role, step_type) {
-            format!("<user_query>\n{}\n</user_query>", merged_content)
-        } else {
-            merged_content
+        idx: usize,
+        latest_tool_message_index: &HashMap<String, usize>,
+    ) -> bool {
+        if message.role == "system" {
+            return true;
+        }
+
+        if is_runtime_observation(message.metadata.as_ref())
+            && Self::llm_visibility(message.metadata.as_ref())
+                == Some(RuntimeObservationLlmVisibility::Hide)
+        {
+            return false;
+        }
+
+        if message.role != "tool" {
+            return true;
+        }
+
+        let Some(tool_call_id) = message
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("tool_call_id").and_then(|value| value.as_str()))
+        else {
+            return true;
         };
 
-        WorkflowContextMessage {
-            id: None,
-            session_id: self.session_id.clone(),
-            segment_id: self.current_segment_id,
-            role: message.role.clone(),
-            message: final_content,
-            reasoning: message.reasoning.clone(),
-            message_kind: message.message_kind.clone(),
-            message_subtype: message.message_subtype.clone(),
-            metadata: message.metadata.clone(),
-            source_message_id: message.id,
-            created_at: None,
+        latest_tool_message_index
+            .get(tool_call_id)
+            .is_none_or(|latest_idx| *latest_idx == idx)
+    }
+
+    fn tool_call_ids_from_message(message: &WorkflowAiContextMessage) -> HashSet<String> {
+        message
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("tool_calls"))
+            .and_then(|tool_calls| tool_calls.as_array())
+            .map(|tool_calls| {
+                tool_calls
+                    .iter()
+                    .filter_map(|tool_call| {
+                        tool_call
+                            .get("id")
+                            .and_then(|value| value.as_str())
+                            .or_else(|| {
+                                tool_call
+                                    .get("tool_call_id")
+                                    .and_then(|value| value.as_str())
+                            })
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn protocol_safe_context_projection(
+        projected: Vec<WorkflowAiContextMessage>,
+    ) -> Vec<WorkflowAiContextMessage> {
+        let mut protocol_safe = Vec::with_capacity(projected.len());
+        let mut pending_tool_call_ids: Option<HashSet<String>> = None;
+
+        for message in projected {
+            match message.role.as_str() {
+                "assistant" => {
+                    let tool_call_ids = Self::tool_call_ids_from_message(&message);
+                    pending_tool_call_ids = (!tool_call_ids.is_empty()).then_some(tool_call_ids);
+                    protocol_safe.push(message);
+                }
+                "tool" => {
+                    let Some(tool_call_id) = message
+                        .metadata
+                        .as_ref()
+                        .and_then(|meta| meta.get("tool_call_id").and_then(|value| value.as_str()))
+                        .map(str::to_string)
+                    else {
+                        continue;
+                    };
+
+                    let Some(open_tool_calls) = pending_tool_call_ids.as_mut() else {
+                        continue;
+                    };
+
+                    if !open_tool_calls.remove(&tool_call_id) {
+                        continue;
+                    }
+
+                    protocol_safe.push(message);
+
+                    if open_tool_calls.is_empty() {
+                        pending_tool_call_ids = None;
+                    }
+                }
+                _ => {
+                    pending_tool_call_ids = None;
+                    protocol_safe.push(message);
+                }
+            }
         }
+
+        protocol_safe
     }
 
     fn projection_source_messages(&self) -> Vec<WorkflowMessage> {
@@ -407,10 +488,15 @@ impl ContextManager {
         &self,
         source_messages: &[WorkflowMessage],
         segment_id: i32,
-    ) -> Vec<WorkflowContextMessage> {
+    ) -> Vec<WorkflowAiContextMessage> {
         let mut projected = Vec::new();
+        let latest_tool_message_index = Self::latest_tool_message_index(source_messages);
 
-        for message in source_messages {
+        for (idx, message) in source_messages.iter().enumerate() {
+            if !Self::should_project_message_for_llm(message, idx, &latest_tool_message_index) {
+                continue;
+            }
+
             let step_type = message
                 .step_type
                 .as_deref()
@@ -438,14 +524,14 @@ impl ContextManager {
                 && step_type.as_ref() != Some(&StepType::Observe)
                 && !projected
                     .iter()
-                    .any(|existing: &WorkflowContextMessage| existing.role == "user")
+                    .any(|existing: &WorkflowAiContextMessage| existing.role == "user")
             {
                 format!("<user_query>\n{}\n</user_query>", merged_content)
             } else {
                 merged_content
             };
 
-            projected.push(WorkflowContextMessage {
+            projected.push(WorkflowAiContextMessage {
                 id: None,
                 session_id: self.session_id.clone(),
                 segment_id,
@@ -460,7 +546,7 @@ impl ContextManager {
             });
         }
 
-        projected
+        Self::protocol_safe_context_projection(projected)
     }
 
     async fn rebuild_context_projection_from_runtime_messages(
@@ -475,15 +561,19 @@ impl ContextManager {
         let segment_id = self.current_segment_id;
         let projection =
             self.build_context_projection(&self.projection_source_messages(), segment_id);
-        self.context_messages.clear();
+        self.ai_context_messages.clear();
 
         if persist {
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            store.delete_workflow_ai_context_segment(&self.session_id, segment_id)?;
             for message in projection {
-                let persisted = self.persist_context_seed(message).await?;
-                self.context_messages.push(persisted);
+                let persisted = store.add_workflow_ai_context_message(&message)?;
+                self.ai_context_messages.push(persisted);
             }
         } else {
-            self.context_messages = projection;
+            self.ai_context_messages = projection;
         }
 
         Ok(())
@@ -496,7 +586,7 @@ impl ContextManager {
             .await
     }
 
-    fn to_workflow_messages(messages: &[WorkflowContextMessage]) -> Vec<WorkflowMessage> {
+    fn to_workflow_messages(messages: &[WorkflowAiContextMessage]) -> Vec<WorkflowMessage> {
         messages
             .iter()
             .map(|message| WorkflowMessage {
@@ -522,28 +612,28 @@ impl ContextManager {
 
     async fn persist_context_seed(
         &self,
-        seed: WorkflowContextMessage,
-    ) -> Result<WorkflowContextMessage, WorkflowEngineError> {
+        seed: WorkflowAiContextMessage,
+    ) -> Result<WorkflowAiContextMessage, WorkflowEngineError> {
         let store = self.main_store.read().map_err(|e| {
             WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
         })?;
         store
-            .add_workflow_context_message(&seed)
+            .add_workflow_ai_context_message(&seed)
             .map_err(WorkflowEngineError::from)
     }
 
     pub async fn begin_new_segment_with_seed(
         &mut self,
-        seed_messages: Vec<WorkflowContextMessage>,
+        seed_messages: Vec<WorkflowAiContextMessage>,
     ) -> Result<(), WorkflowEngineError> {
         self.current_segment_id += 1;
-        self.context_messages.clear();
+        self.ai_context_messages.clear();
 
         for mut seed in seed_messages {
             seed.segment_id = self.current_segment_id;
             seed.session_id = self.session_id.clone();
             let persisted = self.persist_context_seed(seed).await?;
-            self.context_messages.push(persisted);
+            self.ai_context_messages.push(persisted);
         }
 
         Ok(())
@@ -553,7 +643,7 @@ impl ContextManager {
         &mut self,
     ) -> Result<(), WorkflowEngineError> {
         let initial_user = self
-            .context_messages
+            .ai_context_messages
             .iter()
             .find(|message| message.role == "user")
             .cloned()
@@ -564,7 +654,7 @@ impl ContextManager {
             })?;
 
         let approved_plan = self
-            .context_messages
+            .ai_context_messages
             .iter()
             .rev()
             .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
@@ -607,37 +697,37 @@ impl ContextManager {
                 .await?;
         }
 
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-
-        let msg_id = self
-            .tsid_generator
-            .generate_u64()
-            .map_err(|e| WorkflowEngineError::General(e))?;
-        let reasoning = Self::sanitize_reasoning_content(reasoning);
-        let msg = WorkflowMessage {
-            id: Some(msg_id as i64),
-            session_id: self.session_id.clone(),
-            role: role.clone(),
-            message: content,
-            reasoning,
-            message_kind: "message".to_string(),
-            message_subtype: None,
-            segment_id: self.current_segment_id,
-            source_event_type: None,
-            metadata,
-            attached_context,
-            step_type: step_type.clone().map(|s| s.to_string()),
-            step_index,
-            is_error,
-            error_type,
-            created_at: None,
-        };
-
         let persisted = {
+            let _permit = self
+                .semaphore
+                .acquire()
+                .await
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+
+            let msg_id = self
+                .tsid_generator
+                .generate_u64()
+                .map_err(|e| WorkflowEngineError::General(e))?;
+            let reasoning = Self::sanitize_reasoning_content(reasoning);
+            let msg = WorkflowMessage {
+                id: Some(msg_id as i64),
+                session_id: self.session_id.clone(),
+                role: role.clone(),
+                message: content,
+                reasoning,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: self.current_segment_id,
+                source_event_type: None,
+                metadata,
+                attached_context,
+                step_type: step_type.clone().map(|s| s.to_string()),
+                step_index,
+                is_error,
+                error_type,
+                created_at: None,
+            };
+
             let store = self.main_store.read().map_err(|e| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
             })?;
@@ -646,14 +736,8 @@ impl ContextManager {
 
         self.messages.push(persisted.clone());
 
-        let context_message = self.project_context_message(&persisted, step_type.as_ref());
-        let persisted_context = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
-            store.add_workflow_context_message(&context_message)?
-        };
-        self.context_messages.push(persisted_context);
+        self.rebuild_context_projection_from_runtime_messages(false, true)
+            .await?;
 
         // Check if compression is needed.
         // This estimate is based on projected runtime context only and does not fully include
@@ -720,7 +804,7 @@ impl ContextManager {
     }
 
     pub fn get_messages_for_llm(&self) -> Vec<WorkflowMessage> {
-        Self::to_workflow_messages(&self.context_messages)
+        Self::to_workflow_messages(&self.ai_context_messages)
     }
 
     /// Gets the initial user query for the session.
@@ -758,11 +842,11 @@ impl ContextManager {
 mod tests {
     use super::ContextManager;
     use crate::ccproxy::utils::token_estimator::estimate_tokens;
-    use crate::db::WorkflowContextMessage;
+    use crate::db::WorkflowAiContextMessage;
     use crate::db::{Agent, MainStore, WorkflowMessage};
     use crate::libs::tsid::TsidGenerator;
     use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
-    use crate::workflow::react::types::StepType;
+    use crate::workflow::react::types::{ExecutionContext, StepType};
     use serde_json::json;
     use std::sync::{Arc, RwLock};
 
@@ -809,7 +893,7 @@ mod tests {
 
     #[test]
     fn current_token_estimate_includes_reasoning_content() {
-        let message = WorkflowContextMessage {
+        let message = WorkflowAiContextMessage {
             id: None,
             session_id: "session".to_string(),
             segment_id: 0,
@@ -1066,6 +1150,98 @@ mod tests {
             snapshot.messages.len(),
             "history without summary should remain uncompressed"
         );
+    }
+
+    #[tokio::test]
+    async fn load_history_recovers_segment_id_from_snapshot_and_rebuilds_ai_cache() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-segment-recovery-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Initial query".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add initial user message");
+
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Assistant reply".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add assistant message");
+
+        {
+            let store_guard = store.read().expect("lock poisoned");
+            let mut execution_context = ExecutionContext::new(session_id.to_string());
+            execution_context.state = crate::workflow::react::types::RuntimeState::Running;
+            execution_context.current_segment_id = 3;
+            store_guard
+                .upsert_execution_context(&execution_context)
+                .expect("failed to persist execution context");
+        }
+
+        {
+            let store_guard = store.read().expect("lock poisoned");
+            let conn = store_guard.conn.lock().expect("db lock poisoned");
+            conn.execute(
+                "DELETE FROM workflow_context_messages WHERE session_id = ?1",
+                rusqlite::params![session_id],
+            )
+            .expect("failed to clear ai cache");
+        }
+
+        let mut restored = ContextManager::new(
+            session_id.to_string(),
+            store.clone(),
+            4096,
+            Arc::new(TsidGenerator::new(2).expect("failed to create tsid")),
+        );
+        restored
+            .load_history()
+            .await
+            .expect("load history should succeed");
+
+        assert_eq!(restored.current_segment_id, 3);
+        assert!(
+            restored
+                .ai_context_messages
+                .iter()
+                .all(|message| message.segment_id == 3),
+            "rebuilt AI cache should adopt the recovered current segment id"
+        );
+
+        let store_guard = store.read().expect("lock poisoned");
+        let conn = store_guard.conn.lock().expect("db lock poisoned");
+        let persisted_segment_id: i32 = conn
+            .query_row(
+                "SELECT MAX(segment_id) FROM workflow_context_messages WHERE session_id = ?1",
+                rusqlite::params![session_id],
+                |row| row.get(0),
+            )
+            .expect("failed to read persisted ai cache segment id");
+        assert_eq!(persisted_segment_id, 3);
     }
 
     #[tokio::test]
@@ -2320,5 +2496,225 @@ mod tests {
         assert!(llm_contents
             .iter()
             .any(|content| content.contains("Follow-up clarification")));
+    }
+
+    #[tokio::test]
+    async fn get_messages_for_llm_keeps_only_latest_tool_message_per_tool_call_id() {
+        let (_dir, store) = setup_store();
+        insert_workflow(&store, "dedupe_tool_projection");
+        let mut context = ContextManager::new(
+            "dedupe_tool_projection".to_string(),
+            store,
+            20_000,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Write the file".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message");
+
+        context
+            .add_message(
+                "assistant".to_string(),
+                "".to_string(),
+                None,
+                Some("Need to write the file".to_string()),
+                Some(StepType::Think),
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool_write",
+                        "type": "function",
+                        "function": {
+                            "name": "write_file",
+                            "arguments": "{}"
+                        }
+                    }]
+                })),
+            )
+            .await
+            .expect("failed to add assistant tool call");
+
+        context
+            .add_message(
+                "tool".to_string(),
+                "Preview payload".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                3,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool_write",
+                    "tool_name": "write_file",
+                    "approval_status": "pending"
+                })),
+            )
+            .await
+            .expect("failed to add preview tool message");
+
+        context
+            .add_message(
+                "tool".to_string(),
+                "{\"bytes_written\":128}".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                4,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool_write",
+                    "tool_name": "write_file",
+                    "approval_status": "approved"
+                })),
+            )
+            .await
+            .expect("failed to add final tool message");
+
+        let llm_messages = context.get_messages_for_llm();
+        let tool_messages = llm_messages
+            .iter()
+            .filter(|message| message.role == "tool")
+            .collect::<Vec<_>>();
+
+        assert_eq!(tool_messages.len(), 1);
+        assert_eq!(
+            tool_messages[0]
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("tool_call_id"))
+                .and_then(|value| value.as_str()),
+            Some("tool_write")
+        );
+        assert!(tool_messages[0].message.contains("bytes_written"));
+    }
+
+    #[tokio::test]
+    async fn get_messages_for_llm_drops_orphan_tool_messages() {
+        let (_dir, store) = setup_store();
+        insert_workflow(&store, "orphan_tool_projection");
+        let mut context = ContextManager::new(
+            "orphan_tool_projection".to_string(),
+            store,
+            20_000,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Continue".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message");
+
+        context
+            .add_message(
+                "assistant".to_string(),
+                "I am thinking.".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                2,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add assistant message");
+
+        context
+            .add_message(
+                "tool".to_string(),
+                "late tool result".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                3,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool_late",
+                    "tool_name": "read_file"
+                })),
+            )
+            .await
+            .expect("failed to add orphan tool message");
+
+        let llm_messages = context.get_messages_for_llm();
+        assert!(llm_messages.iter().all(|message| message.role != "tool"));
+    }
+
+    #[tokio::test]
+    async fn get_messages_for_llm_hides_runtime_observations_marked_hidden() {
+        let (_dir, store) = setup_store();
+        insert_workflow(&store, "hidden_runtime_observation");
+        let mut context = ContextManager::new(
+            "hidden_runtime_observation".to_string(),
+            store,
+            20_000,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Investigate".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message");
+
+        context
+            .add_message(
+                "tool".to_string(),
+                "<SYSTEM_REMINDER>Internal note</SYSTEM_REMINDER>".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                2,
+                false,
+                None,
+                Some(json!({
+                    "message_kind": "runtime_observation",
+                    "observation_type": "generic_reminder",
+                    "llm_visibility": "hide",
+                    "ui_visibility": "show"
+                })),
+            )
+            .await
+            .expect("failed to add hidden runtime observation");
+
+        let llm_messages = context.get_messages_for_llm();
+        assert_eq!(llm_messages.len(), 1);
+        assert_eq!(llm_messages[0].role, "user");
     }
 }

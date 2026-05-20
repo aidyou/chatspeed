@@ -1109,6 +1109,7 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                     session_id: child_id.clone(),
                     state: RuntimeState::Cancelled,
                     wait_reason: None,
+                    current_segment_id: 1,
                     current_step: 0,
                     max_steps: 0,
                     pending_tools: Vec::new(),

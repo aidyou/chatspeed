@@ -412,6 +412,8 @@ pub struct ExecutionContext {
     pub session_id: String,
     pub state: RuntimeState,
     pub wait_reason: Option<WaitReason>,
+    #[serde(default = "default_execution_context_segment_id")]
+    pub current_segment_id: i32,
     pub current_step: usize,
     pub max_steps: usize,
     pub pending_tools: Vec<PendingTool>,
@@ -431,8 +433,12 @@ pub struct ExecutionContext {
     pub pending_sub_agent_completions: Vec<SubAgentCompletion>,
 }
 
+fn default_execution_context_segment_id() -> i32 {
+    1
+}
+
 impl ExecutionContext {
-    pub const CURRENT_VERSION: &'static str = "1.2.0";
+    pub const CURRENT_VERSION: &'static str = "1.3.0";
 
     #[cfg(test)]
     pub fn new(session_id: String) -> Self {
@@ -440,6 +446,7 @@ impl ExecutionContext {
             session_id,
             state: RuntimeState::Pending,
             wait_reason: None,
+            current_segment_id: default_execution_context_segment_id(),
             current_step: 0,
             max_steps: 100,
             pending_tools: Vec::new(),
@@ -465,9 +472,10 @@ mod tests {
         assert_eq!(ctx.session_id, "test-session");
         assert_eq!(ctx.state, RuntimeState::Pending);
         assert!(ctx.wait_reason.is_none());
+        assert_eq!(ctx.current_segment_id, 1);
         assert!(ctx.pending_tools.is_empty());
         assert!(ctx.last_event_id.is_none());
-        assert_eq!(ctx.version, "1.2.0");
+        assert_eq!(ctx.version, "1.3.0");
         assert!(ctx.waiting_on_sub_agent_id.is_none());
         assert!(ctx.sub_agent_sessions.is_empty());
         assert!(ctx.pending_sub_agent_completions.is_empty());
@@ -478,6 +486,7 @@ mod tests {
         let mut ctx = ExecutionContext::new("test-session".to_string());
         ctx.state = RuntimeState::Waiting;
         ctx.wait_reason = Some(WaitReason::Approval);
+        ctx.current_segment_id = 3;
         ctx.current_step = 5;
         ctx.max_steps = 100;
         ctx.pending_tools.push(PendingTool {
