@@ -551,6 +551,10 @@ impl WorkflowExecutor {
             compressed_until_message_id,
             self.context.current_token_estimate()
         );
+        self.dispatch_ui_payload(GatewayPayload::CompressionApplied {
+            compressed_until_message_id,
+        })
+        .await?;
         self.dispatch_context_usage().await?;
         Ok(())
     }

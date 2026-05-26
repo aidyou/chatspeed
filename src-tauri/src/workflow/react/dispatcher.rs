@@ -36,6 +36,7 @@ fn gateway_payload_name(payload: &GatewayPayload) -> &'static str {
         GatewayPayload::SyncTodo { .. } => "sync_todo",
         GatewayPayload::RetryStatus { .. } => "retry_status",
         GatewayPayload::CompressionStatus { .. } => "compression_status",
+        GatewayPayload::CompressionApplied { .. } => "compression_applied",
         GatewayPayload::ContextUsage { .. } => "context_usage",
         GatewayPayload::SubAgentProgress { .. } => "sub_agent_progress",
         GatewayPayload::Notification { .. } => "notification",

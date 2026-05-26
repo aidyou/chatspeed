@@ -96,6 +96,10 @@ pub enum GatewayPayload {
         is_compressing: bool,
         message: String,
     },
+    /// Compression summary has been persisted and the message projection changed.
+    CompressionApplied {
+        compressed_until_message_id: i64,
+    },
     /// Current runtime context token estimate after compaction/rebuild.
     ContextUsage {
         total_tokens: usize,

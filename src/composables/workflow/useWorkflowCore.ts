@@ -853,6 +853,16 @@ export function useWorkflowCore({
                     if (payload.is_compressing) {
                         scrollToBottom()
                     }
+                } else if (payload.type === 'compression_applied') {
+                    markSessionLiveFromNonTerminalEvent()
+                    if (workflowStore.currentWorkflowId === sessionId) {
+                        workflowStore.loadMessages(sessionId).catch((error) => {
+                            console.warn(
+                                '[Workflow] Failed to refresh messages after compression:',
+                                error
+                            )
+                        })
+                    }
                 } else if (payload.type === 'context_usage') {
                     markSessionLiveFromNonTerminalEvent()
                     workflowStore.setCurrentContextTokens(
