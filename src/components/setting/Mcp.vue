@@ -194,7 +194,6 @@
                 :rules="[{ required: true, message: $t('settings.mcp.validation.typeRequired') }]">
                 <el-radio-group v-model="currentServerForm.config.type">
                   <el-radio value="stdio">Stdio</el-radio>
-                  <el-radio value="sse">SSE</el-radio>
                   <el-radio value="streamable_http">Streamable HTTP</el-radio>
                 </el-radio-group>
               </el-form-item>
@@ -965,7 +964,7 @@ const validatePlaceholders = () => {
   const placeholderRegex = /\{[^}]+\}/g
   const errors = []
 
-  // check Bearer Token, streamable_http and sse may has bearer_token
+  // check Bearer Token for non-stdio transports
   if (currentServerForm.config.type !== 'stdio' && currentServerForm.config.bearer_token) {
     const bearerToken = currentServerForm.config.bearer_token.trim()
     if (bearerToken && placeholderRegex.test(bearerToken)) {
@@ -991,7 +990,7 @@ const validatePlaceholders = () => {
     }
   }
 
-  // check the url, streamable_http and sse must be has url and may has placeholder in url
+  // check the URL for non-stdio transports
   if (currentServerForm.config.type !== 'stdio' && currentServerForm.config.url) {
     const url = currentServerForm.config.url.trim()
     if (url && placeholderRegex.test(url)) {

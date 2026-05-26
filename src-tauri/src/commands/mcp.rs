@@ -93,11 +93,9 @@ fn check_form(name: &str, config: &McpServerConfig) -> Result<()> {
         )));
     }
 
-    if config.protocol_type == McpProtocolType::Sse
-        && config.url.clone().unwrap_or_default().is_empty()
-    {
+    if config.protocol_type == McpProtocolType::Sse {
         return Err(AppError::Mcp(McpError::ClientConfigError(
-            t!("mcp.config.sse_url_must_be_non_empty").to_string(),
+            t!("mcp.config.sse_removed_in_rmcp_v1").to_string(),
         )));
     }
 

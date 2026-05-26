@@ -162,6 +162,7 @@ mcp:
       および "%{command}" の設定を確認してください。
   config:
     name_must_be_non_empty: MCP 設定名は空にできません。有効な設定名を入力してください
+    sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
     sse_url_must_be_non_empty: MCP 設定の SSE URL は空にできません
     stdio_args_must_be_non_empty: MCP 設定の「起動パラメータ」は空にできません
     stdio_command_must_be_non_empty: MCP 設定の「起動コマンド」は空にできません

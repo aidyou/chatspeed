@@ -168,6 +168,7 @@ mcp:
       или отсутствуют в переменной окружения PATH вашей системы. Проверьте настройку Python и инструмента "%{command}".
   config:
     name_must_be_non_empty: Имя конфигурации MCP не может быть пустым, введите допустимое имя конфигурации
+    sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
     sse_url_must_be_non_empty: URL-адрес SSE конфигурации MCP не может быть пустым
     stdio_args_must_be_non_empty: Параметры запуска конфигурации MCP не могут быть пустыми
     stdio_command_must_be_non_empty: Команда запуска конфигурации MCP не может быть пустой

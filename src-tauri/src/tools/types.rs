@@ -79,11 +79,24 @@ impl ToolCallResult {
 
 impl From<ToolCallResult> for rmcp::model::CallToolResult {
     fn from(value: ToolCallResult) -> Self {
-        Self {
-            content: value.content.map(|c| c.into_contents()).unwrap_or_default(),
-            structured_content: value.structured_content,
-            is_error: value.is_error,
-            meta: None,
+        let content = value.content.map(|c| c.into_contents()).unwrap_or_default();
+        match (value.structured_content, value.is_error.unwrap_or(false)) {
+            (Some(structured_content), true) => {
+                let mut result = rmcp::model::CallToolResult::structured_error(structured_content);
+                if !content.is_empty() {
+                    result.content = content;
+                }
+                result
+            }
+            (Some(structured_content), false) => {
+                let mut result = rmcp::model::CallToolResult::structured(structured_content);
+                if !content.is_empty() {
+                    result.content = content;
+                }
+                result
+            }
+            (None, true) => rmcp::model::CallToolResult::error(content),
+            (None, false) => rmcp::model::CallToolResult::success(content),
         }
     }
 }

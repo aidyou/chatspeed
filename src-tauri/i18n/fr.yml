@@ -176,6 +176,7 @@ mcp:
   config:
     name_must_be_non_empty: Le nom de la configuration MCP ne peut pas être vide, veuillez saisir un nom de configuration
       valide
+    sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
     sse_url_must_be_non_empty: L'URL SSE de la configuration MCP ne peut pas être vide
     stdio_args_must_be_non_empty: Les Arguments de démarrage de la configuration MCP ne peuvent pas être vides
     stdio_command_must_be_non_empty: La Commande de démarrage de la configuration MCP ne peut pas être vide

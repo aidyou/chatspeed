@@ -169,6 +169,7 @@ mcp:
       corretamente ou não está no PATH do seu sistema. Verifique a configuração do Python e da ferramenta "%{command}".
   config:
     name_must_be_non_empty: O nome da configuração MCP não pode estar vazio, insira um nome de configuração válido
+    sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
     sse_url_must_be_non_empty: A URL SSE da configuração MCP não pode estar vazia
     stdio_args_must_be_non_empty: Os Argumentos de Inicialização da configuração MCP não podem estar vazios
     stdio_command_must_be_non_empty: O Comando de Inicialização da configuração MCP não pode estar vazio

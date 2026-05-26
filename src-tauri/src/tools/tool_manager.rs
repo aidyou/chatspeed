@@ -10,8 +10,7 @@ use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::constants::CFG_SEARCH_ENGINE;
 use crate::db::MainStore;
 use crate::mcp::client::{
-    McpClient, McpProtocolType, McpServerConfig, McpStatus, SseClient, StdioClient,
-    StreamableHttpClient,
+    McpClient, McpProtocolType, McpServerConfig, McpStatus, StdioClient, StreamableHttpClient,
 };
 use crate::tools::error::ToolError;
 use crate::tools::{ToolCallResult, ToolCategory, ToolScope, MCP_TOOL_NAME_SPLIT};
@@ -539,13 +538,12 @@ impl ToolManager {
             );
         }
 
-        // 1. Create the MCP client (SseClient or StdioClient)
+        // 1. Create the MCP client
         // This happens without holding FunctionManager's locks
         let client_arc: Arc<dyn McpClient> = match mcp_server_config.protocol_type {
-            McpProtocolType::Sse => {
-                SseClient::new(mcp_server_config.clone()) // Clone for the client
-                    .map(|c| Arc::new(c) as Arc<dyn McpClient>)
-            }
+            McpProtocolType::Sse => Err(crate::mcp::McpError::ClientConfigError(
+                t!("mcp.config.sse_removed_in_rmcp_v1").to_string(),
+            )),
             McpProtocolType::Stdio => {
                 StdioClient::new(mcp_server_config.clone()) // Clone for the client
                     .map(|c| Arc::new(c) as Arc<dyn McpClient>)

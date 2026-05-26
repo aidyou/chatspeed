@@ -1,4 +1,4 @@
-use rmcp::model::{CallToolRequestParam, InitializeRequestParam};
+use rmcp::model::{CallToolRequestParams, InitializeRequestParams};
 use rmcp::service::RunningService;
 use rmcp::RoleClient;
 use rust_i18n::t;
@@ -188,7 +188,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
 
     /// Gets the running service instance
     /// Implementors should return a clone of their `Arc<RwLock<Option<RunningService<...>>>>`.
-    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParam>>>>;
+    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParams>>>>;
 
     async fn status(&self) -> McpStatus;
 
@@ -201,7 +201,7 @@ pub trait McpClient: Send + Sync + McpClientInternal {
     /// nor should it store the running service in the shared client field.
     async fn perform_connect(
         &self,
-    ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParam>>;
+    ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParams>>;
 
     /// Starts the MCP client connection.
     /// This default implementation calls `perform_connect` and manages status updates
@@ -337,9 +337,11 @@ pub trait McpClient: Send + Sync + McpClientInternal {
         if let Some(service_instance) = guard.as_ref() {
             let call_tool_result = service_instance
                 .peer()
-                .call_tool(CallToolRequestParam {
-                    name: tool_name.to_string().into(),
-                    arguments: self.arg_parser(args),
+                .call_tool({
+                    let mut request = CallToolRequestParams::default();
+                    request.name = tool_name.to_string().into();
+                    request.arguments = self.arg_parser(args);
+                    request
                 })
                 .await
                 .map_err(|e| McpError::ClientCallError(e.to_string()))?;

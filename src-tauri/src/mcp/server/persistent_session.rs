@@ -559,10 +559,7 @@ impl CachedTx {
             http_request_id: self.http_request_id,
             index,
         };
-        let message = ServerSseMessage {
-            event_id: Some(event_id.to_string()),
-            message: Arc::new(message),
-        };
+        let message = ServerSseMessage::new(event_id.to_string(), message);
         if self.cache.len() >= self.capacity {
             self.cache.pop_front();
         }
@@ -814,13 +811,17 @@ impl LocalSessionWorker {
                 }
             }
             ServerJsonRpcMessage::Error(json_rpc_error) => {
-                if let Some(id) = self
-                    .resource_router
-                    .get(&ResourceKey::McpRequestId(json_rpc_error.id.clone()))
-                {
-                    OutboundChannel::RequestWise {
-                        id: *id,
-                        close: false,
+                if let Some(request_id) = json_rpc_error.id.clone() {
+                    if let Some(id) = self
+                        .resource_router
+                        .get(&ResourceKey::McpRequestId(request_id))
+                    {
+                        OutboundChannel::RequestWise {
+                            id: *id,
+                            close: false,
+                        }
+                    } else {
+                        OutboundChannel::Common
                     }
                 } else {
                     OutboundChannel::Common
@@ -1040,10 +1041,10 @@ impl Worker for LocalSessionWorker {
         McpError::General(e.to_string())
     }
     fn config(&self) -> rmcp::transport::worker::WorkerConfig {
-        rmcp::transport::worker::WorkerConfig {
-            name: Some(format!("streamable-http-session-{}", self.id)),
-            channel_buffer_capacity: self.session_config.channel_capacity,
-        }
+        let mut config = rmcp::transport::worker::WorkerConfig::default();
+        config.name = Some(format!("streamable-http-session-{}", self.id));
+        config.channel_buffer_capacity = self.session_config.channel_capacity;
+        config
     }
     async fn run(
         mut self,
@@ -1106,15 +1107,15 @@ impl Worker for LocalSessionWorker {
                 }
             };
             match event {
-                InnerEvent::FromHandler(WorkerSendRequest { message, responder }) => {
+                InnerEvent::FromHandler(WorkerSendRequest {
+                    message, responder, ..
+                }) => {
                     let to_unregister = match &message {
                         rmcp::model::JsonRpcMessage::Response(json_rpc_response) => {
-                            let request_id = json_rpc_response.id.clone();
-                            Some(ResourceKey::McpRequestId(request_id))
+                            Some(ResourceKey::McpRequestId(json_rpc_response.id.clone()))
                         }
                         rmcp::model::JsonRpcMessage::Error(json_rpc_error) => {
-                            let request_id = json_rpc_error.id.clone();
-                            Some(ResourceKey::McpRequestId(request_id))
+                            json_rpc_error.id.clone().map(ResourceKey::McpRequestId)
                         }
                         _ => None,
                     };

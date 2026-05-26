@@ -10,8 +10,8 @@ use crate::{ai::interaction::chat_completion::ChatState, tools::MCP_TOOL_NAME_SP
 use rmcp::model::IntoContents;
 use rmcp::{
     model::{
-        CallToolRequestParam, CallToolResult, Implementation, InitializeRequestParam,
-        InitializeResult, ListToolsResult, PaginatedRequestParam, ProtocolVersion,
+        CallToolRequestParams, CallToolResult, Implementation, InitializeRequestParams,
+        InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
         ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer},
@@ -34,15 +34,7 @@ impl From<MCPToolDeclaration> for Tool {
             _ => Arc::new(serde_json::Map::new()), // Fallback to empty object
         };
 
-        Tool {
-            name: tool.name.into(),
-            description: Some(tool.description.into()),
-            input_schema,
-            output_schema: None,
-            annotations: None,
-            title: None,
-            icons: None,
-        }
+        Tool::new(tool.name, tool.description, input_schema)
     }
 }
 
@@ -163,23 +155,19 @@ impl McpProxyHandler {
 
 impl ServerHandler for McpProxyHandler {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "Chatspeed MCP Hub".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                title: Some("Chatspeed".to_string()),
-                website_url: Some("https://chatspeed.aidyou.ai".to_string()),
-                icons: None,
-            },
-            instructions: Some(t!("mcp.proxy.service_description").to_string()),
-        }
+        let mut info = ServerInfo::default();
+        info.protocol_version = ProtocolVersion::default();
+        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info.server_info = Implementation::new("Chatspeed MCP Hub", env!("CARGO_PKG_VERSION"))
+            .with_title("Chatspeed")
+            .with_website_url("https://chatspeed.aidyou.ai");
+        info.instructions = Some(t!("mcp.proxy.service_description").to_string());
+        info
     }
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        _request: InitializeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, rmcp::model::ErrorData> {
         Ok(self.get_info())
@@ -187,7 +175,7 @@ impl ServerHandler for McpProxyHandler {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, rmcp::model::ErrorData> {
         let exclude_tools = HashSet::from(["chat_completion".to_string()]);
@@ -254,15 +242,12 @@ impl ServerHandler for McpProxyHandler {
         let mut tool_map = self.tool_map.write().await;
         *tool_map = new_tool_map;
 
-        Ok(ListToolsResult {
-            tools: display_tools,
-            next_cursor: None,
-        })
+        Ok(ListToolsResult::with_all_items(display_tools))
     }
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, rmcp::model::ErrorData> {
         // Ensure tool map is loaded
@@ -274,12 +259,7 @@ impl ServerHandler for McpProxyHandler {
             Some(tool) => tool.clone(),
             None => {
                 let error = json!({"error":t!("mcp.proxy.tool_not_found", tool_name = request.name).to_string()});
-                return Ok(CallToolResult {
-                    content: error.to_string().into_contents(),
-                    structured_content: Some(error),
-                    is_error: Some(true),
-                    meta: None,
-                });
+                return Ok(CallToolResult::structured_error(error));
             }
         };
         drop(tool_map_guard); // Explicitly release lock
@@ -310,10 +290,14 @@ impl ServerHandler for McpProxyHandler {
 
         match result {
             Ok(tool_result) => {
-                let (content, structured_content) = if let Ok(result) =
+                let (content, structured_content, is_error) = if let Ok(result) =
                     serde_json::from_value::<CallToolResult>(tool_result.clone())
                 {
-                    (result.content, result.structured_content)
+                    (
+                        result.content,
+                        result.structured_content,
+                        result.is_error.unwrap_or(false),
+                    )
                 } else if let Ok(result) =
                     serde_json::from_value::<ToolCallResult>(tool_result.clone())
                 {
@@ -324,29 +308,36 @@ impl ServerHandler for McpProxyHandler {
                             .unwrap_or_default(),
                         // result.structured_content,
                         None,
+                        false,
                     )
                 } else {
                     (
                         tool_result.to_string().into_contents(),
                         Some(tool_result.clone()),
+                        false,
                     )
                 };
-                Ok(CallToolResult {
-                    content,
-                    structured_content,
-                    is_error: Some(false),
-                    meta: None,
-                })
+                let call_result = if let Some(structured_content) = structured_content {
+                    let mut result = if is_error {
+                        CallToolResult::structured_error(structured_content)
+                    } else {
+                        CallToolResult::structured(structured_content)
+                    };
+                    if !content.is_empty() {
+                        result.content = content;
+                    }
+                    result
+                } else if is_error {
+                    CallToolResult::error(content)
+                } else {
+                    CallToolResult::success(content)
+                };
+                Ok(call_result)
             }
             Err(e) => {
                 let error = json!({"error":t!("mcp.proxy.tool_execution_error", error = e.to_string())
                 .to_string()});
-                Ok(CallToolResult {
-                    content: error.to_string().into_contents(),
-                    structured_content: Some(error),
-                    is_error: Some(true),
-                    meta: None,
-                })
+                Ok(CallToolResult::structured_error(error))
             }
         }
     }

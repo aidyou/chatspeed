@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use rmcp::model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParam};
+use rmcp::model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParams};
 use rmcp::{service::RunningService, transport::TokioChildProcess, RoleClient, ServiceExt as _};
 use rust_i18n::t;
 use tokio::{process::Command, sync::RwLock};
@@ -121,7 +121,7 @@ impl McpClient for StdioClient {
     /// on success, or an error.
     async fn perform_connect(
         &self,
-    ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParam>> {
+    ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParams>> {
         let config = self.core.get_config().await;
         let original_cmd_str = config
             .command
@@ -266,17 +266,13 @@ impl McpClient for StdioClient {
             }
         })?;
 
-        let client_info = ClientInfo {
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "Chatspeed MCP Client".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                title: Some("Chatspeed".to_string()),
-                website_url: Some("https://chatspeed.aidyou.ai".to_string()),
-                icons: None,
-            },
-        };
+        let mut client_info = ClientInfo::default();
+        client_info.protocol_version = Default::default();
+        client_info.capabilities = ClientCapabilities::default();
+        client_info.client_info =
+            Implementation::new("Chatspeed MCP Client", env!("CARGO_PKG_VERSION"))
+                .with_title("Chatspeed")
+                .with_website_url("https://chatspeed.aidyou.ai");
         client_info.serve(process).await.map_err(|e| {
             // Optional: Wrap with t!
             let detailed_error = e.to_string();
@@ -292,7 +288,7 @@ impl McpClient for StdioClient {
         })
     }
 
-    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParam>>>> {
+    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParams>>>> {
         self.core.get_client_instance_arc()
     }
 

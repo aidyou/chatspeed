@@ -165,6 +165,7 @@ mcp:
       not in your system's PATH environment variable. Please check your Python and "%{command}" setup.
   config:
     name_must_be_non_empty: MCP config name cannot be empty, please enter a valid config name
+    sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
     sse_url_must_be_non_empty: MCP config SSE URL cannot be empty
     stdio_args_must_be_non_empty: MCP config 'Startup Arguments' cannot be empty
     stdio_command_must_be_non_empty: MCP config 'Startup Command' cannot be empty

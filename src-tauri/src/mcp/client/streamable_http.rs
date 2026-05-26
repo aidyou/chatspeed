@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use reqwest::{header, Client};
 use rmcp::{
-    model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParam},
+    model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParams},
     service::RunningService,
     transport::{
         common::client_side_sse::ExponentialBackoff,
@@ -110,7 +110,7 @@ impl McpClientInternal for StreamableHttpClient {
 impl McpClient for StreamableHttpClient {
     async fn perform_connect(
         &self,
-    ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParam>> {
+    ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParams>> {
         let config = self.core.get_config().await;
         let url_str = config.url.as_deref().filter(|s| !s.is_empty());
 
@@ -123,29 +123,22 @@ impl McpClient for StreamableHttpClient {
         };
 
         let http_client = self.build_http_client_async().await?;
-        let retry_config = ExponentialBackoff {
-            max_times: Some(120),
-            base_duration: Duration::from_secs(2),
-        };
-        let transport_config = StreamableHttpClientTransportConfig {
-            uri: Arc::from(url),
-            retry_config: Arc::new(retry_config),
-            auth_header: config.bearer_token.clone(),
-            ..Default::default()
-        };
+        let mut retry_config = ExponentialBackoff::default();
+        retry_config.max_times = Some(120);
+        retry_config.base_duration = Duration::from_secs(2);
+
+        let mut transport_config = StreamableHttpClientTransportConfig::with_uri(url);
+        transport_config.retry_config = Arc::new(retry_config);
+        transport_config.auth_header = config.bearer_token.clone();
         let transport = StreamableHttpClientTransport::with_client(http_client, transport_config);
 
-        let client_info = ClientInfo {
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "Chatspeed MCP Client".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                title: Some("Chatspeed".to_string()),
-                website_url: Some("https://chatspeed.aidyou.ai".to_string()),
-                icons: None,
-            },
-        };
+        let mut client_info = ClientInfo::default();
+        client_info.protocol_version = Default::default();
+        client_info.capabilities = ClientCapabilities::default();
+        client_info.client_info =
+            Implementation::new("Chatspeed MCP Client", env!("CARGO_PKG_VERSION"))
+                .with_title("Chatspeed")
+                .with_website_url("https://chatspeed.aidyou.ai");
         let client_service_result = client_info
             .serve(transport)
             .await
@@ -169,7 +162,7 @@ impl McpClient for StreamableHttpClient {
         Ok(client_service)
     }
 
-    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParam>>>> {
+    fn client(&self) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParams>>>> {
         self.core.get_client_instance_arc()
     }
 

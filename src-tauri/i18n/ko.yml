@@ -162,6 +162,7 @@ mcp:
       설정을 확인하십시오.
   config:
     name_must_be_non_empty: MCP 구성 이름은 비워 둘 수 없습니다. 유효한 구성 이름을 입력하십시오.
+    sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
     sse_url_must_be_non_empty: MCP 구성의 SSE URL은 비워 둘 수 없습니다.
     stdio_args_must_be_non_empty: MCP 구성의 시작 매개변수는 비워 둘 수 없습니다.
     stdio_command_must_be_non_empty: MCP 구성의 시작 명령은 비워 둘 수 없습니다.

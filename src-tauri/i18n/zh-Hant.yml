@@ -160,6 +160,7 @@ mcp:
     stdio_uvx_not_found_help: 這可能意味著您的 Python 環境或「%{command}」工具未正確設定，或它不在系統的 PATH 環境變數中。請檢查您的 Python 和「%{command}」設定。
   config:
     name_must_be_non_empty: MCP 配置名稱不可為空，請輸入一個有效的配置名稱
+    sse_removed_in_rmcp_v1: MCP SSE 傳輸已不再受支援。請將該伺服器遷移到 Streamable HTTP。
     sse_url_must_be_non_empty: MCP 配置的 SSE URL 不可為空
     stdio_args_must_be_non_empty: MCP 配置的啟動參數不可為空
     stdio_command_must_be_non_empty: MCP 配置的啟動指令不可為空
