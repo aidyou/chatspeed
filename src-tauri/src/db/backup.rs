@@ -451,8 +451,8 @@ impl DbBackup {
                     })?;
                 }
 
-                // Try to create and write file, but handle file locking gracefully
-                // This is especially important for mcp_sessions/db which may be locked by sled
+                // Try to create and write file, but handle file locking gracefully.
+                // This matters for session artifacts that may still be in use during restore.
                 match File::create(&outpath) {
                     Ok(mut outfile) => {
                         if let Err(e) = std::io::copy(&mut file, &mut outfile) {

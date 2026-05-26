@@ -107,9 +107,7 @@ pub fn render_runtime_observation_for_llm(
 ) -> Option<RenderedObservation> {
     let metadata = message.metadata.as_ref();
     let is_typed = is_runtime_observation(metadata);
-    let is_legacy_system_observation = message.role == "user"
-        && message.step_type.as_deref() == Some("observe")
-        && message.message.contains("<SYSTEM_REMINDER>");
+    let is_legacy_system_observation = is_legacy_system_observation(message);
 
     if !is_typed && !is_legacy_system_observation {
         return None;
@@ -131,7 +129,7 @@ pub fn render_runtime_observation_for_llm(
         .unwrap_or_else(|| {
             if runtime_observation_type(metadata)
                 == Some(RuntimeObservationType::SubAgentCompletion)
-                || message.message.contains("<tool_result")
+                || is_legacy_sub_agent_completion_observation(message)
             {
                 RuntimeObservationPlacement::Preserve
             } else {
@@ -140,6 +138,16 @@ pub fn render_runtime_observation_for_llm(
         });
 
     Some(RenderedObservation { content, placement })
+}
+
+fn is_legacy_system_observation(message: &WorkflowMessage) -> bool {
+    message.role == "user"
+        && message.step_type.as_deref() == Some("observe")
+        && message.message.contains("<SYSTEM_REMINDER>")
+}
+
+fn is_legacy_sub_agent_completion_observation(message: &WorkflowMessage) -> bool {
+    is_legacy_system_observation(message) && message.message.contains("<tool_result")
 }
 
 fn default_visibility(
@@ -191,6 +199,7 @@ fn merge_object_fields(target: &mut Value, source: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::WorkflowMessage;
 
     #[test]
     fn runtime_observation_metadata_has_stable_shape() {
@@ -216,5 +225,31 @@ mod tests {
             metadata["data"]["sub_agent_id"].as_str(),
             Some("subagent_1")
         );
+    }
+
+    #[test]
+    fn legacy_sub_agent_completion_observation_preserves_position() {
+        let message = WorkflowMessage {
+            id: None,
+            session_id: "session".to_string(),
+            role: "user".to_string(),
+            message: "<tool_result tool=\"sub_agent_run\" id=\"subagent_1\" mode=\"call\" status=\"completed\">\n<Result>\nDone\n</Result>\n</tool_result>\n<SYSTEM_REMINDER>Use the result.</SYSTEM_REMINDER>".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: None,
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        let rendered = render_runtime_observation_for_llm(&message)
+            .expect("legacy sub-agent completion should still render");
+        assert_eq!(rendered.placement, RuntimeObservationPlacement::Preserve);
     }
 }

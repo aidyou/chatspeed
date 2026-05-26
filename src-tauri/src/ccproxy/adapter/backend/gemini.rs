@@ -1165,6 +1165,7 @@ impl BackendAdapter for GeminiBackendAdapter {
 #[cfg(test)]
 mod tests {
     use super::{GeminiBackendAdapter, GEMINI_DUMMY_THOUGHT_SIGNATURE};
+    use crate::ccproxy::adapter::backend::traits::BackendAdapter;
     use crate::ccproxy::adapter::unified::{
         UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedToolChoice,
     };

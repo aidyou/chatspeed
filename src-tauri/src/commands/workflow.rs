@@ -1249,7 +1249,7 @@ pub async fn delete_workflow(
 }
 
 #[tauri::command]
-pub async fn delete_last_assistant_workflow_turn(
+pub async fn delete_last_workflow_message(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
@@ -1266,7 +1266,7 @@ pub async fn delete_last_assistant_workflow_turn(
 
     let store = state.read().map_err(|e| e.to_string())?;
     store
-        .delete_last_assistant_turn(&session_id)
+        .delete_last_message(&session_id)
         .map_err(|e| e.to_string())
 }
 

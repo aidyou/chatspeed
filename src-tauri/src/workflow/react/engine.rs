@@ -4852,7 +4852,7 @@ impl WorkflowExecutor {
                 .map(ToString::to_string)
                 .unwrap_or(default_summary);
             return Ok(ReinforcedResult {
-                content: "Finished".into(),
+                content: super::constants::TASK_FINISHED.to_string(),
                 llm_content: None,
                 title: "Complete Workflow with Summary".to_string(),
                 summary,

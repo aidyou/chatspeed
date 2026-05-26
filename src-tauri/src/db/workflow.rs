@@ -447,7 +447,7 @@ impl MainStore {
         Ok(())
     }
 
-    pub fn delete_last_assistant_turn(&self, session_id: &str) -> Result<bool, StoreError> {
+    pub fn delete_last_message(&self, session_id: &str) -> Result<bool, StoreError> {
         let mut conn = self
             .conn
             .lock()
@@ -455,11 +455,11 @@ impl MainStore {
 
         let tx = conn.transaction()?;
 
-        let assistant_anchor_id: Option<i64> = tx
+        let last_message_id: Option<i64> = tx
             .query_row(
                 "SELECT id
                  FROM workflow_messages
-                 WHERE session_id = ?1 AND role = 'assistant'
+                 WHERE session_id = ?1
                  ORDER BY id DESC
                  LIMIT 1",
                 params![session_id],
@@ -467,12 +467,12 @@ impl MainStore {
             )
             .optional()?;
 
-        let Some(assistant_anchor_id) = assistant_anchor_id else {
+        let Some(last_message_id) = last_message_id else {
             return Ok(false);
         };
 
         // `workflow_context_messages` is an AI-only cache derived from transcript history.
-        // After deleting a tail turn from durable history, partial cache surgery is brittle.
+        // After deleting a tail message from durable history, partial cache surgery is brittle.
         // Clear the whole session cache and let the runtime rebuild it from authority data.
         tx.execute(
             "DELETE FROM workflow_context_messages WHERE session_id = ?1",
@@ -481,13 +481,13 @@ impl MainStore {
 
         tx.execute(
             "DELETE FROM workflow_messages
-             WHERE session_id = ?1 AND id >= ?2",
-            params![session_id, assistant_anchor_id],
+             WHERE session_id = ?1 AND id = ?2",
+            params![session_id, last_message_id],
         )?;
 
         // Snapshots and events are recovery/audit projections. After deleting the tail
-        // transcript turn, keeping them would allow stale state to resurrect the removed
-        // approval/tool turn through replay or hot-resume.
+        // transcript message, keeping them would allow stale state to resurrect removed
+        // state through replay or hot-resume.
         tx.execute(
             "DELETE FROM workflow_snapshots WHERE session_id = ?1",
             params![session_id],
@@ -1706,9 +1706,9 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_last_assistant_turn_removes_tail_messages_and_recovery_state() {
+    fn test_delete_last_workflow_message_removes_only_tail_message_and_recovery_state() {
         let store = create_test_store();
-        let session_id = "session-delete-last-assistant-turn";
+        let session_id = "session-delete-last-workflow-message";
         {
             let conn = store
                 .conn
@@ -1852,17 +1852,46 @@ mod tests {
             .upsert_execution_context(&context)
             .expect("failed to persist snapshot");
 
+        let trailing_user_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Continue from here".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 2,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add trailing user message");
+
         let deleted = store
-            .delete_last_assistant_turn(session_id)
-            .expect("failed to delete last assistant turn");
-        assert!(deleted, "assistant tail should be deleted");
+            .delete_last_message(session_id)
+            .expect("failed to delete last workflow message");
+        assert!(deleted, "tail message should be deleted");
 
         let snapshot = store
             .get_workflow_snapshot(session_id)
             .expect("failed to load workflow snapshot after deletion");
-        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages.len(), 3);
         assert_eq!(snapshot.messages[0].id, user_message.id);
         assert_eq!(snapshot.messages[0].role, "user");
+        assert_eq!(snapshot.messages[1].id, assistant_message.id);
+        assert_eq!(snapshot.messages[1].role, "assistant");
+        assert_eq!(snapshot.messages[2].id, tool_message.id);
+        assert_eq!(snapshot.messages[2].role, "tool");
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != trailing_user_message.id));
 
         let conn = store
             .conn

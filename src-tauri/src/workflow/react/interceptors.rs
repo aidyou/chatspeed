@@ -5,6 +5,7 @@ use crate::tools::{
     READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_EDIT_FILE,
     TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_WRITE_FILE,
 };
+use crate::workflow::react::constants::TASK_FINISHED;
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::events::WorkflowEvent;
@@ -654,7 +655,7 @@ impl WorkflowExecutor {
         };
 
         Ok(Some(ReinforcedResult {
-            content: "Finished".into(),
+            content: TASK_FINISHED.to_string(),
             llm_content: None,
             title: "Complete Workflow with Summary".to_string(),
             summary: completion_summary,

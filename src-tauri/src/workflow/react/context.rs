@@ -327,7 +327,9 @@ impl ContextManager {
         Self::merge_attached_context(&message.message, message.attached_context.as_deref())
     }
 
-    fn llm_visibility(metadata: Option<&serde_json::Value>) -> Option<RuntimeObservationLlmVisibility> {
+    fn llm_visibility(
+        metadata: Option<&serde_json::Value>,
+    ) -> Option<RuntimeObservationLlmVisibility> {
         metadata
             .and_then(|meta| meta.get("llm_visibility"))
             .and_then(|value| serde_json::from_value(value.clone()).ok())
@@ -410,12 +412,56 @@ impl ContextManager {
     ) -> Vec<WorkflowAiContextMessage> {
         let mut protocol_safe = Vec::with_capacity(projected.len());
         let mut pending_tool_call_ids: Option<HashSet<String>> = None;
+        let mut pending_assistant_index: Option<usize> = None;
+
+        fn strip_unresolved_tool_calls(
+            projected: &mut Vec<WorkflowAiContextMessage>,
+            assistant_index: usize,
+        ) {
+            let Some(message) = projected.get_mut(assistant_index) else {
+                return;
+            };
+
+            if let Some(meta) = message
+                .metadata
+                .as_mut()
+                .and_then(|value| value.as_object_mut())
+            {
+                meta.remove("tool_calls");
+            }
+
+            let has_tool_calls = message
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("tool_calls"))
+                .and_then(|value| value.as_array())
+                .is_some_and(|calls| !calls.is_empty());
+            let has_content = !message.message.trim().is_empty();
+            let has_reasoning = message
+                .reasoning
+                .as_ref()
+                .is_some_and(|reasoning| !reasoning.trim().is_empty());
+
+            if !has_tool_calls && !has_content && !has_reasoning {
+                projected.remove(assistant_index);
+            }
+        }
 
         for message in projected {
             match message.role.as_str() {
                 "assistant" => {
+                    if pending_tool_call_ids.take().is_some() {
+                        if let Some(assistant_index) = pending_assistant_index.take() {
+                            strip_unresolved_tool_calls(&mut protocol_safe, assistant_index);
+                        }
+                    }
+
                     let tool_call_ids = Self::tool_call_ids_from_message(&message);
-                    pending_tool_call_ids = (!tool_call_ids.is_empty()).then_some(tool_call_ids);
+                    pending_assistant_index = None;
+                    pending_tool_call_ids = (!tool_call_ids.is_empty()).then(|| {
+                        pending_assistant_index = Some(protocol_safe.len());
+                        tool_call_ids
+                    });
                     protocol_safe.push(message);
                 }
                 "tool" => {
@@ -440,12 +486,25 @@ impl ContextManager {
 
                     if open_tool_calls.is_empty() {
                         pending_tool_call_ids = None;
+                        pending_assistant_index = None;
                     }
                 }
                 _ => {
+                    if pending_tool_call_ids.take().is_some() {
+                        if let Some(assistant_index) = pending_assistant_index.take() {
+                            strip_unresolved_tool_calls(&mut protocol_safe, assistant_index);
+                        }
+                    }
+
                     pending_tool_call_ids = None;
                     protocol_safe.push(message);
                 }
+            }
+        }
+
+        if pending_tool_call_ids.take().is_some() {
+            if let Some(assistant_index) = pending_assistant_index.take() {
+                strip_unresolved_tool_calls(&mut protocol_safe, assistant_index);
             }
         }
 
@@ -846,6 +905,7 @@ mod tests {
     use crate::db::{Agent, MainStore, WorkflowMessage};
     use crate::libs::tsid::TsidGenerator;
     use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
+    use crate::workflow::react::constants::TASK_FINISHED;
     use crate::workflow::react::types::{ExecutionContext, StepType};
     use serde_json::json;
     use std::sync::{Arc, RwLock};
@@ -962,7 +1022,7 @@ mod tests {
         let completion_message = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_owned(),
                 None,
                 None,
                 None,
@@ -991,7 +1051,7 @@ mod tests {
         let _ = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1271,7 +1331,7 @@ mod tests {
         let completion_message_1 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1312,7 +1372,7 @@ mod tests {
         let _completion_message_2 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1341,7 +1401,7 @@ mod tests {
         let completion_message_3 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1370,7 +1430,7 @@ mod tests {
         let completion_message_4 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1459,7 +1519,7 @@ mod tests {
         let _ = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1488,7 +1548,7 @@ mod tests {
         let completion_message_2 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1523,7 +1583,7 @@ mod tests {
         let _completion_message_3 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1606,7 +1666,7 @@ mod tests {
         let completion_message_1 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1647,7 +1707,7 @@ mod tests {
         let _completion_message_2 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1682,7 +1742,7 @@ mod tests {
         let _completion_message_3 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1731,7 +1791,7 @@ mod tests {
         let _completion_message_4 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1796,7 +1856,7 @@ mod tests {
         let completion_message_1 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1831,7 +1891,7 @@ mod tests {
         let _completion_message_2 = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1902,7 +1962,7 @@ mod tests {
         let _ = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -1987,7 +2047,7 @@ mod tests {
         let _ = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -2084,7 +2144,7 @@ mod tests {
         let _ = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -2168,7 +2228,7 @@ mod tests {
         let completion_one = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -2212,7 +2272,7 @@ mod tests {
         let completion_two = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -2256,7 +2316,7 @@ mod tests {
         let _completion_three = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 None,
@@ -2444,7 +2504,7 @@ mod tests {
         let completion = context
             .add_message(
                 "tool".to_string(),
-                "Finished".to_string(),
+                TASK_FINISHED.to_string(),
                 None,
                 None,
                 Some(StepType::Observe),
@@ -2492,7 +2552,7 @@ mod tests {
             .any(|content| content.contains("Original analysis")));
         assert!(llm_contents
             .iter()
-            .any(|content| content.contains("Finished")));
+            .any(|content| content.contains(TASK_FINISHED)));
         assert!(llm_contents
             .iter()
             .any(|content| content.contains("Follow-up clarification")));
@@ -2668,6 +2728,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_messages_for_llm_strips_unresolved_assistant_tool_calls() {
+        let (_dir, store) = setup_store();
+        insert_workflow(&store, "dangling_assistant_tool_call");
+        let mut context = ContextManager::new(
+            "dangling_assistant_tool_call".to_string(),
+            store,
+            20_000,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Finish the task".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message");
+
+        context
+            .add_message(
+                "assistant".to_string(),
+                "".to_string(),
+                None,
+                Some("Submitting completion".to_string()),
+                Some(StepType::Think),
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool_finish",
+                        "type": "function",
+                        "function": {
+                            "name": "complete_workflow_with_summary",
+                            "arguments": "{}"
+                        }
+                    }]
+                })),
+            )
+            .await
+            .expect("failed to add dangling assistant tool call");
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Start the next task".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add next task message");
+
+        let llm_messages = context.get_messages_for_llm();
+        let assistant = llm_messages
+            .iter()
+            .find(|message| message.role == "assistant")
+            .expect("assistant message should remain for reasoning continuity");
+        assert!(
+            assistant
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("tool_calls"))
+                .is_none(),
+            "unresolved assistant tool_calls should be stripped from projection"
+        );
+    }
+
+    #[tokio::test]
     async fn get_messages_for_llm_hides_runtime_observations_marked_hidden() {
         let (_dir, store) = setup_store();
         insert_workflow(&store, "hidden_runtime_observation");
@@ -2716,5 +2856,228 @@ mod tests {
         let llm_messages = context.get_messages_for_llm();
         assert_eq!(llm_messages.len(), 1);
         assert_eq!(llm_messages[0].role, "user");
+    }
+
+    #[tokio::test]
+    async fn compression_preserves_latest_complete_workflow_summary_tool_response_in_ai_context() {
+        let (_dir, store) = setup_store();
+        let session_id = "compress-tool-response-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        // --- Task 1: complete ---
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 1".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("add user");
+        let _ = context
+            .add_message(
+                "tool".to_string(),
+                TASK_FINISHED.to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool_complete_1",
+                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "execution_status": "completed",
+                    "approval_status": "approved"
+                })),
+            )
+            .await
+            .expect("add task1 completion")
+            .0;
+
+        // --- Task 2: complete ---
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 2".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("add user");
+        let completion_2 = context
+            .add_message(
+                "tool".to_string(),
+                TASK_FINISHED.to_string(),
+                None,
+                None,
+                None,
+                4,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool_complete_2",
+                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "execution_status": "completed",
+                    "approval_status": "approved"
+                })),
+            )
+            .await
+            .expect("add task2 completion")
+            .0;
+
+        // --- Task 3: complete with assistant having tool_calls ---
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 3".to_string(),
+                None,
+                None,
+                None,
+                5,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("add user");
+        // Simulate assistant calling complete_workflow_with_summary
+        let tool_call_id = "tool_complete_3";
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "".to_string(),
+                None,
+                Some("reasoning text".to_string()),
+                None,
+                6,
+                false,
+                None,
+                Some(json!({
+                    "tool_calls": [{
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                            "arguments": "{\"summary\":\"done\"}"
+                        }
+                    }]
+                })),
+            )
+            .await
+            .expect("add assistant");
+        let _completion_3 = context
+            .add_message(
+                "tool".to_string(),
+                "Completed".to_string(),
+                None,
+                None,
+                None,
+                7,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": tool_call_id,
+                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "execution_status": "completed",
+                    "approval_status": "approved"
+                })),
+            )
+            .await
+            .expect("add task3 tool response");
+
+        // --- New user message triggers task boundary compression ---
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "new task".to_string(),
+                None,
+                None,
+                None,
+                8,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("add new user");
+
+        // Verify compression candidate exists and stops at correct boundary
+        let candidate = context.build_task_boundary_compression_candidate();
+        assert!(candidate.is_some(), "should have 3+ completions for rollup");
+        let (candidate_msgs, compressed_until_id) = candidate.unwrap();
+        assert_eq!(
+            candidate_msgs.last().and_then(|m| m.id),
+            completion_2.id,
+            "compression should stop at second-to-last completion"
+        );
+
+        // Run compression
+        context
+            .compress(
+                "<state_snapshot>compressed</state_snapshot>".to_string(),
+                99,
+                compressed_until_id,
+            )
+            .await
+            .expect("compression should succeed");
+
+        // ===== THE KEY CHECK =====
+        // After compression, the latest task's complete_workflow_with_summary
+        // tool response (with tool_call_id = "tool_complete_3") MUST be in ai_context_messages
+
+        let tool_in_ai_ctx = context.ai_context_messages.iter().any(|m| {
+            m.role == "tool"
+                && m.metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("tool_call_id").and_then(|v| v.as_str()))
+                    == Some(tool_call_id)
+        });
+
+        assert!(
+            tool_in_ai_ctx,
+            "BUG: complete_workflow_with_summary tool response missing from ai_context_messages after compression"
+        );
+
+        // Also check that the assistant with tool_calls has its tool response right after
+        let llm_messages = context.get_messages_for_llm();
+        let assistant_pos = llm_messages.iter().position(|m| {
+            m.role == "assistant"
+                && m.metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("tool_calls").and_then(|tc| tc.as_array()))
+                    .is_some_and(|tc| {
+                        tc.iter()
+                            .any(|t| t.get("id").and_then(|v| v.as_str()) == Some(tool_call_id))
+                    })
+        });
+        assert!(
+            assistant_pos.is_some(),
+            "assistant with tool_calls should be in LLM messages"
+        );
+        let assistant_pos = assistant_pos.unwrap();
+        let tool_after = &llm_messages[assistant_pos + 1];
+        assert_eq!(tool_after.role, "tool");
+        assert_eq!(
+            tool_after
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("tool_call_id").and_then(|v| v.as_str())),
+            Some(tool_call_id)
+        );
     }
 }

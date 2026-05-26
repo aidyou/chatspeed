@@ -3,6 +3,7 @@ use crate::ai::error::AiError;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::ChatMetadata;
 use crate::db::WorkflowMessage;
+use crate::tools::TOOL_ASK_USER;
 use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
@@ -69,9 +70,7 @@ impl ContextCompressor {
                     return None;
                 }
                 let content = Self::sanitize_message_content_for_compression(&m.message);
-                let keep = !content.is_empty()
-                    && content != "Finished"
-                    && !content.contains("Waiting for user");
+                let keep = Self::should_keep_message_content_for_compression(m, &content);
                 keep.then(|| serde_json::json!({ "role": m.role, "content": content }))
             })
             .collect();
@@ -289,6 +288,46 @@ impl ContextCompressor {
         let approval_status = meta.get("approval_status").and_then(|value| value.as_str());
 
         tool_name == Some("submit_plan") && approval_status == Some("approved")
+    }
+
+    fn should_keep_message_content_for_compression(
+        message: &WorkflowMessage,
+        content: &str,
+    ) -> bool {
+        if content.is_empty() {
+            return false;
+        }
+
+        if Self::is_successful_completion_message(message) {
+            return false;
+        }
+
+        let Some(meta) = message.metadata.as_ref() else {
+            return true;
+        };
+
+        let tool_name = meta.get("tool_name").and_then(|value| value.as_str());
+        let approval_status = meta.get("approval_status").and_then(|value| value.as_str());
+        let execution_status = meta
+            .get("execution_status")
+            .and_then(|value| value.as_str());
+
+        if tool_name == Some(TOOL_ASK_USER) {
+            return false;
+        }
+
+        if matches!(approval_status, Some("pending" | "rejected")) {
+            return false;
+        }
+
+        if matches!(
+            execution_status,
+            Some("pending_approval" | "approval_submitted" | "running" | "waiting")
+        ) {
+            return false;
+        }
+
+        true
     }
 
     fn should_retry_compression_error(error: &AiError) -> bool {
@@ -681,7 +720,7 @@ impl ContextCompressor {
 #[cfg(test)]
 mod tests {
     use super::ContextCompressor;
-    use crate::db::WorkflowMessage;
+    use crate::{db::WorkflowMessage, workflow::react::constants::TASK_FINISHED};
 
     #[test]
     fn normalize_summary_result_extracts_content_field_from_json() {
@@ -796,7 +835,7 @@ mod tests {
                 id: Some(3),
                 session_id: "s".to_string(),
                 role: "tool".to_string(),
-                message: "Finished".to_string(),
+                message: TASK_FINISHED.to_string(),
                 reasoning: None,
                 message_kind: "message".to_string(),
                 message_subtype: None,
@@ -852,7 +891,7 @@ mod tests {
                 id: Some(6),
                 session_id: "s".to_string(),
                 role: "tool".to_string(),
-                message: "Finished".to_string(),
+                message: TASK_FINISHED.to_string(),
                 reasoning: None,
                 message_kind: "message".to_string(),
                 message_subtype: None,
@@ -905,5 +944,70 @@ mod tests {
         assert!(ContextCompressor::should_skip_message_for_compression(
             &message
         ));
+    }
+
+    #[test]
+    fn compression_filters_ask_user_wait_state_by_tool_metadata() {
+        let message = WorkflowMessage {
+            id: Some(1),
+            session_id: "s".to_string(),
+            role: "tool".to_string(),
+            message: "[{\"title\":\"Need a choice\",\"options\":[\"A\",\"B\"]}]".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(serde_json::json!({
+                "tool_name": "ask_user",
+                "execution_status": "waiting"
+            })),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        assert!(
+            !ContextCompressor::should_keep_message_content_for_compression(
+                &message,
+                &message.message
+            )
+        );
+    }
+
+    #[test]
+    fn compression_filters_successful_completion_by_metadata_not_message_text() {
+        let message = WorkflowMessage {
+            id: Some(1),
+            session_id: "s".to_string(),
+            role: "tool".to_string(),
+            message: "Any completion text".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(serde_json::json!({
+                "tool_name": "complete_workflow_with_summary",
+                "execution_status": "completed",
+                "approval_status": "approved"
+            })),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        assert!(
+            !ContextCompressor::should_keep_message_content_for_compression(
+                &message,
+                &message.message
+            )
+        );
     }
 }

@@ -79,10 +79,10 @@
         </el-dropdown>
         <div
           class="icon-btn upperLayer"
-          :class="{ disabled: !canDeleteLastAssistantTurn }"
-          @click="onDeleteLastAssistantTurn">
+          :class="{ disabled: !canDeleteLastMessage }"
+          @click="onDeleteLastMessage">
           <el-tooltip
-            :content="$t('workflow.deleteLastAssistantTurn')"
+            :content="$t('workflow.deleteLastMessage')"
             :hide-after="0"
             :enterable="false"
             placement="bottom">
@@ -1052,9 +1052,9 @@ const sidebarRootFilterResetToken = ref(0)
 const currentWorkflowPendingApprovals = computed(() =>
   pendingApprovalList.value.filter(entry => entry.sessionId === currentWorkflowId.value)
 )
-const canDeleteLastAssistantTurn = computed(() => {
+const canDeleteLastMessage = computed(() => {
   if (!currentWorkflowId.value || canStop.value) return false
-  return workflowStore.messages.some(message => message?.role === 'assistant')
+  return workflowStore.messages.length > 0
 })
 
 const displayAllowedPathTitle = computed(() => {
@@ -1062,13 +1062,13 @@ const displayAllowedPathTitle = computed(() => {
   return displayAllowedPath.value || ''
 })
 
-const onDeleteLastAssistantTurn = async () => {
-  if (!canDeleteLastAssistantTurn.value || !currentWorkflowId.value) return
+const onDeleteLastMessage = async () => {
+  if (!canDeleteLastMessage.value || !currentWorkflowId.value) return
 
   try {
     await ElMessageBox.confirm(
-      t('workflow.deleteLastAssistantTurnConfirm'),
-      t('workflow.deleteLastAssistantTurn'),
+      t('workflow.deleteLastMessageConfirm'),
+      t('workflow.deleteLastMessage'),
       {
         confirmButtonText: t('common.delete'),
         cancelButtonText: t('common.cancel'),
@@ -1080,20 +1080,20 @@ const onDeleteLastAssistantTurn = async () => {
   }
 
   try {
-    const deleted = await invokeWrapper('delete_last_assistant_workflow_turn', {
+    const deleted = await invokeWrapper('delete_last_workflow_message', {
       sessionId: currentWorkflowId.value
     })
 
     if (!deleted) {
-      showMessage(t('workflow.deleteLastAssistantTurnMissing'), 'warning')
+      showMessage(t('workflow.deleteLastMessageMissing'), 'warning')
       return
     }
 
     await selectWorkflow(currentWorkflowId.value)
-    showMessage(t('workflow.deleteLastAssistantTurnDone'), 'success')
+    showMessage(t('workflow.deleteLastMessageDone'), 'success')
   } catch (error) {
-    console.error('Failed to delete last assistant workflow turn:', error)
-    showMessage(t('workflow.deleteLastAssistantTurnFailed', { error: String(error) }), 'error')
+    console.error('Failed to delete last workflow message:', error)
+    showMessage(t('workflow.deleteLastMessageFailed', { error: String(error) }), 'error')
   }
 }
 

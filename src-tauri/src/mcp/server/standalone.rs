@@ -11,7 +11,7 @@ use std::sync::Arc;
 /// Creates a service for the MCP proxy server using Streamable HTTP transport.
 ///
 /// This function attempts to create a persistent session manager with multiple fallbacks:
-/// 1. First tries to create a persistent session manager with sled database
+/// 1. First tries to create a persistent session manager with a JSON session index
 /// 2. If that fails, tries to create a temporary in-memory session manager
 /// 3. As absolute last resort, logs error and returns a basic service (sessions won't persist)
 ///

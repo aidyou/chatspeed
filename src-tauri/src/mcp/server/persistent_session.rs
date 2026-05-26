@@ -1,11 +1,11 @@
 //! Persistent Session Manager for Streamable HTTP transport.
 //!
-//! This module provides a `SessionManager` implementation that persists sessions
-//! to disk using the `sled` embedded database. This ensures that sessions
-//! can survive application restarts.
+//! This module provides a `SessionManager` implementation that persists session
+//! metadata to disk using a small JSON index file. This ensures that sessions
+//! can survive application restarts without introducing a second embedded DB.
 //!
 //! It is heavily based on the `rmcp`'s `LocalSessionManager`, but adds a persistence
-//! layer with `sled` and session expiration logic.
+//! layer with a JSON file and session expiration logic.
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures::Stream;
@@ -26,7 +26,9 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fs,
     marker::PhantomData,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -38,6 +40,7 @@ use tokio::sync::{
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::constants::STORE_DIR;
+use rust_i18n::t;
 
 const SESSION_LIFETIME_DAYS: i64 = 7;
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
@@ -52,12 +55,25 @@ pub struct SessionData {
     pub expires_at: DateTime<Utc>,
 }
 
-/// A `SessionManager` that persists sessions to disk using `sled`.
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+struct SessionIndex {
+    sessions: HashMap<String, SessionData>,
+}
+
+#[derive(Debug, Clone)]
+enum PersistenceMode {
+    JsonFile { index_path: PathBuf },
+    MemoryOnly,
+}
+
+/// A `SessionManager` that persists sessions to disk using a JSON index file.
 pub struct PersistentSessionManager<S: rmcp::Service<RoleServer>> {
     /// In-memory cache of active session handles.
     sessions: Arc<RwLock<HashMap<SessionId, LocalSessionHandle>>>,
-    /// The `sled` database for persistence.
-    db: sled::Db,
+    /// Persisted session metadata used for lightweight rehydration after restart.
+    persisted_sessions: Arc<RwLock<HashMap<String, SessionData>>>,
+    /// Persistence backend for session metadata.
+    persistence: PersistenceMode,
     /// Configuration for new sessions.
     session_config: SessionConfig,
     /// Factory to create new service instances.
@@ -70,7 +86,8 @@ impl<S: rmcp::Service<RoleServer>> Clone for PersistentSessionManager<S> {
     fn clone(&self) -> Self {
         Self {
             sessions: self.sessions.clone(),
-            db: self.db.clone(),
+            persisted_sessions: self.persisted_sessions.clone(),
+            persistence: self.persistence.clone(),
             session_config: self.session_config.clone(),
             service_factory: self.service_factory.clone(),
             _phantom: PhantomData,
@@ -78,11 +95,7 @@ impl<S: rmcp::Service<RoleServer>> Clone for PersistentSessionManager<S> {
     }
 }
 
-//======================================================
-// Error Types
-//======================================================
 use crate::mcp::McpError;
-use rust_i18n::t;
 
 //======================================================
 // PersistentSessionManager Implementation
@@ -93,22 +106,22 @@ where
 {
     /// Creates a new `PersistentSessionManager`.
     ///
-    /// This method attempts to open the sled database with the following fallback strategy:
-    /// 1. Try to open the existing database
-    /// 2. If that fails (e.g., corrupted or locked), try to remove it and create a fresh one
-    /// 3. If that also fails, use an in-memory temporary database
+    /// This method attempts to open the JSON session index with the following fallback strategy:
+    /// 1. Try to load the existing file
+    /// 2. If that fails, back it up and start with a fresh empty index
+    /// 3. If the file cannot be written, use in-memory-only mode
     pub fn new(
         service_factory: Arc<dyn Fn() -> Result<S, std::io::Error> + Send + Sync>,
     ) -> Result<Self, McpError> {
         let store_dir = STORE_DIR.read();
-        let db_path = store_dir.join("mcp_sessions");
-
-        // Try to open the database with fallback strategies
-        let db = Self::open_db_with_fallback(&db_path)?;
+        let sessions_dir = store_dir.join("mcp_sessions");
+        let index_path = sessions_dir.join("sessions.json");
+        let (persistence, persisted_sessions) = Self::load_persistence_with_fallback(&index_path);
 
         let manager = Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            db,
+            persisted_sessions: Arc::new(RwLock::new(persisted_sessions)),
+            persistence,
             session_config: SessionConfig::default(),
             service_factory,
             _phantom: PhantomData,
@@ -118,68 +131,133 @@ where
         Ok(manager)
     }
 
-    /// Opens the sled database with multiple fallback strategies.
-    fn open_db_with_fallback(db_path: &std::path::Path) -> Result<sled::Db, McpError> {
-        // Strategy 1: Try to open normally
-        match sled::open(db_path) {
-            Ok(db) => {
-                log::info!("MCP session database opened successfully at {:?}", db_path);
-                return Ok(db);
-            }
-            Err(e) => {
+    fn load_persistence_with_fallback(
+        index_path: &Path,
+    ) -> (PersistenceMode, HashMap<String, SessionData>) {
+        if let Some(parent) = index_path.parent() {
+            if let Err(error) = fs::create_dir_all(parent) {
                 log::warn!(
-                    "Failed to open sled database at {:?}: {}. Trying recovery...",
-                    db_path,
-                    e
+                    "Failed to create MCP session directory at {:?}: {}. Using in-memory session persistence.",
+                    parent,
+                    error
+                );
+                return (PersistenceMode::MemoryOnly, HashMap::new());
+            }
+        }
+
+        match Self::load_session_index(index_path) {
+            Ok(index) => {
+                log::info!(
+                    "MCP session index loaded successfully from {:?}",
+                    index_path
+                );
+                return (
+                    PersistenceMode::JsonFile {
+                        index_path: index_path.to_path_buf(),
+                    },
+                    index.sessions,
+                );
+            }
+            Err(error) => {
+                log::warn!(
+                    "Failed to load MCP session index at {:?}: {}. Trying recovery...",
+                    index_path,
+                    error
                 );
             }
         }
 
-        // Strategy 2: Try to remove the corrupted database and create fresh
-        if db_path.exists() {
-            log::warn!("Attempting to remove corrupted database at {:?}", db_path);
-            if let Err(e) = std::fs::remove_dir_all(db_path) {
-                log::warn!("Failed to remove corrupted database: {}", e);
+        if index_path.exists() {
+            let backup_path = index_path.with_extension(format!(
+                "corrupt-{}.json",
+                Utc::now().format("%Y%m%d%H%M%S")
+            ));
+            if let Err(error) = fs::rename(index_path, &backup_path) {
+                log::warn!(
+                    "Failed to back up corrupted MCP session index {:?} to {:?}: {}",
+                    index_path,
+                    backup_path,
+                    error
+                );
             } else {
-                // Try to open again after removal
-                match sled::open(db_path) {
-                    Ok(db) => {
-                        log::info!(
-                            "MCP session database recreated successfully at {:?}",
-                            db_path
-                        );
-                        return Ok(db);
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to create fresh database at {:?}: {}. Using in-memory fallback...",
-                            db_path, e
-                        );
-                    }
-                }
+                log::warn!(
+                    "Backed up corrupted MCP session index to {:?}. Starting with a fresh index.",
+                    backup_path
+                );
             }
         }
 
-        // Strategy 3: Use temporary in-memory database as last resort
-        log::warn!("Using temporary in-memory database for MCP sessions. Sessions will not persist across restarts.");
-        sled::Config::new().temporary(true).open().map_err(|e| {
-            McpError::General(format!("Failed to create temporary sled database: {}", e))
-        })
+        let empty_index = SessionIndex::default();
+        match Self::persist_session_index(index_path, &empty_index.sessions) {
+            Ok(()) => (
+                PersistenceMode::JsonFile {
+                    index_path: index_path.to_path_buf(),
+                },
+                HashMap::new(),
+            ),
+            Err(error) => {
+                log::warn!(
+                    "Failed to create MCP session index at {:?}: {}. Using in-memory session persistence.",
+                    index_path,
+                    error
+                );
+                (PersistenceMode::MemoryOnly, HashMap::new())
+            }
+        }
     }
 
-    /// Creates a new `PersistentSessionManager` with a temporary in-memory database.
-    /// This is used as an absolute last resort fallback.
+    fn load_session_index(index_path: &Path) -> Result<SessionIndex, McpError> {
+        if !index_path.exists() {
+            return Ok(SessionIndex::default());
+        }
+
+        let contents = fs::read_to_string(index_path)?;
+        if contents.trim().is_empty() {
+            return Ok(SessionIndex::default());
+        }
+        serde_json::from_str(&contents).map_err(Into::into)
+    }
+
+    fn persist_session_index(
+        index_path: &Path,
+        sessions: &HashMap<String, SessionData>,
+    ) -> Result<(), McpError> {
+        if let Some(parent) = index_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let temp_path = index_path.with_extension("json.tmp");
+        let payload = serde_json::to_vec_pretty(&SessionIndex {
+            sessions: sessions.clone(),
+        })?;
+        fs::write(&temp_path, payload)?;
+        if index_path.exists() {
+            fs::remove_file(index_path)?;
+        }
+        fs::rename(&temp_path, index_path)?;
+        Ok(())
+    }
+
+    async fn persist_current_index(&self) -> Result<(), McpError> {
+        match &self.persistence {
+            PersistenceMode::JsonFile { index_path } => {
+                let snapshot = self.persisted_sessions.read().await.clone();
+                Self::persist_session_index(index_path, &snapshot)
+            }
+            PersistenceMode::MemoryOnly => Ok(()),
+        }
+    }
+
+    /// Creates a new `PersistentSessionManager` with in-memory-only session persistence.
     pub fn new_temporary(
         service_factory: Arc<dyn Fn() -> Result<S, std::io::Error> + Send + Sync>,
     ) -> Result<Self, McpError> {
-        log::warn!("Creating temporary in-memory session manager as fallback.");
-        let db = sled::Config::new().temporary(true).open().map_err(|e| {
-            McpError::General(format!("Failed to create temporary sled database: {}", e))
-        })?;
+        log::warn!("Creating in-memory session manager as fallback.");
 
         let manager = Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            db,
+            persisted_sessions: Arc::new(RwLock::new(HashMap::new())),
+            persistence: PersistenceMode::MemoryOnly,
             session_config: SessionConfig::default(),
             service_factory,
             _phantom: PhantomData,
@@ -190,21 +268,27 @@ where
     }
 
     fn spawn_cleanup_task(&self) {
-        let db = self.db.clone();
+        let persisted_sessions = self.persisted_sessions.clone();
+        let persistence = self.persistence.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(CLEANUP_INTERVAL).await;
                 let now = Utc::now();
+                let mut sessions = persisted_sessions.write().await;
+                let before_len = sessions.len();
+                sessions.retain(|_, session_data| session_data.expires_at >= now);
 
-                for item in db.iter() {
-                    if let Ok((session_id_bytes, session_data_bytes)) = item {
-                        if let Ok(session_data) =
-                            serde_json::from_slice::<SessionData>(&session_data_bytes)
-                        {
-                            if session_data.expires_at < now {
-                                let _ = db.remove(&session_id_bytes);
-                            }
-                        }
+                if sessions.len() == before_len {
+                    continue;
+                }
+
+                if let PersistenceMode::JsonFile { index_path } = &persistence {
+                    if let Err(error) = Self::persist_session_index(index_path, &sessions.clone()) {
+                        log::warn!(
+                            "Failed to persist cleaned MCP session index at {:?}: {}",
+                            index_path,
+                            error
+                        );
                     }
                 }
             }
@@ -269,15 +353,14 @@ where
     }
 
     async fn check_db_session(&self, id: &SessionId) -> Result<bool, McpError> {
-        match self.db.get(id.as_ref())? {
-            Some(session_data_bytes) => {
-                let session_data: SessionData = serde_json::from_slice(&session_data_bytes)?;
-                if session_data.expires_at > Utc::now() {
-                    Ok(true)
-                } else {
-                    self.db.remove(id.as_ref())?;
-                    Ok(false)
-                }
+        let mut sessions = self.persisted_sessions.write().await;
+        match sessions.get(id.as_ref()).cloned() {
+            Some(session_data) if session_data.expires_at > Utc::now() => Ok(true),
+            Some(_) => {
+                sessions.remove(id.as_ref());
+                drop(sessions);
+                self.persist_current_index().await?;
+                Ok(false)
             }
             None => Ok(false),
         }
@@ -302,8 +385,11 @@ where
         let session_data = SessionData {
             expires_at: Utc::now() + ChronoDuration::days(SESSION_LIFETIME_DAYS),
         };
-        let session_data_bytes = serde_json::to_vec(&session_data)?;
-        self.db.insert(id.as_ref(), session_data_bytes)?;
+        self.persisted_sessions
+            .write()
+            .await
+            .insert(id.to_string(), session_data);
+        self.persist_current_index().await?;
 
         self.sessions.write().await.insert(id.clone(), handle);
 
@@ -323,7 +409,8 @@ where
         if let Some(handle) = self.sessions.write().await.remove(id) {
             handle.close().await?;
         }
-        self.db.remove(id.as_ref())?;
+        self.persisted_sessions.write().await.remove(id.as_ref());
+        self.persist_current_index().await?;
         Ok(())
     }
 

@@ -69,12 +69,6 @@ impl From<serde_json::Error> for McpError {
     }
 }
 
-impl From<sled::Error> for McpError {
-    fn from(error: sled::Error) -> Self {
-        McpError::Store(error.to_string())
-    }
-}
-
 impl From<std::io::Error> for McpError {
     fn from(error: std::io::Error) -> Self {
         McpError::Io(error.to_string())

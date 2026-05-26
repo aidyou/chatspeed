@@ -176,10 +176,45 @@
         <div class="chart-card tab-chart">
           <el-tabs v-model="activeTrendTab" type="border-card">
             <el-tab-pane :label="$t('settings.proxy.stats.dailyTokensTitle')" name="dailyTokens">
-              <div id="daily-tokens-column" class="tab-chart-content"></div>
+              <div class="tab-chart-content">
+                <div v-if="tokenTrend.length" class="trend-stack-chart">
+                  <div v-for="day in tokenTrend" :key="day.date" class="trend-stack-item">
+                    <div class="trend-stack-bars">
+                      <div
+                        v-for="segment in day.segments"
+                        :key="segment.type"
+                        class="trend-stack-segment"
+                        :style="{ height: `${segment.percent}%`, backgroundColor: segment.color }" />
+                    </div>
+                    <div class="trend-stack-total">{{ formatTokens(day.total) }}</div>
+                    <div class="trend-stack-label">{{ day.date }}</div>
+                  </div>
+                </div>
+                <el-empty v-else :description="$t('common.noData')" />
+              </div>
             </el-tab-pane>
             <el-tab-pane :label="$t('settings.proxy.stats.dailyRequestsTitle')" name="dailyRequests">
-              <div id="daily-requests-dual-axis" class="tab-chart-content"></div>
+              <div class="tab-chart-content">
+                <div v-if="requestsTrend.length" class="trend-metric-list">
+                  <div v-for="item in requestsTrend" :key="item.date" class="trend-metric-row">
+                    <div class="trend-metric-header">
+                      <span>{{ item.date }}</span>
+                      <span>{{ formatNumber(item.requests) }} / {{ item.errorRate.toFixed(2) }}%</span>
+                    </div>
+                    <div class="trend-metric-track">
+                      <div
+                        class="trend-metric-fill requests"
+                        :style="{ width: `${toPercent(item.requests, maxRequestsValue)}%` }" />
+                    </div>
+                    <div class="trend-metric-track error">
+                      <div
+                        class="trend-metric-fill errors"
+                        :style="{ width: `${toPercent(item.errorRate, maxErrorRateValue)}%` }" />
+                    </div>
+                  </div>
+                </div>
+                <el-empty v-else :description="$t('common.noData')" />
+              </div>
             </el-tab-pane>
           </el-tabs>
         </div>
@@ -190,16 +225,76 @@
         <div class="chart-card tab-chart">
           <el-tabs v-model="activeDistributionTab" type="border-card">
             <el-tab-pane :label="$t('settings.proxy.stats.modelTokenUsageTitle')" name="modelTokenUsage">
-              <div id="model-token-usage-bar" class="tab-chart-content"></div>
+              <div class="tab-chart-content">
+                <div v-if="modelTokenUsageStats.length" class="rank-bar-list">
+                  <div v-for="item in modelTokenUsageStats" :key="item.type" class="rank-bar-row">
+                    <div class="rank-bar-header">
+                      <span class="rank-bar-label">{{ item.type }}</span>
+                      <span class="rank-bar-value">{{ formatTokens(item.value) }}</span>
+                    </div>
+                    <div class="rank-bar-track">
+                      <div
+                        class="rank-bar-fill"
+                        :style="{ width: `${toPercent(item.value, maxModelTokenUsageValue)}%`, backgroundColor: getSeriesColor(1) }" />
+                    </div>
+                  </div>
+                </div>
+                <el-empty v-else :description="$t('common.noData')" />
+              </div>
             </el-tab-pane>
             <el-tab-pane :label="$t('settings.proxy.stats.modelUsageTitle')" name="modelUsage">
-              <div id="model-usage-bar" class="tab-chart-content"></div>
+              <div class="tab-chart-content">
+                <div v-if="modelUsageStats.length" class="rank-bar-list">
+                  <div v-for="item in modelUsageStats" :key="item.type" class="rank-bar-row">
+                    <div class="rank-bar-header">
+                      <span class="rank-bar-label">{{ item.type }}</span>
+                      <span class="rank-bar-value">{{ formatNumber(item.value) }}</span>
+                    </div>
+                    <div class="rank-bar-track">
+                      <div
+                        class="rank-bar-fill"
+                        :style="{ width: `${toPercent(item.value, maxModelUsageValue)}%`, backgroundColor: getSeriesColor(0) }" />
+                    </div>
+                  </div>
+                </div>
+                <el-empty v-else :description="$t('common.noData')" />
+              </div>
             </el-tab-pane>
             <el-tab-pane :label="$t('settings.proxy.stats.providerTokenUsageTitle')" name="providerTokenUsage">
-              <div id="provider-token-usage-bar" class="tab-chart-content"></div>
+              <div class="tab-chart-content">
+                <div v-if="providerTokenUsageStats.length" class="rank-bar-list">
+                  <div v-for="item in providerTokenUsageStats" :key="item.type" class="rank-bar-row">
+                    <div class="rank-bar-header">
+                      <span class="rank-bar-label">{{ item.type }}</span>
+                      <span class="rank-bar-value">{{ formatTokens(item.value) }}</span>
+                    </div>
+                    <div class="rank-bar-track">
+                      <div
+                        class="rank-bar-fill"
+                        :style="{ width: `${toPercent(item.value, maxProviderTokenUsageValue)}%`, backgroundColor: getSeriesColor(2) }" />
+                    </div>
+                  </div>
+                </div>
+                <el-empty v-else :description="$t('common.noData')" />
+              </div>
             </el-tab-pane>
             <el-tab-pane :label="$t('settings.proxy.stats.errorDistTitle')" name="errorDist">
-              <div id="error-dist-bar" class="tab-chart-content"></div>
+              <div class="tab-chart-content">
+                <div v-if="errorDistributionStats.length" class="rank-bar-list">
+                  <div v-for="item in errorDistributionStats" :key="item.type" class="rank-bar-row">
+                    <div class="rank-bar-header">
+                      <span class="rank-bar-label">{{ item.type }}</span>
+                      <span class="rank-bar-value">{{ formatNumber(item.value) }}</span>
+                    </div>
+                    <div class="rank-bar-track">
+                      <div
+                        class="rank-bar-fill"
+                        :style="{ width: `${toPercent(item.value, maxErrorDistributionValue)}%`, backgroundColor: getCssVar('--cs-error-color') || '#f56c6c' }" />
+                    </div>
+                  </div>
+                </div>
+                <el-empty v-else :description="$t('common.noData')" />
+              </div>
             </el-tab-pane>
           </el-tabs>
         </div>
@@ -224,11 +319,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch, nextTick, markRaw } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { invokeWrapper } from '@/libs/tauri'
 import { useI18n } from 'vue-i18n'
 import { Refresh, Delete } from '@element-plus/icons-vue'
-import { Column, Bar, DualAxes } from '@antv/g2plot'
 import { showMessage } from '@/libs/util'
 import { ElMessageBox } from 'element-plus'
 import { DataLine, Coin, Warning, Collection } from '@element-plus/icons-vue'
@@ -265,13 +359,12 @@ const activeTrendTab = ref('dailyTokens')
 // Active tab for distribution charts
 const activeDistributionTab = ref('modelTokenUsage')
 
-// Chart instances
-let modelBarChart = null
-let modelTokenBarChart = null
-let providerTokenBarChart = null
-let errorBarChart = null
-let tokenBarChart = null
-let requestsDualAxisChart = null
+const requestsTrend = ref([])
+const tokenTrend = ref([])
+const modelUsageStats = ref([])
+const modelTokenUsageStats = ref([])
+const providerTokenUsageStats = ref([])
+const errorDistributionStats = ref([])
 let refreshTimer = null
 
 const startRefreshTimer = () => {
@@ -309,53 +402,36 @@ const formatNumber = val => {
   return num.toLocaleString()
 }
 
-// Format axis value (for chart axis labels)
-const formatAxisValue = val => {
-  if (val === undefined || val === null || isNaN(val)) return '0'
-  const num = Number(val)
-  if (num >= 100000000) {
-    return (num / 100000000).toFixed(1) + '亿'
-  }
-  if (num >= 10000) {
-    return (num / 10000).toFixed(1) + '万'
-  }
-  return num.toString()
-}
-
-// Get theme-aware axis colors
-const getAxisColors = () => {
-  const isDark = document.documentElement.classList.contains('dark')
-  return {
-    gridStroke: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
-    lineStroke: isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(0, 0, 0, 0.2)'
-  }
-}
-
 // Get CSS variable color value
 const getCssVar = (varName) => {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim() || ''
 }
 
-// Common axis configuration with dashed grid and solid axis line
-const getCommonAxisConfig = () => {
-  const colors = getAxisColors()
-  return {
-    grid: {
-      line: {
-        style: {
-          lineDash: [4, 4],
-          stroke: colors.gridStroke
-        }
-      }
-    },
-    line: {
-      style: {
-        stroke: colors.lineStroke,
-        lineWidth: 1
-      }
-    }
-  }
+const getSeriesColor = (index) => {
+  const palette = [
+    getCssVar('--cs-info-color') || '#409eff',
+    getCssVar('--cs-success-color') || '#67c23a',
+    getCssVar('--cs-warning-color') || '#e6a23c',
+    getCssVar('--cs-error-color') || '#f56c6c',
+    '#8b5cf6',
+    '#14b8a6'
+  ]
+  return palette[index % palette.length]
 }
+
+const getMaxValue = items => items.reduce((max, item) => Math.max(max, Number(item.value || 0)), 0)
+
+const toPercent = (value, max) => {
+  if (!max || max <= 0) return 0
+  return Math.max(0, Math.min(100, (Number(value || 0) / max) * 100))
+}
+
+const maxRequestsValue = computed(() => requestsTrend.value.reduce((max, item) => Math.max(max, item.requests), 0))
+const maxErrorRateValue = computed(() => requestsTrend.value.reduce((max, item) => Math.max(max, item.errorRate), 0))
+const maxModelUsageValue = computed(() => getMaxValue(modelUsageStats.value))
+const maxModelTokenUsageValue = computed(() => getMaxValue(modelTokenUsageStats.value))
+const maxProviderTokenUsageValue = computed(() => getMaxValue(providerTokenUsageStats.value))
+const maxErrorDistributionValue = computed(() => getMaxValue(errorDistributionStats.value))
 
 // Calculate KPI data from daily stats and model usage stats
 const calculateKPI = (modelUsage = []) => {
@@ -432,8 +508,6 @@ const fetchDailyStats = async (isAutoRefresh = false) => {
       }
     }
 
-    // Ensure DOM is updated before rendering charts
-    await nextTick()
     await updateCharts()
   } catch (error) {
     console.error('Failed to fetch proxy stats:', error)
@@ -456,358 +530,74 @@ const updateCharts = async () => {
     // Calculate KPI data with model usage stats
     calculateKPI(modelUsage)
 
-    // Prepare data for dual-axis chart (requests + error rate)
-    const requestsData = []
-    const errorRateData = []
-    if (dailyStats.value && dailyStats.value.length > 0) {
-      dailyStats.value
-        .slice()
-        .reverse()
-        .forEach(day => {
-          const totalRequests = Number(day.totalRequestCount || 0)
-          const errorCount = Number(day.errorCount || 0)
-          const errorRate = totalRequests > 0 ? (errorCount / totalRequests) * 100 : 0
+    requestsTrend.value = (dailyStats.value || [])
+      .slice()
+      .reverse()
+      .map(day => {
+        const requests = Number(day.totalRequestCount || 0)
+        const errors = Number(day.errorCount || 0)
+        return {
+          date: day.date,
+          requests,
+          errorRate: requests > 0 ? Number(((errors / requests) * 100).toFixed(2)) : 0
+        }
+      })
 
-          requestsData.push({
-            date: day.date,
-            value: totalRequests,
-            type: t('settings.proxy.stats.requests')
-          })
-          errorRateData.push({
-            date: day.date,
-            value: parseFloat(errorRate.toFixed(2)),
-            type: t('settings.proxy.stats.errorRate')
-          })
-        })
-    }
-
-    // Render or update dual-axis chart (requests + error rate)
-    if (!requestsDualAxisChart) {
-      const container = document.getElementById('daily-requests-dual-axis')
-      if (container) {
-        requestsDualAxisChart = markRaw(
-          new DualAxes('daily-requests-dual-axis', {
-            data: [requestsData, errorRateData],
-            xField: 'date',
-            yField: ['value', 'value'],
-            geometryOptions: [
-              {
-                geometry: 'column',
-                color: getCssVar('--cs-info-color') || '#409eff',
-                label: {
-                  position: 'middle',
-                  formatter: datum => formatNumber(datum.value)
-                }
-              },
-              {
-                geometry: 'line',
-                color: getCssVar('--cs-error-color') || '#f56c6c',
-                lineStyle: { lineWidth: 3 },
-                point: { size: 4, shape: 'circle' },
-                label: {
-                  position: 'top',
-                  formatter: datum => datum.value + '%'
-                }
-              }
-            ],
-            xAxis: {
-              ...getCommonAxisConfig()
-            },
-            yAxis: [
-              {
-                ...getCommonAxisConfig(),
-                label: {
-                  formatter: val => formatAxisValue(val)
-                }
-              },
-              {
-                label: {
-                  formatter: val => val + '%'
-                }
-              }
-            ],
-            legend: {
-              position: 'bottom',
-              itemName: {
-                formatter: (text, item) => {
-                  return item.value === 'value' && item.index === 0
-                    ? t('settings.proxy.stats.requests')
-                    : t('settings.proxy.stats.errorRate')
-                }
-              }
-            },
-            tooltip: {
-              shared: true,
-              showMarkers: true,
-              customContent: (title, items) => {
-                if (!items || items.length === 0) return ''
-                let html = `<div style="padding: 8px 12px;"><div style="font-weight: 500; margin-bottom: 8px;">${title}</div>`
-                items.forEach((item, index) => {
-                  const color = item.color || '#999'
-                  // DualAxes chart: index 0 is requests (column), index 1 is error rate (line)
-                  const name = index === 0 ? t('settings.proxy.stats.requests') : t('settings.proxy.stats.errorRate')
-                  const value = item.value !== undefined ? item.value : ''
-                  const suffix = index === 1 ? '%' : ''
-                  const displayValue = suffix ? value + suffix : formatNumber(value)
-                  html += `<div style="display: flex; align-items: center; margin-bottom: 4px;">
-                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${color}; margin-right: 8px;"></span>
-                    <span style="flex: 1;">${name}:</span>
-                    <span style="font-weight: 500; margin-left: 12px;">${displayValue}</span>
-                  </div>`
-                })
-                html += '</div>'
-                return html
-              }
-            }
-          })
-        )
-        requestsDualAxisChart.render()
-      }
-    } else {
-      requestsDualAxisChart.update({ data: [requestsData, errorRateData] })
-    }
-
-    // Prepare token data for stacked bar chart
-    const tokenData = []
-    if (dailyStats.value && dailyStats.value.length > 0) {
-      dailyStats.value
-        .slice()
-        .reverse()
-        .forEach(day => {
-          tokenData.push({
-            date: day.date,
+    tokenTrend.value = (dailyStats.value || [])
+      .slice()
+      .reverse()
+      .map(day => {
+        const segments = [
+          {
             type: t('settings.proxy.stats.inputTokens'),
-            value: Number(day.totalInputTokens || 0)
-          })
-          tokenData.push({
-            date: day.date,
+            value: Number(day.totalInputTokens || 0),
+            color: getSeriesColor(0)
+          },
+          {
             type: t('settings.proxy.stats.outputTokens'),
-            value: Number(day.totalOutputTokens || 0)
-          })
-          tokenData.push({
-            date: day.date,
+            value: Number(day.totalOutputTokens || 0),
+            color: getSeriesColor(1)
+          },
+          {
             type: t('settings.proxy.stats.cacheTokens'),
-            value: Number(day.totalCacheTokens || 0)
-          })
-        })
-    }
-
-    // Render or update daily token trend chart (Column)
-    if (!tokenBarChart) {
-      const container = document.getElementById('daily-tokens-column')
-      if (container) {
-        tokenBarChart = markRaw(
-          new Column('daily-tokens-column', {
-            data: tokenData,
-            isStack: true,
-            xField: 'date',
-            yField: 'value',
-            seriesField: 'type',
-            xAxis: {
-              ...getCommonAxisConfig()
-            },
-            yAxis: {
-              ...getCommonAxisConfig(),
-              label: {
-                formatter: val => formatAxisValue(val)
-              }
-            },
-            legend: {
-              position: 'bottom'
-            },
-            label: {
-              position: 'middle',
-              layout: [{ type: 'interval-adjust-position' }, { type: 'interval-hide-overlap' }],
-              formatter: datum => formatTokens(datum.value)
-            },
-            tooltip: {
-              formatter: datum => {
-                return { name: datum.type, value: formatTokens(datum.value) }
-              }
-            }
-          })
-        )
-        tokenBarChart.render()
-      }
-    } else {
-      tokenBarChart.changeData(tokenData)
-      tokenBarChart.render()
-    }
+            value: Number(day.totalCacheTokens || 0),
+            color: getSeriesColor(2)
+          }
+        ]
+        const total = segments.reduce((sum, item) => sum + item.value, 0)
+        return {
+          date: day.date,
+          total,
+          segments: segments
+            .filter(item => item.value > 0)
+            .map(item => ({
+              ...item,
+              percent: total > 0 ? (item.value / total) * 100 : 0
+            }))
+        }
+      })
 
     // Sort model usage data by value descending for horizontal bar chart
-    const sortedModelUsage = (modelUsage || [])
+    modelUsageStats.value = (modelUsage || [])
       .map(item => ({ ...item, value: Number(item.value) }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 10) // Top 10
-
-    // Render or update model usage horizontal bar chart
-    if (!modelBarChart) {
-      const container = document.getElementById('model-usage-bar')
-      if (container) {
-        modelBarChart = markRaw(
-          new Bar('model-usage-bar', {
-            data: sortedModelUsage,
-            xField: 'value',
-            yField: 'type',
-            seriesField: 'type',
-            legend: false,
-            xAxis: {
-              ...getCommonAxisConfig(),
-              label: {
-                formatter: val => formatAxisValue(val)
-              }
-            },
-            yAxis: {
-              ...getCommonAxisConfig()
-            },
-            label: {
-              position: 'right',
-              formatter: datum => formatNumber(datum.value)
-            },
-            tooltip: {
-              formatter: datum => {
-                return { name: datum.type, value: formatNumber(datum.value) }
-              }
-            }
-          })
-        )
-        modelBarChart.render()
-      }
-    } else {
-      modelBarChart.changeData(sortedModelUsage)
-      modelBarChart.render()
-    }
 
     // Sort model token usage data by value descending
-    const sortedModelTokenUsage = (modelTokenUsage || [])
+    modelTokenUsageStats.value = (modelTokenUsage || [])
       .map(item => ({ ...item, value: Number(item.value) }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 10) // Top 10
 
-    // Render or update model token usage horizontal bar chart
-    if (!modelTokenBarChart) {
-      const container = document.getElementById('model-token-usage-bar')
-      if (container) {
-        modelTokenBarChart = markRaw(
-          new Bar('model-token-usage-bar', {
-            data: sortedModelTokenUsage,
-            xField: 'value',
-            yField: 'type',
-            seriesField: 'type',
-            legend: false,
-            xAxis: {
-              ...getCommonAxisConfig(),
-              label: {
-                formatter: val => formatAxisValue(val)
-              }
-            },
-            yAxis: {
-              ...getCommonAxisConfig()
-            },
-            label: {
-              position: 'right',
-              formatter: datum => formatTokens(datum.value)
-            },
-            tooltip: {
-              formatter: datum => {
-                return { name: datum.type, value: formatTokens(datum.value) }
-              }
-            }
-          })
-        )
-        modelTokenBarChart.render()
-      }
-    } else {
-      modelTokenBarChart.changeData(sortedModelTokenUsage)
-      modelTokenBarChart.render()
-    }
-
     // Sort provider token usage data by value descending
-    const sortedProviderTokenUsage = (providerTokenUsage || [])
+    providerTokenUsageStats.value = (providerTokenUsage || [])
       .map(item => ({ ...item, value: Number(item.value) }))
       .sort((a, b) => b.value - a.value)
-
-    // Render or update provider token usage horizontal bar chart
-    if (!providerTokenBarChart) {
-      const container = document.getElementById('provider-token-usage-bar')
-      if (container) {
-        providerTokenBarChart = markRaw(
-          new Bar('provider-token-usage-bar', {
-            data: sortedProviderTokenUsage,
-            xField: 'value',
-            yField: 'type',
-            seriesField: 'type',
-            legend: false,
-            xAxis: {
-              ...getCommonAxisConfig(),
-              label: {
-                formatter: val => formatAxisValue(val)
-              }
-            },
-            yAxis: {
-              ...getCommonAxisConfig()
-            },
-            label: {
-              position: 'right',
-              formatter: datum => formatTokens(datum.value)
-            },
-            tooltip: {
-              formatter: datum => {
-                return { name: datum.type, value: formatTokens(datum.value) }
-              }
-            }
-          })
-        )
-        providerTokenBarChart.render()
-      }
-    } else {
-      providerTokenBarChart.changeData(sortedProviderTokenUsage)
-      providerTokenBarChart.render()
-    }
 
     // Sort error distribution data by value descending
-    const sortedErrorDist = (errorDist || [])
+    errorDistributionStats.value = (errorDist || [])
       .map(item => ({ ...item, value: Number(item.value) }))
       .sort((a, b) => b.value - a.value)
-
-    // Render or update error distribution horizontal bar chart
-    if (!errorBarChart) {
-      const container = document.getElementById('error-dist-bar')
-      if (container) {
-        errorBarChart = markRaw(
-          new Bar('error-dist-bar', {
-            data: sortedErrorDist,
-            xField: 'value',
-            yField: 'type',
-            seriesField: 'type',
-            legend: false,
-            color: getCssVar('--cs-error-color') || '#f56c6c',
-            xAxis: {
-              ...getCommonAxisConfig(),
-              label: {
-                formatter: val => formatAxisValue(val)
-              }
-            },
-            yAxis: {
-              ...getCommonAxisConfig()
-            },
-            label: {
-              position: 'right',
-              formatter: datum => formatNumber(datum.value)
-            },
-            tooltip: {
-              formatter: datum => {
-                return { name: datum.type, value: formatNumber(datum.value) }
-              }
-            }
-          })
-        )
-        errorBarChart.render()
-      }
-    } else {
-      errorBarChart.changeData(sortedErrorDist)
-      errorBarChart.render()
-    }
   } catch (error) {
     console.error('Failed to update charts:', error)
   }
@@ -899,12 +689,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
-  if (modelBarChart) modelBarChart.destroy()
-  if (modelTokenBarChart) modelTokenBarChart.destroy()
-  if (providerTokenBarChart) providerTokenBarChart.destroy()
-  if (errorBarChart) errorBarChart.destroy()
-  if (tokenBarChart) tokenBarChart.destroy()
-  if (requestsDualAxisChart) requestsDualAxisChart.destroy()
 })
 </script>
 
@@ -1028,27 +812,6 @@ onUnmounted(() => {
     text-align: center;
   }
 
-  div {
-    height: 300px;
-  }
-
-  &.bar-chart {
-    min-width: 100%;
-
-    div {
-      height: 350px;
-    }
-  }
-
-  &.bar-chart-small {
-    min-width: 300px;
-    flex: 1;
-
-    div {
-      height: 300px;
-    }
-  }
-
   &.tab-chart {
     min-width: 100%;
     padding: 0;
@@ -1092,9 +855,119 @@ onUnmounted(() => {
     }
 
     .tab-chart-content {
-      height: 380px;
+      min-height: 380px;
     }
   }
+}
+
+.trend-stack-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  height: 100%;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.trend-stack-item {
+  min-width: 72px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.trend-stack-bars {
+  width: 40px;
+  height: 220px;
+  display: flex;
+  flex-direction: column-reverse;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--cs-bg-color-light);
+  border: 1px solid var(--cs-border-color-light);
+}
+
+.trend-stack-segment {
+  width: 100%;
+  min-height: 2px;
+}
+
+.trend-stack-total,
+.trend-stack-label {
+  width: 100%;
+  text-align: center;
+  font-size: 12px;
+}
+
+.trend-stack-total {
+  color: var(--cs-text-color-primary);
+  font-weight: 600;
+}
+
+.trend-stack-label {
+  color: var(--cs-text-color-secondary);
+}
+
+.trend-metric-list,
+.rank-bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.trend-metric-row,
+.rank-bar-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trend-metric-header,
+.rank-bar-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.rank-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rank-bar-value {
+  flex-shrink: 0;
+  color: var(--cs-text-color-secondary);
+}
+
+.trend-metric-track,
+.rank-bar-track {
+  width: 100%;
+  height: 10px;
+  background: var(--cs-bg-color-light);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.trend-metric-track.error,
+.rank-bar-track {
+  height: 8px;
+}
+
+.trend-metric-fill,
+.rank-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.trend-metric-fill.requests {
+  background: var(--cs-info-color);
+}
+
+.trend-metric-fill.errors {
+  background: var(--cs-error-color);
 }
 
 .expand-detail {

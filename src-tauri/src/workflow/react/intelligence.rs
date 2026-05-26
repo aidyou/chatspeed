@@ -33,6 +33,29 @@ pub struct ToolApprovalReview {
 }
 
 impl IntelligenceManager {
+    fn assistant_calls_completion_tool(message: &WorkflowMessage) -> bool {
+        if message.role != "assistant" {
+            return false;
+        }
+
+        message
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("tool_calls"))
+            .and_then(|tool_calls| tool_calls.as_array())
+            .is_some_and(|tool_calls| {
+                tool_calls.iter().any(|call| {
+                    call.get("name")
+                        .or_else(|| {
+                            call.get("function")
+                                .and_then(|function| function.get("name"))
+                        })
+                        .and_then(|value| value.as_str())
+                        == Some(TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
+                })
+            })
+    }
+
     pub(crate) fn extract_completion_summary(message: &WorkflowMessage) -> String {
         let visible_content = message.message.trim();
         let tool_summary = message
@@ -459,21 +482,11 @@ impl IntelligenceManager {
         ];
 
         // 3. Add the Target Conclusion (The Assistant message calling complete_workflow_with_summary)
-        if let Some(target_msg) = messages.iter().rev().find(|m| {
-            m.role == "assistant"
-                && (m.message.contains(TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
-                    || m.metadata.as_ref().map_or(false, |meta| {
-                        meta.get("tool_calls")
-                            .and_then(|tc| tc.as_array())
-                            .map_or(false, |arr| {
-                                arr.iter().any(|call| {
-                                    call["name"] == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
-                                        || call["function"]["name"]
-                                            == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
-                                })
-                            })
-                    }))
-        }) {
+        if let Some(target_msg) = messages
+            .iter()
+            .rev()
+            .find(|m| Self::assistant_calls_completion_tool(m))
+        {
             history.push(serde_json::json!({
                 "role": "user",
                 "content": format!("<proposed_conclusion>\n{}\n</proposed_conclusion>", Self::extract_completion_summary(target_msg))
