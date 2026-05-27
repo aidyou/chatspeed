@@ -64,13 +64,9 @@ impl SkillScanner {
         // 3. software data dir (Priority 3)
         search_paths.push(app_data_dir.join("skills"));
 
-        // 4. builtin skills from tauri assets (Priority 4)
-        // In dev mode, resources are in source tree (src-tauri/assets/skills)
-        // In prod mode, resources are bundled and accessible via resource_dir()
-        let resource_dir = crate::RESOURCE_DIR.read().clone();
-        if !resource_dir.as_os_str().is_empty() {
-            let skills_path = resource_dir.join("skills");
-            log::debug!("Builtin skills path from RESOURCE_DIR: {:?}", skills_path);
+        // 4. builtin skills from bundled resources (Priority 4)
+        for skills_path in crate::constants::resolve_resource_subdirs("skills") {
+            log::debug!("Builtin skills candidate path: {:?}", skills_path);
             search_paths.push(skills_path);
         }
 
@@ -85,7 +81,7 @@ impl SkillScanner {
     /// Higher priority paths (earlier in search_paths) override lower ones.
     pub fn scan(&self) -> Result<HashMap<String, SkillManifest>, WorkflowEngineError> {
         let mut skills = HashMap::new();
-        let builtin_root = crate::RESOURCE_DIR.read().clone().join("skills");
+        let builtin_roots = crate::constants::resolve_resource_subdirs("skills");
 
         // Iterate in REVERSE to allow higher priority paths to overwrite at the end
         for path in self.search_paths.iter().rev() {
@@ -98,7 +94,7 @@ impl SkillScanner {
                     let skill_dir = entry.path();
                     if skill_dir.is_dir() {
                         if let Some(mut manifest) = self.try_load_skill(&skill_dir) {
-                            manifest.source = if path == &builtin_root {
+                            manifest.source = if builtin_roots.iter().any(|root| path == root) {
                                 "builtin".to_string()
                             } else {
                                 "user".to_string()
@@ -109,6 +105,12 @@ impl SkillScanner {
                 }
             }
         }
+
+        log::info!(
+            "System skill scan completed: loaded {} skills from {:?}",
+            skills.len(),
+            self.search_paths
+        );
 
         Ok(skills)
     }
@@ -378,5 +380,32 @@ mod tests {
         assert_eq!(manifest.references[0].filename, "guide.md");
         assert_eq!(manifest.references[0].description, "Guide");
         assert!(manifest.skill_dir.is_some());
+    }
+
+    #[test]
+    fn test_scan_marks_builtin_skills_from_assets_layout() {
+        let temp_dir = TempDir::new().unwrap();
+        let resource_root = temp_dir.path().join("resources");
+        let builtin_skill_dir = resource_root
+            .join("assets")
+            .join("skills")
+            .join("builtin-help");
+        fs::create_dir_all(&builtin_skill_dir).unwrap();
+        fs::write(
+            builtin_skill_dir.join("SKILL.md"),
+            "---\nname: builtin-help\ndescription: Builtin help\n---\n\nInstructions...",
+        )
+        .unwrap();
+
+        let original_resource_dir = crate::RESOURCE_DIR.read().clone();
+        *crate::RESOURCE_DIR.write() = resource_root;
+
+        let scanner = SkillScanner::new(PathBuf::new());
+        let skills = scanner.scan().unwrap();
+
+        *crate::RESOURCE_DIR.write() = original_resource_dir;
+
+        let manifest = skills.get("builtin-help").unwrap();
+        assert_eq!(manifest.source, "builtin");
     }
 }

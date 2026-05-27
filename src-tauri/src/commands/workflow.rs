@@ -3714,6 +3714,7 @@ pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, Str
     let skills_map = scanner.scan().map_err(|e| e.to_string())?;
     let mut skills: Vec<SkillManifest> = skills_map.into_values().collect();
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    log::info!("get_system_skills returned {} skills", skills.len());
     Ok(skills)
 }
 

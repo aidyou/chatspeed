@@ -206,6 +206,31 @@ pub fn get_static_var<T: Clone>(var: &Arc<PLRwLock<T>>) -> T {
     var.read().clone()
 }
 
+/// Resolve bundled asset subdirectories across development and packaged layouts.
+///
+/// Development uses `src-tauri/assets/...`, so `RESOURCE_DIR` already points to `assets`.
+/// Packaged builds use `Contents/Resources/assets/...`, while older layouts may place
+/// files directly under `Contents/Resources/...`. Returning both candidates keeps the
+/// lookup logic compatible without forcing callers to guess the bundle layout.
+pub fn resolve_resource_subdirs(relative: &str) -> Vec<PathBuf> {
+    let resource_dir = RESOURCE_DIR.read().clone();
+    if resource_dir.as_os_str().is_empty() {
+        return vec![];
+    }
+
+    let mut candidates = Vec::new();
+    let resource_is_assets =
+        resource_dir.file_name().and_then(|name| name.to_str()) == Some("assets");
+
+    candidates.push(resource_dir.join(relative));
+    if !resource_is_assets {
+        candidates.push(resource_dir.join("assets").join(relative));
+    }
+
+    candidates.dedup();
+    candidates
+}
+
 // When the search results include video or image websites, they are filtered out
 pub static VIDEO_AND_IMAGE_DOMAINS: phf::Set<&'static str> = phf::phf_set! {
     // video websites

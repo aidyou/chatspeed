@@ -136,8 +136,23 @@ fn read_default_shell_policy(
     Ok(Some(policy))
 }
 
+fn resolve_builtin_agents_root() -> Option<PathBuf> {
+    let candidates = crate::constants::resolve_resource_subdirs(BUILTIN_AGENTS_DIR);
+    let existing = candidates.iter().find(|path| path.exists()).cloned();
+    let selected = existing.or_else(|| candidates.first().cloned());
+
+    if let Some(path) = &selected {
+        log::debug!("Builtin agents candidate selected: {:?}", path);
+    }
+
+    selected
+}
+
 pub fn load_default_shell_policy_from_resources() -> Result<Vec<ShellPolicyRule>, String> {
-    let builtin_agents_root = crate::RESOURCE_DIR.read().clone().join(BUILTIN_AGENTS_DIR);
+    let builtin_agents_root = match resolve_builtin_agents_root() {
+        Some(path) => path,
+        None => return Ok(Vec::new()),
+    };
     Ok(read_default_shell_policy(&builtin_agents_root)?.unwrap_or_default())
 }
 
@@ -359,8 +374,13 @@ pub fn sync_builtin_agents_if_needed(
         }
     }
 
-    let resource_dir = crate::RESOURCE_DIR.read().clone();
-    let builtin_agents_root: PathBuf = resource_dir.join(BUILTIN_AGENTS_DIR);
+    let builtin_agents_root = match resolve_builtin_agents_root() {
+        Some(path) => path,
+        None => {
+            log::info!("Builtin agents sync skipped: resource directory is not available");
+            return Ok(());
+        }
+    };
     let definitions = scan_builtin_agents(&builtin_agents_root)?;
     let default_shell_policy = read_default_shell_policy(&builtin_agents_root)?;
 
