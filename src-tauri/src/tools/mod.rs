@@ -1,6 +1,7 @@
 mod constants;
 mod error;
 mod fs;
+pub(crate) mod helper;
 mod interaction;
 mod llm_output;
 mod mcp_loader;

@@ -1,4 +1,7 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::tools::helper::{
+    classify_shell_stage, shell_tokens, split_shell_command_segments, ShellStage,
+};
 use crate::tools::shell_output::build_shell_tool_result;
 use crate::tools::{NativeToolResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::error::WorkflowEngineError;
@@ -96,21 +99,9 @@ impl ShellPolicyEngine {
             return ShellDecision::Deny("Command is empty".into());
         }
 
-        // 2. Custom Regex/Pattern matching for the full command line
-        for rule in &self.custom_rules {
-            if let Ok(re) = Regex::new(&rule.pattern) {
-                if re.is_match(command_str) {
-                    return rule.decision.clone();
-                }
-            } else if command_str.contains(&rule.pattern) {
-                return rule.decision.clone();
-            }
-        }
-
-        // 2.5. Whitelist mode: If custom rules are configured but none matched, require review.
-        // This ensures commands not in the allowed list are flagged for approval.
+        // 2. Custom Regex/Pattern matching for the full command line or normalized stages.
         if !self.custom_rules.is_empty() {
-            return ShellDecision::Review("Requires review (not in allowed list)".to_string());
+            return self.evaluate_custom_rules(command_str, restrict_to_planning);
         }
 
         // 3. Recursive Check: Audit nested structure contents
@@ -337,6 +328,165 @@ impl ShellPolicyEngine {
         }
 
         final_decision
+    }
+
+    fn evaluate_custom_rules(
+        &self,
+        command_str: &str,
+        restrict_to_planning: bool,
+    ) -> ShellDecision {
+        if let Some(decision) = self.match_custom_rule(command_str) {
+            return decision;
+        }
+
+        let normalized_segments =
+            match self.extract_policy_match_segments(command_str, restrict_to_planning) {
+                Ok(segments) => segments,
+                Err(decision) => return decision,
+            };
+
+        if normalized_segments.is_empty() {
+            return ShellDecision::Allow;
+        }
+
+        let mut final_decision = ShellDecision::Allow;
+        for segment in normalized_segments {
+            let Some(decision) = self.match_custom_rule(&segment) else {
+                return ShellDecision::Review("Requires review (not in allowed list)".to_string());
+            };
+
+            match decision {
+                ShellDecision::Deny(reason) => return ShellDecision::Deny(reason),
+                ShellDecision::Review(reason) => {
+                    if final_decision == ShellDecision::Allow {
+                        final_decision = ShellDecision::Review(reason);
+                    }
+                }
+                ShellDecision::Allow => {}
+            }
+        }
+
+        final_decision
+    }
+
+    fn match_custom_rule(&self, command_str: &str) -> Option<ShellDecision> {
+        for rule in &self.custom_rules {
+            if let Ok(re) = Regex::new(&rule.pattern) {
+                if re.is_match(command_str) {
+                    return Some(rule.decision.clone());
+                }
+            } else if command_str.contains(&rule.pattern) {
+                return Some(rule.decision.clone());
+            }
+        }
+
+        None
+    }
+
+    fn extract_policy_match_segments(
+        &self,
+        command_str: &str,
+        restrict_to_planning: bool,
+    ) -> Result<Vec<String>, ShellDecision> {
+        let mut segments = Vec::new();
+
+        for segment in split_shell_command_segments(command_str) {
+            let Some(tokens) = shell_tokens(&segment) else {
+                return Err(ShellDecision::Deny("Invalid shell syntax".into()));
+            };
+            if tokens.is_empty() {
+                continue;
+            }
+
+            match classify_shell_stage(&segment) {
+                Some(ShellStage::Navigation { command, target }) => {
+                    match self.validate_navigation_segment(
+                        command.as_str(),
+                        target.as_deref(),
+                        restrict_to_planning,
+                    ) {
+                        ShellDecision::Allow => continue,
+                        decision => return Err(decision),
+                    }
+                }
+                Some(ShellStage::Command { normalized, .. }) => segments.push(normalized),
+                None => segments.push(segment),
+            }
+        }
+
+        Ok(segments)
+    }
+
+    fn validate_navigation_segment(
+        &self,
+        command: &str,
+        target: Option<&str>,
+        restrict_to_planning: bool,
+    ) -> ShellDecision {
+        if command == "popd" {
+            return ShellDecision::Allow;
+        }
+
+        let Some(target) = target else {
+            return ShellDecision::Deny(
+                "Directory navigation requires an explicit target within the authorized roots."
+                    .into(),
+            );
+        };
+
+        if target == "-" {
+            return ShellDecision::Deny(
+                "Directory navigation via shell history is not allowed.".into(),
+            );
+        }
+
+        if target.starts_with('~') {
+            return ShellDecision::Deny(
+                "Tilde (~) expansion is blocked. Use absolute paths within the workspace.".into(),
+            );
+        }
+
+        let expanded = match shellexpand::full(target) {
+            Ok(expanded) => expanded,
+            Err(err) => {
+                return ShellDecision::Deny(format!(
+                    "Expansion failed for token '{}': {}",
+                    target, err
+                ))
+            }
+        };
+
+        let validated = if let Ok(guard) = self.path_guard.read() {
+            guard.validate(
+                Path::new(expanded.as_ref()),
+                restrict_to_planning,
+                true,
+                false,
+            )
+        } else {
+            Err(WorkflowEngineError::Security("Lock failed".into()))
+        };
+
+        match validated {
+            Ok(path) => {
+                if !path.exists() {
+                    return ShellDecision::Deny(format!(
+                        "Directory navigation target does not exist: {:?}",
+                        path
+                    ));
+                }
+
+                if !path.is_dir() {
+                    return ShellDecision::Deny(format!(
+                        "Directory navigation target is not a directory: {:?}",
+                        path
+                    ));
+                }
+
+                ShellDecision::Allow
+            }
+            Err(err) => ShellDecision::Deny(format!("Boundary Violation: {}", err)),
+        }
     }
 
     fn validate_path_token(
@@ -1021,6 +1171,59 @@ mod tests {
         let result_status_short = engine.check(cmd_status_short, false);
         println!("\ngit status --short result: {:?}", result_status_short);
         assert_eq!(result_status_short, ShellDecision::Allow);
+    }
+
+    #[test]
+    fn test_policy_engine_custom_rule_allows_authorized_cd_prefix() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_root.clone()],
+            vec![],
+            vec![],
+        )));
+        let engine = ShellPolicyEngine::new(
+            guard,
+            vec![ShellPolicyRule {
+                pattern: "^git diff($| .*)".to_string(),
+                decision: ShellDecision::Allow,
+                description: None,
+            }],
+        );
+
+        let result = engine.check("cd . && git diff src/main.rs | head -80", false);
+
+        assert_eq!(result, ShellDecision::Allow);
+    }
+
+    #[test]
+    fn test_policy_engine_custom_rule_denies_unauthorized_cd_prefix() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let outside_root = tempdir().unwrap();
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_root],
+            vec![],
+            vec![],
+        )));
+        let engine = ShellPolicyEngine::new(
+            guard,
+            vec![ShellPolicyRule {
+                pattern: "^git diff($| .*)".to_string(),
+                decision: ShellDecision::Allow,
+                description: None,
+            }],
+        );
+
+        let command = format!(
+            "cd {} && git diff src/main.rs | head -80",
+            outside_root.path().display()
+        );
+        let result = engine.check(&command, false);
+
+        assert!(matches!(result, ShellDecision::Deny(_)));
     }
 
     #[test]
