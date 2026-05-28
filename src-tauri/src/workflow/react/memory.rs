@@ -5,7 +5,8 @@
 //! constraints, facts, and conventions that should be remembered across sessions.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use super::error::WorkflowEngineError;
 
@@ -35,6 +36,10 @@ pub struct MemoryManager {
     global_path: PathBuf,
     /// Path to project memory file (None if no project root).
     project_path: Option<PathBuf>,
+    /// Physical project root for project-scoped memory.
+    project_root: Option<PathBuf>,
+    /// Stable project key used by candidate persistence.
+    project_key: Option<String>,
 }
 
 impl MemoryManager {
@@ -48,25 +53,34 @@ impl MemoryManager {
             .map(|h| h.join(".chatspeed").join("memory.md"))
             .unwrap_or_else(|| PathBuf::from(".chatspeed/memory.md"));
 
-        let project_path = project_root.and_then(|p| {
+        let project_path = project_root.as_ref().and_then(|p| {
             let chatspeed_dir = dirs::home_dir()?.join(".chatspeed");
-            let path_str = p.to_string_lossy();
-            let transformed = path_str
-                .strip_prefix('/')
-                .unwrap_or(&path_str)
-                .replace('/', "-");
+            let transformed = Self::project_key_from_root(p);
             Some(
                 chatspeed_dir
                     .join("project")
-                    .join(transformed)
+                    .join(&transformed)
                     .join("memory.md"),
             )
         });
+        let project_key = project_root
+            .as_ref()
+            .map(|root| Self::project_key_from_root(root));
 
         Self {
             global_path,
             project_path,
+            project_root,
+            project_key,
         }
+    }
+
+    pub fn project_key_from_root(root: &Path) -> String {
+        let path_str = root.to_string_lossy();
+        path_str
+            .strip_prefix('/')
+            .unwrap_or(&path_str)
+            .replace('/', "-")
     }
 
     /// Reads memory content from the specified scope.
@@ -162,6 +176,47 @@ impl MemoryManager {
         self.project_path.is_some()
     }
 
+    pub fn project_key(&self) -> Option<&str> {
+        self.project_key.as_deref()
+    }
+
+    pub fn project_root(&self) -> Option<&Path> {
+        self.project_root.as_deref()
+    }
+
+    pub fn merge_entries(
+        &self,
+        scope: MemoryScope,
+        entries_by_category: &BTreeMap<String, Vec<String>>,
+    ) -> Result<Option<String>, WorkflowEngineError> {
+        if entries_by_category.is_empty() {
+            return Ok(None);
+        }
+
+        let current = self.read(scope)?.unwrap_or_default();
+        let mut sections = parse_memory_sections(&current);
+        let before = render_memory_sections(&sections);
+
+        for (category, entries) in entries_by_category {
+            let bucket = sections.entry(category.clone()).or_default();
+            for entry in entries {
+                if !bucket.iter().any(|existing| {
+                    normalize_memory_entry(existing) == normalize_memory_entry(entry)
+                }) {
+                    bucket.push(entry.clone());
+                }
+            }
+        }
+
+        let after = render_memory_sections(&sections);
+        if normalize_memory_entry(&before) == normalize_memory_entry(&after) {
+            return Ok(None);
+        }
+
+        self.write(scope, &after)?;
+        Ok(Some(after))
+    }
+
     /// Gets the global memory file path (for debugging purposes).
     #[cfg(debug_assertions)]
     #[allow(dead_code)]
@@ -192,10 +247,112 @@ pub struct MemoryAnalysisResult {
     #[serde(default)]
     pub project_memory: Option<String>,
 
+    /// Extracted global candidates from the current session.
+    #[serde(default)]
+    pub global_candidates: Vec<MemoryCandidateDraft>,
+
+    /// Extracted project candidates from the current session.
+    #[serde(default)]
+    pub project_candidates: Vec<MemoryCandidateDraft>,
+
     /// Reasoning for the changes made.
     #[serde(default)]
     #[allow(dead_code)]
     pub reasoning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryCandidateDraft {
+    pub category: String,
+    pub content: String,
+    pub confidence: f32,
+    pub explicitness: i32,
+}
+
+pub fn normalize_memory_entry(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches("- ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+pub fn parse_memory_sections(content: &str) -> BTreeMap<String, Vec<String>> {
+    let mut sections: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut current_category: Option<String> = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(category) = trimmed.strip_prefix("## ") {
+            current_category = Some(category.trim().to_string());
+            sections
+                .entry(category.trim().to_string())
+                .or_insert_with(Vec::new);
+            continue;
+        }
+
+        if let Some(entry) = trimmed.strip_prefix("- ") {
+            if let Some(category) = current_category.as_ref() {
+                let bucket = sections.entry(category.clone()).or_default();
+                let entry = entry.trim().to_string();
+                if !entry.is_empty()
+                    && !bucket.iter().any(|existing| {
+                        normalize_memory_entry(existing) == normalize_memory_entry(&entry)
+                    })
+                {
+                    bucket.push(entry);
+                }
+            }
+        }
+    }
+
+    sections
+}
+
+pub fn render_memory_sections(sections: &BTreeMap<String, Vec<String>>) -> String {
+    let category_order = [
+        "preference",
+        "constraint",
+        "fact",
+        "skill",
+        "convention",
+        "architecture",
+        "tooling",
+        "config",
+    ];
+
+    let mut ordered_categories: Vec<String> = sections.keys().cloned().collect();
+    ordered_categories.sort_by_key(|category| {
+        category_order
+            .iter()
+            .position(|item| item == category)
+            .unwrap_or(category_order.len())
+    });
+
+    let mut blocks = Vec::new();
+    for category in ordered_categories {
+        let Some(entries) = sections.get(&category) else {
+            continue;
+        };
+        if entries.is_empty() {
+            continue;
+        }
+
+        let mut deduped = entries.clone();
+        deduped.sort();
+        deduped.dedup_by(|a, b| normalize_memory_entry(a) == normalize_memory_entry(b));
+
+        let mut lines = vec![format!("## {}", category)];
+        for entry in deduped {
+            lines.push(format!("- {}", entry));
+        }
+        blocks.push(lines.join("\n"));
+    }
+
+    blocks.join("\n")
 }
 
 #[cfg(test)]
@@ -235,5 +392,21 @@ mod tests {
         assert!(serde_json::to_string(&project)
             .unwrap()
             .contains("\"project\""));
+    }
+
+    #[test]
+    fn test_project_key_from_root() {
+        let key = MemoryManager::project_key_from_root(Path::new("/Users/test/project/demo"));
+        assert_eq!(key, "Users-test-project-demo");
+    }
+
+    #[test]
+    fn test_parse_and_render_memory_sections_deduplicates_entries() {
+        let content = "## preference\n- Use Rust\n- Use Rust\n## constraint\n- Avoid unwrap()";
+        let sections = parse_memory_sections(content);
+        let rendered = render_memory_sections(&sections);
+        assert_eq!(sections["preference"].len(), 1);
+        assert!(rendered.contains("## preference"));
+        assert!(rendered.contains("- Use Rust"));
     }
 }

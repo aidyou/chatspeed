@@ -600,6 +600,10 @@ const getModelDisplayName = modelConfig => {
 }
 
 const workflowModels = computed(() => currentWorkflow.value?.agentConfig?.models || {})
+const displayRoots = computed(() => {
+  const paths = currentWorkflow.value?.agentConfig?.allowedPaths
+  return Array.isArray(paths) ? paths.filter(path => typeof path === 'string' && path.trim()) : []
+})
 const workflowPhase = computed(() =>
   String(currentWorkflow.value?.agentConfig?.phase || '').toLowerCase() === 'planning'
     ? 'planning'
@@ -811,7 +815,7 @@ const removeSystemReminder = content => {
   return content.replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '').trim()
 }
 
-const getToolInfo = (name, metadata = {}) => {
+const getToolInfo = (name, metadata = {}, roots = []) => {
   const iconMap = {
     read_file: { icon: resolveWorkflowToolIcon('read_file', 'file'), toolType: 'tool-file' },
     write_file: { icon: resolveWorkflowToolIcon('write_file', 'file'), toolType: 'tool-file' },
@@ -840,7 +844,7 @@ const getToolInfo = (name, metadata = {}) => {
 
   return {
     ...info,
-    shortName: normalizeToolDisplayText(metadata.title || name.replace(/_/g, ' '))
+    shortName: normalizeToolDisplayText(metadata.title || name.replace(/_/g, ' '), roots)
   }
 }
 
@@ -871,10 +875,17 @@ const recentOperations = computed(() => {
           title: tool.title,
           summary: tool.summary
         }
-        const { icon, toolType, shortName } = getToolInfo(tool.toolName || 'Tool', meta)
+        const { icon, toolType, shortName } = getToolInfo(
+          tool.toolName || 'Tool',
+          meta,
+          displayRoots.value
+        )
         return {
           name: shortName,
-          fullText: removeSystemReminder(tool.summary || tool.toolName || ''),
+          fullText: normalizeToolDisplayText(
+            removeSystemReminder(tool.summary || tool.toolName || ''),
+            displayRoots.value
+          ),
           icon,
           toolType,
           status: ledgerStatusToPanelStatus(tool.status),
@@ -909,11 +920,11 @@ const recentOperations = computed(() => {
         status = 'running'
       }
 
-      const { icon, toolType, shortName } = getToolInfo(name, meta)
+      const { icon, toolType, shortName } = getToolInfo(name, meta, displayRoots.value)
 
       return {
         name: shortName,
-        fullText: removeSystemReminder(meta.summary || name),
+        fullText: normalizeToolDisplayText(removeSystemReminder(meta.summary || name), displayRoots.value),
         icon,
         toolType,
         status,

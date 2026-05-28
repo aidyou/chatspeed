@@ -4,6 +4,7 @@
 
 use crate::db::{MainStore, StoreError};
 use crate::workflow::react::events::{WorkflowEvent, WorkflowEventRecord};
+use crate::workflow::react::memory::normalize_memory_entry;
 use crate::workflow::react::types::ExecutionContext;
 use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -127,6 +128,38 @@ pub struct WorkflowEfficiencyReport {
     pub sub_agents: Vec<WorkflowEfficiencySessionReport>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryCandidate {
+    pub id: Option<i64>,
+    pub scope: String,
+    pub category: String,
+    pub content: String,
+    pub normalized_content: String,
+    pub project_key: String,
+    pub project_root: Option<String>,
+    pub source_session_id: String,
+    pub confidence: f32,
+    pub explicitness: i32,
+    pub occurrence_count: i32,
+    pub status: String,
+    pub created_at: Option<String>,
+    pub last_seen_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryCandidateUpsert {
+    pub scope: String,
+    pub category: String,
+    pub content: String,
+    pub project_key: String,
+    pub project_root: Option<String>,
+    pub source_session_id: String,
+    pub confidence: f32,
+    pub explicitness: i32,
+}
+
 // =================================================
 //  From Row Implementations
 // =================================================
@@ -192,6 +225,28 @@ impl From<&Row<'_>> for WorkflowEventRecord {
             event_version: row.get("event_version").unwrap_or_default(),
             event_data,
             created_at: row.get("created_at").unwrap_or_default(),
+        }
+    }
+}
+
+impl From<&Row<'_>> for MemoryCandidate {
+    fn from(row: &Row<'_>) -> Self {
+        Self {
+            id: row.get("id").ok(),
+            scope: row.get("scope").unwrap_or_default(),
+            category: row.get("category").unwrap_or_default(),
+            content: row.get("content").unwrap_or_default(),
+            normalized_content: row.get("normalized_content").unwrap_or_default(),
+            project_key: row.get("project_key").unwrap_or_default(),
+            project_root: row.get("project_root").ok(),
+            source_session_id: row.get("source_session_id").unwrap_or_default(),
+            confidence: row.get("confidence").unwrap_or(0.0),
+            explicitness: row.get("explicitness").unwrap_or_default(),
+            occurrence_count: row.get("occurrence_count").unwrap_or(1),
+            status: row.get("status").unwrap_or_else(|_| "pending".to_string()),
+            created_at: row.get("created_at").ok(),
+            last_seen_at: row.get("last_seen_at").ok(),
+            updated_at: row.get("updated_at").ok(),
         }
     }
 }
@@ -973,6 +1028,148 @@ impl MainStore {
 
         Ok(result)
     }
+
+    pub fn upsert_memory_candidate(
+        &self,
+        candidate: &MemoryCandidateUpsert,
+    ) -> Result<MemoryCandidate, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let normalized_content = normalize_memory_entry(&candidate.content);
+        let existing_id: Option<i64> = conn
+            .query_row(
+                "SELECT id
+                 FROM memory_candidates
+                 WHERE scope = ?1 AND category = ?2 AND normalized_content = ?3 AND project_key = ?4",
+                params![
+                    candidate.scope,
+                    candidate.category,
+                    normalized_content,
+                    candidate.project_key
+                ],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(id) = existing_id {
+            conn.execute(
+                "UPDATE memory_candidates
+                 SET content = ?1,
+                     project_root = ?2,
+                     source_session_id = ?3,
+                     confidence = CASE WHEN confidence > ?4 THEN confidence ELSE ?4 END,
+                     explicitness = CASE WHEN explicitness > ?5 THEN explicitness ELSE ?5 END,
+                     occurrence_count = occurrence_count + 1,
+                     last_seen_at = CURRENT_TIMESTAMP,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?6",
+                params![
+                    candidate.content,
+                    candidate.project_root,
+                    candidate.source_session_id,
+                    candidate.confidence,
+                    candidate.explicitness,
+                    id
+                ],
+            )?;
+        } else {
+            conn.execute(
+                "INSERT INTO memory_candidates
+                 (scope, category, content, normalized_content, project_key, project_root, source_session_id, confidence, explicitness, occurrence_count, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 'pending')",
+                params![
+                    candidate.scope,
+                    candidate.category,
+                    candidate.content,
+                    normalized_content,
+                    candidate.project_key,
+                    candidate.project_root,
+                    candidate.source_session_id,
+                    candidate.confidence,
+                    candidate.explicitness
+                ],
+            )?;
+        }
+
+        let candidate_id = existing_id.unwrap_or_else(|| conn.last_insert_rowid());
+        let stored = conn.query_row(
+            "SELECT *
+             FROM memory_candidates
+             WHERE id = ?1",
+            params![candidate_id],
+            |row| Ok(MemoryCandidate::from(row)),
+        )?;
+
+        Ok(stored)
+    }
+
+    pub fn update_memory_candidate_status(&self, id: i64, status: &str) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        conn.execute(
+            "UPDATE memory_candidates
+             SET status = ?1,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+            params![status, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_memory_candidates(
+        &self,
+        scope: Option<&str>,
+        project_key: Option<&str>,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<MemoryCandidate>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let mut sql = String::from("SELECT * FROM memory_candidates WHERE 1 = 1");
+        let mut values: Vec<String> = Vec::new();
+
+        if let Some(scope) = scope {
+            sql.push_str(" AND scope = ?");
+            sql.push_str(&(values.len() + 1).to_string());
+            values.push(scope.to_string());
+        }
+        if let Some(project_key) = project_key {
+            sql.push_str(" AND project_key = ?");
+            sql.push_str(&(values.len() + 1).to_string());
+            values.push(project_key.to_string());
+        }
+        if let Some(status) = status {
+            sql.push_str(" AND status = ?");
+            sql.push_str(&(values.len() + 1).to_string());
+            values.push(status.to_string());
+        }
+        sql.push_str(" ORDER BY explicitness DESC, occurrence_count DESC, updated_at DESC");
+        sql.push_str(" LIMIT ?");
+        sql.push_str(&(values.len() + 1).to_string());
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = values
+            .iter()
+            .map(|value| value as &dyn rusqlite::ToSql)
+            .collect();
+        let limit_i64 = limit as i64;
+        params_vec.push(&limit_i64);
+
+        let rows = stmt.query_map(params_vec.as_slice(), |row| Ok(MemoryCandidate::from(row)))?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            candidates.push(row?);
+        }
+        Ok(candidates)
+    }
 }
 
 fn compute_efficiency_metrics(messages: &[WorkflowMessage]) -> WorkflowEfficiencyMetrics {
@@ -1309,6 +1506,70 @@ mod tests {
             index_exists, 1,
             "idx_workflow_events_session_id_id index should exist"
         );
+    }
+
+    #[test]
+    fn test_memory_candidates_table_and_index_exist_after_migration() {
+        let store = create_test_store();
+        let conn = store
+            .conn
+            .lock()
+            .expect("failed to lock db connection for schema check");
+
+        let table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'memory_candidates'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to query memory_candidates table existence");
+        assert_eq!(table_exists, 1, "memory_candidates table should exist");
+
+        let index_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_candidates_unique_content'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to query memory_candidates unique index existence");
+        assert_eq!(
+            index_exists, 1,
+            "memory candidate unique index should exist"
+        );
+    }
+
+    #[test]
+    fn test_upsert_memory_candidate_increments_occurrence_count() {
+        let store = create_test_store();
+        let first = store
+            .upsert_memory_candidate(&MemoryCandidateUpsert {
+                scope: "global".to_string(),
+                category: "preference".to_string(),
+                content: "始终用中文对话".to_string(),
+                project_key: String::new(),
+                project_root: None,
+                source_session_id: "session-a".to_string(),
+                confidence: 0.8,
+                explicitness: 2,
+            })
+            .expect("failed to insert candidate");
+        assert_eq!(first.occurrence_count, 1);
+
+        let second = store
+            .upsert_memory_candidate(&MemoryCandidateUpsert {
+                scope: "global".to_string(),
+                category: "preference".to_string(),
+                content: "始终用中文对话".to_string(),
+                project_key: String::new(),
+                project_root: None,
+                source_session_id: "session-b".to_string(),
+                confidence: 0.9,
+                explicitness: 3,
+            })
+            .expect("failed to upsert candidate");
+        assert_eq!(second.occurrence_count, 2);
+        assert!(second.confidence >= 0.9);
+        assert!(second.explicitness >= 3);
     }
 
     #[test]

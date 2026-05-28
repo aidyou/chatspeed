@@ -23,5 +23,6 @@ pub use note::{Note, NoteTag};
 pub use proxy_group::ProxyGroup;
 pub use types::{AiModel, AiSkill, CcproxyStat, Conversation, ModelConfig, ThinkingConfig};
 pub use workflow::{
-    Workflow, WorkflowAiContextMessage, WorkflowEfficiencyReport, WorkflowMessage, WorkflowSnapshot,
+    MemoryCandidate, MemoryCandidateUpsert, Workflow, WorkflowAiContextMessage,
+    WorkflowEfficiencyReport, WorkflowMessage, WorkflowSnapshot,
 };

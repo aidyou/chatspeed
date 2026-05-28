@@ -2,15 +2,17 @@ use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::db::{
-    Agent, AgentConfig, MainStore, Workflow, WorkflowEfficiencyReport, WorkflowMessage,
-    WorkflowSnapshot,
+    Agent, AgentConfig, MainStore, MemoryCandidate, Workflow, WorkflowEfficiencyReport,
+    WorkflowMessage, WorkflowSnapshot,
 };
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::child_tasks::get_sub_agent_registry;
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
+use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
+use crate::workflow::react::memory::MemoryManager;
 use crate::workflow::react::orchestrator::{
     list_background_task_ids_for_owner, stop_background_task, BackgroundTask, SubAgentFactory,
     BACKGROUND_TASKS,
@@ -35,6 +37,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowMemoryDiagnostics {
+    pub global_memory: Option<String>,
+    pub project_memory: Option<String>,
+    pub project_key: Option<String>,
+    pub global_candidates: Vec<MemoryCandidate>,
+    pub project_candidates: Vec<MemoryCandidate>,
+}
+
 // ==========================================
 // 0. Helper Functions for @mentions
 // ==========================================
@@ -49,8 +61,86 @@ fn workflow_planning_root(allowed_roots: &[PathBuf]) -> PathBuf {
 
 fn reset_workflow_planning_note(allowed_roots: &[PathBuf]) -> Result<(), String> {
     let planning_root = workflow_planning_root(allowed_roots);
-    std::fs::create_dir_all(&planning_root).map_err(|e| e.to_string())?;
-    std::fs::write(planning_root.join("note.md"), "").map_err(|e| e.to_string())
+    let note_path = planning_root.join("note.md");
+    if note_path.exists() {
+        std::fs::write(note_path, "").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn should_treat_as_title_source(message: &WorkflowMessage) -> bool {
+    message.role == "user"
+        && message
+            .step_type
+            .as_deref()
+            .map_or(true, |step_type| step_type != "observe")
+        && !message.message.trim().is_empty()
+}
+
+fn spawn_workflow_title_generation_if_missing(
+    session_id: String,
+    user_query: String,
+    state: Arc<std::sync::RwLock<MainStore>>,
+    chat_state: Arc<ChatState>,
+) -> Result<(), String> {
+    if user_query.trim().is_empty() {
+        return Ok(());
+    }
+
+    let should_generate_title = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store
+            .get_workflow_snapshot(&session_id)
+            .ok()
+            .map(|snapshot| {
+                snapshot
+                    .workflow
+                    .title
+                    .as_deref()
+                    .map_or(true, |title| title.trim().is_empty())
+            })
+            .unwrap_or(true)
+    };
+
+    if !should_generate_title {
+        return Ok(());
+    }
+
+    let (provider_id, model_name) = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let workflow = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?
+            .workflow;
+        let agent_config = workflow
+            .agent_config
+            .as_deref()
+            .and_then(AgentConfig::from_json)
+            .unwrap_or_default();
+        let model = agent_config
+            .models
+            .as_ref()
+            .and_then(|models| models.act.as_ref().or(models.plan.as_ref()));
+        let provider_id = model.map(|model| model.id).unwrap_or(0);
+        let model_name = model.map(|model| model.model.clone()).unwrap_or_default();
+        (provider_id, model_name)
+    };
+
+    let intelligence_manager = IntelligenceManager::new(
+        session_id.clone(),
+        chat_state,
+        provider_id,
+        model_name.clone(),
+        provider_id,
+        model_name,
+    );
+    tokio::spawn(async move {
+        let _ = intelligence_manager
+            .generate_workflow_title(&user_query)
+            .await;
+    });
+
+    Ok(())
 }
 
 fn is_user_authored_workflow_message(message: &WorkflowMessage) -> bool {
@@ -1067,6 +1157,13 @@ pub async fn create_workflow(
         request.agent_id
     );
 
+    let _ = spawn_workflow_title_generation_if_missing(
+        session_id.clone(),
+        user_query.to_string(),
+        state.inner().clone(),
+        chat_state.inner().clone(),
+    );
+
     Ok(session_id)
 }
 
@@ -1324,12 +1421,24 @@ pub async fn get_workflow_snapshot(
 #[tauri::command]
 pub async fn add_workflow_message(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    chat_state: State<'_, Arc<ChatState>>,
     message: WorkflowMessage,
 ) -> Result<i64, String> {
     let store = state.read().map_err(|e| e.to_string())?;
     let res = store
         .add_workflow_message(&message)
         .map_err(|e| e.to_string())?;
+    drop(store);
+
+    if should_treat_as_title_source(&message) {
+        let _ = spawn_workflow_title_generation_if_missing(
+            message.session_id.clone(),
+            message.message.clone(),
+            state.inner().clone(),
+            chat_state.inner().clone(),
+        );
+    }
+
     Ok(res.id.unwrap_or(0))
 }
 
@@ -4368,10 +4477,52 @@ pub async fn get_workflow_efficiency_report(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn get_workflow_memory_diagnostics(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+) -> Result<WorkflowMemoryDiagnostics, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    let snapshot = store
+        .get_workflow_snapshot(&session_id)
+        .map_err(|e| e.to_string())?;
+
+    let project_root = snapshot
+        .workflow
+        .agent_config
+        .as_deref()
+        .and_then(AgentConfig::from_json)
+        .and_then(|config| config.allowed_paths)
+        .and_then(|paths| paths.first().cloned())
+        .map(PathBuf::from);
+
+    let memory_manager = MemoryManager::new(project_root);
+    let project_key = memory_manager.project_key().map(str::to_string);
+    let global_candidates = store
+        .list_memory_candidates(Some("global"), None, None, 100)
+        .map_err(|e| e.to_string())?;
+    let project_candidates = store
+        .list_memory_candidates(Some("project"), project_key.as_deref(), None, 100)
+        .map_err(|e| e.to_string())?;
+
+    Ok(WorkflowMemoryDiagnostics {
+        global_memory: memory_manager
+            .read(crate::workflow::react::memory::MemoryScope::Global)
+            .map_err(|e| e.to_string())?,
+        project_memory: memory_manager
+            .read(crate::workflow::react::memory::MemoryScope::Project)
+            .map_err(|e| e.to_string())?,
+        project_key,
+        global_candidates,
+        project_candidates,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use tempfile::tempdir;
 
     #[test]
     fn test_compat_wait_reason_from_snapshot_status() {
@@ -4532,5 +4683,29 @@ mod tests {
             Some(ManagedSessionStatus::Failed)
         ));
         assert!(!should_inject_terminal_user_message_into_live_session(None));
+    }
+
+    #[test]
+    fn test_reset_workflow_planning_note_is_lazy_for_missing_workspace() {
+        let root = tempdir().unwrap();
+        let allowed_roots = vec![root.path().to_path_buf()];
+
+        reset_workflow_planning_note(&allowed_roots).unwrap();
+
+        assert!(!root.path().join(".cs").exists());
+        assert!(!root.path().join(".cs").join("note.md").exists());
+    }
+
+    #[test]
+    fn test_reset_workflow_planning_note_clears_existing_note() {
+        let root = tempdir().unwrap();
+        let planning_root = root.path().join(".cs");
+        std::fs::create_dir_all(&planning_root).unwrap();
+        let note_path = planning_root.join("note.md");
+        std::fs::write(&note_path, "stale plan").unwrap();
+
+        reset_workflow_planning_note(&[root.path().to_path_buf()]).unwrap();
+
+        assert_eq!(std::fs::read_to_string(note_path).unwrap(), "");
     }
 }

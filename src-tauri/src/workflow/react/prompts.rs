@@ -665,7 +665,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 /// Memory Analyzer System Prompt
 /// Used to analyze user inputs after task completion and determine what to remember.
-pub const MEMORY_ANALYZER_SYSTEM_PROMPT: &str = r#"You are a high-fidelity Memory Analyzer. Your task is to extract long-term user preferences, technical constraints, and project-specific facts to maintain the user's "Digital Brain".
+pub const MEMORY_ANALYZER_SYSTEM_PROMPT: &str = r#"You are a multilingual Memory Analyzer. Your task is to extract durable memory candidates from user inputs across any language.
 
 ## Core Responsibilities
 
@@ -683,12 +683,11 @@ pub const MEMORY_ANALYZER_SYSTEM_PROMPT: &str = r#"You are a high-fidelity Memor
 - Do not record XML/HTML wrapper syntax itself as memory content.
 
 **Judgment Criteria**:
-- If user mentions the same preference **multiple times** → Record as persistent preference
-- If the user states a clear cross-session or project-wide rule even once and the wording is explicit, record it immediately
-- If user uses **emphatic language** ("always", "never", "must", "不要", "禁止") → Record as constraint
-- If information is **relevant across multiple sessions** → Record as fact
-- If user specifies **project-level coding style** (comment language, naming, formatting) → Record to Project Memory as convention
-- If information is **only relevant to current task** (e.g., "implement this feature", "fix this bug") → Do not record
+- Work semantically, not by exact keyword matching. The user may speak any language.
+- Extract only information that is likely to matter across multiple future sessions or across all work in the current project.
+- If the user states a clear cross-session or project-wide rule even once and the wording is explicit, extract it immediately as a candidate.
+- If information is only relevant to the current task (e.g. "implement this feature", "fix this bug", "check this file"), do not extract it.
+- Prefer under-extraction over over-extraction, but do not return empty output if clear durable preferences or constraints exist.
 
 **Critical Distinction: Project Preference vs Task Request**
 - "在这个项目中不要用中文注释" → **Project Preference** → Record to project memory
@@ -696,96 +695,26 @@ pub const MEMORY_ANALYZER_SYSTEM_PROMPT: &str = r#"You are a high-fidelity Memor
 - "本项目代码注释必须用英文" → **Project Preference** → Record to project memory
 - "请用英文写这个函数的注释" → **Task Request** → Do not record
 
-### 2. Synthesize
-**Compare and Integrate**:
-- Compare new findings with existing memories
-- Handle contradictions: **Always prioritize the latest stated preference**
-- Supplement with non-conflicting new information
-- Remove old entries that are explicitly negated
+### 2. Scope Selection
+- `globalCandidates`: Cross-project preferences, habits, communication language, general engineering standards.
+- `projectCandidates`: Project-specific conventions, comment language, naming style, framework rules, repository-local constraints.
 
-**Conflict Resolution Rules**:
-1. Latest statement > Old statement (Temporal Priority)
-2. Specific statement > Vague statement (Clarity Priority)
-3. Emphatic tone > Neutral tone (Intensity Priority)
-4. Repeated occurrence > Single mention (Frequency Priority)
+### 3. Candidate Shape
+Each candidate must contain:
+- `category`: one of `preference`, `constraint`, `fact`, `skill`, `convention`, `architecture`, `tooling`, `config`
+- `content`: concise normalized memory text in English or the user's original language, whichever preserves meaning better
+- `confidence`: float between `0.0` and `1.0`
+- `explicitness`: integer `0-3`
 
-### 3. Prune & Update
-**Memory Management Principles**:
+`explicitness` guidance:
+- `3`: explicit durable rule or hard constraint
+- `2`: strong preference or clear convention
+- `1`: weak but plausible long-term signal
+- `0`: should usually be omitted instead of emitted
 
-#### A. Line Limit Strategy (CRITICAL)
-Only the latest 300 lines of each memory file are loaded in future sessions. You MUST:
-- **Priority Retention**: Technical constraints, architectural decisions, core toolchain
-- **Prunable**: Development preferences, minor configurations, personal workflow habits
-- **First to Delete**: Obsolete information, duplicate entries, transient context
+### 4. Conflict Awareness
 
-#### B. Memory Optimization Algorithm
-When approaching the 300-line limit:
-1. **Merge Similar Entries**:
-   - Combine multiple preferences on the same topic into one comprehensive entry
-   - Merge similar tool configurations into a single rule
-2. **Compress Format**:
-   - Use concise language, avoid redundant descriptions
-   - Minimize empty lines and formatting overhead
-3. **Priority Ranking**:
-   - Sort entries by importance and usage frequency
-   - Least important entries are pruned first
-
-#### C. Real-time Synchronization
-- Update memories based on the user's current status, role, and evolving habits
-- Remove old entries that are no longer relevant
-- Adjust priorities based on the user's current project
-
-### 4. De-duplicate
-**Active Redundancy Management**:
-- Regularly scan memory for duplicate or similar entries
-- Merge different expressions of the same information
-- Remove completely obsolete or invalid entries
-
-## Memory Types & Format
-
-### Global Memory Examples
-```markdown
-## preference
-- User prefers `snake_case` for all Rust variables across all projects
-- User prefers `Result<T, E>` for error handling, avoids `unwrap()`
-- Work habit: Focused coding in mornings, code reviews and meetings in afternoons
-
-## constraint
-- No `unsafe` blocks in production code
-- API responses must include complete error context
-- All database operations must be wrapped in transactions
-
-## fact
-- User is a Senior Backend Engineer specializing in Distributed Systems
-- Primary languages: Rust (70%), Go (20%), TypeScript (10%)
-- Work environment: macOS + Neovim + tmux
-
-## skill
-- Expert: Rust async programming, microservices architecture, database optimization
-- Proficient: Docker orchestration, Kubernetes, CI/CD pipelines
-```
-
-### Project Memory Examples
-```markdown
-## architecture
-- Frontend: Vue 3 + TypeScript + Pinia state management
-- Backend: Rust + Tauri framework + SQLite database
-- Build: pnpm (frontend), cargo (backend)
-
-## convention
-- Use `useXStore` pattern for Pinia stores
-- All API errors must be converted to unified `AppError` type
-- CSS class names follow BEM naming convention
-
-## tooling
-- Code formatting: prettier (frontend), rustfmt (backend)
-- Testing frameworks: vitest (frontend), cargo test (backend)
-- Package manager: pnpm (npm or yarn prohibited)
-
-## config
-- TypeScript: strict mode enabled, target ES2022
-- Rust: 2021 edition, all unsafe code disabled
-```
+If a current memory already contains the same idea, do not emit a duplicate candidate unless the new message clearly replaces or negates the old one.
 
 ## Output Format (STRICT)
 
@@ -796,61 +725,19 @@ You MUST return a valid JSON object with this exact structure:
 {
   "globalMemory": null,
   "projectMemory": null,
-  "reasoning": "Brief explanation of what was added/removed and why"
+  "globalCandidates": [],
+  "projectCandidates": [],
+  "reasoning": "Brief explanation of what was extracted and why"
 }
 
 ### JSON Rules:
-1. Use `null` for unchanged memories (do not omit the key)
-2. Return COMPLETE memory content when changed (not just deltas)
-3. Maintain existing entries unless explicitly removing
-4. Use compact markdown format: `## category` headers, bullet points for entries
-5. Standard categories: preference, constraint, fact, convention, architecture, tooling, config, skill
+1. Keep `globalMemory` and `projectMemory` as `null`
+2. Populate `globalCandidates` and `projectCandidates` with zero or more candidates
+3. Do not emit duplicates within the same array
+4. Use concise `content`
+5. If nothing durable is present, return empty arrays
 
-### Memory File Format Example (Compact)
-
-```markdown
-## preference
-- User prefers `snake_case` for all Rust variables
-## constraint
-- Never use `unwrap()` in production code
-## fact
-- User is a Senior Backend Engineer
-## skill
-- Expert: Rust async programming
-```
-
-## Decision Flowchart (Internal Reference)
-
-User Input → Analysis:
-1. **Mentioned multiple times?** Yes → Persistent preference
-2. **Uses absolute language?** Yes → Constraint
-3. **About project coding style/convention?** Yes → Project Memory (convention)
-4. **About project structure?** Yes → Architecture
-5. **About user capabilities?** Yes → Skill
-6. **Is it a one-off task request without cross-session value?** Yes → Do not record
-7. **Otherwise** → Fact
-
-When updating memory:
-1. **Any conflicts?** Yes → Apply conflict resolution rules
-2. **Approaching 300 lines?** Yes → Apply pruning strategy
-3. **Needs merging?** Yes → Merge similar entries
-4. **Needs deletion?** Yes → Remove obsolete/low-priority entries
-
-Final output:
-1. **Any changes?** Yes → Generate complete updated memory
-2. **No changes?** No → Set memory fields to `null`
-3. **Always include**: Concise reasoning explanation
-
-## Quality Checklist
-
-Before processing each user input, verify:
-- [ ] Does it comply with the 300-line limit requirement?
-- [ ] Have all duplicate entries been removed?
-- [ ] Has latest-priority conflict resolution been applied?
-- [ ] Is the output JSON format correct?
-- [ ] Is the reasoning concise and clear?
-
-Remember: Conservative recording is better than over-recording. When in doubt, do not record."#;
+Remember: semantic multilingual extraction is more important than keyword matching. When in doubt between "temporary task request" and "durable preference", prefer not to extract."#;
 
 /// Memory Analyzer User Prompt Template
 /// Placeholders: {global_memory}, {project_memory}, {user_inputs}
@@ -871,14 +758,13 @@ pub const MEMORY_ANALYZER_USER_PROMPT_TEMPLATE: &str = r#"Please analyze the fol
 
 ---
 
-Analyze the above inputs and return the updated memories following the criteria and format specified in your instructions.
+Analyze the above inputs and return structured durable memory candidates following the criteria and format specified in your instructions.
 
 Remember:
-- Return `"globalMemory": null` if no changes needed
-- Return `"projectMemory": null` if no changes needed
-- Return COMPLETE content when changed, not just deltas
-- Be conservative: only record things that are clearly preferences/conventions/facts
-- **300 LINE LIMIT**: Ensure the updated memory stays within 300 lines while keeping the most critical information.
-- **COMPACT**: Remove unnecessary empty lines to maximize information density."#;
+- Return `"globalMemory": null`
+- Return `"projectMemory": null`
+- Prefer `globalCandidates` / `projectCandidates` over direct memory rewrites
+- Be multilingual and semantic, not keyword-bound
+- Be conservative: only extract things that are clearly durable preferences, conventions, facts, or constraints."#;
 
 pub const APPROVED_PLAN_EXECUTION_REMINDER: &str = r#"The plan has been approved and the workflow has switched to implementation. Use the approved plan as execution guidance. Do not assume an approved plan automatically requires todo tracking. Use todo* tools only when execution has multiple concrete units, meaningful verification steps, or real interruption risk; skip todos for single-step or immediately verifiable local work."#;

@@ -120,6 +120,37 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "idx_workflow_events_session_id_id",
         "CREATE INDEX IF NOT EXISTS idx_workflow_events_session_id_id ON workflow_events(session_id, id)"
     ),
+    // Memory candidate table for deterministic cross-session promotion.
+    (
+        "memory_candidates",
+        "CREATE TABLE IF NOT EXISTS memory_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT NOT NULL,
+            category TEXT NOT NULL,
+            content TEXT NOT NULL,
+            normalized_content TEXT NOT NULL,
+            project_key TEXT NOT NULL DEFAULT '',
+            project_root TEXT,
+            source_session_id TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0.0,
+            explicitness INTEGER NOT NULL DEFAULT 0,
+            occurrence_count INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )"
+    ),
+    (
+        "idx_memory_candidates_scope_project_status",
+        "CREATE INDEX IF NOT EXISTS idx_memory_candidates_scope_project_status
+         ON memory_candidates(scope, project_key, status, updated_at DESC)"
+    ),
+    (
+        "idx_memory_candidates_unique_content",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_candidates_unique_content
+         ON memory_candidates(scope, category, normalized_content, project_key)"
+    ),
 ];
 
 fn ensure_agent_hierarchy_columns(conn: &Connection) -> Result<(), StoreError> {
@@ -272,10 +303,95 @@ fn ensure_workflow_message_columns(conn: &Connection) -> Result<(), StoreError> 
     Ok(())
 }
 
+fn ensure_memory_candidate_table(conn: &Connection) -> Result<(), StoreError> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS memory_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT NOT NULL,
+            category TEXT NOT NULL,
+            content TEXT NOT NULL,
+            normalized_content TEXT NOT NULL,
+            project_key TEXT NOT NULL DEFAULT '',
+            project_root TEXT,
+            source_session_id TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0.0,
+            explicitness INTEGER NOT NULL DEFAULT 0,
+            occurrence_count INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )",
+        [],
+    )?;
+
+    if !column_exists(conn, "memory_candidates", "project_key")? {
+        conn.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN project_key TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "memory_candidates", "project_root")? {
+        conn.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN project_root TEXT",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "memory_candidates", "confidence")? {
+        conn.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN confidence REAL NOT NULL DEFAULT 0.0",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "memory_candidates", "explicitness")? {
+        conn.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN explicitness INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "memory_candidates", "occurrence_count")? {
+        conn.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN occurrence_count INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "memory_candidates", "status")? {
+        conn.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "memory_candidates", "last_seen_at")? {
+        conn.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "memory_candidates", "updated_at")? {
+        conn.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP",
+            [],
+        )?;
+    }
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memory_candidates_scope_project_status
+         ON memory_candidates(scope, project_key, status, updated_at DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_candidates_unique_content
+         ON memory_candidates(scope, category, normalized_content, project_key)",
+        [],
+    )?;
+    Ok(())
+}
+
 pub fn ensure(conn: &Connection) -> Result<(), StoreError> {
     ensure_agent_hierarchy_columns(conn)?;
     ensure_workflow_parent_column(conn)?;
     ensure_workflow_message_columns(conn)?;
+    ensure_memory_candidate_table(conn)?;
     // Keep the AI projection cache table present for existing databases.
     // Even though it is persisted, it remains rebuildable derived data.
     conn.execute(

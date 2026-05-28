@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use rust_i18n::t;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::time::{sleep, Duration};
@@ -10,9 +10,9 @@ use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ccproxy::ChatProtocol;
-use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
+use crate::db::{Agent, MainStore, MemoryCandidateUpsert, ModelConfig, WorkflowMessage};
 use crate::tools::{
-    ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
+    ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
     TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
     TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_WEB_FETCH,
 };
@@ -1332,18 +1332,22 @@ impl WorkflowExecutor {
         self.sync_runtime_skills_from_agent_config();
 
         // Get MCP tool summaries for workflow
-        self.llm_processor.mcp_tool_summaries = self
-            .global_tool_manager
-            .get_tool_calling_spec(Some(ToolScope::Workflow), None)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|t| t.name.contains(MCP_TOOL_NAME_SPLIT))
-            .map(|mut t| {
-                t.input_schema = serde_json::json!({});
-                t
-            })
-            .collect();
+        self.llm_processor.mcp_tool_summaries =
+            if self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
+                self.global_tool_manager
+                    .get_tool_calling_spec(Some(ToolScope::Workflow), None)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|t| t.name.contains(MCP_TOOL_NAME_SPLIT))
+                    .map(|mut t| {
+                        t.input_schema = serde_json::json!({});
+                        t
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
         self.register_foundation_tools().await?;
 
@@ -1802,6 +1806,7 @@ impl WorkflowExecutor {
             .policy
             .allowed_categories
             .contains(&ToolCategory::System)
+            && self.policy.allowed_categories.contains(&ToolCategory::Mcp)
         {
             // Check if there are any MCP tools
             let has_mcp_tools = self
@@ -4203,46 +4208,179 @@ impl WorkflowExecutor {
         .await
         .map_err(|e| WorkflowEngineError::General(format!("Memory analysis failed: {}", e)))?;
 
-        // 4. Update memories if changed
         let mut updated_global = false;
-        if let Some(new_global) = analysis.global_memory {
-            let old_global = current_global.unwrap_or_default();
-            if new_global.trim() != old_global.trim() {
-                self.memory_manager
-                    .write(MemoryScope::Global, &new_global)
-                    .map_err(|e| {
-                        WorkflowEngineError::General(format!(
-                            "Failed to write global memory: {}",
-                            e
-                        ))
-                    })?;
-                updated_global = true;
+        let mut updated_project = false;
+
+        let project_key = self
+            .memory_manager
+            .project_key()
+            .map(str::to_string)
+            .unwrap_or_default();
+        let project_root = self
+            .memory_manager
+            .project_root()
+            .map(|root| root.to_string_lossy().to_string());
+
+        let store = self.context.main_store.read().map_err(|e| {
+            WorkflowEngineError::General(format!("Failed to lock MainStore: {}", e))
+        })?;
+
+        let mut promoted_global_entries: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut promoted_project_entries: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+        for candidate in analysis.global_candidates {
+            let stored = store
+                .upsert_memory_candidate(&MemoryCandidateUpsert {
+                    scope: "global".to_string(),
+                    category: candidate.category.clone(),
+                    content: candidate.content.clone(),
+                    project_key: String::new(),
+                    project_root: None,
+                    source_session_id: self.session_id.clone(),
+                    confidence: candidate.confidence,
+                    explicitness: candidate.explicitness,
+                })
+                .map_err(|e| {
+                    WorkflowEngineError::General(format!(
+                        "Failed to upsert global memory candidate: {}",
+                        e
+                    ))
+                })?;
+            if Self::should_promote_memory_candidate(stored.explicitness, stored.occurrence_count) {
+                if let Some(id) = stored.id {
+                    store
+                        .update_memory_candidate_status(id, "promoted")
+                        .map_err(|e| {
+                            WorkflowEngineError::General(format!(
+                                "Failed to promote global memory candidate: {}",
+                                e
+                            ))
+                        })?;
+                }
+                promoted_global_entries
+                    .entry(stored.category)
+                    .or_default()
+                    .push(stored.content);
+            }
+        }
+
+        for candidate in analysis.project_candidates {
+            let stored = store
+                .upsert_memory_candidate(&MemoryCandidateUpsert {
+                    scope: "project".to_string(),
+                    category: candidate.category.clone(),
+                    content: candidate.content.clone(),
+                    project_key: project_key.clone(),
+                    project_root: project_root.clone(),
+                    source_session_id: self.session_id.clone(),
+                    confidence: candidate.confidence,
+                    explicitness: candidate.explicitness,
+                })
+                .map_err(|e| {
+                    WorkflowEngineError::General(format!(
+                        "Failed to upsert project memory candidate: {}",
+                        e
+                    ))
+                })?;
+            if Self::should_promote_memory_candidate(stored.explicitness, stored.occurrence_count) {
+                if let Some(id) = stored.id {
+                    store
+                        .update_memory_candidate_status(id, "promoted")
+                        .map_err(|e| {
+                            WorkflowEngineError::General(format!(
+                                "Failed to promote project memory candidate: {}",
+                                e
+                            ))
+                        })?;
+                }
+                promoted_project_entries
+                    .entry(stored.category)
+                    .or_default()
+                    .push(stored.content);
+            }
+        }
+
+        let promoted_global = store
+            .list_memory_candidates(Some("global"), None, Some("promoted"), 200)
+            .map_err(|e| {
+                WorkflowEngineError::General(format!(
+                    "Failed to load promoted global memories: {}",
+                    e
+                ))
+            })?;
+        for candidate in promoted_global {
+            promoted_global_entries
+                .entry(candidate.category)
+                .or_default()
+                .push(candidate.content);
+        }
+
+        if self.memory_manager.has_project_memory() {
+            let promoted_project = store
+                .list_memory_candidates(
+                    Some("project"),
+                    Some(project_key.as_str()),
+                    Some("promoted"),
+                    200,
+                )
+                .map_err(|e| {
+                    WorkflowEngineError::General(format!(
+                        "Failed to load promoted project memories: {}",
+                        e
+                    ))
+                })?;
+            for candidate in promoted_project {
+                promoted_project_entries
+                    .entry(candidate.category)
+                    .or_default()
+                    .push(candidate.content);
+            }
+        }
+
+        drop(store);
+
+        if !promoted_global_entries.is_empty() {
+            updated_global = self
+                .memory_manager
+                .merge_entries(MemoryScope::Global, &promoted_global_entries)?
+                .is_some();
+            if updated_global {
                 log::info!(
-                    "[Workflow][session={}][phase=memory] Global memory updated",
+                    "[Workflow][session={}][phase=memory] Global memory updated from promoted candidates",
                     self.session_id
                 );
             }
         }
 
-        let mut updated_project = false;
+        if self.memory_manager.has_project_memory() && !promoted_project_entries.is_empty() {
+            updated_project = self
+                .memory_manager
+                .merge_entries(MemoryScope::Project, &promoted_project_entries)?
+                .is_some();
+            if updated_project {
+                log::info!(
+                    "[Workflow][session={}][phase=memory] Project memory updated from promoted candidates",
+                    self.session_id
+                );
+            }
+        }
+
+        if let Some(new_global) = analysis.global_memory {
+            let old_global = current_global.unwrap_or_default();
+            if new_global.trim() != old_global.trim() {
+                self.memory_manager
+                    .write(MemoryScope::Global, &new_global)?;
+                updated_global = true;
+            }
+        }
+
         if let Some(new_project) = analysis.project_memory {
             let old_project = current_project.unwrap_or_default();
-            if new_project.trim() != old_project.trim() {
-                if self.memory_manager.has_project_memory() {
-                    self.memory_manager
-                        .write(MemoryScope::Project, &new_project)
-                        .map_err(|e| {
-                            WorkflowEngineError::General(format!(
-                                "Failed to write project memory: {}",
-                                e
-                            ))
-                        })?;
-                    updated_project = true;
-                    log::info!(
-                        "[Workflow][session={}][phase=memory] Project memory updated",
-                        self.session_id
-                    );
-                }
+            if new_project.trim() != old_project.trim() && self.memory_manager.has_project_memory()
+            {
+                self.memory_manager
+                    .write(MemoryScope::Project, &new_project)?;
+                updated_project = true;
             }
         }
 
@@ -4254,6 +4392,10 @@ impl WorkflowExecutor {
         }
 
         Ok(())
+    }
+
+    fn should_promote_memory_candidate(explicitness: i32, occurrence_count: i32) -> bool {
+        explicitness >= 3 || occurrence_count >= 2
     }
 
     fn sanitize_user_input_for_memory_analysis(content: &str) -> String {

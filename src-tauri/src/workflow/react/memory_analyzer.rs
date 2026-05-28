@@ -1,49 +1,25 @@
 //! Memory analyzer for ChatSpeed workflow engine.
 //!
-//! Performs memory analysis using a separate LLM session after task completion.
-//! This runs as an independent analysis step to determine what memories should
-//! be recorded from the user's inputs.
+//! The analyzer prefers structured LLM extraction for multilingual support,
+//! and falls back to deterministic heuristics when the model call fails or
+//! returns invalid output.
 
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::{ChatMetadata, ChatResponse};
 use crate::ccproxy::ChatProtocol;
+use tokio::sync::mpsc;
 
 use super::error::WorkflowEngineError;
-use super::memory::MemoryAnalysisResult;
+use super::memory::{normalize_memory_entry, MemoryAnalysisResult, MemoryCandidateDraft};
 
 /// Memory analyzer for task completion memory updates.
-///
-/// Analyzes user inputs and existing memories to determine what should be
-/// recorded for future sessions.
 pub struct MemoryAnalyzer;
 
 impl MemoryAnalyzer {
-    /// Analyzes user inputs and updates memory files.
-    ///
-    /// This method:
-    /// 1. Collects user inputs from the session
-    /// 2. Reads current memories
-    /// 3. Calls the AI with a specialized prompt
-    /// 4. Parses the AI's response
-    /// 5. Updates memory files if changes are needed
-    ///
-    /// # Arguments
-    /// * `user_inputs` - Vector of user messages from the session
-    /// * `current_global_memory` - Current global memory content
-    /// * `current_project_memory` - Current project memory content
-    /// * `chat_state` - Chat state for LLM access
-    /// * `session_id` - Session identifier
-    /// * `provider_id` - AI provider ID
-    /// * `model_name` - Model name to use
-    ///
-    /// # Returns
-    /// * `Ok(MemoryAnalysisResult)` - Analysis result with any memory updates
-    /// * `Err(WorkflowEngineError)` - If analysis fails
     pub async fn analyze(
         user_inputs: Vec<String>,
         current_global_memory: Option<String>,
@@ -53,17 +29,18 @@ impl MemoryAnalyzer {
         provider_id: i64,
         model_name: &str,
     ) -> Result<MemoryAnalysisResult, WorkflowEngineError> {
-        // Skip if no user inputs
         if user_inputs.is_empty() {
             return Ok(MemoryAnalysisResult {
                 global_memory: None,
                 project_memory: None,
+                global_candidates: Vec::new(),
+                project_candidates: Vec::new(),
                 reasoning: Some("No user inputs to analyze".to_string()),
             });
         }
 
         log::info!(
-            "[Workflow][session={}][phase=memory] Memory analyzer LLM request starting: provider_id={}, model={}, user_inputs={}, has_global_memory={}, has_project_memory={}",
+            "[Workflow][session={}][phase=memory] Memory analyzer request starting: provider_id={}, model={}, user_inputs={}, has_global_memory={}, has_project_memory={}",
             session_id,
             provider_id,
             model_name,
@@ -78,7 +55,50 @@ impl MemoryAnalyzer {
                 .unwrap_or(false)
         );
 
-        // Get chat interface
+        let llm_result = Self::analyze_with_llm(
+            &user_inputs,
+            current_global_memory,
+            current_project_memory,
+            chat_state,
+            session_id,
+            provider_id,
+            model_name,
+        )
+        .await;
+
+        let mut result = match llm_result {
+            Ok(result) => {
+                log::info!(
+                    "[Workflow][session={}][phase=memory] Memory analyzer used structured LLM extraction",
+                    session_id
+                );
+                result
+            }
+            Err(error) => {
+                log::warn!(
+                    "[Workflow][session={}][phase=memory] Memory analyzer LLM extraction failed, falling back to heuristics: {}",
+                    session_id,
+                    error
+                );
+                Self::analyze_with_heuristics(&user_inputs)
+            }
+        };
+
+        Self::dedupe_candidates(&mut result.global_candidates);
+        Self::dedupe_candidates(&mut result.project_candidates);
+
+        Ok(result)
+    }
+
+    async fn analyze_with_llm(
+        user_inputs: &[String],
+        current_global_memory: Option<String>,
+        current_project_memory: Option<String>,
+        chat_state: Arc<ChatState>,
+        session_id: &str,
+        provider_id: i64,
+        model_name: &str,
+    ) -> Result<MemoryAnalysisResult, WorkflowEngineError> {
         let chat_interface = {
             let mut chats_guard = chat_state.chats.lock().await;
             let protocol = ChatProtocol::OpenAI;
@@ -91,24 +111,18 @@ impl MemoryAnalyzer {
                 .clone()
         };
 
-        // Build prompts
         let system_prompt = super::prompts::MEMORY_ANALYZER_SYSTEM_PROMPT;
+        let user_prompt = super::prompts::MEMORY_ANALYZER_USER_PROMPT_TEMPLATE
+            .replace(
+                "{global_memory}",
+                &current_global_memory.unwrap_or_default(),
+            )
+            .replace(
+                "{project_memory}",
+                &current_project_memory.unwrap_or_default(),
+            )
+            .replace("{user_inputs}", &user_inputs.join("\n\n---\n\n"));
 
-        let user_prompt = format!(
-            "{}",
-            super::prompts::MEMORY_ANALYZER_USER_PROMPT_TEMPLATE
-                .replace(
-                    "{global_memory}",
-                    &current_global_memory.unwrap_or_default()
-                )
-                .replace(
-                    "{project_memory}",
-                    &current_project_memory.unwrap_or_default()
-                )
-                .replace("{user_inputs}", &user_inputs.join("\n\n---\n\n"))
-        );
-
-        // Build messages
         let messages = vec![
             serde_json::json!({
                 "role": "system",
@@ -120,18 +134,16 @@ impl MemoryAnalyzer {
             }),
         ];
 
-        // Call LLM with streaming
-        let (tx, _rx) = mpsc::channel::<Arc<ChatResponse>>(100);
-
+        let (tx, _rx) = mpsc::channel::<Arc<ChatResponse>>(32);
         let response = chat_interface
             .chat(
                 provider_id,
                 model_name,
                 format!("{}-memory", session_id),
                 messages,
-                None, // No tools needed for analysis
+                None,
                 Some(ChatMetadata {
-                    temperature: Some(0.3), // Low temperature for consistent analysis
+                    temperature: Some(0.1),
                     ..Default::default()
                 }),
                 move |chunk| {
@@ -143,51 +155,201 @@ impl MemoryAnalyzer {
                 WorkflowEngineError::General(format!("Memory analysis LLM call failed: {}", e))
             })?;
 
-        // Parse JSON response
-        // The response should be a JSON object with global_memory and project_memory
-        let result = Self::parse_response(&response)?;
-
-        log::info!(
-            "[Workflow][session={}][phase=memory] Memory analyzer LLM request finished: global_update={}, project_update={}, has_reasoning={}",
-            session_id,
-            result
-                .global_memory
-                .as_ref()
-                .map(|value| !value.trim().is_empty())
-                .unwrap_or(false),
-            result
-                .project_memory
-                .as_ref()
-                .map(|value| !value.trim().is_empty())
-                .unwrap_or(false),
-            result
-                .reasoning
-                .as_ref()
-                .map(|value| !value.trim().is_empty())
-                .unwrap_or(false)
-        );
-
-        Ok(result)
+        Self::parse_response(&response)
     }
 
-    /// Parses the AI response to extract memory updates.
     fn parse_response(response: &str) -> Result<MemoryAnalysisResult, WorkflowEngineError> {
-        // AI responses are often wrapped in markdown code blocks or contain reasoning text.
-        // Use our utility function to extract and clean the JSON.
         let json_str = crate::libs::util::format_json_str(response);
-
-        // Parse JSON
-        let result: MemoryAnalysisResult = serde_json::from_str(&json_str).map_err(|e| {
+        serde_json::from_str(&json_str).map_err(|e| {
             WorkflowEngineError::General(format!(
                 "Failed to parse memory analysis result: {}. Response: {}",
                 e, response
             ))
-        })?;
-
-        Ok(result)
+        })
     }
 
-    // Removed manual extract_json as it's replaced by crate::libs::util::format_json_str
+    fn analyze_with_heuristics(user_inputs: &[String]) -> MemoryAnalysisResult {
+        let mut global_candidates = Vec::new();
+        let mut project_candidates = Vec::new();
+
+        for input in user_inputs {
+            for fragment in Self::split_candidate_fragments(input) {
+                if let Some(candidate) = Self::build_candidate(&fragment) {
+                    if Self::is_project_scoped(&fragment) {
+                        project_candidates.push(candidate);
+                    } else {
+                        global_candidates.push(candidate);
+                    }
+                }
+            }
+        }
+
+        MemoryAnalysisResult {
+            global_memory: None,
+            project_memory: None,
+            global_candidates,
+            project_candidates,
+            reasoning: Some("Fallback heuristic extraction".to_string()),
+        }
+    }
+
+    fn split_candidate_fragments(input: &str) -> Vec<String> {
+        input
+            .replace(['。', '！', '？', ';', '；'], "\n")
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.len() >= 8)
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn build_candidate(fragment: &str) -> Option<MemoryCandidateDraft> {
+        if Self::looks_like_transient_request(fragment) {
+            return None;
+        }
+
+        let explicitness = Self::explicitness_score(fragment);
+        if explicitness == 0 {
+            return None;
+        }
+
+        let category = if Self::is_constraint(fragment) {
+            "constraint"
+        } else if Self::is_project_scoped(fragment) {
+            "convention"
+        } else {
+            "preference"
+        };
+
+        Some(MemoryCandidateDraft {
+            category: category.to_string(),
+            content: Self::normalize_candidate_content(fragment),
+            confidence: if explicitness >= 3 { 0.95 } else { 0.75 },
+            explicitness,
+        })
+    }
+
+    fn normalize_candidate_content(fragment: &str) -> String {
+        fragment
+            .trim()
+            .trim_start_matches("我觉得")
+            .trim_start_matches("我希望")
+            .trim_start_matches("希望")
+            .trim_start_matches("请")
+            .trim()
+            .to_string()
+    }
+
+    fn dedupe_candidates(candidates: &mut Vec<MemoryCandidateDraft>) {
+        let mut seen = std::collections::HashSet::new();
+        candidates.retain(|candidate| {
+            let key = format!(
+                "{}:{}",
+                candidate.category,
+                normalize_memory_entry(&candidate.content)
+            );
+            seen.insert(key)
+        });
+    }
+
+    fn explicitness_score(fragment: &str) -> i32 {
+        let lower = fragment.to_lowercase();
+        let strong_markers = [
+            "must",
+            "must not",
+            "never",
+            "always",
+            "始终",
+            "forbid",
+            "forbidden",
+            "禁止",
+            "必须",
+            "不要",
+            "一律",
+            "统一",
+        ];
+        if strong_markers.iter().any(|marker| lower.contains(marker)) {
+            return 3;
+        }
+
+        let medium_markers = [
+            "prefer",
+            "preferred",
+            "avoid",
+            "please use",
+            "希望",
+            "尽量",
+            "偏好",
+            "习惯",
+            "建议",
+            "最好",
+        ];
+        if medium_markers.iter().any(|marker| lower.contains(marker)) {
+            return 2;
+        }
+
+        0
+    }
+
+    fn is_project_scoped(fragment: &str) -> bool {
+        let markers = [
+            "本项目",
+            "这个项目",
+            "当前项目",
+            "这个仓库",
+            "代码库",
+            "注释",
+            "命名",
+            "格式化",
+            "pnpm",
+            "cargo",
+            "tauri",
+            "vue",
+            "rust",
+        ];
+        let lower = fragment.to_lowercase();
+        markers
+            .iter()
+            .any(|marker| fragment.contains(marker) || lower.contains(marker))
+    }
+
+    fn is_constraint(fragment: &str) -> bool {
+        let lower = fragment.to_lowercase();
+        [
+            "must", "must not", "never", "forbid", "禁止", "必须", "不要", "不能", "avoid",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    }
+
+    fn looks_like_transient_request(fragment: &str) -> bool {
+        let lower = fragment.to_lowercase();
+        let action_markers = [
+            "修复",
+            "实现",
+            "增加",
+            "新增",
+            "看看",
+            "分析",
+            "排查",
+            "怎么改",
+            "为什么",
+            "fix ",
+            "implement",
+            "add ",
+            "check ",
+            "analyze",
+            "look at",
+        ];
+        let preference_markers = [
+            "must", "never", "always", "prefer", "禁止", "必须", "不要", "偏好", "希望", "尽量",
+        ];
+
+        action_markers.iter().any(|marker| lower.contains(marker))
+            && !preference_markers
+                .iter()
+                .any(|marker| lower.contains(marker))
+    }
 }
 
 #[cfg(test)]
@@ -195,31 +357,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_json_with_code_block() {
-        let response = r#"
-Some text before
-```json
-{"global_memory": null, "project_memory": null, "reasoning": "No changes needed"}
-```
-Some text after
-"#;
-        let json = crate::libs::util::format_json_str(response);
-        assert!(json.contains("global_memory"));
+    fn test_parse_response_with_candidates() {
+        let response = r#"{
+          "globalMemory": null,
+          "projectMemory": null,
+          "globalCandidates": [
+            { "category": "preference", "content": "Use Chinese", "confidence": 0.8, "explicitness": 2 }
+          ],
+          "projectCandidates": [],
+          "reasoning": "ok"
+        }"#;
+        let parsed = MemoryAnalyzer::parse_response(response).unwrap();
+        assert_eq!(parsed.global_candidates.len(), 1);
+        assert_eq!(parsed.global_candidates[0].category, "preference");
     }
 
     #[test]
-    fn test_extract_json_plain() {
-        let response = r#"{"global_memory": null, "project_memory": null}"#;
-        let json = crate::libs::util::format_json_str(response);
-        assert!(json.contains("global_memory"));
+    fn test_build_candidate_extracts_global_preference() {
+        let candidate = MemoryAnalyzer::build_candidate("请始终用中文对话").unwrap();
+        assert_eq!(candidate.category, "preference");
+        assert!(candidate.explicitness >= 2);
     }
 
     #[test]
-    fn test_parse_response() {
-        let json = r#"{"global_memory": null, "project_memory": null, "reasoning": "Test"}"#;
-        let result: MemoryAnalysisResult = serde_json::from_str(json).unwrap();
-        assert!(result.global_memory.is_none());
-        assert!(result.project_memory.is_none());
-        assert!(result.reasoning.is_some());
+    fn test_build_candidate_extracts_project_constraint() {
+        let candidate = MemoryAnalyzer::build_candidate("本项目代码注释必须使用英文").unwrap();
+        assert_eq!(candidate.category, "constraint");
+    }
+
+    #[test]
+    fn test_build_candidate_skips_transient_request() {
+        let candidate = MemoryAnalyzer::build_candidate("帮我修复这个路径守卫 bug");
+        assert!(candidate.is_none());
     }
 }
