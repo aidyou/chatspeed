@@ -1512,8 +1512,21 @@ impl WorkflowExecutor {
                     self.llm_processor.active_provider_id,
                     self.llm_processor.active_model_name.clone(),
                 );
+                let gateway = self.gateway.clone();
+                let session_id = self.session_id.clone();
                 tokio::spawn(async move {
-                    let _ = im.generate_workflow_title(&user_query).await;
+                    if let Ok(title) = im.generate_workflow_title(&user_query).await {
+                        if !title.trim().is_empty() {
+                            let _ = gateway
+                                .send(
+                                    &session_id,
+                                    GatewayPayload::WorkflowTitleUpdated {
+                                        title: title.clone(),
+                                    },
+                                )
+                                .await;
+                        }
+                    }
                 });
             }
         }

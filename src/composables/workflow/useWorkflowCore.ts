@@ -846,6 +846,8 @@ export function useWorkflowCore({
                             String(nextConfig.phase || '').toLowerCase() === 'planning'
                         isSyncingWorkflowConfig.value = false
                     }
+                } else if (payload.type === 'workflow_title_updated') {
+                    workflowStore.updateWorkflowTitleLocal(sessionId, payload.title)
                 } else if (payload.type === 'compression_status') {
                     markSessionLiveFromNonTerminalEvent()
                     // Handle context compression status

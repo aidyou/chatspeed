@@ -1289,6 +1289,21 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
+  const updateWorkflowTitleLocal = (workflowId, title) => {
+    if (!workflowId || !title) return;
+    const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
+    if (workflowIndex !== -1) {
+      workflows.value[workflowIndex] = {
+        ...workflows.value[workflowIndex],
+        title
+      };
+    }
+
+    if (currentWorkflowId.value === workflowId && currentWorkflow.value) {
+      currentWorkflow.value.title = title;
+    }
+  };
+
   const loadMessages = async (workflowId) => {
     console.log('workflowStore: loading messages for', workflowId);
     error.value = null;
@@ -1409,6 +1424,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     clearSubAgentProgress,
     updateWorkflowAllowedPaths,
     updateWorkflowFinalAudit,
+    updateWorkflowTitleLocal,
     loadMessages,
     clearCurrentWorkflow,
   };

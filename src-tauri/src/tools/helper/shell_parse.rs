@@ -10,6 +10,17 @@ pub(crate) enum ShellStage {
     },
 }
 
+fn strip_benign_shell_redirection(command: &str) -> String {
+    command
+        .replace("2>&1", " ")
+        .replace("1>&2", " ")
+        .replace("2>/dev/null", " ")
+        .replace("2> /dev/null", " ")
+        .replace("1>/dev/null", " ")
+        .replace("1> /dev/null", " ")
+        .replace("&>/dev/null", " ")
+}
+
 pub(crate) fn split_shell_command_segments(command: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
@@ -134,7 +145,8 @@ pub(crate) fn leading_command_index(tokens: &[String]) -> usize {
 }
 
 pub(crate) fn classify_shell_stage(command: &str) -> Option<ShellStage> {
-    let trimmed = command.trim();
+    let sanitized = strip_benign_shell_redirection(command);
+    let trimmed = sanitized.trim();
     if trimmed.is_empty() || trimmed.contains('\n') {
         return None;
     }
@@ -260,4 +272,31 @@ pub(crate) fn generate_shell_approval_patterns(command: &str) -> Vec<String> {
         }
     }
     patterns
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_shell_stage, generate_shell_approval_patterns, ShellStage};
+
+    #[test]
+    fn classify_shell_stage_ignores_benign_stream_merge_and_tail_filter() {
+        let stage = classify_shell_stage(
+            "cargo check --manifest-path src-tauri/Cargo.toml 2>&1 | tail -10",
+        );
+
+        assert!(matches!(
+            stage,
+            Some(ShellStage::Command { normalized, .. })
+            if normalized.starts_with("cargo check --manifest-path src-tauri/Cargo.toml")
+        ));
+    }
+
+    #[test]
+    fn generate_shell_approval_patterns_keeps_primary_command_with_benign_stream_merge() {
+        let patterns = generate_shell_approval_patterns(
+            "cd . && cargo check --manifest-path src-tauri/Cargo.toml 2>&1 | tail -10",
+        );
+
+        assert_eq!(patterns, vec!["^cargo check($| .*)".to_string()]);
+    }
 }

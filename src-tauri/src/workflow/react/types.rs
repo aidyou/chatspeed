@@ -147,6 +147,10 @@ pub enum GatewayPayload {
     AgentConfigUpdated {
         agent_config: serde_json::Value,
     },
+    /// Workflow title updated asynchronously in the background.
+    WorkflowTitleUpdated {
+        title: String,
+    },
     /// Shell policy updated
     ShellPolicyUpdated {
         policy: Vec<crate::tools::ShellPolicyRule>,

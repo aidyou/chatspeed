@@ -23,8 +23,8 @@ use crate::workflow::react::runtime_observation::{
 };
 use crate::workflow::react::signals::SignalType;
 use crate::workflow::react::types::{
-    ExecutionContext, RuntimeState, StepType, SubAgentCompletion, WaitReason, WorkflowSignal,
-    WorkflowState,
+    ExecutionContext, GatewayPayload, RuntimeState, StepType, SubAgentCompletion, WaitReason,
+    WorkflowSignal, WorkflowState,
 };
 use chrono::{DateTime, Local};
 use glob::glob;
@@ -82,6 +82,7 @@ fn spawn_workflow_title_generation_if_missing(
     user_query: String,
     state: Arc<std::sync::RwLock<MainStore>>,
     chat_state: Arc<ChatState>,
+    gateway: Arc<TauriGateway>,
 ) -> Result<(), String> {
     if user_query.trim().is_empty() {
         return Ok(());
@@ -135,9 +136,21 @@ fn spawn_workflow_title_generation_if_missing(
         model_name,
     );
     tokio::spawn(async move {
-        let _ = intelligence_manager
+        if let Ok(title) = intelligence_manager
             .generate_workflow_title(&user_query)
-            .await;
+            .await
+        {
+            if !title.trim().is_empty() {
+                let _ = gateway
+                    .send(
+                        &session_id,
+                        GatewayPayload::WorkflowTitleUpdated {
+                            title: title.clone(),
+                        },
+                    )
+                    .await;
+            }
+        }
     });
 
     Ok(())
@@ -1093,6 +1106,7 @@ pub async fn create_workflow(
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
+    gateway: State<'_, Arc<TauriGateway>>,
     request: CreateWorkflowRequest,
 ) -> Result<String, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -1162,6 +1176,7 @@ pub async fn create_workflow(
         user_query.to_string(),
         state.inner().clone(),
         chat_state.inner().clone(),
+        gateway.inner().clone(),
     );
 
     Ok(session_id)
@@ -1422,6 +1437,7 @@ pub async fn get_workflow_snapshot(
 pub async fn add_workflow_message(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     chat_state: State<'_, Arc<ChatState>>,
+    gateway: State<'_, Arc<TauriGateway>>,
     message: WorkflowMessage,
 ) -> Result<i64, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -1436,6 +1452,7 @@ pub async fn add_workflow_message(
             message.message.clone(),
             state.inner().clone(),
             chat_state.inner().clone(),
+            gateway.inner().clone(),
         );
     }
 

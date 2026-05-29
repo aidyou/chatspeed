@@ -17,13 +17,20 @@ pub(crate) fn build_shell_tool_result(
     stdout: &str,
     stderr: &str,
 ) -> ToolCallResult {
-    let display_stdout = truncate_with_marker(stdout, MAX_DISPLAY_CHARS);
-    let display_stderr = truncate_with_marker(stderr, MAX_DISPLAY_CHARS);
+    let (normalized_stdout, normalized_stderr) =
+        normalize_shell_output_streams(command_str, exit_code, stdout, stderr);
+    let display_stdout = truncate_with_marker(&normalized_stdout, MAX_DISPLAY_CHARS);
+    let display_stderr = truncate_with_marker(&normalized_stderr, MAX_DISPLAY_CHARS);
     let display_content = format_shell_output(exit_code, &display_stdout, &display_stderr);
 
-    let raw_content = format_shell_output(exit_code, stdout, stderr);
-    let llm_content =
-        reduce_shell_output_for_llm(command_str, exit_code, stdout, stderr, &raw_content);
+    let raw_content = format_shell_output(exit_code, &normalized_stdout, &normalized_stderr);
+    let llm_content = reduce_shell_output_for_llm(
+        command_str,
+        exit_code,
+        &normalized_stdout,
+        &normalized_stderr,
+        &raw_content,
+    );
 
     ToolCallResult::success(
         Some(display_content),
@@ -32,6 +39,58 @@ pub(crate) fn build_shell_tool_result(
             "llm_content": llm_content,
         })),
     )
+}
+
+pub(crate) fn should_render_stderr_line_as_stdout(command_str: &str, line: &str) -> bool {
+    let normalized_command = normalize_command(command_str);
+    if !(is_plain_go_build(&normalized_command) || is_plain_go_test(&normalized_command)) {
+        return false;
+    }
+
+    line.starts_with("go: downloading ")
+}
+
+pub(crate) fn normalize_shell_output_streams(
+    command_str: &str,
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+) -> (String, String) {
+    if exit_code != 0 || stderr.trim().is_empty() {
+        return (stdout.to_string(), stderr.to_string());
+    }
+
+    let mut moved_stderr_lines = Vec::new();
+    let mut remaining_stderr_lines = Vec::new();
+
+    for line in stderr.lines() {
+        if should_render_stderr_line_as_stdout(command_str, line) {
+            moved_stderr_lines.push(line);
+        } else {
+            remaining_stderr_lines.push(line);
+        }
+    }
+
+    if moved_stderr_lines.is_empty() {
+        return (stdout.to_string(), stderr.to_string());
+    }
+
+    let mut normalized_stdout = stdout.to_string();
+    for line in moved_stderr_lines {
+        if !normalized_stdout.is_empty() && !normalized_stdout.ends_with('\n') {
+            normalized_stdout.push('\n');
+        }
+        normalized_stdout.push_str(line);
+        normalized_stdout.push('\n');
+    }
+
+    let normalized_stderr = if remaining_stderr_lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", remaining_stderr_lines.join("\n"))
+    };
+
+    (normalized_stdout, normalized_stderr)
 }
 
 fn format_shell_output(exit_code: i32, stdout: &str, stderr: &str) -> String {
@@ -299,7 +358,10 @@ fn truncate_with_marker(content: &str, max_len: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::build_shell_tool_result;
+    use super::{
+        build_shell_tool_result, normalize_shell_output_streams,
+        should_render_stderr_line_as_stdout,
+    };
 
     #[test]
     fn cargo_check_without_args_uses_tail_for_llm_content() {
@@ -355,6 +417,45 @@ mod tests {
         assert!(llm_content.contains("test line 40"));
         assert!(llm_content.contains("test line 11"));
         assert!(!llm_content.contains("test line 1\n"));
+    }
+
+    #[test]
+    fn go_build_download_progress_is_normalized_to_stdout_on_success() {
+        let (stdout, stderr) = normalize_shell_output_streams(
+            "go build ./...",
+            0,
+            "",
+            "go: downloading github.com/foo/bar v1.0.0\n",
+        );
+
+        assert!(stdout.contains("go: downloading github.com/foo/bar v1.0.0"));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn go_build_download_progress_stays_on_stderr_on_failure() {
+        let (stdout, stderr) = normalize_shell_output_streams(
+            "go build ./...",
+            1,
+            "",
+            "go: downloading github.com/foo/bar v1.0.0\nbuild failed\n",
+        );
+
+        assert!(stdout.is_empty());
+        assert!(stderr.contains("go: downloading github.com/foo/bar v1.0.0"));
+        assert!(stderr.contains("build failed"));
+    }
+
+    #[test]
+    fn go_build_streaming_stderr_download_line_is_stdout_like() {
+        assert!(should_render_stderr_line_as_stdout(
+            "go build ./...",
+            "go: downloading github.com/foo/bar v1.0.0"
+        ));
+        assert!(!should_render_stderr_line_as_stdout(
+            "go build ./...",
+            "some actual error"
+        ));
     }
 
     #[test]

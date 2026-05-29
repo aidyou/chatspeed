@@ -3,6 +3,7 @@ use crate::tools::helper::{
     classify_shell_stage, shell_tokens, split_shell_command_segments, ShellStage,
 };
 use crate::tools::shell_output::build_shell_tool_result;
+use crate::tools::shell_output::should_render_stderr_line_as_stdout;
 use crate::tools::{NativeToolResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
@@ -857,21 +858,36 @@ impl ShellExecute {
                 line = stderr_reader.next_line(), if !stderr_eof => {
                     match line {
                         Ok(Some(l)) => {
-                            full_stderr.push_str(&l);
-                            full_stderr.push('\n');
+                            let timestamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
 
-                            // Send real-time streaming output to frontend
-                            let _ = gateway.send(
-                                session_id,
-                                GatewayPayload::ToolStream {
-                                    tool_id: tool_id.clone(),
-                                    output: format!("[STDERR] {}", l),
-                                    timestamp: std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis() as u64,
-                                },
-                            ).await;
+                            if should_render_stderr_line_as_stdout(command_str, &l) {
+                                full_stdout.push_str(&l);
+                                full_stdout.push('\n');
+
+                                let _ = gateway.send(
+                                    session_id,
+                                    GatewayPayload::ToolStream {
+                                        tool_id: tool_id.clone(),
+                                        output: l.clone(),
+                                        timestamp,
+                                    },
+                                ).await;
+                            } else {
+                                full_stderr.push_str(&l);
+                                full_stderr.push('\n');
+
+                                let _ = gateway.send(
+                                    session_id,
+                                    GatewayPayload::ToolStream {
+                                        tool_id: tool_id.clone(),
+                                        output: format!("[STDERR] {}", l),
+                                        timestamp,
+                                    },
+                                ).await;
+                            }
                             got_output = true;
                         }
                         Ok(None) => {
@@ -1193,6 +1209,33 @@ mod tests {
         );
 
         let result = engine.check("cd . && git diff src/main.rs | head -80", false);
+
+        assert_eq!(result, ShellDecision::Allow);
+    }
+
+    #[test]
+    fn test_policy_engine_custom_rule_allows_benign_stream_merge_and_tail_filter() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_root.clone()],
+            vec![],
+            vec![],
+        )));
+        let engine = ShellPolicyEngine::new(
+            guard,
+            vec![ShellPolicyRule {
+                pattern: "^cargo check($| .*)".to_string(),
+                decision: ShellDecision::Allow,
+                description: None,
+            }],
+        );
+
+        let result = engine.check(
+            "cd . && cargo check --manifest-path src-tauri/Cargo.toml 2>&1 | tail -10",
+            false,
+        );
 
         assert_eq!(result, ShellDecision::Allow);
     }
