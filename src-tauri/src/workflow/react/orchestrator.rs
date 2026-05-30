@@ -18,6 +18,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+pub const FINAL_REVIEWER_BUILTIN_AGENT_ID: &str = "builtin:final-code-reviewer";
+
 /// Represents different types of background tasks for unified management
 pub enum BackgroundTask {
     /// An autonomous sub-agent running its own ReAct loop
@@ -219,6 +221,7 @@ fn persist_sub_agent_completion(
             waiting_on_sub_agent_id: Some(completion.sub_agent_id.clone()),
             sub_agent_sessions: vec![completion.sub_agent_id.clone()],
             pending_sub_agent_completions: Vec::new(),
+            pending_final_review: None,
         });
 
     context
@@ -591,6 +594,14 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
             final_audit: agent_config.final_audit,
+            final_review_mode: Some(
+                if agent_config.final_audit.unwrap_or(false) {
+                    "sub_agent_review"
+                } else {
+                    "off"
+                }
+                .to_string(),
+            ),
             skill_enabled: agent_config.skill_enabled,
             selected_skills: agent_config
                 .selected_skills
@@ -739,6 +750,149 @@ impl TaskTool {
         self.child_agents = child_agents;
         self
     }
+}
+
+pub async fn spawn_call_sub_agent(
+    executor_factory: Arc<dyn SubAgentFactory>,
+    main_store: Arc<std::sync::RwLock<MainStore>>,
+    _gateway: Arc<dyn Gateway>,
+    tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
+    parent_session_id: String,
+    child_agent: Agent,
+    description: &str,
+    prompt: &str,
+) -> Result<Value, WorkflowEngineError> {
+    let task_id = format!(
+        "subagent_{}",
+        tsid_generator
+            .generate()
+            .map_err(|e| WorkflowEngineError::General(e.to_string()))?
+    );
+
+    let sub_executor = executor_factory
+        .create_executor(
+            &child_agent.id,
+            &task_id,
+            prompt,
+            &child_agent.name,
+            Some(parent_session_id.as_str()),
+        )
+        .await
+        .map_err(|e| {
+            WorkflowEngineError::General(format!("Failed to create sub-executor: {}", e))
+        })?;
+
+    {
+        let mut guard = sub_executor.lock().await;
+        guard.init().await?;
+    }
+
+    get_sub_agent_registry().register_sub_agent(task_id.clone(), parent_session_id.clone());
+    if let Err(e) = append_sub_agent_event(
+        &main_store,
+        WorkflowEvent::sub_agent_started(
+            parent_session_id.clone(),
+            task_id.clone(),
+            "call".to_string(),
+        ),
+    ) {
+        log::warn!(
+            "[Workflow][session={}][parent={}][phase=sub_agent_start] Failed to persist sub-agent event: {}",
+            task_id,
+            parent_session_id,
+            e
+        );
+    }
+
+    let exec_clone = sub_executor.clone();
+    let task_id_clone = task_id.clone();
+    let main_store_clone = main_store.clone();
+    BACKGROUND_TASKS.insert(
+        task_id.clone(),
+        BackgroundTask::SubAgent {
+            owner_session_id: Some(parent_session_id.clone()),
+            executor: sub_executor,
+            output_accessible: false,
+        },
+    );
+
+    tokio::spawn(async move {
+        let mut guard = exec_clone.lock().await;
+        let result = guard.run_loop().await;
+        let final_state = guard.state();
+        let messages = guard.messages();
+        let completion_result = build_terminal_sub_agent_result(
+            &task_id_clone,
+            final_state.clone(),
+            &result,
+            &messages,
+        );
+
+        let completion_status = completion_result
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("completed")
+            .to_string();
+        if let Err(e) = append_sub_agent_event(
+            &main_store_clone,
+            WorkflowEvent::sub_agent_completed(
+                parent_session_id.clone(),
+                task_id_clone.clone(),
+                completion_status,
+                completion_result.clone(),
+            ),
+        ) {
+            log::warn!(
+                "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist sub-agent completion event: {}",
+                task_id_clone,
+                parent_session_id,
+                e
+            );
+        }
+
+        let completion =
+            build_sub_agent_completion(&parent_session_id, &task_id_clone, &completion_result);
+        if let Err(e) = persist_sub_agent_completion(&main_store_clone, completion) {
+            log::error!(
+                "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist sub-agent completion: {}",
+                task_id_clone,
+                parent_session_id,
+                e
+            );
+        }
+
+        if let Err(e) = crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
+            &parent_session_id,
+            json!({
+                "type": "sub_agent_complete",
+                "sub_agent_id": task_id_clone,
+                "result": completion_result
+            })
+            .to_string(),
+        ) {
+            log::warn!(
+                "[Workflow][session={}][parent={}][phase=sub_agent_completion] Live signal delivery failed; durable completion will be replayed on recovery: {}",
+                task_id_clone,
+                parent_session_id,
+                e
+            );
+        }
+
+        get_sub_agent_registry().unregister_sub_agent(&task_id_clone);
+        TASK_OUTPUT_THROTTLE.remove(&task_id_clone);
+        crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(
+            &task_id_clone,
+        );
+        BACKGROUND_TASKS.remove(&task_id_clone);
+    });
+
+    Ok(json!({
+        "status": "waiting",
+        "task_id": task_id,
+        "agent_name": child_agent.name,
+        "task": prompt,
+        "message": format!("Task '{}' has been spawned. Parent workflow will wait for completion.", description)
+    }))
 }
 
 #[async_trait]
@@ -1707,6 +1861,7 @@ mod tests {
                         completed_at_ms: chrono::Utc::now().timestamp_millis(),
                         consumed: false,
                     }],
+                    pending_final_review: None,
                 })
                 .expect("failed to upsert execution context");
         }
@@ -1860,6 +2015,7 @@ mod tests {
                         completed_at_ms: chrono::Utc::now().timestamp_millis(),
                         consumed: false,
                     }],
+                    pending_final_review: None,
                 })
                 .expect("failed to upsert execution context");
         }

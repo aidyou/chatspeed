@@ -5,7 +5,7 @@ use crate::db::WorkflowMessage;
 use crate::tools::{TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_WEB_SEARCH};
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
-use crate::workflow::react::prompts::{CONTENT_FILTERING_PROMPT, SELF_REFLECTION_AUDIT_PROMPT};
+use crate::workflow::react::prompts::CONTENT_FILTERING_PROMPT;
 
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -33,29 +33,6 @@ pub struct ToolApprovalReview {
 }
 
 impl IntelligenceManager {
-    fn assistant_calls_completion_tool(message: &WorkflowMessage) -> bool {
-        if message.role != "assistant" {
-            return false;
-        }
-
-        message
-            .metadata
-            .as_ref()
-            .and_then(|meta| meta.get("tool_calls"))
-            .and_then(|tool_calls| tool_calls.as_array())
-            .is_some_and(|tool_calls| {
-                tool_calls.iter().any(|call| {
-                    call.get("name")
-                        .or_else(|| {
-                            call.get("function")
-                                .and_then(|function| function.get("name"))
-                        })
-                        .and_then(|value| value.as_str())
-                        == Some(TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
-                })
-            })
-    }
-
     pub(crate) fn extract_completion_summary(message: &WorkflowMessage) -> String {
         let visible_content = message.message.trim();
         let tool_summary = message
@@ -101,40 +78,6 @@ impl IntelligenceManager {
             (false, None) => visible_content.to_string(),
             (true, None) => String::new(),
         }
-    }
-
-    fn is_user_authored_message(message: &WorkflowMessage) -> bool {
-        message.role == "user" && message.step_type.as_deref().unwrap_or_default() != "observe"
-    }
-
-    fn approved_plan_text(messages: &[WorkflowMessage]) -> String {
-        messages
-            .iter()
-            .rev()
-            .find_map(|message| {
-                if message.message_subtype.as_deref() == Some("approved_plan") {
-                    message
-                        .metadata
-                        .as_ref()
-                        .and_then(|meta| meta.get("plan_content"))
-                        .and_then(|value| value.as_str())
-                        .map(str::to_string)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "No approved plan was provided for this workflow.".to_string())
-    }
-
-    fn todo_status_json(context: &ContextManager) -> String {
-        let Ok(store) = context.main_store.read() else {
-            return "[]".to_string();
-        };
-        store
-            .get_todo_list_for_workflow(&context.session_id)
-            .ok()
-            .and_then(|todos| serde_json::to_string_pretty(&todos).ok())
-            .unwrap_or_else(|| "[]".to_string())
     }
 
     fn truncate_text(value: &str, max_chars: usize) -> String {
@@ -418,174 +361,6 @@ impl IntelligenceManager {
         }
 
         Ok(summary)
-    }
-
-    /// Performs a hidden quality audit before allowing the task to finish.
-    pub async fn run_final_audit(
-        &self,
-        context: &ContextManager,
-    ) -> Result<Option<String>, WorkflowEngineError> {
-        log::info!(
-            "IntelligenceManager {}: Running final quality audit...",
-            self.session_id
-        );
-
-        let messages = context.get_messages_for_llm();
-
-        // 1. Consolidate Mission Context
-        let user_messages: Vec<String> = messages
-            .iter()
-            .filter(|message| Self::is_user_authored_message(message))
-            .map(|m| m.message.clone())
-            .collect();
-
-        let plan_text = Self::approved_plan_text(&messages);
-        let todo_json = Self::todo_status_json(context);
-
-        // 2. Extract Audit Rejection History to ensure consistency
-        let mut audit_history = String::new();
-        for (i, m) in messages.iter().enumerate() {
-            if m.error_type.as_deref() == Some("AuditRejected") {
-                // Find the assistant response that for audit
-                if let Some(next_m) = messages.get(i - 1) {
-                    if next_m.role == "assistant" {
-                        audit_history.push_str(&format!(
-                            "<agent_message>\n{}\n</agent_message>\n\n",
-                            next_m.message
-                        ));
-                    }
-                }
-                audit_history.push_str(&format!(
-                    "<rejection_feedback>\n{}\n</rejection_feedback>\n\n",
-                    m.message
-                ));
-            }
-        }
-
-        let mut history = vec![
-            (serde_json::json!({
-                "role": "system",
-                "content": format!(
-                    "{}\n\n\
-                    AUDIT CONTEXT:\n\n\
-                    <user_messages>\n{}\n</user_messages>\n\n\
-                    <approved_plan>\n{}\n</approved_plan>\n\n\
-                    <todo_status>\n{}\n</todo_status>\n\n\
-                    <previous_audit_feedback>\n{}\n</previous_audit_feedback>",
-                    SELF_REFLECTION_AUDIT_PROMPT,
-                    user_messages.join("\n---\n"),
-                    plan_text,
-                    todo_json,
-                    if audit_history.is_empty() { "None".to_string() } else { audit_history }
-                )
-            })),
-        ];
-
-        // 3. Add the Target Conclusion (The Assistant message calling complete_workflow_with_summary)
-        if let Some(target_msg) = messages
-            .iter()
-            .rev()
-            .find(|m| Self::assistant_calls_completion_tool(m))
-        {
-            history.push(serde_json::json!({
-                "role": "user",
-                "content": format!("<proposed_conclusion>\n{}\n</proposed_conclusion>", Self::extract_completion_summary(target_msg))
-            }));
-        } else {
-            // Fallback: If we can't find it exactly, use the very last assistant message
-            if let Some(last_msg) = messages.iter().rev().find(|m| m.role == "assistant") {
-                history.push(serde_json::json!({
-                    "role": "user",
-                    "content": format!("<proposed_conclusion>\n{}\n</proposed_conclusion>", Self::extract_completion_summary(last_msg))
-                }));
-            }
-        }
-
-        let chat_interface = {
-            let mut chats_guard = self.chat_state.chats.lock().await;
-            chats_guard
-                .entry(crate::ccproxy::ChatProtocol::OpenAI)
-                .or_default()
-                .entry(self.session_id.clone() + "_auditor")
-                .or_insert_with(|| crate::create_chat!(self.chat_state.main_store))
-                .clone()
-        };
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-
-        // Spawn the LLM call in a separate task so we can process the stream concurrently
-        let session_id_audit = self.session_id.clone() + "_auditor";
-        let provider_id = self.audit_provider_id;
-        let model_name = self.audit_model_name.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = chat_interface
-                .chat(
-                    provider_id,
-                    &model_name,
-                    session_id_audit,
-                    history,
-                    None,
-                    None,
-                    move |chunk| {
-                        let _ = tx.try_send(chunk);
-                    },
-                )
-                .await
-            {
-                log::error!("IntelligenceManager audit background task failed: {}", e);
-            }
-        });
-
-        let mut result = String::new();
-        while let Some(chunk) = rx.recv().await {
-            match chunk.r#type {
-                MessageType::Text => {
-                    result.push_str(&chunk.chunk);
-                }
-                MessageType::Finished => {
-                    break;
-                }
-                MessageType::Error => {
-                    log::error!("IntelligenceManager audit LLM error: {}", chunk.chunk);
-                    return Ok(None); // Fail open
-                }
-                _ => {}
-            }
-        }
-
-        let result = result.trim();
-
-        let audit_json: serde_json::Value =
-            match serde_json::from_str(crate::libs::util::format_json_str(result).as_str()) {
-                Ok(v) => v,
-                Err(_) => {
-                    // Fallback for non-JSON responses
-                    let result_upper = result.to_uppercase();
-                    if result_upper.contains("APPROVED") && !result_upper.contains("REJECTED") {
-                        serde_json::json!({ "approved": true })
-                    } else {
-                        let feedback = if result_upper.contains("REJECTED:") {
-                            let idx = result_upper.find("REJECTED:").unwrap();
-                            result[idx + 9..].trim().to_string()
-                        } else {
-                            result.to_string()
-                        };
-                        serde_json::json!({ "approved": false, "reason": feedback })
-                    }
-                }
-            };
-
-        if audit_json["approved"].as_bool().unwrap_or(false) {
-            Ok(None)
-        } else {
-            let feedback = audit_json["reason"].as_str().unwrap_or("").trim();
-            if feedback.is_empty() || feedback.to_uppercase() == "REJECTED" {
-                Ok(Some("The conclusion was rejected by audit. Please review the global goals and ensure all requirements are addressed in your final report.".to_string()))
-            } else {
-                Ok(Some(feedback.to_string()))
-            }
-        }
     }
 
     /// Reviews a proposed tool call in smart approval mode.

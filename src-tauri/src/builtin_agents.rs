@@ -362,18 +362,6 @@ pub fn sync_builtin_agents_if_needed(
 ) -> Result<(), String> {
     let current_app_version = app.package_info().version.to_string();
 
-    #[cfg(not(debug_assertions))]
-    {
-        let last_synced_version = main_store
-            .read()
-            .map_err(|e| e.to_string())?
-            .get_config(CFG_BUILTIN_AGENTS_LAST_SYNCED_APP_VERSION, String::new());
-
-        if last_synced_version == current_app_version {
-            return Ok(());
-        }
-    }
-
     let builtin_agents_root = match resolve_builtin_agents_root() {
         Some(path) => path,
         None => {

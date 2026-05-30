@@ -11,6 +11,7 @@ pub const TOOL_PLAN_EDIT_NOTE: &str = "plan_edit_note";
 pub const TOOL_LIST_DIR: &str = "list_dir";
 pub const TOOL_GLOB: &str = "glob";
 pub const TOOL_GREP: &str = "grep";
+pub const TOOL_GIT_DIFF: &str = "git_diff";
 pub const TOOL_WEB_SEARCH: &str = "web_search";
 pub const TOOL_WEB_FETCH: &str = "web_fetch";
 
@@ -112,6 +113,7 @@ mod tests {
             TOOL_LIST_DIR,
             TOOL_GLOB,
             TOOL_GREP,
+            TOOL_GIT_DIFF,
             TOOL_WEB_SEARCH,
             TOOL_WEB_FETCH,
         ] {

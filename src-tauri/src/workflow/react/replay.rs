@@ -5,7 +5,7 @@
 use crate::db::MainStore;
 use crate::workflow::react::events::{WorkflowEventRecord, WorkflowEventType};
 use crate::workflow::react::types::{
-    ExecutionContext, PendingTool, RuntimeState, SubAgentCompletion, WaitReason,
+    ExecutionContext, PendingFinalReview, PendingTool, RuntimeState, SubAgentCompletion, WaitReason,
 };
 use std::sync::Arc;
 use thiserror::Error;
@@ -91,6 +91,7 @@ pub struct EventReducer {
     waiting_on_sub_agent_id: Option<String>,
     sub_agent_sessions: Vec<String>,
     pending_sub_agent_completions: Vec<SubAgentCompletion>,
+    pending_final_review: Option<PendingFinalReview>,
 }
 
 impl EventReducer {
@@ -106,6 +107,7 @@ impl EventReducer {
             waiting_on_sub_agent_id: None,
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
+            pending_final_review: None,
         }
     }
 
@@ -379,6 +381,7 @@ impl EventReducer {
             waiting_on_sub_agent_id: self.waiting_on_sub_agent_id,
             sub_agent_sessions: self.sub_agent_sessions,
             pending_sub_agent_completions: self.pending_sub_agent_completions,
+            pending_final_review: self.pending_final_review,
         }
     }
 }

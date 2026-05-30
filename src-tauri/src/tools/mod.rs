@@ -1,6 +1,7 @@
 mod constants;
 mod error;
 mod fs;
+mod git_diff;
 pub(crate) mod helper;
 mod interaction;
 mod llm_output;
@@ -18,6 +19,7 @@ mod web_search;
 pub use constants::*;
 pub use error::ToolError;
 pub use fs::*;
+pub use git_diff::GitDiff;
 pub use interaction::*;
 pub use mcp_loader::McpToolLoad;
 pub use search::*;

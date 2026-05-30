@@ -22,6 +22,7 @@ pub struct AgentConfig {
     pub auto_compress: Option<bool>,
     pub available_tools: Option<Vec<String>>,
     pub final_audit: Option<bool>,
+    pub final_review_mode: Option<String>,
     pub skill_enabled: Option<bool>,
     pub selected_skills: Option<Vec<String>>,
     pub phase: Option<String>,
@@ -36,6 +37,27 @@ impl AgentConfig {
 
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn normalized_final_review_mode(&self) -> &'static str {
+        match self.final_review_mode.as_deref() {
+            Some("sub_agent_review") => "sub_agent_review",
+            Some("off") => "off",
+            Some(_) => "off",
+            None => {
+                if self.final_audit.unwrap_or(false) {
+                    "sub_agent_review"
+                } else {
+                    "off"
+                }
+            }
+        }
+    }
+
+    pub fn sync_legacy_final_audit_flag(&mut self) {
+        let mode = self.normalized_final_review_mode().to_string();
+        self.final_audit = Some(mode == "sub_agent_review");
+        self.final_review_mode = Some(mode);
     }
 
     pub fn apply_overrides(&mut self, other: &AgentConfig) {
@@ -60,6 +82,9 @@ impl AgentConfig {
         if other.final_audit.is_some() {
             self.final_audit = other.final_audit;
         }
+        if other.final_review_mode.is_some() {
+            self.final_review_mode = other.final_review_mode.clone();
+        }
         if other.skill_enabled.is_some() {
             self.skill_enabled = other.skill_enabled;
         }
@@ -75,6 +100,7 @@ impl AgentConfig {
         if other.max_contexts.is_some() {
             self.max_contexts = other.max_contexts;
         }
+        self.sync_legacy_final_audit_flag();
     }
 }
 
@@ -217,8 +243,9 @@ impl Agent {
     /// The config JSON uses camelCase field names (from AgentConfig serialization)
     pub fn merge_config(&mut self, config_json: &str) {
         if let Some(config) = AgentConfig::from_json(config_json) {
+            let final_review_enabled = config.normalized_final_review_mode() == "sub_agent_review";
             // Merge models
-            if let Some(config_models) = config.models {
+            if let Some(config_models) = config.models.clone() {
                 let mut merged_models = self.models.clone().unwrap_or_default();
                 if config_models.plan.is_some() {
                     merged_models.plan = config_models.plan;
@@ -248,6 +275,9 @@ impl Agent {
             // Merge final_audit
             if config.final_audit.is_some() {
                 self.final_audit = config.final_audit;
+            }
+            if config.final_review_mode.is_some() {
+                self.final_audit = Some(final_review_enabled);
             }
 
             // Merge auto_approve (Vec<String> -> JSON string)

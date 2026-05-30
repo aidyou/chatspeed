@@ -416,6 +416,12 @@ impl SubAgentCompletion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PendingFinalReview {
+    pub sub_agent_id: String,
+    pub completion_summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionContext {
     pub session_id: String,
     pub state: RuntimeState,
@@ -439,6 +445,8 @@ pub struct ExecutionContext {
     pub sub_agent_sessions: Vec<String>,
     #[serde(default)]
     pub pending_sub_agent_completions: Vec<SubAgentCompletion>,
+    #[serde(default)]
+    pub pending_final_review: Option<PendingFinalReview>,
 }
 
 fn default_execution_context_segment_id() -> i32 {
@@ -446,7 +454,7 @@ fn default_execution_context_segment_id() -> i32 {
 }
 
 impl ExecutionContext {
-    pub const CURRENT_VERSION: &'static str = "1.3.0";
+    pub const CURRENT_VERSION: &'static str = "1.4.0";
 
     #[cfg(test)]
     pub fn new(session_id: String) -> Self {
@@ -466,6 +474,7 @@ impl ExecutionContext {
             waiting_on_sub_agent_id: None,
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
+            pending_final_review: None,
         }
     }
 }
@@ -483,10 +492,11 @@ mod tests {
         assert_eq!(ctx.current_segment_id, 1);
         assert!(ctx.pending_tools.is_empty());
         assert!(ctx.last_event_id.is_none());
-        assert_eq!(ctx.version, "1.3.0");
+        assert_eq!(ctx.version, "1.4.0");
         assert!(ctx.waiting_on_sub_agent_id.is_none());
         assert!(ctx.sub_agent_sessions.is_empty());
         assert!(ctx.pending_sub_agent_completions.is_empty());
+        assert!(ctx.pending_final_review.is_none());
     }
 
     #[test]

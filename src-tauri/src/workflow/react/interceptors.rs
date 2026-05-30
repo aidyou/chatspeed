@@ -1,9 +1,10 @@
-use serde_json::json;
-use std::collections::HashMap;
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::tools::{
-    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_EDIT_FILE,
-    TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_WRITE_FILE,
+    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH,
+    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_EDIT_FILE, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_WRITE_NOTE,
+    TOOL_SUBMIT_PLAN, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::constants::TASK_FINISHED;
 use crate::workflow::react::engine::WorkflowExecutor;
@@ -14,6 +15,7 @@ use crate::workflow::react::file_preview::{
 };
 use crate::workflow::react::intelligence::ToolApprovalReview;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
+use crate::workflow::react::orchestrator::{spawn_call_sub_agent, FINAL_REVIEWER_BUILTIN_AGENT_ID};
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
 use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
 
@@ -25,6 +27,543 @@ pub(crate) enum SmartApprovalDecision {
 }
 
 impl WorkflowExecutor {
+    fn final_review_mode_enabled(&self) -> bool {
+        self.agent_config.final_audit.unwrap_or(false)
+    }
+
+    async fn persist_completion_report_if_needed(
+        &mut self,
+        text_part: &str,
+        argument_summary: Option<String>,
+    ) -> Result<String, WorkflowEngineError> {
+        if Self::is_valid_finish_task_summary(text_part) {
+            return Ok(Self::normalized_finish_task_summary(text_part));
+        }
+
+        let summary = argument_summary.unwrap_or_default();
+        self.add_message_and_notify_internal(
+            "assistant".to_string(),
+            summary.clone(),
+            None,
+            None,
+            Some(StepType::Think),
+            false,
+            None,
+            Some(json!({
+                "message_kind": "completion_report",
+                "source": "complete_workflow_with_summary.summary"
+            })),
+        )
+        .await?;
+        Ok(summary)
+    }
+
+    fn review_payload_changed_files(&self) -> Vec<Value> {
+        let mut files = BTreeMap::<String, Value>::new();
+        for message in self.context.messages_since_last_completion() {
+            if message.role != "tool" || message.is_error {
+                continue;
+            }
+            let Some(metadata) = message.metadata.as_ref() else {
+                continue;
+            };
+            let Some(tool_name) = metadata.get("tool_name").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if !matches!(
+                tool_name,
+                crate::tools::TOOL_EDIT_FILE | crate::tools::TOOL_WRITE_FILE
+            ) {
+                continue;
+            }
+            let Some(details) = metadata.get("details") else {
+                continue;
+            };
+            let Some(path) = details
+                .get("file_path")
+                .or_else(|| details.get("path"))
+                .and_then(|value| value.as_str())
+            else {
+                continue;
+            };
+            let entry = files.entry(path.to_string()).or_insert_with(|| {
+                json!({
+                    "path": path,
+                    "operations": Vec::<String>::new(),
+                    "line_ranges": Vec::<Value>::new(),
+                    "summaries": Vec::<String>::new(),
+                })
+            });
+            if let Some(operations) = entry
+                .get_mut("operations")
+                .and_then(|value| value.as_array_mut())
+            {
+                let operation = if tool_name == crate::tools::TOOL_WRITE_FILE {
+                    "write_file"
+                } else {
+                    "edit_file"
+                };
+                if !operations
+                    .iter()
+                    .any(|value| value.as_str() == Some(operation))
+                {
+                    operations.push(json!(operation));
+                }
+            }
+            if let Some(start_line) = details.get("start_line").and_then(|value| value.as_u64()) {
+                let end_line = details
+                    .get("new_string")
+                    .and_then(|value| value.as_str())
+                    .map(|text| text.lines().count())
+                    .filter(|count| *count > 0)
+                    .map(|count| start_line + count.saturating_sub(1) as u64)
+                    .unwrap_or(start_line);
+                if let Some(line_ranges) = entry
+                    .get_mut("line_ranges")
+                    .and_then(|value| value.as_array_mut())
+                {
+                    line_ranges.push(json!({
+                        "start_line": start_line,
+                        "end_line": end_line
+                    }));
+                }
+            }
+            if let Some(summary) = metadata.get("summary").and_then(|value| value.as_str()) {
+                if let Some(summaries) = entry
+                    .get_mut("summaries")
+                    .and_then(|value| value.as_array_mut())
+                {
+                    if !summary.trim().is_empty()
+                        && !summaries
+                            .iter()
+                            .any(|value| value.as_str() == Some(summary))
+                    {
+                        summaries.push(json!(summary));
+                    }
+                }
+            }
+        }
+        files.into_values().collect()
+    }
+
+    fn review_payload_validation_summary(&self) -> Vec<Value> {
+        self.context
+            .messages_since_last_completion()
+            .into_iter()
+            .filter(|message| message.role == "tool" && !message.is_error)
+            .filter_map(|message| {
+                let metadata = message.metadata?;
+                let tool_name = metadata.get("tool_name").and_then(|value| value.as_str())?;
+                let summary = metadata.get("summary").and_then(|value| value.as_str())?;
+                let title = metadata
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(tool_name);
+                let lower = tool_name.to_ascii_lowercase();
+                let summary_lower = summary.to_ascii_lowercase();
+                let is_validation = lower == "bash"
+                    || lower.contains("read")
+                    || lower.contains("grep")
+                    || lower.contains("glob")
+                    || summary_lower.contains("test")
+                    || summary_lower.contains("build")
+                    || summary_lower.contains("verify")
+                    || summary_lower.contains("validation");
+                is_validation.then(|| {
+                    json!({
+                        "tool_name": tool_name,
+                        "title": title,
+                        "summary": summary
+                    })
+                })
+            })
+            .collect()
+    }
+
+    fn review_payload_previous_results(&self) -> Vec<Value> {
+        self.context
+            .messages_since_last_completion()
+            .into_iter()
+            .filter_map(|message| {
+                let metadata = message.metadata?;
+                if metadata
+                    .get("message_kind")
+                    .and_then(|value| value.as_str())
+                    != Some("final_review_feedback")
+                {
+                    return None;
+                }
+
+                let verdict = metadata.get("review_verdict")?.clone();
+                let summary = metadata
+                    .get("review_summary")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                Some(json!({
+                    "sub_agent_id": metadata.get("sub_agent_id").cloned().unwrap_or(Value::Null),
+                    "summary": summary,
+                    "verdict": verdict
+                }))
+            })
+            .collect()
+    }
+
+    fn build_final_review_prompt(
+        &self,
+        completion_summary: &str,
+        todo_status_overrides: &HashMap<String, String>,
+    ) -> String {
+        let user_request = self.context.current_user_request_since_last_completion();
+        let changed_files = self.review_payload_changed_files();
+        let validation_summary = self.review_payload_validation_summary();
+        let previous_review_results = self.review_payload_previous_results();
+        let todo_status =
+            if let Ok(store) = self.context.main_store.read() {
+                store
+                    .get_todo_list_for_workflow(&self.session_id)
+                    .ok()
+                    .map(|todos| {
+                        todos
+                            .into_iter()
+                            .map(|todo| {
+                                let todo_id = todo["id"].as_str().unwrap_or_default().to_string();
+                                let status =
+                                    todo_status_overrides.get(&todo_id).cloned().unwrap_or_else(
+                                        || todo["status"].as_str().unwrap_or_default().to_string(),
+                                    );
+                                json!({
+                                    "id": todo_id,
+                                    "subject": todo["subject"].as_str().unwrap_or_default(),
+                                    "status": status
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+        let payload = json!({
+            "review_type": "final_code_review",
+            "workflow_session_id": self.session_id,
+            "user_request": user_request,
+            "completion_report": completion_summary,
+            "todo_status": todo_status,
+            "changed_files": changed_files,
+            "validation_summary": validation_summary,
+            "previous_review_results": previous_review_results,
+        });
+        let payload_text =
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
+        format!(
+            "Review the parent workflow's completion package below. Perform an independent final review using your read-only code inspection tools.\n\n\
+Return the final verdict ONLY by calling `submit_result`.\n\
+- `submit_result.result` MUST be a JSON object with this schema:\n\
+  {{\"approved\": boolean, \"summary\": string, \"findings\": [{{\"severity\": \"blocker|major|minor|info\", \"file\": string|null, \"detail\": string}}], \"required_fixes\": [string]}}\n\
+- You will also receive `previous_review_results`; use them to avoid repeating the same rejected reasoning unless the parent has actually addressed those findings.\n\
+- If the work should not be allowed to finish, set `approved` to false and provide concrete required fixes.\n\
+- If the work is acceptable, set `approved` to true and keep findings minimal.\n\
+- Do not edit files. Do not ask the parent to run `git diff`; inspect the code directly with read/search tools when needed.\n\n\
+<final_review_package>\n{}\n</final_review_package>",
+            payload_text
+        )
+    }
+
+    async fn launch_final_review(
+        &mut self,
+        completion_summary: String,
+        todo_status_overrides: &HashMap<String, String>,
+    ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
+        let reviewer_agent = {
+            let store = self
+                .context
+                .main_store
+                .read()
+                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            store
+                .get_agent(FINAL_REVIEWER_BUILTIN_AGENT_ID)
+                .map_err(WorkflowEngineError::Db)?
+                .ok_or_else(|| {
+                    WorkflowEngineError::General(format!(
+                        "Final reviewer agent '{}' not found",
+                        FINAL_REVIEWER_BUILTIN_AGENT_ID
+                    ))
+                })?
+        };
+        let review_prompt =
+            self.build_final_review_prompt(&completion_summary, todo_status_overrides);
+        let raw_result = spawn_call_sub_agent(
+            self.sub_agent_factory.clone(),
+            self.context.main_store.clone(),
+            self.gateway.clone(),
+            self.tsid_generator.clone(),
+            self.session_id.clone(),
+            reviewer_agent.clone(),
+            "Final review",
+            &review_prompt,
+        )
+        .await?;
+        let task_id = raw_result
+            .get("task_id")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| WorkflowEngineError::General("Missing reviewer task_id".to_string()))?
+            .to_string();
+        self.sub_agent_id = Some(task_id.clone());
+        if !self.sub_agent_sessions.iter().any(|id| id == &task_id) {
+            self.sub_agent_sessions.push(task_id.clone());
+        }
+        self.pending_final_review = Some(crate::workflow::react::types::PendingFinalReview {
+            sub_agent_id: task_id,
+            completion_summary,
+        });
+        self.update_state(WorkflowState::AwaitingSubAgent).await?;
+        Ok(Some(ReinforcedResult {
+            content: serde_json::to_string(&raw_result).unwrap_or_else(|_| raw_result.to_string()),
+            llm_content: None,
+            title: "Final Review".to_string(),
+            summary: "Waiting for final review".to_string(),
+            is_error: false,
+            error_type: None,
+            display_type: "text".to_string(),
+            approval_status: Some("pending".to_string()),
+            observation_kind: None,
+        }))
+    }
+
+    fn parse_json_value_lossy(raw: &str) -> Option<Value> {
+        let cleaned = crate::libs::util::format_json_str(raw);
+        if let Ok(parsed) = serde_json::from_str::<Value>(&cleaned) {
+            return Some(parsed);
+        }
+
+        let start = cleaned
+            .char_indices()
+            .find(|(_, ch)| *ch == '{' || *ch == '[')
+            .map(|(idx, _)| idx)?;
+        let candidate = &cleaned[start..];
+        for (idx, ch) in candidate.char_indices().rev() {
+            if ch != '}' && ch != ']' {
+                continue;
+            }
+            let slice = &candidate[..=idx];
+            if let Ok(parsed) = serde_json::from_str::<Value>(slice) {
+                return Some(parsed);
+            }
+        }
+
+        None
+    }
+
+    fn normalize_final_review_verdict(raw_value: &Value) -> Value {
+        let parsed = match raw_value {
+            Value::Object(_) => Some(raw_value.clone()),
+            Value::String(raw) => Self::parse_json_value_lossy(raw),
+            _ => None,
+        }
+        .unwrap_or_else(|| {
+            json!({
+                "approved": false,
+                "summary": raw_value.as_str().filter(|value| !value.trim().is_empty()).unwrap_or("Final review returned no structured verdict."),
+                "findings": [],
+                "required_fixes": []
+            })
+        });
+
+        let findings = parsed
+            .get("findings")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items.iter()
+                    .filter_map(|item| {
+                        let detail = item.get("detail").and_then(|value| value.as_str())?.trim();
+                        if detail.is_empty() {
+                            return None;
+                        }
+                        Some(json!({
+                            "severity": item.get("severity").and_then(|value| value.as_str()).unwrap_or("major"),
+                            "file": item.get("file").cloned().unwrap_or(Value::Null),
+                            "detail": detail
+                        }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut required_fixes = parsed
+            .get("required_fixes")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::trim))
+                    .filter(|item| !item.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if required_fixes.is_empty() {
+            required_fixes = findings
+                .iter()
+                .filter_map(|item| {
+                    let severity = item
+                        .get("severity")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("major");
+                    (severity == "blocker" || severity == "major").then(|| {
+                        item.get("detail")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or_default()
+                            .to_string()
+                    })
+                })
+                .filter(|item| !item.is_empty())
+                .collect();
+        }
+
+        let has_blocking_findings = findings.iter().any(|item| {
+            matches!(
+                item.get("severity").and_then(|value| value.as_str()),
+                Some("blocker" | "major")
+            )
+        });
+        let approved = parsed
+            .get("approved")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+            && !has_blocking_findings
+            && required_fixes.is_empty();
+        let summary = parsed
+            .get("summary")
+            .and_then(|value| value.as_str())
+            .unwrap_or(if approved {
+                "Final review approved the completion report."
+            } else {
+                "Final review rejected the completion report."
+            })
+            .to_string();
+
+        json!({
+            "approved": approved,
+            "summary": summary,
+            "findings": findings,
+            "required_fixes": required_fixes
+        })
+    }
+
+    fn parse_final_review_verdict(result: &Value) -> (Value, bool, String, Vec<String>) {
+        let candidate = result
+            .get("result")
+            .cloned()
+            .or_else(|| {
+                result
+                    .get("structured_content")
+                    .and_then(|value| value.get("result"))
+                    .cloned()
+            })
+            .or_else(|| result.get("structured_content").cloned())
+            .or_else(|| result.get("summary").cloned())
+            .unwrap_or(Value::Null);
+        let parsed = Self::normalize_final_review_verdict(&candidate);
+        let approved = parsed
+            .get("approved")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let summary = parsed
+            .get("summary")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let required_fixes = parsed
+            .get("required_fixes")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        (parsed, approved, summary, required_fixes)
+    }
+
+    pub(crate) async fn handle_final_review_completion(
+        &mut self,
+        sub_agent_id: &str,
+        result: &Value,
+    ) -> Result<bool, WorkflowEngineError> {
+        let Some(pending) = self.pending_final_review.clone() else {
+            return Ok(false);
+        };
+        if pending.sub_agent_id != sub_agent_id {
+            return Ok(false);
+        }
+
+        let (review_verdict, approved, summary, required_fixes) =
+            Self::parse_final_review_verdict(result);
+        self.pending_final_review = None;
+        self.sub_agent_sessions.retain(|id| id != sub_agent_id);
+        if self.sub_agent_id.as_deref() == Some(sub_agent_id) {
+            self.sub_agent_id = None;
+        }
+
+        if approved {
+            self.add_message_and_notify_internal(
+                "tool".to_string(),
+                TASK_FINISHED.to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": crate::ccproxy::get_tool_id(),
+                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "title": "Complete Workflow with Summary",
+                    "summary": pending.completion_summary,
+                    "execution_status": "completed",
+                    "is_error": false,
+                    "display_type": "text"
+                })),
+            )
+            .await?;
+            self.update_state(WorkflowState::Completed).await?;
+            return Ok(true);
+        }
+
+        let mut content = format!(
+            "Final review rejected the completion.\nSummary: {}",
+            summary
+        );
+        if !required_fixes.is_empty() {
+            content.push_str("\nRequired fixes:\n");
+            for item in required_fixes {
+                content.push_str("- ");
+                content.push_str(&item);
+                content.push('\n');
+            }
+        }
+        content.push_str("\n<SYSTEM_REMINDER>Address the review findings above before calling `complete_workflow_with_summary` again. Update the implementation, verify the fixes, and then submit a new completion report.</SYSTEM_REMINDER>");
+
+        self.add_message_and_notify_internal(
+            "user".to_string(),
+            content,
+            None,
+            None,
+            Some(StepType::Observe),
+            true,
+            Some("FinalReviewRejected".to_string()),
+            Some(json!({
+                "message_kind": "final_review_feedback",
+                "sub_agent_id": sub_agent_id,
+                "review_summary": summary,
+                "review_verdict": review_verdict
+            })),
+        )
+        .await?;
+        self.update_state(WorkflowState::Thinking).await?;
+        Ok(true)
+    }
+
     pub(crate) fn is_smart_mode_read_only_tool(name: &str) -> bool {
         matches!(
             name,
@@ -607,52 +1146,20 @@ impl WorkflowExecutor {
             }
         }
 
-        // 3. Optional Hidden AI quality audit
-        if self.agent_config.final_audit.unwrap_or(false) {
+        let completion_summary = self
+            .persist_completion_report_if_needed(text_part, argument_summary)
+            .await?;
+
+        if self.final_review_mode_enabled() {
             log::info!(
-                "WorkflowExecutor {}: Performing final quality audit...",
+                "WorkflowExecutor {}: Launching final reviewer sub-agent...",
                 self.session_id
             );
             self.update_state(WorkflowState::Auditing).await?;
-            if let Some(audit_feedback) = self
-                .intelligence_manager
-                .run_final_audit(&self.context)
-                .await?
-            {
-                return Ok(Some(ReinforcedResult {
-                    content: format!("<SYSTEM_REMINDER>Audit Rejected: Your conclusion was deemed incomplete. Feedback: {}\n\nYou MUST address these points before you can call complete_workflow_with_summary. Do NOT call sub_agent_output for call-mode sub-agent results; use the sub-agent completion observations already in context.</SYSTEM_REMINDER>", audit_feedback),
-                    llm_content: None,
-                    title: "Audit Rejected".to_string(),
-                    summary: "Audit failed".to_string(),
-                    is_error: true,
-                    error_type: Some("AuditRejected".into()),
-                    display_type: "text".to_string(),
-                    approval_status: None,
-                    observation_kind: None,
-                }));
-            }
+            return self
+                .launch_final_review(completion_summary, todo_status_overrides)
+                .await;
         }
-
-        let completion_summary = if text_summary_valid {
-            Self::normalized_finish_task_summary(text_part)
-        } else {
-            let summary = argument_summary.unwrap_or_default();
-            self.add_message_and_notify_internal(
-                "assistant".to_string(),
-                summary.clone(),
-                None,
-                None,
-                Some(StepType::Think),
-                false,
-                None,
-                Some(json!({
-                    "message_kind": "completion_report",
-                    "source": "complete_workflow_with_summary.summary"
-                })),
-            )
-            .await?;
-            summary
-        };
 
         Ok(Some(ReinforcedResult {
             content: TASK_FINISHED.to_string(),

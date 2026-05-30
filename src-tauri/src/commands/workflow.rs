@@ -907,6 +907,14 @@ fn build_agent_config_from_agent(
     }
 
     config.final_audit = Some(final_audit.unwrap_or(agent.final_audit.unwrap_or(false)));
+    config.final_review_mode = Some(
+        if config.final_audit.unwrap_or(false) {
+            "sub_agent_review"
+        } else {
+            "off"
+        }
+        .to_string(),
+    );
     config.skill_enabled = agent.skill_enabled;
     config.phase = agent.phase.clone();
 
@@ -929,6 +937,7 @@ fn build_agent_config_from_agent(
 
 fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
     let mut inherited_config = AgentConfig::from_json(inherited)?;
+    inherited_config.sync_legacy_final_audit_flag();
 
     if let Some(models) = &inherited_config.models {
         let mut validated_models = models.clone();
@@ -1032,6 +1041,14 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
         config.available_tools = defaults.available_tools;
         changed = true;
     }
+    if config.final_audit.is_none() && defaults.final_audit.is_some() {
+        config.final_audit = defaults.final_audit;
+        changed = true;
+    }
+    if config.final_review_mode.is_none() && defaults.final_review_mode.is_some() {
+        config.final_review_mode = defaults.final_review_mode;
+        changed = true;
+    }
     if config.skill_enabled.is_none() && defaults.skill_enabled.is_some() {
         config.skill_enabled = defaults.skill_enabled;
         changed = true;
@@ -1070,6 +1087,7 @@ fn normalize_workflow_agent_config_inner(
         .as_deref()
         .and_then(AgentConfig::from_json)
         .unwrap_or_default();
+    config.sync_legacy_final_audit_flag();
 
     let shell_policy_missing =
         config.shell_policy.is_none() && agent_shell_policy_value(&agent).is_some();
@@ -1233,6 +1251,7 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                     waiting_on_sub_agent_id: None,
                     sub_agent_sessions: Vec::new(),
                     pending_sub_agent_completions: Vec::new(),
+                    pending_final_review: None,
                 });
         context.state = RuntimeState::Cancelled;
         context.wait_reason = None;
@@ -3946,6 +3965,11 @@ pub async fn update_workflow_final_audit(
             .unwrap_or_default();
 
         config.final_audit = Some(final_audit);
+        config.final_review_mode = Some(if final_audit {
+            "sub_agent_review".to_string()
+        } else {
+            "off".to_string()
+        });
 
         let new_config_str = config.to_json();
         store
@@ -4308,6 +4332,13 @@ pub async fn update_workflow_agent_id(
         .unwrap_or_default();
     let mut agent_config = build_agent_config_from_agent(&agent, None, None);
     agent_config.final_audit = current_config.final_audit;
+    agent_config.final_review_mode = current_config.final_review_mode.clone().or_else(|| {
+        Some(if current_config.final_audit.unwrap_or(false) {
+            "sub_agent_review".to_string()
+        } else {
+            "off".to_string()
+        })
+    });
     agent_config.phase = current_config.phase;
     let agent_config_json = agent_config_to_json_with_agent_shell_policy(&agent_config, &agent)?;
     store

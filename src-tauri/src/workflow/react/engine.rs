@@ -147,6 +147,8 @@ pub struct WorkflowExecutor {
     pub sub_agent_sessions: Vec<String>,
     /// Durable sub-agent completions restored from snapshot but not yet consumed.
     pub pending_sub_agent_completions: Vec<SubAgentCompletion>,
+    /// Structured final review state used while a reviewer child is running.
+    pub pending_final_review: Option<crate::workflow::react::types::PendingFinalReview>,
 }
 
 impl WorkflowExecutor {
@@ -931,6 +933,7 @@ impl WorkflowExecutor {
         self.queued_user_messages.clear();
         self.sub_agent_id = None;
         self.pending_sub_agent_completions.clear();
+        self.pending_final_review = None;
 
         self.update_state(WorkflowState::Thinking).await
     }
@@ -1111,6 +1114,7 @@ impl WorkflowExecutor {
             sub_agent_id: None,
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
+            pending_final_review: None,
         };
 
         // Phase 6: wire default dispatcher with UI + DB sinks for all executors.
@@ -1360,6 +1364,7 @@ impl WorkflowExecutor {
                 self.sub_agent_id = context.waiting_on_sub_agent_id.clone();
                 self.sub_agent_sessions = context.sub_agent_sessions.clone();
                 self.pending_sub_agent_completions = context.pending_sub_agent_completions.clone();
+                self.pending_final_review = context.pending_final_review.clone();
             }
         }
 
@@ -1410,6 +1415,7 @@ impl WorkflowExecutor {
                         self.sub_agent_sessions = context.sub_agent_sessions.clone();
                         self.pending_sub_agent_completions =
                             context.pending_sub_agent_completions.clone();
+                        self.pending_final_review = context.pending_final_review.clone();
 
                         if self.state == WorkflowState::AwaitingApproval
                             && context.pending_tools.is_empty()
@@ -1651,6 +1657,10 @@ impl WorkflowExecutor {
             }
             if is_allowed(TOOL_GREP) {
                 tm.register_tool(Arc::new(Grep::new(path_guard.clone())))
+                    .await?;
+            }
+            if is_allowed(TOOL_GIT_DIFF) {
+                tm.register_tool(Arc::new(GitDiff::new(path_guard.clone())))
                     .await?;
             }
             if self.policy.allows_planning_note_tools() {
@@ -5134,6 +5144,18 @@ impl WorkflowExecutor {
         sub_agent_id: String,
         result: serde_json::Value,
     ) -> Result<bool, WorkflowEngineError> {
+        if self
+            .handle_final_review_completion(&sub_agent_id, &result)
+            .await?
+        {
+            for completion in &mut self.pending_sub_agent_completions {
+                if completion.sub_agent_id == sub_agent_id {
+                    completion.consumed = true;
+                }
+            }
+            return Ok(true);
+        }
+
         if let Some(resolution) = crate::workflow::react::child_tasks::resolve_sub_agent_completion(
             &mut self.sub_agent_id,
             &mut self.sub_agent_sessions,
@@ -5970,6 +5992,8 @@ impl WorkflowExecutor {
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or(serde_json::json!({}));
                         agent_config["final_audit"] = serde_json::json!(audit);
+                        agent_config["finalReviewMode"] =
+                            serde_json::json!(if audit { "sub_agent_review" } else { "off" });
                         if let Ok(config_str) = serde_json::to_string(&agent_config) {
                             let _ =
                                 store.update_workflow_agent_config(&self.session_id, &config_str);
@@ -6487,6 +6511,7 @@ impl WorkflowExecutor {
             waiting_on_sub_agent_id: self.sub_agent_id.clone(),
             sub_agent_sessions: self.sub_agent_sessions.clone(),
             pending_sub_agent_completions: self.pending_sub_agent_completions.clone(),
+            pending_final_review: self.pending_final_review.clone(),
         }
     }
 
