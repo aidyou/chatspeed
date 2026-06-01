@@ -364,12 +364,10 @@ export function useWorkflowMessages() {
                     ? 'rejected'
                     : isRunning || isAutoExecuteWorkflowTool(name)
                       ? 'running'
-                      : 'pending',
+                      : undefined,
                   isRejected
                     ? 'User rejected'
-                    : isRunning || isAutoExecuteWorkflowTool(name)
-                      ? 'Executing...'
-                      : 'Awaiting approval'
+                    : 'Executing...'
                 )
               }
             })
