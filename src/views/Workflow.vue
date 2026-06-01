@@ -180,6 +180,7 @@
           :planning-mode="planningMode"
           :approval-level="approvalLevel"
           :final-audit-mode="finalAuditMode"
+          :can-toggle-final-audit-mode="canToggleFinalAuditMode"
           :auto-compress-enabled="autoCompressEnabled"
           :agents="agentStore.agents"
           :attachments="imageAttachments"
@@ -497,6 +498,7 @@ const {
   canStop,
   canContinue,
   activeModelName,
+  canToggleFinalAuditMode,
   pendingApprovalList,
   getPendingApprovalEntry,
   clearPendingApprovalEntry,

@@ -21,6 +21,8 @@ import {
 import { safeExecute } from './useErrorBoundary'
 import { BLOCKING_WAIT_REASONS } from './signalTypes'
 
+const FINAL_REVIEWER_BUILTIN_AGENT_ID = 'builtin:final-code-reviewer'
+
 /**
  * Composable for core workflow operations
  * Handles CRUD, start/stop/continue, and event handling
@@ -72,6 +74,31 @@ export function useWorkflowCore({
     const canContinue = computed(() => workflowStore.canContinue)
     const canApprovePlan = computed(() => workflowStore.canApprovePlan)
     const isWaiting = computed(() => workflowStore.isWaiting)
+    const isFinalReviewerConfigured = computed(() => {
+        const reviewer = agentStore.agents.find(agent => agent.id === FINAL_REVIEWER_BUILTIN_AGENT_ID)
+        if (!reviewer || reviewer.disabled) {
+            return false
+        }
+
+        const actModel = reviewer.actModel
+        if (!actModel?.model || actModel.id === '' || actModel.id === null || actModel.id === undefined) {
+            return false
+        }
+
+        const providerId = typeof actModel.id === 'string' ? Number.parseInt(actModel.id, 10) : actModel.id
+        if (!Number.isInteger(providerId)) {
+            return false
+        }
+
+        const provider = modelStore.getModelProviderById(providerId)
+        if (!provider || provider.disabled) {
+            return false
+        }
+
+        return Array.isArray(provider.models)
+            && provider.models.some(model => model.id === actModel.model)
+    })
+    const canToggleFinalAuditMode = computed(() => finalAuditMode.value === 'on' || isFinalReviewerConfigured.value)
 
     const isAwaitingApproval = computed(() => {
         return canApprovePlan.value
@@ -1707,6 +1734,9 @@ export function useWorkflowCore({
     }
 
     const toggleFinalAuditMode = () => {
+        if (!canToggleFinalAuditMode.value) {
+            return
+        }
         const newValue = finalAuditMode.value === 'on' ? 'off' : 'on'
         finalAuditMode.value = newValue
     }
@@ -1768,6 +1798,7 @@ export function useWorkflowCore({
         canStop,
         canContinue,
         canApprovePlan,
+        canToggleFinalAuditMode,
         isAwaitingApproval,
         pendingApprovalList,
         getPendingApprovalEntry,

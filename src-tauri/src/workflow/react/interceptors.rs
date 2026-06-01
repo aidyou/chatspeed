@@ -113,6 +113,7 @@ impl WorkflowExecutor {
             if let Some(start_line) = details.get("start_line").and_then(|value| value.as_u64()) {
                 let end_line = details
                     .get("new_string")
+                    .or_else(|| details.get("content"))
                     .and_then(|value| value.as_str())
                     .map(|text| text.lines().count())
                     .filter(|count| *count > 0)
@@ -214,7 +215,26 @@ impl WorkflowExecutor {
         completion_summary: &str,
         todo_status_overrides: &HashMap<String, String>,
     ) -> String {
-        let user_request = self.context.current_user_request_since_last_completion();
+        let user_messages = self
+            .context
+            .current_user_messages_since_last_completion()
+            .into_iter()
+            .map(|message| {
+                json!({
+                    "id": message.id,
+                    "content": message.message,
+                    "timestamp": message.created_at,
+                    "attached_context": message.attached_context,
+                    "metadata": message.metadata
+                })
+            })
+            .collect::<Vec<_>>();
+        let user_request_summary = if user_messages.is_empty() {
+            self.context.get_initial_query()
+        } else {
+            self.context.current_user_request_since_last_completion()
+        };
+        let approved_plan = self.context.current_approved_plan_since_last_completion();
         let changed_files = self.review_payload_changed_files();
         let validation_summary = self.review_payload_validation_summary();
         let previous_review_results = self.review_payload_previous_results();
@@ -247,7 +267,9 @@ impl WorkflowExecutor {
         let payload = json!({
             "review_type": "final_code_review",
             "workflow_session_id": self.session_id,
-            "user_request": user_request,
+            "user_request_summary": user_request_summary,
+            "user_messages": user_messages,
+            "approved_plan": approved_plan,
             "completion_report": completion_summary,
             "todo_status": todo_status,
             "changed_files": changed_files,

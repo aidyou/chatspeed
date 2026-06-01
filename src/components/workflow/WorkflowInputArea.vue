@@ -146,8 +146,8 @@
               :enterable="false">
               <label
                 class="final-audit-toggle icon-btn upperLayer"
-                :class="finalAuditMode"
-                @click="$emit('toggle-final-audit-mode')">
+                :class="{ [finalAuditMode]: true, disabled: !canToggleFinalAuditMode }"
+                @click="canToggleFinalAuditMode && $emit('toggle-final-audit-mode')">
                 <cs name="check-circle" class="small" />
                 <span class="audit-label" v-if="finalAuditMode !== 'off'">{{
                   finalAuditMode.toUpperCase()
@@ -423,6 +423,10 @@ const props = defineProps({
     type: String,
     default: 'off'
   },
+  canToggleFinalAuditMode: {
+    type: Boolean,
+    default: true
+  },
   autoCompressEnabled: {
     type: Boolean,
     default: true
@@ -641,6 +645,11 @@ defineExpose({
   cursor: pointer;
   flex-shrink: 0;
   color: var(--cs-text-secondary);
+}
+
+.final-audit-toggle.disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 @keyframes workflow-attachment-spin {

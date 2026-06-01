@@ -895,6 +895,38 @@ impl ContextManager {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| self.get_initial_query())
     }
+
+    pub fn current_user_messages_since_last_completion(&self) -> Vec<WorkflowMessage> {
+        self.messages_since_last_completion()
+            .into_iter()
+            .filter(|message| {
+                message.role == "user"
+                    && message.step_type.as_deref() != Some("observe")
+                    && (!message.message.trim().is_empty()
+                        || message
+                            .attached_context
+                            .as_ref()
+                            .is_some_and(|value| !value.trim().is_empty())
+                        || message.metadata.is_some())
+            })
+            .collect()
+    }
+
+    pub fn current_approved_plan_since_last_completion(&self) -> Option<String> {
+        self.messages_since_last_completion()
+            .into_iter()
+            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
+            .and_then(|message| {
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("plan_content"))
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+    }
 }
 
 #[cfg(test)]
@@ -3078,6 +3110,122 @@ mod tests {
                 .as_ref()
                 .and_then(|meta| meta.get("tool_call_id").and_then(|v| v.as_str())),
             Some(tool_call_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn current_segment_user_messages_and_approved_plan_are_preserved() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-final-review-payload-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Initial request".to_string(),
+                Some("Image OCR: error screenshot mentions final review".to_string()),
+                None,
+                None,
+                0,
+                false,
+                None,
+                Some(json!({
+                    "attachments": [{
+                        "kind": "image",
+                        "name": "review.png"
+                    }]
+                })),
+            )
+            .await
+            .expect("failed to add initial user");
+        let _ = context
+            .add_message(
+                "system".to_string(),
+                "# APPROVED EXECUTION PLAN".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                Some(json!({
+                    "plan_content": "1. do work\n2. verify work"
+                })),
+            )
+            .await
+            .expect("failed to add approved plan");
+        if let Some(message) = context.messages.last_mut() {
+            message.message_kind = "summary".to_string();
+            message.message_subtype = Some("approved_plan".to_string());
+        }
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Additional constraint".to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add follow-up user");
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "".to_string(),
+                Some("Image caption: reviewer toggle disabled".to_string()),
+                None,
+                None,
+                3,
+                false,
+                None,
+                Some(json!({
+                    "attachments": [{
+                        "kind": "image",
+                        "name": "toggle.png"
+                    }]
+                })),
+            )
+            .await
+            .expect("failed to add attachment-only user");
+
+        let user_messages = context.current_user_messages_since_last_completion();
+        assert_eq!(user_messages.len(), 3);
+        assert_eq!(user_messages[0].message, "Initial request");
+        assert_eq!(
+            user_messages[0].attached_context.as_deref(),
+            Some("Image OCR: error screenshot mentions final review")
+        );
+        assert_eq!(
+            user_messages[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata["attachments"][0]["name"].as_str()),
+            Some("review.png")
+        );
+        assert_eq!(user_messages[1].message, "Additional constraint");
+        assert_eq!(user_messages[2].message, "");
+        assert_eq!(
+            user_messages[2].attached_context.as_deref(),
+            Some("Image caption: reviewer toggle disabled")
+        );
+        assert_eq!(
+            user_messages[2]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata["attachments"][0]["name"].as_str()),
+            Some("toggle.png")
+        );
+        assert_eq!(
+            context.current_approved_plan_since_last_completion(),
+            Some("1. do work\n2. verify work".to_string())
         );
     }
 }
