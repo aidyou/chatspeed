@@ -589,16 +589,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return 'completed';
   };
 
-  const markToolApprovalSubmitted = (toolId) => {
+  const markToolApprovalSubmitted = (toolId, toolName = 'unknown') => {
     if (!toolId) return;
     const existing = currentTaskLedger.value?.tools.get(toolId);
 
     if (taskLedgerEnabled.value) {
       upsertToolViewState({
         toolCallId: toolId,
+        toolName: existing?.toolName || toolName,
         status: 'approved_running',
         approvalStatus: 'approved',
-        summary: getToolStatusSummary(existing?.toolName, 'running', 'Executing...')
+        summary: getToolStatusSummary(existing?.toolName || toolName, 'running', 'Executing...')
       });
     }
 
@@ -622,7 +623,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   /**
    * 标记工具为已批准
    */
-  const markToolApprovedRunning = (toolId) => {
+  const markToolApprovedRunning = (toolId, toolName = 'unknown') => {
     if (!taskLedgerEnabled.value) {
       // 降级到旧逻辑
       patchToolMessage(toolId, (existing, meta) => ({
@@ -643,23 +644,21 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
 
     const existing = currentTaskLedger.value?.tools.get(toolId);
-    if (existing) {
-      // 如果已经是终态，不再更新
-      if (['final_success', 'final_error', 'rejected'].includes(existing.status)) {
-        return;
-      }
-
-      upsertToolViewState({
-        toolCallId: toolId,
-        status: 'approved_running',
-        approvalStatus: 'approved',
-        summary: getToolStatusSummary(
-          existing.toolName,
-          'running',
-          'Executing...'
-        )
-      });
+    if (existing && ['final_success', 'final_error', 'rejected'].includes(existing.status)) {
+      return;
     }
+
+    upsertToolViewState({
+      toolCallId: toolId,
+      toolName: existing?.toolName || toolName,
+      status: 'approved_running',
+      approvalStatus: 'approved',
+      summary: getToolStatusSummary(
+        existing?.toolName || toolName,
+        'running',
+        'Executing...'
+      )
+    });
 
     // 同时更新旧的消息元数据以保持兼容
     patchToolMessage(toolId, (existing, meta) => ({

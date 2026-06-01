@@ -835,9 +835,15 @@ export function useWorkflowCore({
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     if (payload.approved) {
                         if (payload.execution_status === 'approval_submitted') {
-                            workflowStore.markToolApprovalSubmitted(payload.tool_call_id)
+                            workflowStore.markToolApprovalSubmitted(
+                                payload.tool_call_id,
+                                payload.tool_name
+                            )
                         } else {
-                            workflowStore.markToolApprovedRunning(payload.tool_call_id)
+                            workflowStore.markToolApprovedRunning(
+                                payload.tool_call_id,
+                                payload.tool_name
+                            )
                         }
                     } else {
                         workflowStore.markToolRejected(payload.tool_call_id)
@@ -846,7 +852,7 @@ export function useWorkflowCore({
                     markSessionLiveFromNonTerminalEvent()
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
-                    workflowStore.markToolApprovedRunning(payload.tool_call_id)
+                    workflowStore.markToolApprovedRunning(payload.tool_call_id, payload.tool_name)
                 } else if (payload.type === 'queued_user_message_removed') {
                     markSessionLiveFromNonTerminalEvent()
                     workflowStore.removeQueuedMessage(payload.queued_user_message_id)
