@@ -666,8 +666,29 @@
     <!-- Frontend queued user messages -->
     <div v-if="queuedMessages.length > 0" class="queued-list">
       <div v-for="item in queuedMessages" :key="item.id" class="queued-item">
-        <cs name="clock" size="12px" class="queued-icon" />
-        <span class="queued-text">{{ item.content }}</span>
+        <div class="queued-item-main">
+          <cs name="clock" size="12px" class="queued-icon" />
+          <div class="queued-content">
+            <span v-if="item.content" class="queued-text">{{ item.content }}</span>
+            <div v-if="item.attachments?.length > 0" class="queued-attachments">
+              <div
+                v-for="(attachment, attachmentIndex) in item.attachments"
+                :key="`${item.id}_attachment_${attachment.id || attachmentIndex}`"
+                class="queued-attachment-item">
+                <el-image
+                  v-if="attachment.type === 'image' && (attachment.url || attachment.sourceUrl)"
+                  :src="attachment.url || attachment.sourceUrl"
+                  :preview-src-list="[attachment.url || attachment.sourceUrl]"
+                  :initial-index="0"
+                  fit="cover"
+                  class="queued-attachment-image"
+                  preview-teleported />
+                <span v-else class="queued-attachment-name">{{ attachment.name }}</span>
+              </div>
+            </div>
+            <span v-if="item.statusText" class="queued-status-text">{{ item.statusText }}</span>
+          </div>
+        </div>
         <button
           type="button"
           class="queued-remove"
@@ -1512,6 +1533,10 @@ const formatAskUserAnswer = item => {
 }
 
 const getFinishTaskLabel = message => {
+  const reviewDisplayState = String(message?.metadata?.review_display_state || '').toLowerCase()
+  if (reviewDisplayState === 'final_review_pending') {
+    return `${t('workflow.finishTask')} · ${t('workflow.finalReviewPending')}`
+  }
   const count = Number(message?.metadata?.finish_task_error_count || 1)
   if (count > 1) return `${t('workflow.finishTask')} (${count})`
   return t('workflow.finishTask')
@@ -1689,9 +1714,7 @@ const getMessageSubAgentId = message => {
 const getChoiceGroups = message =>
   props.parseChoiceContent(props.removeSystemReminder(message.message || '')).groups || []
 
-const isSubAgentRunMessage = message =>
-  String(message?.metadata?.tool_name || '').toLowerCase() === 'sub_agent_run' &&
-  !!message?.subAgentCard
+const isSubAgentRunMessage = message => !!message?.subAgentCard
 
 const getSubAgentStatusLabel = message => {
   const status = String(message?.subAgentCard?.status || 'running').toLowerCase()
@@ -2275,5 +2298,83 @@ defineExpose({
 
 .queued-remove:hover {
   color: var(--cs-text-color-primary);
+}
+
+.queued-status-text {
+  display: inline-flex;
+  margin-top: 6px;
+  color: var(--cs-text-color-secondary);
+}
+
+.queued-list {
+  padding-bottom: 24px;
+}
+
+.queued-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--cs-border-color);
+  border-radius: var(--cs-border-radius-md);
+  background: var(--cs-bg-color);
+}
+
+.queued-item-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.queued-icon {
+  margin-top: 3px;
+  flex-shrink: 0;
+  color: var(--cs-text-color-secondary);
+}
+
+.queued-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.queued-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--cs-text-color-primary);
+}
+
+.queued-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.queued-attachment-item {
+  display: flex;
+}
+
+.queued-attachment-image {
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--cs-border-color);
+}
+
+.queued-attachment-name {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--cs-bg-color-light);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
 }
 </style>

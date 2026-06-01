@@ -865,6 +865,7 @@
       "title": "코드 탐색"
     },
     "finalAuditTooltip": "최종 감사 모드: 작업 완료 전 AI 가 자동으로 품질 검토를 수행합니다",
+    "finalReviewPending": "최종 검토 중",
     "finishTask": "작업 완료",
     "historyTab": "대화",
     "installedSkillsGroup": "설치된 Skills",

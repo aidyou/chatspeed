@@ -865,6 +865,7 @@
       "title": "程式碼探索"
     },
     "finalAuditTooltip": "最終審核模式：AI 在任務完成前自動執行品質審查",
+    "finalReviewPending": "終審中",
     "finishTask": "完成任務",
     "historyTab": "對話",
     "installedSkillsGroup": "已安裝 Skills",

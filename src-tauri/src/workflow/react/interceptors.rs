@@ -147,40 +147,6 @@ impl WorkflowExecutor {
         files.into_values().collect()
     }
 
-    fn review_payload_validation_summary(&self) -> Vec<Value> {
-        self.context
-            .messages_since_last_completion()
-            .into_iter()
-            .filter(|message| message.role == "tool" && !message.is_error)
-            .filter_map(|message| {
-                let metadata = message.metadata?;
-                let tool_name = metadata.get("tool_name").and_then(|value| value.as_str())?;
-                let summary = metadata.get("summary").and_then(|value| value.as_str())?;
-                let title = metadata
-                    .get("title")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or(tool_name);
-                let lower = tool_name.to_ascii_lowercase();
-                let summary_lower = summary.to_ascii_lowercase();
-                let is_validation = lower == "bash"
-                    || lower.contains("read")
-                    || lower.contains("grep")
-                    || lower.contains("glob")
-                    || summary_lower.contains("test")
-                    || summary_lower.contains("build")
-                    || summary_lower.contains("verify")
-                    || summary_lower.contains("validation");
-                is_validation.then(|| {
-                    json!({
-                        "tool_name": tool_name,
-                        "title": title,
-                        "summary": summary
-                    })
-                })
-            })
-            .collect()
-    }
-
     fn review_payload_previous_results(&self) -> Vec<Value> {
         self.context
             .messages_since_last_completion()
@@ -220,23 +186,27 @@ impl WorkflowExecutor {
             .current_user_messages_since_last_completion()
             .into_iter()
             .map(|message| {
-                json!({
-                    "id": message.id,
-                    "content": message.message,
-                    "timestamp": message.created_at,
-                    "attached_context": message.attached_context,
-                    "metadata": message.metadata
-                })
+                let mut payload = serde_json::Map::new();
+                payload.insert("id".to_string(), json!(message.id));
+                if !message.message.trim().is_empty() {
+                    payload.insert("content".to_string(), json!(message.message));
+                }
+                if let Some(timestamp) = message.created_at {
+                    payload.insert("timestamp".to_string(), json!(timestamp));
+                }
+                if let Some(attached_context) = message.attached_context {
+                    if !attached_context.trim().is_empty() {
+                        payload.insert("attached_context".to_string(), json!(attached_context));
+                    }
+                }
+                if let Some(metadata) = message.metadata {
+                    payload.insert("metadata".to_string(), metadata);
+                }
+                Value::Object(payload)
             })
             .collect::<Vec<_>>();
-        let user_request_summary = if user_messages.is_empty() {
-            self.context.get_initial_query()
-        } else {
-            self.context.current_user_request_since_last_completion()
-        };
         let approved_plan = self.context.current_approved_plan_since_last_completion();
         let changed_files = self.review_payload_changed_files();
-        let validation_summary = self.review_payload_validation_summary();
         let previous_review_results = self.review_payload_previous_results();
         let todo_status =
             if let Ok(store) = self.context.main_store.read() {
@@ -264,18 +234,27 @@ impl WorkflowExecutor {
             } else {
                 Vec::new()
             };
-        let payload = json!({
-            "review_type": "final_code_review",
-            "workflow_session_id": self.session_id,
-            "user_request_summary": user_request_summary,
-            "user_messages": user_messages,
-            "approved_plan": approved_plan,
-            "completion_report": completion_summary,
-            "todo_status": todo_status,
-            "changed_files": changed_files,
-            "validation_summary": validation_summary,
-            "previous_review_results": previous_review_results,
-        });
+        let mut payload = serde_json::Map::new();
+        payload.insert("review_type".to_string(), json!("final_code_review"));
+        payload.insert("workflow_session_id".to_string(), json!(self.session_id));
+        payload.insert("user_messages".to_string(), json!(user_messages));
+        payload.insert("completion_report".to_string(), json!(completion_summary));
+        payload.insert("changed_files".to_string(), json!(changed_files));
+        if let Some(approved_plan) = approved_plan {
+            if !approved_plan.trim().is_empty() {
+                payload.insert("approved_plan".to_string(), json!(approved_plan));
+            }
+        }
+        if !todo_status.is_empty() {
+            payload.insert("todo_status".to_string(), json!(todo_status));
+        }
+        if !previous_review_results.is_empty() {
+            payload.insert(
+                "previous_review_results".to_string(),
+                json!(previous_review_results),
+            );
+        }
+        let payload = Value::Object(payload);
         let payload_text =
             serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
         format!(
@@ -542,6 +521,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
                     "title": "Complete Workflow with Summary",
                     "summary": pending.completion_summary,
+                    "review_display_state": "final_review_approved",
                     "execution_status": "completed",
                     "is_error": false,
                     "display_type": "text"
@@ -577,6 +557,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             Some(json!({
                 "message_kind": "final_review_feedback",
                 "sub_agent_id": sub_agent_id,
+                "review_display_state": "final_review_rejected",
                 "review_summary": summary,
                 "review_verdict": review_verdict
             })),

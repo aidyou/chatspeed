@@ -865,6 +865,7 @@
       "title": "コード探索"
     },
     "finalAuditTooltip": "最終監査モード：タスク完了前に AI が自動的に品質レビューを実行します",
+    "finalReviewPending": "最終レビュー中",
     "finishTask": "タスクを完了",
     "historyTab": "会話",
     "installedSkillsGroup": "インストール済み Skills",

@@ -865,6 +865,7 @@
       "title": "Exploração de código"
     },
     "finalAuditTooltip": "Modo de auditoria final: A IA realiza automaticamente uma revisão de qualidade antes de concluir a tarefa",
+    "finalReviewPending": "Revisão final em andamento",
     "finishTask": "Concluir tarefa",
     "historyTab": "Conversa",
     "installedSkillsGroup": "Skills instaladas",

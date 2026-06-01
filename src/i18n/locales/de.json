@@ -865,6 +865,7 @@
       "title": "Code-Erkundung"
     },
     "finalAuditTooltip": "Abschlussprüfungsmodus: Qualitätsprüfung durch KI vor Aufgabenabschluss",
+    "finalReviewPending": "Abschlussprüfung läuft",
     "finishTask": "Aufgabe abschließen",
     "historyTab": "Sitzung",
     "installedSkillsGroup": "Installierte Skills",

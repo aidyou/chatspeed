@@ -1026,10 +1026,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
       id: message.id || `local_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       content: message.content || '',
       status: message.status || 'queued',
+      statusText: typeof message.statusText === 'string' ? message.statusText : '',
       sent: !!message.sent,
       acknowledged: !!message.acknowledged,
       attachedContext: message.attachedContext || null,
       metadata: message.metadata || null,
+      attachments: Array.isArray(message.attachments) ? message.attachments : [],
       createdAt: message.createdAt || Date.now(),
     });
   };
@@ -1041,6 +1043,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messageQueue.value[index] = {
       ...messageQueue.value[index],
       sent: true,
+    };
+  };
+
+  const updateQueuedMessage = (id, updates = {}) => {
+    if (!id) return;
+    const index = messageQueue.value.findIndex((item) => item.id === id);
+    if (index === -1) return;
+    messageQueue.value[index] = {
+      ...messageQueue.value[index],
+      ...updates,
     };
   };
 
@@ -1412,6 +1424,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     addMessage,
     addMessageToQueue,
     markQueuedMessageSent,
+    updateQueuedMessage,
     acknowledgeQueuedMessageSent,
     removeQueuedMessage,
     acknowledgeQueuedMessage,

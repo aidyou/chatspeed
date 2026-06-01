@@ -185,6 +185,7 @@
           :agents="agentStore.agents"
           :attachments="imageAttachments"
           :can-attach-images="canUseImageAttachments"
+          :is-preparing-image-send="isPreparingImageSend"
           :show-skill-suggestions="showSkillSuggestions"
           :show-file-suggestions="showFileSuggestions"
           :filtered-system-skills="filteredSystemSkills"
@@ -578,6 +579,7 @@ const activeImageRecognitionPrompt = computed(() => {
 })
 
 const canUseImageAttachments = computed(() => !!activeVisionModel.value)
+const isPreparingImageSend = ref(false)
 
 function generateAttachmentId() {
   return `workflow_attachment_${Uuid()}`
@@ -885,8 +887,39 @@ function buildImageAttachmentMetadata(attachments) {
   }
 }
 
+function buildPendingImageQueueText(message, attachments) {
+  if (message) {
+    return message
+  }
+
+  const names = attachments
+    .map(attachment => String(attachment.name || '').trim())
+    .filter(Boolean)
+    .slice(0, 2)
+
+  return names.join(', ') || t('chat.preparingAttachments')
+}
+
+function buildPendingQueueAttachments(attachments) {
+  return attachments.map(attachment => ({
+    id: attachment.id,
+    type: attachment.type || 'image',
+    name: attachment.name,
+    url: attachment.url || attachment.sourceUrl || '',
+    sourceUrl: attachment.sourceUrl || attachment.url || ''
+  }))
+}
+
+function scrollMessageListToBottom(force = true) {
+  nextTick(() => messageListRef.value?.scrollToBottom(force))
+}
+
 // Set up the onSendMessage callback for the input composable
 inputComposable.onSendMessage.value = async () => {
+  if (isPreparingImageSend.value) {
+    return false
+  }
+
   const backupMessage = inputMessage.value
   const backupAttachments = [...imageAttachments.value]
   const rawMessage = backupMessage.trim()
@@ -897,9 +930,23 @@ inputComposable.onSendMessage.value = async () => {
 
   let attachedContext = null
   let metadata = null
+  let preparingQueueId = null
 
   try {
     if (backupAttachments.length > 0) {
+      preparingQueueId = `local_queue_prepare_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      workflowStore.addMessageToQueue({
+        id: preparingQueueId,
+        content: buildPendingImageQueueText(rawMessage, backupAttachments),
+        status: 'preparing_attachments',
+        statusText: t('chat.analyzingImages'),
+        attachments: buildPendingQueueAttachments(backupAttachments)
+      })
+      scrollMessageListToBottom()
+      clearInput()
+      clearImageAttachments()
+      isPreparingImageSend.value = true
+      scrollMessageListToBottom()
       const imageAnalysis = await analyzeImageAttachments(backupAttachments, rawMessage)
       if (imageAnalysis) {
         attachedContext = buildImageAttachedContext(imageAnalysis, rawMessage)
@@ -908,16 +955,25 @@ inputComposable.onSendMessage.value = async () => {
     }
   } catch (error) {
     console.error('Failed to analyze workflow images:', error)
+    if (preparingQueueId) {
+      workflowStore.removeQueuedMessage(preparingQueueId)
+    }
     inputMessage.value = backupMessage
     imageAttachments.value = backupAttachments
     resetChatState()
     isChatting.value = false
+    isPreparingImageSend.value = false
     showMessage(error?.message || t('chat.errorOnAddAttachment', { error: String(error) }), 'error')
     return
   }
 
-  clearInput()
-  clearImageAttachments()
+  if (preparingQueueId) {
+    workflowStore.removeQueuedMessage(preparingQueueId)
+  } else {
+    clearInput()
+    clearImageAttachments()
+  }
+  isPreparingImageSend.value = false
 
   const wasCommand = await coreOnSendMessage(rawMessage, {
     attachedContext,
@@ -1268,11 +1324,18 @@ const onGlobalKeyDown = event => {
 watch(
   () => workflowStore.messages,
   () => {
-    nextTick(() => {
-      messageListRef.value?.scrollToBottom()
-    })
+    scrollMessageListToBottom(false)
   },
   { deep: true }
+)
+
+watch(
+  () => workflowStore.messageQueue.length,
+  (nextLength, previousLength) => {
+    if (nextLength > previousLength) {
+      scrollMessageListToBottom()
+    }
+  }
 )
 
 watch(
@@ -1358,7 +1421,7 @@ onMounted(async () => {
   window.addEventListener('resize', updateMaxWidth)
 
   // Initial scroll
-  nextTick(() => messageListRef.value?.scrollToBottom(true))
+  scrollMessageListToBottom()
 })
 
 onBeforeUnmount(() => {

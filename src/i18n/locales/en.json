@@ -865,6 +865,7 @@
       "title": "Code Exploration"
     },
     "finalAuditTooltip": "Final audit mode: AI automatically performs quality review before task completion",
+    "finalReviewPending": "Final review",
     "finishTask": "Finish task",
     "historyTab": "Conversation",
     "installedSkillsGroup": "Installed Skills",

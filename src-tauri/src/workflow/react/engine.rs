@@ -3678,7 +3678,14 @@ impl WorkflowExecutor {
                         );
                     }
                     Self::enrich_tool_observation_metadata(tool_name, &mut metadata, reinforced);
-                    if tool_name == crate::tools::TOOL_SUB_AGENT_RUN {
+                    if tool_name == crate::tools::TOOL_SUB_AGENT_RUN
+                        || (tool_name == crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                            && reinforced.approval_status.as_deref() == Some("pending"))
+                    {
+                        if tool_name == crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY {
+                            metadata["review_display_state"] =
+                                serde_json::json!("final_review_pending");
+                        }
                         if let Ok(task_result) =
                             serde_json::from_str::<serde_json::Value>(&reinforced.content)
                         {

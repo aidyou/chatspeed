@@ -443,6 +443,10 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  isPreparingImageSend: {
+    type: Boolean,
+    default: false
+  },
   showSkillSuggestions: {
     type: Boolean,
     default: false
@@ -565,6 +569,7 @@ const canSendMessage = computed(
     (inputMessage.value.trim() !== '' || props.attachments.length > 0) &&
     props.selectedAgent &&
     !props.attachments.some(attachment => attachment.uploading) &&
+    !props.isPreparingImageSend &&
     !isStopping.value
 )
 

@@ -85,9 +85,30 @@ export function useWorkflowMessages() {
 
     const buildSubAgentCard = message => {
       const meta = message?.metadata || {}
-      if (String(meta.tool_name || '').toLowerCase() !== 'sub_agent_run') return null
+      const toolName = String(meta.tool_name || '').toLowerCase()
+      const directTaskId =
+        meta.sub_agent_id || meta.subAgentId || meta.data?.sub_agent_id || meta.data?.subAgentId || ''
+      if (toolName !== 'sub_agent_run' && !directTaskId) return null
 
-      const payload = parseSubAgentRunPayload(message)
+      const payload =
+        toolName === 'sub_agent_run'
+          ? parseSubAgentRunPayload(message)
+          : {
+              taskId: directTaskId,
+              mode: meta.sub_agent_mode || meta.subAgentMode || 'call',
+              task:
+                meta.sub_agent_task ||
+                meta.subAgentTask ||
+                meta.data?.sub_agent_task ||
+                meta.data?.subAgentTask ||
+                '',
+              agent:
+                meta.sub_agent_name ||
+                meta.subAgentName ||
+                meta.data?.sub_agent_name ||
+                meta.data?.subAgentName ||
+                ''
+            }
       const liveProgress = payload.taskId ? subAgentProgressById.get(payload.taskId) : null
       const completion = payload.taskId ? subAgentCompletions.get(payload.taskId) : null
       const completionResult = completion?.result || completion?.data?.result || {}
