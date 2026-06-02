@@ -1418,7 +1418,7 @@ export function useWorkflowCore({
             return true
         }
         if (cmd === '/skills-config') {
-            openSkillsSelector?.()
+            await openSkillsSelector?.()
             return true
         }
         return false

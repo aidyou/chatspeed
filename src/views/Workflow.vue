@@ -479,7 +479,8 @@ const core = useWorkflowCore({
   processChunk,
   processReasoningChunk,
   setCompressionStatus,
-  openSkillsSelector: () => {
+  openSkillsSelector: async () => {
+    await fetchSystemSkills()
     skillsSelectorVisible.value = true
   },
   scrollToBottom: (force = false) => messageListRef.value?.scrollToBottom(force)
@@ -1014,11 +1015,12 @@ const onSkillSelect = skill => {
   }
 }
 
-const openSkillsSelector = () => {
+const openSkillsSelector = async () => {
   if (!currentWorkflowId.value && !selectedAgent.value) {
     showMessage(t('workflow.noAgentError'), 'warning')
     return
   }
+  await fetchSystemSkills()
   skillsSelectorVisible.value = true
 }
 
