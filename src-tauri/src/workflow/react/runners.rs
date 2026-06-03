@@ -34,14 +34,6 @@ impl ReActExecutor for ExecutionExecutor {
         self.executor.begin_new_context_segment().await
     }
 
-    async fn begin_execution_context_from_approved_plan(
-        &mut self,
-    ) -> Result<(), WorkflowEngineError> {
-        self.executor
-            .begin_execution_context_from_approved_plan()
-            .await
-    }
-
     async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError> {
         self.executor.prepare_completed_resume().await
     }

@@ -483,12 +483,6 @@ mod tests {
             Ok(())
         }
 
-        async fn begin_execution_context_from_approved_plan(
-            &mut self,
-        ) -> Result<(), WorkflowEngineError> {
-            Ok(())
-        }
-
         async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError> {
             self.state = WorkflowState::Thinking;
             Ok(())

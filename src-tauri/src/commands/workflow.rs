@@ -37,6 +37,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
+#[cfg(test)]
+use rusqlite::params;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowMemoryDiagnostics {
@@ -321,6 +324,21 @@ async fn inject_runtime_config_signal(
     Ok(())
 }
 
+fn raw_workflow_agent_config_json(store: &MainStore, session_id: &str) -> Result<String, String> {
+    store
+        .get_workflow(session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Workflow {} not found", session_id))
+        .map(|workflow| workflow.agent_config.unwrap_or_else(|| "{}".to_string()))
+}
+
+fn raw_workflow_agent_config(store: &MainStore, session_id: &str) -> Result<AgentConfig, String> {
+    Ok(
+        AgentConfig::from_json(&raw_workflow_agent_config_json(store, session_id)?)
+            .unwrap_or_default(),
+    )
+}
+
 fn previous_completed_task_context(messages: &[WorkflowMessage]) -> Option<(String, String)> {
     let completion_indices: Vec<usize> = messages
         .iter()
@@ -570,10 +588,6 @@ fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessa
     merged
 }
 
-fn is_final_tool_execution_status(status: &str) -> bool {
-    matches!(status, "completed" | "failed" | "rejected" | "interrupted")
-}
-
 fn normalize_snapshot_after_live_reconciliation(
     store: &MainStore,
     session_id: &str,
@@ -593,78 +607,6 @@ fn normalize_snapshot_after_live_reconciliation(
             .update_workflow_status(session_id, &WorkflowState::Cancelled.to_string())
             .map_err(|e| e.to_string())?;
         snapshot.workflow.status = WorkflowState::Cancelled.to_string();
-    }
-
-    let mut finalized_tool_ids = std::collections::HashSet::new();
-    for message in &snapshot.messages {
-        let Some(meta) = message.metadata.as_ref() else {
-            continue;
-        };
-        let Some(tool_call_id) = meta.get("tool_call_id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let execution_status = meta
-            .get("execution_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let approval_status = meta
-            .get("approval_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        if is_final_tool_execution_status(execution_status)
-            || (message.role == "tool"
-                && approval_status != "pending"
-                && !matches!(
-                    execution_status,
-                    "approval_submitted" | "running" | "pending_approval"
-                ))
-        {
-            finalized_tool_ids.insert(tool_call_id.to_string());
-        }
-    }
-
-    for message in &mut snapshot.messages {
-        let Some(message_id) = message.id else {
-            continue;
-        };
-        let Some(meta) = message.metadata.as_mut() else {
-            continue;
-        };
-        let Some(tool_call_id) = meta
-            .get("tool_call_id")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-        else {
-            continue;
-        };
-        if finalized_tool_ids.contains(&tool_call_id) {
-            continue;
-        }
-
-        let execution_status = meta
-            .get("execution_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        if !matches!(execution_status, "approval_submitted" | "running") {
-            continue;
-        }
-
-        log::info!(
-            "[Workflow][session={}][phase=snapshot] Runtime tool state '{}' for tool_call_id={} has no live session; normalizing to interrupted",
-            session_id,
-            execution_status,
-            tool_call_id
-        );
-        meta["execution_status"] = json!("interrupted");
-        meta["is_error"] = json!(true);
-        meta["error_type"] = json!("Interrupted");
-        meta["summary"] = json!(rust_i18n::t!("workflow.interrupted_by_restart").to_string());
-        meta["hide_approval_details"] = json!(true);
-        store
-            .update_workflow_message_metadata(message_id, meta)
-            .map_err(|e| e.to_string())?;
-        message.is_error = true;
-        message.error_type = Some("Interrupted".to_string());
     }
 
     Ok(())
@@ -1450,6 +1392,16 @@ pub async fn get_workflow_snapshot(
     );
 
     Ok(snapshot_json)
+}
+
+#[tauri::command]
+pub async fn get_workflow_agent_config(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+) -> Result<Value, String> {
+    let store = state.read().map_err(|e| e.to_string())?;
+    let config_json = raw_workflow_agent_config_json(&store, &session_id)?;
+    serde_json::from_str::<Value>(&config_json).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2605,340 +2557,53 @@ pub async fn workflow_approve_plan(
     agent_id: String,
     plan: String,
 ) -> Result<(), String> {
-    let main_store_arc = main_store.inner().clone();
-    let chat_state_arc = chat_state.inner().clone();
-    let tsid_generator_arc = tsid_generator.inner().clone();
-    let gateway_arc = gateway.inner().clone();
-    let factory_arc = factory.inner().clone();
-    let workflow_manager_arc = workflow_manager.inner().clone();
-    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
-
-    {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
-        store
-            .update_workflow_status(
-                &session_id,
-                &crate::workflow::react::types::WorkflowState::Thinking.to_string(),
-            )
-            .map_err(|e| e.to_string())?;
-    }
-
-    let mut agent_config = {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
-        store
-            .get_agent(&agent_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Agent {} not found", agent_id))?
-    };
-
-    // Load agent_config from workflow record if available and merge into agent_config struct
-    {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
-        if let Ok(snapshot) = store.get_workflow_snapshot(&session_id) {
-            if let Some(config_str) = snapshot.workflow.agent_config {
-                agent_config.merge_config(&config_str);
-            }
-        }
-    }
-    let auto_compress_enabled = {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
-        if let Ok(snapshot) = store.get_workflow_snapshot(&session_id) {
-            snapshot
-                .workflow
-                .agent_config
-                .as_ref()
-                .and_then(|s| serde_json::from_str::<Value>(s).ok())
-                .map(|config| workflow_auto_compress_enabled(&config))
-                .unwrap_or(true)
-        } else {
-            true
-        }
-    };
-
-    let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
-    gateway_arc
-        .register_session_tx_with_source(
-            session_id.clone(),
-            signal_tx.clone(),
-            "workflow_approve_plan",
-        )
-        .await;
-    WorkflowManager::register_session_signal_tx_with_source(
-        session_id.clone(),
-        signal_tx,
-        "workflow_approve_plan",
+    log::info!(
+        "[Workflow][session={}][phase=approve_plan] Legacy workflow_approve_plan called for agent_id={}; routing through workflow_signal approval",
+        session_id,
+        agent_id
     );
 
-    let allowed_paths = {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        let wf = snapshot.workflow;
-
-        let agent_cfg = wf
-            .agent_config
-            .as_ref()
-            .and_then(|s| AgentConfig::from_json(s))
-            .unwrap_or_default();
-
-        let paths: Vec<String> = agent_cfg.allowed_paths.unwrap_or_default();
-
-        paths
-    };
-
-    let global_tool_manager = chat_state_arc.tool_manager.clone();
-
-    let allowed_roots: Vec<PathBuf> = allowed_paths
-        .into_iter()
-        .map(|p| {
-            let path = PathBuf::from(p);
-            if path.is_absolute() {
-                path
-            } else {
-                std::env::current_dir().unwrap_or_default().join(path)
-            }
-        })
-        .collect();
-
-    // Transition to Execution/Implementation
-    let executor_obj = crate::workflow::react::runners::ExecutionExecutor::new(
-        session_id.clone(),
-        main_store_arc.clone(),
-        chat_state_arc,
-        gateway_arc.clone() as Arc<dyn Gateway>,
-        factory_arc,
-        agent_config,
-        allowed_roots,
-        app_data_dir,
-        None,
-        Some(signal_rx),
-        tsid_generator_arc,
-        global_tool_manager,
-        auto_compress_enabled,
-        crate::workflow::react::policy::ExecutionPolicy::implementation(),
-    );
-
-    // [Bug Fix] Correctly re-register tools for Implementation phase
-    {
-        // Tools are registered during executor.init() which is called below
-    }
-
-    let shared_executor: Arc<
-        tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
-    > = Arc::new(tokio::sync::Mutex::new(executor_obj));
-
-    {
-        let mut executor = shared_executor.lock().await;
-        executor.init().await.map_err(|e| e.to_string())?;
-
-        let todo_json = {
-            let store = main_store_arc.read().map_err(|e| e.to_string())?;
-            let todos = store
-                .get_todo_list_for_workflow(&session_id)
-                .map_err(|e| e.to_string())?;
-            serde_json::to_string_pretty(&todos).unwrap_or_else(|_| "[]".to_string())
-        };
-
-        let mut executor_guard = executor;
-        executor_guard
-            .add_message_and_notify(
-                "system".into(),
+    let submit_plan_tool_call_id =
+        restore_context_for_signal(main_store.inner().clone(), &session_id)
+            .and_then(|context| {
+                context
+                    .pending_tools
+                    .into_iter()
+                    .find(|tool| tool.tool_name == crate::tools::TOOL_SUBMIT_PLAN)
+                    .map(|tool| tool.tool_call_id)
+            })
+            .ok_or_else(|| {
                 format!(
-                    "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## TODO LIST\n{}",
-                    plan, todo_json
-                ),
-                None,
-                None,
-                None,
-                false,
-                None,
-                Some(json!({
-                    "type": "summary",
-                    "subtype": "approved_plan",
-                    "plan_content": plan,
-                    "todo_content": todo_json
-                })),
+                "Cannot approve plan: no pending structured submit_plan approval for workflow {}",
+                session_id
             )
-            .await
-            .map_err(|e| e.to_string())?;
+            })?;
 
-        executor_guard
-            .begin_execution_context_from_approved_plan()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        executor_guard.add_message_and_notify(
-            "user".into(),
-            format!(
-                "The plan has been approved. Please proceed with execution.\n\nApproved Plan:\n{}\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
-                plan,
-                crate::workflow::react::prompts::APPROVED_PLAN_EXECUTION_REMINDER
-            ),
-            None,
-            None,
-            Some(StepType::Observe),
-            false,
-            None,
-            None,
-        ).await.map_err(|e| e.to_string())?;
-
-        // Re-sync pruned history to the UI
-        for msg in executor_guard.messages() {
-            let _ = gateway_arc
-                .send(
-                    &session_id,
-                    crate::workflow::react::types::GatewayPayload::Message {
-                        role: msg.role.clone(),
-                        content: msg.message.clone(),
-                        reasoning: msg.reasoning.clone(),
-                        step_type: msg.step_type.as_ref().and_then(|s| s.parse().ok()),
-                        step_index: msg.step_index,
-                        is_error: msg.is_error,
-                        error_type: msg.error_type.clone(),
-                        metadata: msg.metadata.clone(),
-                    },
-                )
-                .await;
+    let signal = json!({
+        "type": SignalType::Approval.as_str(),
+        "id": submit_plan_tool_call_id,
+        "approved": true,
+        "approve_all": false,
+        "metadata": {
+            "source": "workflow_approve_plan_compat",
+            "legacy_plan_length": plan.len()
         }
-    }
+    })
+    .to_string();
 
-    // Register to WorkflowManager FIRST (primary registry)
-    if let Err(e) = workflow_manager_arc.register_session(
-        session_id.clone(),
-        shared_executor.clone(),
-        ManagedSessionStatus::Active,
-    ) {
-        log::error!(
-            "[Workflow][session={}][phase=approve_plan] Failed to register to WorkflowManager: {}",
-            session_id,
-            e
-        );
-        return Err(format!("Failed to register workflow session: {}", e));
-    }
-
-    // BACKGROUND_TASKS as compatibility layer (secondary)
-    BACKGROUND_TASKS.insert(
-        session_id.clone(),
-        BackgroundTask::SubAgent {
-            owner_session_id: None,
-            executor: shared_executor.clone(),
-            output_accessible: false,
-        },
-    );
-
-    let session_id_for_spawn = session_id.clone();
-    let gateway_for_spawn = gateway_arc.clone();
-    let manager_for_spawn = workflow_manager_arc.clone();
-    let main_store_for_spawn = main_store_arc.clone();
-    tokio::spawn(async move {
-        let mut guard = shared_executor.lock().await;
-        if let Err(e) = guard.run_loop().await {
-            if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
-                if let Ok(store) = main_store_for_spawn.read() {
-                    let _ = store.update_workflow_status(
-                        &session_id_for_spawn,
-                        &WorkflowState::Cancelled.to_string(),
-                    );
-                }
-                let _ = manager_for_spawn
-                    .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
-                log::info!(
-                    "[Workflow][session={}][phase=run_loop][event=cancelled] Workflow session was cancelled by user",
-                    session_id_for_spawn
-                );
-                let _ = gateway_for_spawn
-                    .send(
-                        &session_id_for_spawn,
-                        crate::workflow::react::types::GatewayPayload::State {
-                            state: WorkflowState::Cancelled,
-                            wait_reason: None,
-                        },
-                    )
-                    .await;
-                manager_for_spawn.remove_session(&session_id_for_spawn);
-                BACKGROUND_TASKS.remove(&session_id_for_spawn);
-                WorkflowManager::unregister_session_signal_tx_with_source(
-                    &session_id_for_spawn,
-                    "workflow_approve_plan.run_loop.cancelled",
-                );
-                gateway_for_spawn
-                    .unregister_session_with_source(
-                        &session_id_for_spawn,
-                        "workflow_approve_plan.run_loop.cancelled",
-                    )
-                    .await;
-                return;
-            }
-
-            log::error!(
-                "[Workflow][session={}][phase=run_loop][event=crash] Workflow error: {:?}",
-                session_id_for_spawn,
-                e
-            );
-            let _ = manager_for_spawn
-                .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Failed);
-
-            // Notify UI about the fatal crash
-            let _ = gateway_for_spawn
-                .send(
-                    &session_id_for_spawn,
-                    crate::workflow::react::types::GatewayPayload::State {
-                        state: crate::workflow::react::types::WorkflowState::Error,
-                        wait_reason: None,
-                    },
-                )
-                .await;
-
-            let _ = gateway_for_spawn
-                .send(
-                    &session_id_for_spawn,
-                    crate::workflow::react::types::GatewayPayload::Message {
-                        role: "assistant".to_string(),
-                        content: format!(
-                            "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
-                            e
-                        ),
-                        reasoning: None,
-                        step_type: None,
-                        step_index: 0,
-                        is_error: true,
-                        error_type: Some("engine".to_string()),
-                        metadata: None,
-                    },
-                )
-                .await;
-        }
-        if matches!(guard.state(), WorkflowState::Completed) {
-            let _ = manager_for_spawn
-                .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Completed);
-            if let Some(completed_at_ms) =
-                manager_for_spawn.get_session_updated_at_ms(&session_id_for_spawn)
-            {
-                schedule_completed_session_cleanup(
-                    session_id_for_spawn.clone(),
-                    completed_at_ms,
-                    gateway_for_spawn.clone(),
-                    manager_for_spawn.clone(),
-                );
-            }
-        } else {
-            manager_for_spawn.remove_session(&session_id_for_spawn);
-            BACKGROUND_TASKS.remove(&session_id_for_spawn);
-            WorkflowManager::unregister_session_signal_tx_with_source(
-                &session_id_for_spawn,
-                "workflow_approve_plan.run_loop.finalize",
-            );
-            gateway_for_spawn
-                .unregister_session_with_source(
-                    &session_id_for_spawn,
-                    "workflow_approve_plan.run_loop.finalize",
-                )
-                .await;
-        }
-    });
-
-    Ok(())
+    workflow_signal(
+        app,
+        main_store,
+        chat_state,
+        tsid_generator,
+        gateway,
+        factory,
+        workflow_manager,
+        session_id,
+        signal,
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -3875,27 +3540,12 @@ pub async fn update_workflow_allowed_paths(
         serde_json::from_value(allowed_paths.clone()).map_err(|e| e.to_string())?;
     let previous_config_json = {
         let store = state.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .agent_config
-            .unwrap_or_else(|| "{}".to_string())
+        raw_workflow_agent_config_json(&store, &session_id)?
     };
 
     {
         let store = state.read().map_err(|e| e.to_string())?;
-
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-
-        let mut config = snapshot
-            .workflow
-            .agent_config
-            .and_then(|s| AgentConfig::from_json(&s))
-            .unwrap_or_default();
+        let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.allowed_paths = Some(runtime_paths.clone());
 
@@ -3943,26 +3593,11 @@ pub async fn update_workflow_final_audit(
 ) -> Result<(), String> {
     let previous_config_json = {
         let store = state.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .agent_config
-            .unwrap_or_else(|| "{}".to_string())
+        raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
         let store = state.read().map_err(|e| e.to_string())?;
-
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-
-        let mut config = snapshot
-            .workflow
-            .agent_config
-            .and_then(|s| AgentConfig::from_json(&s))
-            .unwrap_or_default();
+        let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.final_audit = Some(final_audit);
         config.final_review_mode = Some(if final_audit {
@@ -4003,26 +3638,11 @@ pub async fn update_workflow_auto_compress(
 ) -> Result<(), String> {
     let previous_config_json = {
         let store = state.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .agent_config
-            .unwrap_or_else(|| "{}".to_string())
+        raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
         let store = state.read().map_err(|e| e.to_string())?;
-
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-
-        let mut config = snapshot
-            .workflow
-            .agent_config
-            .and_then(|s| AgentConfig::from_json(&s))
-            .unwrap_or_default();
+        let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.auto_compress = Some(auto_compress);
 
@@ -4058,26 +3678,13 @@ pub async fn update_workflow_model_config(
 ) -> Result<(), String> {
     let previous_config_json = {
         let store = state.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .agent_config
-            .unwrap_or_else(|| "{}".to_string())
+        raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
         let store = state.read().map_err(|e| e.to_string())?;
-
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-
-        let mut agent_config = snapshot
-            .workflow
-            .agent_config
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .unwrap_or(json!({}));
+        let mut agent_config =
+            serde_json::from_str::<Value>(&raw_workflow_agent_config_json(&store, &session_id)?)
+                .unwrap_or(json!({}));
 
         agent_config["models"] = configs.clone();
 
@@ -4114,26 +3721,11 @@ pub async fn update_workflow_skills_config(
 ) -> Result<(), String> {
     let previous_config_json = {
         let store = state.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .agent_config
-            .unwrap_or_else(|| "{}".to_string())
+        raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
         let store = state.read().map_err(|e| e.to_string())?;
-
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-
-        let mut config = snapshot
-            .workflow
-            .agent_config
-            .and_then(|s| AgentConfig::from_json(&s))
-            .unwrap_or_default();
+        let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.skill_enabled = Some(skill_enabled);
         config.selected_skills = Some(selected_skills.clone());
@@ -4171,26 +3763,11 @@ pub async fn update_workflow_approval_level(
 ) -> Result<(), String> {
     let previous_config_json = {
         let store = state.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .agent_config
-            .unwrap_or_else(|| "{}".to_string())
+        raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
         let store = state.read().map_err(|e| e.to_string())?;
-
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-
-        let mut config = snapshot
-            .workflow
-            .agent_config
-            .and_then(|s| AgentConfig::from_json(&s))
-            .unwrap_or_default();
+        let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.approval_level = Some(approval_level.clone());
 
@@ -4226,26 +3803,11 @@ pub async fn update_workflow_phase(
 ) -> Result<(), String> {
     let previous_config_json = {
         let store = state.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .agent_config
-            .unwrap_or_else(|| "{}".to_string())
+        raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
         let store = state.read().map_err(|e| e.to_string())?;
-
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-
-        let mut config = snapshot
-            .workflow
-            .agent_config
-            .and_then(|s| AgentConfig::from_json(&s))
-            .unwrap_or_default();
+        let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.phase = Some(phase.clone());
 
@@ -4354,16 +3916,10 @@ pub async fn get_auto_approved_tools(
     session_id: String,
 ) -> Result<Vec<String>, String> {
     let store = state.read().map_err(|e| e.to_string())?;
-
-    // Get workflow snapshot
-    let snapshot = store
-        .get_workflow_snapshot(&session_id)
-        .map_err(|e| e.to_string())?;
-
-    // Parse agent_config to extract auto_approve list
-    let auto_approve = snapshot
-        .workflow
-        .agent_config
+    let auto_approve = store
+        .get_workflow(&session_id)
+        .map_err(|e| e.to_string())?
+        .and_then(|workflow| workflow.agent_config)
         .and_then(|s| AgentConfig::from_json(&s))
         .and_then(|config| config.auto_approve)
         .unwrap_or_default();
@@ -4381,29 +3937,14 @@ pub async fn remove_auto_approved_tool(
 ) -> Result<(), String> {
     let previous_config_json = {
         let store = state.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .agent_config
-            .unwrap_or_else(|| "{}".to_string())
+        raw_workflow_agent_config_json(&store, &session_id)?
     };
 
     // Update database first
     {
         let store = state.read().map_err(|e| e.to_string())?;
 
-        // Get current config
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-
-        let mut config = snapshot
-            .workflow
-            .agent_config
-            .and_then(|s| AgentConfig::from_json(&s))
-            .unwrap_or_default();
+        let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         // Remove tool from auto_approve list
         if let Some(ref mut tools) = config.auto_approve {
@@ -4443,29 +3984,14 @@ pub async fn remove_shell_policy_item(
 ) -> Result<(), String> {
     let previous_config_json = {
         let store = state.read().map_err(|e| e.to_string())?;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-        snapshot
-            .workflow
-            .agent_config
-            .unwrap_or_else(|| "{}".to_string())
+        raw_workflow_agent_config_json(&store, &session_id)?
     };
 
     // Update database first
     {
         let store = state.read().map_err(|e| e.to_string())?;
 
-        // Get current config
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?;
-
-        let mut config = snapshot
-            .workflow
-            .agent_config
-            .and_then(|s| AgentConfig::from_json(&s))
-            .unwrap_or_default();
+        let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         // Remove item from shell_policy list
         if let Some(ref mut policy) = config.shell_policy {
@@ -4571,6 +4097,31 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    fn create_test_store() -> MainStore {
+        let dir = tempdir().expect("failed to create temp dir");
+        let db_path = dir.path().join("workflow_commands_test.db");
+        MainStore::new(db_path).expect("failed to create MainStore")
+    }
+
+    fn seed_agent(store: &MainStore, agent_id: &str) {
+        let conn = store
+            .conn
+            .lock()
+            .expect("failed to lock db connection for agent seed");
+        conn.execute(
+            "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                agent_id,
+                "Agent Test",
+                "You are a test agent.",
+                "autonomous",
+                20
+            ],
+        )
+        .expect("failed to seed agent");
+    }
 
     #[test]
     fn test_compat_wait_reason_from_snapshot_status() {
@@ -4731,6 +4282,122 @@ mod tests {
             Some(ManagedSessionStatus::Failed)
         ));
         assert!(!should_inject_terminal_user_message_into_live_session(None));
+    }
+
+    #[test]
+    fn test_normalize_snapshot_does_not_interrupt_waiting_approval_workflow() {
+        let store = create_test_store();
+        let session_id = "snapshot-awaiting-approval";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+        store
+            .update_workflow_status(session_id, "awaiting_approval")
+            .expect("failed to update workflow status");
+        let message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "Plan awaiting approval".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "submit_plan_1",
+                    "tool_name": crate::tools::TOOL_SUBMIT_PLAN,
+                    "approval_status": "approved",
+                    "execution_status": "approval_submitted",
+                    "summary": "Pending execution after approval"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add workflow message");
+
+        let mut snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot");
+        normalize_snapshot_after_live_reconciliation(&store, session_id, &mut snapshot, false)
+            .expect("normalization should succeed");
+
+        assert_eq!(snapshot.messages.len(), 1);
+        let normalized = &snapshot.messages[0];
+        assert_eq!(normalized.id, message.id);
+        assert!(!normalized.is_error);
+        assert_eq!(normalized.error_type, None);
+        assert_eq!(
+            normalized
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("execution_status"))
+                .and_then(|value| value.as_str()),
+            Some("approval_submitted")
+        );
+    }
+
+    #[test]
+    fn test_normalize_snapshot_keeps_running_workflow_messages_unchanged_without_live_session() {
+        let store = create_test_store();
+        let session_id = "snapshot-executing-orphan";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+        store
+            .update_workflow_status(session_id, "executing")
+            .expect("failed to update workflow status");
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "Still running".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "tool_1",
+                    "tool_name": "edit_file",
+                    "approval_status": "approved",
+                    "execution_status": "running",
+                    "summary": "Running"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add workflow message");
+
+        let mut snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot");
+        normalize_snapshot_after_live_reconciliation(&store, session_id, &mut snapshot, false)
+            .expect("normalization should succeed");
+
+        let normalized = &snapshot.messages[0];
+        assert!(!normalized.is_error);
+        assert_eq!(normalized.error_type, None);
+        assert_eq!(
+            normalized
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("execution_status"))
+                .and_then(|value| value.as_str()),
+            Some("running")
+        );
     }
 
     #[test]

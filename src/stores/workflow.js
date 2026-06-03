@@ -365,7 +365,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     if (!currentWorkflow.value?.id) return false;
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
     if (
-      RUNNING_STATUSES.includes(status) ||
       status === WORKFLOW_STATUSES.COMPLETED ||
       status === WORKFLOW_STATUSES.STOPPING
     ) {
@@ -389,6 +388,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
 
     return [
+      ...RUNNING_STATUSES,
       WORKFLOW_STATUSES.PAUSED,
       WORKFLOW_STATUSES.AWAITING_USER,
       WORKFLOW_STATUSES.AWAITING_SUB_AGENT,
@@ -425,29 +425,26 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const pendingPlanApprovalRequest = computed(() => {
     const structured = getStructuredPendingApproval(currentWorkflow.value?.executionContext);
-    if (structured?.toolName === 'submit_plan') {
+    if (structured?.toolName === 'submit_plan' && structured.toolCallId) {
       return structured;
     }
 
-    const assistantMsgs = messages.value.filter((message) => message?.role === 'assistant');
-    for (let i = assistantMsgs.length - 1; i >= 0; i -= 1) {
-      const message = assistantMsgs[i];
-      const metadata = message?.metadata;
-      const toolCalls = metadata?.tool_calls || (metadata?.tool ? [metadata.tool] : []);
-      if (!Array.isArray(toolCalls) || toolCalls.length === 0) continue;
-
-      const hasSubmitPlan = toolCalls.some(
-        (call) => call?.name === 'submit_plan' || call?.function?.name === 'submit_plan'
-      );
-      if (hasSubmitPlan) {
-        return {
-          toolCallId: '',
-          toolName: 'submit_plan',
-          arguments: null,
-          details: null,
-          displayType: 'markdown'
-        };
-      }
+    const legacy = pendingApprovalMessage.value;
+    if (
+      legacy?.metadata?.tool_call_id &&
+      legacy?.metadata?.tool_name === 'submit_plan' &&
+      legacy?.metadata?.approval_status === 'pending'
+    ) {
+      return {
+        toolCallId: legacy.metadata.tool_call_id,
+        toolName: 'submit_plan',
+        arguments:
+          legacy.metadata.tool_call?.function?.arguments ||
+          legacy.metadata.tool_call?.arguments ||
+          null,
+        details: legacy.metadata.details ?? null,
+        displayType: legacy.metadata.display_type || ''
+      };
     }
 
     return null;

@@ -485,6 +485,7 @@ Your primary goal is to perform the implementation steps accurately and safely.
 
 **RULES & GUIDELINES**:
 - **Stick to the Plan**: Follow the approved implementation strategy closely. If you encounter a significant obstacle that requires a major change in strategy, inform the user via `ask_user`.
+- **Approval Means Execute**: The user's plan approval is already explicit authorization to begin implementing the approved plan. Do NOT ask the user whether to start, continue, or confirm execution of the approved plan.
 - **Primary Focus**: Perform real actions (file edits, bash commands, tool integrations) within the authorized directories.
 - **Verification**: After each major implementation step, use read or search tools to verify your changes.
 - **Completion**: Once all steps in your todo list are finished, provide a final report summarizing the changes made and call `complete_workflow_with_summary`."#;
@@ -696,4 +697,8 @@ Remember:
 - Be multilingual and semantic, not keyword-bound
 - Be conservative: only extract things that are clearly durable preferences, conventions, facts, or constraints."#;
 
-pub const APPROVED_PLAN_EXECUTION_REMINDER: &str = r#"The plan has been approved and the workflow has switched to implementation. Use the approved plan as execution guidance. Do not assume an approved plan automatically requires todo tracking. Use todo* tools only when execution has multiple concrete units, meaningful verification steps, or real interruption risk; skip todos for single-step or immediately verifiable local work."#;
+pub const APPROVED_PLAN_EXECUTION_REMINDER: &str = r#"The plan has been approved and the workflow has switched to implementation. This approval is the user's instruction to begin executing the approved plan now.
+
+Do not ask the user whether to start, continue, or confirm execution of this approved plan. Use `ask_user` only if you discover a new blocking ambiguity, safety issue, missing credential, destructive action, or major strategy change that is not covered by the approved plan.
+
+Use the approved plan as execution guidance. Do not assume an approved plan automatically requires todo tracking. Use todo* tools only when execution has multiple concrete units, meaningful verification steps, or real interruption risk; skip todos for single-step or immediately verifiable local work."#;

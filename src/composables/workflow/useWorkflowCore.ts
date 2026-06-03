@@ -228,6 +228,23 @@ export function useWorkflowCore({
     }
     const isSyncingWorkflowConfig = ref(false)
     const currentPhaseValue = () => (planningMode.value ? 'planning' : 'standard')
+    const getCurrentWorkflowAgentConfig = () => {
+        const rawConfig =
+            workflowStore.currentWorkflow?.agentConfig ??
+            currentWorkflow.value?.agentConfig ??
+            {}
+
+        if (!rawConfig) return {}
+        if (typeof rawConfig === 'string') {
+            try {
+                return JSON.parse(rawConfig)
+            } catch {
+                return {}
+            }
+        }
+
+        return typeof rawConfig === 'object' ? { ...rawConfig } : {}
+    }
 
     const syncWorkflowUiControlsFromConfig = (config = {}) => {
         isSyncingWorkflowConfig.value = true
@@ -259,14 +276,9 @@ export function useWorkflowCore({
     const refreshCurrentWorkflowUiConfig = async () => {
         if (!currentWorkflowId.value) return
         try {
-            const snapshot = await invokeWrapper('get_workflow_snapshot', {
+            const config = await invokeWrapper('get_workflow_agent_config', {
                 sessionId: currentWorkflowId.value
             })
-            const config = snapshot.workflow?.agentConfig
-                ? typeof snapshot.workflow.agentConfig === 'string'
-                    ? JSON.parse(snapshot.workflow.agentConfig)
-                    : snapshot.workflow.agentConfig
-                : {}
 
             applyWorkflowConfigToLocalStore(config)
             syncWorkflowUiControlsFromConfig(config)
@@ -296,6 +308,24 @@ export function useWorkflowCore({
         }
     }
 
+    const syncWorkflowPhaseLocally = (phase) => {
+        const normalizedPhase = String(phase || '').toLowerCase()
+        isSyncingWorkflowConfig.value = true
+        try {
+            applyWorkflowConfigToLocalStore({ phase: normalizedPhase })
+            planningMode.value = normalizedPhase === 'planning'
+        } finally {
+            isSyncingWorkflowConfig.value = false
+        }
+    }
+
+    const transitionWorkflowIntoExecutionLocally = (sessionId) => {
+        if (!sessionId || workflowStore.currentWorkflowId !== sessionId) return
+        syncWorkflowPhaseLocally('implementation')
+        workflowStore.updateWorkflowStatus(sessionId, WORKFLOW_STATUSES.THINKING, null)
+        workflowStore.setHasLiveSession(true)
+    }
+
     const mergeLocalUiOverrides = (baseConfig = {}) => ({
         ...baseConfig,
         approvalLevel: approvalLevel.value,
@@ -306,19 +336,7 @@ export function useWorkflowCore({
 
     const persistCurrentWorkflowUiConfigBeforeStart = async () => {
         if (!currentWorkflowId.value) return
-
-        const snapshot = await invokeWrapper('get_workflow_snapshot', {
-            sessionId: currentWorkflowId.value
-        })
-
-        let agentConfig = {}
-        if (snapshot.workflow?.agentConfig) {
-            agentConfig = typeof snapshot.workflow.agentConfig === 'string'
-                ? JSON.parse(snapshot.workflow.agentConfig)
-                : snapshot.workflow.agentConfig
-        }
-
-        const nextConfig = mergeLocalUiOverrides(agentConfig)
+        const nextConfig = mergeLocalUiOverrides(getCurrentWorkflowAgentConfig())
 
         await invokeWrapper('update_workflow_agent_config', {
             sessionId: currentWorkflowId.value,
@@ -370,17 +388,7 @@ export function useWorkflowCore({
             }
 
             // 1. Update database
-            const snapshot = await invokeWrapper('get_workflow_snapshot', {
-                sessionId: currentWorkflowId.value
-            })
-
-            let agentConfig = {}
-            if (snapshot.workflow?.agentConfig) {
-                agentConfig = typeof snapshot.workflow.agentConfig === 'string'
-                    ? JSON.parse(snapshot.workflow.agentConfig)
-                    : snapshot.workflow.agentConfig
-            }
-
+            const agentConfig = getCurrentWorkflowAgentConfig()
             agentConfig[key] = value
 
             await invokeWrapper('update_workflow_agent_config', {
@@ -792,19 +800,16 @@ export function useWorkflowCore({
                     }
                 } else if (payload.type === 'chunk') {
                     markSessionLiveFromNonTerminalEvent()
-                    if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Direct text chunk from LLM or StreamParser
                     processChunk(payload.content)
                     scrollToBottom()
                 } else if (payload.type === 'reasoning_chunk') {
                     markSessionLiveFromNonTerminalEvent()
-                    if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Thinking chunk
                     processReasoningChunk(payload.content)
                     scrollToBottom()
                 } else if (payload.type === 'message') {
                     markSessionLiveFromNonTerminalEvent()
-                    if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // ReAct engine sends incremental messages or chunks
                     workflowStore.addMessage({
                         sessionId: sessionId,
@@ -833,6 +838,9 @@ export function useWorkflowCore({
                     markSessionLiveFromNonTerminalEvent()
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
+                    if (payload.approved && payload.tool_name === 'submit_plan') {
+                        transitionWorkflowIntoExecutionLocally(sessionId)
+                    }
                     if (payload.approved) {
                         if (payload.execution_status === 'approval_submitted') {
                             workflowStore.markToolApprovalSubmitted(
@@ -852,13 +860,15 @@ export function useWorkflowCore({
                     markSessionLiveFromNonTerminalEvent()
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
+                    if (payload.tool_name === 'submit_plan') {
+                        transitionWorkflowIntoExecutionLocally(sessionId)
+                    }
                     workflowStore.markToolApprovedRunning(payload.tool_call_id, payload.tool_name)
                 } else if (payload.type === 'queued_user_message_removed') {
                     markSessionLiveFromNonTerminalEvent()
                     workflowStore.removeQueuedMessage(payload.queued_user_message_id)
                 } else if (payload.type === 'retry_status') {
                     markSessionLiveFromNonTerminalEvent()
-                    if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     // Handle 429 retry status
                     setRetryStatus(payload)
                 } else if (payload.type === 'sync_todo') {
@@ -910,7 +920,6 @@ export function useWorkflowCore({
                     workflowStore.upsertSubAgentProgress(payload)
                 } else if (payload.type === 'notification') {
                     markSessionLiveFromNonTerminalEvent()
-                    if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) return
                     workflowStore.setNotification(payload.message, payload.category)
                 } else if (payload.type === 'auto_approved_tools_updated') {
                     markSessionLiveFromNonTerminalEvent()
@@ -1159,17 +1168,9 @@ export function useWorkflowCore({
             let inheritedAgentId = null
             if (currentWorkflowId.value) {
                 try {
-                    const snapshot = await invokeWrapper('get_workflow_snapshot', {
-                        sessionId: currentWorkflowId.value
-                    })
-                    if (snapshot.workflow?.agentConfig) {
-                        const baseConfig =
-                            typeof snapshot.workflow.agentConfig === 'string'
-                                ? JSON.parse(snapshot.workflow.agentConfig)
-                                : snapshot.workflow.agentConfig
-                        inheritedAgentConfig = JSON.stringify(mergeLocalUiOverrides(baseConfig || {}))
-                        inheritedAgentId = snapshot.workflow.agentId
-                    }
+                    const baseConfig = getCurrentWorkflowAgentConfig()
+                    inheritedAgentConfig = JSON.stringify(mergeLocalUiOverrides(baseConfig || {}))
+                    inheritedAgentId = workflowStore.currentWorkflow?.agentId || null
                 } catch (error) {
                     console.warn('Failed to get previous workflow config:', error)
                 }
@@ -1448,55 +1449,60 @@ export function useWorkflowCore({
     const onApprovePlan = async () => {
         if (!currentWorkflowId.value) return
 
-        // Find the last assistant message that contains 'submit_plan' tool call
-        const assistantMsgs = workflowStore.messages.filter((m) => m.role === 'assistant')
-        const lastAssistantMsg = assistantMsgs[assistantMsgs.length - 1]
+        const currentSessionId = currentWorkflowId.value
+        const pendingPlanRequest =
+            workflowStore.pendingApprovalRequest?.toolName === 'submit_plan'
+                ? workflowStore.pendingApprovalRequest
+                : null
+        const structuredPendingSubmitPlan = getExecutionContextPendingTools(
+            workflowStore.currentWorkflow
+        ).find((pendingTool) => {
+            const toolName = String(pendingTool?.toolName || pendingTool?.tool_name || '').trim()
+            const toolCallId = String(pendingTool?.toolCallId || pendingTool?.tool_call_id || '').trim()
+            return toolName === 'submit_plan' && toolCallId
+        })
+        const submitPlanPendingEntry = pendingApprovalList.value.find(
+            (entry) =>
+                entry?.sessionId === currentSessionId &&
+                String(entry?.id || '').trim() &&
+                String(entry?.id) !== 'awaiting_approval' &&
+                String(entry?.action || '').toLowerCase().includes('submit plan')
+        )
+        const submitPlanToolCallId =
+            String(
+                structuredPendingSubmitPlan?.toolCallId ||
+                    structuredPendingSubmitPlan?.tool_call_id ||
+                    pendingPlanRequest?.toolCallId ||
+                    submitPlanPendingEntry?.id ||
+                    ''
+            ).trim()
 
-        if (!lastAssistantMsg) return
-
-        // Extract plan from tool call arguments if available, otherwise use message content
-        let planContent = lastAssistantMsg.message
-        try {
-            const metadata =
-                typeof lastAssistantMsg.metadata === 'string'
-                    ? JSON.parse(lastAssistantMsg.metadata)
-                    : lastAssistantMsg.metadata
-
-            if (metadata && (metadata.tool_calls || metadata.tool)) {
-                const toolCalls = metadata.tool_calls || (metadata.tool ? [metadata.tool] : [])
-                const submitPlanCall = toolCalls.find(
-                    (c) => c.name === 'submit_plan' || (c.function && c.function.name === 'submit_plan')
-                )
-                if (submitPlanCall) {
-                    const args =
-                        typeof submitPlanCall.arguments === 'string'
-                            ? JSON.parse(submitPlanCall.arguments)
-                            : submitPlanCall.arguments ||
-                            submitPlanCall.function?.arguments ||
-                            submitPlanCall.input
-                    if (args && args.plan) {
-                        planContent = args.plan
-                    }
-                }
+        if (submitPlanToolCallId) {
+            try {
+                await invokeWrapper('workflow_signal', {
+                    sessionId: currentSessionId,
+                    signal: JSON.stringify({
+                        type: SIGNAL_TYPES.APPROVAL,
+                        approved: true,
+                        approve_all: false,
+                        id: submitPlanToolCallId
+                    })
+                })
+                console.log('Plan approved via live approval signal')
+                return
+            } catch (error) {
+                console.error('Failed to approve live submit_plan:', error)
+                showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+                return
             }
-        } catch (e) {
-            console.warn(
-                'Failed to extract plan from metadata, using raw message content instead:',
-                e
-            )
         }
 
-        try {
-            await invokeWrapper('workflow_approve_plan', {
-                sessionId: currentWorkflowId.value,
-                agentId: selectedAgent.value.id,
-                plan: planContent
-            })
-            console.log('Plan approved and execution started')
-        } catch (error) {
-            console.error('Failed to approve plan:', error)
-            showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
-        }
+        showMessage(
+            t('workflow.startFailed', {
+                error: 'Missing submit_plan approval id. Refresh the workflow and try again.'
+            }),
+            'error'
+        )
     }
 
     const onStop = async () => {
@@ -1536,9 +1542,12 @@ export function useWorkflowCore({
                     sessionId: currentWorkflowId.value,
                     configs
                 })
-
-                // Refresh current workflow state from DB to update UI
-                await workflowStore.selectWorkflow(currentWorkflowId.value)
+                const nextConfig = {
+                    ...getCurrentWorkflowAgentConfig(),
+                    models: configs
+                }
+                applyWorkflowConfigToLocalStore(nextConfig)
+                syncWorkflowUiControlsFromConfig(nextConfig)
             } else if (selectedAgent.value) {
                 // 2. No active workflow - update agent's default config
                 const updatedAgent = {

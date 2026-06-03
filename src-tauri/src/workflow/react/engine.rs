@@ -62,9 +62,6 @@ pub trait ReActExecutor: Send + Sync {
     async fn init(&mut self) -> Result<(), WorkflowEngineError>;
     async fn run_loop(&mut self) -> Result<(), WorkflowEngineError>;
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError>;
-    async fn begin_execution_context_from_approved_plan(
-        &mut self,
-    ) -> Result<(), WorkflowEngineError>;
     async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError>;
     async fn add_message_and_notify(
         &mut self,
@@ -808,15 +805,6 @@ impl ReActExecutor for WorkflowExecutor {
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
         self.context
             .begin_new_task_segment_from_runtime_projection()
-            .await?;
-        self.save_snapshot().await
-    }
-
-    async fn begin_execution_context_from_approved_plan(
-        &mut self,
-    ) -> Result<(), WorkflowEngineError> {
-        self.context
-            .begin_execution_segment_from_approved_plan()
             .await?;
         self.save_snapshot().await
     }

@@ -550,13 +550,12 @@ fn replay_from_events(
         };
     }
 
-    let mut reducer = EventReducer::new(session_id.to_string());
-    for event in &events {
-        if let Err(e) = reducer.apply_event(event) {
+    let context = match replay_events_to_execution_context(session_id, &events) {
+        Ok(context) => context,
+        Err(e) => {
             log::error!(
-                "[Workflow][session={}] workflow.replay.failed - error applying event {}: {}",
+                "[Workflow][session={}] workflow.replay.failed - reducer error: {}",
                 session_id,
-                event.id,
                 e
             );
             return RecoveryResult::SafeFailed {
@@ -564,9 +563,7 @@ fn replay_from_events(
                 error: e,
             };
         }
-    }
-
-    let context = reducer.build();
+    };
 
     log::info!(
         "[Workflow][session={}] workflow.replay.done - state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
@@ -578,6 +575,22 @@ fn replay_from_events(
     );
 
     RecoveryResult::ReplayFallback { context }
+}
+
+pub fn replay_events_to_execution_context(
+    session_id: &str,
+    events: &[WorkflowEventRecord],
+) -> Result<ExecutionContext, RecoveryError> {
+    if events.is_empty() {
+        return Err(RecoveryError::EmptyReplayHistory);
+    }
+
+    let mut reducer = EventReducer::new(session_id.to_string());
+    for event in events {
+        reducer.apply_event(event)?;
+    }
+
+    Ok(reducer.build())
 }
 
 #[cfg(test)]

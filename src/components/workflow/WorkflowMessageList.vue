@@ -492,7 +492,9 @@
                 class="context-snapshot-card__header"
                 @click="$emit('toggle-expand', getContextSnapshotExpandId(message))">
                 <cs name="archive" size="14px" class="context-snapshot-card__icon" />
-                <span class="context-snapshot-card__title">Previous Context Snapshot</span>
+                <span class="context-snapshot-card__title">{{
+                  getContextSnapshotTitle(message)
+                }}</span>
                 <span
                   v-if="!isContextSnapshotExpanded(message)"
                   class="context-snapshot-card__preview">
@@ -873,9 +875,19 @@ const isHiddenSystemObservation = message => {
 const isContextSnapshotMessage = message =>
   message?.role === 'system' && message?.metadata?.type === 'summary'
 
+const getContextSnapshotSubtype = message => message?.metadata?.subtype || message?.messageSubtype
+
+const getContextSnapshotTitle = message => {
+  if (getContextSnapshotSubtype(message) === 'approved_plan') return 'Planning'
+  return 'Previous Context Snapshot'
+}
+
 const getContextSnapshotContent = message => {
   const content = props.removeSystemReminder(message?.message || '')
-  const normalized = content.replace(/^##\s*Previous Context Snapshot\s*/i, '').trim()
+  const normalized = content
+    .replace(/^##\s*Previous Context Snapshot\s*/i, '')
+    .replace(/^#\s*APPROVED EXECUTION PLAN\s*/i, '')
+    .trim()
 
   try {
     const parsed = JSON.parse(normalized)

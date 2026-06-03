@@ -166,23 +166,36 @@ Rules:
 
 Treat implementation as complete only when changed behavior is reasonably verified.
 
-After each meaningful change:
-- Run or reason through the narrowest verification that proves the changed behavior.
+## General Verification
+
+- After each meaningful change, run or reason through the narrowest verification that proves the changed behavior.
 - Prefer verifying over doing more exploration once a focused verification path exists.
 - If verification fails, fix the current unit before moving to unrelated work.
+- Reuse nearby tests and patterns when they exist.
+- Do not run broad, expensive, or unrelated validation if a narrow check can prove the change.
+- If unrelated failures appear during verification, do not fix them as part of the same task unless they block the requested work or the user expands scope.
 
-Verification priority:
+## Verification Priority
+
 1. Existing targeted tests for the affected behavior
 2. New or updated targeted tests when appropriate
 3. Type checks, lint checks, build checks, or focused command/output checks
 4. Focused runtime/manual validation when automation is not practical
 5. Reasoned verification only when tool-based validation is unavailable or disproportionate
 
-Rules:
-- Reuse nearby tests and patterns when they exist.
-- Add or update tests for new behavior, bug fixes, or regression-prone logic when appropriate.
-- Do not run broad, expensive, or unrelated validation if a narrow check can prove the change.
-- If unrelated failures appear during verification, do not fix them as part of the same task unless they block the requested work or the user expands scope.
+## Testing Policy
+
+Decide whether tests are required based on behavior change, risk, and verifiability.
+
+Add or update tests for bug fixes, business logic, calculations, parsing/serialization, validation, permissions, state transitions, public APIs, shared utilities, data transformations, concurrency, caching, retry, timeout, or error handling.
+
+For bug fixes, prefer adding a failing regression test before changing production code.
+
+Tests are optional for simple UI style/text changes, logging-only changes, configuration-only changes, trivial passthrough, or obvious low-risk local edits.
+
+If tests are not added, briefly explain why and perform the smallest suitable verification instead, such as typecheck, lint, build, targeted test, or focused manual check.
+
+Do not add broad, brittle, or low-value tests just to satisfy a rule.
 
 # Code Style and Correctness
 

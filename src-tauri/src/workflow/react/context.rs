@@ -27,6 +27,36 @@ pub struct ContextManager {
 }
 
 impl ContextManager {
+    fn metadata_message_kind(metadata: Option<&serde_json::Value>) -> Option<&str> {
+        metadata
+            .and_then(|meta| meta.get("type"))
+            .and_then(|value| value.as_str())
+            .filter(|value| *value == "summary")
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    fn metadata_message_subtype(metadata: Option<&serde_json::Value>) -> Option<&str> {
+        metadata
+            .and_then(|meta| meta.get("subtype"))
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    fn effective_message_kind(message: &WorkflowMessage) -> &str {
+        if message.message_kind != "message" {
+            &message.message_kind
+        } else {
+            Self::metadata_message_kind(message.metadata.as_ref()).unwrap_or("message")
+        }
+    }
+
+    fn effective_message_subtype(message: &WorkflowMessage) -> Option<&str> {
+        message
+            .message_subtype
+            .as_deref()
+            .or_else(|| Self::metadata_message_subtype(message.metadata.as_ref()))
+    }
+
     pub(crate) fn sanitize_reasoning_content(reasoning: Option<String>) -> Option<String> {
         let reasoning = reasoning?;
         let trimmed = reasoning.trim();
@@ -54,7 +84,7 @@ impl ContextManager {
     }
 
     fn is_summary_message(message: &WorkflowMessage) -> bool {
-        message.message_kind == "summary"
+        Self::effective_message_kind(message) == "summary"
     }
 
     pub(crate) fn is_compression_summary_message(message: &WorkflowMessage) -> bool {
@@ -62,8 +92,8 @@ impl ContextManager {
             return false;
         };
 
-        message.message_kind == "summary"
-            && message.message_subtype.as_deref() == Some("compression")
+        Self::effective_message_kind(message) == "summary"
+            && Self::effective_message_subtype(message) == Some("compression")
             && meta.get("compressed_until_message_id").is_some()
     }
 
@@ -562,7 +592,8 @@ impl ContextManager {
                 .and_then(|value| value.parse().ok());
 
             let merged_content = Self::content_for_context_projection(message);
-            let final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
+            let final_content = if Self::effective_message_subtype(message) == Some("approved_plan")
+            {
                 let plan = message
                     .metadata
                     .as_ref()
@@ -597,8 +628,8 @@ impl ContextManager {
                 role: message.role.clone(),
                 message: final_content,
                 reasoning: message.reasoning.clone(),
-                message_kind: message.message_kind.clone(),
-                message_subtype: message.message_subtype.clone(),
+                message_kind: Self::effective_message_kind(message).to_string(),
+                message_subtype: Self::effective_message_subtype(message).map(str::to_string),
                 metadata: message.metadata.clone(),
                 source_message_id: message.id,
                 created_at: None,
@@ -702,10 +733,13 @@ impl ContextManager {
         &mut self,
     ) -> Result<(), WorkflowEngineError> {
         let initial_user = self
-            .ai_context_messages
-            .iter()
-            .find(|message| message.role == "user")
-            .cloned()
+            .messages_since_last_completion()
+            .into_iter()
+            .find(|message| {
+                message.role == "user"
+                    && message.step_type.as_deref() != Some("observe")
+                    && !message.message.trim().is_empty()
+            })
             .ok_or_else(|| {
                 WorkflowEngineError::General(
                     "Cannot start execution segment without a current user query".to_string(),
@@ -713,18 +747,64 @@ impl ContextManager {
             })?;
 
         let approved_plan = self
-            .ai_context_messages
-            .iter()
+            .messages_since_last_completion()
+            .into_iter()
             .rev()
-            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
-            .cloned()
+            .find(|message| Self::effective_message_subtype(message) == Some("approved_plan"))
             .ok_or_else(|| {
                 WorkflowEngineError::General(
                     "Cannot start execution segment without an approved plan anchor".to_string(),
                 )
             })?;
 
-        self.begin_new_segment_with_seed(vec![initial_user, approved_plan])
+        let initial_user_seed = WorkflowAiContextMessage {
+            id: None,
+            session_id: self.session_id.clone(),
+            segment_id: self.current_segment_id,
+            role: initial_user.role.clone(),
+            message: format!(
+                "<user_query>\n{}\n</user_query>",
+                Self::content_for_context_projection(&initial_user)
+            ),
+            reasoning: initial_user.reasoning.clone(),
+            message_kind: Self::effective_message_kind(&initial_user).to_string(),
+            message_subtype: Self::effective_message_subtype(&initial_user).map(str::to_string),
+            metadata: initial_user.metadata.clone(),
+            source_message_id: initial_user.id,
+            created_at: None,
+        };
+        let approved_plan_seed = WorkflowAiContextMessage {
+            id: None,
+            session_id: self.session_id.clone(),
+            segment_id: self.current_segment_id,
+            role: approved_plan.role.clone(),
+            message: {
+                let plan = approved_plan
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("plan_content"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let todos = approved_plan
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("todo_content"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("[]");
+                format!(
+                    "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
+                    plan, todos
+                )
+            },
+            reasoning: approved_plan.reasoning.clone(),
+            message_kind: Self::effective_message_kind(&approved_plan).to_string(),
+            message_subtype: Self::effective_message_subtype(&approved_plan).map(str::to_string),
+            metadata: approved_plan.metadata.clone(),
+            source_message_id: approved_plan.id,
+            created_at: None,
+        };
+
+        self.begin_new_segment_with_seed(vec![initial_user_seed, approved_plan_seed])
             .await
     }
 
@@ -768,14 +848,19 @@ impl ContextManager {
                 .generate_u64()
                 .map_err(|e| WorkflowEngineError::General(e))?;
             let reasoning = Self::sanitize_reasoning_content(reasoning);
+            let message_kind = Self::metadata_message_kind(metadata.as_ref())
+                .unwrap_or("message")
+                .to_string();
+            let message_subtype =
+                Self::metadata_message_subtype(metadata.as_ref()).map(str::to_string);
             let msg = WorkflowMessage {
                 id: Some(msg_id as i64),
                 session_id: self.session_id.clone(),
                 role: role.clone(),
                 message: content,
                 reasoning,
-                message_kind: "message".to_string(),
-                message_subtype: None,
+                message_kind,
+                message_subtype,
                 segment_id: self.current_segment_id,
                 source_event_type: None,
                 metadata,
@@ -915,7 +1000,7 @@ impl ContextManager {
     pub fn current_approved_plan_since_last_completion(&self) -> Option<String> {
         self.messages_since_last_completion()
             .into_iter()
-            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
+            .find(|message| Self::effective_message_subtype(message) == Some("approved_plan"))
             .and_then(|message| {
                 message
                     .metadata
@@ -3153,15 +3238,13 @@ mod tests {
                 false,
                 None,
                 Some(json!({
+                    "type": "summary",
+                    "subtype": "approved_plan",
                     "plan_content": "1. do work\n2. verify work"
                 })),
             )
             .await
             .expect("failed to add approved plan");
-        if let Some(message) = context.messages.last_mut() {
-            message.message_kind = "summary".to_string();
-            message.message_subtype = Some("approved_plan".to_string());
-        }
         let _ = context
             .add_message(
                 "user".to_string(),
@@ -3227,5 +3310,69 @@ mod tests {
             context.current_approved_plan_since_last_completion(),
             Some("1. do work\n2. verify work".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn begin_execution_segment_uses_transcript_authority_for_approved_plan_anchor() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-approved-plan-anchor-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Ship the fix".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user");
+        let _ = context
+            .add_message(
+                "system".to_string(),
+                "# APPROVED EXECUTION PLAN".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                Some(json!({
+                    "type": "summary",
+                    "subtype": "approved_plan",
+                    "plan_content": "1. edit files\n2. run tests",
+                    "todo_content": "[]"
+                })),
+            )
+            .await
+            .expect("failed to add approved plan");
+
+        context
+            .begin_execution_segment_from_approved_plan()
+            .await
+            .expect("execution segment should start from durable transcript authority");
+
+        assert_eq!(context.ai_context_messages.len(), 2);
+        assert_eq!(context.ai_context_messages[0].role, "user");
+        assert_eq!(
+            context.ai_context_messages[0].message,
+            "<user_query>\nShip the fix\n</user_query>"
+        );
+        assert_eq!(
+            context.ai_context_messages[1].message_subtype.as_deref(),
+            Some("approved_plan")
+        );
+        assert!(context.ai_context_messages[1]
+            .message
+            .contains("<approved_plan>\n1. edit files\n2. run tests\n</approved_plan>"));
     }
 }
