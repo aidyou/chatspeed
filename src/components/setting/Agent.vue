@@ -601,6 +601,7 @@ const modelRoles = computed(() => {
 })
 
 const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
+const CHILD_ONLY_TOOL_IDS = ['git_diff']
 const HIDDEN_AGENT_TOOL_IDS = ['bash']
 const CORE_MANAGEMENT_TOOLS = [
   'sub_agent_run',
@@ -685,7 +686,12 @@ const proxyAliases = reactive({ plan: '', act: '', vision: '', utility: '' })
 // Computed property: available tools sorted by name, filtered to exclude core management tools
 const sortedAvailableTools = computed(() => {
   return [...availableTools.value]
-    .filter(t => !CORE_MANAGEMENT_TOOLS.includes(t.id) && !HIDDEN_AGENT_TOOL_IDS.includes(t.id))
+    .filter(
+      t =>
+        !CORE_MANAGEMENT_TOOLS.includes(t.id) &&
+        !HIDDEN_AGENT_TOOL_IDS.includes(t.id) &&
+        (agentForm.value.role === AGENT_ROLE.CHILD || !CHILD_ONLY_TOOL_IDS.includes(t.id))
+    )
     .sort((a, b) => {
       return a.name.localeCompare(b.name, 'zh-Hans')
     })
@@ -1110,6 +1116,10 @@ const normalizeAgentFormForSave = form => {
     normalized.shellPolicy = Array.isArray(normalized.shellPolicy)
       ? normalized.shellPolicy.filter(rule => rule.pattern && rule.pattern.trim() !== '')
       : []
+    normalized.availableTools = normalized.availableTools.filter(
+      tool => !CHILD_ONLY_TOOL_IDS.includes(tool)
+    )
+    normalized.autoApprove = normalized.autoApprove.filter(tool => !CHILD_ONLY_TOOL_IDS.includes(tool))
     normalized.skillEnabled = normalized.skillEnabled !== false
 
     if (normalized.allowShell) {
@@ -1310,6 +1320,15 @@ const editAgent = async id => {
         agentForm.value.allowedPaths = []
       }
 
+      if ((agentForm.value.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD) {
+        agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
+          tool => !CHILD_ONLY_TOOL_IDS.includes(tool)
+        )
+        agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
+          tool => !CHILD_ONLY_TOOL_IDS.includes(tool)
+        )
+      }
+
       allModelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
     } catch (error) {
       showMessage(t('settings.agent.fetchFailed'), 'error')
@@ -1318,7 +1337,9 @@ const editAgent = async id => {
     editId.value = null
     agentForm.value = { ...defaultFormData }
     allModelRoles.forEach(role => (modelModes[role.key] = 'provider'))
-    agentForm.value.availableTools = availableTools.value.map(tool => tool.id)
+    agentForm.value.availableTools = availableTools.value
+      .map(tool => tool.id)
+      .filter(tool => !CHILD_ONLY_TOOL_IDS.includes(tool))
     agentForm.value.autoApprove = availableTools.value
       .filter(tool => READ_ONLY_TOOLS.includes(tool.id))
       .map(tool => tool.id)
@@ -1419,6 +1440,15 @@ const copyAgent = async id => {
         ? Boolean(agentData.skillEnabled)
         : (agentForm.value.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD
     agentForm.value.selectedSkills = setSelectedSkillsFromSource(agentData.selectedSkills)
+
+    if ((agentForm.value.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD) {
+      agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
+        tool => !CHILD_ONLY_TOOL_IDS.includes(tool)
+      )
+      agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
+        tool => !CHILD_ONLY_TOOL_IDS.includes(tool)
+      )
+    }
 
     if (
       !agentForm.value.parentAgentId &&
@@ -1580,6 +1610,12 @@ watch(
       ) {
         agentForm.value.selectedSkills = [...defaultSelectedSkillNames.value]
       }
+      agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
+        tool => !CHILD_ONLY_TOOL_IDS.includes(tool)
+      )
+      agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
+        tool => !CHILD_ONLY_TOOL_IDS.includes(tool)
+      )
       return
     }
 

@@ -4,6 +4,10 @@
     "decision": "allow"
   },
   {
+    "pattern": "^basename($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^blkid($| .*)",
     "decision": "allow"
   },
@@ -16,7 +20,15 @@
     "decision": "allow"
   },
   {
+    "pattern": "^cmp($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^command($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cut($| .*)",
     "decision": "allow"
   },
   {
@@ -28,7 +40,15 @@
     "decision": "allow"
   },
   {
-    "pattern": "^dig($| .*)",
+    "pattern": "^diff($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^dirname($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker compose ps($| .*)",
     "decision": "allow"
   },
   {
@@ -36,7 +56,11 @@
     "decision": "allow"
   },
   {
-    "pattern": "^docker inspect($| .*)",
+    "pattern": "^docker info($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker network ls($| .*)",
     "decision": "allow"
   },
   {
@@ -44,11 +68,19 @@
     "decision": "allow"
   },
   {
-    "pattern": "^du($| .*)",
+    "pattern": "^docker stats($| .*)",
     "decision": "allow"
   },
   {
-    "pattern": "^env$",
+    "pattern": "^docker version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker volume ls($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^du($| .*)",
     "decision": "allow"
   },
   {
@@ -64,7 +96,15 @@
     "decision": "allow"
   },
   {
+    "pattern": "^gem list($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^getfacl($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git blame($| .*)",
     "decision": "allow"
   },
   {
@@ -72,7 +112,7 @@
     "decision": "allow"
   },
   {
-    "pattern": "^git config --list($| .*)",
+    "pattern": "^git describe($| .*)",
     "decision": "allow"
   },
   {
@@ -88,11 +128,27 @@
     "decision": "allow"
   },
   {
+    "pattern": "^git ls-files($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git reflog($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^git rev-parse($| .*)",
     "decision": "allow"
   },
   {
     "pattern": "^git show($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git stash list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git stash show($| .*)",
     "decision": "allow"
   },
   {
@@ -164,11 +220,11 @@
     "decision": "allow"
   },
   {
-    "pattern": "^nproc($| .*)",
+    "pattern": "^npm list($| .*)",
     "decision": "allow"
   },
   {
-    "pattern": "^nslookup($| .*)",
+    "pattern": "^nproc($| .*)",
     "decision": "allow"
   },
   {
@@ -176,11 +232,15 @@
     "decision": "allow"
   },
   {
-    "pattern": "^ping($| .*)",
+    "pattern": "^pip freeze($| .*)",
     "decision": "allow"
   },
   {
-    "pattern": "^printenv($| .*)",
+    "pattern": "^pip list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip show($| .*)",
     "decision": "allow"
   },
   {
@@ -192,6 +252,14 @@
     "decision": "allow"
   },
   {
+    "pattern": "^readlink($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^realpath($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^rg($| .*)",
     "decision": "allow"
   },
@@ -200,11 +268,27 @@
     "decision": "allow"
   },
   {
+    "pattern": "^shasum($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^sort($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^ss($| .*)",
     "decision": "allow"
   },
   {
     "pattern": "^stat($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^strings($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^sw_vers($| .*)",
     "decision": "allow"
   },
   {
@@ -220,7 +304,11 @@
     "decision": "allow"
   },
   {
-    "pattern": "^traceroute($| .*)",
+    "pattern": "^tr($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^tree($| .*)",
     "decision": "allow"
   },
   {
@@ -236,7 +324,15 @@
     "decision": "allow"
   },
   {
+    "pattern": "^uniq($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^unzip -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uptime($| .*)",
     "decision": "allow"
   },
   {
@@ -253,6 +349,10 @@
   },
   {
     "pattern": "^whoami($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^xxd($| .*)",
     "decision": "allow"
   },
   {
@@ -324,10 +424,6 @@
     "decision": "allow"
   },
   {
-    "pattern": "^Resolve-DnsName($| .*)",
-    "decision": "allow"
-  },
-  {
     "pattern": "^Select-String .*",
     "decision": "allow"
   },
@@ -345,6 +441,10 @@
   },
   {
     "pattern": "^type .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ver($| .*)",
     "decision": "allow"
   },
   {

@@ -1659,7 +1659,7 @@ impl WorkflowExecutor {
                 tm.register_tool(Arc::new(Grep::new(path_guard.clone())))
                     .await?;
             }
-            if is_allowed(TOOL_GIT_DIFF) {
+            if self.agent_config.role.as_deref() == Some("child") && is_allowed(TOOL_GIT_DIFF) {
                 tm.register_tool(Arc::new(GitDiff::new(path_guard.clone())))
                     .await?;
             }

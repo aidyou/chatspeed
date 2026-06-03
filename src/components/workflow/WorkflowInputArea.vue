@@ -303,10 +303,25 @@
                     </div>
                   </div>
                   <div class="section-footer">
-                    <cs name="info" size="12px" />
-                    <span>{{
-                      $t('workflow.shellPolicyClickRemove') || 'Click × to remove items'
-                    }}</span>
+                    <div class="section-footer-hint">
+                      <cs name="info" size="12px" />
+                      <span>{{
+                        $t('workflow.shellPolicyClickRemove') || 'Click × to remove items'
+                      }}</span>
+                    </div>
+                    <el-tooltip
+                      placement="top"
+                      :content="$t('settings.agent.shellPolicyImportDefault')"
+                      :hide-after="0"
+                      :enterable="false">
+                      <button
+                        type="button"
+                        class="section-footer-action"
+                        :disabled="isImportingShellPolicies || !currentWorkflowId"
+                        @click="importDefaultShellPolicies">
+                        <cs name="import" size="12px" />
+                      </button>
+                    </el-tooltip>
                   </div>
                 </div>
 
@@ -367,6 +382,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import AgentSelector from './AgentSelector.vue'
 import StatusNotifier from './StatusNotifier.vue'
 
@@ -520,8 +536,12 @@ defineEmits([
 
 import { useWorkflowStore } from '@/stores/workflow'
 import { invokeWrapper } from '@/libs/tauri'
+import { showMessage } from '@/libs/util'
 
+const { t } = useI18n()
 const workflowStore = useWorkflowStore()
+const defaultShellPolicies = ref([])
+const isImportingShellPolicies = ref(false)
 
 const autoApprovedTools = computed(() =>
   [...workflowStore.autoApprovedTools].sort((a, b) => a.localeCompare(b))
@@ -557,6 +577,66 @@ const removeShellPolicyItem = async pattern => {
     workflowStore.removeShellPolicyItem(pattern)
   } catch (error) {
     console.error('Failed to remove shell policy item:', error)
+  }
+}
+
+const ensureDefaultShellPoliciesLoaded = async () => {
+  if (defaultShellPolicies.value.length > 0) return
+
+  const result = await invokeWrapper('get_default_shell_policy')
+  defaultShellPolicies.value = Array.isArray(result) ? result : []
+}
+
+const importDefaultShellPolicies = async () => {
+  if (!props.currentWorkflowId || isImportingShellPolicies.value) return
+
+  isImportingShellPolicies.value = true
+  try {
+    await ensureDefaultShellPoliciesLoaded()
+
+    const currentPolicy = Array.isArray(props.currentWorkflow?.agentConfig?.shellPolicy)
+      ? props.currentWorkflow.agentConfig.shellPolicy
+      : Array.isArray(props.currentWorkflow?.shellPolicy)
+        ? props.currentWorkflow.shellPolicy
+        : []
+
+    const mergedPolicy = [...currentPolicy]
+    defaultShellPolicies.value.forEach(defaultRule => {
+      const exists = mergedPolicy.some(
+        rule => rule.pattern === defaultRule.pattern && rule.decision === defaultRule.decision
+      )
+      if (!exists) {
+        mergedPolicy.push({ ...defaultRule })
+      }
+    })
+
+    const mergedCount = mergedPolicy.length - currentPolicy.length
+    if (mergedCount <= 0) {
+      showMessage(t('common.noData') || 'No new rules to import', 'info')
+      return
+    }
+
+    const nextAgentConfig = {
+      ...(props.currentWorkflow?.agentConfig || {}),
+      shellPolicy: mergedPolicy
+    }
+
+    await invokeWrapper('update_workflow_agent_config', {
+      sessionId: props.currentWorkflowId,
+      agentConfig: JSON.stringify(nextAgentConfig)
+    })
+
+    if (props.currentWorkflow) {
+      props.currentWorkflow.agentConfig = nextAgentConfig
+      props.currentWorkflow.shellPolicy = mergedPolicy
+    }
+    workflowStore.setShellPolicy(mergedPolicy)
+    showMessage(t('common.saveSuccess'), 'success')
+  } catch (error) {
+    console.error('Failed to import default shell policy:', error)
+    showMessage('Failed to import default shell policy', 'error')
+  } finally {
+    isImportingShellPolicies.value = false
   }
 }
 
@@ -650,6 +730,45 @@ defineExpose({
   cursor: pointer;
   flex-shrink: 0;
   color: var(--cs-text-secondary);
+}
+
+.section-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.section-footer-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.section-footer-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cs-text-secondary);
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.section-footer-action:hover:not(:disabled) {
+  background: var(--cs-fill-color-light, rgba(0, 0, 0, 0.06));
+  color: var(--cs-text-color);
+}
+
+.section-footer-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .final-audit-toggle.disabled {
