@@ -19,7 +19,7 @@ use crate::tools::{
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
-    child_tasks::render_call_mode_sub_agent_tool_result,
+    child_tasks::{render_call_mode_sub_agent_tool_result, SubAgentResolution},
     compression::{CompressionMode, ContextCompressor},
     context::ContextManager,
     dispatcher::{Dispatcher, DispatcherConfig},
@@ -5139,101 +5139,169 @@ impl WorkflowExecutor {
         sub_agent_id: String,
         result: serde_json::Value,
     ) -> Result<bool, WorkflowEngineError> {
-        if self
-            .handle_final_review_completion(&sub_agent_id, &result)
-            .await?
+        let is_pending_final_review = self
+            .pending_final_review
+            .as_ref()
+            .map(|pending| pending.sub_agent_id == sub_agent_id)
+            .unwrap_or(false);
+
+        if is_pending_final_review {
+            let resolution = self
+                .resolve_sub_agent_completion_for_observation(&sub_agent_id, &result)
+                .unwrap_or_else(|| Self::fallback_sub_agent_resolution(&sub_agent_id, &result));
+            for completion in &mut self.pending_sub_agent_completions {
+                if completion.sub_agent_id == sub_agent_id {
+                    completion.consumed = true;
+                }
+            }
+            self.append_sub_agent_completion_observation(&sub_agent_id, &result, &resolution)
+                .await?;
+
+            if self
+                .handle_final_review_completion(&sub_agent_id, &result)
+                .await?
+            {
+                return Ok(true);
+            }
+        }
+
+        if let Some(resolution) =
+            self.resolve_sub_agent_completion_for_observation(&sub_agent_id, &result)
         {
             for completion in &mut self.pending_sub_agent_completions {
                 if completion.sub_agent_id == sub_agent_id {
                     completion.consumed = true;
                 }
             }
-            return Ok(true);
-        }
 
-        if let Some(resolution) = crate::workflow::react::child_tasks::resolve_sub_agent_completion(
-            &mut self.sub_agent_id,
-            &mut self.sub_agent_sessions,
-            &sub_agent_id,
-            &result,
-        ) {
-            for completion in &mut self.pending_sub_agent_completions {
-                if completion.sub_agent_id == sub_agent_id {
-                    completion.consumed = true;
-                }
-            }
-
-            let summary = resolution
-                .summary
-                .as_deref()
-                .filter(|summary| !summary.trim().is_empty() && *summary != resolution.content)
-                .map(str::trim);
-            let task = self
-                .context
-                .messages
-                .iter()
-                .rev()
-                .filter_map(|message| message.metadata.as_ref())
-                .find(|metadata| {
-                    metadata
-                        .get("sub_agent_id")
-                        .and_then(|value| value.as_str())
-                        == Some(resolution.sub_agent_id.as_str())
-                })
-                .and_then(|metadata| metadata.get("sub_agent_task"))
-                .and_then(|value| value.as_str())
-                .filter(|task| !task.trim().is_empty())
-                .map(str::trim);
-            self.add_message_and_notify_internal(
-                "user".to_string(),
-                format!(
-                    "{}\n<SYSTEM_REMINDER>The call-mode sub-agent result above has already been delivered. Treat it as context for the user's original request, then choose the appropriate next action: continue implementation, inspect more context, verify, ask a blocking question, answer the user, or finish only if the original request is fully addressed. Do not copy the sub-agent result verbatim as the final answer.</SYSTEM_REMINDER>",
-                    render_call_mode_sub_agent_tool_result(
-                        &resolution.sub_agent_id,
-                        &resolution.status,
-                        task,
-                        &resolution.content,
-                        summary,
-                        false,
-                    )
-                ),
-                None,
-                None,
-                Some(StepType::Observe),
-                resolution.is_error,
-                resolution.is_error.then(|| "SubAgentFailed".to_string()),
-                Some({
-                    let mut metadata = runtime_observation_metadata(
-                        RuntimeObservationType::SubAgentCompletion,
-                        json!({
-                            "sub_agent_id": sub_agent_id.clone(),
-                            "result": result.clone(),
-                            "title": format!("Sub-agent {}", resolution.sub_agent_id),
-                            "summary": resolution.content.clone(),
-                            "execution_status": resolution.status.clone(),
-                            "is_error": resolution.is_error,
-                            "error_type": if resolution.is_error { "SubAgentFailed" } else { "" }
-                        }),
-                    );
-                    metadata["sub_agent_id"] = json!(sub_agent_id.clone());
-                    metadata["result"] = json!(result.clone());
-                    metadata["title"] = json!(format!("Sub-agent {}", resolution.sub_agent_id));
-                    metadata["summary"] = json!(resolution.content.clone());
-                    metadata["execution_status"] = json!(resolution.status.clone());
-                    metadata["is_error"] = json!(resolution.is_error);
-                    metadata["error_type"] =
-                        json!(if resolution.is_error { "SubAgentFailed" } else { "" });
-                    metadata["ui_visibility"] = json!("hide");
-                    metadata
-                }),
-            )
-            .await?;
+            self.append_sub_agent_completion_observation(&sub_agent_id, &result, &resolution)
+                .await?;
 
             self.update_state(WorkflowState::Thinking).await?;
             Ok(true)
         } else {
             Ok(false)
         }
+    }
+
+    fn resolve_sub_agent_completion_for_observation(
+        &mut self,
+        sub_agent_id: &str,
+        result: &serde_json::Value,
+    ) -> Option<SubAgentResolution> {
+        crate::workflow::react::child_tasks::resolve_sub_agent_completion(
+            &mut self.sub_agent_id,
+            &mut self.sub_agent_sessions,
+            sub_agent_id,
+            result,
+        )
+    }
+
+    fn fallback_sub_agent_resolution(
+        sub_agent_id: &str,
+        result: &serde_json::Value,
+    ) -> SubAgentResolution {
+        let status = result
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("completed")
+            .to_string();
+        let content = result
+            .get("result")
+            .and_then(|s| s.as_str())
+            .or_else(|| result.get("summary").and_then(|s| s.as_str()))
+            .or_else(|| result.get("error").and_then(|e| e.as_str()))
+            .unwrap_or("Sub-agent completed")
+            .to_string();
+        let summary = result
+            .get("summary")
+            .and_then(|s| s.as_str())
+            .map(str::to_string);
+        let is_error = matches!(status.as_str(), "failed" | "cancelled" | "interrupted");
+
+        SubAgentResolution {
+            sub_agent_id: sub_agent_id.to_string(),
+            status,
+            content,
+            summary,
+            is_error,
+        }
+    }
+
+    async fn append_sub_agent_completion_observation(
+        &mut self,
+        sub_agent_id: &str,
+        result: &serde_json::Value,
+        resolution: &SubAgentResolution,
+    ) -> Result<(), WorkflowEngineError> {
+        let summary = resolution
+            .summary
+            .as_deref()
+            .filter(|summary| !summary.trim().is_empty() && *summary != resolution.content)
+            .map(str::trim);
+        let task = self
+            .context
+            .messages
+            .iter()
+            .rev()
+            .filter_map(|message| message.metadata.as_ref())
+            .find(|metadata| {
+                metadata
+                    .get("sub_agent_id")
+                    .and_then(|value| value.as_str())
+                    == Some(resolution.sub_agent_id.as_str())
+            })
+            .and_then(|metadata| metadata.get("sub_agent_task"))
+            .and_then(|value| value.as_str())
+            .filter(|task| !task.trim().is_empty())
+            .map(str::trim);
+
+        self.add_message_and_notify_internal(
+            "user".to_string(),
+            format!(
+                "{}\n<SYSTEM_REMINDER>The call-mode sub-agent result above has already been delivered. Treat it as context for the user's original request, then choose the appropriate next action: continue implementation, inspect more context, verify, ask a blocking question, answer the user, or finish only if the original request is fully addressed. Do not copy the sub-agent result verbatim as the final answer.</SYSTEM_REMINDER>",
+                render_call_mode_sub_agent_tool_result(
+                    &resolution.sub_agent_id,
+                    &resolution.status,
+                    task,
+                    &resolution.content,
+                    summary,
+                    false,
+                )
+            ),
+            None,
+            None,
+            Some(StepType::Observe),
+            resolution.is_error,
+            resolution.is_error.then(|| "SubAgentFailed".to_string()),
+            Some({
+                let mut metadata = runtime_observation_metadata(
+                    RuntimeObservationType::SubAgentCompletion,
+                    json!({
+                        "sub_agent_id": sub_agent_id,
+                        "result": result,
+                        "title": format!("Sub-agent {}", resolution.sub_agent_id),
+                        "summary": resolution.content.clone(),
+                        "execution_status": resolution.status.clone(),
+                        "is_error": resolution.is_error,
+                        "error_type": if resolution.is_error { "SubAgentFailed" } else { "" }
+                    }),
+                );
+                metadata["sub_agent_id"] = json!(sub_agent_id);
+                metadata["result"] = json!(result);
+                metadata["title"] = json!(format!("Sub-agent {}", resolution.sub_agent_id));
+                metadata["summary"] = json!(resolution.content.clone());
+                metadata["execution_status"] = json!(resolution.status.clone());
+                metadata["is_error"] = json!(resolution.is_error);
+                metadata["error_type"] =
+                    json!(if resolution.is_error { "SubAgentFailed" } else { "" });
+                metadata["ui_visibility"] = json!("hide");
+                metadata
+            }),
+        )
+        .await?;
+
+        Ok(())
     }
 
     pub(crate) async fn update_state(

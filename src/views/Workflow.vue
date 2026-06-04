@@ -86,7 +86,7 @@
             :hide-after="0"
             :enterable="false"
             placement="bottom">
-            <cs name="trash" />
+            <cs name="undo" />
           </el-tooltip>
         </div>
         <div class="icon-btn upperLayer pin-btn" @click="onPin" :class="{ active: isAlwaysOnTop }">
@@ -778,7 +778,9 @@ async function analyzeImageAttachments(attachments, userMessage) {
       return 'Vision analysis failed'
     }
 
-    const sizeMatch = raw.match(/input size exceed limit\s+(\d+)x(\d+),\s*current input:\((\d+),\s*(\d+)\)/i)
+    const sizeMatch = raw.match(
+      /input size exceed limit\s+(\d+)x(\d+),\s*current input:\((\d+),\s*(\d+)\)/i
+    )
     if (sizeMatch) {
       const [, limitW, limitH, currentW, currentH] = sizeMatch
       return t('chat.errorOnAddAttachment', {

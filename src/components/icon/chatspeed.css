@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-undo:before {
+  content: "\e7f2";
+}
+
 .cs-compress:before {
   content: "\e752";
 }

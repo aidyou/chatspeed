@@ -113,33 +113,33 @@ export function useWorkflowMessages() {
       const completion = payload.taskId ? subAgentCompletions.get(payload.taskId) : null
       const completionResult = completion?.result || completion?.data?.result || {}
       const completionStatus =
-        liveProgress?.status ||
         completion?.execution_status ||
         completion?.data?.execution_status ||
         completionResult.status ||
+        liveProgress?.status ||
         meta.sub_agent_status ||
         meta.execution_status ||
         'running'
       const toolCallsCount =
-        liveProgress?.toolCallsCount ??
-        liveProgress?.tool_calls_count ??
         completionResult.tool_calls_count ??
         completion?.tool_calls_count ??
         completion?.data?.tool_calls_count ??
+        liveProgress?.toolCallsCount ??
+        liveProgress?.tool_calls_count ??
         0
       const currentContextTokens =
-        liveProgress?.currentContextTokens ??
-        liveProgress?.current_context_tokens ??
         completionResult.current_context_tokens ??
         completion?.current_context_tokens ??
         completion?.data?.current_context_tokens ??
+        liveProgress?.currentContextTokens ??
+        liveProgress?.current_context_tokens ??
         null
       const maxContextTokens =
-        liveProgress?.maxContextTokens ??
-        liveProgress?.max_context_tokens ??
         completionResult.max_context_tokens ??
         completion?.max_context_tokens ??
         completion?.data?.max_context_tokens ??
+        liveProgress?.maxContextTokens ??
+        liveProgress?.max_context_tokens ??
         null
       const resultContent =
         completionResult.result ||
