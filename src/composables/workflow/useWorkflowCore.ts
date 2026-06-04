@@ -217,7 +217,7 @@ export function useWorkflowCore({
     })
     const signalMapping: Record<string, string> = {
         finalAudit: SIGNAL_TYPES.UPDATE_FINAL_AUDIT,
-        autoCompress: 'update_auto_compress',
+        autoCompress: SIGNAL_TYPES.UPDATE_AUTO_COMPRESS,
         approvalLevel: SIGNAL_TYPES.UPDATE_APPROVAL_LEVEL
     }
 

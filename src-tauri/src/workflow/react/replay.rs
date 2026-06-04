@@ -12,10 +12,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum RecoveryError {
-    #[allow(dead_code)]
-    #[error("Snapshot version mismatch: expected {expected}, got {actual}")]
-    VersionMismatch { expected: String, actual: String },
-
     #[error("Event replay skipped: workflow has no persisted events yet")]
     EmptyReplayHistory,
 
@@ -25,31 +21,19 @@ pub enum RecoveryError {
     #[error("Missing required event data for {event_type}: {field}")]
     MissingEventData { event_type: String, field: String },
 
-    #[allow(dead_code)]
-    #[error("Invalid event sequence: {reason}")]
-    InvalidSequence { reason: String },
-
     #[error("Database error: {0}")]
     DatabaseError(#[from] crate::db::error::StoreError),
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub enum RecoveryResult {
-    SnapshotHit {
-        context: ExecutionContext,
-    },
-    ReplayFallback {
-        context: ExecutionContext,
-    },
-    SafeFailed {
-        session_id: String,
-        error: RecoveryError,
-    },
+    SnapshotHit { context: ExecutionContext },
+    ReplayFallback { context: ExecutionContext },
+    SafeFailed { error: RecoveryError },
 }
 
-#[allow(dead_code)]
 impl RecoveryResult {
+    #[cfg(test)]
     pub fn is_success(&self) -> bool {
         matches!(
             self,
@@ -57,6 +41,7 @@ impl RecoveryResult {
         )
     }
 
+    #[cfg(test)]
     pub fn context(&self) -> Option<&ExecutionContext> {
         match self {
             RecoveryResult::SnapshotHit { context } => Some(context),
@@ -65,6 +50,7 @@ impl RecoveryResult {
         }
     }
 
+    #[cfg(test)]
     pub fn into_context(self) -> Option<ExecutionContext> {
         match self {
             RecoveryResult::SnapshotHit { context } => Some(context),
@@ -434,7 +420,6 @@ pub fn restore_execution_context(
                     e
                 );
                 return RecoveryResult::SafeFailed {
-                    session_id: session_id.to_string(),
                     error: RecoveryError::DatabaseError(crate::db::error::StoreError::LockError(
                         e.to_string(),
                     )),
@@ -513,7 +498,6 @@ fn replay_from_events(
                     e
                 );
                 return RecoveryResult::SafeFailed {
-                    session_id: session_id.to_string(),
                     error: RecoveryError::DatabaseError(crate::db::error::StoreError::LockError(
                         e.to_string(),
                     )),
@@ -530,7 +514,6 @@ fn replay_from_events(
                     e
                 );
                 return RecoveryResult::SafeFailed {
-                    session_id: session_id.to_string(),
                     error: RecoveryError::ReplayFailed {
                         reason: format!("Cannot load events: {}", e),
                     },
@@ -545,7 +528,6 @@ fn replay_from_events(
             session_id
         );
         return RecoveryResult::SafeFailed {
-            session_id: session_id.to_string(),
             error: RecoveryError::EmptyReplayHistory,
         };
     }
@@ -558,10 +540,7 @@ fn replay_from_events(
                 session_id,
                 e
             );
-            return RecoveryResult::SafeFailed {
-                session_id: session_id.to_string(),
-                error: e,
-            };
+            return RecoveryResult::SafeFailed { error: e };
         }
     };
 
@@ -940,7 +919,6 @@ mod tests {
         assert!(replay_fallback.is_success());
 
         let safe_failed = RecoveryResult::SafeFailed {
-            session_id: "test".to_string(),
             error: RecoveryError::ReplayFailed {
                 reason: "test".to_string(),
             },
@@ -958,7 +936,6 @@ mod tests {
         assert!(snapshot_hit.context().is_some());
 
         let safe_failed = RecoveryResult::SafeFailed {
-            session_id: "test".to_string(),
             error: RecoveryError::ReplayFailed {
                 reason: "test".to_string(),
             },
@@ -978,7 +955,6 @@ mod tests {
         assert_eq!(extracted.unwrap().session_id, "test");
 
         let safe_failed = RecoveryResult::SafeFailed {
-            session_id: "test".to_string(),
             error: RecoveryError::ReplayFailed {
                 reason: "test".to_string(),
             },
@@ -1311,16 +1287,10 @@ mod tests {
             let result = restore_execution_context(store.clone(), session_id);
 
             match result {
-                RecoveryResult::SafeFailed {
-                    session_id: sid,
-                    error,
-                } => {
-                    assert_eq!(sid, session_id);
-                    match error {
-                        RecoveryError::MissingEventData { .. } => {}
-                        _ => panic!("Expected MissingEventData error"),
-                    }
-                }
+                RecoveryResult::SafeFailed { error } => match error {
+                    RecoveryError::MissingEventData { .. } => {}
+                    _ => panic!("Expected MissingEventData error"),
+                },
                 _ => panic!("Expected SafeFailed, got {:?}", result),
             }
         }
@@ -1334,16 +1304,10 @@ mod tests {
             let result = restore_execution_context(store.clone(), session_id);
 
             match result {
-                RecoveryResult::SafeFailed {
-                    session_id: sid,
-                    error,
-                } => {
-                    assert_eq!(sid, session_id);
-                    match error {
-                        RecoveryError::EmptyReplayHistory => {}
-                        _ => panic!("Expected EmptyReplayHistory error"),
-                    }
-                }
+                RecoveryResult::SafeFailed { error } => match error {
+                    RecoveryError::EmptyReplayHistory => {}
+                    _ => panic!("Expected EmptyReplayHistory error"),
+                },
                 _ => panic!("Expected SafeFailed, got {:?}", result),
             }
         }

@@ -23,8 +23,10 @@ Rule:
 | Update phase config | `update_phase` | `SignalType::UpdatePhase` / `WorkflowSignal::UpdatePhase` | - | Runtime config signal. |
 | Update allowed paths | `update_allowed_paths` | `SignalType::UpdateAllowedPaths` | - | Runtime config signal. |
 | Update model config | `update_model_config` | `SignalType::UpdateModelConfig` | - | Runtime config signal. |
+| Update skills config | `update_skills_config` | `SignalType::UpdateSkillsConfig` | - | Runtime config signal. |
 | Remove shell policy item | `remove_shell_policy_item` | `SignalType::RemoveShellPolicyItem` / `WorkflowSignal::RemoveShellPolicyItem` | - | Supports UI policy updates. |
 | Remove auto-approved tool | `remove_auto_approved_tool` | `SignalType::RemoveAutoApprovedTool` / `WorkflowSignal::RemoveAutoApprovedTool` | - | Supports UI auto-approve updates. |
+| Sub-agent completion | `sub_agent_complete` | `SignalType::SubAgentComplete` / `WorkflowSignal::SubAgentComplete` | - | Valid for `wait_reason=sub_agent`. |
 
 ## 2) Workflow State Names
 
@@ -38,6 +40,7 @@ Rule:
 | `awaiting_user` | `WorkflowState::AwaitingUser` |
 | `awaiting_approval` | `WorkflowState::AwaitingApproval` |
 | `awaiting_auto_approval` | `WorkflowState::AwaitingAutoApproval` |
+| `awaiting_sub_agent` | `WorkflowState::AwaitingSubAgent` |
 | `completed` | `WorkflowState::Completed` |
 | `error` | `WorkflowState::Error` |
 | `cancelled` | `WorkflowState::Cancelled` |
@@ -49,6 +52,7 @@ Rule:
 | `user_input` | `WaitReason::UserInput` | Executor is waiting for user text input. |
 | `approval` | `WaitReason::Approval` | Executor is waiting for approval/rejection. |
 | `confirmation` | `WaitReason::Confirmation` | Executor is waiting for continue/stop confirmation. |
+| `sub_agent` | `WaitReason::SubAgent` | Executor is waiting for a delegated sub-agent to complete. |
 
 ## Notes
 

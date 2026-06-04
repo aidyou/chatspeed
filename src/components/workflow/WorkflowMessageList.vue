@@ -271,14 +271,14 @@
                 <div
                   v-if="message.subAgentCard.hasResult"
                   class="sub-agent-card__result"
-                  :class="{ expanded: isMessageExpanded(message) }">
+                  :class="{ expanded: isSubAgentResultExpanded(message) }">
                   <div
                     class="sub-agent-card__result-toggle"
-                    @click="$emit('toggle-expand', message.displayId)">
+                    @click="$emit('toggle-expand', getSubAgentResultExpandId(message))">
                     <div class="sub-agent-card__result-heading">
                       <span class="sub-agent-card__label">Result</span>
                       <span
-                        v-if="!isMessageExpanded(message)"
+                        v-if="!isSubAgentResultExpanded(message)"
                         class="sub-agent-card__result-preview"
                         >{{ getSubAgentResultPreview(message) }}</span
                       >
@@ -287,9 +287,9 @@
                       name="double-arrow-down"
                       size="14px"
                       class="sub-agent-card__result-chevron"
-                      :class="{ expanded: isMessageExpanded(message) }" />
+                      :class="{ expanded: isSubAgentResultExpanded(message) }" />
                   </div>
-                  <div v-if="isMessageExpanded(message)" class="sub-agent-card__result-body">
+                  <div v-if="isSubAgentResultExpanded(message)" class="sub-agent-card__result-body">
                     <MarkdownSimple :content="message.subAgentCard.resultMarkdown" />
                   </div>
                 </div>
@@ -1773,17 +1773,28 @@ const subAgentStatusClass = message => {
 
 const getSubAgentResultPreview = message => {
   const result = props
-    .removeSystemReminder(message?.subAgentCard?.result || '')
+    .removeSystemReminder(message?.subAgentCard?.resultMarkdown || message?.subAgentCard?.result || '')
     .replace(/\s+/g, ' ')
+    .replace(/[#>*_`-]+/g, ' ')
+    .trim()
   if (!result) return ''
   return result.length > 96 ? `${result.slice(0, 96)}...` : result
 }
 
 const getSubAgentTaskExpandId = message => `${message?.displayId || message?.id || ''}:task`
+const getSubAgentResultExpandId = message => `${message?.displayId || message?.id || ''}:result`
 
 const isSubAgentTaskExpanded = message => {
   return props.isMessageExpanded({
     displayId: getSubAgentTaskExpandId(message),
+    metadata: {},
+    toolDisplay: {}
+  })
+}
+
+const isSubAgentResultExpanded = message => {
+  return props.isMessageExpanded({
+    displayId: getSubAgentResultExpandId(message),
     metadata: {},
     toolDisplay: {}
   })

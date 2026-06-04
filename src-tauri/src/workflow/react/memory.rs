@@ -216,20 +216,6 @@ impl MemoryManager {
         self.write(scope, &after)?;
         Ok(Some(after))
     }
-
-    /// Gets the global memory file path (for debugging purposes).
-    #[cfg(debug_assertions)]
-    #[allow(dead_code)]
-    pub fn global_path(&self) -> &PathBuf {
-        &self.global_path
-    }
-
-    /// Gets the project memory file path (for debugging purposes).
-    #[cfg(debug_assertions)]
-    #[allow(dead_code)]
-    pub fn project_path(&self) -> Option<&PathBuf> {
-        self.project_path.as_ref()
-    }
 }
 
 /// Result of memory analysis from the AI.
@@ -254,11 +240,6 @@ pub struct MemoryAnalysisResult {
     /// Extracted project candidates from the current session.
     #[serde(default)]
     pub project_candidates: Vec<MemoryCandidateDraft>,
-
-    /// Reasoning for the changes made.
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

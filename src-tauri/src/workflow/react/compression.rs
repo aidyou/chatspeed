@@ -25,10 +25,12 @@ pub struct ContextCompressor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompressionMode {
-    #[allow(dead_code)]
     Rollup,
     Blocking,
 }
+
+const SUPPORTED_COMPRESSION_MODES: [CompressionMode; 2] =
+    [CompressionMode::Rollup, CompressionMode::Blocking];
 
 impl ContextCompressor {
     pub fn new(chat_state: Arc<ChatState>, provider_id: i64, model: String) -> Self {
@@ -46,6 +48,8 @@ impl ContextCompressor {
         messages: &[WorkflowMessage],
         mode: CompressionMode,
     ) -> Result<String, WorkflowEngineError> {
+        let _supported_modes = SUPPORTED_COMPRESSION_MODES;
+
         if messages.is_empty() {
             return Ok(String::new());
         }

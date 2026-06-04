@@ -9,18 +9,23 @@ export const SIGNAL_TYPES = {
   STOP: 'stop',
   REBROADCAST_PENDING: 'rebroadcast_pending',
   UPDATE_FINAL_AUDIT: 'update_final_audit',
+  UPDATE_AUTO_COMPRESS: 'update_auto_compress',
   UPDATE_APPROVAL_LEVEL: 'update_approval_level',
+  UPDATE_PHASE: 'update_phase',
   UPDATE_ALLOWED_PATHS: 'update_allowed_paths',
   UPDATE_MODEL_CONFIG: 'update_model_config',
+  UPDATE_SKILLS_CONFIG: 'update_skills_config',
   REMOVE_SHELL_POLICY_ITEM: 'remove_shell_policy_item',
   REMOVE_AUTO_APPROVED_TOOL: 'remove_auto_approved_tool',
   REMOVE_QUEUED_USER_MESSAGE: 'remove_queued_user_message',
+  SUB_AGENT_COMPLETE: 'sub_agent_complete',
 } as const
 
 export const WORKFLOW_WAIT_REASONS = {
   USER_INPUT: 'user_input',
   APPROVAL: 'approval',
   CONFIRMATION: 'confirmation',
+  SUB_AGENT: 'sub_agent',
 } as const
 
 export const WORKFLOW_STATUSES = {

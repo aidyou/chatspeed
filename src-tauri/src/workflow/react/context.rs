@@ -278,12 +278,14 @@ impl ContextManager {
         self.build_compression_candidate_preserving_latest_completion(3)
     }
 
-    #[allow(dead_code)]
+    /// Test-only compatibility wrapper for blocking compression expectations.
+    #[cfg(test)]
     pub fn build_blocking_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
         self.build_pressure_compression_candidate()
     }
 
-    #[allow(dead_code)]
+    /// Test-only compatibility wrapper for rollup compression expectations.
+    #[cfg(test)]
     pub fn build_rollup_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
         self.build_task_boundary_compression_candidate()
     }

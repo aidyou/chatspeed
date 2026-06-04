@@ -83,6 +83,87 @@ export function useWorkflowMessages() {
       }
     }
 
+    const tryParseJsonValue = value => {
+      if (value === null || value === undefined) return null
+      if (typeof value === 'object') return value
+      if (typeof value !== 'string') return null
+
+      const trimmed = value.trim()
+      if (!trimmed) return null
+      if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) return null
+
+      try {
+        return JSON.parse(trimmed)
+      } catch {
+        return null
+      }
+    }
+
+    const toBulletList = items =>
+      items
+        .map(item => {
+          if (!item || typeof item !== 'object') {
+            return `- ${String(item ?? '').trim()}`
+          }
+
+          const severity = String(item.severity || '').trim()
+          const file = String(item.file || '').trim()
+          const detail = String(item.detail || item.summary || '').trim()
+          const labelParts = [severity && `**${severity}**`, file && `\`${file}\``].filter(Boolean)
+          const label = labelParts.length ? `${labelParts.join(' ')}:` : '-'
+          return `${label} ${detail || JSON.stringify(item)}`
+        })
+        .join('\n')
+
+    const formatSubAgentResultMarkdown = value => {
+      const parsed = tryParseJsonValue(value)
+      if (!parsed) {
+        return typeof value === 'string' ? value : String(value ?? '')
+      }
+
+      if (Array.isArray(parsed)) {
+        return `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``
+      }
+
+      const approved = parsed.approved
+      const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : ''
+      const findings = Array.isArray(parsed.findings) ? parsed.findings : []
+      const requiredFixes = Array.isArray(parsed.required_fixes)
+        ? parsed.required_fixes
+        : Array.isArray(parsed.requiredFixes)
+          ? parsed.requiredFixes
+          : []
+
+      if (
+        Object.prototype.hasOwnProperty.call(parsed, 'approved') ||
+        summary ||
+        findings.length > 0 ||
+        requiredFixes.length > 0
+      ) {
+        const sections = []
+
+        if (typeof approved === 'boolean') {
+          sections.push(`**Verdict:** ${approved ? 'Approved' : 'Changes Required'}`)
+        }
+
+        if (summary) {
+          sections.push(`**Summary**\n\n${summary}`)
+        }
+
+        if (findings.length > 0) {
+          sections.push(`**Findings**\n\n${toBulletList(findings)}`)
+        }
+
+        if (requiredFixes.length > 0) {
+          sections.push(`**Required Fixes**\n\n${toBulletList(requiredFixes)}`)
+        }
+
+        return sections.join('\n\n')
+      }
+
+      return `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``
+    }
+
     const buildSubAgentCard = message => {
       const meta = message?.metadata || {}
       const toolName = String(meta.tool_name || '').toLowerCase()
@@ -147,6 +228,7 @@ export function useWorkflowMessages() {
         completion?.summary ||
         completion?.data?.summary ||
         ''
+      const resultMarkdown = formatSubAgentResultMarkdown(resultContent)
 
       return {
         taskId: payload.taskId,
@@ -159,7 +241,7 @@ export function useWorkflowMessages() {
         currentContextTokens,
         maxContextTokens,
         result: resultContent,
-        resultMarkdown: resultContent,
+        resultMarkdown,
         hasResult: Boolean(resultContent)
       }
     }

@@ -30,7 +30,6 @@ use crate::workflow::react::{
     intelligence::IntelligenceManager,
     llm::LlmProcessor,
     loop_detector::LoopDetector,
-    manager::WorkflowManager,
     memory::{MemoryManager, MemoryScope},
     memory_analyzer::MemoryAnalyzer,
     observation::{ObservationKind, ObservationReinforcer, ReinforcedResult},
@@ -656,79 +655,6 @@ impl WorkflowExecutor {
         Ok(false)
     }
 
-    #[allow(dead_code)]
-    fn spawn_background_compression(
-        &mut self,
-        compression_candidate: Vec<WorkflowMessage>,
-        compressed_until_message_id: i64,
-        mode: CompressionMode,
-    ) {
-        self.background_compression_boundary_id = Some(compressed_until_message_id);
-        let compressor = self.compressor.clone();
-        let session_id = self.session_id.clone();
-
-        tokio::spawn(async move {
-            match compressor.compress(&compression_candidate, mode).await {
-                Ok(summary) => {
-                    let signal = serde_json::to_string(&WorkflowSignal::CompressionReady {
-                        compressed_until_message_id,
-                        summary,
-                    });
-
-                    match signal {
-                        Ok(payload) => {
-                            if let Err(err) =
-                                WorkflowManager::send_signal_to_session(&session_id, payload)
-                            {
-                                log::warn!(
-                                    "[Workflow][session={}][phase=compression] Failed to deliver background compression result for boundary {}: {}",
-                                    session_id,
-                                    compressed_until_message_id,
-                                    err
-                                );
-                            }
-                        }
-                        Err(err) => {
-                            log::warn!(
-                                "[Workflow][session={}][phase=compression] Failed to serialize background compression result for boundary {}: {}",
-                                session_id,
-                                compressed_until_message_id,
-                                err
-                            );
-                        }
-                    }
-                }
-                Err(err) => {
-                    let error_message = err.to_string();
-                    let signal = serde_json::to_string(&WorkflowSignal::CompressionFailed {
-                        compressed_until_message_id,
-                        error: error_message.clone(),
-                    });
-                    if let Ok(payload) = signal {
-                        if let Err(delivery_err) =
-                            WorkflowManager::send_signal_to_session(&session_id, payload)
-                        {
-                            log::warn!(
-                                "[Workflow][session={}][phase=compression] Background compression failed for boundary {} and failure signal could not be delivered: {}; original_error={}",
-                                session_id,
-                                compressed_until_message_id,
-                                delivery_err,
-                                error_message
-                            );
-                        }
-                    } else {
-                        log::warn!(
-                            "[Workflow][session={}][phase=compression] Background compression request failed for boundary {}: {}",
-                            session_id,
-                            compressed_until_message_id,
-                            error_message
-                        );
-                    }
-                }
-            }
-        });
-    }
-
     async fn apply_background_compression_ready(
         &mut self,
         compressed_until_message_id: i64,
@@ -761,14 +687,6 @@ impl WorkflowExecutor {
         if self.background_compression_boundary_id == Some(compressed_until_message_id) {
             self.background_compression_boundary_id = None;
         }
-    }
-
-    #[allow(dead_code)]
-    fn should_retry_background_compression(&self, compressed_until_message_id: i64) -> bool {
-        self.background_compression_retry_state
-            .get(&compressed_until_message_id)
-            .map(|(_, next_retry_step)| self.current_step >= *next_retry_step)
-            .unwrap_or(true)
     }
 
     fn record_background_compression_failure(&mut self, compressed_until_message_id: i64) {
@@ -1448,10 +1366,7 @@ impl WorkflowExecutor {
                             let _ = self.apply_startup_pending_sub_agent_completion().await?;
                         }
                     }
-                    crate::workflow::react::replay::RecoveryResult::SafeFailed {
-                        session_id: _,
-                        error,
-                    } => {
+                    crate::workflow::react::replay::RecoveryResult::SafeFailed { error } => {
                         log::error!(
                             "[Workflow][session={}][phase=restore] Recovery failed: {}",
                             self.session_id,
@@ -6668,7 +6583,6 @@ mod recovery_tests {
     #[test]
     fn test_recovery_result_safe_failed_is_not_success() {
         let safe_failed = RecoveryResult::SafeFailed {
-            session_id: "test".to_string(),
             error: RecoveryError::ReplayFailed {
                 reason: "test failure".to_string(),
             },
@@ -6693,7 +6607,6 @@ mod recovery_tests {
     #[test]
     fn test_safe_failed_result_has_no_context() {
         let safe_failed = RecoveryResult::SafeFailed {
-            session_id: "test".to_string(),
             error: RecoveryError::ReplayFailed {
                 reason: "test failure".to_string(),
             },
@@ -6727,16 +6640,10 @@ mod recovery_tests {
             crate::workflow::react::replay::restore_execution_context(store.clone(), session_id);
 
         match result {
-            RecoveryResult::SafeFailed {
-                session_id: sid,
-                error,
-            } => {
-                assert_eq!(sid, session_id);
-                match error {
-                    RecoveryError::MissingEventData { .. } => {}
-                    _ => panic!("Expected MissingEventData error"),
-                }
-            }
+            RecoveryResult::SafeFailed { error } => match error {
+                RecoveryError::MissingEventData { .. } => {}
+                _ => panic!("Expected MissingEventData error"),
+            },
             _ => panic!("Expected SafeFailed, got {:?}", result),
         }
     }

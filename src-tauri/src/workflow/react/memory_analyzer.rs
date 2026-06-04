@@ -35,7 +35,6 @@ impl MemoryAnalyzer {
                 project_memory: None,
                 global_candidates: Vec::new(),
                 project_candidates: Vec::new(),
-                reasoning: Some("No user inputs to analyze".to_string()),
             });
         }
 
@@ -189,7 +188,6 @@ impl MemoryAnalyzer {
             project_memory: None,
             global_candidates,
             project_candidates,
-            reasoning: Some("Fallback heuristic extraction".to_string()),
         }
     }
 

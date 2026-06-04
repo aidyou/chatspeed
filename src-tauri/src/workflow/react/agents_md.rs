@@ -8,7 +8,7 @@ use regex::Regex;
 use std::path::{Path, PathBuf};
 
 /// Scope of AGENTS.md file.
-#[cfg(any(debug_assertions, test))]
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentsScope {
     Global,
@@ -105,9 +105,8 @@ impl AgentsMdScanner {
         result
     }
 
-    /// Returns all search paths (for debugging).
-    #[cfg(debug_assertions)]
-    #[allow(dead_code)]
+    /// Returns all search paths for test verification.
+    #[cfg(test)]
     pub fn get_search_paths(project_root: Option<PathBuf>) -> Vec<(PathBuf, AgentsScope)> {
         let mut paths = Vec::new();
 

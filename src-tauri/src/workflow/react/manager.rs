@@ -18,26 +18,21 @@ pub enum ManagedSessionStatus {
     Cancelled,
 }
 
-#[allow(dead_code)]
 pub struct ManagedSession {
-    pub session_id: String,
     pub executor: Arc<Mutex<dyn ReActExecutor>>,
     pub status: ManagedSessionStatus,
+    #[cfg(test)]
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }
 
 impl ManagedSession {
-    pub fn new(
-        session_id: String,
-        executor: Arc<Mutex<dyn ReActExecutor>>,
-        status: ManagedSessionStatus,
-    ) -> Self {
+    pub fn new(executor: Arc<Mutex<dyn ReActExecutor>>, status: ManagedSessionStatus) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         Self {
-            session_id,
             executor,
             status,
+            #[cfg(test)]
             created_at_ms: now,
             updated_at_ms: now,
         }
@@ -86,7 +81,7 @@ impl WorkflowManager {
             return Err(WorkflowManagerError::SessionAlreadyExists { session_id });
         }
 
-        let session = ManagedSession::new(session_id.clone(), executor, status.clone());
+        let session = ManagedSession::new(executor, status.clone());
         self.sessions.insert(session_id.clone(), session);
 
         log::info!(
