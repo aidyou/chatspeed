@@ -315,7 +315,7 @@
                 class="tool-line title-wrap expandable"
                 :class="{
                   'tool-rejected': message.isRejected,
-                  'multiline-clamp': message.metadata?.approval_status === 'pending'
+                  'multiline-clamp': isApprovalPending(message)
                 }"
                 @click="$emit('toggle-expand', message.displayId)">
                 <cs :name="message.toolDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
@@ -362,7 +362,7 @@
                 <!-- Final Result -->
                 <file-preview-diff
                   v-if="
-                    message.metadata?.approval_status !== 'pending' &&
+                    !isApprovalPending(message) &&
                     shouldShowToolRawContent(message) &&
                     message.toolDisplay.displayType === 'diff' &&
                     getStructuredDiffPayload(message)
@@ -381,14 +381,14 @@
                   " />
                 <MarkdownSimple
                   v-else-if="
-                    message.metadata?.approval_status !== 'pending' &&
+                    !isApprovalPending(message) &&
                     shouldShowToolRawContent(message) &&
                     message.toolDisplay.displayType === 'diff'
                   "
                   :content="getDiffMarkdown(removeSystemReminder(message.message))" />
                 <div
                   v-else-if="
-                    message.metadata?.approval_status !== 'pending' &&
+                    !isApprovalPending(message) &&
                     shouldShowToolRawContent(message) &&
                     message.toolDisplay.displayType === 'choice'
                   "
@@ -445,14 +445,14 @@
                 </div>
                 <MarkdownSimple
                   v-else-if="
-                    message.metadata?.approval_status !== 'pending' &&
+                    !isApprovalPending(message) &&
                     shouldShowToolRawContent(message) &&
                     message.toolDisplay.displayType === 'markdown'
                   "
                   :content="removeSystemReminder(message.message)" />
                 <pre
                   v-else-if="
-                    message.metadata?.approval_status !== 'pending' &&
+                    !isApprovalPending(message) &&
                     shouldShowToolRawContent(message)
                   "
                   class="raw-content"
@@ -467,7 +467,7 @@
                   :display-type="message.metadata?.display_type || message.toolDisplay.displayType"
                   :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
                   :loading="approvalLoading && activeApprovalId === message.metadata?.tool_call_id"
-                  :pending-count="inlinePendingApprovalCount"
+                  :pending-count="inlineBulkApprovalCount"
                   @update:rejection-message="
                     value => setApprovalDraft(message.metadata?.tool_call_id, value)
                   "
@@ -811,6 +811,10 @@ const props = defineProps({
   pendingCount: {
     type: Number,
     default: 0
+  },
+  pendingApprovalIds: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -834,16 +838,31 @@ const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
 let userMessageResizeObserver = null
 
-const inlinePendingApprovalCount = computed(() => {
-  const toolIds = new Set()
+const isPlanApprovalMessage = message => message?.metadata?.tool_name === 'submit_plan'
+const pendingApprovalIdSet = computed(() => {
+  const ids = (props.pendingApprovalIds || [])
+    .map(id => String(id || '').trim())
+    .filter(Boolean)
+  return new Set(ids)
+})
+const hasAuthoritativePendingApprovals = computed(
+  () => pendingApprovalIdSet.value.size > 0 || (props.pendingCount || 0) > 0
+)
+
+const getMessageToolCallId = message => String(message?.metadata?.tool_call_id || '').trim()
+
+const inlineBulkApprovalCount = computed(() => {
+  const messageIds = new Set()
   for (const message of props.messages || []) {
-    if (message?.role !== 'tool') continue
-    const toolCallId = message?.metadata?.tool_call_id
+    const toolCallId = getMessageToolCallId(message)
     if (!toolCallId) continue
-    if (message?.metadata?.approval_status !== 'pending') continue
-    toolIds.add(toolCallId)
+    if (!isApprovalPending(message)) continue
+    if (isPlanApprovalMessage(message)) continue
+    if (!shouldShowApprovalDialog(message)) continue
+    messageIds.add(toolCallId)
   }
-  return toolIds.size
+
+  return props.pendingApprovalIds.filter(id => messageIds.has(String(id || '').trim())).length
 })
 
 const isNearBottom = el => {
@@ -1417,21 +1436,6 @@ const collapseAssistantCompletionPairs = messages => {
   return collapsed
 }
 
-/// Ordered FIFO queue of pending approval tool_call_ids from the source messages.
-const pendingApprovalQueue = computed(() =>
-  props.messages
-    .filter(msg => isApprovalPending(msg) && !isApprovalInFlight(msg))
-    .map(msg => msg.metadata?.tool_call_id)
-)
-
-/// Returns true when the message is the first pending approval in the FIFO queue.
-const isFirstPendingApproval = message => {
-  if (!isApprovalPending(message) || isApprovalInFlight(message)) return false
-  const queue = pendingApprovalQueue.value
-  if (queue.length === 0) return false
-  return queue[0] === message.metadata?.tool_call_id
-}
-
 const visibleMessages = computed(() =>
   collapseExplorationBatches(
     collapseAssistantCompletionPairs(
@@ -1477,7 +1481,16 @@ const hasThoughtCompleted = message => {
   return false
 }
 
-const isApprovalPending = message => message?.metadata?.approval_status === 'pending'
+const isApprovalPending = message => {
+  const toolCallId = getMessageToolCallId(message)
+  if (!toolCallId) return false
+
+  if (hasAuthoritativePendingApprovals.value) {
+    return pendingApprovalIdSet.value.has(toolCallId)
+  }
+
+  return message?.metadata?.approval_status === 'pending'
+}
 
 const isApprovalInFlight = message =>
   !!props.isApprovalSubmitting(props.currentWorkflowId, message?.metadata?.tool_call_id)
