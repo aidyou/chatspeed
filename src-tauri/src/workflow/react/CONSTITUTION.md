@@ -360,6 +360,36 @@ New backend work must reduce reliance on fallback parsing, not introduce more of
 
 If a tool call is part of the authoritative execution record, frontend filtering must not hide it unless the filtered replacement preserves the same semantic information.
 
+### 10.4 Frontend must have one authority per concern
+
+For every workflow UI concern, the frontend must define one primary authority and treat all other views as projections or compatibility fallback.
+
+Required examples:
+
+- pending approval queue/count/order: authoritative source is the structured pending approval state (`pendingApprovalEntries` / `pendingApprovalList`), not message-list scans
+- tool execution lifecycle: authoritative source is structured tool state / ledger when available, not historical message duplication
+- session status / resumability / waiting: authoritative source is backend workflow state, not UI-local heuristics
+
+The frontend must not let:
+
+- message-list scans define approval counts
+- historical message metadata override structured pending approval state
+- bulk actions build their target set by scanning rendered messages when a structured queue already exists
+
+### 10.5 Message lists are projections, not business-state engines
+
+Frontend message lists may merge, collapse, or restyle data for readability.
+
+They must not become the authority for:
+
+- approval queue membership
+- approval execution order
+- resumability
+- wait-state meaning
+- terminal vs running tool state when a structured source already exists
+
+If a message projection conflicts with structured workflow state, structured workflow state wins and the projection must reconcile to it.
+
 ## 11. Command-Layer Discipline
 
 `commands/workflow.rs` is allowed to do orchestration.

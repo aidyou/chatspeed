@@ -517,7 +517,11 @@ export function useWorkflowMessages() {
   const isMessageExpanded = message => {
     // Only force expansion for 'Ask User' to ensure visibility of interaction points.
     // Everything else (especially heavy Diffs) should be collapsed by default.
-    if (message.metadata?.approval_status === 'pending') {
+    if (
+      message.metadata?.approval_status === 'pending' &&
+      message.metadata?.execution_status !== 'approval_submitted' &&
+      message.metadata?.execution_status !== 'running'
+    ) {
       return true
     }
     if (message.toolDisplay?.action === 'Ask User') return true

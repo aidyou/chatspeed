@@ -149,6 +149,7 @@
           :get-reasoning-preview="getReasoningPreview"
           :should-show-tool-raw-content="shouldShowToolRawContent"
           :pending-count="currentWorkflowPendingApprovals.length"
+          :pending-approval-ids="currentWorkflowPendingApprovalIds"
           :current-workflow-id="currentWorkflowId"
           :is-approval-submitting="isApprovalSubmitting"
           @toggle-expand="toggleMessageExpand"
@@ -1067,11 +1068,8 @@ const onApproveAllPendingAction = async startingToolCallId => {
   const orderedIds = []
   const seen = new Set()
 
-  for (const message of workflowStore.messages || []) {
-    if (message?.role !== 'tool') continue
-    const toolCallId = message?.metadata?.tool_call_id
+  for (const toolCallId of currentWorkflowPendingApprovalIds.value) {
     if (!toolCallId || seen.has(toolCallId)) continue
-    if (message?.metadata?.approval_status !== 'pending') continue
 
     seen.add(toolCallId)
     orderedIds.push(toolCallId)
@@ -1113,6 +1111,11 @@ const sidebarRootFilterResetToken = ref(0)
 // Only count and approve entries for the current workflow
 const currentWorkflowPendingApprovals = computed(() =>
   pendingApprovalList.value.filter(entry => entry.sessionId === currentWorkflowId.value)
+)
+const currentWorkflowPendingApprovalIds = computed(() =>
+  currentWorkflowPendingApprovals.value
+    .map(entry => String(entry?.id || '').trim())
+    .filter(id => id && id !== 'awaiting_approval')
 )
 const canDeleteLastMessage = computed(() => {
   if (!currentWorkflowId.value || canStop.value) return false
