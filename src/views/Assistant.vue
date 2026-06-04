@@ -528,12 +528,14 @@ watch(
   () => isChatting.value,
   newVal => {
     if (newVal) {
+      resetScrollBehavior()
       // ensure scroll listener is set after the element is rendered
       nextTick(() => {
         setupScrollListener()
       })
     } else {
       removeScrollListener()
+      resetScrollBehavior()
     }
   }
 )
@@ -947,6 +949,9 @@ const handleChatMessage = async payload => {
 // =================================================
 const userHasScrolled = ref(false)
 const isScrolledToBottom = ref(true)
+const autoScrollSuspended = ref(false)
+const isProgrammaticScroll = ref(false)
+const lastKnownScrollTop = ref(0)
 /**
  * Scroll to the bottom of the chat messages if conditions are met
  */
@@ -955,9 +960,16 @@ const scrollToBottomIfNeeded = () => {
 
   // Ensure content is rendered
   nextTick(() => {
+    if (autoScrollSuspended.value) return
+
     if (!userHasScrolled.value || isScrolledToBottom.value) {
       const el = chatMessagesRef.value.contentRef
+      isProgrammaticScroll.value = true
       el.scrollTop = el.scrollHeight - el.clientHeight
+      lastKnownScrollTop.value = el.scrollTop
+      requestAnimationFrame(() => {
+        isProgrammaticScroll.value = false
+      })
     }
   })
 }
@@ -972,12 +984,31 @@ const onScroll = () => {
 
   const element = chatMessagesRef.value.contentRef
   const { scrollTop, scrollHeight, clientHeight } = element
+  const wasAtBottom = isScrolledToBottom.value
 
   isScrolledToBottom.value = scrollTop + clientHeight >= scrollHeight - 10
+
+  if (isProgrammaticScroll.value) {
+    lastKnownScrollTop.value = scrollTop
+    return
+  }
+
+  const userScrolledUp = scrollTop < lastKnownScrollTop.value
+  if (isChatting.value && !wasAtBottom && !isScrolledToBottom.value) {
+    autoScrollSuspended.value = true
+  } else if (isChatting.value && userScrolledUp && !isScrolledToBottom.value) {
+    autoScrollSuspended.value = true
+  } else if (isChatting.value && wasAtBottom && !isScrolledToBottom.value) {
+    autoScrollSuspended.value = true
+  } else if (isScrolledToBottom.value) {
+    autoScrollSuspended.value = false
+  }
 
   if (!isScrolledToBottom.value) {
     userHasScrolled.value = true
   }
+
+  lastKnownScrollTop.value = scrollTop
 }
 
 /**
@@ -986,6 +1017,9 @@ const onScroll = () => {
 const resetScrollBehavior = () => {
   userHasScrolled.value = false
   isScrolledToBottom.value = true
+  autoScrollSuspended.value = false
+  isProgrammaticScroll.value = false
+  lastKnownScrollTop.value = 0
 }
 
 // =================================================
