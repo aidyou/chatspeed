@@ -507,9 +507,6 @@ const activeTab = ref('main')
 const position = ref({ x: 0, y: 0 })
 const isPositioned = ref(false)
 
-// Edge distance (for smart positioning during resize)
-const edgeDistance = ref({ right: 20, bottom: 220 })
-
 // Drag offset
 const dragOffset = ref({ x: 0, y: 0 })
 
@@ -1403,16 +1400,7 @@ const stopDrag = () => {
   }
 
   isPositioned.value = true
-
-  // Calculate and save edge distance
-  const width = isCollapsed.value ? COLLAPSED_WIDTH : PANEL_WIDTH
-  const height = isCollapsed.value ? COLLAPSED_HEIGHT : panelRef.value?.offsetHeight || 250
-  edgeDistance.value = {
-    right: window.innerWidth - position.value.x - width,
-    bottom: window.innerHeight - position.value.y - height
-  }
-
-  savePosition()
+  savePositionForMode(getPanelMode(), { forceCustom: true })
 }
 
 const getPanelMode = () => {
@@ -1453,18 +1441,18 @@ const defaultPositionForMode = (mode = getPanelMode()) => {
 
 const storageKeyForMode = (mode, suffix) => `status-panel-${mode}-${suffix}`
 
-const savePositionForMode = (mode = getPanelMode()) => {
-  const { width, height } = getModeDimensions(mode)
+const hasCustomPositionForMode = mode => {
+  return !!localStorage.getItem(storageKeyForMode(mode, 'position'))
+}
+
+const savePositionForMode = (mode = getPanelMode(), { forceCustom = false } = {}) => {
+  if (!forceCustom && !hasCustomPositionForMode(mode)) {
+    return
+  }
   const constrained = constrainPoint(position.value, mode)
   position.value = constrained
-  edgeDistance.value = {
-    right: window.innerWidth - constrained.x - width,
-    bottom: window.innerHeight - constrained.y - height
-  }
   localStorage.setItem(storageKeyForMode(mode, 'position'), JSON.stringify(constrained))
-  localStorage.setItem(storageKeyForMode(mode, 'edge-distance'), JSON.stringify(edgeDistance.value))
   localStorage.setItem('status-panel-position', JSON.stringify(constrained))
-  localStorage.setItem('status-panel-edge-distance', JSON.stringify(edgeDistance.value))
 }
 
 const restorePositionForMode = (mode = getPanelMode()) => {
@@ -1476,7 +1464,6 @@ const restorePositionForMode = (mode = getPanelMode()) => {
 
   if (savedEdge || (!saved && legacyEdge)) {
     const parsedEdge = JSON.parse(savedEdge || legacyEdge)
-    edgeDistance.value = parsedEdge
     position.value = constrainPoint(
       {
         x: window.innerWidth - parsedEdge.right - width,
@@ -1484,6 +1471,9 @@ const restorePositionForMode = (mode = getPanelMode()) => {
       },
       mode
     )
+    savePositionForMode(mode, { forceCustom: true })
+    localStorage.removeItem(storageKeyForMode(mode, 'edge-distance'))
+    localStorage.removeItem('status-panel-edge-distance')
     isPositioned.value = true
     return
   }
@@ -1491,6 +1481,9 @@ const restorePositionForMode = (mode = getPanelMode()) => {
   if (saved || legacySaved) {
     const parsedPosition = JSON.parse(saved || legacySaved)
     position.value = constrainPoint(parsedPosition, mode)
+    savePositionForMode(mode, { forceCustom: true })
+    localStorage.removeItem(storageKeyForMode(mode, 'edge-distance'))
+    localStorage.removeItem('status-panel-edge-distance')
     isPositioned.value = true
     return
   }
@@ -1563,9 +1556,8 @@ const stopTriggerDrag = () => {
   document.removeEventListener('touchmove', onTriggerDrag)
   document.removeEventListener('touchend', stopTriggerDrag)
 
-  // Save position and edge distance
   if (hasDragged.value) {
-    savePosition()
+    savePositionForMode(getPanelMode(), { forceCustom: true })
   }
 
   isDragging.value = false
@@ -1632,38 +1624,11 @@ const restorePosition = () => {
   }
 }
 
-// Ensure panel position stays within viewport bounds and maintains edge distance
 const constrainPosition = () => {
   if (!isPositioned.value) return
-
-  // Determine current dimensions based on visibility and collapse state
-  let width, height
-  if (!isVisible.value) {
-    // Trigger button (small circle)
-    width = TRIGGER_SIZE
-    height = TRIGGER_SIZE
-  } else if (isCollapsed.value) {
-    // Collapsed panel
-    width = COLLAPSED_WIDTH
-    height = COLLAPSED_HEIGHT
-  } else {
-    // Expanded panel
-    width = PANEL_WIDTH
-    height = panelRef.value?.offsetHeight || 250
-  }
-
-  // Calculate new position based on edge distance
-  let newX = window.innerWidth - edgeDistance.value.right - width
-  let newY = window.innerHeight - edgeDistance.value.bottom - height
-  const topInset = getSafeTopInset()
-
-  // Constrain to viewport bounds
-  newX = Math.max(0, Math.min(newX, window.innerWidth - width))
-  newY = Math.max(topInset, Math.min(newY, window.innerHeight - height))
-
-  // Update position
-  position.value = { x: newX, y: newY }
-  savePosition()
+  const mode = getPanelMode()
+  const basePosition = hasCustomPositionForMode(mode) ? position.value : defaultPositionForMode(mode)
+  position.value = constrainPoint(basePosition, mode)
 }
 
 onMounted(() => {
@@ -1737,13 +1702,32 @@ watch(
     }
   }
 )
+
+watch(
+  () => [
+    isCollapsed.value,
+    isVisible.value,
+    activeTab.value,
+    todoList.value.length,
+    displayedTodoList.value.length,
+    recentOperations.value.length,
+    childAgentSummaries.value.length,
+    modelStatusRows.value.length
+  ].join('|'),
+  () => {
+    if (!isVisible.value || !hasData.value) return
+    nextTick(() => {
+      constrainPosition()
+    })
+  }
+)
 </script>
 
 <style lang="scss" scoped>
 .status-panel {
   position: fixed;
   right: 20px;
-  bottom: 100px;
+  top: 200px;
   width: 350px;
   max-width: min(350px, calc(100vw - 12px));
   box-sizing: border-box;
@@ -2648,7 +2632,7 @@ watch(
 .status-panel-trigger {
   position: fixed;
   right: 20px;
-  bottom: 100px;
+  top: 200px;
   width: 44px;
   height: 44px;
   background: var(--cs-bg-color);

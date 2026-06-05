@@ -845,25 +845,29 @@ const pendingApprovalIdSet = computed(() => {
     .filter(Boolean)
   return new Set(ids)
 })
-const hasAuthoritativePendingApprovals = computed(
-  () => pendingApprovalIdSet.value.size > 0 || (props.pendingCount || 0) > 0
-)
 
 const getMessageToolCallId = message => String(message?.metadata?.tool_call_id || '').trim()
-
 const inlineBulkApprovalCount = computed(() => {
-  const messageIds = new Set()
-  for (const message of props.messages || []) {
+  return getVisiblePendingApprovalIds().length
+})
+
+const getVisiblePendingApprovalIds = () => {
+  const orderedIds = []
+  const seen = new Set()
+
+  for (const message of visibleMessages.value || []) {
     const toolCallId = getMessageToolCallId(message)
-    if (!toolCallId) continue
+    if (!toolCallId || seen.has(toolCallId)) continue
     if (!isApprovalPending(message)) continue
     if (isPlanApprovalMessage(message)) continue
     if (!shouldShowApprovalDialog(message)) continue
-    messageIds.add(toolCallId)
+
+    seen.add(toolCallId)
+    orderedIds.push(toolCallId)
   }
 
-  return props.pendingApprovalIds.filter(id => messageIds.has(String(id || '').trim())).length
-})
+  return orderedIds
+}
 
 const isNearBottom = el => {
   if (!el) return true
@@ -1485,11 +1489,7 @@ const isApprovalPending = message => {
   const toolCallId = getMessageToolCallId(message)
   if (!toolCallId) return false
 
-  if (hasAuthoritativePendingApprovals.value) {
-    return pendingApprovalIdSet.value.has(toolCallId)
-  }
-
-  return message?.metadata?.approval_status === 'pending'
+  return pendingApprovalIdSet.value.has(toolCallId)
 }
 
 const isApprovalInFlight = message =>
@@ -1530,7 +1530,10 @@ const setApprovalDraft = (toolCallId, value) => {
 }
 
 const onApproveAllPending = toolCallId => {
-  emit('approve-all-pending', toolCallId)
+  emit('approve-all-pending', {
+    startingToolCallId: toolCallId,
+    orderedToolCallIds: getVisiblePendingApprovalIds()
+  })
 }
 
 const getChoiceKey = message =>

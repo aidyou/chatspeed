@@ -360,35 +360,84 @@ New backend work must reduce reliance on fallback parsing, not introduce more of
 
 If a tool call is part of the authoritative execution record, frontend filtering must not hide it unless the filtered replacement preserves the same semantic information.
 
-### 10.4 Frontend must have one authority per concern
+### 10.4 Frontend authority is concern-scoped
 
-For every workflow UI concern, the frontend must define one primary authority and treat all other views as projections or compatibility fallback.
+The frontend must not choose one global local source for all workflow UI behavior.
 
-Required examples:
+Each workflow concern has its own authority, and that authority must match the concern's lifecycle:
 
-- pending approval queue/count/order: authoritative source is the structured pending approval state (`pendingApprovalEntries` / `pendingApprovalList`), not message-list scans
-- tool execution lifecycle: authoritative source is structured tool state / ledger when available, not historical message duplication
-- session status / resumability / waiting: authoritative source is backend workflow state, not UI-local heuristics
+- session lifecycle, resumability, terminal state, and waiting:
+  authority is backend workflow state (`state + wait_reason`)
+- current active workflow inline approvals:
+  authority is the current workflow's approval-wait state plus the latest structured state for each pending `tool_call_id`
+- approval recovery after reload or cold resume:
+  authority is `ExecutionContext.pendingTools`, normalized into the current inline approval view model
+- cross-session top-bar user-action reminders:
+  authority is a background notification cache built from structured approval and user-input wait events, reconciled by workflow state transitions
+- tool execution lifecycle:
+  authority is the structured tool ledger or latest structured tool metadata for the same `tool_call_id`
+- message rendering:
+  authority is the message projection derived from durable messages and structured metadata
 
-The frontend must not let:
+No concern may borrow another concern's authority just because the data is convenient.
 
-- message-list scans define approval counts
-- historical message metadata override structured pending approval state
-- bulk actions build their target set by scanning rendered messages when a structured queue already exists
+Examples:
 
-### 10.5 Message lists are projections, not business-state engines
+- the top-bar user-action reminder cache must not decide which approval buttons appear inside the active message list
+- rendered message scans must not decide global reminder counts
+- old transcript messages must not keep an approval alive after backend state has left approval wait
+- a pending approval message must be ignored when a newer structured state for the same `tool_call_id` is approved, running, rejected, failed, interrupted, or completed
+
+### 10.5 Approval view models must be lifecycle-gated
+
+The current active workflow's inline approval view model must be valid only while the workflow is waiting for approval:
+
+- `wait_reason == approval`, or
+- a canonical approval-waiting workflow state is present
+
+If the workflow is running, completed, failed, cancelled, awaiting user input, awaiting a sub-agent, or waiting for confirmation, the current inline approval view model must be empty even if old messages still contain `approval_status = pending`.
+
+Within an approval-waiting workflow, inline approval membership must be derived by reducing structured records by `tool_call_id` with latest-state semantics:
+
+- pending states add or keep the item
+- approved, submitted, running, rejected, completed, failed, or interrupted states remove the item
+- duplicate historical messages for the same `tool_call_id` must collapse to one current item
+- bulk approval targets must come from this current inline approval view model, not from rendered DOM state or global reminders
+
+This rule exists specifically to make old persisted messages safe: old pending records may remain in transcript history, but they must not become current business state after the workflow state or latest tool state has moved on.
+
+### 10.6 Background user-action reminders are a notification cache
+
+The top-bar indicator is a cross-session user-action reminder cache, not the approval protocol itself.
+
+It may contain:
+
+- background approval requests from structured `confirm` events
+- background ask-user reminders from structured user-input waits
+- handoff entries produced when the active workflow is switched away while it is still waiting
+
+It must be reconciled by:
+
+- structured per-tool resolution events (`approval_resolved`, `tool_started`)
+- workflow state transitions that leave approval or user-input waiting
+- terminal workflow state transitions
+- active-session selection, which must remove that session from the background reminder cache and rebuild active inline state from the active workflow authority
+
+The user-action reminder cache may notify about both approvals and ask-user waits, but it must never resurrect old active-session approvals or override the current active workflow's inline approval view model. Ask-user waits and tool approvals must remain distinct entries with distinct `kind` values.
+
+### 10.7 Message lists are projections, not business-state engines
 
 Frontend message lists may merge, collapse, or restyle data for readability.
 
 They must not become the authority for:
 
-- approval queue membership
-- approval execution order
+- global user-action reminder membership
 - resumability
 - wait-state meaning
 - terminal vs running tool state when a structured source already exists
+- approval counts or bulk approval target sets
 
-If a message projection conflicts with structured workflow state, structured workflow state wins and the projection must reconcile to it.
+If a message projection conflicts with the canonical authority for its concern, the authority wins and the projection must reconcile to it.
 
 ## 11. Command-Layer Discipline
 

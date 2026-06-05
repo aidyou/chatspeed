@@ -22,7 +22,7 @@
       </template>
       <template #right>
         <el-dropdown
-          v-if="pendingApprovalList.length > 0"
+          v-if="globalPendingApprovalList.length > 0"
           trigger="click"
           @command="handleApprovalCommand">
           <div class="icon-btn upperLayer approval-queue-btn blinking">
@@ -32,7 +32,7 @@
           <template #dropdown>
             <el-dropdown-menu class="approval-queue-menu">
               <el-dropdown-item
-                v-for="item in pendingApprovalList"
+                v-for="item in globalPendingApprovalList"
                 :key="item.key"
                 :command="item.sessionId">
                 <div class="approval-menu-item">
@@ -148,8 +148,8 @@
           :get-parsed-message="getParsedMessage"
           :get-reasoning-preview="getReasoningPreview"
           :should-show-tool-raw-content="shouldShowToolRawContent"
-          :pending-count="currentWorkflowPendingApprovals.length"
-          :pending-approval-ids="currentWorkflowPendingApprovalIds"
+          :pending-count="currentInlinePendingApprovalIds.length"
+          :pending-approval-ids="currentInlinePendingApprovalIds"
           :current-workflow-id="currentWorkflowId"
           :is-approval-submitting="isApprovalSubmitting"
           @toggle-expand="toggleMessageExpand"
@@ -1061,14 +1061,23 @@ const onSkillsConfigSave = async config => {
 // Approve all pending approval items for the current workflow using the
 // in-message FIFO order so the inline item that triggered the batch action
 // is never dropped from the snapshot.
-const onApproveAllPendingAction = async startingToolCallId => {
+const onApproveAllPendingAction = async payload => {
   const sessionId = currentWorkflowId.value
   if (!sessionId) return
 
+  const startingToolCallId =
+    typeof payload === 'string' ? payload : payload?.startingToolCallId || ''
+  const preferredIds = Array.isArray(payload?.orderedToolCallIds) ? payload.orderedToolCallIds : []
   const orderedIds = []
   const seen = new Set()
 
-  for (const toolCallId of currentWorkflowPendingApprovalIds.value) {
+  for (const toolCallId of preferredIds) {
+    if (!toolCallId || seen.has(toolCallId)) continue
+    seen.add(toolCallId)
+    orderedIds.push(toolCallId)
+  }
+
+  for (const toolCallId of currentInlinePendingApprovalIds.value) {
     if (!toolCallId || seen.has(toolCallId)) continue
 
     seen.add(toolCallId)
@@ -1103,20 +1112,28 @@ const soundIcon = computed(() => {
   return workflowApprovalMuted.value && workflowCompletionMuted.value ? 'mute' : 'unmute'
 })
 const approvalQueueCount = computed(() => {
-  const count = pendingApprovalList.value.length
+  const count = globalPendingApprovalList.value.length
   return count > 9 ? '9+' : String(count)
 })
 const sidebarRootFilterResetToken = ref(0)
 
-// Only count and approve entries for the current workflow
-const currentWorkflowPendingApprovals = computed(() =>
-  pendingApprovalList.value.filter(entry => entry.sessionId === currentWorkflowId.value)
-)
-const currentWorkflowPendingApprovalIds = computed(() =>
-  currentWorkflowPendingApprovals.value
-    .map(entry => String(entry?.id || '').trim())
-    .filter(id => id && id !== 'awaiting_approval')
-)
+const currentInlinePendingApprovalIds = computed(() => workflowStore.currentInlinePendingApprovalIds)
+const globalPendingApprovalList = computed(() => {
+  const activeSessionId = currentWorkflowId.value
+  const backgroundEntries = pendingApprovalList.value.filter(entry => entry.sessionId !== activeSessionId)
+  const merged = [...workflowStore.currentInlinePendingApprovals, ...backgroundEntries]
+  const deduped = []
+  const seen = new Set()
+
+  for (const entry of merged) {
+    const key = `${entry?.sessionId || ''}:${entry?.id || ''}`
+    if (!entry || seen.has(key)) continue
+    seen.add(key)
+    deduped.push(entry)
+  }
+
+  return deduped
+})
 const canDeleteLastMessage = computed(() => {
   if (!currentWorkflowId.value || canStop.value) return false
   return workflowStore.messages.length > 0

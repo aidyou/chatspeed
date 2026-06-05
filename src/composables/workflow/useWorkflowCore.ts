@@ -652,6 +652,11 @@ export function useWorkflowCore({
                         return
                     }
 
+                    if (payload.type === 'approval_resolved' || payload.type === 'tool_started') {
+                        clearPendingApprovalEntry(sessionId, payload.tool_call_id)
+                        return
+                    }
+
                     if (payload.type !== 'state') return
 
                     workflowStore.updateWorkflowStatus(
@@ -947,6 +952,23 @@ export function useWorkflowCore({
         if (!canSwitchWorkflow.value) {
             console.warn('Cannot switch workflow while another is running')
             return
+        }
+
+        const previousWorkflowId = workflowStore.currentWorkflowId
+        const previousInlineApprovals = Array.isArray(workflowStore.currentInlinePendingApprovals)
+            ? [...workflowStore.currentInlinePendingApprovals]
+            : []
+
+        if (previousWorkflowId && previousWorkflowId !== id) {
+            clearPendingApprovalEntries(previousWorkflowId, 'approval')
+            for (const entry of previousInlineApprovals) {
+                if (entry?.sessionId !== previousWorkflowId || !entry?.id) continue
+                upsertPendingApprovalEntry(previousWorkflowId, {
+                    id: entry.id,
+                    kind: 'approval',
+                    action: entry.action || t('workflow.awaitingApproval')
+                })
+            }
         }
 
         // Phase 9: Update session ID for event isolation
