@@ -497,6 +497,8 @@ const {
   workflows,
   isRunning,
   hasLiveSession,
+  hasBlockingLiveSession,
+  canRewindTail,
   waitReason,
   canStop,
   canContinue,
@@ -1135,8 +1137,9 @@ const globalPendingApprovalList = computed(() => {
   return deduped
 })
 const canDeleteLastMessage = computed(() => {
-  if (!currentWorkflowId.value || canStop.value) return false
-  return workflowStore.messages.length > 0
+  if (!currentWorkflowId.value) return false
+  if (hasBlockingLiveSession.value) return false
+  return canRewindTail.value === true
 })
 
 const displayAllowedPathTitle = computed(() => {

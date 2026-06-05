@@ -10,6 +10,7 @@ import {
   normalizeShellCommandForDisplay,
   normalizeToolDisplayText
 } from './toolDisplay'
+import { WORKFLOW_STATUSES, WORKFLOW_WAIT_REASONS } from './signalTypes'
 
 /**
  * Composable for managing message processing and display
@@ -40,6 +41,10 @@ export function useWorkflowMessages() {
     const toolHasWaitingMsg = new Set() // tool_call_id that has an 'Awaiting' message
     const toolMessageIds = new Set() // tool_call_id with dedicated tool/user-observe messages
     const subAgentCompletions = new Map()
+    const currentStatus = String(workflowStore.currentWorkflow?.status || '').toLowerCase()
+    const isAwaitingUser =
+      workflowStore.waitReason === WORKFLOW_WAIT_REASONS.USER_INPUT ||
+      currentStatus === WORKFLOW_STATUSES.AWAITING_USER
 
     const extractSubAgentTask = content => {
       if (!content || typeof content !== 'string') return ''
@@ -162,6 +167,18 @@ export function useWorkflowMessages() {
       }
 
       return `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``
+    }
+
+    const hasRealUserResponseAfterIndex = (list, startIndex) => {
+      for (let i = startIndex + 1; i < list.length; i++) {
+        const msg = list[i]
+        if (msg?.role !== 'user') continue
+        if (msg?.metadata?.queue_status === 'queued') continue
+        const content = removeSystemReminder(msg.message || '').trim()
+        if (!content) continue
+        return true
+      }
+      return false
     }
 
     const buildSubAgentCard = message => {
@@ -477,12 +494,19 @@ export function useWorkflowMessages() {
           isApproved
         }
       })
-      .filter(m => {
+      .filter((m, index, list) => {
         if (m.metadata?.ui_visibility === 'hide') return false
         // Standard visibility logic
         if (m.role === 'tool') {
           const name = m.metadata?.tool_call?.name || m.metadata?.tool_call?.function?.name || ''
           if (name === 'answer_user') return false
+          if (
+            name === 'ask_user' &&
+            !isAwaitingUser &&
+            !hasRealUserResponseAfterIndex(list, index)
+          ) {
+            return false
+          }
           if (
             ['approval_submitted', 'running'].includes(m.metadata?.execution_status) &&
             !workflowStore.getToolStream(m.metadata?.tool_call_id).length

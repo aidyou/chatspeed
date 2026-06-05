@@ -69,6 +69,8 @@ export function useWorkflowCore({
     const isRunning = computed(() => workflowStore.isRunning)
     const waitReason = computed(() => workflowStore.waitReason)
     const hasLiveSession = computed(() => workflowStore.hasLiveSession)
+    const hasBlockingLiveSession = computed(() => workflowStore.hasBlockingLiveSession)
+    const canRewindTail = computed(() => workflowStore.canRewindTail)
     const isLiveWaiting = computed(() => workflowStore.isLiveWaiting)
     const canStop = computed(() => workflowStore.canStop)
     const canContinue = computed(() => workflowStore.canContinue)
@@ -1831,6 +1833,8 @@ export function useWorkflowCore({
         isWaiting,
         waitReason,
         hasLiveSession,
+        hasBlockingLiveSession,
+        canRewindTail,
         isLiveWaiting,
         canStop,
         canContinue,
@@ -1840,6 +1844,7 @@ export function useWorkflowCore({
         pendingApprovalList,
         getPendingApprovalEntry,
         clearPendingApprovalEntry,
+        upsertPendingApprovalEntry,
         activeModelName,
         canSwitchWorkflow,
         setupWorkflowEvents,

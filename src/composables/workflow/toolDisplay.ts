@@ -49,6 +49,12 @@ const workflowText = (key: string, fallback: string) => {
   return typeof translated === 'string' && translated !== key ? translated : fallback
 }
 
+const resolveWorkflowSummaryText = (text: string) => {
+  if (!text || typeof text !== 'string') return text
+  if (!text.startsWith('workflow.')) return text
+  return workflowText(text, text)
+}
+
 export const isEditResultTool = (toolName?: string) =>
   typeof toolName === 'string' && EDIT_RESULT_TOOLS.has(toolName)
 
@@ -57,7 +63,8 @@ export const getToolStatusSummary = (
   state: ToolStatusSummaryState | undefined,
   fallback = ''
 ) => {
-  if (!isEditResultTool(toolName) || !state) return fallback
+  const resolvedFallback = resolveWorkflowSummaryText(fallback)
+  if (!state) return resolvedFallback
 
   switch (state) {
     case 'pending':
@@ -67,11 +74,13 @@ export const getToolStatusSummary = (
     case 'rejected':
       return workflowText('workflow.rejected', 'Rejected')
     case 'success':
-      return toolName === 'edit_file'
-        ? workflowText('workflow.edited', 'Edited')
-        : workflowText('workflow.written', 'Written')
+      return isEditResultTool(toolName)
+        ? toolName === 'edit_file'
+          ? workflowText('workflow.edited', 'Edited')
+          : workflowText('workflow.written', 'Written')
+        : resolvedFallback
     case 'failed':
     default:
-      return fallback
+      return resolvedFallback
   }
 }

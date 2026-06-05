@@ -280,6 +280,17 @@ fn should_inject_terminal_user_message_into_live_session(
     )
 }
 
+fn managed_status_blocks_tail_rewind(managed_status: Option<ManagedSessionStatus>) -> bool {
+    matches!(
+        managed_status,
+        Some(
+            ManagedSessionStatus::Active
+                | ManagedSessionStatus::Waiting
+                | ManagedSessionStatus::Stopping
+        )
+    )
+}
+
 async fn inject_runtime_config_signal(
     gateway: &Arc<TauriGateway>,
     workflow_manager: &Arc<WorkflowManager>,
@@ -1362,9 +1373,14 @@ pub async fn get_workflow_snapshot(
     // Phase 0-3 UI State Reconciliation: Add hasLiveSession field.
     // Reconcile terminal executors first so the frontend does not keep seeing
     // zombie runtime sessions after a turn has already finished.
+    let workflow_manager_arc = workflow_manager.inner().clone();
     let has_live_session =
-        has_reconciled_live_session(&workflow_manager.inner().clone(), &session_id, "snapshot")
-            .await;
+        has_reconciled_live_session(&workflow_manager_arc, &session_id, "snapshot").await;
+    let has_blocking_live_session = if has_live_session {
+        managed_status_blocks_tail_rewind(workflow_manager_arc.get_session_status(&session_id))
+    } else {
+        false
+    };
     {
         let store = main_store.read().map_err(|e| e.to_string())?;
         normalize_snapshot_after_live_reconciliation(
@@ -1375,14 +1391,27 @@ pub async fn get_workflow_snapshot(
         )?;
     }
     let merged_messages = merge_ui_workflow_messages(&snapshot.messages);
-    let execution_context = restore_context_for_signal(main_store, &session_id);
+    let execution_context = restore_context_for_signal(main_store.clone(), &session_id);
+    let tail_rewind_kind = {
+        let store = main_store.read().map_err(|e| e.to_string())?;
+        store
+            .get_tail_rewind_kind(&session_id)
+            .map_err(|e| e.to_string())?
+    };
+    let can_rewind_tail = !has_blocking_live_session && tail_rewind_kind.is_some();
 
     // Convert snapshot to JSON and inject hasLiveSession
     let mut snapshot_json = serde_json::to_value(&snapshot).map_err(|e| e.to_string())?;
     if let Some(obj) = snapshot_json.as_object_mut() {
         obj.insert("messages".to_string(), json!(merged_messages));
         obj.insert("hasLiveSession".to_string(), json!(has_live_session));
+        obj.insert(
+            "hasBlockingLiveSession".to_string(),
+            json!(has_blocking_live_session),
+        );
         obj.insert("executionContext".to_string(), json!(execution_context));
+        obj.insert("canRewindTail".to_string(), json!(can_rewind_tail));
+        obj.insert("tailRewindKind".to_string(), json!(tail_rewind_kind));
     }
 
     log::debug!(
@@ -4285,6 +4314,29 @@ mod tests {
     }
 
     #[test]
+    fn test_managed_status_blocks_tail_rewind() {
+        assert!(managed_status_blocks_tail_rewind(Some(
+            ManagedSessionStatus::Active
+        )));
+        assert!(managed_status_blocks_tail_rewind(Some(
+            ManagedSessionStatus::Waiting
+        )));
+        assert!(managed_status_blocks_tail_rewind(Some(
+            ManagedSessionStatus::Stopping
+        )));
+        assert!(!managed_status_blocks_tail_rewind(Some(
+            ManagedSessionStatus::Completed
+        )));
+        assert!(!managed_status_blocks_tail_rewind(Some(
+            ManagedSessionStatus::Failed
+        )));
+        assert!(!managed_status_blocks_tail_rewind(Some(
+            ManagedSessionStatus::Cancelled
+        )));
+        assert!(!managed_status_blocks_tail_rewind(None));
+    }
+
+    #[test]
     fn test_normalize_snapshot_does_not_interrupt_waiting_approval_workflow() {
         let store = create_test_store();
         let session_id = "snapshot-awaiting-approval";
@@ -4397,6 +4449,66 @@ mod tests {
                 .and_then(|meta| meta.get("execution_status"))
                 .and_then(|value| value.as_str()),
             Some("running")
+        );
+    }
+
+    #[test]
+    fn test_store_identifies_rewindable_ask_user_tail_after_restart() {
+        let store = create_test_store();
+        let session_id = "snapshot-awaiting-user-rewind";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+        store
+            .update_workflow_status(session_id, "awaiting_user")
+            .expect("failed to update workflow status");
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "ask_user_1",
+                    "tool_name": crate::tools::TOOL_ASK_USER,
+                    "display_type": "choice",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add ask_user message");
+        let wait_event_id = store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "user_input".to_string(),
+                Vec::new(),
+            ))
+            .expect("failed to append ask_user wait");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Waiting;
+        context.wait_reason = Some(WaitReason::UserInput);
+        context.last_event_id = Some(wait_event_id);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist awaiting-user snapshot");
+
+        assert_eq!(
+            store
+                .get_tail_rewind_kind(session_id)
+                .expect("failed to inspect tail rewind kind"),
+            Some("ask_user_wait")
         );
     }
 

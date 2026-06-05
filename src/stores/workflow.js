@@ -82,6 +82,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const isRunning = ref(false);
   const waitReason = ref(null);
   const hasLiveSession = ref(false);
+  const hasBlockingLiveSession = ref(false);
+  const canRewindTail = ref(false);
   const error = ref(null);
   const notification = ref({
     message: '',
@@ -1071,6 +1073,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     currentWorkflowId.value = workflowId;
     messageQueue.value = [];
     error.value = null;
+    hasBlockingLiveSession.value = false;
+    canRewindTail.value = false;
     clearSubAgentProgress();
 
     try {
@@ -1079,11 +1083,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
       _parseWorkflowData(snapshot.workflow);
       snapshot.workflow.executionContext = normalizeExecutionContext(snapshot.executionContext);
+      snapshot.workflow.canRewindTail = snapshot.canRewindTail === true;
+      snapshot.workflow.tailRewindKind = snapshot.tailRewindKind || null;
 
       setShellPolicy(snapshot.workflow.shellPolicy || []);
 
       const status = snapshot.workflow.status?.toLowerCase() || WORKFLOW_STATUSES.PENDING;
       hasLiveSession.value = snapshot.hasLiveSession || false;
+      hasBlockingLiveSession.value = snapshot.hasBlockingLiveSession === true;
+      canRewindTail.value = snapshot.canRewindTail === true;
       isRunning.value = RUNNING_STATUSES.includes(status) && hasLiveSession.value;
 
       waitReason.value = snapshot.workflow.waitReason || null;
@@ -1149,6 +1157,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       await _handleError(err);
       messages.value = [];
       todoList.value = [];
+      hasBlockingLiveSession.value = false;
+      canRewindTail.value = false;
       // 清理 Task Ledger
       clearTaskLedger(workflowId);
     }
@@ -1497,6 +1507,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     isRunning.value = false;
     waitReason.value = null;
     hasLiveSession.value = false;
+    hasBlockingLiveSession.value = false;
+    canRewindTail.value = false;
     autoApprovedTools.value = [];
     shellPolicy.value = [];
     messageQueue.value = [];
@@ -1513,6 +1525,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     isRunning,
     waitReason,
     hasLiveSession,
+    hasBlockingLiveSession,
+    canRewindTail,
     error,
     notification,
     autoApprovedTools,
