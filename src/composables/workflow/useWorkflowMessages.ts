@@ -45,6 +45,9 @@ export function useWorkflowMessages() {
     const isAwaitingUser =
       workflowStore.waitReason === WORKFLOW_WAIT_REASONS.USER_INPUT ||
       currentStatus === WORKFLOW_STATUSES.AWAITING_USER
+    const askUserTailKinds = new Set(['ask_user_wait', 'ask_user_answered'])
+    const tailRewindKind = String(workflowStore.currentWorkflow?.tailRewindKind || '').trim()
+    const hasAskUserTail = askUserTailKinds.has(tailRewindKind)
 
     const extractSubAgentTask = content => {
       if (!content || typeof content !== 'string') return ''
@@ -498,11 +501,16 @@ export function useWorkflowMessages() {
         if (m.metadata?.ui_visibility === 'hide') return false
         // Standard visibility logic
         if (m.role === 'tool') {
-          const name = m.metadata?.tool_call?.name || m.metadata?.tool_call?.function?.name || ''
+          const name =
+            m.metadata?.tool_name ||
+            m.metadata?.tool_call?.name ||
+            m.metadata?.tool_call?.function?.name ||
+            ''
           if (name === 'answer_user') return false
           if (
             name === 'ask_user' &&
             !isAwaitingUser &&
+            !hasAskUserTail &&
             !hasRealUserResponseAfterIndex(list, index)
           ) {
             return false
@@ -548,7 +556,12 @@ export function useWorkflowMessages() {
     ) {
       return true
     }
-    if (message.toolDisplay?.action === 'Ask User') return true
+    const toolName =
+      message.metadata?.tool_name ||
+      message.metadata?.tool_call?.name ||
+      message.metadata?.tool_call?.function?.name ||
+      ''
+    if (toolName === 'ask_user') return true
     return expandedMessages.value.has(message.displayId)
   }
 

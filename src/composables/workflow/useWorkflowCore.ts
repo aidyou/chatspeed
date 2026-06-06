@@ -1546,6 +1546,7 @@ export function useWorkflowCore({
                 await invokeWrapper('workflow_stop', {
                     sessionId: currentWorkflowId.value
                 })
+                await workflowStore.selectWorkflow(currentWorkflowId.value)
             } catch (error) {
                 console.error('Failed to stop workflow:', error)
             }

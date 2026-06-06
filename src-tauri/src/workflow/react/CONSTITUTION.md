@@ -439,6 +439,38 @@ They must not become the authority for:
 
 If a message projection conflicts with the canonical authority for its concern, the authority wins and the projection must reconcile to it.
 
+### 10.8 "Delete last step" is transcript/runtime deletion, not side-effect undo
+
+The workflow UI action exposed to users as "delete last step" is not a general-purpose undo system.
+
+Its contract is:
+
+- delete the last rewindable workflow interaction unit
+- rebuild workflow runtime state from structured event authority
+- keep transcript/UI consistent with that rebuilt state
+
+It must not claim or imply that it:
+
+- restores edited files to a previous version
+- recreates deleted files
+- reverts shell commands
+- rolls back network or other external side effects
+
+Deletion semantics must stay explicit:
+
+- `ask_user`
+  - if a user answer already exists, first delete the answer and return to waiting-for-input
+  - if no answer exists, delete the entire `ask_user` interaction unit, including the same-batch assistant message/reasoning and tool observation
+- `submit_plan`
+  - if plan approval has already happened, first delete the approval result and return to the pending-plan state
+  - deleting again removes the current planning interaction unit itself
+- other tools
+  - delete the tool interaction unit itself
+  - if the deleted tool was the last tool call in its assistant batch, the same-batch assistant message and reasoning must also be deleted
+  - tool deletion does not imply rollback of real-world side effects
+
+Frontend wording, tooltips, and confirmations must reflect this contract and must not describe the feature as "undo", "revert", or equivalent side-effect rollback language.
+
 ## 11. Command-Layer Discipline
 
 `commands/workflow.rs` is allowed to do orchestration.

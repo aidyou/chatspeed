@@ -342,6 +342,32 @@ fn tool_started_event_id(events: &[WorkflowEventRecord], tool_call_id: &str) -> 
         .map(|event| event.id)
 }
 
+fn latest_approval_submitted_message<'a>(
+    messages: &'a [WorkflowMessage],
+    tool_call_id: &str,
+) -> Option<&'a WorkflowMessage> {
+    messages.iter().rev().find(|message| {
+        is_tool_observation_message(message)
+            && message_tool_call_id(message) == Some(tool_call_id)
+            && message_execution_status(message) == Some("approval_submitted")
+    })
+}
+
+fn latest_approved_plan_summary_message(messages: &[WorkflowMessage]) -> Option<&WorkflowMessage> {
+    messages.iter().rev().find(|message| {
+        message.id.is_some()
+            && message.role == "system"
+            && message.message_kind == "summary"
+            && message.message_subtype.as_deref().or_else(|| {
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("subtype"))
+                    .and_then(Value::as_str)
+            }) == Some("approved_plan")
+    })
+}
+
 fn pending_approval_event_boundary(
     events: &[WorkflowEventRecord],
     tool_call_id: &str,
@@ -359,6 +385,15 @@ fn pending_approval_event_boundary(
         (None, Some(requested)) => Some(requested),
         (None, None) => None,
     }
+}
+
+fn approval_tool_rewind_event_boundary(
+    events: &[WorkflowEventRecord],
+    tool_call_id: &str,
+) -> Option<i64> {
+    pending_approval_event_boundary(events, tool_call_id)
+        .or_else(|| approval_resolved_event_id(events, tool_call_id))
+        .or_else(|| tool_started_event_id(events, tool_call_id))
 }
 
 fn reverted_pending_approval_metadata(message: &WorkflowMessage) -> Option<Value> {
@@ -388,6 +423,46 @@ fn latest_user_input_wait_event_id(events: &[WorkflowEventRecord]) -> Option<i64
     }
 }
 
+fn latest_answered_user_input_wait_event_ids(events: &[WorkflowEventRecord]) -> Option<(i64, i64)> {
+    let latest_wait = events
+        .iter()
+        .rev()
+        .find(|event| is_user_input_wait_event(event))?;
+    let latest_resume = events
+        .iter()
+        .rev()
+        .find(|event| event.id > latest_wait.id && event.event_type == "user_input_received")?;
+    Some((latest_wait.id, latest_resume.id))
+}
+
+fn assistant_batch_message_id_for_tool_call(
+    messages: &[WorkflowMessage],
+    tool_call_id: &str,
+) -> Option<i64> {
+    messages
+        .iter()
+        .rev()
+        .find(|message| {
+            message.id.is_some()
+                && message.role == "assistant"
+                && message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_calls"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|tool_calls| {
+                        tool_calls.iter().any(|tool_call| {
+                            tool_call
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .or_else(|| tool_call.get("tool_call_id").and_then(Value::as_str))
+                                == Some(tool_call_id)
+                        })
+                    })
+        })
+        .and_then(|message| message.id)
+}
+
 fn determine_tail_rewind_plan(
     messages: &[WorkflowMessage],
     events: &[WorkflowEventRecord],
@@ -397,15 +472,37 @@ fn determine_tail_rewind_plan(
         .rev()
         .find(|message| message.id.is_some() && is_pending_submit_plan_message(message));
 
+    if let Some((_, resume_event_id)) = latest_answered_user_input_wait_event_ids(events) {
+        if let Some(user_message) = messages.iter().rev().find(|message| {
+            message.id.is_some()
+                && message.role == "user"
+                && message.step_type.as_deref() != Some("observe")
+                && message.metadata.is_none()
+        }) {
+            return Some(TailRewindPlan {
+                kind: "ask_user_answered",
+                delete_message_boundary_id: Some(user_message.id?),
+                event_boundary_id: Some(resume_event_id),
+                phase: RewindPhase::Preserve,
+                message_metadata_updates: Vec::new(),
+            });
+        }
+    }
+
     if let Some(wait_event_id) = latest_user_input_wait_event_id(events) {
         if let Some(ask_user_message) = messages.iter().rev().find(|message| {
             message.id.is_some()
                 && message_tool_name(message) == Some(crate::tools::TOOL_ASK_USER)
                 && message.step_type.as_deref() == Some("observe")
         }) {
+            let delete_boundary_id = message_tool_call_id(ask_user_message)
+                .and_then(|tool_call_id| {
+                    assistant_batch_message_id_for_tool_call(messages, tool_call_id)
+                })
+                .or(ask_user_message.id);
             return Some(TailRewindPlan {
                 kind: "ask_user_wait",
-                delete_message_boundary_id: Some(ask_user_message.id?),
+                delete_message_boundary_id: delete_boundary_id,
                 event_boundary_id: Some(wait_event_id),
                 phase: if latest_pending_submit_plan.is_some() {
                     RewindPhase::Planning
@@ -452,9 +549,12 @@ fn determine_tail_rewind_plan(
             && execution_status != Some("approval_submitted")
         {
             if let Some(event_boundary_id) = approval_resolved_event_id(events, tool_call_id) {
+                let delete_boundary_id = latest_approved_plan_summary_message(messages)
+                    .and_then(|message| message.id)
+                    .unwrap_or(message.id?);
                 return Some(TailRewindPlan {
                     kind: "approved_submit_plan",
-                    delete_message_boundary_id: Some(message.id?),
+                    delete_message_boundary_id: Some(delete_boundary_id),
                     event_boundary_id: Some(event_boundary_id),
                     phase: RewindPhase::Planning,
                     message_metadata_updates: Vec::new(),
@@ -481,24 +581,59 @@ fn determine_tail_rewind_plan(
         }
 
         if approval_status == Some("approved") && execution_status == Some("approval_submitted") {
+            let delete_boundary_id = if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                latest_approved_plan_summary_message(messages).and_then(|message| message.id)
+            } else {
+                latest_approval_submitted_message(messages, tool_call_id)
+                    .and_then(|message| message.id)
+                    .or(message.id)
+            };
             return Some(TailRewindPlan {
                 kind: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
                     "approved_submit_plan_waiting_execution"
                 } else {
                     "approved_tool_waiting_execution"
                 },
-                delete_message_boundary_id: None,
-                event_boundary_id: approval_resolved_event_id(events, tool_call_id),
+                delete_message_boundary_id: delete_boundary_id,
+                event_boundary_id: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                    approval_resolved_event_id(events, tool_call_id)
+                } else {
+                    approval_tool_rewind_event_boundary(events, tool_call_id)
+                },
                 phase: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
                     RewindPhase::Planning
                 } else {
                     RewindPhase::Implementation
                 },
-                message_metadata_updates: reverted_pending_approval_metadata(message)
-                    .and_then(|metadata| message.id.map(|id| (id, metadata)))
-                    .into_iter()
-                    .collect(),
+                message_metadata_updates: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                    reverted_pending_approval_metadata(message)
+                        .and_then(|metadata| message.id.map(|id| (id, metadata)))
+                        .into_iter()
+                        .collect()
+                } else {
+                    Vec::new()
+                },
             });
+        }
+
+        if approval_status == Some("approved")
+            && tool_name != Some(crate::tools::TOOL_SUBMIT_PLAN)
+            && message_execution_status(message) == Some("completed")
+        {
+            if let Some(event_boundary_id) =
+                approval_tool_rewind_event_boundary(events, tool_call_id)
+            {
+                let delete_boundary_id = latest_approval_submitted_message(messages, tool_call_id)
+                    .and_then(|submitted_message| submitted_message.id)
+                    .unwrap_or(message.id?);
+                return Some(TailRewindPlan {
+                    kind: "approved_tool_completed",
+                    delete_message_boundary_id: Some(delete_boundary_id),
+                    event_boundary_id: Some(event_boundary_id),
+                    phase: RewindPhase::Implementation,
+                    message_metadata_updates: Vec::new(),
+                });
+            }
         }
 
         if let Some(event_boundary_id) = tool_started_event_id(events, tool_call_id) {
@@ -2869,6 +3004,317 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_last_workflow_message_rewinds_answered_ask_user_in_two_steps() {
+        let store = create_test_store();
+        let session_id = "session-delete-last-answered-ask-user";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Help me decide".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let assistant_ask_user_placeholder = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I need one more choice from you before continuing.".to_string(),
+                reasoning: Some("Ask the user to choose an option.".to_string()),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{
+                        "id": "ask_user_1",
+                        "type": "function",
+                        "function": {
+                            "name": crate::tools::TOOL_ASK_USER,
+                            "arguments": "{\"items\":[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant ask_user placeholder");
+        let ask_user_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "ask_user_1",
+                    "tool_name": crate::tools::TOOL_ASK_USER,
+                    "display_type": "choice",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add ask_user message");
+        let user_answer = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "I choose A".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user answer");
+
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started");
+        let ask_user_wait_id = store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "user_input".to_string(),
+                Vec::new(),
+            ))
+            .expect("failed to append ask_user wait");
+        let user_input_received_id = store
+            .append_workflow_event(&WorkflowEvent::user_input_received(
+                session_id.to_string(),
+                "I choose A".to_string(),
+            ))
+            .expect("failed to append user_input_received");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        context.last_event_id = Some(user_input_received_id);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist running snapshot");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind answered ask_user"));
+
+        let first_pass_snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to reload after first rewind");
+        assert_eq!(first_pass_snapshot.messages.len(), 3);
+        assert!(first_pass_snapshot
+            .messages
+            .iter()
+            .any(|message| message.id == ask_user_message.id));
+        assert!(first_pass_snapshot
+            .messages
+            .iter()
+            .any(|message| message.id == assistant_ask_user_placeholder.id));
+        assert!(first_pass_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != user_answer.id));
+
+        let first_context = store
+            .get_execution_context(session_id)
+            .expect("failed to load first rewind snapshot")
+            .expect("snapshot should exist after first rewind");
+        assert_eq!(first_context.state, RuntimeState::Waiting);
+        assert_eq!(first_context.wait_reason, Some(WaitReason::UserInput));
+        assert_eq!(first_context.last_event_id, Some(ask_user_wait_id));
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind ask_user wait"));
+
+        let second_pass_snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to reload after second rewind");
+        assert_eq!(second_pass_snapshot.messages.len(), 1);
+        assert!(second_pass_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != ask_user_message.id));
+        assert!(second_pass_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != assistant_ask_user_placeholder.id));
+
+        let second_context = store
+            .get_execution_context(session_id)
+            .expect("failed to load second rewind snapshot")
+            .expect("snapshot should exist after second rewind");
+        assert_eq!(second_context.state, RuntimeState::Running);
+        assert_eq!(second_context.wait_reason, None);
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_rewinds_unanswered_ask_user_batch_after_stop() {
+        let store = create_test_store();
+        let session_id = "session-delete-last-unanswered-ask-user-stop";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Need a decision".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let assistant_ask_user_placeholder = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I need one more answer from you before proceeding.".to_string(),
+                reasoning: Some("Pause and ask the user to choose a direction.".to_string()),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{
+                        "id": "ask_user_stop_1",
+                        "type": "function",
+                        "function": {
+                            "name": crate::tools::TOOL_ASK_USER,
+                            "arguments": "{\"items\":[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant ask_user placeholder");
+        let ask_user_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "ask_user_stop_1",
+                    "tool_name": crate::tools::TOOL_ASK_USER,
+                    "display_type": "choice",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add ask_user message");
+        let wait_event_id = store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "user_input".to_string(),
+                Vec::new(),
+            ))
+            .expect("failed to append ask_user wait");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Cancelled;
+        context.wait_reason = Some(WaitReason::UserInput);
+        context.last_event_id = Some(wait_event_id);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist cancelled snapshot");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind unanswered ask_user after stop"));
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to reload after rewind");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != ask_user_message.id));
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != assistant_ask_user_placeholder.id));
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load rebuilt snapshot")
+            .expect("snapshot should exist after rewind");
+        assert_eq!(restored.state, RuntimeState::Running);
+        assert_eq!(restored.wait_reason, None);
+    }
+
+    #[test]
     fn test_delete_last_workflow_message_rewinds_pending_submit_plan_to_planning() {
         let store = create_test_store();
         let session_id = "session-delete-last-pending-submit-plan";
@@ -3301,7 +3747,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_last_workflow_message_rewinds_approved_tool_in_two_steps() {
+    fn test_delete_last_workflow_message_deletes_completed_approved_tool_unit() {
         let store = create_test_store();
         let session_id = "session-delete-last-approved-tool";
         seed_agent(&store, "agent-test");
@@ -3482,11 +3928,11 @@ mod tests {
         let first_snapshot = store
             .get_workflow_snapshot(session_id)
             .expect("failed to load snapshot after first rewind");
-        assert_eq!(first_snapshot.messages.len(), 2);
+        assert_eq!(first_snapshot.messages.len(), 1);
         assert!(first_snapshot
             .messages
             .iter()
-            .any(|message| message.id == approval_submitted_tool.id));
+            .all(|message| message.id != approval_submitted_tool.id));
         assert!(first_snapshot
             .messages
             .iter()
@@ -3496,30 +3942,171 @@ mod tests {
             .iter()
             .all(|message| message.id != assistant_placeholder.id));
 
+        let rebuilt = store
+            .get_execution_context(session_id)
+            .expect("failed to load rebuilt snapshot")
+            .expect("rebuilt snapshot should exist");
+        assert_eq!(rebuilt.state, RuntimeState::Running);
+        assert_eq!(rebuilt.wait_reason, None);
+        assert!(rebuilt.pending_tools.is_empty());
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_deletes_approved_tool_waiting_execution_unit() {
+        let store = create_test_store();
+        let session_id = "session-delete-last-approved-tool-waiting-execution";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Edit config".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let assistant_placeholder = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I will edit the config now.".to_string(),
+                reasoning: Some("Preparing the single edit tool call.".to_string()),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{
+                        "id": "edit_wait_1",
+                        "type": "function",
+                        "function": {
+                            "name": "edit_file",
+                            "arguments": "{\"file_path\":\"app.toml\"}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant placeholder");
+        let approval_submitted_tool = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "{\"file_path\":\"app.toml\"}".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "edit_wait_1",
+                    "tool_name": "edit_file",
+                    "approval_status": "approved",
+                    "execution_status": "approval_submitted",
+                    "summary": "Executing"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add approval_submitted message");
+
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started");
+        store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "approval".to_string(),
+                vec![json!({
+                    "tool_call_id": "edit_wait_1",
+                    "tool_name": "edit_file",
+                    "arguments": { "file_path": "app.toml" },
+                    "details": Value::Null,
+                    "display_type": "text"
+                })],
+            ))
+            .expect("failed to append approval wait");
+        store
+            .append_workflow_event(&WorkflowEvent::approval_requested(
+                session_id.to_string(),
+                "edit_wait_1".to_string(),
+                "edit_file".to_string(),
+                json!({ "file_path": "app.toml" }),
+                None,
+                Some("text".to_string()),
+            ))
+            .expect("failed to append approval requested");
+        store
+            .append_workflow_event(&WorkflowEvent::approval_resolved(
+                session_id.to_string(),
+                "edit_wait_1".to_string(),
+                true,
+                false,
+                Some("approved".to_string()),
+                Some("approval_submitted".to_string()),
+            ))
+            .expect("failed to append approval resolved");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist running snapshot");
+
         assert!(store
             .delete_last_message(session_id)
-            .expect("failed to rewind approval_submitted tool"));
+            .expect("failed to delete approved tool waiting execution"));
 
-        let second_snapshot = store
+        let snapshot = store
             .get_workflow_snapshot(session_id)
-            .expect("failed to load snapshot after second rewind");
-        let reverted_tool = second_snapshot
+            .expect("failed to load snapshot after delete");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert!(snapshot
             .messages
             .iter()
-            .find(|message| message.id == approval_submitted_tool.id)
-            .expect("approval message should remain after second rewind");
-        assert_eq!(message_approval_status(reverted_tool), Some("pending"));
-        assert_eq!(
-            message_execution_status(reverted_tool),
-            Some("pending_approval")
-        );
+            .all(|message| message.id != approval_submitted_tool.id));
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != assistant_placeholder.id));
 
         let rebuilt = store
             .get_execution_context(session_id)
             .expect("failed to load rebuilt snapshot")
             .expect("rebuilt snapshot should exist");
-        assert_eq!(rebuilt.wait_reason, Some(WaitReason::Approval));
-        assert_eq!(rebuilt.pending_tools.len(), 1);
+        assert_eq!(rebuilt.state, RuntimeState::Running);
+        assert_eq!(rebuilt.wait_reason, None);
+        assert!(rebuilt.pending_tools.is_empty());
     }
 
     #[test]
@@ -3584,6 +4171,29 @@ mod tests {
                 created_at: None,
             })
             .expect("failed to add pending submit_plan");
+        let approved_plan_summary = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "system".to_string(),
+                message: "APPROVED EXECUTION PLAN".to_string(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("approved_plan".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "type": "summary",
+                    "subtype": "approved_plan"
+                })),
+                attached_context: None,
+                step_type: None,
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add approved plan summary");
         let approved_submit_plan = store
             .add_workflow_message(&WorkflowMessage {
                 id: None,
@@ -3610,29 +4220,6 @@ mod tests {
                 created_at: None,
             })
             .expect("failed to add approved submit_plan");
-        let approved_plan_summary = store
-            .add_workflow_message(&WorkflowMessage {
-                id: None,
-                session_id: session_id.to_string(),
-                role: "assistant".to_string(),
-                message: "APPROVED EXECUTION PLAN".to_string(),
-                reasoning: None,
-                message_kind: "summary".to_string(),
-                message_subtype: Some("approved_plan".to_string()),
-                segment_id: 2,
-                source_event_type: None,
-                metadata: Some(json!({
-                    "type": "summary",
-                    "subtype": "approved_plan"
-                })),
-                attached_context: None,
-                step_type: None,
-                step_index: 3,
-                is_error: false,
-                error_type: None,
-                created_at: None,
-            })
-            .expect("failed to add approved plan summary");
         let assistant_ask_user_placeholder = store
             .add_workflow_message(&WorkflowMessage {
                 id: None,

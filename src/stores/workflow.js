@@ -119,6 +119,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const waitingLikeStates = [...WAITING_STATUSES];
   const approvalWaitingStates = [...APPROVAL_WAITING_STATUSES];
 
+  const computeBlockingLiveSession = (status, live) => {
+    if (!live) return false;
+    const statusLower = String(status || '').toLowerCase();
+    if (!statusLower) return false;
+    if (statusLower === WORKFLOW_STATUSES.COMPLETED) return false;
+    if (TERMINAL_STATUSES.includes(statusLower)) return false;
+    if (statusLower === WORKFLOW_STATUSES.STOPPING) return true;
+    if (runningLikeStates.includes(statusLower)) return true;
+    if (waitingLikeStates.includes(statusLower)) return true;
+    return false;
+  };
+
   // ==================== Task Ledger Computed ====================
 
   /**
@@ -476,6 +488,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const canContinue = computed(() => {
     if (!currentWorkflow.value?.id) return false;
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
+    const tailRewindKind = String(currentWorkflow.value?.tailRewindKind || '').trim();
     if (
       status === WORKFLOW_STATUSES.COMPLETED ||
       status === WORKFLOW_STATUSES.STOPPING
@@ -483,13 +496,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
       return false;
     }
 
-    // Approval waits should be resolved through the approval UI, not a generic resume button.
+    // Interactive waits should be resolved through their dedicated UI, not a generic resume button.
     if (
       [
+        WORKFLOW_STATUSES.AWAITING_USER,
         WORKFLOW_STATUSES.AWAITING_APPROVAL,
         WORKFLOW_STATUSES.AWAITING_AUTO_APPROVAL
       ].includes(status)
     ) {
+      return false;
+    }
+
+    if (['ask_user_wait', 'ask_user_answered'].includes(tailRewindKind)) {
       return false;
     }
 
@@ -502,7 +520,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return [
       ...RUNNING_STATUSES,
       WORKFLOW_STATUSES.PAUSED,
-      WORKFLOW_STATUSES.AWAITING_USER,
       WORKFLOW_STATUSES.AWAITING_SUB_AGENT,
       ...RESUMABLE_STATUSES
     ].includes(status);
@@ -1254,6 +1271,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     hasLiveSession.value = !!live;
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
     isRunning.value = RUNNING_STATUSES.includes(status) && hasLiveSession.value;
+    hasBlockingLiveSession.value = computeBlockingLiveSession(status, hasLiveSession.value);
   };
 
   const addMessage = (message) => {
@@ -1407,6 +1425,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
         if (workflowId === currentWorkflowId.value) {
           waitReason.value = waitReasonValue;
           isRunning.value = RUNNING_STATUSES.includes(statusLower) && hasLiveSession.value;
+          hasBlockingLiveSession.value = computeBlockingLiveSession(
+            statusLower,
+            hasLiveSession.value
+          );
         }
       } else {
         await invokeWrapper('update_workflow_status', { sessionId: workflowId, status });
@@ -1515,6 +1537,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
     clearSubAgentProgress();
   };
 
+  const resetWorkflowUiProjection = (workflowId) => {
+    if (!workflowId) return;
+    clearTaskLedger(workflowId);
+    clearApprovalSubmissionsForSession(workflowId);
+
+    if (currentWorkflowId.value === workflowId) {
+      clearSubAgentProgress();
+    }
+  };
+
   return {
     // State
     workflows,
@@ -1609,5 +1641,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     updateWorkflowTitleLocal,
     loadMessages,
     clearCurrentWorkflow,
+    resetWorkflowUiProjection,
   };
 });

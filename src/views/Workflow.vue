@@ -1174,6 +1174,7 @@ const onDeleteLastMessage = async () => {
       return
     }
 
+    workflowStore.resetWorkflowUiProjection(currentWorkflowId.value)
     await selectWorkflow(currentWorkflowId.value)
     showMessage(t('workflow.deleteLastMessageDone'), 'success')
   } catch (error) {
