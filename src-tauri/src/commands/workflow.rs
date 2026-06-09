@@ -80,6 +80,25 @@ fn should_treat_as_title_source(message: &WorkflowMessage) -> bool {
         && !message.message.trim().is_empty()
 }
 
+fn try_acquire_workflow_title_generation(session_id: &str, chat_state: &ChatState) -> bool {
+    match chat_state
+        .workflow_title_generation_in_flight
+        .entry(session_id.to_string())
+    {
+        dashmap::mapref::entry::Entry::Occupied(_) => false,
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(());
+            true
+        }
+    }
+}
+
+fn release_workflow_title_generation(session_id: &str, chat_state: &ChatState) {
+    chat_state
+        .workflow_title_generation_in_flight
+        .remove(session_id);
+}
+
 fn spawn_workflow_title_generation_if_missing(
     session_id: String,
     user_query: String,
@@ -88,6 +107,10 @@ fn spawn_workflow_title_generation_if_missing(
     gateway: Arc<TauriGateway>,
 ) -> Result<(), String> {
     if user_query.trim().is_empty() {
+        return Ok(());
+    }
+
+    if !try_acquire_workflow_title_generation(&session_id, &chat_state) {
         return Ok(());
     }
 
@@ -107,6 +130,7 @@ fn spawn_workflow_title_generation_if_missing(
     };
 
     if !should_generate_title {
+        release_workflow_title_generation(&session_id, &chat_state);
         return Ok(());
     }
 
@@ -132,7 +156,7 @@ fn spawn_workflow_title_generation_if_missing(
 
     let intelligence_manager = IntelligenceManager::new(
         session_id.clone(),
-        chat_state,
+        chat_state.clone(),
         provider_id,
         model_name.clone(),
         provider_id,
@@ -154,6 +178,8 @@ fn spawn_workflow_title_generation_if_missing(
                     .await;
             }
         }
+
+        release_workflow_title_generation(&session_id, &chat_state);
     });
 
     Ok(())
