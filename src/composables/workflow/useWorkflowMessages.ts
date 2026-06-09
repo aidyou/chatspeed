@@ -579,7 +579,7 @@ export function useWorkflowMessages() {
   const removeSystemReminder = content => {
     if (!content) return ''
     // Handle multiline content and multiple tags
-    return content.replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '').trim()
+    return content.replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '').trimEnd()
   }
 
   // Helper functions for truncating text (UTF-8 safe)

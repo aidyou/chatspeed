@@ -1225,7 +1225,7 @@ impl LlmProcessor {
                     skill.description.replace("\n", " ")
                 ));
             }
-            reminders.push_str("<SYSTEM_REMINDER>You can use the above specialized skills via the `skill` tool.</SYSTEM_REMINDER>\n");
+            reminders.push_str("<SYSTEM_REMINDER>If the request matches one of the above skills, activate it early via the `skill` tool. After activation, the skill's workflow and tool family become the primary path for that subtask; generic tools are fallback-only when the skill path is insufficient or blocked.</SYSTEM_REMINDER>\n");
         }
 
         reminders

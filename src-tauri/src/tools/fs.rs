@@ -11,9 +11,9 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PLANNING_NOTE_FILE: &str = "note.md";
-const DEFAULT_READ_FILE_LIMIT: usize = 800;
+pub(crate) const DEFAULT_READ_FILE_LIMIT: usize = 800;
 const READ_FILE_MAX_LINE_LENGTH: usize = 10_000;
-const READ_FILE_MAX_OUTPUT_CHARS: usize = 18_000;
+pub(crate) const READ_FILE_MAX_OUTPUT_CHARS: usize = 18_000;
 
 fn primary_directory(path_guard: Option<&Arc<RwLock<PathGuard>>>) -> PathBuf {
     path_guard

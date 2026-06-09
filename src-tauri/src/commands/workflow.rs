@@ -666,6 +666,158 @@ fn get_file_metadata_info(path: &Path) -> String {
     )
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct LargeFileReadChunk {
+    offset: usize,
+    limit: usize,
+    end_line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct LargeFileReadPlan {
+    total_lines: usize,
+    average_line_chars: usize,
+    max_line_chars: usize,
+    recommended_limit: usize,
+    estimated_calls: usize,
+    chunk_plan: Vec<LargeFileReadChunk>,
+}
+
+fn build_large_file_read_plan(path: &Path) -> Option<LargeFileReadPlan> {
+    let file = fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+
+    let mut total_lines = 0usize;
+    let mut total_chars = 0usize;
+    let mut max_line_chars = 0usize;
+    let mut line_char_counts = Vec::new();
+
+    for line in reader.lines() {
+        let content = line.ok()?;
+        let line_chars = content.chars().count();
+        total_lines += 1;
+        total_chars += line_chars;
+        max_line_chars = max_line_chars.max(line_chars);
+        line_char_counts.push(line_chars);
+    }
+
+    if total_lines == 0 {
+        return None;
+    }
+
+    let average_line_chars = total_chars.div_ceil(total_lines);
+    let mut chunk_plan = Vec::new();
+    let mut chunk_start = 0usize;
+    let mut chunk_chars = 0usize;
+    let mut chunk_lines = 0usize;
+
+    for (index, line_chars) in line_char_counts.iter().enumerate() {
+        let line_number = index + 1;
+        let rendered_len = format!("{:>6}\t{}", line_number, "x".repeat(*line_chars))
+            .chars()
+            .count()
+            + 1;
+
+        if chunk_lines > 0 && chunk_chars + rendered_len > crate::tools::READ_FILE_MAX_OUTPUT_CHARS
+        {
+            chunk_plan.push(LargeFileReadChunk {
+                offset: chunk_start,
+                limit: chunk_lines,
+                end_line: index,
+            });
+            chunk_start = index;
+            chunk_chars = 0;
+            chunk_lines = 0;
+        }
+
+        chunk_chars += rendered_len;
+        chunk_lines += 1;
+    }
+
+    if chunk_lines > 0 {
+        chunk_plan.push(LargeFileReadChunk {
+            offset: chunk_start,
+            limit: chunk_lines,
+            end_line: total_lines,
+        });
+    }
+
+    let recommended_limit = chunk_plan
+        .first()
+        .map(|chunk| chunk.limit)
+        .unwrap_or(crate::tools::DEFAULT_READ_FILE_LIMIT);
+    let estimated_calls = chunk_plan.len();
+
+    Some(LargeFileReadPlan {
+        total_lines,
+        average_line_chars,
+        max_line_chars,
+        recommended_limit,
+        estimated_calls,
+        chunk_plan,
+    })
+}
+
+fn format_large_file_read_plan(
+    path_label: &str,
+    file_size: u64,
+    plan: &LargeFileReadPlan,
+) -> String {
+    let chunk_preview = plan
+        .chunk_plan
+        .iter()
+        .take(6)
+        .map(|chunk| format!("offset={},limit={}", chunk.offset, chunk.limit))
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    let offset_clause = if plan.estimated_calls <= 6 {
+        format!("Recommended chunk sequence: {}.", chunk_preview)
+    } else {
+        format!(
+            "Recommended chunk sequence starts with {} and continues with the same exact per-chunk simulation until EOF.",
+            chunk_preview
+        )
+    };
+
+    format!(
+        "The user referenced a large file {}. If you only need symbols, keys, or a specific section, prefer 'grep' first. When the task requires reviewing or executing against the whole file, follow the full-file read plan below instead of guessing chunk sizes. This file is {} across {} lines (average {} chars/line, max {} chars/line), and the exact simulated full-read plan is {} call(s). {}",
+        path_label,
+        format_size(file_size),
+        plan.total_lines,
+        plan.average_line_chars,
+        plan.max_line_chars,
+        plan.estimated_calls,
+        offset_clause
+    )
+}
+
+fn format_large_file_read_plan_block(
+    path_label: &str,
+    file_size: u64,
+    plan: &LargeFileReadPlan,
+) -> String {
+    let chunk_preview = plan
+        .chunk_plan
+        .iter()
+        .take(8)
+        .map(|chunk| format!("{}:{}", chunk.offset, chunk.limit))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!(
+        "<full_file_read_plan path=\"{}\" recommended_when=\"need_complete_file\" prefer_grep_when=\"targeted_lookup\" file_size_bytes=\"{}\" total_lines=\"{}\" average_line_chars=\"{}\" max_line_chars=\"{}\" first_chunk_limit=\"{}\" estimated_calls=\"{}\" chunk_preview=\"{}\">\nUse `grep` first for targeted lookup. When the task requires whole-file review, execute the exact chunk plan in order. Each chunk in chunk_preview is encoded as offset:limit, and later chunks are based on exact in-memory simulation of the file against the read_file output cap.\n</full_file_read_plan>",
+        path_label,
+        file_size,
+        plan.total_lines,
+        plan.average_line_chars,
+        plan.max_line_chars,
+        plan.recommended_limit,
+        plan.estimated_calls,
+        chunk_preview
+    )
+}
+
 fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String) {
     let mut attached_context = String::new();
     let re = Regex::new(r"@([^\s]+)").unwrap();
@@ -714,9 +866,21 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
                 let info = get_file_metadata_info(&path);
 
                 if size > 10 * 1024 {
+                    let reminder = if let Some(plan) = build_large_file_read_plan(&path) {
+                        format!(
+                            "{}\n{}",
+                            format_large_file_read_plan_block(&rel_pattern, size, &plan),
+                            format_large_file_read_plan(&rel_pattern, size, &plan)
+                        )
+                    } else {
+                        format!(
+                            "The user referenced a large file {}. If you only need specific symbols or sections, prefer 'grep' first. When you need to read the complete file, use sequential 'read_file' calls with 'offset' and 'limit' parameters.",
+                            rel_pattern
+                        )
+                    };
                     injections.push(format!(
-                        "\n<file_content path={:?}>\n[File too large to show full content]\n{}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a large file {}. Use 'read_file' tool with 'offset' and 'limit' parameters to read specific line ranges (e.g., offset=1, limit=100 for lines 1-100). Use 'grep' tool to search for specific patterns.</SYSTEM_REMINDER>",
-                        rel_pattern, info, rel_pattern
+                        "\n<file_content path={:?}>\n[File too large to show full content]\n{}\n</file_content>\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
+                        rel_pattern, info, reminder
                     ));
                 } else {
                     match fs::read(&path) {
@@ -823,6 +987,65 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
     }
 
     (prompt.to_string(), attached_context)
+}
+
+fn allowed_paths_from_workflow_snapshot(snapshot: &WorkflowSnapshot) -> Vec<String> {
+    snapshot
+        .workflow
+        .agent_config
+        .as_deref()
+        .and_then(AgentConfig::from_json)
+        .and_then(|cfg| cfg.allowed_paths)
+        .unwrap_or_default()
+}
+
+fn inject_at_mentions_into_signal(signal: &str, allowed_paths: &[String]) -> String {
+    let mut parsed = match serde_json::from_str::<serde_json::Value>(signal) {
+        Ok(value) => value,
+        Err(_) => return signal.to_string(),
+    };
+
+    let signal_type = parsed
+        .get("type")
+        .and_then(|value| value.as_str())
+        .and_then(SignalType::from_str);
+    if !matches!(
+        signal_type,
+        Some(SignalType::UserMessage | SignalType::LegacyUserInput)
+    ) {
+        return signal.to_string();
+    }
+
+    let Some(content) = parsed
+        .get("content")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return signal.to_string();
+    };
+
+    let (_, mention_context) = inject_at_mentions(content, allowed_paths);
+    if mention_context.is_empty() {
+        return signal.to_string();
+    }
+
+    let existing = parsed
+        .get("attached_context")
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            parsed
+                .get("attachedContext")
+                .and_then(|value| value.as_str())
+        })
+        .map(|value| value.to_string());
+    let combined = combine_attached_context(mention_context, existing);
+    parsed["attached_context"] = json!(combined);
+
+    if let Some(object) = parsed.as_object_mut() {
+        object.remove("attachedContext");
+    }
+
+    serde_json::to_string(&parsed).unwrap_or_else(|_| signal.to_string())
 }
 
 // ==========================================
@@ -2194,6 +2417,16 @@ pub async fn workflow_start(
         )
     };
 
+    if initial_prompt.is_some() {
+        let _ = spawn_workflow_title_generation_if_missing(
+            session_id.clone(),
+            raw_prompt.clone(),
+            main_store_arc.clone(),
+            chat_state_arc.clone(),
+            gateway_arc.clone(),
+        );
+    }
+
     let mut agent_config = {
         let store = main_store_arc.read().map_err(|e| e.to_string())?;
         store
@@ -2674,6 +2907,10 @@ pub async fn workflow_signal(
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?
     };
+    let signal = inject_at_mentions_into_signal(
+        &signal,
+        &allowed_paths_from_workflow_snapshot(&workflow_snapshot),
+    );
     let recovery_context = restore_context_for_signal(main_store_arc, &session_id);
 
     // Phase 1: Check manager first (primary path)
@@ -4150,6 +4387,81 @@ mod tests {
             ],
         )
         .expect("failed to seed agent");
+    }
+
+    #[test]
+    fn test_build_large_file_read_plan_generates_full_read_strategy() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("large.txt");
+        let content = (0..240)
+            .map(|i| format!("fn line_{}() {{ return {}; }}", i, i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, content).unwrap();
+
+        let plan = build_large_file_read_plan(&path).expect("plan should exist");
+
+        assert_eq!(plan.total_lines, 240);
+        assert!(plan.recommended_limit > 0);
+        assert!(plan.recommended_limit <= crate::tools::DEFAULT_READ_FILE_LIMIT);
+        assert!(!plan.chunk_plan.is_empty());
+        assert_eq!(plan.chunk_plan[0].offset, 0);
+        assert!(plan.chunk_plan[0].limit > 0);
+        assert!(plan.estimated_calls >= 1);
+    }
+
+    #[test]
+    fn test_inject_at_mentions_large_file_includes_full_read_plan_and_grep_guidance() {
+        let root = tempdir().unwrap();
+        let large_path = root.path().join("large.ts");
+        let content = (0..900)
+            .map(|i| format!("export const value_{} = '{}';", i, "x".repeat(24)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&large_path, content).unwrap();
+
+        let (_, attached) =
+            inject_at_mentions("@large.ts", &[root.path().to_string_lossy().to_string()]);
+
+        assert!(attached.contains(
+            "If you only need symbols, keys, or a specific section, prefer 'grep' first."
+        ));
+        assert!(attached.contains("<full_file_read_plan "));
+        assert!(attached.contains("recommended_when=\"need_complete_file\""));
+        assert!(attached.contains("prefer_grep_when=\"targeted_lookup\""));
+        assert!(attached.contains("first_chunk_limit=\""));
+        assert!(attached.contains("chunk_preview=\"0:"));
+        assert!(attached
+            .contains("When the task requires reviewing or executing against the whole file"));
+        assert!(attached.contains("exact simulated full-read plan"));
+        assert!(attached.contains("Recommended chunk sequence"));
+    }
+
+    #[test]
+    fn test_inject_at_mentions_into_signal_adds_attached_context_for_user_messages() {
+        let root = tempdir().unwrap();
+        let file_path = root.path().join("sample.txt");
+        std::fs::write(&file_path, "alpha\nbeta\ngamma").unwrap();
+
+        let signal = json!({
+            "type": "user_message",
+            "content": "Please review @sample.txt",
+            "attached_context": "existing context"
+        })
+        .to_string();
+
+        let enriched =
+            inject_at_mentions_into_signal(&signal, &[root.path().to_string_lossy().to_string()]);
+        let parsed: serde_json::Value = serde_json::from_str(&enriched).unwrap();
+        let attached_context = parsed["attached_context"].as_str().unwrap_or_default();
+
+        assert!(attached_context.contains("existing context"));
+        assert!(
+            attached_context.contains("<file_content path=\"sample.txt\">")
+                || attached_context.contains("<file_content path=\"sample.txt\"")
+        );
+        assert!(attached_context.contains("alpha"));
+        assert!(attached_context.contains("beta"));
     }
 
     #[test]

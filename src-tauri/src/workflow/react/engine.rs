@@ -5583,7 +5583,7 @@ impl WorkflowExecutor {
                 );
 
                 let activated_content = format!(
-                    "<activated_skill name=\"{}\" skill_dir=\"{}\">\n<instructions>\n{}\n</instructions>\n</activated_skill>\n<SYSTEM_REMINDER>\nSkill {} activated. You MUST strictly follow the expert guidance and workflows defined in the <instructions> above to fulfill the following user request. This context is current and complete; proceed immediately.\n</SYSTEM_REMINDER>",
+                    "<activated_skill name=\"{}\" skill_dir=\"{}\">\n<instructions>\n{}\n</instructions>\n</activated_skill>\n<SYSTEM_REMINDER>\nSkill {} activated. You MUST strictly follow the expert guidance and workflows defined in the <instructions> above to fulfill the following user request. Use the skill's recommended workflow, tool family, and verification steps as the primary execution path, and only fall back to generic tools when the skill-specific path is insufficient or blocked after reasonable attempts. This context is current and complete; proceed immediately.\n</SYSTEM_REMINDER>",
                     &skill.name,
                     skill.skill_dir.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
                     skill.instructions,

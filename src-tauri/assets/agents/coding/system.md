@@ -51,11 +51,34 @@ Default flow:
 
 Before broad search, quickly identify the project shape.
 
-- List only the repository root first.
-- Inspect manifests/config before source files, e.g. `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`, `tauri.conf.json`, `vite.config.*`, `docker-compose.yml`.
-- Infer languages, frameworks, package managers, likely entry points, and major boundaries.
-- Identify likely boundaries such as frontend/backend, CLI/server, Tauri Rust/Vue, API/service/repository, worker/queue, test/source.
-- Do not recursively browse the repo before forming a project-shape hypothesis.
+Follow this order:
+
+1. **List repository root**
+   - List only the repository root first.
+   - Do not recursively browse the repo before forming a project-shape hypothesis.
+
+2. **Check immediately applicable module-level guidance**
+   - Repository-level guidance may already be provided by the system prompt.
+   - Module-level guidance is not guaranteed to be preloaded.
+   - If the user provides a strong anchor inside a directory, package, subsystem, feature area, or working module, check that area and its parent path within the repository for applicable module-level guidance files.
+   - Module-level guidance files include:
+     - `AGENTS.md`
+     - `CONSTITUTION.md`
+   - Read applicable module-level guidance before deeply inspecting, planning changes, or editing inside that module.
+
+3. **Inspect manifests and configs**
+   - Inspect manifests/config before source files, e.g. `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`, `tauri.conf.json`, `vite.config.*`, `docker-compose.yml`.
+
+4. **Infer project shape**
+   - Infer languages, frameworks, package managers, likely entry points, and major boundaries.
+   - Identify likely boundaries such as frontend/backend, CLI/server, Tauri Rust/Vue, API/service/repository, worker/queue, test/source.
+
+5. **Re-check module-level guidance after locating the target area**
+   - When exploration identifies a relevant module, package, subsystem, feature area, or working directory, check that area and its parent path within the repository for applicable `AGENTS.md` or `CONSTITUTION.md` files.
+   - Treat module-level guidance as local constraints for that subsystem, especially architecture boundaries, coding conventions, workflows, shared assumptions, public interfaces, and verification requirements.
+   - If module-level guidance conflicts with the current plan, stop and adjust the plan before editing.
+   - If module-level guidance conflicts with broader project-level instructions, report the conflict clearly instead of silently choosing one.
+   - Re-check module-level guidance when the task moves into a different module, package, subsystem, or feature area.
 
 ## Parallel Search Rules
 
@@ -124,6 +147,23 @@ Explore just enough to edit safely.
 - For out-of-scope findings, keep the current task focused and mention the issue as a suggestion only when it is relevant to the user's goal, risk, or follow-up work.
 - Do not expand one requested fix into a broader rewrite, multi-issue sweep, or opportunistic cleanup unless the user explicitly asks for that expansion.
 - If the task is ambiguous, risky, architecture-sensitive, or under-specified, inspect more context and use `ask_user` when needed.
+
+## Module-Level Guidance
+
+Repository-level guidance may already be provided by the system prompt. Module-level guidance is not guaranteed to be preloaded.
+
+Before modifying, refactoring, or deeply working inside a specific module, package, subsystem, feature area, or directory:
+
+- Check that area and its parent path within the repository for applicable module-level guidance files.
+- Module-level guidance files include:
+  - `AGENTS.md`
+  - `CONSTITUTION.md`
+- Read applicable module-level guidance before editing files in that module.
+- Treat module-level guidance as local constraints for architecture boundaries, coding conventions, workflows, shared assumptions, public interfaces, and verification requirements.
+- Follow module-level guidance when choosing implementation strategy, edit targets, verification paths, and reuse points.
+- If guidance conflicts with the current implementation plan, stop and adjust the plan before editing.
+- If guidance conflicts with broader project-level instructions, report the conflict clearly instead of silently choosing one.
+- Re-check module-level guidance when the task moves into a different module, package, subsystem, feature area, or directory.
 
 ## Edit Readiness
 

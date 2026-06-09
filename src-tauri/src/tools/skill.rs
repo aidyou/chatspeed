@@ -30,6 +30,8 @@ impl ToolDefinition for SkillExecute {
 
 Skills provide domain-specific knowledge and detailed operational guidelines.
 When a user request matches an available skill (e.g. via a slash command like /commit), you MUST activate the relevant skill BEFORE proceeding.
+After activation, you MUST treat that skill's workflow, preferred tool family, and verification steps as the primary execution path while the skill remains applicable.
+Do not use the skill once and then casually switch back to generic tools if the skill-specific path can continue the work.
 
 Activation will inject the skill's specific instructions into your context."#
     }
@@ -74,10 +76,11 @@ Activation will inject the skill's specific instructions into your context."#
                 .unwrap_or_default();
 
             let result_content = format!(
-                "<activated_skill name=\"{}\" skill_dir=\"{}\">\n<instructions>\n{}\n</instructions>\n</activated_skill>",
+                "<activated_skill name=\"{}\" skill_dir=\"{}\">\n<instructions>\n{}\n</instructions>\n</activated_skill>\n<SYSTEM_REMINDER>\nSkill {} is now active. Use the workflow, tool family, and verification steps defined in the activated skill as the default path for this subtask. Prefer that path over generic tools unless it is missing a required capability or is blocked after reasonable attempts.\n</SYSTEM_REMINDER>",
                 skill.name,
                 skill_path,
-                skill.instructions
+                skill.instructions,
+                skill.name
             );
 
             Ok(ToolCallResult::success(Some(result_content), None))
