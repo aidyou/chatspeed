@@ -4,7 +4,10 @@
       <h3>{{ $t('settings.proxy.stats.title') }}</h3>
       <div class="header-actions">
         <el-space>
-          <el-select v-model="selectedDays" size="small" @change="fetchDailyStats(false)"
+          <el-select
+            v-model="selectedDays"
+            size="small"
+            @change="fetchDailyStats(false)"
             style="width: 140px; margin-left: 10px">
             <el-option :label="$t('settings.proxy.stats.today')" :value="0" />
             <el-option :label="$t('settings.proxy.stats.last1Day')" :value="1" />
@@ -14,7 +17,12 @@
             <el-option :label="$t('settings.proxy.stats.last365Days')" :value="365" />
             <el-option :label="$t('settings.proxy.stats.allTime')" :value="-1" />
           </el-select>
-          <el-button :icon="Refresh" circle size="small" @click="fetchDailyStats(false)" :loading="loading" />
+          <el-button
+            :icon="Refresh"
+            circle
+            size="small"
+            @click="fetchDailyStats(false)"
+            :loading="loading" />
           <el-checkbox v-model="autoRefreshEnabled" size="small" style="margin-right: 15px">
             {{ $t('settings.proxy.stats.autoRefresh') }}
           </el-checkbox>
@@ -24,13 +32,21 @@
           <el-button :icon="Delete" type="danger" plain size="small" circle />
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item :command="7">{{ $t('settings.proxy.stats.deleteOlderThan7Days') }}</el-dropdown-item>
-              <el-dropdown-item :command="30">{{ $t('settings.proxy.stats.deleteOlderThan30Days') }}</el-dropdown-item>
-              <el-dropdown-item :command="90">{{ $t('settings.proxy.stats.deleteOlderThan90Days') }}</el-dropdown-item>
-              <el-dropdown-item :command="365">{{ $t('settings.proxy.stats.deleteOlderThan365Days')
-                }}</el-dropdown-item>
+              <el-dropdown-item :command="7">{{
+                $t('settings.proxy.stats.deleteOlderThan7Days')
+              }}</el-dropdown-item>
+              <el-dropdown-item :command="30">{{
+                $t('settings.proxy.stats.deleteOlderThan30Days')
+              }}</el-dropdown-item>
+              <el-dropdown-item :command="90">{{
+                $t('settings.proxy.stats.deleteOlderThan90Days')
+              }}</el-dropdown-item>
+              <el-dropdown-item :command="365">{{
+                $t('settings.proxy.stats.deleteOlderThan365Days')
+              }}</el-dropdown-item>
               <el-dropdown-item :command="-1" divided style="color: var(--el-color-danger)">{{
-                $t('settings.proxy.stats.deleteAll') }}</el-dropdown-item>
+                $t('settings.proxy.stats.deleteAll')
+              }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -87,34 +103,63 @@
       </div>
     </div>
 
-    <el-table :data="dailyStats" style="width: 100%" v-loading="loading" @expand-change="handleExpandChange"
+    <el-table
+      :data="dailyStats"
+      style="width: 100%"
+      v-loading="loading"
+      @expand-change="handleExpandChange"
       row-key="date">
       <el-table-column type="expand" fixed="left">
         <template #default="props">
           <div class="expand-detail">
-            <el-table :data="providerStats[props.row.date] || []" size="small" border
+            <el-table
+              :data="providerStats[props.row.date] || []"
+              size="small"
+              border
               v-loading="providerLoading[props.row.date]">
-              <el-table-column prop="provider" :label="$t('settings.proxy.stats.provider')" width="100"
+              <el-table-column
+                prop="provider"
+                :label="$t('settings.proxy.stats.provider')"
+                width="100"
                 show-overflow-tooltip />
-              <el-table-column prop="clientModel" :label="$t('settings.proxy.stats.clientModel')" min-width="150"
-                show-overflow-tooltip sortable>
+              <el-table-column
+                prop="clientModel"
+                :label="$t('settings.proxy.stats.clientModel')"
+                min-width="150"
+                show-overflow-tooltip
+                sortable>
                 <template #default="scope">
                   <span style="color: var(--cs-color-primary); font-weight: bold">{{
                     scope.row.clientModel
-                    }}</span>
+                  }}</span>
                 </template>
               </el-table-column>
-              <el-table-column prop="backendModel" :label="$t('settings.proxy.stats.backendModel')" min-width="200"
-                show-overflow-tooltip sortable />
-              <el-table-column prop="protocol" :label="$t('settings.proxy.stats.protocol')" width="90">
+              <el-table-column
+                prop="backendModel"
+                :label="$t('settings.proxy.stats.backendModel')"
+                min-width="200"
+                show-overflow-tooltip
+                sortable />
+              <el-table-column
+                prop="protocol"
+                :label="$t('settings.proxy.stats.protocol')"
+                width="90">
                 <template #default="scope">
-                  <el-tag size="small" :color="getProtocolColor(scope.row.protocol)"
-                    :style="{ color: getProtocolTextColor(scope.row.protocol), borderColor: getProtocolTextColor(scope.row.protocol) + '50' }">
+                  <el-tag
+                    size="small"
+                    :color="getProtocolColor(scope.row.protocol)"
+                    :style="{
+                      color: getProtocolTextColor(scope.row.protocol),
+                      borderColor: getProtocolTextColor(scope.row.protocol) + '50'
+                    }">
                     {{ scope.row.protocol }}
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column :label="$t('settings.proxy.stats.toolCompat')" width="90" align="center">
+              <el-table-column
+                :label="$t('settings.proxy.stats.toolCompat')"
+                width="90"
+                align="center">
                 <template #default="scope">
                   <el-tag :type="scope.row.toolCompatMode === 1 ? 'warning' : 'info'" size="small">
                     {{
@@ -125,25 +170,46 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="requestCount" :label="$t('settings.proxy.stats.requests')" width="100" sortable />
-              <el-table-column :label="$t('settings.proxy.stats.inputTokens')" width="90" sortable
+              <el-table-column
+                prop="requestCount"
+                :label="$t('settings.proxy.stats.requests')"
+                width="100"
+                sortable />
+              <el-table-column
+                :label="$t('settings.proxy.stats.inputTokens')"
+                width="90"
+                sortable
                 sort-by="totalInputTokens">
                 <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
               </el-table-column>
-              <el-table-column :label="$t('settings.proxy.stats.outputTokens')" width="90" sortable
+              <el-table-column
+                :label="$t('settings.proxy.stats.outputTokens')"
+                width="90"
+                sortable
                 sort-by="totalOutputTokens">
                 <template #default="scope">{{
                   formatTokens(scope.row.totalOutputTokens)
-                  }}</template>
+                }}</template>
               </el-table-column>
-              <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" width="90" sortable
+              <el-table-column
+                :label="$t('settings.proxy.stats.cacheTokens')"
+                width="90"
+                sortable
                 sort-by="totalCacheTokens">
                 <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
               </el-table-column>
-              <el-table-column :label="$t('settings.proxy.stats.errors')" width="100" sortable sort-by="errorCount">
+              <el-table-column
+                :label="$t('settings.proxy.stats.errors')"
+                width="100"
+                sortable
+                sort-by="errorCount">
                 <template #default="scope">
-                  <el-link v-if="scope.row.errorCount > 0" type="danger"
-                    @click="showErrorDetail(props.row.date, scope.row.clientModel, scope.row.backendModel)">
+                  <el-link
+                    v-if="scope.row.errorCount > 0"
+                    type="danger"
+                    @click="
+                      showErrorDetail(props.row.date, scope.row.clientModel, scope.row.backendModel)
+                    ">
                     {{ scope.row.errorCount }}
                   </el-link>
                   <span v-else>0</span>
@@ -154,10 +220,20 @@
         </template>
       </el-table-column>
       <el-table-column prop="date" :label="$t('settings.proxy.stats.date')" width="110" />
-      <el-table-column prop="providerCount" :label="$t('settings.proxy.stats.providers')" width="90" align="center" />
-      <el-table-column prop="topProvider" :label="$t('settings.proxy.stats.topProvider')" min-width="180"
+      <el-table-column
+        prop="providerCount"
+        :label="$t('settings.proxy.stats.providers')"
+        width="90"
+        align="center" />
+      <el-table-column
+        prop="topProvider"
+        :label="$t('settings.proxy.stats.topProvider')"
+        min-width="180"
         show-overflow-tooltip />
-      <el-table-column prop="totalRequestCount" :label="$t('settings.proxy.stats.requests')" width="100" />
+      <el-table-column
+        prop="totalRequestCount"
+        :label="$t('settings.proxy.stats.requests')"
+        width="100" />
       <el-table-column :label="$t('settings.proxy.stats.inputTokens')" width="100">
         <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
       </el-table-column>
@@ -177,42 +253,27 @@
           <el-tabs v-model="activeTrendTab" type="border-card">
             <el-tab-pane :label="$t('settings.proxy.stats.dailyTokensTitle')" name="dailyTokens">
               <div class="tab-chart-content">
-                <div v-if="tokenTrend.length" class="trend-stack-chart">
-                  <div v-for="day in tokenTrend" :key="day.date" class="trend-stack-item">
-                    <div class="trend-stack-bars">
-                      <div
-                        v-for="segment in day.segments"
-                        :key="segment.type"
-                        class="trend-stack-segment"
-                        :style="{ height: `${segment.percent}%`, backgroundColor: segment.color }" />
-                    </div>
-                    <div class="trend-stack-total">{{ formatTokens(day.total) }}</div>
-                    <div class="trend-stack-label">{{ day.date }}</div>
-                  </div>
-                </div>
+                <UPlotMiniChart
+                  v-if="activeTrendTab === 'dailyTokens' && tokenTrend.length"
+                  :labels="trendLabels"
+                  :series="tokenTrendSeries"
+                  :scale-configs="tokenScaleConfigs"
+                  :x-axis-label="$t('settings.proxy.stats.date')"
+                  :height="320" />
                 <el-empty v-else :description="$t('common.noData')" />
               </div>
             </el-tab-pane>
-            <el-tab-pane :label="$t('settings.proxy.stats.dailyRequestsTitle')" name="dailyRequests">
+            <el-tab-pane
+              :label="$t('settings.proxy.stats.dailyRequestsTitle')"
+              name="dailyRequests">
               <div class="tab-chart-content">
-                <div v-if="requestsTrend.length" class="trend-metric-list">
-                  <div v-for="item in requestsTrend" :key="item.date" class="trend-metric-row">
-                    <div class="trend-metric-header">
-                      <span>{{ item.date }}</span>
-                      <span>{{ formatNumber(item.requests) }} / {{ item.errorRate.toFixed(2) }}%</span>
-                    </div>
-                    <div class="trend-metric-track">
-                      <div
-                        class="trend-metric-fill requests"
-                        :style="{ width: `${toPercent(item.requests, maxRequestsValue)}%` }" />
-                    </div>
-                    <div class="trend-metric-track error">
-                      <div
-                        class="trend-metric-fill errors"
-                        :style="{ width: `${toPercent(item.errorRate, maxErrorRateValue)}%` }" />
-                    </div>
-                  </div>
-                </div>
+                <UPlotMiniChart
+                  v-if="activeTrendTab === 'dailyRequests' && requestsTrend.length"
+                  :labels="trendLabels"
+                  :series="requestLineSeries"
+                  :scale-configs="requestScaleConfigs"
+                  :x-axis-label="$t('settings.proxy.stats.date')"
+                  :height="320" />
                 <el-empty v-else :description="$t('common.noData')" />
               </div>
             </el-tab-pane>
@@ -224,7 +285,9 @@
       <div class="charts-row">
         <div class="chart-card tab-chart">
           <el-tabs v-model="activeDistributionTab" type="border-card">
-            <el-tab-pane :label="$t('settings.proxy.stats.modelTokenUsageTitle')" name="modelTokenUsage">
+            <el-tab-pane
+              :label="$t('settings.proxy.stats.modelTokenUsageTitle')"
+              name="modelTokenUsage">
               <div class="tab-chart-content">
                 <div v-if="modelTokenUsageStats.length" class="rank-bar-list">
                   <div v-for="item in modelTokenUsageStats" :key="item.type" class="rank-bar-row">
@@ -235,7 +298,10 @@
                     <div class="rank-bar-track">
                       <div
                         class="rank-bar-fill"
-                        :style="{ width: `${toPercent(item.value, maxModelTokenUsageValue)}%`, backgroundColor: getSeriesColor(1) }" />
+                        :style="{
+                          width: `${toPercent(item.value, maxModelTokenUsageValue)}%`,
+                          backgroundColor: getSeriesColor(1)
+                        }" />
                     </div>
                   </div>
                 </div>
@@ -253,17 +319,25 @@
                     <div class="rank-bar-track">
                       <div
                         class="rank-bar-fill"
-                        :style="{ width: `${toPercent(item.value, maxModelUsageValue)}%`, backgroundColor: getSeriesColor(0) }" />
+                        :style="{
+                          width: `${toPercent(item.value, maxModelUsageValue)}%`,
+                          backgroundColor: getSeriesColor(0)
+                        }" />
                     </div>
                   </div>
                 </div>
                 <el-empty v-else :description="$t('common.noData')" />
               </div>
             </el-tab-pane>
-            <el-tab-pane :label="$t('settings.proxy.stats.providerTokenUsageTitle')" name="providerTokenUsage">
+            <el-tab-pane
+              :label="$t('settings.proxy.stats.providerTokenUsageTitle')"
+              name="providerTokenUsage">
               <div class="tab-chart-content">
                 <div v-if="providerTokenUsageStats.length" class="rank-bar-list">
-                  <div v-for="item in providerTokenUsageStats" :key="item.type" class="rank-bar-row">
+                  <div
+                    v-for="item in providerTokenUsageStats"
+                    :key="item.type"
+                    class="rank-bar-row">
                     <div class="rank-bar-header">
                       <span class="rank-bar-label">{{ item.type }}</span>
                       <span class="rank-bar-value">{{ formatTokens(item.value) }}</span>
@@ -271,7 +345,10 @@
                     <div class="rank-bar-track">
                       <div
                         class="rank-bar-fill"
-                        :style="{ width: `${toPercent(item.value, maxProviderTokenUsageValue)}%`, backgroundColor: getSeriesColor(2) }" />
+                        :style="{
+                          width: `${toPercent(item.value, maxProviderTokenUsageValue)}%`,
+                          backgroundColor: getSeriesColor(2)
+                        }" />
                     </div>
                   </div>
                 </div>
@@ -289,7 +366,10 @@
                     <div class="rank-bar-track">
                       <div
                         class="rank-bar-fill"
-                        :style="{ width: `${toPercent(item.value, maxErrorDistributionValue)}%`, backgroundColor: getCssVar('--cs-error-color') || '#f56c6c' }" />
+                        :style="{
+                          width: `${toPercent(item.value, maxErrorDistributionValue)}%`,
+                          backgroundColor: getCssVar('--cs-error-color') || '#f56c6c'
+                        }" />
                     </div>
                   </div>
                 </div>
@@ -302,11 +382,23 @@
     </div>
 
     <!-- Error Detail Dialog -->
-    <el-dialog v-model="errorDialogVisible"
-      :title="$t('settings.proxy.stats.errorDetailTitle', { date: selectedErrorDate })" width="700px" append-to-body
+    <el-dialog
+      v-model="errorDialogVisible"
+      :title="$t('settings.proxy.stats.errorDetailTitle', { date: selectedErrorDate })"
+      width="700px"
+      append-to-body
       class="error-detail-dialog">
-      <el-table :data="errorStats" size="small" border v-loading="errorLoading" max-height="60vh" style="width: 100%">
-        <el-table-column prop="statusCode" :label="$t('settings.proxy.stats.statusCode')" width="80" />
+      <el-table
+        :data="errorStats"
+        size="small"
+        border
+        v-loading="errorLoading"
+        max-height="60vh"
+        style="width: 100%">
+        <el-table-column
+          prop="statusCode"
+          :label="$t('settings.proxy.stats.statusCode')"
+          width="80" />
         <el-table-column prop="errorMessage" :label="$t('settings.proxy.stats.errorMessage')">
           <template #default="scope">
             <div class="error-msg-text">{{ scope.row.errorMessage }}</div>
@@ -326,6 +418,7 @@ import { Refresh, Delete } from '@element-plus/icons-vue'
 import { showMessage } from '@/libs/util'
 import { ElMessageBox } from 'element-plus'
 import { DataLine, Coin, Warning, Collection } from '@element-plus/icons-vue'
+import UPlotMiniChart from './UPlotMiniChart.vue'
 
 const { t } = useI18n()
 
@@ -403,11 +496,11 @@ const formatNumber = val => {
 }
 
 // Get CSS variable color value
-const getCssVar = (varName) => {
+const getCssVar = varName => {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim() || ''
 }
 
-const getSeriesColor = (index) => {
+const getSeriesColor = index => {
   const palette = [
     getCssVar('--cs-info-color') || '#409eff',
     getCssVar('--cs-success-color') || '#67c23a',
@@ -426,12 +519,108 @@ const toPercent = (value, max) => {
   return Math.max(0, Math.min(100, (Number(value || 0) / max) * 100))
 }
 
-const maxRequestsValue = computed(() => requestsTrend.value.reduce((max, item) => Math.max(max, item.requests), 0))
-const maxErrorRateValue = computed(() => requestsTrend.value.reduce((max, item) => Math.max(max, item.errorRate), 0))
 const maxModelUsageValue = computed(() => getMaxValue(modelUsageStats.value))
 const maxModelTokenUsageValue = computed(() => getMaxValue(modelTokenUsageStats.value))
 const maxProviderTokenUsageValue = computed(() => getMaxValue(providerTokenUsageStats.value))
 const maxErrorDistributionValue = computed(() => getMaxValue(errorDistributionStats.value))
+
+const activeTrendItems = computed(() =>
+  activeTrendTab.value === 'dailyTokens' ? tokenTrend.value : requestsTrend.value
+)
+
+const useTokenBars = computed(() => tokenTrend.value.length > 0 && tokenTrend.value.length < 10)
+
+const trendLabels = computed(() =>
+  activeTrendItems.value.map(item => item.date.slice(5).replace('-', '/'))
+)
+
+const tokenScaleConfigs = computed(() => ({
+  x: {
+    maxTicks: useTokenBars.value ? tokenTrend.value.length : 8,
+    range: useTokenBars.value ? (u, min, max) => [min - 0.5, max + 0.5] : undefined
+  },
+  y: {
+    formatter: value => formatTokens(value)
+  }
+}))
+
+const tokenTrendSeries = computed(() => {
+  const inputValues = tokenTrend.value.map(item => Number(item.inputTokens || 0))
+  const outputValues = tokenTrend.value.map(item => Number(item.outputTokens || 0))
+  const cacheValues = tokenTrend.value.map(item => Number(item.cacheTokens || 0))
+
+  return [
+    {
+      label: t('settings.proxy.stats.inputTokens'),
+      type: useTokenBars.value ? 'groupedBar' : 'spline',
+      color: getSeriesColor(0),
+      strokeColor: getSeriesColor(0),
+      values: inputValues,
+      tooltipValues: inputValues,
+      valueFormatter: value => formatTokens(value),
+      width: 2,
+      pointSize: 4
+    },
+    {
+      label: t('settings.proxy.stats.outputTokens'),
+      type: useTokenBars.value ? 'groupedBar' : 'spline',
+      color: getSeriesColor(1),
+      strokeColor: getSeriesColor(1),
+      values: outputValues,
+      tooltipValues: outputValues,
+      valueFormatter: value => formatTokens(value),
+      width: 2,
+      pointSize: 4
+    },
+    {
+      label: t('settings.proxy.stats.cacheTokens'),
+      type: useTokenBars.value ? 'groupedBar' : 'spline',
+      color: getSeriesColor(2),
+      strokeColor: getSeriesColor(2),
+      values: cacheValues,
+      tooltipValues: cacheValues,
+      valueFormatter: value => formatTokens(value),
+      width: 2,
+      pointSize: 4
+    }
+  ]
+})
+
+const requestScaleConfigs = computed(() => ({
+  x: {
+    maxTicks: 8
+  },
+  y: {
+    formatter: value => formatNumber(value)
+  },
+  y2: {
+    side: 'right',
+    formatter: value => `${Number(value || 0).toFixed(1)}%`
+  }
+}))
+
+const requestLineSeries = computed(() => [
+  {
+    label: t('settings.proxy.stats.requests'),
+    type: 'spline',
+    color: getSeriesColor(0),
+    values: requestsTrend.value.map(item => Number(item.requests || 0)),
+    valueFormatter: value => formatNumber(value),
+    scale: 'y',
+    width: 2,
+    pointSize: 4
+  },
+  {
+    label: t('settings.proxy.stats.errorRate'),
+    type: 'spline',
+    color: getCssVar('--cs-error-color') || '#f56c6c',
+    values: requestsTrend.value.map(item => Number(item.errorRate || 0)),
+    valueFormatter: value => `${Number(value || 0).toFixed(2)}%`,
+    scale: 'y2',
+    width: 2,
+    pointSize: 4
+  }
+])
 
 // Calculate KPI data from daily stats and model usage stats
 const calculateKPI = (modelUsage = []) => {
@@ -451,7 +640,10 @@ const calculateKPI = (modelUsage = []) => {
 
   dailyStats.value.forEach(day => {
     totalRequests += Number(day.totalRequestCount || 0)
-    totalTokens += Number(day.totalInputTokens || 0) + Number(day.totalOutputTokens || 0) + Number(day.totalCacheTokens || 0)
+    totalTokens +=
+      Number(day.totalInputTokens || 0) +
+      Number(day.totalOutputTokens || 0) +
+      Number(day.totalCacheTokens || 0)
     totalErrors += Number(day.errorCount || 0)
   })
 
@@ -468,22 +660,22 @@ const calculateKPI = (modelUsage = []) => {
   }
 }
 
-const getProtocolColor = (protocol) => {
+const getProtocolColor = protocol => {
   const colorMap = {
-    'openai': 'rgba(16, 163, 127, 0.1)',
-    'claude': 'rgba(229, 119, 25, 0.1)',
-    'gemini': 'rgba(0, 108, 255, 0.1)',
-    'ollama': 'rgba(80, 85, 242, 0.1)'
+    openai: 'rgba(16, 163, 127, 0.1)',
+    claude: 'rgba(229, 119, 25, 0.1)',
+    gemini: 'rgba(0, 108, 255, 0.1)',
+    ollama: 'rgba(80, 85, 242, 0.1)'
   }
   return colorMap[protocol] || ''
 }
 
-const getProtocolTextColor = (protocol) => {
+const getProtocolTextColor = protocol => {
   const colorMap = {
-    'openai': '#10a37f',
-    'claude': '#e57719',
-    'gemini': '#006cff',
-    'ollama': '#5055f2'
+    openai: '#10a37f',
+    claude: '#e57719',
+    gemini: '#006cff',
+    ollama: '#5055f2'
   }
   return colorMap[protocol] || 'var(--el-text-color-regular)'
 }
@@ -547,33 +739,15 @@ const updateCharts = async () => {
       .slice()
       .reverse()
       .map(day => {
-        const segments = [
-          {
-            type: t('settings.proxy.stats.inputTokens'),
-            value: Number(day.totalInputTokens || 0),
-            color: getSeriesColor(0)
-          },
-          {
-            type: t('settings.proxy.stats.outputTokens'),
-            value: Number(day.totalOutputTokens || 0),
-            color: getSeriesColor(1)
-          },
-          {
-            type: t('settings.proxy.stats.cacheTokens'),
-            value: Number(day.totalCacheTokens || 0),
-            color: getSeriesColor(2)
-          }
-        ]
-        const total = segments.reduce((sum, item) => sum + item.value, 0)
+        const inputTokens = Number(day.totalInputTokens || 0)
+        const outputTokens = Number(day.totalOutputTokens || 0)
+        const cacheTokens = Number(day.totalCacheTokens || 0)
         return {
           date: day.date,
-          total,
-          segments: segments
-            .filter(item => item.value > 0)
-            .map(item => ({
-              ...item,
-              percent: total > 0 ? (item.value / total) * 100 : 0
-            }))
+          inputTokens,
+          outputTokens,
+          cacheTokens,
+          total: inputTokens + outputTokens + cacheTokens
         }
       })
 
@@ -648,7 +822,9 @@ const handleExpandChange = (row, expandedRows) => {
 
 const handleDeleteStats = async days => {
   const confirmMessage =
-    days === -1 ? t('settings.proxy.stats.deleteAllConfirm') : t('settings.proxy.stats.deleteConfirm', { days })
+    days === -1
+      ? t('settings.proxy.stats.deleteAllConfirm')
+      : t('settings.proxy.stats.deleteConfirm', { days })
 
   try {
     await ElMessageBox.confirm(confirmMessage, t('common.confirm'), {
@@ -671,7 +847,7 @@ const handleDeleteStats = async days => {
   }
 }
 
-watch(autoRefreshEnabled, (val) => {
+watch(autoRefreshEnabled, val => {
   localStorage.setItem(STORAGE_KEY_AUTO_REFRESH, val ? 'true' : 'false')
   if (val) {
     startRefreshTimer()
@@ -860,70 +1036,18 @@ onUnmounted(() => {
   }
 }
 
-.trend-stack-chart {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  height: 100%;
-  overflow-x: auto;
-  padding-bottom: 4px;
-}
-
-.trend-stack-item {
-  min-width: 72px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.trend-stack-bars {
-  width: 40px;
-  height: 220px;
-  display: flex;
-  flex-direction: column-reverse;
-  overflow: hidden;
-  border-radius: 12px;
-  background: var(--cs-bg-color-light);
-  border: 1px solid var(--cs-border-color-light);
-}
-
-.trend-stack-segment {
-  width: 100%;
-  min-height: 2px;
-}
-
-.trend-stack-total,
-.trend-stack-label {
-  width: 100%;
-  text-align: center;
-  font-size: 12px;
-}
-
-.trend-stack-total {
-  color: var(--cs-text-color-primary);
-  font-weight: 600;
-}
-
-.trend-stack-label {
-  color: var(--cs-text-color-secondary);
-}
-
-.trend-metric-list,
 .rank-bar-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.trend-metric-row,
 .rank-bar-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.trend-metric-header,
 .rank-bar-header {
   display: flex;
   justify-content: space-between;
@@ -942,7 +1066,6 @@ onUnmounted(() => {
   color: var(--cs-text-color-secondary);
 }
 
-.trend-metric-track,
 .rank-bar-track {
   width: 100%;
   height: 10px;
@@ -951,23 +1074,13 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-.trend-metric-track.error,
 .rank-bar-track {
   height: 8px;
 }
 
-.trend-metric-fill,
 .rank-bar-fill {
   height: 100%;
   border-radius: inherit;
-}
-
-.trend-metric-fill.requests {
-  background: var(--cs-info-color);
-}
-
-.trend-metric-fill.errors {
-  background: var(--cs-error-color);
 }
 
 .expand-detail {
