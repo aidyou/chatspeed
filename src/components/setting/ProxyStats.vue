@@ -106,7 +106,7 @@
     <el-table
       :data="dailyStats"
       style="width: 100%"
-      max-height="450"
+      max-height="350"
       v-loading="loading"
       @expand-change="handleExpandChange"
       row-key="date">
@@ -285,9 +285,7 @@
             </el-tab-pane>
             <el-tab-pane :label="$t('settings.proxy.stats.modelUsageTitle')" name="modelUsage">
               <div class="tab-chart-content">
-                <div
-                  v-show="activeDistributionTab === 'modelUsage'"
-                  id="model-usage-bar"></div>
+                <div v-show="activeDistributionTab === 'modelUsage'" id="model-usage-bar"></div>
               </div>
             </el-tab-pane>
             <el-tab-pane
