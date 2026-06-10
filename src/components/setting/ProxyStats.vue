@@ -106,6 +106,7 @@
     <el-table
       :data="dailyStats"
       style="width: 100%"
+      max-height="450"
       v-loading="loading"
       @expand-change="handleExpandChange"
       row-key="date">
@@ -645,7 +646,10 @@ const updateCharts = async () => {
                 color: getCssVar('--cs-info-color') || '#409eff',
                 label: {
                   position: 'middle',
-                  formatter: datum => formatNumber(datum.value)
+                  formatter: datum => {
+                    const dayCount = dailyStats.value?.length || 0
+                    return dayCount <= 5 ? formatNumber(datum.value) : ''
+                  }
                 }
               },
               {
@@ -655,12 +659,16 @@ const updateCharts = async () => {
                 point: { size: 4, shape: 'circle' },
                 label: {
                   position: 'top',
-                  formatter: datum => `${datum.value}%`
+                  formatter: datum => {
+                    const dayCount = dailyStats.value?.length || 0
+                    return dayCount <= 5 ? `${datum.value}%` : ''
+                  }
                 }
               }
             ],
             xAxis: {
-              ...getCommonAxisConfig()
+              ...getCommonAxisConfig(),
+              grid: null
             },
             yAxis: [
               {
@@ -708,13 +716,19 @@ const updateCharts = async () => {
                 html += '</div>'
                 return html
               }
-            }
+            },
+            slider: (dailyStats.value?.length || 0) > 10 ? { start: 0, end: 1 } : null
           })
         )
         requestsDualAxisChart.render()
       }
     } else {
       requestsDualAxisChart.update({ data: [requestsData, errorRateData] })
+      // Update slider visibility based on data points
+      const dayCount = dailyStats.value?.length || 0
+      requestsDualAxisChart.update({
+        slider: dayCount > 10 ? { start: 0, end: 1 } : null
+      })
     }
 
     if (!tokenBarChart) {
@@ -728,7 +742,8 @@ const updateCharts = async () => {
             yField: 'value',
             seriesField: 'type',
             xAxis: {
-              ...getCommonAxisConfig()
+              ...getCommonAxisConfig(),
+              grid: null
             },
             yAxis: {
               ...getCommonAxisConfig(),
@@ -742,20 +757,29 @@ const updateCharts = async () => {
             label: {
               position: 'middle',
               layout: [{ type: 'interval-adjust-position' }, { type: 'interval-hide-overlap' }],
-              formatter: datum => formatTokens(datum.value)
+              formatter: datum => {
+                // Only show labels when data points <= 5
+                const dayCount = dailyStats.value?.length || 0
+                return dayCount <= 5 ? formatTokens(datum.value) : ''
+              }
             },
             tooltip: {
               formatter: datum => {
                 return { name: datum.type, value: formatTokens(datum.value) }
               }
-            }
+            },
+            slider: (dailyStats.value?.length || 0) > 10 ? { start: 0, end: 1 } : null
           })
         )
         tokenBarChart.render()
       }
     } else {
       tokenBarChart.changeData(tokenData)
-      tokenBarChart.render()
+      // Update slider visibility based on data points
+      const dayCount = dailyStats.value?.length || 0
+      tokenBarChart.update({
+        slider: dayCount > 10 ? { start: 0, end: 1 } : null
+      })
     }
 
     const sortedModelUsage = (modelUsage || [])
