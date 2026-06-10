@@ -109,6 +109,68 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return workflows.value.find(w => w.id === currentWorkflowId.value);
   });
 
+  const displayQueueItems = computed(() => {
+    const currentWorkflow = currentWorkflowId.value;
+    const activeSubAgentQueue = Array.from(subAgentProgress.value.values())
+      .filter((progress) => {
+        const parentSessionId =
+          progress.parentSessionId ?? progress.parent_session_id ?? currentWorkflow;
+        if (currentWorkflow && parentSessionId && parentSessionId !== currentWorkflow) {
+          return false;
+        }
+
+        const status = String(progress.status || '').toLowerCase();
+        return !['completed', 'failed', 'cancelled'].includes(status);
+      })
+      .sort((left, right) => {
+        const leftTime = Number(left.createdAtMs || left.updatedAtMs || left.updated_at_ms || 0);
+        const rightTime = Number(right.createdAtMs || right.updatedAtMs || right.updated_at_ms || 0);
+        return leftTime - rightTime;
+      })
+      .map((progress) => {
+        const status = String(progress.status || '').toLowerCase();
+        const workflowState = String(progress.workflowState || progress.workflow_state || '').toLowerCase();
+        const waitReason = String(progress.waitReason || progress.wait_reason || '').toLowerCase();
+        const agentName = progress.agentName || progress.agent_name || 'Sub-agent';
+        const task = progress.task || '';
+        const toolCallsCount = progress.toolCallsCount ?? progress.tool_calls_count ?? 0;
+
+        let statusText = agentName;
+        if (status === 'waiting') {
+          statusText = waitReason ? `${agentName} · waiting (${waitReason})` : `${agentName} · waiting`;
+        } else if (status === 'running') {
+          statusText = toolCallsCount > 0 ? `${agentName} · running · ${toolCallsCount} tools` : `${agentName} · running`;
+        } else if (status === 'pending') {
+          statusText = `${agentName} · pending`;
+        } else if (status === 'stopping') {
+          statusText = `${agentName} · stopping`;
+        } else if (workflowState) {
+          statusText = `${agentName} · ${workflowState}`;
+        }
+
+        return {
+          id: `sub_agent_progress_${progress.subAgentId || progress.sub_agent_id}`,
+          content: task || agentName,
+          status: 'sub_agent_progress',
+          statusText,
+          sent: true,
+          acknowledged: true,
+          attachedContext: null,
+          metadata: {
+            subAgentId: progress.subAgentId || progress.sub_agent_id || '',
+            parentSessionId: progress.parentSessionId || progress.parent_session_id || '',
+            queueKind: 'sub_agent_progress',
+          },
+          attachments: [],
+          createdAt: progress.createdAtMs || progress.updatedAtMs || progress.updated_at_ms || Date.now(),
+          removable: false,
+          icon: 'task',
+        };
+      });
+
+    return [...messageQueue.value, ...activeSubAgentQueue];
+  });
+
   const persistLastSelectedWorkflowId = (workflowId) => {
     void settingStore.setSetting('workflowLastSelectedId', workflowId || '').catch((error) => {
       console.warn('[Workflow] Failed to persist last selected workflow id:', error);
@@ -314,7 +376,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       currentContextTokens: progress.currentContextTokens ?? progress.current_context_tokens ?? existing.currentContextTokens ?? null,
       maxContextTokens: progress.maxContextTokens ?? progress.max_context_tokens ?? existing.maxContextTokens ?? null,
       isError: progress.isError ?? progress.is_error ?? existing.isError ?? false,
-      updatedAtMs: progress.updatedAtMs ?? progress.updated_at_ms ?? Date.now()
+      updatedAtMs: progress.updatedAtMs ?? progress.updated_at_ms ?? Date.now(),
+      createdAtMs: existing.createdAtMs ?? progress.createdAtMs ?? progress.created_at_ms ?? progress.updatedAtMs ?? progress.updated_at_ms ?? Date.now()
     });
     subAgentProgress.value = nextProgress;
   };
@@ -1565,6 +1628,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     shellPolicy,
     toolStreams,
     subAgentProgress,
+    displayQueueItems,
     approvalSubmissions,
 
     // Task Ledger State

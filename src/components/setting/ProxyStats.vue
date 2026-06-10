@@ -253,28 +253,16 @@
           <el-tabs v-model="activeTrendTab" type="border-card">
             <el-tab-pane :label="$t('settings.proxy.stats.dailyTokensTitle')" name="dailyTokens">
               <div class="tab-chart-content">
-                <UPlotMiniChart
-                  v-if="activeTrendTab === 'dailyTokens' && tokenTrend.length"
-                  :labels="trendLabels"
-                  :series="tokenTrendSeries"
-                  :scale-configs="tokenScaleConfigs"
-                  :x-axis-label="$t('settings.proxy.stats.date')"
-                  :height="320" />
-                <el-empty v-else :description="$t('common.noData')" />
+                <div v-show="activeTrendTab === 'dailyTokens'" id="daily-tokens-column"></div>
               </div>
             </el-tab-pane>
             <el-tab-pane
               :label="$t('settings.proxy.stats.dailyRequestsTitle')"
               name="dailyRequests">
               <div class="tab-chart-content">
-                <UPlotMiniChart
-                  v-if="activeTrendTab === 'dailyRequests' && requestsTrend.length"
-                  :labels="trendLabels"
-                  :series="requestLineSeries"
-                  :scale-configs="requestScaleConfigs"
-                  :x-axis-label="$t('settings.proxy.stats.date')"
-                  :height="320" />
-                <el-empty v-else :description="$t('common.noData')" />
+                <div
+                  v-show="activeTrendTab === 'dailyRequests'"
+                  id="daily-requests-dual-axis"></div>
               </div>
             </el-tab-pane>
           </el-tabs>
@@ -289,91 +277,30 @@
               :label="$t('settings.proxy.stats.modelTokenUsageTitle')"
               name="modelTokenUsage">
               <div class="tab-chart-content">
-                <div v-if="modelTokenUsageStats.length" class="rank-bar-list">
-                  <div v-for="item in modelTokenUsageStats" :key="item.type" class="rank-bar-row">
-                    <div class="rank-bar-header">
-                      <span class="rank-bar-label">{{ item.type }}</span>
-                      <span class="rank-bar-value">{{ formatTokens(item.value) }}</span>
-                    </div>
-                    <div class="rank-bar-track">
-                      <div
-                        class="rank-bar-fill"
-                        :style="{
-                          width: `${toPercent(item.value, maxModelTokenUsageValue)}%`,
-                          backgroundColor: getSeriesColor(1)
-                        }" />
-                    </div>
-                  </div>
-                </div>
-                <el-empty v-else :description="$t('common.noData')" />
+                <div
+                  v-show="activeDistributionTab === 'modelTokenUsage'"
+                  id="model-token-usage-bar"></div>
               </div>
             </el-tab-pane>
             <el-tab-pane :label="$t('settings.proxy.stats.modelUsageTitle')" name="modelUsage">
               <div class="tab-chart-content">
-                <div v-if="modelUsageStats.length" class="rank-bar-list">
-                  <div v-for="item in modelUsageStats" :key="item.type" class="rank-bar-row">
-                    <div class="rank-bar-header">
-                      <span class="rank-bar-label">{{ item.type }}</span>
-                      <span class="rank-bar-value">{{ formatNumber(item.value) }}</span>
-                    </div>
-                    <div class="rank-bar-track">
-                      <div
-                        class="rank-bar-fill"
-                        :style="{
-                          width: `${toPercent(item.value, maxModelUsageValue)}%`,
-                          backgroundColor: getSeriesColor(0)
-                        }" />
-                    </div>
-                  </div>
-                </div>
-                <el-empty v-else :description="$t('common.noData')" />
+                <div
+                  v-show="activeDistributionTab === 'modelUsage'"
+                  id="model-usage-bar"></div>
               </div>
             </el-tab-pane>
             <el-tab-pane
               :label="$t('settings.proxy.stats.providerTokenUsageTitle')"
               name="providerTokenUsage">
               <div class="tab-chart-content">
-                <div v-if="providerTokenUsageStats.length" class="rank-bar-list">
-                  <div
-                    v-for="item in providerTokenUsageStats"
-                    :key="item.type"
-                    class="rank-bar-row">
-                    <div class="rank-bar-header">
-                      <span class="rank-bar-label">{{ item.type }}</span>
-                      <span class="rank-bar-value">{{ formatTokens(item.value) }}</span>
-                    </div>
-                    <div class="rank-bar-track">
-                      <div
-                        class="rank-bar-fill"
-                        :style="{
-                          width: `${toPercent(item.value, maxProviderTokenUsageValue)}%`,
-                          backgroundColor: getSeriesColor(2)
-                        }" />
-                    </div>
-                  </div>
-                </div>
-                <el-empty v-else :description="$t('common.noData')" />
+                <div
+                  v-show="activeDistributionTab === 'providerTokenUsage'"
+                  id="provider-token-usage-bar"></div>
               </div>
             </el-tab-pane>
             <el-tab-pane :label="$t('settings.proxy.stats.errorDistTitle')" name="errorDist">
               <div class="tab-chart-content">
-                <div v-if="errorDistributionStats.length" class="rank-bar-list">
-                  <div v-for="item in errorDistributionStats" :key="item.type" class="rank-bar-row">
-                    <div class="rank-bar-header">
-                      <span class="rank-bar-label">{{ item.type }}</span>
-                      <span class="rank-bar-value">{{ formatNumber(item.value) }}</span>
-                    </div>
-                    <div class="rank-bar-track">
-                      <div
-                        class="rank-bar-fill"
-                        :style="{
-                          width: `${toPercent(item.value, maxErrorDistributionValue)}%`,
-                          backgroundColor: getCssVar('--cs-error-color') || '#f56c6c'
-                        }" />
-                    </div>
-                  </div>
-                </div>
-                <el-empty v-else :description="$t('common.noData')" />
+                <div v-show="activeDistributionTab === 'errorDist'" id="error-dist-bar"></div>
               </div>
             </el-tab-pane>
           </el-tabs>
@@ -411,14 +338,14 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { markRaw, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { Bar, Column, DualAxes } from '@antv/g2plot'
 import { invokeWrapper } from '@/libs/tauri'
 import { useI18n } from 'vue-i18n'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import { showMessage } from '@/libs/util'
 import { ElMessageBox } from 'element-plus'
 import { DataLine, Coin, Warning, Collection } from '@element-plus/icons-vue'
-import UPlotMiniChart from './UPlotMiniChart.vue'
 
 const { t } = useI18n()
 
@@ -452,23 +379,45 @@ const activeTrendTab = ref('dailyTokens')
 // Active tab for distribution charts
 const activeDistributionTab = ref('modelTokenUsage')
 
-const requestsTrend = ref([])
-const tokenTrend = ref([])
-const modelUsageStats = ref([])
-const modelTokenUsageStats = ref([])
-const providerTokenUsageStats = ref([])
-const errorDistributionStats = ref([])
+let modelBarChart = null
+let modelTokenBarChart = null
+let providerTokenBarChart = null
+let errorBarChart = null
+let tokenBarChart = null
+let requestsDualAxisChart = null
 let refreshTimer = null
+let isRefreshing = false
 
-const startRefreshTimer = () => {
-  if (refreshTimer) clearInterval(refreshTimer)
+const scheduleNextRefresh = () => {
   if (!autoRefreshEnabled.value) {
     refreshTimer = null
     return
   }
-  refreshTimer = setInterval(() => {
-    fetchDailyStats(true)
+  refreshTimer = setTimeout(async () => {
+    if (isRefreshing) {
+      // Previous refresh still in progress, try again later
+      scheduleNextRefresh()
+      return
+    }
+    isRefreshing = true
+    try {
+      await fetchDailyStats(true)
+    } finally {
+      isRefreshing = false
+      scheduleNextRefresh()
+    }
   }, 10000)
+}
+
+const startRefreshTimer = () => {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
+  if (!autoRefreshEnabled.value) {
+    return
+  }
+  scheduleNextRefresh()
 }
 
 const formatTokens = val => {
@@ -500,127 +449,45 @@ const getCssVar = varName => {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim() || ''
 }
 
-const getSeriesColor = index => {
-  const palette = [
-    getCssVar('--cs-info-color') || '#409eff',
-    getCssVar('--cs-success-color') || '#67c23a',
-    getCssVar('--cs-warning-color') || '#e6a23c',
-    getCssVar('--cs-error-color') || '#f56c6c',
-    '#8b5cf6',
-    '#14b8a6'
-  ]
-  return palette[index % palette.length]
-}
-
-const getMaxValue = items => items.reduce((max, item) => Math.max(max, Number(item.value || 0)), 0)
-
-const toPercent = (value, max) => {
-  if (!max || max <= 0) return 0
-  return Math.max(0, Math.min(100, (Number(value || 0) / max) * 100))
-}
-
-const maxModelUsageValue = computed(() => getMaxValue(modelUsageStats.value))
-const maxModelTokenUsageValue = computed(() => getMaxValue(modelTokenUsageStats.value))
-const maxProviderTokenUsageValue = computed(() => getMaxValue(providerTokenUsageStats.value))
-const maxErrorDistributionValue = computed(() => getMaxValue(errorDistributionStats.value))
-
-const activeTrendItems = computed(() =>
-  activeTrendTab.value === 'dailyTokens' ? tokenTrend.value : requestsTrend.value
-)
-
-const useTokenBars = computed(() => tokenTrend.value.length > 0 && tokenTrend.value.length < 10)
-
-const trendLabels = computed(() =>
-  activeTrendItems.value.map(item => item.date.slice(5).replace('-', '/'))
-)
-
-const tokenScaleConfigs = computed(() => ({
-  x: {
-    maxTicks: useTokenBars.value ? tokenTrend.value.length : 8,
-    range: useTokenBars.value ? (u, min, max) => [min - 0.5, max + 0.5] : undefined
-  },
-  y: {
-    formatter: value => formatTokens(value)
+const formatAxisValue = val => {
+  if (val === undefined || val === null || isNaN(val)) return '0'
+  const num = Number(val)
+  if (num >= 100000000) {
+    return (num / 100000000).toFixed(1) + '亿'
   }
-}))
+  if (num >= 10000) {
+    return (num / 10000).toFixed(1) + '万'
+  }
+  return num.toString()
+}
 
-const tokenTrendSeries = computed(() => {
-  const inputValues = tokenTrend.value.map(item => Number(item.inputTokens || 0))
-  const outputValues = tokenTrend.value.map(item => Number(item.outputTokens || 0))
-  const cacheValues = tokenTrend.value.map(item => Number(item.cacheTokens || 0))
+const getAxisColors = () => {
+  const isDark = document.documentElement.classList.contains('dark')
+  return {
+    gridStroke: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
+    lineStroke: isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(0, 0, 0, 0.2)'
+  }
+}
 
-  return [
-    {
-      label: t('settings.proxy.stats.inputTokens'),
-      type: useTokenBars.value ? 'groupedBar' : 'spline',
-      color: getSeriesColor(0),
-      strokeColor: getSeriesColor(0),
-      values: inputValues,
-      tooltipValues: inputValues,
-      valueFormatter: value => formatTokens(value),
-      width: 2,
-      pointSize: 4
+const getCommonAxisConfig = () => {
+  const colors = getAxisColors()
+  return {
+    grid: {
+      line: {
+        style: {
+          lineDash: [4, 4],
+          stroke: colors.gridStroke
+        }
+      }
     },
-    {
-      label: t('settings.proxy.stats.outputTokens'),
-      type: useTokenBars.value ? 'groupedBar' : 'spline',
-      color: getSeriesColor(1),
-      strokeColor: getSeriesColor(1),
-      values: outputValues,
-      tooltipValues: outputValues,
-      valueFormatter: value => formatTokens(value),
-      width: 2,
-      pointSize: 4
-    },
-    {
-      label: t('settings.proxy.stats.cacheTokens'),
-      type: useTokenBars.value ? 'groupedBar' : 'spline',
-      color: getSeriesColor(2),
-      strokeColor: getSeriesColor(2),
-      values: cacheValues,
-      tooltipValues: cacheValues,
-      valueFormatter: value => formatTokens(value),
-      width: 2,
-      pointSize: 4
+    line: {
+      style: {
+        stroke: colors.lineStroke,
+        lineWidth: 1
+      }
     }
-  ]
-})
-
-const requestScaleConfigs = computed(() => ({
-  x: {
-    maxTicks: 8
-  },
-  y: {
-    formatter: value => formatNumber(value)
-  },
-  y2: {
-    side: 'right',
-    formatter: value => `${Number(value || 0).toFixed(1)}%`
   }
-}))
-
-const requestLineSeries = computed(() => [
-  {
-    label: t('settings.proxy.stats.requests'),
-    type: 'spline',
-    color: getSeriesColor(0),
-    values: requestsTrend.value.map(item => Number(item.requests || 0)),
-    valueFormatter: value => formatNumber(value),
-    scale: 'y',
-    width: 2,
-    pointSize: 4
-  },
-  {
-    label: t('settings.proxy.stats.errorRate'),
-    type: 'spline',
-    color: getCssVar('--cs-error-color') || '#f56c6c',
-    values: requestsTrend.value.map(item => Number(item.errorRate || 0)),
-    valueFormatter: value => `${Number(value || 0).toFixed(2)}%`,
-    scale: 'y2',
-    width: 2,
-    pointSize: 4
-  }
-])
+}
 
 // Calculate KPI data from daily stats and model usage stats
 const calculateKPI = (modelUsage = []) => {
@@ -722,56 +589,341 @@ const updateCharts = async () => {
     // Calculate KPI data with model usage stats
     calculateKPI(modelUsage)
 
-    requestsTrend.value = (dailyStats.value || [])
+    await nextTick()
+
+    const requestsData = []
+    const errorRateData = []
+    const tokenData = []
+
+    ;(dailyStats.value || [])
       .slice()
       .reverse()
-      .map(day => {
-        const requests = Number(day.totalRequestCount || 0)
-        const errors = Number(day.errorCount || 0)
-        return {
+      .forEach(day => {
+        const totalRequests = Number(day.totalRequestCount || 0)
+        const errorCount = Number(day.errorCount || 0)
+        const errorRate = totalRequests > 0 ? (errorCount / totalRequests) * 100 : 0
+
+        requestsData.push({
           date: day.date,
-          requests,
-          errorRate: requests > 0 ? Number(((errors / requests) * 100).toFixed(2)) : 0
-        }
+          value: totalRequests,
+          type: t('settings.proxy.stats.requests')
+        })
+        errorRateData.push({
+          date: day.date,
+          value: Number(errorRate.toFixed(2)),
+          type: t('settings.proxy.stats.errorRate')
+        })
+
+        tokenData.push({
+          date: day.date,
+          type: t('settings.proxy.stats.inputTokens'),
+          value: Number(day.totalInputTokens || 0)
+        })
+        tokenData.push({
+          date: day.date,
+          type: t('settings.proxy.stats.outputTokens'),
+          value: Number(day.totalOutputTokens || 0)
+        })
+        tokenData.push({
+          date: day.date,
+          type: t('settings.proxy.stats.cacheTokens'),
+          value: Number(day.totalCacheTokens || 0)
+        })
       })
 
-    tokenTrend.value = (dailyStats.value || [])
-      .slice()
-      .reverse()
-      .map(day => {
-        const inputTokens = Number(day.totalInputTokens || 0)
-        const outputTokens = Number(day.totalOutputTokens || 0)
-        const cacheTokens = Number(day.totalCacheTokens || 0)
-        return {
-          date: day.date,
-          inputTokens,
-          outputTokens,
-          cacheTokens,
-          total: inputTokens + outputTokens + cacheTokens
-        }
-      })
+    if (!requestsDualAxisChart) {
+      const container = document.getElementById('daily-requests-dual-axis')
+      if (container) {
+        requestsDualAxisChart = markRaw(
+          new DualAxes('daily-requests-dual-axis', {
+            data: [requestsData, errorRateData],
+            xField: 'date',
+            yField: ['value', 'value'],
+            geometryOptions: [
+              {
+                geometry: 'column',
+                color: getCssVar('--cs-info-color') || '#409eff',
+                label: {
+                  position: 'middle',
+                  formatter: datum => formatNumber(datum.value)
+                }
+              },
+              {
+                geometry: 'line',
+                color: getCssVar('--cs-error-color') || '#f56c6c',
+                lineStyle: { lineWidth: 3 },
+                point: { size: 4, shape: 'circle' },
+                label: {
+                  position: 'top',
+                  formatter: datum => `${datum.value}%`
+                }
+              }
+            ],
+            xAxis: {
+              ...getCommonAxisConfig()
+            },
+            yAxis: [
+              {
+                ...getCommonAxisConfig(),
+                label: {
+                  formatter: val => formatAxisValue(val)
+                }
+              },
+              {
+                label: {
+                  formatter: val => `${val}%`
+                }
+              }
+            ],
+            legend: {
+              position: 'bottom',
+              itemName: {
+                formatter: (_text, item) => {
+                  return item.value === 'value' && item.index === 0
+                    ? t('settings.proxy.stats.requests')
+                    : t('settings.proxy.stats.errorRate')
+                }
+              }
+            },
+            tooltip: {
+              shared: true,
+              showMarkers: true,
+              customContent: (title, items) => {
+                if (!items || items.length === 0) return ''
+                let html = `<div style="padding: 8px 12px;"><div style="font-weight: 500; margin-bottom: 8px;">${title}</div>`
+                items.forEach((item, index) => {
+                  const color = item.color || '#999'
+                  const name =
+                    index === 0
+                      ? t('settings.proxy.stats.requests')
+                      : t('settings.proxy.stats.errorRate')
+                  const value = item.value !== undefined ? item.value : ''
+                  const displayValue = index === 1 ? `${value}%` : formatNumber(value)
+                  html += `<div style="display: flex; align-items: center; margin-bottom: 4px;">
+                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${color}; margin-right: 8px;"></span>
+                    <span style="flex: 1;">${name}:</span>
+                    <span style="font-weight: 500; margin-left: 12px;">${displayValue}</span>
+                  </div>`
+                })
+                html += '</div>'
+                return html
+              }
+            }
+          })
+        )
+        requestsDualAxisChart.render()
+      }
+    } else {
+      requestsDualAxisChart.update({ data: [requestsData, errorRateData] })
+    }
 
-    // Sort model usage data by value descending for horizontal bar chart
-    modelUsageStats.value = (modelUsage || [])
+    if (!tokenBarChart) {
+      const container = document.getElementById('daily-tokens-column')
+      if (container) {
+        tokenBarChart = markRaw(
+          new Column('daily-tokens-column', {
+            data: tokenData,
+            isStack: true,
+            xField: 'date',
+            yField: 'value',
+            seriesField: 'type',
+            xAxis: {
+              ...getCommonAxisConfig()
+            },
+            yAxis: {
+              ...getCommonAxisConfig(),
+              label: {
+                formatter: val => formatAxisValue(val)
+              }
+            },
+            legend: {
+              position: 'bottom'
+            },
+            label: {
+              position: 'middle',
+              layout: [{ type: 'interval-adjust-position' }, { type: 'interval-hide-overlap' }],
+              formatter: datum => formatTokens(datum.value)
+            },
+            tooltip: {
+              formatter: datum => {
+                return { name: datum.type, value: formatTokens(datum.value) }
+              }
+            }
+          })
+        )
+        tokenBarChart.render()
+      }
+    } else {
+      tokenBarChart.changeData(tokenData)
+      tokenBarChart.render()
+    }
+
+    const sortedModelUsage = (modelUsage || [])
       .map(item => ({ ...item, value: Number(item.value) }))
       .sort((a, b) => b.value - a.value)
-      .slice(0, 10) // Top 10
+      .slice(0, 10)
 
-    // Sort model token usage data by value descending
-    modelTokenUsageStats.value = (modelTokenUsage || [])
+    if (!modelBarChart) {
+      const container = document.getElementById('model-usage-bar')
+      if (container) {
+        modelBarChart = markRaw(
+          new Bar('model-usage-bar', {
+            data: sortedModelUsage,
+            xField: 'value',
+            yField: 'type',
+            seriesField: 'type',
+            legend: false,
+            xAxis: {
+              ...getCommonAxisConfig(),
+              label: {
+                formatter: val => formatAxisValue(val)
+              }
+            },
+            yAxis: {
+              ...getCommonAxisConfig()
+            },
+            label: {
+              position: 'right',
+              formatter: datum => formatNumber(datum.value)
+            },
+            tooltip: {
+              formatter: datum => {
+                return { name: datum.type, value: formatNumber(datum.value) }
+              }
+            }
+          })
+        )
+        modelBarChart.render()
+      }
+    } else {
+      modelBarChart.changeData(sortedModelUsage)
+      modelBarChart.render()
+    }
+
+    const sortedModelTokenUsage = (modelTokenUsage || [])
       .map(item => ({ ...item, value: Number(item.value) }))
       .sort((a, b) => b.value - a.value)
-      .slice(0, 10) // Top 10
+      .slice(0, 10)
 
-    // Sort provider token usage data by value descending
-    providerTokenUsageStats.value = (providerTokenUsage || [])
+    if (!modelTokenBarChart) {
+      const container = document.getElementById('model-token-usage-bar')
+      if (container) {
+        modelTokenBarChart = markRaw(
+          new Bar('model-token-usage-bar', {
+            data: sortedModelTokenUsage,
+            xField: 'value',
+            yField: 'type',
+            seriesField: 'type',
+            legend: false,
+            xAxis: {
+              ...getCommonAxisConfig(),
+              label: {
+                formatter: val => formatAxisValue(val)
+              }
+            },
+            yAxis: {
+              ...getCommonAxisConfig()
+            },
+            label: {
+              position: 'right',
+              formatter: datum => formatTokens(datum.value)
+            },
+            tooltip: {
+              formatter: datum => {
+                return { name: datum.type, value: formatTokens(datum.value) }
+              }
+            }
+          })
+        )
+        modelTokenBarChart.render()
+      }
+    } else {
+      modelTokenBarChart.changeData(sortedModelTokenUsage)
+      modelTokenBarChart.render()
+    }
+
+    const sortedProviderTokenUsage = (providerTokenUsage || [])
       .map(item => ({ ...item, value: Number(item.value) }))
       .sort((a, b) => b.value - a.value)
 
-    // Sort error distribution data by value descending
-    errorDistributionStats.value = (errorDist || [])
+    if (!providerTokenBarChart) {
+      const container = document.getElementById('provider-token-usage-bar')
+      if (container) {
+        providerTokenBarChart = markRaw(
+          new Bar('provider-token-usage-bar', {
+            data: sortedProviderTokenUsage,
+            xField: 'value',
+            yField: 'type',
+            seriesField: 'type',
+            legend: false,
+            xAxis: {
+              ...getCommonAxisConfig(),
+              label: {
+                formatter: val => formatAxisValue(val)
+              }
+            },
+            yAxis: {
+              ...getCommonAxisConfig()
+            },
+            label: {
+              position: 'right',
+              formatter: datum => formatTokens(datum.value)
+            },
+            tooltip: {
+              formatter: datum => {
+                return { name: datum.type, value: formatTokens(datum.value) }
+              }
+            }
+          })
+        )
+        providerTokenBarChart.render()
+      }
+    } else {
+      providerTokenBarChart.changeData(sortedProviderTokenUsage)
+      providerTokenBarChart.render()
+    }
+
+    const sortedErrorDist = (errorDist || [])
       .map(item => ({ ...item, value: Number(item.value) }))
       .sort((a, b) => b.value - a.value)
+
+    if (!errorBarChart) {
+      const container = document.getElementById('error-dist-bar')
+      if (container) {
+        errorBarChart = markRaw(
+          new Bar('error-dist-bar', {
+            data: sortedErrorDist,
+            xField: 'value',
+            yField: 'type',
+            seriesField: 'type',
+            legend: false,
+            color: getCssVar('--cs-error-color') || '#f56c6c',
+            xAxis: {
+              ...getCommonAxisConfig(),
+              label: {
+                formatter: val => formatAxisValue(val)
+              }
+            },
+            yAxis: {
+              ...getCommonAxisConfig()
+            },
+            label: {
+              position: 'right',
+              formatter: datum => formatNumber(datum.value)
+            },
+            tooltip: {
+              formatter: datum => {
+                return { name: datum.type, value: formatNumber(datum.value) }
+              }
+            }
+          })
+        )
+        errorBarChart.render()
+      }
+    } else {
+      errorBarChart.changeData(sortedErrorDist)
+      errorBarChart.render()
+    }
   } catch (error) {
     console.error('Failed to update charts:', error)
   }
@@ -853,7 +1005,7 @@ watch(autoRefreshEnabled, val => {
     startRefreshTimer()
   } else {
     if (refreshTimer) {
-      clearInterval(refreshTimer)
+      clearTimeout(refreshTimer)
       refreshTimer = null
     }
   }
@@ -864,7 +1016,13 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer)
+  if (refreshTimer) clearTimeout(refreshTimer)
+  if (modelBarChart) modelBarChart.destroy()
+  if (modelTokenBarChart) modelTokenBarChart.destroy()
+  if (providerTokenBarChart) providerTokenBarChart.destroy()
+  if (errorBarChart) errorBarChart.destroy()
+  if (tokenBarChart) tokenBarChart.destroy()
+  if (requestsDualAxisChart) requestsDualAxisChart.destroy()
 })
 </script>
 
@@ -1032,6 +1190,10 @@ onUnmounted(() => {
 
     .tab-chart-content {
       min-height: 380px;
+
+      > div {
+        height: 380px;
+      }
     }
   }
 }

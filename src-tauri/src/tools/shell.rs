@@ -243,6 +243,7 @@ impl ShellPolicyEngine {
 
         let mut final_decision = ShellDecision::Allow;
         let mut current_binary = String::new();
+        let mut current_binary_arg_index = 0usize;
 
         for (i, token) in tokens.iter().enumerate() {
             let token_str = token.as_str();
@@ -250,13 +251,19 @@ impl ShellPolicyEngine {
             if separators.contains(&token_str) {
                 next_is_binary = true;
                 current_binary.clear();
+                current_binary_arg_index = 0;
                 continue;
             }
 
             if redirection_ops.contains(&token_str) {
                 if let Some(next_token) = tokens.get(i + 1) {
                     if !next_token.starts_with('-') {
-                        match self.validate_path_token(next_token, restrict_to_planning, false) {
+                        match self.validate_path_token(
+                            next_token,
+                            restrict_to_planning,
+                            false,
+                            true,
+                        ) {
                             ShellDecision::Deny(reason) => return ShellDecision::Deny(reason),
                             ShellDecision::Review(reason) => {
                                 if final_decision == ShellDecision::Allow {
@@ -292,11 +299,20 @@ impl ShellPolicyEngine {
                     }
                 }
                 next_is_binary = false;
+                current_binary_arg_index = 0;
+                continue;
             }
 
             if !token.starts_with('-') {
                 let is_delete = current_binary == "rm";
-                match self.validate_path_token(token, restrict_to_planning, is_delete) {
+                let force_path_validation =
+                    Self::should_force_path_validation(&current_binary, current_binary_arg_index);
+                match self.validate_path_token(
+                    token,
+                    restrict_to_planning,
+                    is_delete,
+                    force_path_validation,
+                ) {
                     ShellDecision::Deny(reason) => return ShellDecision::Deny(reason),
                     ShellDecision::Review(reason) => {
                         if final_decision == ShellDecision::Allow {
@@ -325,10 +341,23 @@ impl ShellPolicyEngine {
                         }
                     }
                 }
+
+                current_binary_arg_index += 1;
             }
         }
 
         final_decision
+    }
+
+    fn should_force_path_validation(command: &str, arg_index: usize) -> bool {
+        match command {
+            "cat" | "head" | "tail" | "less" | "more" | "bat" | "nl" | "wc" | "sort" | "uniq"
+            | "ls" | "stat" | "file" | "du" | "diff" | "cmp" | "comm" => true,
+            "grep" | "egrep" | "fgrep" | "rg" => arg_index >= 1,
+            "sed" | "awk" => arg_index >= 1,
+            "find" => arg_index == 0,
+            _ => false,
+        }
     }
 
     fn evaluate_custom_rules(
@@ -495,6 +524,7 @@ impl ShellPolicyEngine {
         token: &str,
         restrict_to_planning: bool,
         is_delete: bool,
+        force_path_validation: bool,
     ) -> ShellDecision {
         if token.starts_with('~') {
             return ShellDecision::Deny(
@@ -502,7 +532,8 @@ impl ShellPolicyEngine {
             );
         }
 
-        let is_path_like = token.contains('$')
+        let is_path_like = force_path_validation
+            || token.contains('$')
             || token.starts_with('/')
             || token.starts_with('.')
             || token.contains('/')
@@ -512,7 +543,10 @@ impl ShellPolicyEngine {
             match shellexpand::full(token) {
                 Ok(expanded) => {
                     let expanded_str: &str = expanded.as_ref();
-                    if expanded_str.contains('/') || expanded_str.starts_with('.') {
+                    if force_path_validation
+                        || expanded_str.contains('/')
+                        || expanded_str.starts_with('.')
+                    {
                         let valid = if let Ok(guard) = self.path_guard.read() {
                             guard.validate(
                                 Path::new(expanded_str),
@@ -1328,7 +1362,7 @@ mod tests {
         println!("Project root: {:?}", project_root);
 
         for (path, desc) in test_cases {
-            let decision = engine.validate_path_token(path, false, false);
+            let decision = engine.validate_path_token(path, false, false, false);
             println!("\nPath: {} ({})", path, desc);
             println!("Decision: {:?}", decision);
 
@@ -1340,5 +1374,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_policy_engine_blocks_gitignored_bare_filename_for_cat() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        std::fs::write(project_root.join(".gitignore"), "ignored.txt\n").unwrap();
+        std::fs::write(project_root.join("ignored.txt"), "secret").unwrap();
+        std::fs::write(project_root.join("visible.txt"), "ok").unwrap();
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_root.clone()],
+            vec![],
+            vec![],
+        )));
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+
+        assert!(matches!(
+            engine.check("cat ignored.txt", false),
+            ShellDecision::Deny(_)
+        ));
+        assert_eq!(engine.check("cat visible.txt", false), ShellDecision::Allow);
+    }
+
+    #[test]
+    fn test_policy_engine_blocks_gitignored_bare_filename_for_grep_file_operand() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        std::fs::write(project_root.join(".gitignore"), "ignored.log\n").unwrap();
+        std::fs::write(project_root.join("ignored.log"), "needle").unwrap();
+        std::fs::write(project_root.join("visible.log"), "needle").unwrap();
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_root.clone()],
+            vec![],
+            vec![],
+        )));
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+
+        assert!(matches!(
+            engine.check("grep needle ignored.log", false),
+            ShellDecision::Deny(_)
+        ));
+        assert_eq!(
+            engine.check("grep needle visible.log", false),
+            ShellDecision::Allow
+        );
     }
 }

@@ -131,7 +131,7 @@
           ref="messageListRef"
           :messages="enhancedMessages"
           :is-running="isRunning"
-          :queued-messages="workflowStore.messageQueue"
+          :queued-messages="workflowStore.displayQueueItems"
           :is-chatting="isChatting"
           :chat-state="chatState"
           :is-compressing="isCompressing"
@@ -1358,7 +1358,7 @@ watch(
 )
 
 watch(
-  () => workflowStore.messageQueue.length,
+  () => workflowStore.displayQueueItems.length,
   (nextLength, previousLength) => {
     if (nextLength > previousLength) {
       scrollMessageListToBottom()

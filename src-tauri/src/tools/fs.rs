@@ -290,25 +290,16 @@ fn execute_read_file(
         next_offset,
     );
 
-    if truncated {
+    if truncated_by_size {
         let truncated_body = lines.join("\n");
         let resume_offset = next_offset.unwrap_or(end_offset);
-        let reminder = if truncated_by_size {
-            format!(
-                "<SYSTEM_REMINDER>Partial file through line {} of {} ({} bytes). Continue with read_file offset={} and a narrower range.</SYSTEM_REMINDER>",
-                last_line_number,
-                total_lines,
-                file_size_bytes,
-                resume_offset
-            )
-        } else {
-            format!(
-                "<SYSTEM_REMINDER>Stopped at line {} of {}. Continue with read_file offset={} if needed.</SYSTEM_REMINDER>",
-                last_line_number,
-                total_lines,
-                resume_offset
-            )
-        };
+        let reminder = format!(
+            "<SYSTEM_REMINDER>Partial file through line {} of {} ({} bytes). Continue with read_file offset={} and a narrower range.</SYSTEM_REMINDER>",
+            last_line_number,
+            total_lines,
+            file_size_bytes,
+            resume_offset
+        );
         return Ok(ToolCallResult::success(
             Some(format!(
                 "<truncated_content>\n{}\n</truncated_content>\n{}",
@@ -328,6 +319,14 @@ fn execute_read_file(
                 "file_size_bytes": file_size_bytes,
                 "total_lines": total_lines
             })),
+        ));
+    } else if truncated_by_limit {
+        let resume_offset = next_offset.unwrap_or(end_offset);
+        lines.push(format!(
+            "<SYSTEM_REMINDER>Stopped at line {} of {} due to the requested limit. Continue with read_file offset={} if more exact content is needed.</SYSTEM_REMINDER>",
+            last_line_number,
+            total_lines,
+            resume_offset
         ));
     } else if offset > 0 {
         lines.push(format!(
@@ -1222,6 +1221,7 @@ mod tests {
         assert!(output.contains("line 3"));
         assert!(output.contains("line 7"));
         assert!(output.contains("offset=7"));
+        assert!(!output.contains("<truncated_content>"));
         // Should NOT contain lines 1-2 or 8-10
         assert!(!output.contains("line 1"));
         assert!(!output.contains("line 10"));

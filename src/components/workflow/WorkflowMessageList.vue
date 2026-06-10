@@ -669,7 +669,7 @@
     <div v-if="queuedMessages.length > 0" class="queued-list">
       <div v-for="item in queuedMessages" :key="item.id" class="queued-item">
         <div class="queued-item-main">
-          <cs name="clock" size="12px" class="queued-icon" />
+          <cs :name="item.icon || 'clock'" size="12px" class="queued-icon" />
           <div class="queued-content">
             <span v-if="item.content" class="queued-text">{{ item.content }}</span>
             <div v-if="item.attachments?.length > 0" class="queued-attachments">
@@ -692,6 +692,7 @@
           </div>
         </div>
         <button
+          v-if="canRemoveQueuedMessage(item)"
           type="button"
           class="queued-remove"
           @click="$emit('remove-queued-message', item.id)">
@@ -873,6 +874,8 @@ const isNearBottom = el => {
   if (!el) return true
   return el.scrollHeight - el.scrollTop - el.clientHeight <= AUTO_SCROLL_THRESHOLD
 }
+
+const canRemoveQueuedMessage = item => item?.removable !== false
 
 const handleScroll = () => {
   shouldAutoScroll.value = isNearBottom(messagesRef.value)
