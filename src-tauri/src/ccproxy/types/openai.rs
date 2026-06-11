@@ -149,12 +149,24 @@ pub struct OpenAIUsage {
     pub prompt_tokens_details: Option<PromptTokensDetails>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens_details: Option<CompletionTokensDetails>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_hit_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_content_tokens: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct PromptTokensDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_content_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_hit_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_tokens: Option<u64>,
 }
@@ -163,6 +175,26 @@ pub struct PromptTokensDetails {
 pub struct CompletionTokensDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u64>,
+}
+
+impl PromptTokensDetails {
+    pub fn cached_tokens_value(&self) -> Option<u64> {
+        self.cached_tokens
+            .or(self.cache_read_input_tokens)
+            .or(self.cached_content_tokens)
+            .or(self.prompt_cache_hit_tokens)
+    }
+}
+
+impl OpenAIUsage {
+    pub fn cached_tokens_value(&self) -> Option<u64> {
+        self.prompt_tokens_details
+            .as_ref()
+            .and_then(PromptTokensDetails::cached_tokens_value)
+            .or(self.cache_read_input_tokens)
+            .or(self.cached_content_tokens)
+            .or(self.prompt_cache_hit_tokens)
+    }
 }
 
 // For streaming

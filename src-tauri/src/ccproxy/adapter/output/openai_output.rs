@@ -130,6 +130,9 @@ impl OutputAdapter for OpenAIOutputAdapter {
                     .or(response.usage.cached_content_tokens)
                     .map(|t| PromptTokensDetails {
                         cached_tokens: Some(t),
+                        cache_read_input_tokens: None,
+                        cached_content_tokens: None,
+                        prompt_cache_hit_tokens: None,
                         audio_tokens: None,
                     }),
                 completion_tokens_details: response.usage.thoughts_tokens.map(|t| {

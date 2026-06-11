@@ -1,5 +1,6 @@
 use crate::ccproxy::adapter::unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart};
 use crate::ccproxy::helper::{get_tool_id, send_with_retry, RetryConfig};
+use crate::ccproxy::openai::OpenAIUsage;
 use crate::ccproxy::utils::token_estimator::estimate_tokens;
 use crate::ccproxy::{
     errors::{CCProxyError, ProxyResult},
@@ -25,7 +26,7 @@ pub async fn handle_direct_forward(
     proxy_model: ProxyModel,
     is_streaming_request: bool,
     main_store_arc: Arc<std::sync::RwLock<MainStore>>,
-    log_to_file: bool,
+    log_response_to_file: bool,
 ) -> ProxyResult<Response> {
     let message_id = crate::ccproxy::helper::get_msg_id();
     let provider_name = proxy_model.provider.clone();
@@ -130,8 +131,23 @@ pub async fn handle_direct_forward(
     };
     let retry_config = RetryConfig::from_settings(max_retries);
 
+    // Persist direct-forward backend failures even when body logging is disabled so upstream
+    // incidents remain visible in ccproxy.log.
+    let log_direct_backend_error = |message: &str| {
+        log::info!(target: "ccproxy_logger", "[ERROR][Direct] protocol: {}, model: {}, provider: {}, url: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, &proxy_model.provider, &full_url, message);
+    };
+
     // Send request with retry support for 429 status code
-    let target_response = send_with_retry(onward_request_builder, &retry_config).await?;
+    let target_response = match send_with_retry(onward_request_builder, &retry_config).await {
+        Ok(response) => response,
+        Err(error) => {
+            log_direct_backend_error(&format!(
+                "Request failed before receiving a response: {}",
+                error
+            ));
+            return Err(error);
+        }
+    };
 
     // Handle response
     let status_code = target_response.status();
@@ -172,9 +188,10 @@ pub async fn handle_direct_forward(
             });
         }
 
-        if log_to_file {
-            log::info!(target: "ccproxy_logger", "[ERROR] {} Response Error, model: {}, Status: {}, Body: \n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, status_code, error_msg);
-        }
+        log_direct_backend_error(&format!(
+            "Response status: {}\nBody:\n{}",
+            status_code, error_msg
+        ));
 
         log::warn!(
             "Backend API error (alias: '{}', model: '{}', provider: '{}'): url={}, status_code={}, response={}",
@@ -236,7 +253,7 @@ pub async fn handle_direct_forward(
                     log_recorder.clone(),
                     &chat_protocol,
                     sse_status.clone(),
-                    log_to_file,
+                    log_response_to_file,
                 );
 
                 inject_openai_estimated_usage_before_done(
@@ -262,7 +279,7 @@ pub async fn handle_direct_forward(
             .await
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
-        if log_to_file {
+        if log_response_to_file {
             log::info!(target: "ccproxy_logger", "[Direct] {} Response Body: {}\n================\n\n",proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
         }
 
@@ -654,6 +671,34 @@ fn chunk_parser_and_log(
                             {
                                 recorder.output_tokens = Some(completion_tokens);
                             }
+                            if let Ok(parsed_usage) =
+                                serde_json::from_value::<OpenAIUsage>(usage.clone())
+                            {
+                                recorder.cache_tokens = parsed_usage.cached_tokens_value();
+                            } else {
+                                recorder.cache_tokens = usage
+                                    .get("prompt_tokens_details")
+                                    .and_then(|d| {
+                                        d.get("cached_tokens")
+                                            .or_else(|| d.get("cache_read_input_tokens"))
+                                            .or_else(|| d.get("cached_content_tokens"))
+                                            .or_else(|| d.get("prompt_cache_hit_tokens"))
+                                    })
+                                    .and_then(|t| t.as_u64())
+                                    .or_else(|| {
+                                        usage
+                                            .get("cache_read_input_tokens")
+                                            .and_then(|t| t.as_u64())
+                                    })
+                                    .or_else(|| {
+                                        usage.get("cached_content_tokens").and_then(|t| t.as_u64())
+                                    })
+                                    .or_else(|| {
+                                        usage
+                                            .get("prompt_cache_hit_tokens")
+                                            .and_then(|t| t.as_u64())
+                                    });
+                            }
                         }
                     }
                     ChatProtocol::Claude => {
@@ -959,19 +1004,47 @@ fn chunk_parser_and_log(
 fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64, i64) {
     match protocol {
         ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
-            let usage = value.get("usage");
-            let input = usage
-                .and_then(|u| u.get("prompt_tokens"))
+            let usage_value = value.get("usage").cloned().unwrap_or(Value::Null);
+            if let Ok(usage) = serde_json::from_value::<OpenAIUsage>(usage_value.clone()) {
+                return (
+                    usage.prompt_tokens as i64,
+                    usage.completion_tokens as i64,
+                    usage.cached_tokens_value().unwrap_or(0) as i64,
+                );
+            }
+
+            let input = usage_value
+                .get("prompt_tokens")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            let output = usage
-                .and_then(|u| u.get("completion_tokens"))
+            let output = usage_value
+                .get("completion_tokens")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            let cache = usage
-                .and_then(|u| u.get("prompt_tokens_details"))
-                .and_then(|d| d.get("cached_tokens"))
+            let cache = usage_value
+                .get("prompt_tokens_details")
+                .and_then(|d| {
+                    d.get("cached_tokens")
+                        .or_else(|| d.get("cache_read_input_tokens"))
+                        .or_else(|| d.get("cached_content_tokens"))
+                        .or_else(|| d.get("prompt_cache_hit_tokens"))
+                })
                 .and_then(|v| v.as_i64())
+                .or_else(|| {
+                    usage_value
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_i64())
+                })
+                .or_else(|| {
+                    usage_value
+                        .get("cached_content_tokens")
+                        .and_then(|v| v.as_i64())
+                })
+                .or_else(|| {
+                    usage_value
+                        .get("prompt_cache_hit_tokens")
+                        .and_then(|v| v.as_i64())
+                })
                 .unwrap_or(0);
             (input, output, cache)
         }

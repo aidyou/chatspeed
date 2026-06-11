@@ -9,6 +9,11 @@
       :style="panelStyle">
       <!-- Drag handle/header -->
       <div class="panel-header upperLayer" @mousedown="startDrag" @touchstart="startDrag">
+        <div
+          v-if="isCollapsed"
+          class="collapsed-context-bar"
+          :class="`is-${contextUsageStatusClass}`"
+          :style="collapsedContextBarStyle"></div>
         <div class="header-left">
           <cs name="list" size="14px" class="drag-icon" />
           <span v-if="!isCollapsed" class="header-title">{{
@@ -202,7 +207,7 @@
                 </div>
                 <span class="child-task" :title="child.task">{{ child.task }}</span>
                 <div class="child-metrics">
-                <span class="child-metric-label">{{
+                  <span class="child-metric-label">{{
                     translateOrFallback('workflow.statusPanel.latestDynamic', 'Latest')
                   }}</span>
                   <span class="child-summary" :title="child.summary">{{ child.summary }}</span>
@@ -260,13 +265,8 @@
                 class="refresh-btn"
                 :disabled="efficiencyLoading"
                 @click="refreshEfficiencyReport">
-                <cs
-                  name="refresh"
-                  size="12px"
-                  :class="{ 'cs-spin': efficiencyLoading }" />
-                <span>{{
-                  translateOrFallback('workflow.statusPanel.refresh', 'Refresh')
-                }}</span>
+                <cs name="refresh" size="12px" :class="{ 'cs-spin': efficiencyLoading }" />
+                <span>{{ translateOrFallback('workflow.statusPanel.refresh', 'Refresh') }}</span>
               </button>
             </div>
           </div>
@@ -284,7 +284,9 @@
             <div class="section">
               <div class="section-header">
                 <cs name="agent" size="14px" />
-                <span>{{ translateOrFallback('workflow.statusPanel.mainAgent', 'Main Agent') }}</span>
+                <span>{{
+                  translateOrFallback('workflow.statusPanel.mainAgent', 'Main Agent')
+                }}</span>
               </div>
               <div class="efficiency-card">
                 <div class="efficiency-card-header">
@@ -296,11 +298,15 @@
                   }}</span>
                 </div>
                 <div class="score-row">
-                  <div class="score-pill" :class="scoreClass(efficiencyMainAgent.metrics.convergenceScore)">
+                  <div
+                    class="score-pill"
+                    :class="scoreClass(efficiencyMainAgent.metrics.convergenceScore)">
                     <span class="score-label">{{
                       translateOrFallback('workflow.statusPanel.convergenceScore', 'Convergence')
                     }}</span>
-                    <span class="score-value">{{ efficiencyMainAgent.metrics.convergenceScore }}</span>
+                    <span class="score-value">{{
+                      efficiencyMainAgent.metrics.convergenceScore
+                    }}</span>
                   </div>
                   <div
                     class="score-pill"
@@ -308,7 +314,9 @@
                     <span class="score-label">{{
                       translateOrFallback('workflow.statusPanel.executionScore', 'Execution')
                     }}</span>
-                    <span class="score-value">{{ efficiencyMainAgent.metrics.executionScore }}</span>
+                    <span class="score-value">{{
+                      efficiencyMainAgent.metrics.executionScore
+                    }}</span>
                   </div>
                 </div>
                 <div class="score-hint">
@@ -379,7 +387,9 @@
             <div class="section">
               <div class="section-header">
                 <cs name="agent" size="14px" />
-                <span>{{ translateOrFallback('workflow.statusPanel.subAgents', 'Sub Agents') }}</span>
+                <span>{{
+                  translateOrFallback('workflow.statusPanel.subAgents', 'Sub Agents')
+                }}</span>
                 <span class="section-meta">{{ efficiencySubAgents.length }}</span>
               </div>
               <div v-if="efficiencySubAgents.length === 0" class="empty-state compact">
@@ -394,7 +404,9 @@
                   :key="agent.sessionId"
                   class="efficiency-agent-item">
                   <div class="efficiency-card-header">
-                    <span class="efficiency-card-title">{{ getEfficiencySessionTitle(agent) }}</span>
+                    <span class="efficiency-card-title">{{
+                      getEfficiencySessionTitle(agent)
+                    }}</span>
                     <span class="efficiency-status" :class="agent.status">{{ agent.status }}</span>
                   </div>
                   <div class="score-row compact">
@@ -402,11 +414,9 @@
                       <span class="score-label">{{
                         translateOrFallback('workflow.statusPanel.convergenceScore', 'Convergence')
                       }}</span>
-                        <span class="score-value">{{ agent.metrics.convergenceScore }}</span>
+                      <span class="score-value">{{ agent.metrics.convergenceScore }}</span>
                     </div>
-                    <div
-                      class="score-pill"
-                      :class="scoreClass(agent.metrics.executionScore)">
+                    <div class="score-pill" :class="scoreClass(agent.metrics.executionScore)">
                       <span class="score-label">{{
                         translateOrFallback('workflow.statusPanel.executionScore', 'Execution')
                       }}</span>
@@ -469,11 +479,24 @@
       class="status-panel-trigger"
       :style="triggerStyle"
       @click="onTriggerClick">
-      <div
-        class="trigger-drag-area"
-        @mousedown.stop.prevent="startTriggerDrag"
-        @touchstart.stop.prevent="startTriggerDrag"></div>
-      <cs name="list" size="18px" />
+      <div class="trigger-circle">
+        <svg class="trigger-ring" viewBox="0 0 44 44" aria-hidden="true">
+          <circle class="trigger-ring-track" cx="22" cy="22" r="19" />
+          <circle
+            class="trigger-ring-progress"
+            :class="`is-${contextUsageStatusClass}`"
+            cx="22"
+            cy="22"
+            r="19"
+            :style="triggerRingProgressStyle" />
+        </svg>
+        <div class="trigger-surface"></div>
+        <div
+          class="trigger-drag-area"
+          @mousedown.stop.prevent="startTriggerDrag"
+          @touchstart.stop.prevent="startTriggerDrag"></div>
+        <cs name="list" size="18px" />
+      </div>
       <span v-if="progressPercent > 0" class="trigger-badge">{{ progressPercent }}%</span>
     </div>
   </Teleport>
@@ -921,7 +944,10 @@ const recentOperations = computed(() => {
 
       return {
         name: shortName,
-        fullText: normalizeToolDisplayText(removeSystemReminder(meta.summary || name), displayRoots.value),
+        fullText: normalizeToolDisplayText(
+          removeSystemReminder(meta.summary || name),
+          displayRoots.value
+        ),
         icon,
         toolType,
         status,
@@ -937,7 +963,8 @@ const totalToolCalls = computed(() => {
 const extractSubAgentIdFromMessage = message => {
   const meta = message?.metadata || {}
   if (meta.sub_agent_id || meta.subAgentId) return meta.sub_agent_id || meta.subAgentId
-  if (meta.data?.sub_agent_id || meta.data?.subAgentId) return meta.data.sub_agent_id || meta.data.subAgentId
+  if (meta.data?.sub_agent_id || meta.data?.subAgentId)
+    return meta.data.sub_agent_id || meta.data.subAgentId
   if ((meta.tool_name || '').toLowerCase() !== 'sub_agent_run') return null
 
   try {
@@ -1062,15 +1089,24 @@ const childAgentSummariesAll = computed(() => {
       ...(snapshotProgress || {}),
       ...(eventProgress || {})
     }
-    let status = (ctx.waitingOnSubAgentId || ctx.waiting_on_sub_agent_id) === id ? 'running' : 'pending'
+    let status =
+      (ctx.waitingOnSubAgentId || ctx.waiting_on_sub_agent_id) === id ? 'running' : 'pending'
     let summary = t('workflow.statusPanel.childRunning') || 'Running'
     let toolCalls = 0
-    const workflowAgentName = childWorkflow?.agentName
-      || childWorkflow?.agent_name
-      || agentStore.agents.find(agent => agent.id === (childWorkflow?.agentId || childWorkflow?.agent_id))?.name
-      || null
+    const workflowAgentName =
+      childWorkflow?.agentName ||
+      childWorkflow?.agent_name ||
+      agentStore.agents.find(
+        agent => agent.id === (childWorkflow?.agentId || childWorkflow?.agent_id)
+      )?.name ||
+      null
     let agentName = progress.agentName || progress.agent_name || workflowAgentName || 'Sub-agent'
-    let task = progress.task || childWorkflow?.userQuery || childWorkflow?.user_query || childWorkflow?.title || id
+    let task =
+      progress.task ||
+      childWorkflow?.userQuery ||
+      childWorkflow?.user_query ||
+      childWorkflow?.title ||
+      id
 
     if (last) {
       const meta = last.metadata || {}
@@ -1097,10 +1133,7 @@ const childAgentSummariesAll = computed(() => {
         childWorkflow?.title ||
         task
       const executionStatus =
-        meta.execution_status ||
-        meta.sub_agent_status ||
-        observationData.execution_status ||
-        ''
+        meta.execution_status || meta.sub_agent_status || observationData.execution_status || ''
       if (
         last.isError ||
         meta.is_error ||
@@ -1331,6 +1364,21 @@ const triggerStyle = computed(() => {
     top: `${position.value.y}px`,
     right: 'auto',
     bottom: 'auto'
+  }
+})
+
+const collapsedContextBarStyle = computed(() => ({
+  width: `${contextUsagePercent.value}%`
+}))
+
+const TRIGGER_RING_CIRCUMFERENCE = 2 * Math.PI * 19
+
+const triggerRingProgressStyle = computed(() => {
+  const progress = Math.max(0, Math.min(contextUsagePercent.value, 100))
+  const dashOffset = TRIGGER_RING_CIRCUMFERENCE * (1 - progress / 100)
+  return {
+    strokeDasharray: `${TRIGGER_RING_CIRCUMFERENCE}`,
+    strokeDashoffset: `${dashOffset}`
   }
 })
 
@@ -1627,7 +1675,9 @@ const restorePosition = () => {
 const constrainPosition = () => {
   if (!isPositioned.value) return
   const mode = getPanelMode()
-  const basePosition = hasCustomPositionForMode(mode) ? position.value : defaultPositionForMode(mode)
+  const basePosition = hasCustomPositionForMode(mode)
+    ? position.value
+    : defaultPositionForMode(mode)
   position.value = constrainPoint(basePosition, mode)
 }
 
@@ -1704,16 +1754,17 @@ watch(
 )
 
 watch(
-  () => [
-    isCollapsed.value,
-    isVisible.value,
-    activeTab.value,
-    todoList.value.length,
-    displayedTodoList.value.length,
-    recentOperations.value.length,
-    childAgentSummaries.value.length,
-    modelStatusRows.value.length
-  ].join('|'),
+  () =>
+    [
+      isCollapsed.value,
+      isVisible.value,
+      activeTab.value,
+      todoList.value.length,
+      displayedTodoList.value.length,
+      recentOperations.value.length,
+      childAgentSummaries.value.length,
+      modelStatusRows.value.length
+    ].join('|'),
   () => {
     if (!isVisible.value || !hasData.value) return
     nextTick(() => {
@@ -1765,6 +1816,7 @@ watch(
 }
 
 .panel-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1780,7 +1832,34 @@ watch(
     cursor: grabbing;
   }
 
+  .collapsed-context-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    pointer-events: none;
+    transition:
+      width 0.25s ease,
+      background-color 0.25s ease;
+
+    &.is-start,
+    &.is-medium {
+      background: rgba(103, 194, 58, 0.2);
+    }
+
+    &.is-good {
+      background: rgba(230, 162, 60, 0.2);
+    }
+
+    &.is-complete {
+      background: rgba(245, 108, 108, 0.2);
+    }
+  }
+
   .header-left {
+    position: relative;
+    z-index: 1;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1798,6 +1877,8 @@ watch(
   }
 
   .header-actions {
+    position: relative;
+    z-index: 1;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -2635,21 +2716,88 @@ watch(
   top: 200px;
   width: 44px;
   height: 44px;
-  background: var(--cs-bg-color);
-  border: 1px solid var(--cs-border-color);
-  border-radius: var(--cs-border-radius-round);
-  box-shadow: var(--el-box-shadow-light);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: visible;
   cursor: pointer;
   z-index: 1000;
-  color: var(--el-color-primary);
+  transition: transform 0.2s ease;
+
+  .trigger-circle {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--cs-border-radius-round);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--el-color-primary);
+    filter: drop-shadow(0 6px 12px rgba(15, 23, 42, 0.12));
+  }
 
   .trigger-drag-area {
     position: absolute;
     inset: 0;
     cursor: grab;
+    z-index: 4;
+  }
+
+  .trigger-ring {
+    position: absolute;
+    inset: 0;
+    width: 44px;
+    height: 44px;
+    pointer-events: none;
+    z-index: 1;
+    transform: rotate(-90deg);
+    overflow: visible;
+  }
+
+  .trigger-ring-track,
+  .trigger-ring-progress {
+    fill: none;
+    stroke-width: 4;
+  }
+
+  .trigger-ring-track {
+    stroke: rgba(15, 23, 42, 0.08);
+  }
+
+  .trigger-ring-progress {
+    stroke-linecap: round;
+    transition:
+      stroke 0.25s ease,
+      stroke-dashoffset 0.25s ease;
+
+    &.is-start,
+    &.is-medium {
+      stroke: rgba(103, 194, 58, 0.42);
+    }
+
+    &.is-good {
+      stroke: rgba(230, 162, 60, 0.42);
+    }
+
+    &.is-complete {
+      stroke: rgba(245, 108, 108, 0.42);
+    }
+  }
+
+  .trigger-surface {
+    position: absolute;
+    inset: 5px;
+    border-radius: var(--cs-border-radius-round);
+    background: var(--cs-bg-color);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    z-index: 2;
+  }
+
+  .trigger-circle > .cs,
+  .trigger-badge {
+    position: relative;
+  }
+
+  .trigger-circle > .cs {
+    z-index: 3;
   }
 
   &:active .trigger-drag-area {
@@ -2657,9 +2805,11 @@ watch(
   }
 
   &:hover {
-    box-shadow: var(--el-box-shadow-dark);
     transform: scale(1.05);
-    background: var(--el-color-primary-light-9);
+
+    .trigger-circle {
+      filter: drop-shadow(0 8px 16px rgba(15, 23, 42, 0.18));
+    }
   }
 
   .trigger-badge {
@@ -2672,8 +2822,10 @@ watch(
     font-weight: 600;
     padding: 2px 5px;
     border-radius: 10px;
+    border: 2px solid var(--cs-bg-color);
     min-width: 20px;
     text-align: center;
+    z-index: 5;
   }
 }
 

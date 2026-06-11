@@ -49,6 +49,23 @@ export function useWorkflowMessages() {
     const tailRewindKind = String(workflowStore.currentWorkflow?.tailRewindKind || '').trim()
     const hasAskUserTail = askUserTailKinds.has(tailRewindKind)
 
+    const isCriticalErrorText = content => /^critical error:/i.test(String(content || '').trim())
+
+    const isMessageError = message => {
+      const meta = message?.metadata || {}
+      const content = removeSystemReminder(message?.message || '')
+      return Boolean(
+        message?.isError ||
+          message?.is_error ||
+          meta?.is_error ||
+          message?.errorType ||
+          message?.error_type ||
+          meta?.error_type ||
+          meta?.errorType ||
+          isCriticalErrorText(content)
+      )
+    }
+
     const extractSubAgentTask = content => {
       if (!content || typeof content !== 'string') return ''
       const patterns = [
@@ -318,27 +335,22 @@ export function useWorkflowMessages() {
         ) {
           const isRejected = executionStatus === 'rejected'
           const isError =
-            executionStatus === 'failed' ||
-            executionStatus === 'interrupted' ||
-            m.isError ||
-            m.is_error ||
-            meta.is_error ||
-            false
+            executionStatus === 'failed' || executionStatus === 'interrupted' || isMessageError(m)
           toolStates.set(id, { isFinal: true, isRejected, hasError: isError })
         } else if (approvalStatus === 'rejected') {
           // Final states
-          const isError = m.isError || m.is_error || meta.is_error || false
+          const isError = isMessageError(m)
           toolStates.set(id, { isFinal: true, isRejected: true, hasError: isError })
         } else if (
           approvalStatus === 'approved' &&
           executionStatus !== 'approval_submitted' &&
           executionStatus !== 'running'
         ) {
-          const isError = m.isError || m.is_error || meta.is_error || false
+          const isError = isMessageError(m)
           toolStates.set(id, { isFinal: true, isRejected: false, hasError: isError })
         } else if (m.role === 'tool') {
           // Fallback: normal tool execution result (no approval flow)
-          const isError = m.isError || m.is_error || meta.is_error || false
+          const isError = isMessageError(m)
           toolStates.set(id, { isFinal: true, isRejected: false, hasError: isError })
         }
       }
@@ -490,6 +502,7 @@ export function useWorkflowMessages() {
         return {
           ...message,
           displayId,
+          isError: isMessageError(message),
           toolDisplay,
           subAgentCard: buildSubAgentCard(message),
           pendingToolCalls,

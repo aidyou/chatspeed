@@ -968,12 +968,12 @@ impl ToolDefinition for TaskTool {
                     "child_agent_name": {
                         "type": "string",
                         "enum": child_agent_names,
-                        "description": "Preferred selector. Use the exact displayed child agent name instead of manually copying an opaque id."
+                        "description": "Preferred selector. Use the exact displayed child agent name instead of manually copying an opaque id. Provide either child_agent_name or child_agent_id."
                     },
                     "child_agent_id": {
                         "type": "string",
                         "enum": child_agent_ids,
-                        "description": "Fallback selector. Use only if child_agent_name is unavailable."
+                        "description": "Fallback selector. Use only if child_agent_name is unavailable. Provide either child_agent_name or child_agent_id."
                     },
                     "execution_mode": {
                         "type": "string",
@@ -982,11 +982,7 @@ impl ToolDefinition for TaskTool {
                         "description": "Execution mode for the child agent. Use 'call' if you must wait for the child to finish before continuing; the parent workflow will pause and resume with the final child result. Use 'background' if you can continue other work in parallel; the system will report completion automatically, and you may inspect the result later with sub_agent_output when needed."
                     }
                 },
-                "required": ["description", "prompt"],
-                "anyOf": [
-                    { "required": ["child_agent_name"] },
-                    { "required": ["child_agent_id"] }
-                ]
+                "required": ["description", "prompt"]
             }),
             output_schema: None,
             disabled: false,

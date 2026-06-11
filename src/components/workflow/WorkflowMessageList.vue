@@ -551,8 +551,19 @@
                 {{ sanitizeReasoningContent(message.reasoning || message.message) }}
               </div>
             </div>
+            <el-alert
+              v-if="!isContextSnapshotMessage(message) && shouldShowErrorAlert(message)"
+              type="error"
+              :closable="false"
+              show-icon
+              class="workflow-error-alert">
+              <template #title>{{ getErrorAlertTitle(message) }}</template>
+              <div class="workflow-error-alert__body">
+                <MarkdownSimple :content="getErrorAlertContent(message)" />
+              </div>
+            </el-alert>
             <MarkdownSimple
-              v-if="!isContextSnapshotMessage(message) && getParsedMessage(message).content"
+              v-else-if="!isContextSnapshotMessage(message) && getParsedMessage(message).content"
               :content="getParsedMessage(message).content" />
 
             <!-- Tool Call Indicators SECOND (Only pending ones) -->
@@ -1607,6 +1618,40 @@ const isExplorationGroupReasoningExpanded = (message, groupIndex) =>
 
 const sanitizeReasoningContent = content => String(content || '').replace(/^\s*<think>\s*/i, '')
 
+const shouldShowErrorAlert = message => {
+  if (!message?.isError) return false
+  if (message?.role === 'tool') return false
+  return !!getErrorAlertContent(message)
+}
+
+const getErrorAlertTitle = message => {
+  const rawContent = props.removeSystemReminder(message?.message || '').trim()
+  if (/^critical error:/i.test(rawContent)) {
+    return 'Critical Error'
+  }
+
+  const rawType = String(
+    message?.metadata?.error_type || message?.metadata?.errorType || message?.errorType || ''
+  ).trim()
+  if (rawType) {
+    return rawType.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+  }
+
+  return t('common.error') || 'Error'
+}
+
+const getErrorAlertContent = message => {
+  const parsed = props.getParsedMessage(message)
+  const rawContent = String(
+    parsed?.content || props.removeSystemReminder(message?.message || '')
+  ).trim()
+
+  return rawContent
+    .replace(/^critical error:\s*/i, '')
+    .replace(/^\[?error\]?:\s*/i, '')
+    .trim()
+}
+
 const getExplorationToolExpandId = (message, groupIndex, toolIndex) =>
   `${message?.displayId || message?.id || 'exploration'}:group_tool:${groupIndex}:${toolIndex}`
 
@@ -2062,6 +2107,21 @@ defineExpose({
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid var(--cs-border-color);
+}
+
+.workflow-error-alert {
+  margin-top: 8px;
+  border: 1px solid var(--el-color-danger-light-5);
+
+  :deep(.el-alert__content) {
+    width: 100%;
+  }
+}
+
+.workflow-error-alert__body {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .user-message-wrap {

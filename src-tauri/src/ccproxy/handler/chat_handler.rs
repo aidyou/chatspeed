@@ -325,7 +325,7 @@ pub async fn handle_chat_completion(
             proxy_model,
             is_streaming,
             main_store_arc,
-            log_org_to_file,
+            log_proxy_to_file,
         )
         .await?;
         return Ok(result.into_response());
