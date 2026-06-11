@@ -230,10 +230,15 @@ const diffLines = computed(() => {
 .file-preview-diff {
   border: 1px solid var(--cs-border-color);
   border-radius: var(--cs-border-radius-md);
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: var(--cs-bg-color);
+  padding-top: var(--cs-space-sm);
+  padding-bottom: var(--cs-space-sm);
 
   .diff-text {
+    width: max-content;
+    min-width: 100%;
     font-family: var(--cs-font-family-mono, monospace);
     font-size: 13px;
     line-height: 1.6;
@@ -241,7 +246,7 @@ const diffLines = computed(() => {
 
   .diff-line {
     display: grid;
-    grid-template-columns: 18px 56px 56px 12px minmax(0, 1fr);
+    grid-template-columns: 18px 56px 56px 12px max-content;
     align-items: stretch;
     min-width: 100%;
 
@@ -283,7 +288,8 @@ const diffLines = computed(() => {
   .diff-content {
     display: block;
     white-space: pre;
-    overflow-x: auto;
+    overflow: visible;
+    min-width: max-content;
     padding: 0 12px;
   }
 

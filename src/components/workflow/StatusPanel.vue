@@ -479,24 +479,15 @@
       class="status-panel-trigger"
       :style="triggerStyle"
       @click="onTriggerClick">
-      <div class="trigger-circle">
-        <svg class="trigger-ring" viewBox="0 0 44 44" aria-hidden="true">
-          <circle class="trigger-ring-track" cx="22" cy="22" r="19" />
-          <circle
-            class="trigger-ring-progress"
-            :class="`is-${contextUsageStatusClass}`"
-            cx="22"
-            cy="22"
-            r="19"
-            :style="triggerRingProgressStyle" />
-        </svg>
-        <div class="trigger-surface"></div>
-        <div
-          class="trigger-drag-area"
-          @mousedown.stop.prevent="startTriggerDrag"
-          @touchstart.stop.prevent="startTriggerDrag"></div>
-        <cs name="list" size="18px" />
-      </div>
+      <div
+        class="trigger-context-ring"
+        :class="`is-${contextUsageStatusClass}`"
+        :style="triggerContextRingStyle"></div>
+      <div
+        class="trigger-drag-area"
+        @mousedown.stop.prevent="startTriggerDrag"
+        @touchstart.stop.prevent="startTriggerDrag"></div>
+      <cs name="list" size="18px" />
       <span v-if="progressPercent > 0" class="trigger-badge">{{ progressPercent }}%</span>
     </div>
   </Teleport>
@@ -1371,14 +1362,19 @@ const collapsedContextBarStyle = computed(() => ({
   width: `${contextUsagePercent.value}%`
 }))
 
-const TRIGGER_RING_CIRCUMFERENCE = 2 * Math.PI * 19
+const triggerContextColorMap = {
+  start: 'rgba(103, 194, 58, 0.6)',
+  medium: 'rgba(103, 194, 58, 0.6)',
+  good: 'rgba(230, 162, 60, 0.58)',
+  complete: 'rgba(245, 108, 108, 0.58)'
+}
 
-const triggerRingProgressStyle = computed(() => {
+const triggerContextRingStyle = computed(() => {
   const progress = Math.max(0, Math.min(contextUsagePercent.value, 100))
-  const dashOffset = TRIGGER_RING_CIRCUMFERENCE * (1 - progress / 100)
+  const color =
+    triggerContextColorMap[contextUsageStatusClass.value] || triggerContextColorMap.start
   return {
-    strokeDasharray: `${TRIGGER_RING_CIRCUMFERENCE}`,
-    strokeDashoffset: `${dashOffset}`
+    background: `conic-gradient(from 180deg, ${color} 0 ${progress}%, rgba(15, 23, 42, 0.14) ${progress}% 100%)`
   }
 })
 
@@ -2716,87 +2712,49 @@ watch(
   top: 200px;
   width: 44px;
   height: 44px;
+  background: var(--cs-bg-color);
+  border: 1px solid var(--cs-border-color);
+  border-radius: var(--cs-border-radius-round);
+  box-shadow: var(--el-box-shadow-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: visible;
   cursor: pointer;
   z-index: 1000;
+  color: var(--el-color-primary);
   transition: transform 0.2s ease;
-
-  .trigger-circle {
-    position: relative;
-    width: 44px;
-    height: 44px;
-    border-radius: var(--cs-border-radius-round);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--el-color-primary);
-    filter: drop-shadow(0 6px 12px rgba(15, 23, 42, 0.12));
-  }
 
   .trigger-drag-area {
     position: absolute;
     inset: 0;
     cursor: grab;
-    z-index: 4;
+    z-index: 3;
   }
 
-  .trigger-ring {
+  .trigger-context-ring {
     position: absolute;
-    inset: 0;
-    width: 44px;
-    height: 44px;
+    inset: 3px;
+    border-radius: inherit;
     pointer-events: none;
     z-index: 1;
-    transform: rotate(-90deg);
-    overflow: visible;
-  }
-
-  .trigger-ring-track,
-  .trigger-ring-progress {
-    fill: none;
-    stroke-width: 4;
-  }
-
-  .trigger-ring-track {
-    stroke: rgba(15, 23, 42, 0.08);
-  }
-
-  .trigger-ring-progress {
-    stroke-linecap: round;
     transition:
-      stroke 0.25s ease,
-      stroke-dashoffset 0.25s ease;
-
-    &.is-start,
-    &.is-medium {
-      stroke: rgba(103, 194, 58, 0.42);
-    }
-
-    &.is-good {
-      stroke: rgba(230, 162, 60, 0.42);
-    }
-
-    &.is-complete {
-      stroke: rgba(245, 108, 108, 0.42);
-    }
+      background 0.25s ease,
+      opacity 0.25s ease;
+    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+    -webkit-mask: radial-gradient(
+      farthest-side,
+      transparent calc(100% - 3px),
+      #000 calc(100% - 2px)
+    );
   }
 
-  .trigger-surface {
-    position: absolute;
-    inset: 5px;
-    border-radius: var(--cs-border-radius-round);
-    background: var(--cs-bg-color);
-    border: 1px solid rgba(255, 255, 255, 0.7);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
-    z-index: 2;
-  }
-
-  .trigger-circle > .cs,
+  > .cs,
   .trigger-badge {
     position: relative;
   }
 
-  .trigger-circle > .cs {
+  > .cs {
     z-index: 3;
   }
 
@@ -2805,11 +2763,9 @@ watch(
   }
 
   &:hover {
+    box-shadow: var(--el-box-shadow-dark);
     transform: scale(1.05);
-
-    .trigger-circle {
-      filter: drop-shadow(0 8px 16px rgba(15, 23, 42, 0.18));
-    }
+    background: var(--el-color-primary-light-9);
   }
 
   .trigger-badge {
