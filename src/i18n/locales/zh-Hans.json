@@ -627,6 +627,7 @@
         "autoRefresh": "自动刷新",
         "backendModel": "后端模型",
         "cacheTokens": "缓存",
+        "cacheHitRate": "缓存命中率",
         "clientModel": "模型别名",
         "count": "次数",
         "dailyRequestsTitle": "每日请求量与错误率趋势",

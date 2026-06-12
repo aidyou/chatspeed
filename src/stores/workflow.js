@@ -941,6 +941,36 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }));
   };
 
+  const finalizeToolExecution = (toolId, success, result, errorType) => {
+    if (!toolId) return;
+    const existing = currentTaskLedger.value?.tools.get(toolId);
+    const statusSummary = success
+      ? getToolStatusSummary(existing?.toolName, 'success', result || 'Completed')
+      : getToolStatusSummary(existing?.toolName, 'failed', errorType || result || 'Failed');
+
+    if (taskLedgerEnabled.value) {
+      upsertToolViewState({
+        toolCallId: toolId,
+        status: success ? 'final_success' : 'final_error',
+        approvalStatus: 'approved',
+        result,
+        errorType,
+        summary: statusSummary
+      });
+    }
+
+    patchToolMessage(toolId, (existingMessage, meta) => ({
+      ...existingMessage,
+      metadata: {
+        ...meta,
+        approval_status: 'approved',
+        execution_status: success ? 'completed' : 'failed',
+        error_type: success ? meta.error_type : (errorType || meta.error_type),
+        summary: statusSummary
+      }
+    }));
+  };
+
   const markToolPendingApproval = (toolId) => {
     if (!toolId) return;
     const existing = currentTaskLedger.value?.tools.get(toolId);
@@ -1665,6 +1695,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     markToolApprovedRunning,
     markToolApprovalSubmitted,
     markToolRejected,
+    finalizeToolExecution,
     markToolPendingApproval,
     markApprovalSubmitted,
     clearApprovalSubmission,

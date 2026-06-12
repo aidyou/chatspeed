@@ -26,6 +26,7 @@ pub async fn handle_direct_forward(
     proxy_model: ProxyModel,
     is_streaming_request: bool,
     main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+    _log_origin_request_to_file: bool,
     log_response_to_file: bool,
 ) -> ProxyResult<Response> {
     let message_id = crate::ccproxy::helper::get_msg_id();
@@ -117,6 +118,15 @@ pub async fn handle_direct_forward(
     let modified_body = serde_json::to_vec(&body_json).map_err(|e| {
         CCProxyError::InternalError(format!("Failed to serialize modified body: {}", e))
     })?;
+
+    if log_response_to_file {
+        log::info!(
+            target: "ccproxy_logger",
+            "[Direct] {} Final Request Body: \n{}\n----------------\n",
+            proxy_model.chat_protocol.to_string(),
+            serde_json::to_string_pretty(&body_json).unwrap_or_default()
+        );
+    }
 
     let onward_request_builder = http_client
         .post(&full_url)
@@ -532,6 +542,48 @@ fn inject_openai_estimated_usage_before_done(
         .replace("data: [DONE]", &format!("{}data: [DONE]", usage_event))
         .replace("data:[DONE]", &format!("{}data:[DONE]", usage_event));
     bytes::Bytes::from(rewritten)
+}
+
+fn log_direct_stream_response_if_complete(
+    chunk_str: &str,
+    log_recorder: Arc<Mutex<StreamLogRecorder>>,
+    chat_protocol: &ChatProtocol,
+    sse_status: Arc<RwLock<SseStatus>>,
+    log_to_file: bool,
+) {
+    if !log_to_file || !chunk_str.contains("[DONE]") {
+        return;
+    }
+
+    let (estimated_input, estimated_output) = if let Ok(status) = sse_status.read() {
+        (
+            status.estimated_input_tokens.ceil() as u64,
+            status.estimated_output_tokens.ceil() as u64,
+        )
+    } else {
+        (0, 0)
+    };
+
+    if let Ok(mut recorder) = log_recorder.lock() {
+        if recorder.stream_response_logged {
+            return;
+        }
+
+        if recorder.input_tokens.is_none() && estimated_input > 0 {
+            recorder.input_tokens = Some(estimated_input);
+        }
+        if recorder.output_tokens.is_none() && estimated_output > 0 {
+            recorder.output_tokens = Some(estimated_output);
+        }
+        recorder.stream_response_logged = true;
+
+        log::info!(
+            target: "ccproxy_logger",
+            "[Direct] {} Stream Response: \n{}\n================\n\n",
+            chat_protocol.to_string(),
+            serde_json::to_string_pretty(&*recorder).unwrap_or_default()
+        );
+    }
 }
 
 fn chunk_parser_and_log(
@@ -999,6 +1051,14 @@ fn chunk_parser_and_log(
             }
         }
     }
+
+    log_direct_stream_response_if_complete(
+        &chunk_str,
+        log_recorder,
+        chat_protocol,
+        sse_status,
+        log_to_file,
+    );
 }
 
 fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64, i64) {

@@ -97,8 +97,8 @@
           </el-icon>
         </div>
         <div class="kpi-content">
-          <div class="kpi-value">{{ kpiData.activeModels }}</div>
-          <div class="kpi-label">{{ $t('settings.proxy.stats.activeModels') }}</div>
+          <div class="kpi-value">{{ formatPercent(kpiData.cacheHitRate) }}</div>
+          <div class="kpi-label">{{ $t('settings.proxy.stats.cacheHitRate') }}</div>
         </div>
       </div>
     </div>
@@ -200,6 +200,17 @@
                 <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
               </el-table-column>
               <el-table-column
+                :label="$t('settings.proxy.stats.cacheHitRate')"
+                width="110"
+                sortable
+                :sort-method="
+                  (a, b) => getCacheHitRateValue(a.totalCacheTokens, a.totalInputTokens) - getCacheHitRateValue(b.totalCacheTokens, b.totalInputTokens)
+                ">
+                <template #default="scope">
+                  {{ formatPercent(getCacheHitRateValue(scope.row.totalCacheTokens, scope.row.totalInputTokens)) }}
+                </template>
+              </el-table-column>
+              <el-table-column
                 :label="$t('settings.proxy.stats.errors')"
                 width="100"
                 sortable
@@ -243,6 +254,11 @@
       </el-table-column>
       <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" width="100">
         <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
+      </el-table-column>
+      <el-table-column :label="$t('settings.proxy.stats.cacheHitRate')" width="110">
+        <template #default="scope">
+          {{ formatPercent(getCacheHitRateValue(scope.row.totalCacheTokens, scope.row.totalInputTokens)) }}
+        </template>
       </el-table-column>
       <el-table-column prop="errorCount" :label="$t('settings.proxy.stats.errors')" width="100" />
     </el-table>
@@ -369,7 +385,7 @@ const kpiData = ref({
   totalRequests: 0,
   totalTokens: 0,
   errorRate: 0,
-  activeModels: 0
+  cacheHitRate: 0
 })
 
 // Active tab for trend charts (Token first)
@@ -443,6 +459,18 @@ const formatNumber = val => {
   return num.toLocaleString()
 }
 
+const getCacheHitRateValue = (cacheTokens, inputTokens) => {
+  const input = Number(inputTokens || 0)
+  const cache = Number(cacheTokens || 0)
+  if (input <= 0 || cache <= 0) return 0
+  return (cache / input) * 100
+}
+
+const formatPercent = val => {
+  const num = Number(val || 0)
+  return `${num.toFixed(2)}%`
+}
+
 // Get CSS variable color value
 const getCssVar = varName => {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim() || ''
@@ -495,7 +523,7 @@ const calculateKPI = (modelUsage = []) => {
       totalRequests: 0,
       totalTokens: 0,
       errorRate: 0,
-      activeModels: 0
+      cacheHitRate: 0
     }
     return
   }
@@ -503,26 +531,25 @@ const calculateKPI = (modelUsage = []) => {
   let totalRequests = 0
   let totalTokens = 0
   let totalErrors = 0
+  let totalInputTokens = 0
+  let totalCacheTokens = 0
 
   dailyStats.value.forEach(day => {
     totalRequests += Number(day.totalRequestCount || 0)
-    totalTokens +=
-      Number(day.totalInputTokens || 0) +
-      Number(day.totalOutputTokens || 0) +
-      Number(day.totalCacheTokens || 0)
+    totalInputTokens += Number(day.totalInputTokens || 0)
+    totalCacheTokens += Number(day.totalCacheTokens || 0)
+    totalTokens += Number(day.totalInputTokens || 0) + Number(day.totalOutputTokens || 0)
     totalErrors += Number(day.errorCount || 0)
   })
 
   const errorRate = totalRequests > 0 ? (totalErrors / totalRequests) * 100 : 0
-
-  // Count unique models from model usage stats
-  const activeModels = modelUsage.length > 0 ? modelUsage.length : 0
+  const cacheHitRate = getCacheHitRateValue(totalCacheTokens, totalInputTokens)
 
   kpiData.value = {
     totalRequests,
     totalTokens,
     errorRate,
-    activeModels
+    cacheHitRate
   }
 }
 
@@ -592,7 +619,8 @@ const updateCharts = async () => {
 
     const requestsData = []
     const errorRateData = []
-    const tokenData = []
+    const tokenBarData = []
+    const tokenLineData = []
 
     ;(dailyStats.value || [])
       .slice()
@@ -613,19 +641,18 @@ const updateCharts = async () => {
           type: t('settings.proxy.stats.errorRate')
         })
 
-        tokenData.push({
+        tokenBarData.push({
           date: day.date,
           type: t('settings.proxy.stats.inputTokens'),
           value: Number(day.totalInputTokens || 0)
         })
-        tokenData.push({
+        tokenBarData.push({
           date: day.date,
           type: t('settings.proxy.stats.outputTokens'),
           value: Number(day.totalOutputTokens || 0)
         })
-        tokenData.push({
+        tokenLineData.push({
           date: day.date,
-          type: t('settings.proxy.stats.cacheTokens'),
           value: Number(day.totalCacheTokens || 0)
         })
       })
@@ -733,37 +760,77 @@ const updateCharts = async () => {
       const container = document.getElementById('daily-tokens-column')
       if (container) {
         tokenBarChart = markRaw(
-          new Column('daily-tokens-column', {
-            data: tokenData,
-            isStack: true,
+          new DualAxes('daily-tokens-column', {
+            data: [tokenBarData, tokenLineData],
             xField: 'date',
-            yField: 'value',
-            seriesField: 'type',
+            yField: ['value', 'value'],
+            geometryOptions: [
+              {
+                geometry: 'column',
+                isStack: true,
+                seriesField: 'type',
+                color: [
+                  getCssVar('--cs-info-color') || '#409eff',
+                  getCssVar('--cs-success-color') || '#67c23a'
+                ],
+                label: {
+                  position: 'middle',
+                  layout: [
+                    { type: 'interval-adjust-position' },
+                    { type: 'interval-hide-overlap' }
+                  ],
+                  formatter: datum => {
+                    const dayCount = dailyStats.value?.length || 0
+                    return dayCount <= 5 ? formatTokens(datum.value) : ''
+                  }
+                }
+              },
+              {
+                geometry: 'line',
+                color: getCssVar('--cs-warning-color') || '#e6a23c',
+                lineStyle: { lineWidth: 3 },
+                point: { size: 4, shape: 'circle' }
+              }
+            ],
             xAxis: {
               ...getCommonAxisConfig(),
               grid: null
             },
-            yAxis: {
-              ...getCommonAxisConfig(),
-              label: {
-                formatter: val => formatAxisValue(val)
+            yAxis: [
+              {
+                ...getCommonAxisConfig(),
+                label: {
+                  formatter: val => formatAxisValue(val)
+                }
+              },
+              {
+                ...getCommonAxisConfig(),
+                label: {
+                  formatter: val => formatAxisValue(val)
+                }
               }
-            },
+            ],
             legend: {
               position: 'bottom'
             },
-            label: {
-              position: 'middle',
-              layout: [{ type: 'interval-adjust-position' }, { type: 'interval-hide-overlap' }],
-              formatter: datum => {
-                // Only show labels when data points <= 5
-                const dayCount = dailyStats.value?.length || 0
-                return dayCount <= 5 ? formatTokens(datum.value) : ''
-              }
-            },
             tooltip: {
-              formatter: datum => {
-                return { name: datum.type, value: formatTokens(datum.value) }
+              shared: true,
+              showMarkers: true,
+              customContent: (title, items) => {
+                if (!items || items.length === 0) return ''
+                let html = `<div style="padding: 8px 12px;"><div style="font-weight: 500; margin-bottom: 8px;">${title}</div>`
+                items.forEach(item => {
+                  const color = item.color || '#999'
+                  const name = item.name || t('settings.proxy.stats.cacheTokens')
+                  const value = item.value !== undefined ? item.value : ''
+                  html += `<div style="display: flex; align-items: center; margin-bottom: 4px;">
+                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${color}; margin-right: 8px;"></span>
+                    <span style="flex: 1;">${name}:</span>
+                    <span style="font-weight: 500; margin-left: 12px;">${formatTokens(value)}</span>
+                  </div>`
+                })
+                html += '</div>'
+                return html
               }
             },
             slider: (dailyStats.value?.length || 0) > 10 ? { start: 0, end: 1 } : null
@@ -772,7 +839,7 @@ const updateCharts = async () => {
         tokenBarChart.render()
       }
     } else {
-      tokenBarChart.changeData(tokenData)
+      tokenBarChart.update({ data: [tokenBarData, tokenLineData] })
       // Update slider visibility based on data points
       const dayCount = dailyStats.value?.length || 0
       tokenBarChart.update({

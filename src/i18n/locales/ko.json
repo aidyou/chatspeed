@@ -627,6 +627,7 @@
         "autoRefresh": "자동 새로고침",
         "backendModel": "백엔드 모델",
         "cacheTokens": "캐시",
+        "cacheHitRate": "Cache Hit Rate",
         "clientModel": "모델 별칭",
         "count": "횟수",
         "dailyRequestsTitle": "일일 요청 및 오류율 추세",

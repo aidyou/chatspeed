@@ -627,6 +627,7 @@
         "autoRefresh": "Автообновление",
         "backendModel": "Модель бэкенда",
         "cacheTokens": "Кэш",
+        "cacheHitRate": "Cache Hit Rate",
         "clientModel": "Псевдоним модели",
         "count": "Кол-во",
         "dailyRequestsTitle": "Дневной тренд запросов и ошибок",

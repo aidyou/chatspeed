@@ -513,7 +513,7 @@
 
             <!-- Thought/Content FIRST (Separate reasoning field has priority) -->
             <div
-              v-else-if="message.reasoning || message.stepType === 'Think'"
+              v-else-if="getMessageReasoning(message) || message.stepType === 'Think'"
               class="reasoning-container">
               <div class="reasoning-header" @click="$emit('toggle-reasoning', message.displayId)">
                 <cs
@@ -537,7 +537,7 @@
                     v-else-if="
                       isRunning && !hasThoughtCompleted(message) && message === lastAssistantMessage
                     ">
-                    {{ getReasoningPreview(sanitizeReasoningContent(message.reasoning || message.message)) }}
+                    {{ getReasoningPreview(sanitizeReasoningContent(getMessageReasoning(message))) }}
                   </template>
                   <template v-else>
                     {{ $t('workflow.thoughtCompleted') || 'Thought Complete' }}
@@ -548,7 +548,7 @@
                 </span>
               </div>
               <div v-if="isReasoningExpanded(message.displayId)" class="reasoning-content">
-                {{ sanitizeReasoningContent(message.reasoning || message.message) }}
+                {{ sanitizeReasoningContent(getMessageReasoning(message)) }}
               </div>
             </div>
             <el-alert
@@ -563,8 +563,8 @@
               </div>
             </el-alert>
             <MarkdownSimple
-              v-else-if="!isContextSnapshotMessage(message) && getParsedMessage(message).content"
-              :content="getParsedMessage(message).content" />
+              v-else-if="!isContextSnapshotMessage(message) && getMessageContent(message)"
+              :content="getMessageContent(message)" />
 
             <!-- Tool Call Indicators SECOND (Only pending ones) -->
             <div v-if="message.pendingToolCalls?.length > 0" class="cli-tool-calls-container">
@@ -611,33 +611,26 @@
         <div class="ai-content chat">
           <div v-if="chatState.reasoning" class="reasoning-container">
             <div
-              class="reasoning-header"
-              :class="{ clickable: hasStreamingThoughtCompleted }"
-              @click="
-                hasStreamingThoughtCompleted
-                  ? $emit('toggle-reasoning', STREAMING_REASONING_DISPLAY_ID)
-                  : null
-              ">
+              class="reasoning-header clickable"
+              @click="$emit('toggle-reasoning', STREAMING_REASONING_DISPLAY_ID)">
               <cs
                 name="reasoning"
                 size="14px"
                 class="reasoning-icon"
-                :class="{ rotating: !hasStreamingThoughtCompleted }" />
+                :class="{ rotating: isStreamingReasoningActive }" />
               <span class="reasoning-text">
                 {{
-                  hasStreamingThoughtCompleted
-                    ? $t('workflow.thoughtCompleted') || 'Thought Complete'
-                    : getReasoningPreview(sanitizeReasoningContent(chatState.reasoning))
+                  isReasoningExpanded(STREAMING_REASONING_DISPLAY_ID)
+                    ? getStreamingReasoningExpandedTitle()
+                    : getStreamingReasoningCollapsedTitle()
                 }}
               </span>
-              <span v-if="hasStreamingThoughtCompleted" class="reasoning-toggle">
+              <span class="reasoning-toggle">
                 {{ isReasoningExpanded(STREAMING_REASONING_DISPLAY_ID) ? '▲' : '▼' }}
               </span>
             </div>
             <div
-              v-if="
-                hasStreamingThoughtCompleted && isReasoningExpanded(STREAMING_REASONING_DISPLAY_ID)
-              "
+              v-if="isReasoningExpanded(STREAMING_REASONING_DISPLAY_ID)"
               class="reasoning-content">
               {{ sanitizeReasoningContent(chatState.reasoning) }}
             </div>
@@ -729,6 +722,8 @@ const { t } = useI18n()
 const CUSTOM_ASK_USER_VALUE = '__custom__'
 const STREAMING_REASONING_DISPLAY_ID = '__streaming_reasoning__'
 const USER_MESSAGE_COLLAPSED_LINE_COUNT = 4
+const THINK_BLOCK_REGEX = /<(think|thinking)(?:\s+class="[^"]*")?>([\s\S]*?)<\/\1>/gi
+const THINK_OPEN_REGEX = /<(?:think|thinking)(?:\s+class="[^"]*")?>/i
 
 const props = defineProps({
   messages: {
@@ -752,6 +747,7 @@ const props = defineProps({
     default: () => ({
       content: '',
       reasoning: '',
+      reasoningStatus: 'idle',
       blocks: [],
       retryInfo: null
     })
@@ -1476,23 +1472,32 @@ const hasSubsequentVisibleOutput = message => {
   return visibleMessages.value.slice(index + 1).some(item => item.role !== 'user')
 }
 
-const hasStreamingThoughtCompleted = computed(() => {
-  if (props.chatState.content) return true
+const isStreamingReasoningActive = computed(
+  () => String(props.chatState?.reasoningStatus || 'idle') === 'streaming'
+)
 
-  const message = lastVisibleMessage.value
-  if (!message || message.role === 'user') return false
+const getStreamingReasoningCollapsedTitle = () => {
+  if (isStreamingReasoningActive.value) {
+    return getReasoningPreview(sanitizeReasoningContent(props.chatState.reasoning))
+  }
 
-  if (message.role === 'tool') return true
+  return t('workflow.thoughtCompleted') || 'Thought Complete'
+}
 
-  return hasThoughtCompleted(message)
-})
+const getStreamingReasoningExpandedTitle = () => {
+  if (isStreamingReasoningActive.value) {
+    return t('workflow.thinking') || 'Thinking...'
+  }
+
+  return t('workflow.thoughtCompleted') || 'Thought Complete'
+}
 
 const hasThoughtCompleted = message => {
   if (!message) return false
-  if (props.getParsedMessage(message).content) return true
+  if (getMessageContent(message)) return true
   if ((message.metadata?.tool_calls?.length || 0) > 0) return true
   if ((message.pendingToolCalls?.length || 0) > 0) return true
-  if (!props.isRunning && !!(message.reasoning || message.message)) {
+  if (!props.isRunning && !!(getMessageReasoning(message) || getMessageContent(message))) {
     return true
   }
   if (hasSubsequentVisibleOutput(message)) return true
@@ -1616,7 +1621,47 @@ const getExplorationGroupReasoningId = (message, groupIndex) =>
 const isExplorationGroupReasoningExpanded = (message, groupIndex) =>
   props.isReasoningExpanded(getExplorationGroupReasoningId(message, groupIndex))
 
-const sanitizeReasoningContent = content => String(content || '').replace(/^\s*<think>\s*/i, '')
+const sanitizeReasoningContent = content =>
+  String(content || '').replace(/^\s*<(?:think|thinking)(?:\s+class="[^"]*")?>\s*/i, '')
+
+const extractThinkTaggedContent = content => {
+  const reasoningParts = []
+  let visibleContent = String(content || '').replace(THINK_BLOCK_REGEX, (_match, _tagName, innerContent) => {
+    const normalized = String(innerContent || '').trim()
+    if (normalized) reasoningParts.push(normalized)
+    return ''
+  })
+
+  const trailingThinkIndex = visibleContent.search(THINK_OPEN_REGEX)
+  if (trailingThinkIndex >= 0) {
+    const trailingReasoning = visibleContent
+      .slice(trailingThinkIndex)
+      .replace(THINK_OPEN_REGEX, '')
+      .trim()
+    if (trailingReasoning) reasoningParts.push(trailingReasoning)
+    visibleContent = visibleContent.slice(0, trailingThinkIndex)
+  }
+
+  return {
+    content: visibleContent.trim(),
+    reasoning: reasoningParts.join('\n\n').trim()
+  }
+}
+
+const getMessageDisplayData = message => {
+  const parsed = props.getParsedMessage(message)
+  const normalized = extractThinkTaggedContent(parsed?.content || '')
+  const explicitReasoning = String(message?.reasoning || '').trim()
+
+  return {
+    content: normalized.content,
+    reasoning: explicitReasoning || normalized.reasoning
+  }
+}
+
+const getMessageContent = message => getMessageDisplayData(message).content
+
+const getMessageReasoning = message => getMessageDisplayData(message).reasoning
 
 const shouldShowErrorAlert = message => {
   if (!message?.isError) return false

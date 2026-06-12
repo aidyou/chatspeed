@@ -12,9 +12,14 @@ export function useWorkflowChat({ currentWorkflowId }) {
   const workflowStore = useWorkflowStore()
 
   const chattingParser = new MarkdownStreamParser()
+  const THINK_BLOCK_REGEX = /<(think|thinking)(?:\s+class="[^"]*")?>([\s\S]*?)<\/\1>/gi
+  const THINK_OPEN_REGEX = /<(?:think|thinking)(?:\s+class="[^"]*")?>/i
   const chatState = ref({
+    rawContent: '',
     content: '',
     reasoning: '',
+    explicitReasoning: '',
+    reasoningStatus: 'idle',
     blocks: [],
     retryInfo: null
   })
@@ -50,10 +55,67 @@ export function useWorkflowChat({ currentWorkflowId }) {
   // Reset chat state
   const resetChatState = () => {
     chattingParser.reset()
+    chatState.value.rawContent = ''
     chatState.value.content = ''
     chatState.value.reasoning = ''
+    chatState.value.explicitReasoning = ''
+    chatState.value.reasoningStatus = 'idle'
     chatState.value.blocks = []
     chatState.value.retryInfo = null
+  }
+
+  const extractInlineReasoning = rawContent => {
+    const reasoningParts = []
+    let visibleContent = String(rawContent || '').replace(THINK_BLOCK_REGEX, (_match, _tagName, innerContent) => {
+      const normalized = String(innerContent || '').trim()
+      if (normalized) reasoningParts.push(normalized)
+      return ''
+    })
+
+    const trailingThinkIndex = visibleContent.search(THINK_OPEN_REGEX)
+    if (trailingThinkIndex >= 0) {
+      const trailingReasoning = visibleContent
+        .slice(trailingThinkIndex)
+        .replace(THINK_OPEN_REGEX, '')
+        .trim()
+      if (trailingReasoning) reasoningParts.push(trailingReasoning)
+      visibleContent = visibleContent.slice(0, trailingThinkIndex)
+    }
+
+    return {
+      content: visibleContent,
+      reasoning: reasoningParts.join('\n\n').trim(),
+      hasOpenThink: trailingThinkIndex >= 0
+    }
+  }
+
+  const refreshDerivedChatState = (source = 'chunk') => {
+    const { content, reasoning, hasOpenThink } = extractInlineReasoning(chatState.value.rawContent)
+    const combinedReasoning = [reasoning, chatState.value.explicitReasoning]
+      .map(part => String(part || '').trim())
+      .filter(Boolean)
+      .join('\n\n')
+
+    const hadStreamingReasoning = chatState.value.reasoningStatus === 'streaming'
+    let reasoningStatus = 'idle'
+
+    if (combinedReasoning) {
+      if (source === 'reasoning' || hasOpenThink) {
+        reasoningStatus = 'streaming'
+      } else if (content.trim()) {
+        reasoningStatus = 'done'
+      } else if (hadStreamingReasoning) {
+        reasoningStatus = 'streaming'
+      } else {
+        reasoningStatus = 'done'
+      }
+    }
+
+    chattingParser.reset()
+    chatState.value.content = content
+    chatState.value.reasoning = combinedReasoning
+    chatState.value.reasoningStatus = reasoningStatus
+    chatState.value.blocks = content ? chattingParser.process(content) : []
   }
 
   // Handle retry status with countdown
@@ -80,15 +142,16 @@ export function useWorkflowChat({ currentWorkflowId }) {
   const processChunk = (content) => {
     clearRetryTimer()
     workflowStore.setNotification('', 'info')
-    chatState.value.content += content
-    chatState.value.blocks = chattingParser.process(content)
+    chatState.value.rawContent += content
+    refreshDerivedChatState('chunk')
   }
 
   // Handle reasoning chunk
   const processReasoningChunk = (content) => {
     clearRetryTimer()
     workflowStore.setNotification('', 'info')
-    chatState.value.reasoning += content
+    chatState.value.explicitReasoning += content
+    refreshDerivedChatState('reasoning')
   }
 
   // Set compression status

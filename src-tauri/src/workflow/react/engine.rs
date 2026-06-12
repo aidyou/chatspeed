@@ -2493,6 +2493,17 @@ impl WorkflowExecutor {
                                     } else {
                                         self.tool_manager.tool_call(&tool_name, enriched_args).await
                                     };
+                                    self.append_tool_terminal_event(
+                                        &tool_call_id,
+                                        &tool_name,
+                                        &result,
+                                    );
+                                    self.dispatch_tool_terminal_payload(
+                                        &tool_call_id,
+                                        &tool_name,
+                                        &result,
+                                    )
+                                    .await;
 
                                     let tool_call_obj = serde_json::json!({
                                         "id": tool_call_id,
@@ -2583,7 +2594,7 @@ impl WorkflowExecutor {
                                     };
 
                                     self.add_message_and_notify_internal(
-                                        "user".to_string(),
+                                        "tool".to_string(),
                                         observation,
                                         None,
                                         None,
@@ -2947,6 +2958,9 @@ impl WorkflowExecutor {
                             } else {
                                 self.tool_manager.tool_call(&tool_name, enriched_args).await
                             };
+                            self.append_tool_terminal_event(signal_id, &tool_name, &result);
+                            self.dispatch_tool_terminal_payload(signal_id, &tool_name, &result)
+                                .await;
 
                             let tool_call_obj = serde_json::json!({
                                 "id": signal_id,
@@ -3046,12 +3060,12 @@ impl WorkflowExecutor {
                                 )
                             };
 
-                            self.add_message_and_notify_internal(
-                                "user".to_string(),
-                                observation,
-                                None,
-                                None,
-                                Some(StepType::Observe),
+                                    self.add_message_and_notify_internal(
+                                        "tool".to_string(),
+                                        observation,
+                                        None,
+                                        None,
+                                        Some(StepType::Observe),
                                 true,
                                 Some("UserRejected".to_string()),
                                 Some(serde_json::json!({
@@ -4244,6 +4258,57 @@ impl WorkflowExecutor {
         }
     }
 
+    async fn dispatch_tool_terminal_payload(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        result: &Result<serde_json::Value, crate::tools::ToolError>,
+    ) {
+        let payload = match result {
+            Ok(value) => GatewayPayload::ToolCompleted {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                result: Some(value.clone()),
+            },
+            Err(error) => GatewayPayload::ToolFailed {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                error: error.to_string(),
+                error_type: Some(Self::tool_error_type(error).to_string()),
+            },
+        };
+
+        if let Err(e) = self.dispatch_ui_payload(payload).await {
+            log::warn!(
+                "[Workflow][session={}] workflow.ui_dispatch_failed - tool_terminal {}: {}",
+                self.session_id,
+                tool_call_id,
+                e
+            );
+        }
+    }
+
+    fn tool_error_type(error: &crate::tools::ToolError) -> &'static str {
+        match error {
+            crate::tools::ToolError::Config(_) => "Config",
+            crate::tools::ToolError::Initialization(_) => "Initialization",
+            crate::tools::ToolError::FunctionNotFound(_) => "FunctionNotFound",
+            crate::tools::ToolError::FunctionAlreadyExists(_) => "FunctionAlreadyExists",
+            crate::tools::ToolError::InvalidParams(_) => "InvalidParams",
+            crate::tools::ToolError::Timeout(_) => "Timeout",
+            crate::tools::ToolError::NetworkError(_) => "NetworkError",
+            crate::tools::ToolError::IoError(_) => "Io",
+            crate::tools::ToolError::AuthError(_) => "AuthError",
+            crate::tools::ToolError::ExecutionFailed(_) => "Other",
+            crate::tools::ToolError::Fatal(_) => "Fatal",
+            crate::tools::ToolError::McpServerNotFound(_) => "McpServerNotFound",
+            crate::tools::ToolError::Serialization(_) => "Serialization",
+            crate::tools::ToolError::StateChangeFailed(_) => "StateChangeFailed",
+            crate::tools::ToolError::Store(_) => "Store",
+            crate::tools::ToolError::Security(_) => "Security",
+        }
+    }
+
     fn append_tool_terminal_event(
         &self,
         tool_call_id: &str,
@@ -4267,6 +4332,86 @@ impl WorkflowExecutor {
         if let Err(e) = self.append_event(&event) {
             log::error!(
                 "[Workflow][session={}] workflow.event.append_failed - tool_terminal {}: {}",
+                self.session_id,
+                tool_call_id,
+                e
+            );
+        }
+    }
+
+    fn append_reinforced_tool_terminal_event(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        reinforced: &ReinforcedResult,
+    ) {
+        let event = if reinforced.is_error {
+            WorkflowEvent::tool_failed(
+                self.session_id.clone(),
+                tool_call_id.to_string(),
+                tool_name.to_string(),
+                reinforced.llm_content.clone().unwrap_or_else(|| reinforced.content.clone()),
+            )
+        } else {
+            WorkflowEvent::tool_completed(
+                self.session_id.clone(),
+                tool_call_id.to_string(),
+                tool_name.to_string(),
+                Some(serde_json::json!({
+                    "content": reinforced
+                        .llm_content
+                        .clone()
+                        .unwrap_or_else(|| reinforced.content.clone()),
+                    "summary": reinforced.summary,
+                    "display_type": reinforced.display_type,
+                })),
+            )
+        };
+
+        if let Err(e) = self.append_event(&event) {
+            log::error!(
+                "[Workflow][session={}] workflow.event.append_failed - reinforced_tool_terminal {}: {}",
+                self.session_id,
+                tool_call_id,
+                e
+            );
+        }
+    }
+
+    async fn dispatch_reinforced_tool_terminal_payload(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        reinforced: &ReinforcedResult,
+    ) {
+        let payload = if reinforced.is_error {
+            GatewayPayload::ToolFailed {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                error: reinforced
+                    .llm_content
+                    .clone()
+                    .unwrap_or_else(|| reinforced.content.clone()),
+                error_type: reinforced.error_type.clone(),
+            }
+        } else {
+            GatewayPayload::ToolCompleted {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                result: Some(serde_json::json!({
+                    "content": reinforced
+                        .llm_content
+                        .clone()
+                        .unwrap_or_else(|| reinforced.content.clone()),
+                    "summary": reinforced.summary,
+                    "display_type": reinforced.display_type,
+                })),
+            }
+        };
+
+        if let Err(e) = self.dispatch_ui_payload(payload).await {
+            log::warn!(
+                "[Workflow][session={}] workflow.ui_dispatch_failed - reinforced_tool_terminal {}: {}",
                 self.session_id,
                 tool_call_id,
                 e
@@ -4502,6 +4647,11 @@ impl WorkflowExecutor {
                     // Tool was intercepted (Approval needed, Loop detected, etc.)
                     let approval_intercepted =
                         early_result.approval_status.as_deref() == Some("pending");
+                    if !approval_intercepted {
+                        self.append_reinforced_tool_terminal_event(&id, &name, &early_result);
+                        self.dispatch_reinforced_tool_terminal_payload(&id, &name, &early_result)
+                            .await;
+                    }
                     result_map.insert(id, (early_result, call));
                     if !approval_intercepted && self.state != WorkflowState::AwaitingApproval {
                         predicted_turn_block = true;
@@ -4618,6 +4768,7 @@ impl WorkflowExecutor {
 
             while let Some((id, name, args, call, res)) = tool_futures.next().await {
                 self.append_tool_terminal_event(&id, &name, &res);
+                self.dispatch_tool_terminal_payload(&id, &name, &res).await;
                 let reinforced = self
                     .post_process_tool_result(&name, &args, &call, res)
                     .await?;
@@ -4642,6 +4793,8 @@ impl WorkflowExecutor {
             };
 
             self.append_tool_terminal_event(&id, &name, &final_res);
+            self.dispatch_tool_terminal_payload(&id, &name, &final_res)
+                .await;
             let reinforced = self
                 .post_process_tool_result(&name, &args, &call, final_res)
                 .await?;

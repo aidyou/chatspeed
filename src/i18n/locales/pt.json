@@ -627,6 +627,7 @@
         "autoRefresh": "Atualização automática",
         "backendModel": "Modelo de backend",
         "cacheTokens": "Cache",
+        "cacheHitRate": "Cache Hit Rate",
         "clientModel": "Apelido do modelo",
         "count": "Contagem",
         "dailyRequestsTitle": "Tendência Diária de Requisições e Taxa de Erro",

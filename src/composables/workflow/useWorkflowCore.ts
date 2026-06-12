@@ -654,7 +654,12 @@ export function useWorkflowCore({
                         return
                     }
 
-                    if (payload.type === 'approval_resolved' || payload.type === 'tool_started') {
+                    if (
+                        payload.type === 'approval_resolved' ||
+                        payload.type === 'tool_started' ||
+                        payload.type === 'tool_completed' ||
+                        payload.type === 'tool_failed'
+                    ) {
                         clearPendingApprovalEntry(sessionId, payload.tool_call_id)
                         return
                     }
@@ -871,6 +876,33 @@ export function useWorkflowCore({
                         transitionWorkflowIntoExecutionLocally(sessionId)
                     }
                     workflowStore.markToolApprovedRunning(payload.tool_call_id, payload.tool_name)
+                } else if (payload.type === 'tool_completed') {
+                    markSessionLiveFromNonTerminalEvent()
+                    clearPendingApprovalEntry(sessionId, payload.tool_call_id)
+                    workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
+                    const resultValue = payload.result
+                    const resultText =
+                        typeof resultValue?.content === 'string'
+                            ? resultValue.content
+                            : typeof resultValue === 'string'
+                              ? resultValue
+                              : ''
+                    workflowStore.finalizeToolExecution(
+                        payload.tool_call_id,
+                        true,
+                        resultText,
+                        undefined
+                    )
+                } else if (payload.type === 'tool_failed') {
+                    markSessionLiveFromNonTerminalEvent()
+                    clearPendingApprovalEntry(sessionId, payload.tool_call_id)
+                    workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
+                    workflowStore.finalizeToolExecution(
+                        payload.tool_call_id,
+                        false,
+                        payload.error,
+                        payload.error_type
+                    )
                 } else if (payload.type === 'queued_user_message_removed') {
                     markSessionLiveFromNonTerminalEvent()
                     workflowStore.removeQueuedMessage(payload.queued_user_message_id)

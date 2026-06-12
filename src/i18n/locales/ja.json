@@ -627,6 +627,7 @@
         "autoRefresh": "自動更新",
         "backendModel": "バックエンドモデル",
         "cacheTokens": "キャッシュ",
+        "cacheHitRate": "Cache Hit Rate",
         "clientModel": "モデルエイリアス",
         "count": "回数",
         "dailyRequestsTitle": "1 日のリクエストとエラー率の傾向",
