@@ -855,6 +855,7 @@
     "deleteLastMessageDone": "마지막 단계를 삭제했습니다",
     "deleteLastMessageFailed": "마지막 단계 삭제 실패: {error}",
     "deleteLastMessageMissing": "삭제할 단계가 없습니다",
+    "earlierTasks": "이전 완료 작업 {count}개 표시",
     "edited": "편집됨",
     "editWorkflowTitle": "워크플로우 제목 편집",
     "executing": "실행 중...",

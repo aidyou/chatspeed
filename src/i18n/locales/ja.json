@@ -855,6 +855,7 @@
     "deleteLastMessageDone": "最後のステップを削除しました",
     "deleteLastMessageFailed": "最後のステップの削除に失敗しました：{error}",
     "deleteLastMessageMissing": "削除できるステップがありません",
+    "earlierTasks": "以前の完了済みタスクを {count} 件表示",
     "edited": "編集済み",
     "editWorkflowTitle": "ワークフロータイトルを編集",
     "executing": "実行中...",

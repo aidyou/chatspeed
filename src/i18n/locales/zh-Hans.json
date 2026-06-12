@@ -855,6 +855,7 @@
     "deleteLastMessageDone": "已删除最后一步",
     "deleteLastMessageFailed": "删除最后一步失败：{error}",
     "deleteLastMessageMissing": "当前没有可删除的步骤",
+    "earlierTasks": "显示更早的 {count} 个已完成任务",
     "edited": "已编辑",
     "editWorkflowTitle": "编辑工作流标题",
     "executing": "执行中...",

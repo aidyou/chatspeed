@@ -130,6 +130,7 @@
         <WorkflowMessageList
           ref="messageListRef"
           :messages="enhancedMessages"
+          :hidden-completed-task-group-count="hiddenCompletedTaskGroupCount"
           :is-running="isRunning"
           :queued-messages="workflowStore.displayQueueItems"
           :is-chatting="isChatting"
@@ -154,6 +155,7 @@
           :is-approval-submitting="isApprovalSubmitting"
           @toggle-expand="toggleMessageExpand"
           @toggle-reasoning="toggleReasoningExpand"
+          @reveal-earlier-task-group="visibleCompletedTaskGroupCount += 1"
           @submit-ask-user="submitAskUserResponse"
           @approve-tool="onApproveAction"
           @approve-all-tool="onApproveAllAction"
@@ -310,6 +312,7 @@ const planningMode = ref(false)
 const autoCompressEnabled = ref(true)
 const imageAttachments = ref([])
 const defaultImageRecognitionPrompt = ref('')
+const visibleCompletedTaskGroupCount = ref(3)
 
 const showPlanningModeToggle = computed(() => {
   const workflow = workflowStore.currentWorkflow
@@ -402,6 +405,7 @@ const {
   expandedMessages,
   expandedReasonings,
   enhancedMessages,
+  hiddenCompletedTaskGroupCount,
   lastAssistantMessage,
   toggleMessageExpand,
   isMessageExpanded,
@@ -412,7 +416,9 @@ const {
   parseChoiceContent,
   getParsedMessage,
   shouldShowToolRawContent
-} = useWorkflowMessages()
+} = useWorkflowMessages({
+  visibleCompletedTaskGroupCount
+})
 
 // ============================================================
 // Composables that DEPEND on local state
@@ -1122,8 +1128,16 @@ const sidebarRootFilterResetToken = ref(0)
 const currentInlinePendingApprovalIds = computed(() => workflowStore.currentInlinePendingApprovalIds)
 const globalPendingApprovalList = computed(() => {
   const activeSessionId = currentWorkflowId.value
-  const backgroundEntries = pendingApprovalList.value.filter(entry => entry.sessionId !== activeSessionId)
-  const merged = [...workflowStore.currentInlinePendingApprovals, ...backgroundEntries]
+  const backgroundEntries = pendingApprovalList.value.filter(
+    entry => entry.sessionId !== activeSessionId && entry?.kind === 'approval'
+  )
+  const currentEntries = workflowStore.currentInlinePendingApprovals
+    .map(entry => ({
+      ...entry,
+      kind: 'approval'
+    }))
+    .filter(entry => entry?.kind === 'approval')
+  const merged = [...currentEntries, ...backgroundEntries]
   const deduped = []
   const seen = new Set()
 
@@ -1369,6 +1383,7 @@ watch(
 watch(
   () => currentWorkflowId.value,
   () => {
+    visibleCompletedTaskGroupCount.value = 3
     clearImageAttachments()
   }
 )

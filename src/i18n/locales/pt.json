@@ -855,6 +855,7 @@
     "deleteLastMessageDone": "Última etapa excluída",
     "deleteLastMessageFailed": "Falha ao excluir a última etapa: {error}",
     "deleteLastMessageMissing": "Não há etapa para excluir",
+    "earlierTasks": "Mostrar {count} tarefas concluídas anteriores",
     "edited": "Editado",
     "editWorkflowTitle": "Editar título do fluxo de trabalho",
     "executing": "Executando...",

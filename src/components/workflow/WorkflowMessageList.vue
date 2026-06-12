@@ -1,5 +1,14 @@
 <template>
   <div class="messages" ref="messagesRef" @scroll.passive="handleScroll">
+    <button
+      v-if="props.hiddenCompletedTaskGroupCount > 0"
+      type="button"
+      class="history-window-indicator"
+      @click="revealEarlierTaskGroup">
+      <cs name="archive" size="13px" class="history-window-indicator__icon" />
+      <span>{{ t('workflow.earlierTasks', { count: props.hiddenCompletedTaskGroupCount }) }}</span>
+    </button>
+
     <div
       v-for="(message, index) in visibleMessages"
       :key="message.displayId"
@@ -730,6 +739,10 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  hiddenCompletedTaskGroupCount: {
+    type: Number,
+    default: 0
+  },
   queuedMessages: {
     type: Array,
     default: () => []
@@ -829,6 +842,7 @@ const props = defineProps({
 const emit = defineEmits([
   'toggle-expand',
   'toggle-reasoning',
+  'reveal-earlier-task-group',
   'scroll-bottom',
   'approve-tool',
   'approve-all-tool',
@@ -844,6 +858,7 @@ const askUserDrafts = ref({})
 const userMessageOverflowMap = ref({})
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
+const isRevealingEarlierTaskGroup = ref(false)
 let userMessageResizeObserver = null
 
 const isPlanApprovalMessage = message => message?.metadata?.tool_name === 'submit_plan'
@@ -1450,15 +1465,35 @@ const collapseAssistantCompletionPairs = messages => {
   return collapsed
 }
 
+const filteredMessages = computed(() =>
+  props.messages.filter(message => !isHiddenSystemObservation(message))
+)
+
 const visibleMessages = computed(() =>
   collapseExplorationBatches(
-    collapseAssistantCompletionPairs(
-      collapseRepeatedFinishTaskErrors(
-        props.messages.filter(message => !isHiddenSystemObservation(message))
-      )
-    )
+    collapseAssistantCompletionPairs(collapseRepeatedFinishTaskErrors(filteredMessages.value))
   )
 )
+
+const revealEarlierTaskGroup = () => {
+  if (isRevealingEarlierTaskGroup.value || props.hiddenCompletedTaskGroupCount <= 0) return
+
+  const container = messagesRef.value
+  const previousScrollHeight = container?.scrollHeight || 0
+  const previousScrollTop = container?.scrollTop || 0
+
+  isRevealingEarlierTaskGroup.value = true
+  emit('reveal-earlier-task-group')
+
+  nextTick(() => {
+    if (container) {
+      const nextScrollHeight = container.scrollHeight
+      container.scrollTop = previousScrollTop + (nextScrollHeight - previousScrollHeight)
+    }
+    isRevealingEarlierTaskGroup.value = false
+  })
+}
+
 const lastVisibleMessage = computed(
   () => visibleMessages.value[visibleMessages.value.length - 1] || null
 )
@@ -2099,11 +2134,18 @@ const scrollToBottom = (force = false) => {
 }
 
 watch(
-  visibleMessages,
+  () => visibleMessages.value.map(message => message.displayId || message.id || '').join('|'),
   () => {
     scheduleMeasureUserMessageOverflow()
   },
-  { deep: true, flush: 'post' }
+  { flush: 'post' }
+)
+
+watch(
+  () => props.currentWorkflowId,
+  () => {
+    isRevealingEarlierTaskGroup.value = false
+  }
 )
 
 onMounted(() => {
@@ -2135,6 +2177,36 @@ defineExpose({
 </script>
 
 <style scoped lang="scss">
+.history-window-indicator {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cs-space-xs);
+  margin: 0 0 var(--cs-space-sm);
+  padding: var(--cs-space-xs) var(--cs-space-sm);
+  border: 1px dashed var(--cs-border-color);
+  border-radius: var(--cs-border-radius-md);
+  background: var(--cs-bg-color-light);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-sm);
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.history-window-indicator:hover {
+  background: var(--cs-hover-bg-color);
+  border-color: var(--el-color-primary-light-5);
+  color: var(--cs-text-color-primary);
+}
+
+.history-window-indicator__icon {
+  color: var(--el-color-primary);
+}
+
 .workflow-message-attachments {
   display: flex;
   flex-wrap: wrap;

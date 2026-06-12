@@ -855,6 +855,7 @@
     "deleteLastMessageDone": "Last step deleted",
     "deleteLastMessageFailed": "Failed to delete last step: {error}",
     "deleteLastMessageMissing": "No step available to delete",
+    "earlierTasks": "Show {count} earlier completed tasks",
     "edited": "Edited",
     "editWorkflowTitle": "Edit Workflow Title",
     "executing": "Executing...",

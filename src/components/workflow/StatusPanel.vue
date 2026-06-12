@@ -2752,6 +2752,7 @@ watch(
   > .cs,
   .trigger-badge {
     position: relative;
+    pointer-events: none;
   }
 
   > .cs {

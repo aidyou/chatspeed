@@ -855,6 +855,7 @@
     "deleteLastMessageDone": "Dernière étape supprimée",
     "deleteLastMessageFailed": "Échec de la suppression de la dernière étape : {error}",
     "deleteLastMessageMissing": "Aucune étape à supprimer",
+    "earlierTasks": "Afficher {count} tâches terminées plus anciennes",
     "edited": "Modifié",
     "editWorkflowTitle": "Modifier le titre du flux de travail",
     "executing": "Exécution...",

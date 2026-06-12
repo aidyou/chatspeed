@@ -855,6 +855,7 @@
     "deleteLastMessageDone": "Последний шаг удалён",
     "deleteLastMessageFailed": "Не удалось удалить последний шаг: {error}",
     "deleteLastMessageMissing": "Нет шагов для удаления",
+    "earlierTasks": "Показать {count} более ранних завершённых задач",
     "edited": "Изменено",
     "editWorkflowTitle": "Изменить название рабочего процесса",
     "executing": "Выполнение...",
