@@ -35,6 +35,7 @@ fn gateway_payload_name(payload: &GatewayPayload) -> &'static str {
         GatewayPayload::ToolStarted { .. } => "tool_started",
         GatewayPayload::ToolCompleted { .. } => "tool_completed",
         GatewayPayload::ToolFailed { .. } => "tool_failed",
+        GatewayPayload::TaskCompleted { .. } => "task_completed",
         GatewayPayload::SyncTodo { .. } => "sync_todo",
         GatewayPayload::RetryStatus { .. } => "retry_status",
         GatewayPayload::CompressionStatus { .. } => "compression_status",

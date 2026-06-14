@@ -471,6 +471,29 @@ Deletion semantics must stay explicit:
 
 Frontend wording, tooltips, and confirmations must reflect this contract and must not describe the feature as "undo", "revert", or equivalent side-effect rollback language.
 
+### 10.9 Completed task boundaries are backend-authoritative
+
+The successful completion of one top-level task is represented by the canonical
+`task_completed` event.
+
+It may be emitted only after:
+
+- `complete_workflow_with_summary` passes runtime validation
+- the completion tool is not pending, rejected, or failed
+- any configured final review has approved the completion
+- the successful completion tool observation has been persisted
+
+`task_completed` is distinct from `workflow_completed`:
+
+- `task_completed` marks a durable transcript/UI task boundary
+- `workflow_completed` marks the session lifecycle entering a terminal state
+- `task_completed` must still be emitted when queued user input keeps the hot executor running
+
+Frontend message projections may use `task_completed` to rotate completed-task
+windows. Snapshot and legacy recovery may reconstruct the same boundary from the
+durable successful completion tool observation, but live UI code must not independently
+reimplement completion approval rules.
+
 ## 11. Command-Layer Discipline
 
 `commands/workflow.rs` is allowed to do orchestration.

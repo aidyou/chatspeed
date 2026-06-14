@@ -116,6 +116,7 @@ impl EventReducer {
             "tool_started" => WorkflowEventType::ToolStarted,
             "tool_completed" => WorkflowEventType::ToolCompleted,
             "tool_failed" => WorkflowEventType::ToolFailed,
+            "task_completed" => WorkflowEventType::TaskCompleted,
             "sub_agent_started" => WorkflowEventType::SubAgentStarted,
             "sub_agent_completed" => WorkflowEventType::SubAgentCompleted,
             "sub_agent_failed" => WorkflowEventType::SubAgentFailed,
@@ -240,6 +241,7 @@ impl EventReducer {
                     }
                 }
             }
+            WorkflowEventType::TaskCompleted => {}
             WorkflowEventType::SubAgentStarted => {
                 let sub_agent_id = event.event_data["sub_agent_id"].as_str().ok_or_else(|| {
                     RecoveryError::MissingEventData {

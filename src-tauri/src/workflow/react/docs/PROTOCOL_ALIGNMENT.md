@@ -54,6 +54,13 @@ Rule:
 | `confirmation` | `WaitReason::Confirmation` | Executor is waiting for continue/stop confirmation. |
 | `sub_agent` | `WaitReason::SubAgent` | Executor is waiting for a delegated sub-agent to complete. |
 
+## 4) Backend-to-Frontend Events
+
+| Purpose | Canonical wire name | Backend type | Notes |
+|---|---|---|---|
+| Accepted top-level task boundary | `task_completed` | `WorkflowEventType::TaskCompleted` / `GatewayPayload::TaskCompleted` | Emitted after `complete_workflow_with_summary` and any configured final review succeed. It is emitted even when queued input keeps the session running. |
+| Session terminal completion | `state` with `completed` | `GatewayPayload::State` / `WorkflowEventType::WorkflowCompleted` | Session lifecycle authority; not a per-task display boundary. |
+
 ## Notes
 
 - `user_message` is a **signal type**; `user_input` is a **wait reason**. They are intentionally different.

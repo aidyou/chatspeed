@@ -508,6 +508,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }
 
         if approved {
+            let completion_tool_call_id = crate::ccproxy::get_tool_id();
             self.add_message_and_notify_internal(
                 "tool".to_string(),
                 TASK_FINISHED.to_string(),
@@ -517,7 +518,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 false,
                 None,
                 Some(json!({
-                    "tool_call_id": crate::ccproxy::get_tool_id(),
+                    "tool_call_id": completion_tool_call_id.clone(),
                     "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
                     "title": "Complete Workflow with Summary",
                     "summary": pending.completion_summary,
@@ -528,6 +529,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 })),
             )
             .await?;
+            self.record_task_completed(&completion_tool_call_id).await;
             self.update_state(WorkflowState::Completed).await?;
             return Ok(true);
         }

@@ -3778,6 +3778,25 @@ impl WorkflowExecutor {
                     });
 
                 if has_successful_finish_task {
+                    if let Some((tool_call_id, _, _)) =
+                        results.iter().find(|(_, reinforced, original_call)| {
+                            if reinforced.is_error || self.is_child_agent_workflow() {
+                                return false;
+                            }
+                            let tool_name = original_call
+                                .get("name")
+                                .or_else(|| {
+                                    original_call.get("function").and_then(|f| f.get("name"))
+                                })
+                                .and_then(|value| value.as_str())
+                                .unwrap_or_default();
+                            tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                                && reinforced.approval_status.as_deref() != Some("pending")
+                                && reinforced.approval_status.as_deref() != Some("rejected")
+                        })
+                    {
+                        self.record_task_completed(tool_call_id).await;
+                    }
                     if queued_applied {
                         log::info!(
                             "[Workflow][session={}][phase=queue] Finish tool completed, but queued user messages were applied in the same turn; continuing on the hot executor instead of entering Completed",
@@ -4417,6 +4436,43 @@ impl WorkflowExecutor {
                 e
             );
         }
+    }
+
+    pub(crate) async fn record_task_completed(&self, tool_call_id: &str) {
+        let segment_id = self.context.current_segment_id;
+        let event = WorkflowEvent::task_completed(
+            self.session_id.clone(),
+            tool_call_id.to_string(),
+            segment_id,
+        );
+        if let Err(error) = self.append_event(&event) {
+            log::error!(
+                "[Workflow][session={}][phase=completion][event=task_completed] Failed to persist event for tool_call_id={}: {}",
+                self.session_id,
+                tool_call_id,
+                error
+            );
+        }
+        if let Err(error) = self
+            .dispatch_ui_payload(GatewayPayload::TaskCompleted {
+                tool_call_id: tool_call_id.to_string(),
+                segment_id,
+            })
+            .await
+        {
+            log::warn!(
+                "[Workflow][session={}][phase=completion][event=task_completed] Failed to dispatch UI payload for tool_call_id={}: {}",
+                self.session_id,
+                tool_call_id,
+                error
+            );
+        }
+        log::info!(
+            "[Workflow][session={}][phase=completion][event=task_completed] tool_call_id={}, segment_id={}",
+            self.session_id,
+            tool_call_id,
+            segment_id
+        );
     }
 
     fn find_completed_sub_agent_result_for_prompt(

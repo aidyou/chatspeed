@@ -15,6 +15,7 @@ pub enum WorkflowEventType {
     ToolStarted,
     ToolCompleted,
     ToolFailed,
+    TaskCompleted,
     SubAgentStarted,
     SubAgentCompleted,
     SubAgentFailed,
@@ -36,6 +37,7 @@ impl WorkflowEventType {
             WorkflowEventType::ToolStarted => "tool_started",
             WorkflowEventType::ToolCompleted => "tool_completed",
             WorkflowEventType::ToolFailed => "tool_failed",
+            WorkflowEventType::TaskCompleted => "task_completed",
             WorkflowEventType::SubAgentStarted => "sub_agent_started",
             WorkflowEventType::SubAgentCompleted => "sub_agent_completed",
             WorkflowEventType::SubAgentFailed => "sub_agent_failed",
@@ -202,6 +204,17 @@ impl WorkflowEvent {
         )
     }
 
+    pub fn task_completed(session_id: String, tool_call_id: String, segment_id: i32) -> Self {
+        Self::new(
+            WorkflowEventType::TaskCompleted,
+            session_id,
+            serde_json::json!({
+                "tool_call_id": tool_call_id,
+                "segment_id": segment_id
+            }),
+        )
+    }
+
     pub fn sub_agent_started(
         session_id: String,
         sub_agent_id: String,
@@ -328,6 +341,18 @@ mod tests {
         );
         assert_eq!(resolved.event_type, WorkflowEventType::ApprovalResolved);
         assert_eq!(resolved.event_data["approved"], true);
+    }
+
+    #[test]
+    fn test_task_completed_event() {
+        let event = WorkflowEvent::task_completed(
+            "test-session".to_string(),
+            "call_complete_123".to_string(),
+            4,
+        );
+        assert_eq!(event.event_type, WorkflowEventType::TaskCompleted);
+        assert_eq!(event.event_data["tool_call_id"], "call_complete_123");
+        assert_eq!(event.event_data["segment_id"], 4);
     }
 
     #[test]

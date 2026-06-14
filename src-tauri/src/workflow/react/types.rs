@@ -95,6 +95,11 @@ pub enum GatewayPayload {
         #[serde(skip_serializing_if = "Option::is_none")]
         error_type: Option<String>,
     },
+    /// A top-level workflow task passed all completion checks and any configured final review.
+    TaskCompleted {
+        tool_call_id: String,
+        segment_id: i32,
+    },
     SyncTodo {
         todo_list: serde_json::Value,
     },
@@ -495,6 +500,18 @@ impl ExecutionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_task_completed_gateway_payload_serialization() {
+        let payload = GatewayPayload::TaskCompleted {
+            tool_call_id: "call_complete_123".to_string(),
+            segment_id: 7,
+        };
+        let serialized = serde_json::to_value(payload).unwrap();
+        assert_eq!(serialized["type"], "task_completed");
+        assert_eq!(serialized["tool_call_id"], "call_complete_123");
+        assert_eq!(serialized["segment_id"], 7);
+    }
 
     #[test]
     fn test_execution_context_new() {

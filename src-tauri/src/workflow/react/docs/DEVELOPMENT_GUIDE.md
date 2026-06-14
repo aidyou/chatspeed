@@ -38,6 +38,12 @@ Do not add alternate execution paths that bypass these contracts.
 5. Stop must always be effective.
 - `Stop` must remain valid and actionable in any waiting state.
 
+6. Task completion has one backend-owned boundary.
+- `task_completed` is emitted only after the successful completion observation is persisted.
+- Final-review mode emits it only after the reviewer approves.
+- Queued input may keep the session running, but does not suppress the completed-task boundary.
+- Frontend live rendering consumes this event instead of duplicating completion validation.
+
 ## 3. Where to Extend (And Where Not)
 
 ### Allowed extension points
@@ -88,6 +94,13 @@ Frontend behavior must be based on:
 Do not infer waiting intent from message text or tool output patterns.
 
 If optimistic UI is needed (for responsiveness), it must later reconcile with backend authoritative events.
+
+For completed-task message windows:
+
+- live rotation authority is the `task_completed` gateway payload
+- persisted `task_completed` events provide audit/replay traceability
+- durable successful `complete_workflow_with_summary` observations are the snapshot and legacy reconstruction adapter
+- `workflow_completed` remains a session lifecycle event and must not be repurposed as a per-task boundary
 
 ## 7. Bugfix Checklist (Required)
 
