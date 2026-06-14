@@ -27,20 +27,22 @@ export function useWorkflowMessages(options = {}) {
   const expandedMessages = ref(new Set())
   const expandedReasonings = ref(new Set())
   const taskGroupCache = new Map()
-  const completedTaskGroupVersion = ref(0)
   const acceptedTaskCompletionIds = new Set()
   const taskWindowState = ref({
     workflowId: null,
     initialized: false,
     completedGroups: [],
     activeMessages: [],
+    retainCompletedOverflow: false,
     lastCompletionIndex: -1,
     lastCompletionId: ''
   })
 
   const removeSystemReminder = content => {
-    if (!content) return ''
-    return content.replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '').trimEnd()
+    if (content === null || content === undefined) return ''
+    return String(content)
+      .replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '')
+      .trimEnd()
   }
 
   const isHiddenSystemObservation = message => {
@@ -266,6 +268,7 @@ export function useWorkflowMessages(options = {}) {
       initialized: true,
       completedGroups,
       activeMessages: activeGroup?.messages || [],
+      retainCompletedOverflow: false,
       lastCompletionIndex,
       lastCompletionId:
         lastCompletionIndex >= 0
@@ -286,12 +289,18 @@ export function useWorkflowMessages(options = {}) {
         initialized: false,
         completedGroups: [],
         activeMessages: [],
+        retainCompletedOverflow: false,
         lastCompletionIndex: -1,
         lastCompletionId: ''
       }
     }
 
     if (!messages.length) {
+      taskWindowState.value = {
+        ...taskWindowState.value,
+        activeMessages: [],
+        retainCompletedOverflow: false
+      }
       return
     }
 
@@ -321,6 +330,9 @@ export function useWorkflowMessages(options = {}) {
 
     if (!newlyCompletedGroups.length) {
       currentState.activeMessages = activeTail
+      if (activeTail.length > 0) {
+        currentState.retainCompletedOverflow = false
+      }
       return
     }
 
@@ -331,12 +343,12 @@ export function useWorkflowMessages(options = {}) {
     const nextLastCompletionIndex = activeStartIndex + completedMessageCount - 1
     currentState.completedGroups.push(...newlyCompletedGroups)
     currentState.activeMessages = activeGroup?.messages || []
+    currentState.retainCompletedOverflow = !activeGroup
     currentState.lastCompletionIndex = nextLastCompletionIndex
     currentState.lastCompletionId = getMessageIdentity(
       messages[nextLastCompletionIndex],
       nextLastCompletionIndex
     )
-    completedTaskGroupVersion.value += 1
   }
 
   watch(
@@ -357,8 +369,10 @@ export function useWorkflowMessages(options = {}) {
 
   const visibleTaskGroupsState = computed(() => {
     const state = taskWindowState.value
+    const completedGroupLimit =
+      visibleCompletedTaskGroupCount.value + (state.retainCompletedOverflow ? 1 : 0)
     const visibleCompletedGroups = state.completedGroups.slice(
-      -visibleCompletedTaskGroupCount.value
+      -completedGroupLimit
     )
     const activeGroup = state.activeMessages.length
       ? {
@@ -374,12 +388,12 @@ export function useWorkflowMessages(options = {}) {
     }
   })
 
-  const hiddenCompletedTaskGroupCount = computed(() =>
-    Math.max(
-      0,
-      taskWindowState.value.completedGroups.length - visibleCompletedTaskGroupCount.value
-    )
-  )
+  const hiddenCompletedTaskGroupCount = computed(() => {
+    const visibleLimit =
+      visibleCompletedTaskGroupCount.value +
+      (taskWindowState.value.retainCompletedOverflow ? 1 : 0)
+    return Math.max(0, taskWindowState.value.completedGroups.length - visibleLimit)
+  })
 
   const enhanceRawMessages = rawMsgs => {
     if (!rawMsgs.length) return []
@@ -758,7 +772,25 @@ export function useWorkflowMessages(options = {}) {
         return true
       })
       .map((message, idx) => {
-        const toolDisplay = getToolDisplayInfo(message)
+        let toolDisplay
+        try {
+          toolDisplay = getToolDisplayInfo(message)
+        } catch (error) {
+          console.error('[Workflow] Failed to format tool message:', error, message)
+          const fallbackTitle = t('chat.toolResult') || 'Result'
+          toolDisplay = {
+            title: fallbackTitle,
+            summary: removeSystemReminder(message?.metadata?.summary || ''),
+            isError: isMessageError(message),
+            displayType: 'text',
+            icon: 'tool',
+            toolType: 'tool-system',
+            action: fallbackTitle,
+            target: '',
+            hasStreamOutput: false,
+            executionStatus: String(message?.metadata?.execution_status || '')
+          }
+        }
         const displayId = message.id || `msg_${message.role}_${message.stepIndex}_${idx}`
 
         let isRejected = false
@@ -793,8 +825,8 @@ export function useWorkflowMessages(options = {}) {
         if (Array.isArray(toolCalls) && toolCalls.length > 0) {
           pendingToolCalls = toolCalls
             .map(call => {
-              const name = call.function?.name || call.name || ''
-              const rawArgs = call.function?.arguments || call.arguments || {}
+              const name = call?.function?.name || call?.name || ''
+              const rawArgs = call?.function?.arguments || call?.arguments || {}
               let args = rawArgs
               if (typeof rawArgs === 'string') {
                 try {
@@ -803,9 +835,12 @@ export function useWorkflowMessages(options = {}) {
                   args = {}
                 }
               }
+              if (!args || typeof args !== 'object' || Array.isArray(args)) {
+                args = {}
+              }
               const { icon, toolType, action, target } = formatToolTitle(name, args)
-              const state = toolStates.get(call.id)
-              const ledgerState = ledgerStateById.get(call.id)
+              const state = toolStates.get(call?.id)
+              const ledgerState = ledgerStateById.get(call?.id)
               const isRejected =
                 ledgerState?.status === 'rejected' || (!!state?.isFinal && !!state?.isRejected)
               const isRunning = ledgerState?.status === 'approved_running' || !!state?.isRunning
@@ -814,7 +849,7 @@ export function useWorkflowMessages(options = {}) {
                   ? args.summary.trim()
                   : ''
               return {
-                id: call.id,
+                id: call?.id,
                 icon,
                 toolType,
                 action,
@@ -836,16 +871,9 @@ export function useWorkflowMessages(options = {}) {
               }
             })
             .filter(call => {
-              const state = toolStates.get(call.id)
-              const ledgerState = ledgerStateById.get(call.id)
-              if (toolMessageIds.has(call.id)) return false
-              if (ledgerState?.status === 'approved_running') return false
-              if (ledgerState?.status === 'final_success') return false
-              if (ledgerState?.status === 'final_error') return false
-              if (ledgerState?.status === 'rejected') return true
-              if (!state) return true
-              if (state.isRunning) return false
-              return state.isRejected
+              // Tool lifecycle events can arrive before the persisted result message.
+              // Keep the assistant card visible until its replacement actually exists.
+              return !toolMessageIds.has(call.id)
             })
         }
 
@@ -1282,6 +1310,9 @@ export function useWorkflowMessages(options = {}) {
         args = {}
       }
     }
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
+      args = {}
+    }
 
     let parsedPayload = meta.details && typeof meta.details === 'object' ? meta.details : null
 
@@ -1324,7 +1355,7 @@ export function useWorkflowMessages(options = {}) {
     if (name === 'complete_workflow_with_summary') {
       finalAction = t('workflow.finishTask')
       finalTarget = ''
-    } else if (meta.title && meta.title.trim()) {
+    } else if (typeof meta.title === 'string' && meta.title.trim()) {
       finalAction = normalizeToolDisplayText(removeSystemReminder(meta.title), displayRoots())
       const normalizedFormattedAction = normalizeToolDisplayText(formatted.action || '', displayRoots())
       const normalizedFinalAction = normalizeToolDisplayText(finalAction || '', displayRoots())
@@ -1651,7 +1682,6 @@ export function useWorkflowMessages(options = {}) {
     expandedMessages,
     expandedReasonings,
     enhancedMessages,
-    completedTaskGroupVersion,
     hiddenCompletedTaskGroupCount,
     lastAssistantMessage,
     toggleMessageExpand,

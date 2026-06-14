@@ -12,7 +12,6 @@
     <div
       v-for="(message, index) in renderedMessages"
       :key="message.displayId"
-      v-memo="[message, getMessageRenderState(message)]"
       class="message"
       :data-message-id="message.displayId || message.id || null"
       :data-child-task-id="getMessageSubAgentId(message)"
@@ -210,8 +209,8 @@
             v-else-if="message.role === 'tool'"
             class="cli-tool-call"
             :class="[
-              message.toolDisplay.toolType || 'tool-system',
-              message.toolDisplay.isError ? 'status-error' : 'status-success'
+              message.toolDisplay?.toolType || 'tool-system',
+              message.toolDisplay?.isError ? 'status-error' : 'status-success'
             ]">
             <template v-if="isSubAgentRunMessage(message) && message.subAgentCard">
               <div class="sub-agent-card">
@@ -862,7 +861,10 @@ const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
 const isRevealingEarlierTaskGroup = ref(false)
 const lastNonEmptyMessages = ref([])
-let isRestoringScroll = false
+let pendingScrollFrame = null
+let pendingScrollForce = false
+let scrollScheduled = false
+let isUnmounted = false
 let userMessageResizeObserver = null
 
 const isPlanApprovalMessage = message => message?.metadata?.tool_name === 'submit_plan'
@@ -904,7 +906,6 @@ const isNearBottom = el => {
 const canRemoveQueuedMessage = item => item?.removable !== false
 
 const handleScroll = () => {
-  if (isRestoringScroll) return
   shouldAutoScroll.value = isNearBottom(messagesRef.value)
 }
 
@@ -1731,57 +1732,6 @@ const getMessageContent = message => getMessageDisplayData(message).content
 
 const getMessageReasoning = message => getMessageDisplayData(message).reasoning
 
-const getNestedExpansionState = message => {
-  const states = [
-    props.isMessageExpanded(message) ? '1' : '0',
-    props.isReasoningExpanded(message?.displayId) ? '1' : '0',
-    isContextSnapshotExpanded(message) ? '1' : '0',
-    isUserMessageExpanded(message) ? '1' : '0',
-    isExpandableUserMessage(message) ? '1' : '0'
-  ]
-
-  if (isSubAgentRunMessage(message)) {
-    states.push(
-      isSubAgentTaskExpanded(message) ? '1' : '0',
-      isSubAgentResultExpanded(message) ? '1' : '0'
-    )
-  }
-
-  if (isExplorationBatchMessage(message)) {
-    for (let groupIndex = 0; groupIndex < message.explorationBatch.groups.length; groupIndex += 1) {
-      const group = message.explorationBatch.groups[groupIndex]
-      states.push(isExplorationGroupReasoningExpanded(message, groupIndex) ? '1' : '0')
-      for (let toolIndex = 0; toolIndex < group.tools.length; toolIndex += 1) {
-        states.push(isExplorationToolExpanded(message, groupIndex, toolIndex) ? '1' : '0')
-      }
-    }
-  }
-
-  return states.join('')
-}
-
-const getMessageRenderState = message => {
-  const toolCallId = getMessageToolCallId(message)
-  const toolStreamLength = toolCallId ? workflowStore.getToolStream(toolCallId).length : 0
-  const approvalSubmitting = toolCallId
-    ? props.isApprovalSubmitting(props.currentWorkflowId, toolCallId)
-    : false
-  const choiceKey = getChoiceKey(message)
-
-  return [
-    props.isRunning ? '1' : '0',
-    message === props.lastAssistantMessage ? '1' : '0',
-    getNestedExpansionState(message),
-    pendingApprovalIdSet.value.has(toolCallId) ? '1' : '0',
-    props.approvalLoading && props.activeApprovalId === toolCallId ? '1' : '0',
-    approvalSubmitting ? '1' : '0',
-    props.askUserSubmitting ? '1' : '0',
-    toolStreamLength,
-    approvalDrafts.value[toolCallId] || '',
-    JSON.stringify(askUserDrafts.value[choiceKey] || null)
-  ].join(':')
-}
-
 const shouldShowErrorAlert = message => {
   if (!message?.isError) return false
   if (message?.role === 'tool') return false
@@ -2206,71 +2156,37 @@ const submitAskUserResponse = message => {
 }
 
 const scrollToBottom = (force = false) => {
-  if (messagesRef.value) {
-    const el = messagesRef.value
-    if (force || shouldAutoScroll.value || isNearBottom(el)) {
-      nextTick(() => {
-        el.scrollTop = el.scrollHeight
+  const container = messagesRef.value
+  if (!container) return
+  if (!force && !shouldAutoScroll.value && !isNearBottom(container)) return
+
+  pendingScrollForce = pendingScrollForce || force
+  if (scrollScheduled) return
+  scrollScheduled = true
+
+  nextTick(() => {
+    if (isUnmounted) {
+      scrollScheduled = false
+      pendingScrollForce = false
+      return
+    }
+    pendingScrollFrame = requestAnimationFrame(() => {
+      pendingScrollFrame = null
+      scrollScheduled = false
+      const target = messagesRef.value
+      if (!target) {
+        pendingScrollForce = false
+        return
+      }
+
+      if (pendingScrollForce || shouldAutoScroll.value || isNearBottom(target)) {
+        target.scrollTop = target.scrollHeight
         shouldAutoScroll.value = true
-      })
-    }
-  }
-}
-
-const captureScrollPosition = () => {
-  const container = messagesRef.value
-  if (!container) return null
-
-  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-  const containerTop = container.getBoundingClientRect().top
-  const anchor = Array.from(container.querySelectorAll('.message')).find(element => {
-    return element.getBoundingClientRect().bottom > containerTop
-  })
-
-  return {
-    stickToBottom: shouldAutoScroll.value || isNearBottom(container),
-    scrollRatio: maxScrollTop > 0 ? container.scrollTop / maxScrollTop : 0,
-    anchorId: anchor?.dataset.messageId || '',
-    anchorOffset: anchor ? anchor.getBoundingClientRect().top - containerTop : 0
-  }
-}
-
-const restoreScrollPosition = position => {
-  const container = messagesRef.value
-  if (!container || !position) return
-
-  isRestoringScroll = true
-  if (position.stickToBottom) {
-    container.scrollTop = container.scrollHeight
-    shouldAutoScroll.value = true
-  } else {
-    const containerTop = container.getBoundingClientRect().top
-    const anchor = Array.from(container.querySelectorAll('.message')).find(
-      element => element.dataset.messageId === position.anchorId
-    )
-
-    if (anchor) {
-      container.scrollTop += anchor.getBoundingClientRect().top - containerTop - position.anchorOffset
-    } else {
-      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-      container.scrollTop = maxScrollTop * position.scrollRatio
-    }
-    shouldAutoScroll.value = false
-  }
-
-  requestAnimationFrame(() => {
-    isRestoringScroll = false
+      }
+      pendingScrollForce = false
+    })
   })
 }
-
-watch(
-  () => renderedMessages.value.map(message => message.displayId || message.id || '').join('|'),
-  () => {
-    const position = captureScrollPosition()
-    nextTick(() => restoreScrollPosition(position))
-  },
-  { flush: 'pre' }
-)
 
 watch(
   () => renderedMessages.value.map(message => message.displayId || message.id || '').join('|'),
@@ -2303,6 +2219,12 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  isUnmounted = true
+  if (pendingScrollFrame !== null) {
+    cancelAnimationFrame(pendingScrollFrame)
+    pendingScrollFrame = null
+  }
+  scrollScheduled = false
   if (userMessageResizeObserver) {
     userMessageResizeObserver.disconnect()
     userMessageResizeObserver = null

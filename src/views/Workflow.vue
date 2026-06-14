@@ -407,7 +407,6 @@ const {
   expandedMessages,
   expandedReasonings,
   enhancedMessages,
-  completedTaskGroupVersion,
   hiddenCompletedTaskGroupCount,
   lastAssistantMessage,
   toggleMessageExpand,
@@ -1365,15 +1364,6 @@ const onGlobalKeyDown = event => {
   }
 }
 
-// Watch for workflow changes to scroll
-watch(
-  () => workflowStore.messages,
-  () => {
-    scrollMessageListToBottom(false)
-  },
-  { deep: true }
-)
-
 watch(
   () => workflowStore.displayQueueItems.length,
   (nextLength, previousLength) => {
@@ -1382,12 +1372,6 @@ watch(
     }
   }
 )
-
-watch(completedTaskGroupVersion, (nextVersion, previousVersion) => {
-  if (nextVersion > previousVersion) {
-    scrollMessageListToBottom()
-  }
-})
 
 watch(
   () => currentWorkflowId.value,

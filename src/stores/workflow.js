@@ -40,39 +40,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return (toolStreams.value.get(toolId) || []).length > 0;
   };
 
-  const removeAssistantToolCallPlaceholder = (toolCallId) => {
-    if (!toolCallId) return;
-
-    messages.value = messages.value.flatMap((message) => {
-      const toolCalls = message?.metadata?.tool_calls;
-      if (message?.role !== 'assistant' || !Array.isArray(toolCalls) || toolCalls.length === 0) {
-        return [message];
-      }
-
-      const remainingToolCalls = toolCalls.filter((call) => {
-        const callId = call?.id || call?.tool_call_id;
-        return callId !== toolCallId;
-      });
-
-      const hasText = Boolean((message.message || '').trim() || (message.reasoning || '').trim());
-      if (remainingToolCalls.length === 0 && !hasText) {
-        return [];
-      }
-
-      const nextMetadata = { ...(message.metadata || {}) };
-      if (remainingToolCalls.length > 0) {
-        nextMetadata.tool_calls = remainingToolCalls;
-      } else {
-        delete nextMetadata.tool_calls;
-      }
-
-      return [{
-        ...message,
-        metadata: nextMetadata
-      }];
-    });
-  };
-
   // ==================== Core State ====================
   const workflows = ref([]);
   const currentWorkflowId = ref(null);
@@ -1182,6 +1149,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
       // 保留 Task Ledger 数据以支持切换回退
     }
 
+    // Clear the previous projection before changing the session id. The workflow
+    // message grouper uses synchronous watchers, so exposing old messages under a
+    // new id can initialize the new session with the previous session's groups.
+    messages.value = [];
     currentWorkflowId.value = workflowId;
     lastTaskCompletion.value = null;
     messageQueue.value = [];
@@ -1193,6 +1164,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
     try {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
       console.log('workflowStore: snapshot loaded', snapshot);
+
+      // A slower request for a previously selected workflow must not overwrite
+      // the projection of the workflow that is currently active.
+      if (currentWorkflowId.value !== workflowId) {
+        return;
+      }
 
       _parseWorkflowData(snapshot.workflow);
       snapshot.workflow.executionContext = normalizeExecutionContext(snapshot.executionContext);
@@ -1267,6 +1244,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
       persistLastSelectedWorkflowId(workflowId);
     } catch (err) {
+      if (currentWorkflowId.value !== workflowId) {
+        return;
+      }
       await _handleError(err);
       messages.value = [];
       todoList.value = [];
@@ -1445,10 +1425,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
       messages.value[index] = { ...messages.value[index], ...message };
     } else {
       messages.value.push(message);
-    }
-
-    if (incomingToolCallId && (message.role === 'tool' || (message.role === 'user' && message.stepType === 'observe'))) {
-      removeAssistantToolCallPlaceholder(incomingToolCallId);
     }
 
     // 更新 Task Ledger
