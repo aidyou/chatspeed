@@ -127,41 +127,43 @@
 
       <!-- Main container -->
       <el-container class="main-container">
-        <WorkflowMessageList
-          ref="messageListRef"
-          :messages="enhancedMessages"
-          :hidden-completed-task-group-count="hiddenCompletedTaskGroupCount"
-          :is-running="isRunning"
-          :queued-messages="workflowStore.displayQueueItems"
-          :is-chatting="isChatting"
-          :chat-state="chatState"
-          :is-compressing="isCompressing"
-          :compression-message="compressionMessage"
-          :last-assistant-message="lastAssistantMessage"
-          :approval-loading="approvalLoading"
-          :active-approval-id="activeApprovalId"
-          :ask-user-submitting="askUserSubmitting"
-          :is-message-expanded="isMessageExpanded"
-          :is-reasoning-expanded="isReasoningExpanded"
-          :remove-system-reminder="removeSystemReminder"
-          :get-diff-markdown="getDiffMarkdown"
-          :parse-choice-content="parseChoiceContent"
-          :get-parsed-message="getParsedMessage"
-          :get-reasoning-preview="getReasoningPreview"
-          :should-show-tool-raw-content="shouldShowToolRawContent"
-          :pending-count="currentInlinePendingApprovalIds.length"
-          :pending-approval-ids="currentInlinePendingApprovalIds"
-          :current-workflow-id="currentWorkflowId"
-          :is-approval-submitting="isApprovalSubmitting"
-          @toggle-expand="toggleMessageExpand"
-          @toggle-reasoning="toggleReasoningExpand"
-          @reveal-earlier-task-group="visibleCompletedTaskGroupCount += 1"
-          @submit-ask-user="submitAskUserResponse"
-          @approve-tool="onApproveAction"
-          @approve-all-tool="onApproveAllAction"
-          @approve-all-pending="onApproveAllPendingAction"
-          @remove-queued-message="removeQueuedMessage"
-          @reject-tool="onRejectAction" />
+        <el-main class="message-list-container">
+          <WorkflowMessageList
+            ref="messageListRef"
+            :messages="enhancedMessages"
+            :hidden-completed-task-group-count="hiddenCompletedTaskGroupCount"
+            :is-running="isRunning"
+            :queued-messages="workflowStore.displayQueueItems"
+            :is-chatting="isChatting"
+            :chat-state="chatState"
+            :is-compressing="isCompressing"
+            :compression-message="compressionMessage"
+            :last-assistant-message="lastAssistantMessage"
+            :approval-loading="approvalLoading"
+            :active-approval-id="activeApprovalId"
+            :ask-user-submitting="askUserSubmitting"
+            :is-message-expanded="isMessageExpanded"
+            :is-reasoning-expanded="isReasoningExpanded"
+            :remove-system-reminder="removeSystemReminder"
+            :get-diff-markdown="getDiffMarkdown"
+            :parse-choice-content="parseChoiceContent"
+            :get-parsed-message="getParsedMessage"
+            :get-reasoning-preview="getReasoningPreview"
+            :should-show-tool-raw-content="shouldShowToolRawContent"
+            :pending-count="currentInlinePendingApprovalIds.length"
+            :pending-approval-ids="currentInlinePendingApprovalIds"
+            :current-workflow-id="currentWorkflowId"
+            :is-approval-submitting="isApprovalSubmitting"
+            @toggle-expand="toggleMessageExpand"
+            @toggle-reasoning="toggleReasoningExpand"
+            @reveal-earlier-task-group="visibleCompletedTaskGroupCount += 1"
+            @submit-ask-user="submitAskUserResponse"
+            @approve-tool="onApproveAction"
+            @approve-all-tool="onApproveAllAction"
+            @approve-all-pending="onApproveAllPendingAction"
+            @remove-queued-message="removeQueuedMessage"
+            @reject-tool="onRejectAction" />
+        </el-main>
 
         <!-- Status Panel (Floating) -->
         <StatusPanel />
@@ -405,6 +407,7 @@ const {
   expandedMessages,
   expandedReasonings,
   enhancedMessages,
+  completedTaskGroupVersion,
   hiddenCompletedTaskGroupCount,
   lastAssistantMessage,
   toggleMessageExpand,
@@ -1379,6 +1382,12 @@ watch(
     }
   }
 )
+
+watch(completedTaskGroupVersion, (nextVersion, previousVersion) => {
+  if (nextVersion > previousVersion) {
+    scrollMessageListToBottom()
+  }
+})
 
 watch(
   () => currentWorkflowId.value,

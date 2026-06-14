@@ -10,8 +10,9 @@
     </button>
 
     <div
-      v-for="(message, index) in visibleMessages"
+      v-for="(message, index) in renderedMessages"
       :key="message.displayId"
+      v-memo="[message, getMessageRenderState(message)]"
       class="message"
       :data-message-id="message.displayId || message.id || null"
       :data-child-task-id="getMessageSubAgentId(message)"
@@ -856,9 +857,12 @@ const messagesRef = ref(null)
 const approvalDrafts = ref({})
 const askUserDrafts = ref({})
 const userMessageOverflowMap = ref({})
+const messageDisplayDataCache = new WeakMap()
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
 const isRevealingEarlierTaskGroup = ref(false)
+const lastNonEmptyMessages = ref([])
+let isRestoringScroll = false
 let userMessageResizeObserver = null
 
 const isPlanApprovalMessage = message => message?.metadata?.tool_name === 'submit_plan'
@@ -878,7 +882,7 @@ const getVisiblePendingApprovalIds = () => {
   const orderedIds = []
   const seen = new Set()
 
-  for (const message of visibleMessages.value || []) {
+  for (const message of renderedMessages.value || []) {
     const toolCallId = getMessageToolCallId(message)
     if (!toolCallId || seen.has(toolCallId)) continue
     if (!isApprovalPending(message)) continue
@@ -900,6 +904,7 @@ const isNearBottom = el => {
 const canRemoveQueuedMessage = item => item?.removable !== false
 
 const handleScroll = () => {
+  if (isRestoringScroll) return
   shouldAutoScroll.value = isNearBottom(messagesRef.value)
 }
 
@@ -1334,8 +1339,6 @@ const buildExplorationBatchMessage = (messages, startIndex) => {
   ).length
   const searchCount = toolMessages.length - readCount
   const firstId = messages[0]?.displayId || messages[0]?.id || `exploration_${startIndex}`
-  const lastId =
-    messages[messages.length - 1]?.displayId || messages[messages.length - 1]?.id || firstId
   const groups = []
   let currentGroup = null
 
@@ -1372,8 +1375,9 @@ const buildExplorationBatchMessage = (messages, startIndex) => {
 
   return {
     role: 'tool',
-    displayId: `exploration_batch_${firstId}_${lastId}`,
-    id: `exploration_batch_${startIndex}`,
+    // Keep the identity stable while new exploration results extend the batch.
+    displayId: `exploration_batch_${firstId}`,
+    id: `exploration_batch_${firstId}`,
     metadata: {
       message_kind: 'exploration_batch'
     },
@@ -1411,28 +1415,6 @@ const collapseExplorationBatches = messages => {
       }
       batch.push(candidate)
       cursor += 1
-    }
-
-    if (props.isRunning && cursor >= messages.length) {
-      const lastToolIndex = [...batch]
-        .map((item, batchIndex) => (isReadOnlyExplorationToolMessage(item) ? batchIndex : -1))
-        .filter(batchIndex => batchIndex >= 0)
-        .pop()
-
-      if (typeof lastToolIndex === 'number') {
-        const stableBatch = batch.slice(0, lastToolIndex)
-        const liveTail = batch.slice(lastToolIndex)
-
-        if (stableBatch.length > 0) {
-          const grouped = buildExplorationBatchMessage(stableBatch, index)
-          if (grouped) collapsed.push(grouped)
-          else collapsed.push(...stableBatch)
-        }
-
-        collapsed.push(...liveTail)
-        index = cursor
-        continue
-      }
     }
 
     const grouped = buildExplorationBatchMessage(batch, index)
@@ -1475,6 +1457,45 @@ const visibleMessages = computed(() =>
   )
 )
 
+const hasCurrentWorkflowSourceMessages = computed(() =>
+  (workflowStore.messages || []).some(message => {
+    const workflowId = message?.sessionId || message?.session_id
+    return !workflowId || workflowId === props.currentWorkflowId
+  })
+)
+
+const shouldRetainLastNonEmptyMessages = computed(
+  () =>
+    props.isRunning ||
+    props.isChatting ||
+    props.isCompressing ||
+    hasCurrentWorkflowSourceMessages.value
+)
+
+const renderedMessages = computed(() => {
+  if (visibleMessages.value.length > 0) return visibleMessages.value
+  if (shouldRetainLastNonEmptyMessages.value) return lastNonEmptyMessages.value
+  return visibleMessages.value
+})
+
+watch(
+  visibleMessages,
+  messages => {
+    if (messages.length > 0) {
+      lastNonEmptyMessages.value = messages
+    } else if (!shouldRetainLastNonEmptyMessages.value) {
+      lastNonEmptyMessages.value = []
+    }
+  },
+  { immediate: true, flush: 'sync' }
+)
+
+watch(shouldRetainLastNonEmptyMessages, shouldRetain => {
+  if (!shouldRetain && visibleMessages.value.length === 0) {
+    lastNonEmptyMessages.value = []
+  }
+})
+
 const revealEarlierTaskGroup = () => {
   if (isRevealingEarlierTaskGroup.value || props.hiddenCompletedTaskGroupCount <= 0) return
 
@@ -1495,16 +1516,16 @@ const revealEarlierTaskGroup = () => {
 }
 
 const lastVisibleMessage = computed(
-  () => visibleMessages.value[visibleMessages.value.length - 1] || null
+  () => renderedMessages.value[renderedMessages.value.length - 1] || null
 )
 const getVisibleMessageIndex = message =>
-  visibleMessages.value.findIndex(item => item.displayId === message?.displayId)
+  renderedMessages.value.findIndex(item => item.displayId === message?.displayId)
 
 const hasSubsequentVisibleOutput = message => {
   const index = getVisibleMessageIndex(message)
   if (index === -1) return false
 
-  return visibleMessages.value.slice(index + 1).some(item => item.role !== 'user')
+  return renderedMessages.value.slice(index + 1).some(item => item.role !== 'user')
 }
 
 const isStreamingReasoningActive = computed(
@@ -1684,19 +1705,82 @@ const extractThinkTaggedContent = content => {
 }
 
 const getMessageDisplayData = message => {
+  if (!message || typeof message !== 'object') {
+    return {
+      content: '',
+      reasoning: ''
+    }
+  }
+
+  const cached = messageDisplayDataCache.get(message)
+  if (cached) return cached
+
   const parsed = props.getParsedMessage(message)
   const normalized = extractThinkTaggedContent(parsed?.content || '')
   const explicitReasoning = String(message?.reasoning || '').trim()
 
-  return {
+  const displayData = {
     content: normalized.content,
     reasoning: explicitReasoning || normalized.reasoning
   }
+  messageDisplayDataCache.set(message, displayData)
+  return displayData
 }
 
 const getMessageContent = message => getMessageDisplayData(message).content
 
 const getMessageReasoning = message => getMessageDisplayData(message).reasoning
+
+const getNestedExpansionState = message => {
+  const states = [
+    props.isMessageExpanded(message) ? '1' : '0',
+    props.isReasoningExpanded(message?.displayId) ? '1' : '0',
+    isContextSnapshotExpanded(message) ? '1' : '0',
+    isUserMessageExpanded(message) ? '1' : '0',
+    isExpandableUserMessage(message) ? '1' : '0'
+  ]
+
+  if (isSubAgentRunMessage(message)) {
+    states.push(
+      isSubAgentTaskExpanded(message) ? '1' : '0',
+      isSubAgentResultExpanded(message) ? '1' : '0'
+    )
+  }
+
+  if (isExplorationBatchMessage(message)) {
+    for (let groupIndex = 0; groupIndex < message.explorationBatch.groups.length; groupIndex += 1) {
+      const group = message.explorationBatch.groups[groupIndex]
+      states.push(isExplorationGroupReasoningExpanded(message, groupIndex) ? '1' : '0')
+      for (let toolIndex = 0; toolIndex < group.tools.length; toolIndex += 1) {
+        states.push(isExplorationToolExpanded(message, groupIndex, toolIndex) ? '1' : '0')
+      }
+    }
+  }
+
+  return states.join('')
+}
+
+const getMessageRenderState = message => {
+  const toolCallId = getMessageToolCallId(message)
+  const toolStreamLength = toolCallId ? workflowStore.getToolStream(toolCallId).length : 0
+  const approvalSubmitting = toolCallId
+    ? props.isApprovalSubmitting(props.currentWorkflowId, toolCallId)
+    : false
+  const choiceKey = getChoiceKey(message)
+
+  return [
+    props.isRunning ? '1' : '0',
+    message === props.lastAssistantMessage ? '1' : '0',
+    getNestedExpansionState(message),
+    pendingApprovalIdSet.value.has(toolCallId) ? '1' : '0',
+    props.approvalLoading && props.activeApprovalId === toolCallId ? '1' : '0',
+    approvalSubmitting ? '1' : '0',
+    props.askUserSubmitting ? '1' : '0',
+    toolStreamLength,
+    approvalDrafts.value[toolCallId] || '',
+    JSON.stringify(askUserDrafts.value[choiceKey] || null)
+  ].join(':')
+}
 
 const shouldShowErrorAlert = message => {
   if (!message?.isError) return false
@@ -2011,7 +2095,7 @@ const setAskUserCustomInput = (message, title, value) => {
 /**
  * Check if there is a real user message after the given message in props.messages.
  * Uses the message's displayId to find its actual position, avoiding index mismatch
- * between visibleMessages (v-for) and props.messages (filtered/merged).
+ * between renderedMessages (v-for) and props.messages (filtered/merged).
  */
 const hasRealUserResponseAfter = message => {
   const startIndex = props.messages.findIndex(
@@ -2133,8 +2217,63 @@ const scrollToBottom = (force = false) => {
   }
 }
 
+const captureScrollPosition = () => {
+  const container = messagesRef.value
+  if (!container) return null
+
+  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+  const containerTop = container.getBoundingClientRect().top
+  const anchor = Array.from(container.querySelectorAll('.message')).find(element => {
+    return element.getBoundingClientRect().bottom > containerTop
+  })
+
+  return {
+    stickToBottom: shouldAutoScroll.value || isNearBottom(container),
+    scrollRatio: maxScrollTop > 0 ? container.scrollTop / maxScrollTop : 0,
+    anchorId: anchor?.dataset.messageId || '',
+    anchorOffset: anchor ? anchor.getBoundingClientRect().top - containerTop : 0
+  }
+}
+
+const restoreScrollPosition = position => {
+  const container = messagesRef.value
+  if (!container || !position) return
+
+  isRestoringScroll = true
+  if (position.stickToBottom) {
+    container.scrollTop = container.scrollHeight
+    shouldAutoScroll.value = true
+  } else {
+    const containerTop = container.getBoundingClientRect().top
+    const anchor = Array.from(container.querySelectorAll('.message')).find(
+      element => element.dataset.messageId === position.anchorId
+    )
+
+    if (anchor) {
+      container.scrollTop += anchor.getBoundingClientRect().top - containerTop - position.anchorOffset
+    } else {
+      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+      container.scrollTop = maxScrollTop * position.scrollRatio
+    }
+    shouldAutoScroll.value = false
+  }
+
+  requestAnimationFrame(() => {
+    isRestoringScroll = false
+  })
+}
+
 watch(
-  () => visibleMessages.value.map(message => message.displayId || message.id || '').join('|'),
+  () => renderedMessages.value.map(message => message.displayId || message.id || '').join('|'),
+  () => {
+    const position = captureScrollPosition()
+    nextTick(() => restoreScrollPosition(position))
+  },
+  { flush: 'pre' }
+)
+
+watch(
+  () => renderedMessages.value.map(message => message.displayId || message.id || '').join('|'),
   () => {
     scheduleMeasureUserMessageOverflow()
   },
@@ -2145,6 +2284,8 @@ watch(
   () => props.currentWorkflowId,
   () => {
     isRevealingEarlierTaskGroup.value = false
+    lastNonEmptyMessages.value = []
+    shouldAutoScroll.value = true
   }
 )
 

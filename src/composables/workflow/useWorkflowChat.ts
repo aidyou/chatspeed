@@ -90,6 +90,7 @@ export function useWorkflowChat({ currentWorkflowId }) {
   }
 
   const refreshDerivedChatState = (source = 'chunk') => {
+    const previousContent = chatState.value.content
     const { content, reasoning, hasOpenThink } = extractInlineReasoning(chatState.value.rawContent)
     const combinedReasoning = [reasoning, chatState.value.explicitReasoning]
       .map(part => String(part || '').trim())
@@ -111,11 +112,20 @@ export function useWorkflowChat({ currentWorkflowId }) {
       }
     }
 
-    chattingParser.reset()
     chatState.value.content = content
     chatState.value.reasoning = combinedReasoning
     chatState.value.reasoningStatus = reasoningStatus
-    chatState.value.blocks = content ? chattingParser.process(content) : []
+
+    if (!content) {
+      chattingParser.reset()
+      chatState.value.blocks = []
+    } else if (content.startsWith(previousContent)) {
+      chatState.value.blocks = chattingParser.process(content.slice(previousContent.length))
+    } else {
+      // Inline reasoning tags can retract text that was temporarily treated as visible content.
+      chattingParser.reset()
+      chatState.value.blocks = chattingParser.process(content)
+    }
   }
 
   // Handle retry status with countdown

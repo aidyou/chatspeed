@@ -653,6 +653,7 @@ const updateCharts = async () => {
         })
         tokenLineData.push({
           date: day.date,
+          type: t('settings.proxy.stats.cacheTokens'),
           value: Number(day.totalCacheTokens || 0)
         })
       })
@@ -771,7 +772,7 @@ const updateCharts = async () => {
                 seriesField: 'type',
                 color: [
                   getCssVar('--cs-info-color') || '#409eff',
-                  getCssVar('--cs-success-color') || '#67c23a'
+                  getCssVar('--cs-warning-color') || '#e6a23c'
                 ],
                 label: {
                   position: 'middle',
@@ -787,7 +788,8 @@ const updateCharts = async () => {
               },
               {
                 geometry: 'line',
-                color: getCssVar('--cs-warning-color') || '#e6a23c',
+                seriesField: 'type',
+                color: getCssVar('--cs-success-color') || '#67c23a',
                 lineStyle: { lineWidth: 3 },
                 point: { size: 4, shape: 'circle' }
               }

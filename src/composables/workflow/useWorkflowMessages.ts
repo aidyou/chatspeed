@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
 import { resolveWorkflowToolIcon } from './toolIcons'
 import { isAutoExecuteWorkflowTool } from './toolApproval'
@@ -26,7 +26,17 @@ export function useWorkflowMessages(options = {}) {
 
   const expandedMessages = ref(new Set())
   const expandedReasonings = ref(new Set())
-  const completedTaskGroupCache = new Map()
+  const taskGroupCache = new Map()
+  const completedTaskGroupVersion = ref(0)
+  const acceptedTaskCompletionIds = new Set()
+  const taskWindowState = ref({
+    workflowId: null,
+    initialized: false,
+    completedGroups: [],
+    activeMessages: [],
+    lastCompletionIndex: -1,
+    lastCompletionId: ''
+  })
 
   const removeSystemReminder = content => {
     if (!content) return ''
@@ -64,34 +74,43 @@ export function useWorkflowMessages(options = {}) {
     return toolName === 'complete_workflow_with_summary'
   }
 
-  const filteredWorkflowMessages = computed(() =>
-    (workflowStore.messages || []).filter(message => !isHiddenSystemObservation(message))
-  )
+  const isAcceptedFinishTaskMessage = message => {
+    if (message?.role !== 'tool' || !isFinishTaskMessage(message)) return false
 
-  const messageWindowState = computed(() => {
-    const messages = filteredWorkflowMessages.value
-    if (!messages.length) {
-      return {
-        hiddenCompletedCount: 0,
-        windowMessages: []
-      }
-    }
-    const groups = buildTaskGroups(messages)
-    const completedGroups = groups.filter(group => group.isCompleted)
-    const activeGroups = getTrailingActiveGroups(groups)
-    const visibleCompletedGroups = completedGroups.slice(-visibleCompletedTaskGroupCount.value)
-    const visibleGroupIds = new Set(
-      [...visibleCompletedGroups, ...activeGroups].map(group => group.id)
+    const metadata = message.metadata || {}
+    const executionStatus = String(metadata.execution_status || '').toLowerCase()
+    const approvalStatus = String(metadata.approval_status || '').toLowerCase()
+    const reviewDisplayState = String(metadata.review_display_state || '').toLowerCase()
+    const isError = Boolean(
+      message.isError ||
+        message.is_error ||
+        metadata.is_error ||
+        message.errorType ||
+        message.error_type ||
+        metadata.error_type ||
+        metadata.errorType
     )
-    const visibleGroups = groups.filter(group => visibleGroupIds.has(group.id))
 
-    return {
-      hiddenCompletedCount: Math.max(0, completedGroups.length - visibleCompletedTaskGroupCount.value),
-      windowMessages: visibleGroups.flatMap(group => group.messages)
+    if (isError || approvalStatus === 'rejected' || reviewDisplayState === 'final_review_rejected') {
+      return false
     }
-  })
+    if (reviewDisplayState === 'final_review_approved') return executionStatus === 'completed'
 
-  const hiddenCompletedTaskGroupCount = computed(() => messageWindowState.value.hiddenCompletedCount)
+    // Current backend tool observations always carry a terminal execution status.
+    // The status-less branch only keeps compatibility with older persisted transcripts.
+    return executionStatus ? executionStatus === 'completed' : true
+  }
+
+  const getMessageToolCallId = message =>
+    String(message?.metadata?.tool_call_id || message?.metadata?.toolCallId || '')
+
+  const filteredWorkflowMessages = computed(() =>
+    (workflowStore.messages || []).filter(message => {
+      if (isHiddenSystemObservation(message)) return false
+      const messageWorkflowId = message?.sessionId || message?.session_id
+      return !messageWorkflowId || messageWorkflowId === workflowStore.currentWorkflowId
+    })
+  )
 
   const getMessageSegmentId = message => {
     const rawSegmentId = message?.segment_id ?? message?.segmentId ?? message?.metadata?.segment_id
@@ -137,67 +156,230 @@ export function useWorkflowMessages(options = {}) {
       })
       .join('||')
 
-  const buildTaskGroups = messages => {
+  const buildEnhancedMessageSignature = message =>
+    JSON.stringify({
+      displayId: message?.displayId || '',
+      role: message?.role || '',
+      stepType: message?.stepType || '',
+      stepIndex: message?.stepIndex || '',
+      message: message?.message || '',
+      reasoning: message?.reasoning || '',
+      metadata: message?.metadata || {},
+      isError: !!message?.isError,
+      isRejected: !!message?.isRejected,
+      isApproved: !!message?.isApproved,
+      toolDisplay: message?.toolDisplay || null,
+      pendingToolCalls: message?.pendingToolCalls || [],
+      subAgentCard: message?.subAgentCard || null
+    })
+
+  const reuseUnchangedEnhancedMessages = (cachedEntry, nextMessages) => {
+    if (!cachedEntry?.messages?.length) {
+      return {
+        messages: nextMessages,
+        messageSignatures: nextMessages.map(buildEnhancedMessageSignature)
+      }
+    }
+
+    const cachedById = new Map(
+      cachedEntry.messages.map((message, index) => [
+        message.displayId,
+        {
+          message,
+          signature: cachedEntry.messageSignatures[index]
+        }
+      ])
+    )
+    const messageSignatures = nextMessages.map(buildEnhancedMessageSignature)
+    const messages = nextMessages.map((message, index) => {
+      const cached = cachedById.get(message.displayId)
+      return cached?.signature === messageSignatures[index] ? cached.message : message
+    })
+
+    return {
+      messages,
+      messageSignatures
+    }
+  }
+
+  const buildTaskGroups = (messages, allowPersistedCompletionFallback = false) => {
     if (!messages.length) return []
 
     const groups = []
-    let currentGroup = [messages[0]]
-    let currentSegmentId = getMessageSegmentId(messages[0])
+    let currentGroup = []
 
-    const pushGroup = groupMessages => {
+    const pushGroup = (groupMessages, isCompleted) => {
       if (!groupMessages.length) return
       groups.push({
         id: buildTaskGroupId(groupMessages),
-        isCompleted: groupMessages.some(isFinishTaskMessage),
+        isCompleted,
         messages: groupMessages
       })
     }
 
-    for (let index = 1; index < messages.length; index += 1) {
-      const message = messages[index]
-      const messageSegmentId = getMessageSegmentId(message)
-
-      if (messageSegmentId !== null && currentSegmentId !== null && messageSegmentId !== currentSegmentId) {
-        pushGroup(currentGroup)
-        currentGroup = [message]
-        currentSegmentId = messageSegmentId
-        continue
-      }
-
+    for (const message of messages) {
       currentGroup.push(message)
-      if (currentSegmentId === null) {
-        currentSegmentId = messageSegmentId
+      const toolCallId = getMessageToolCallId(message)
+      const isAcceptedBoundary =
+        acceptedTaskCompletionIds.has(toolCallId) ||
+        (allowPersistedCompletionFallback && isAcceptedFinishTaskMessage(message))
+      if (isAcceptedBoundary) {
+        pushGroup(currentGroup, true)
+        currentGroup = []
       }
     }
 
-    pushGroup(currentGroup)
+    pushGroup(currentGroup, false)
     return groups
   }
 
-  const getTrailingActiveGroups = groups => {
-    const trailing = []
-    for (let index = groups.length - 1; index >= 0; index -= 1) {
-      const group = groups[index]
-      if (group.isCompleted) break
-      trailing.unshift(group)
-    }
-    return trailing
-  }
-
-  const visibleTaskGroupsState = computed(() => {
-    const groups = buildTaskGroups(messageWindowState.value.windowMessages)
-    const completedGroups = groups.filter(group => group.isCompleted)
-    const activeGroups = getTrailingActiveGroups(groups)
-    const visibleCompletedGroups = completedGroups.slice(-visibleCompletedTaskGroupCount.value)
-    const visibleGroupIds = new Set(
-      [...visibleCompletedGroups, ...activeGroups].map(group => group.id)
+  const getMessageIdentity = (message, index) =>
+    String(
+      message?.id ||
+        message?.displayId ||
+        `${message?.role || 'message'}:${message?.stepIndex || 0}:${index}`
     )
 
+  const initializeTaskWindow = messages => {
+    acceptedTaskCompletionIds.clear()
+    for (const message of messages) {
+      if (isAcceptedFinishTaskMessage(message)) {
+        const toolCallId = getMessageToolCallId(message)
+        if (toolCallId) acceptedTaskCompletionIds.add(toolCallId)
+      }
+    }
+
+    const groups = buildTaskGroups(messages, true)
+    const completedGroups = groups.filter(group => group.isCompleted)
+    const activeGroup = groups.find(group => !group.isCompleted)
+    let lastCompletionIndex = -1
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (acceptedTaskCompletionIds.has(getMessageToolCallId(messages[index]))) {
+        lastCompletionIndex = index
+        break
+      }
+    }
+
+    taskWindowState.value = {
+      workflowId: workflowStore.currentWorkflowId,
+      initialized: true,
+      completedGroups,
+      activeMessages: activeGroup?.messages || [],
+      lastCompletionIndex,
+      lastCompletionId:
+        lastCompletionIndex >= 0
+          ? getMessageIdentity(messages[lastCompletionIndex], lastCompletionIndex)
+          : ''
+    }
+  }
+
+  const reconcileTaskWindow = messages => {
+    const state = taskWindowState.value
+    const workflowId = workflowStore.currentWorkflowId
+
+    if (state.workflowId !== workflowId) {
+      taskGroupCache.clear()
+      acceptedTaskCompletionIds.clear()
+      taskWindowState.value = {
+        workflowId,
+        initialized: false,
+        completedGroups: [],
+        activeMessages: [],
+        lastCompletionIndex: -1,
+        lastCompletionId: ''
+      }
+    }
+
+    if (!messages.length) {
+      return
+    }
+
+    if (!taskWindowState.value.initialized) {
+      initializeTaskWindow(messages)
+      return
+    }
+
+    const currentState = taskWindowState.value
+    if (currentState.lastCompletionIndex >= 0) {
+      const boundaryMessage = messages[currentState.lastCompletionIndex]
+      if (
+        !boundaryMessage ||
+        getMessageIdentity(boundaryMessage, currentState.lastCompletionIndex) !==
+          currentState.lastCompletionId
+      ) {
+        initializeTaskWindow(messages)
+        return
+      }
+    }
+
+    const activeStartIndex = currentState.lastCompletionIndex + 1
+    const activeTail = messages.slice(activeStartIndex)
+    const tailGroups = buildTaskGroups(activeTail)
+    const newlyCompletedGroups = tailGroups.filter(group => group.isCompleted)
+    const activeGroup = tailGroups.find(group => !group.isCompleted)
+
+    if (!newlyCompletedGroups.length) {
+      currentState.activeMessages = activeTail
+      return
+    }
+
+    const completedMessageCount = newlyCompletedGroups.reduce(
+      (count, group) => count + group.messages.length,
+      0
+    )
+    const nextLastCompletionIndex = activeStartIndex + completedMessageCount - 1
+    currentState.completedGroups.push(...newlyCompletedGroups)
+    currentState.activeMessages = activeGroup?.messages || []
+    currentState.lastCompletionIndex = nextLastCompletionIndex
+    currentState.lastCompletionId = getMessageIdentity(
+      messages[nextLastCompletionIndex],
+      nextLastCompletionIndex
+    )
+    completedTaskGroupVersion.value += 1
+  }
+
+  watch(
+    [
+      () => workflowStore.currentWorkflowId,
+      filteredWorkflowMessages,
+      () => workflowStore.taskCompletionRevision
+    ],
+    ([, messages]) => {
+      const completion = workflowStore.lastTaskCompletion
+      if (completion?.sessionId === workflowStore.currentWorkflowId && completion.toolCallId) {
+        acceptedTaskCompletionIds.add(completion.toolCallId)
+      }
+      reconcileTaskWindow(messages)
+    },
+    { immediate: true, flush: 'sync' }
+  )
+
+  const visibleTaskGroupsState = computed(() => {
+    const state = taskWindowState.value
+    const visibleCompletedGroups = state.completedGroups.slice(
+      -visibleCompletedTaskGroupCount.value
+    )
+    const activeGroup = state.activeMessages.length
+      ? {
+          id: buildTaskGroupId(state.activeMessages),
+          isCompleted: false,
+          messages: state.activeMessages
+        }
+      : null
+
     return {
-      groups: groups.filter(group => visibleGroupIds.has(group.id)),
-      activeGroupIds: new Set(activeGroups.map(group => group.id))
+      groups: activeGroup ? [...visibleCompletedGroups, activeGroup] : visibleCompletedGroups,
+      activeGroupId: activeGroup?.id || ''
     }
   })
+
+  const hiddenCompletedTaskGroupCount = computed(() =>
+    Math.max(
+      0,
+      taskWindowState.value.completedGroups.length - visibleCompletedTaskGroupCount.value
+    )
+  )
 
   const enhanceRawMessages = rawMsgs => {
     if (!rawMsgs.length) return []
@@ -720,31 +902,34 @@ export function useWorkflowMessages(options = {}) {
   }
 
   const enhancedMessages = computed(() => {
-    const { groups, activeGroupIds } = visibleTaskGroupsState.value
+    const { groups, activeGroupId } = visibleTaskGroupsState.value
     if (!groups.length) return []
 
     const visibleGroupIds = new Set(groups.map(group => group.id))
-    for (const cachedGroupId of completedTaskGroupCache.keys()) {
+    for (const cachedGroupId of taskGroupCache.keys()) {
       if (!visibleGroupIds.has(cachedGroupId)) {
-        completedTaskGroupCache.delete(cachedGroupId)
+        taskGroupCache.delete(cachedGroupId)
       }
     }
 
     return groups.flatMap(group => {
-      if (group.isCompleted && !activeGroupIds.has(group.id)) {
-        const signature = buildTaskGroupSignature(group.messages)
-        const cachedEntry = completedTaskGroupCache.get(group.id)
-        if (cachedEntry?.signature === signature) return cachedEntry.messages
+      const signature = buildTaskGroupSignature(group.messages)
+      const cachedEntry = taskGroupCache.get(group.id)
 
-        const nextMessages = enhanceRawMessages(group.messages)
-        completedTaskGroupCache.set(group.id, {
-          signature,
-          messages: nextMessages
-        })
-        return nextMessages
+      if (group.isCompleted && group.id !== activeGroupId) {
+        if (cachedEntry?.signature === signature) return cachedEntry.messages
       }
 
-      return enhanceRawMessages(group.messages)
+      const enhanced = reuseUnchangedEnhancedMessages(
+        cachedEntry,
+        enhanceRawMessages(group.messages)
+      )
+      taskGroupCache.set(group.id, {
+        signature,
+        messages: enhanced.messages,
+        messageSignatures: enhanced.messageSignatures
+      })
+      return enhanced.messages
     })
   })
 
@@ -1466,6 +1651,7 @@ export function useWorkflowMessages(options = {}) {
     expandedMessages,
     expandedReasonings,
     enhancedMessages,
+    completedTaskGroupVersion,
     hiddenCompletedTaskGroupCount,
     lastAssistantMessage,
     toggleMessageExpand,

@@ -95,6 +95,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const toolStreams = ref(new Map()); // tool_id -> string[] (max 100 lines)
   const subAgentProgress = ref(new Map()); // sub_agent_id -> lightweight parent UI projection
   const approvalSubmissions = ref(new Map()); // sessionId -> Set<toolCallId>
+  const taskCompletionRevision = ref(0);
+  const lastTaskCompletion = ref(null);
 
   // ==================== Task Ledger State ====================
   /**
@@ -1181,6 +1183,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
 
     currentWorkflowId.value = workflowId;
+    lastTaskCompletion.value = null;
     messageQueue.value = [];
     error.value = null;
     hasBlockingLiveSession.value = false;
@@ -1616,6 +1619,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       clearApprovalSubmissionsForSession(currentWorkflowId.value);
     }
     currentWorkflowId.value = null;
+    lastTaskCompletion.value = null;
     persistLastSelectedWorkflowId('');
     messages.value = [];
     todoList.value = [];
@@ -1640,6 +1644,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
+  const recordTaskCompleted = (sessionId, toolCallId, segmentId) => {
+    if (!sessionId || !toolCallId || currentWorkflowId.value !== sessionId) return;
+    lastTaskCompletion.value = {
+      sessionId,
+      toolCallId,
+      segmentId: Number(segmentId) || null
+    };
+    taskCompletionRevision.value += 1;
+  };
+
   return {
     // State
     workflows,
@@ -1660,6 +1674,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     subAgentProgress,
     displayQueueItems,
     approvalSubmissions,
+    taskCompletionRevision,
+    lastTaskCompletion,
 
     // Task Ledger State
     taskLedgerMap,
@@ -1706,6 +1722,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     clearToolStream,
     getToolStream,
     setTodoList,
+    recordTaskCompleted,
 
     // Task Ledger Actions
     rebuildTaskLedger,
