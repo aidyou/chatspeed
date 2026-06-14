@@ -10,6 +10,7 @@ use tokio::sync::{Mutex, Semaphore};
 
 // const MIN_POOL_SIZE: usize = 1;
 const MAX_POOL_SIZE: usize = 10;
+const MAX_CONCURRENT_SCRAPES: usize = 1;
 const IDLE_TIMEOUT_SECS: u64 = 300; // 5 minutes
 
 /// Represents a webview resource in the pool, including its listeners and usage metadata.
@@ -36,7 +37,9 @@ impl ScraperPool {
         let scraper_pool = Arc::new(Self {
             pool: pool.clone(),
             scraper,
-            semaphore: Arc::new(Semaphore::new(MAX_POOL_SIZE)),
+            // WebKit-backed hidden windows are not reliable when multiple searches
+            // create and navigate them concurrently, especially in release builds.
+            semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_SCRAPES)),
             app_handle,
         });
 

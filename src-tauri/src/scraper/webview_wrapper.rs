@@ -1,12 +1,11 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::{
-    AppHandle, EventId, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent, Wry,
+    webview::PageLoadEvent, AppHandle, Emitter, EventId, Listener, Manager, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, WindowEvent, Wry,
 };
 use url::ParseError;
 
@@ -56,48 +55,18 @@ impl WebviewScraper {
         config: Option<FullConfig>,
         generic_content_rule: Option<GenericContentRule>,
     ) -> (Result<String>, Vec<EventId>) {
-        let (tx_page_load, rx_page_load) = tokio::sync::oneshot::channel::<()>();
-        let tx_page_load = Arc::new(Mutex::new(Some(tx_page_load)));
-
-        let (tx_dom_content_loaded, rx_dom_content_loaded) = tokio::sync::oneshot::channel::<()>();
-        let tx_dom_content_loaded = Arc::new(Mutex::new(Some(tx_dom_content_loaded)));
-
         let (tx_scrape_result, rx_scrape_result) =
             tokio::sync::oneshot::channel::<Result<String>>();
         let scrape_result_sender = Arc::new(Mutex::new(Some(tx_scrape_result)));
 
         let window_label = webview.label();
-
-        // CRITICAL: Use `listen` instead of `once` for page lifecycle events.
-        //
-        // Why? The `webview.once` handler will panic if the underlying web event (e.g., 'load')
-        // fires more than once during a single navigation attempt. This can happen with
-        // HTTP redirects or complex client-side routing. The panic message is
-        // "attempted to call handler more than once".
-        //
-        // To solve this, we use a regular `listen` and manually ensure idempotency.
-        // The `oneshot::Sender` is wrapped in an `Arc<Mutex<Option<...>>>`. The first time
-        // the event fires, we `take()` the sender from the Option, use it, and leave `None`
-        // in its place. Any subsequent fires of the same event will find `None` and do nothing,
-        // preventing the panic while still achieving a "run once" behavior for the scrape operation.
-        let tx_page_load_clone = tx_page_load.clone();
-        let page_loaded_id =
-            webview.listen(format!("page_loaded_{}", window_label), move |_event| {
-                if let Ok(mut guard) = tx_page_load_clone.lock() {
-                    if let Some(tx) = guard.take() {
-                        let _ = tx.send(());
-                    }
-                }
-            });
-
-        let tx_dom_content_loaded_clone = tx_dom_content_loaded.clone();
-        let dom_content_loaded_id = webview.listen(
-            format!("DOMContentLoaded_ready_{}", window_label),
-            move |_event| {
-                if let Ok(mut guard) = tx_dom_content_loaded_clone.lock() {
-                    if let Some(tx) = guard.take() {
-                        let _ = tx.send(());
-                    }
+        let (page_load_sender, mut page_load_receiver) =
+            tokio::sync::mpsc::unbounded_channel::<String>();
+        let page_load_listener_id = webview.listen(
+            format!("scraper_page_load_finished_{}", window_label),
+            move |event| {
+                if let Ok(loaded_url) = serde_json::from_str::<String>(event.payload()) {
+                    let _ = page_load_sender.send(loaded_url);
                 }
             },
         );
@@ -195,56 +164,45 @@ impl WebviewScraper {
             });
 
         if let Err(e) = navigate_result {
-            let listeners = vec![
-                page_loaded_id,
-                dom_content_loaded_id,
-                scrape_result_listener_id,
-            ];
+            let listeners = vec![page_load_listener_id, scrape_result_listener_id];
             return (Err(e), listeners);
         }
 
         let result = async {
-            // Use race between load and DOMContentLoaded events
-            // Plus a fallback probe that checks if the URL has already reached its destination
+            // Use the URL supplied by Wry's native page-load callback. Polling
+            // `webview.url()` can panic inside the macOS event loop while WKWebView is
+            // transitioning between redirected pages.
             let fast_ready_timeout = std::cmp::min(page_timeout, Duration::from_secs(12));
+            let navigation_ready = async {
+                let Some(mut final_url) = page_load_receiver.recv().await else {
+                    return None;
+                };
 
-            let combined_ready = async {
-                tokio::select! {
-                    _ = rx_page_load => { log::debug!("Page load event received via JS"); },
-                    _ = rx_dom_content_loaded => { log::debug!("DOMContentLoaded event received via JS"); },
-                    _ = async {
-                        // Fallback probe: poll URL status every 500ms
-                        let start = Instant::now();
-                        loop {
-                            if let Ok(Ok(current_url)) =
-                                catch_unwind(AssertUnwindSafe(|| webview.url()))
-                            {
-                                let current_url_str = current_url.as_str();
-                                // If we've reached the target URL (ignoring fragments/queries for basic match)
-                                if current_url_str.contains(url) || (url.contains("://") && current_url_str.len() > 10 && !current_url_str.contains("index.html")) {
-                                    // Give it at least 2 seconds to settle if it's a fallback
-                                    if start.elapsed() >= Duration::from_secs(3) {
-                                        log::debug!("Fallback probe: URL reached and settled. Proceeding.");
-                                        break;
-                                    }
-                                }
-                            } else {
-                                log::debug!("Fallback probe skipped webview.url() because URL is not available yet");
-                            }
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                            if start.elapsed() >= fast_ready_timeout { break; }
-                        }
-                    } => { log::debug!("Fallback probe reached timeout or success"); }
+                // Redirects and client-side navigations may emit multiple Finished
+                // events. Continue until the loaded URL has remained stable briefly.
+                while let Ok(Some(next_url)) = tokio::time::timeout(
+                    Duration::from_millis(750),
+                    page_load_receiver.recv(),
+                )
+                .await
+                {
+                    final_url = next_url;
                 }
+
+                Some(final_url)
             };
 
-            if tokio::time::timeout(fast_ready_timeout, combined_ready).await.is_err() {
-                log::warn!(
-                    "Timed out waiting for page ready events for URL: {} after {:?}. Proceeding anyway as fallback.",
-                    url,
-                    fast_ready_timeout
-                );
-                // We no longer return Err here. Instead, we fall through to injection.
+            match tokio::time::timeout(fast_ready_timeout, navigation_ready).await {
+                Ok(Some(final_url)) => {
+                    log::debug!("Page ready after navigation, final URL: {}", final_url);
+                }
+                _ => {
+                    log::warn!(
+                        "Timed out waiting for final page load for URL: {} after {:?}. Proceeding anyway as fallback.",
+                        url,
+                        fast_ready_timeout
+                    );
+                }
             }
 
             if url.contains("bing.com") {
@@ -307,11 +265,7 @@ impl WebviewScraper {
         }
         .await;
 
-        let listeners = vec![
-            page_loaded_id,
-            dom_content_loaded_id,
-            scrape_result_listener_id,
-        ];
+        let listeners = vec![page_load_listener_id, scrape_result_listener_id];
 
         (result, listeners)
     }
@@ -339,7 +293,14 @@ impl WebviewScraper {
                 .context("Failed to serialize generic content rule to JSON")?;
         let js_code = format!(
             r#"
-            window.performScrape || (()=>{{
+            (()=>{{
+                const windowLabel = {window_label_json};
+                const config = {config_json_str};
+                const genericContentRule = {generic_content_rule_json_str};
+                if (typeof window.performScrape === 'function') {{
+                    window.performScrape(config, genericContentRule);
+                    return;
+                }}
                 try {{
                     console.debug('Starting script injection...');
                     {utility_js}
@@ -347,12 +308,14 @@ impl WebviewScraper {
                     {readability_js}
                     {scrape_logic_js}
                     console.debug('end script injection');
-                    window.performScrape({config_json_str}, {generic_content_rule_json_str});
+                    window.performScrape(config, genericContentRule);
                 }} catch (error) {{
                     console.error('Script injection failed:', error);
                 }}
             }})();
             "#,
+            window_label_json = serde_json::to_string(webview.label())
+                .context("Failed to serialize scraper window label")?,
         );
         webview.eval(&js_code)?;
         Ok(())
@@ -368,22 +331,6 @@ impl WebviewScraper {
         let window_label = format!(
             "scraper-{}",
             &uuid::Uuid::new_v4().simple().to_string()[..6]
-        );
-
-        let init_script = format!(
-            r#"
-            const windowLabel = '{window_label}';
-            window.addEventListener('load', () => {{
-                if (window.__TAURI__?.event) {{
-                    window.__TAURI__.event.emit('page_loaded_{window_label}');
-                }}
-            }});
-            window.addEventListener('DOMContentLoaded', () => {{
-                if (window.__TAURI__?.event) {{
-                    window.__TAURI__.event.emit('DOMContentLoaded_ready_{window_label}');
-                }}
-            }});
-        "#
         );
 
         // if block_images {
@@ -422,7 +369,16 @@ impl WebviewScraper {
             WebviewUrl::External(url.parse()?),
         )
         .title("Chatspeed Web Scraper")
-        .initialization_script(&init_script)
+        .on_page_load({
+            let page_load_event = format!("scraper_page_load_finished_{}", window_label);
+            move |window, payload| {
+                if matches!(payload.event(), PageLoadEvent::Finished) {
+                    if let Err(error) = window.emit(&page_load_event, payload.url().as_str()) {
+                        log::warn!("Failed to emit scraper page-load event: {}", error);
+                    }
+                }
+            }
+        })
         .visible(visible)
         .additional_browser_args("--mute-audio")
         .build()

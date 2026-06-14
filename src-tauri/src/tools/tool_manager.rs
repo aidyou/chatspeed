@@ -1,7 +1,9 @@
 use async_trait::async_trait;
+use futures::FutureExt;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tokio::sync::{broadcast, RwLock};
@@ -394,7 +396,23 @@ impl ToolManager {
     /// * `ToolResult` - The result of the function execution.
     pub async fn native_tool_call(&self, name: &str, params: Value) -> NativeToolResult {
         let tool = self.get_tool(name).await?;
-        tool.call(params).await
+        match AssertUnwindSafe(tool.call(params)).catch_unwind().await {
+            Ok(result) => result,
+            Err(payload) => {
+                let panic_message = if let Some(message) = payload.downcast_ref::<&str>() {
+                    (*message).to_string()
+                } else if let Some(message) = payload.downcast_ref::<String>() {
+                    message.clone()
+                } else {
+                    "unknown panic payload".to_string()
+                };
+                log::error!("Native tool '{}' panicked: {}", name, panic_message);
+                Err(ToolError::ExecutionFailed(format!(
+                    "Tool '{}' panicked: {}",
+                    name, panic_message
+                )))
+            }
+        }
     }
 
     /// Call a native tool or mcp tool by its name.

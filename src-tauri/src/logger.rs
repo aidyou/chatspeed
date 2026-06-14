@@ -1,6 +1,9 @@
 use lazy_static::*;
 use regex::Regex;
+use std::backtrace::Backtrace;
+#[cfg(test)]
 use std::fs::File;
+use std::fs::OpenOptions;
 use tauri::Manager;
 
 /// Simplifies file paths by extracting relevant parts from cargo registry paths
@@ -233,9 +236,13 @@ pub fn setup_logger(app: &tauri::App) {
     }
 
     // 3. Try to create log files
-    let log_file = match File::create(&log_file_path) {
+    let log_file = match OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file_path)
+    {
         Ok(f) => {
-            eprintln!("Log file created successfully: {:?}", log_file_path);
+            eprintln!("Log file opened successfully: {:?}", log_file_path);
             Some(f)
         }
         Err(e) => {
@@ -249,7 +256,11 @@ pub fn setup_logger(app: &tauri::App) {
         }
     };
 
-    let ccproxy_log_file = match File::create(&ccproxy_log_path) {
+    let ccproxy_log_file = match OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&ccproxy_log_path)
+    {
         Ok(f) => Some(f),
         Err(e) => {
             eprintln!("Failed to create ccproxy log file: {}", e);
@@ -284,12 +295,9 @@ pub fn setup_logger(app: &tauri::App) {
         })
         .format(file_log_formatter);
 
-    if log_file.is_some() {
-        if let Ok(file_chain) = fern::log_file(&log_file_path) {
-            file_dispatcher = file_dispatcher.chain(file_chain);
-        } else {
-            eprintln!("Failed to open log file chain even though file was created");
-        }
+    let log_file_enabled = log_file.is_some();
+    if let Some(file) = log_file {
+        file_dispatcher = file_dispatcher.chain(file);
     }
 
     // ccproxy dispatcher - raw format
@@ -298,20 +306,17 @@ pub fn setup_logger(app: &tauri::App) {
         .filter(|record| record.target() == "ccproxy_logger")
         .format(|out, message, _| out.finish(format_args!("{}", message)));
 
-    if ccproxy_log_file.is_some() {
-        if let Ok(file_chain) = fern::log_file(&ccproxy_log_path) {
-            ccproxy_dispatcher = ccproxy_dispatcher.chain(file_chain);
-        } else {
-            eprintln!("Failed to open ccproxy log file chain even though file was created");
-        }
+    let ccproxy_log_enabled = ccproxy_log_file.is_some();
+    if let Some(file) = ccproxy_log_file {
+        ccproxy_dispatcher = ccproxy_dispatcher.chain(file);
     }
 
     // Apply logger configuration
     let mut final_dispatcher = base_dispatcher.chain(stdout_dispatcher);
-    if log_file.is_some() {
+    if log_file_enabled {
         final_dispatcher = final_dispatcher.chain(file_dispatcher);
     }
-    if ccproxy_log_file.is_some() {
+    if ccproxy_log_enabled {
         final_dispatcher = final_dispatcher.chain(ccproxy_dispatcher);
     }
 
@@ -319,11 +324,46 @@ pub fn setup_logger(app: &tauri::App) {
         eprintln!("Failed to initialize logger: {}", e);
     }
 
+    install_panic_hook();
+
     log::info!(
         "Logger initialized, log file enabled: {}, path: {:?}",
-        log_file.is_some(),
+        log_file_enabled,
         log_file_path
     );
+}
+
+fn install_panic_hook() {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let location = panic_info
+            .location()
+            .map(|location| {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            })
+            .unwrap_or_else(|| "unknown location".to_string());
+        let payload = if let Some(message) = panic_info.payload().downcast_ref::<&str>() {
+            (*message).to_string()
+        } else if let Some(message) = panic_info.payload().downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "unknown panic payload".to_string()
+        };
+        let backtrace = Backtrace::force_capture();
+
+        log::error!(
+            "Application panic at {}: {}\nBacktrace:\n{}",
+            location,
+            payload,
+            backtrace
+        );
+        previous_hook(panic_info);
+    }));
 }
 
 fn get_level(level: log::Level) -> String {
