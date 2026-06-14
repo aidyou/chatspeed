@@ -35,8 +35,10 @@ export function useWorkflowMessages(options = {}) {
     activeMessages: [],
     retainCompletedOverflow: false,
     lastCompletionIndex: -1,
-    lastCompletionId: ''
+    lastCompletionId: '',
+    lastCompletionToolCallId: ''
   })
+  const lastNonEmptyEnhancedMessages = ref([])
 
   const removeSystemReminder = content => {
     if (content === null || content === undefined) return ''
@@ -273,8 +275,34 @@ export function useWorkflowMessages(options = {}) {
       lastCompletionId:
         lastCompletionIndex >= 0
           ? getMessageIdentity(messages[lastCompletionIndex], lastCompletionIndex)
-          : ''
+          : '',
+      lastCompletionToolCallId:
+        lastCompletionIndex >= 0 ? getMessageToolCallId(messages[lastCompletionIndex]) : ''
     }
+  }
+
+  const findCompletionBoundaryIndex = (messages, state) => {
+    if (!messages.length || state.lastCompletionIndex < 0) return -1
+
+    const previousToolCallId = String(state.lastCompletionToolCallId || '')
+    if (previousToolCallId) {
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (getMessageToolCallId(messages[index]) === previousToolCallId) {
+          return index
+        }
+      }
+    }
+
+    const previousIdentity = String(state.lastCompletionId || '')
+    if (!previousIdentity) return -1
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (getMessageIdentity(messages[index], index) === previousIdentity) {
+        return index
+      }
+    }
+
+    return -1
   }
 
   const reconcileTaskWindow = messages => {
@@ -291,7 +319,8 @@ export function useWorkflowMessages(options = {}) {
         activeMessages: [],
         retainCompletedOverflow: false,
         lastCompletionIndex: -1,
-        lastCompletionId: ''
+        lastCompletionId: '',
+        lastCompletionToolCallId: ''
       }
     }
 
@@ -317,8 +346,18 @@ export function useWorkflowMessages(options = {}) {
         getMessageIdentity(boundaryMessage, currentState.lastCompletionIndex) !==
           currentState.lastCompletionId
       ) {
-        initializeTaskWindow(messages)
-        return
+        const relocatedBoundaryIndex = findCompletionBoundaryIndex(messages, currentState)
+        if (relocatedBoundaryIndex < 0) {
+          initializeTaskWindow(messages)
+          return
+        }
+
+        currentState.lastCompletionIndex = relocatedBoundaryIndex
+        currentState.lastCompletionId = getMessageIdentity(
+          messages[relocatedBoundaryIndex],
+          relocatedBoundaryIndex
+        )
+        currentState.lastCompletionToolCallId = getMessageToolCallId(messages[relocatedBoundaryIndex])
       }
     }
 
@@ -349,6 +388,7 @@ export function useWorkflowMessages(options = {}) {
       messages[nextLastCompletionIndex],
       nextLastCompletionIndex
     )
+    currentState.lastCompletionToolCallId = getMessageToolCallId(messages[nextLastCompletionIndex])
   }
 
   watch(
@@ -929,7 +969,7 @@ export function useWorkflowMessages(options = {}) {
       })
   }
 
-  const enhancedMessages = computed(() => {
+  const rawEnhancedMessages = computed(() => {
     const { groups, activeGroupId } = visibleTaskGroupsState.value
     if (!groups.length) return []
 
@@ -959,6 +999,44 @@ export function useWorkflowMessages(options = {}) {
       })
       return enhanced.messages
     })
+  })
+
+  const shouldRetainEnhancedMessages = computed(
+    () =>
+      workflowStore.isRunning ||
+      workflowStore.hasLiveSession ||
+      filteredWorkflowMessages.value.length > 0
+  )
+
+  watch(
+    rawEnhancedMessages,
+    messages => {
+      if (messages.length > 0) {
+        lastNonEmptyEnhancedMessages.value = messages
+      } else if (!shouldRetainEnhancedMessages.value) {
+        lastNonEmptyEnhancedMessages.value = []
+      }
+    },
+    { immediate: true, flush: 'sync' }
+  )
+
+  watch(
+    () => workflowStore.currentWorkflowId,
+    () => {
+      lastNonEmptyEnhancedMessages.value = []
+    }
+  )
+
+  watch(shouldRetainEnhancedMessages, shouldRetain => {
+    if (!shouldRetain && rawEnhancedMessages.value.length === 0) {
+      lastNonEmptyEnhancedMessages.value = []
+    }
+  })
+
+  const enhancedMessages = computed(() => {
+    if (rawEnhancedMessages.value.length > 0) return rawEnhancedMessages.value
+    if (shouldRetainEnhancedMessages.value) return lastNonEmptyEnhancedMessages.value
+    return rawEnhancedMessages.value
   })
 
   const lastAssistantMessage = computed(() => {
