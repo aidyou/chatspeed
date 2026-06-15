@@ -882,29 +882,36 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }));
   };
 
-  const markToolRejected = (toolId) => {
+  const markToolRejected = (toolId, rejectionMessage = '') => {
     if (!toolId) return;
     const existing = currentTaskLedger.value?.tools.get(toolId);
+    const trimmedRejectionMessage = String(rejectionMessage || '').trim();
 
     if (taskLedgerEnabled.value) {
       upsertToolViewState({
         toolCallId: toolId,
         status: 'rejected',
         approvalStatus: 'rejected',
-        summary: getToolStatusSummary(existing?.toolName, 'rejected', 'User rejected')
+        summary: getToolStatusSummary(
+          existing?.toolName,
+          'rejected',
+          trimmedRejectionMessage || 'User rejected'
+        )
       });
     }
 
     patchToolMessage(toolId, (existing, meta) => ({
       ...existing,
+      message: trimmedRejectionMessage || existing.message,
       metadata: {
         ...meta,
         approval_status: 'rejected',
         execution_status: 'rejected',
+        rejection_message: trimmedRejectionMessage || meta.rejection_message,
         summary: getToolStatusSummary(
           meta.tool_name || meta.tool_call?.function?.name || meta.tool_call?.name,
           'rejected',
-          'User rejected'
+          trimmedRejectionMessage || 'User rejected'
         )
       }
     }));

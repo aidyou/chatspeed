@@ -592,6 +592,45 @@ export function useWorkflowCore({
         execution_status: 'pending_approval'
     })
 
+    const hasResolvedToolObservation = (sessionId, toolCallId) => {
+        if (!sessionId || !toolCallId) return false
+
+        return workflowStore.messages.some((message) => {
+            const metadata = message?.metadata || {}
+            const messageSessionId = message?.sessionId || message?.session_id || sessionId
+            if (messageSessionId !== sessionId) return false
+            if ((metadata.tool_call_id || '') !== toolCallId) return false
+
+            const approvalStatus = String(metadata.approval_status || '').toLowerCase()
+            const executionStatus = String(metadata.execution_status || '').toLowerCase()
+            const isError = Boolean(
+                message?.isError ||
+                message?.is_error ||
+                metadata.is_error ||
+                message?.errorType ||
+                message?.error_type ||
+                metadata.error_type ||
+                metadata.errorType
+            )
+
+            if (
+                approvalStatus === 'approved' ||
+                approvalStatus === 'rejected' ||
+                executionStatus === 'approval_submitted' ||
+                executionStatus === 'running' ||
+                executionStatus === 'completed' ||
+                executionStatus === 'failed' ||
+                executionStatus === 'interrupted' ||
+                executionStatus === 'rejected' ||
+                isError
+            ) {
+                return true
+            }
+
+            return message?.role === 'tool' && approvalStatus !== 'pending'
+        })
+    }
+
     const clearPendingApprovalEntry = (sessionId, approvalId) => {
         if (!sessionId || !approvalId) return
         const key = `${sessionId}:${approvalId}`
@@ -866,7 +905,10 @@ export function useWorkflowCore({
                             )
                         }
                     } else {
-                        workflowStore.markToolRejected(payload.tool_call_id)
+                        workflowStore.markToolRejected(
+                            payload.tool_call_id,
+                            payload.rejection_message
+                        )
                     }
                 } else if (payload.type === 'tool_started') {
                     markSessionLiveFromNonTerminalEvent()
@@ -1067,6 +1109,7 @@ export function useWorkflowCore({
                         const details = pendingTool.details ?? null
                         const displayType = pendingTool.displayType || pendingTool.display_type || ''
                         if (!toolCallId) continue
+                        if (hasResolvedToolObservation(id, toolCallId)) continue
 
                         upsertPendingApprovalEntry(id, {
                             id: toolCallId,

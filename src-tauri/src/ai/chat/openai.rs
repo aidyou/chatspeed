@@ -33,6 +33,127 @@ struct JsonErrorPayload<'a> {
 }
 
 const MAX_TOOL_CALLS_PER_RESPONSE: usize = 15;
+const THINK_OPEN_TAG_PREFIXES: [&str; 2] = ["<thinking", "<think"];
+const THINK_CLOSE_TAG_PREFIXES: [&str; 2] = ["</thinking", "</think"];
+
+#[derive(Debug, Default)]
+struct InlineThinkStreamState {
+    in_reasoning: bool,
+    carry: String,
+}
+
+impl InlineThinkStreamState {
+    fn consume(&mut self, chunk: &str) -> (String, String) {
+        let mut input = String::new();
+        if !self.carry.is_empty() {
+            input.push_str(&self.carry);
+            self.carry.clear();
+        }
+        input.push_str(chunk);
+
+        let mut visible = String::new();
+        let mut reasoning = String::new();
+        let mut index = 0;
+
+        while index < input.len() {
+            let Some(relative_lt) = input[index..].find('<') else {
+                Self::active_buffer(&mut visible, &mut reasoning, self.in_reasoning)
+                    .push_str(&input[index..]);
+                break;
+            };
+
+            let lt_index = index + relative_lt;
+            Self::active_buffer(&mut visible, &mut reasoning, self.in_reasoning)
+                .push_str(&input[index..lt_index]);
+
+            if let Some(relative_gt) = input[lt_index..].find('>') {
+                let end_index = lt_index + relative_gt + 1;
+                let tag = &input[lt_index..end_index];
+
+                if !self.in_reasoning && Self::is_open_think_tag(tag) {
+                    self.in_reasoning = true;
+                    index = end_index;
+                    continue;
+                }
+
+                if self.in_reasoning && Self::is_close_think_tag(tag) {
+                    self.in_reasoning = false;
+                    index = end_index;
+                    continue;
+                }
+
+                Self::active_buffer(&mut visible, &mut reasoning, self.in_reasoning).push_str(tag);
+                index = end_index;
+                continue;
+            }
+
+            let fragment = &input[lt_index..];
+            if Self::is_possible_think_tag_fragment(fragment, self.in_reasoning) {
+                self.carry.push_str(fragment);
+            } else {
+                Self::active_buffer(&mut visible, &mut reasoning, self.in_reasoning)
+                    .push_str(fragment);
+            }
+            break;
+        }
+
+        (visible, reasoning)
+    }
+
+    fn active_buffer<'a>(
+        visible: &'a mut String,
+        reasoning: &'a mut String,
+        in_reasoning: bool,
+    ) -> &'a mut String {
+        if in_reasoning { reasoning } else { visible }
+    }
+
+    fn is_open_think_tag(tag: &str) -> bool {
+        let normalized = tag.trim().to_ascii_lowercase();
+        if normalized.starts_with("</") || !normalized.starts_with('<') || !normalized.ends_with('>')
+        {
+            return false;
+        }
+
+        let inner = normalized[1..normalized.len() - 1].trim();
+        inner == "think"
+            || inner == "thinking"
+            || inner.starts_with("think ")
+            || inner.starts_with("thinking ")
+    }
+
+    fn is_close_think_tag(tag: &str) -> bool {
+        let normalized = tag.trim().to_ascii_lowercase();
+        if !normalized.starts_with("</") || !normalized.ends_with('>') {
+            return false;
+        }
+
+        let inner = normalized[2..normalized.len() - 1].trim();
+        inner == "think" || inner == "thinking"
+    }
+
+    fn is_possible_think_tag_fragment(fragment: &str, in_reasoning: bool) -> bool {
+        let normalized = fragment.trim_start().to_ascii_lowercase();
+        if normalized.is_empty() || normalized.contains('>') {
+            return false;
+        }
+
+        let prefixes = if in_reasoning {
+            &THINK_CLOSE_TAG_PREFIXES
+        } else {
+            &THINK_OPEN_TAG_PREFIXES
+        };
+
+        prefixes
+            .iter()
+            .any(|prefix| prefix.starts_with(&normalized) || normalized.starts_with(prefix))
+    }
+}
+
+fn extract_inline_reasoning_content(content: &str) -> (String, String) {
+    let mut state = InlineThinkStreamState::default();
+    state.consume(content)
+}
 
 fn extract_reasoning_from_openai_message(message: &Value) -> String {
     if let Some(reasoning_content) = message
@@ -134,6 +255,7 @@ impl OpenAIChat {
         // Streaming response handling
         let mut full_response = String::new();
         let mut reasoning_content = String::new();
+        let mut inline_think_state = InlineThinkStreamState::default();
         let mut token_usage = TokenUsage::default();
         let start_time = Instant::now();
 
@@ -229,14 +351,35 @@ impl OpenAIChat {
                                     });
                                 }
 
-                                full_response.push_str(&content);
-                                callback(ChatResponse::new_with_arc(
-                                    chat_id.clone(),
-                                    content,
-                                    msg_type,
-                                    metadata_option.as_ref().and_then(|m| m.to_value()),
-                                    None,
-                                ));
+                                let (visible_content, inline_reasoning_chunk) =
+                                    if msg_type == MessageType::Text {
+                                        inline_think_state.consume(&content)
+                                    } else {
+                                        (content, String::new())
+                                    };
+
+                                if !inline_reasoning_chunk.is_empty() {
+                                    reasoning_content.push_str(&inline_reasoning_chunk);
+
+                                    callback(ChatResponse::new_with_arc(
+                                        chat_id.clone(),
+                                        inline_reasoning_chunk,
+                                        MessageType::Reasoning,
+                                        metadata_option.as_ref().and_then(|m| m.to_value()),
+                                        None,
+                                    ));
+                                }
+
+                                if !visible_content.is_empty() {
+                                    full_response.push_str(&visible_content);
+                                    callback(ChatResponse::new_with_arc(
+                                        chat_id.clone(),
+                                        visible_content,
+                                        msg_type,
+                                        metadata_option.as_ref().and_then(|m| m.to_value()),
+                                        None,
+                                    ));
+                                }
                             }
                         }
 
@@ -394,17 +537,23 @@ impl OpenAIChat {
         })?;
 
         // Extract content from the response
-        let content = parsed["choices"]
+        let raw_content = parsed["choices"]
             .as_array()
             .and_then(|choices| choices.first())
             .and_then(|choice| choice["message"]["content"].as_str())
             .unwrap_or("");
+        let (content, inline_reasoning_content) = extract_inline_reasoning_content(raw_content);
 
-        let reasoning_content = parsed["choices"]
+        let structured_reasoning_content = parsed["choices"]
             .as_array()
             .and_then(|choices| choices.first())
             .map(|choice| extract_reasoning_from_openai_message(&choice["message"]))
             .unwrap_or_default();
+        let reasoning_content = [structured_reasoning_content, inline_reasoning_content]
+            .into_iter()
+            .filter(|part| !part.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
 
         // Extract token usage if available
         let token_usage = if let Some(usage) = parsed.get("usage") {
@@ -432,7 +581,7 @@ impl OpenAIChat {
         if !content.is_empty() {
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
-                content.to_string(),
+                content.clone(),
                 MessageType::Text,
                 metadata_option.as_ref().and_then(|m| m.to_value()),
                 None,
@@ -760,7 +909,10 @@ impl OpenAIChat {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_reasoning_from_openai_message;
+    use super::{
+        extract_inline_reasoning_content, extract_reasoning_from_openai_message,
+        InlineThinkStreamState,
+    };
     use serde_json::json;
 
     #[test]
@@ -805,6 +957,41 @@ mod tests {
             extract_reasoning_from_openai_message(&message),
             "first\nsecond"
         );
+    }
+
+    #[test]
+    fn extract_inline_reasoning_splits_complete_think_block() {
+        let (content, reasoning) =
+            extract_inline_reasoning_content("before<thinking>hidden</thinking>after");
+
+        assert_eq!(content, "beforeafter");
+        assert_eq!(reasoning, "hidden");
+    }
+
+    #[test]
+    fn inline_think_stream_state_keeps_reasoning_across_chunks() {
+        let mut state = InlineThinkStreamState::default();
+
+        let (content_1, reasoning_1) = state.consume("<thinking>hidden");
+        assert_eq!(content_1, "");
+        assert_eq!(reasoning_1, "hidden");
+
+        let (content_2, reasoning_2) = state.consume(" trace</thinking>done");
+        assert_eq!(content_2, "done");
+        assert_eq!(reasoning_2, " trace");
+    }
+
+    #[test]
+    fn inline_think_stream_state_handles_partial_open_tag_fragment() {
+        let mut state = InlineThinkStreamState::default();
+
+        let (content_1, reasoning_1) = state.consume("<thi");
+        assert_eq!(content_1, "");
+        assert_eq!(reasoning_1, "");
+
+        let (content_2, reasoning_2) = state.consume("nking>hidden</thinking>done");
+        assert_eq!(content_2, "done");
+        assert_eq!(reasoning_2, "hidden");
     }
 }
 

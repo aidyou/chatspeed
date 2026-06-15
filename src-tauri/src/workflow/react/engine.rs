@@ -2234,6 +2234,15 @@ impl WorkflowExecutor {
                                 approve_all,
                                 rejection_message,
                             } => {
+                                let tool_name = self
+                                    .pending_approvals
+                                    .get(&tool_call_id)
+                                    .and_then(|info| {
+                                        info.get("name")
+                                            .and_then(|value| value.as_str())
+                                            .map(|value| value.to_string())
+                                    })
+                                    .unwrap_or_else(|| "unknown".to_string());
                                 let approval_status =
                                     if approved { "approved" } else { "rejected" };
                                 let execution_status = if approved {
@@ -2258,10 +2267,12 @@ impl WorkflowExecutor {
                                 let event = WorkflowEvent::approval_resolved(
                                     self.session_id.clone(),
                                     tool_call_id.clone(),
+                                    tool_name.clone(),
                                     approved,
                                     approve_all,
                                     Some(approval_status.to_string()),
                                     Some(execution_status.to_string()),
+                                    rejection_message.clone(),
                                 );
                                 if let Err(e) = self.append_event(&event) {
                                     log::error!(
@@ -2561,12 +2572,18 @@ impl WorkflowExecutor {
                                         self.update_state(WorkflowState::Thinking).await?;
                                     }
                                 } else {
-                                    let tool_name = if let Some(stashed) =
+                                    let (tool_name, tool_args) = if let Some(stashed) =
                                         self.pending_approvals.get(&tool_call_id)
                                     {
-                                        stashed["name"].as_str().unwrap_or("unknown").to_string()
+                                        (
+                                            stashed["name"]
+                                                .as_str()
+                                                .unwrap_or("unknown")
+                                                .to_string(),
+                                            stashed["arguments"].clone(),
+                                        )
                                     } else {
-                                        "unknown".to_string()
+                                        ("unknown".to_string(), serde_json::json!({}))
                                     };
 
                                     log::info!(
@@ -2578,7 +2595,7 @@ impl WorkflowExecutor {
 
                                     let pretty_title = ObservationReinforcer::generate_title(
                                         &tool_name,
-                                        &serde_json::json!({}),
+                                        &tool_args,
                                         None,
                                         None,
                                     );
@@ -2593,23 +2610,29 @@ impl WorkflowExecutor {
                                         )
                                     };
 
-                                    self.add_message_and_notify_internal(
-                                        "tool".to_string(),
-                                        observation,
-                                        None,
-                                        None,
+                            self.add_message_and_notify_internal(
+                                "tool".to_string(),
+                                observation,
+                                None,
+                                None,
                                         Some(StepType::Observe),
                                         true,
                                         Some("UserRejected".to_string()),
                                         Some(serde_json::json!({
                                             "tool_call_id": tool_call_id,
                                             "tool_name": tool_name,
+                                            "tool_call": {
+                                                "id": tool_call_id,
+                                                "name": tool_name,
+                                                "arguments": tool_args
+                                            },
                                             "title": pretty_title,
                                             "summary": "User rejected",
                                             "execution_status": "rejected",
                                             "is_error": true,
                                             "error_type": "UserRejected",
-                                            "approval_status": "rejected"
+                                            "approval_status": "rejected",
+                                            "rejection_message": rejection_message
                                         })),
                                     )
                                     .await?;
@@ -3071,12 +3094,18 @@ impl WorkflowExecutor {
                                 Some(serde_json::json!({
                                     "tool_call_id": signal_id,
                                     "tool_name": tool_name,
+                                    "tool_call": {
+                                        "id": signal_id,
+                                        "name": tool_name,
+                                        "arguments": tool_args
+                                    },
                                     "title": pretty_title,
                                     "summary": "User rejected",
                                     "execution_status": "rejected",
                                     "is_error": true,
                                     "error_type": "UserRejected",
-                                    "approval_status": "rejected"
+                                    "approval_status": "rejected",
+                                    "rejection_message": rejection_message
                                 })),
                             )
                             .await?;

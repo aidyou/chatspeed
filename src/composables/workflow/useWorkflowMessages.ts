@@ -428,6 +428,8 @@ export function useWorkflowMessages(options = {}) {
     const toolHasWaitingMsg = new Set() // tool_call_id that has an 'Awaiting' message
     const toolMessageIds = new Set() // tool_call_id with dedicated tool/user-observe messages
     const subAgentCompletions = new Map()
+    const rejectedUserMessageIds = new Set()
+    const ledgerStateById = new Map((workflowStore.toolList || []).map(tool => [tool.toolCallId, tool]))
 
     const tryParseJsonValue = value => {
       if (value === null || value === undefined) return null
@@ -601,15 +603,32 @@ export function useWorkflowMessages(options = {}) {
         const id = meta.tool_call_id
         const approvalStatus = meta.approval_status || ''
         const executionStatus = meta.execution_status || ''
+        const ledgerState = ledgerStateById.get(id)
 
         if (m.role === 'tool' || (m.role === 'user' && m.stepType === 'observe')) {
           toolMessageIds.add(id)
         }
 
-        // Use approval_status as the primary indicator
-        if (executionStatus === 'pending_approval' || approvalStatus === 'pending') {
+        if (m.role === 'user' && approvalStatus === 'rejected') {
+          rejectedUserMessageIds.add(id)
+        }
+
+        if (ledgerState?.status === 'approved_running') {
+          toolStates.set(id, {
+            isFinal: false,
+            isRejected: false,
+            hasError: false,
+            isRunning: true
+          })
+        } else if (ledgerState?.status === 'rejected') {
+          toolStates.set(id, { isFinal: true, isRejected: true, hasError: false })
+        } else if (ledgerState?.status === 'final_success') {
+          toolStates.set(id, { isFinal: true, isRejected: false, hasError: false })
+        } else if (ledgerState?.status === 'final_error') {
+          toolStates.set(id, { isFinal: true, isRejected: false, hasError: true })
+        } else if (executionStatus === 'pending_approval' || approvalStatus === 'pending') {
           toolHasWaitingMsg.add(id)
-        } else if (executionStatus === 'running') {
+        } else if (executionStatus === 'approval_submitted' || executionStatus === 'running') {
           toolStates.set(id, {
             isFinal: false,
             isRejected: false,
@@ -665,9 +684,15 @@ export function useWorkflowMessages(options = {}) {
           const id = m.metadata.tool_call_id
           const state = toolStates.get(id)
           const approvalStatus = m.metadata.approval_status
+          const ledgerState = ledgerStateById.get(id)
+          const isResolvedByLedger =
+            ledgerState?.status === 'approved_running' ||
+            ledgerState?.status === 'rejected' ||
+            ledgerState?.status === 'final_success' ||
+            ledgerState?.status === 'final_error'
 
           // If there's a final result (approved, rejected, or executed)
-          if (state?.isFinal) {
+          if (state?.isFinal || state?.isRunning || isResolvedByLedger) {
             // Hide "pending" messages when there's a final result
             if (approvalStatus === 'pending' && toolHasWaitingMsg.has(id)) return false
           }
@@ -685,7 +710,7 @@ export function useWorkflowMessages(options = {}) {
 
         return true
       })
-      .map((message, idx) => {
+      .flatMap((message, idx) => {
         const toolDisplay = getToolDisplayInfo(message)
         const displayId = message.id || `msg_${message.role}_${message.stepIndex}_${idx}`
 
@@ -769,7 +794,7 @@ export function useWorkflowMessages(options = {}) {
             })
         }
 
-        return {
+        const enhancedMessage = {
           ...message,
           displayId,
           toolDisplay,
@@ -778,6 +803,35 @@ export function useWorkflowMessages(options = {}) {
           isRejected,
           isApproved
         }
+
+        const syntheticMessages = [enhancedMessage]
+        const rejectionMessage = String(message.metadata?.rejection_message || '').trim()
+        const toolCallId = String(message.metadata?.tool_call_id || '').trim()
+
+        if (
+          message.role === 'tool' &&
+          isRejected &&
+          rejectionMessage &&
+          toolCallId &&
+          !rejectedUserMessageIds.has(toolCallId)
+        ) {
+          rejectedUserMessageIds.add(toolCallId)
+          syntheticMessages.push({
+            id: `${displayId}_rejection_user`,
+            displayId: `${displayId}_rejection_user`,
+            role: 'user',
+            stepType: 'Observe',
+            stepIndex: `${message.stepIndex || idx}_rejection`,
+            message: rejectionMessage,
+            metadata: {
+              tool_call_id: toolCallId,
+              approval_status: 'rejected',
+              ui_visibility: 'show'
+            }
+          })
+        }
+
+        return syntheticMessages
       })
       .filter(m => {
         if (m.metadata?.ui_visibility === 'hide') return false
@@ -1178,6 +1232,13 @@ export function useWorkflowMessages(options = {}) {
     }
     if (!args || typeof args !== 'object' || Array.isArray(args)) {
       args = {}
+    }
+
+    const ledgerState = toolCallId
+      ? (workflowStore.toolList || []).find(tool => tool.toolCallId === toolCallId)
+      : null
+    if ((!args || Object.keys(args).length === 0) && ledgerState?.arguments) {
+      args = ledgerState.arguments
     }
 
     let parsedPayload = meta.details && typeof meta.details === 'object' ? meta.details : null

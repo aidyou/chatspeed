@@ -179,16 +179,22 @@
                   </div>
                 </div>
                 <!-- Final Result -->
-                <MarkdownSimple
+                <div
                   v-if="
-                    message.metadata?.approval_status !== 'pending' &&
+                    !isApprovalPending(message) &&
                     shouldShowToolRawContent(message) &&
                     message.toolDisplay.displayType === 'diff'
                   "
-                  :content="getDiffMarkdown(removeSystemReminder(message.message))" />
+                  class="tool-diff-view">
+                  <FilePreviewDiff
+                    :file-path="getDiffFilePath(message)"
+                    :old-content="getDiffOldContent(message)"
+                    :new-content="getDiffNewContent(message)"
+                    :context-data="getDiffContextData(message)" />
+                </div>
                 <div
                   v-else-if="
-                    message.metadata?.approval_status !== 'pending' &&
+                    !isApprovalPending(message) &&
                     shouldShowToolRawContent(message) &&
                     message.toolDisplay.displayType === 'choice'
                   "
@@ -245,32 +251,34 @@
                 </div>
                 <MarkdownSimple
                   v-else-if="
-                    message.metadata?.approval_status !== 'pending' &&
+                    !isApprovalPending(message) &&
                     shouldShowToolRawContent(message) &&
                     message.toolDisplay.displayType === 'markdown'
                   "
                   :content="removeSystemReminder(message.message)" />
                 <pre
                   v-else-if="
-                    message.metadata?.approval_status !== 'pending' &&
+                    !isApprovalPending(message) &&
                     shouldShowToolRawContent(message)
                   "
                   class="raw-content"
                   >{{ removeSystemReminder(message.message) }}</pre
                 >
                 <ApprovalDialog
-                  v-if="message.metadata?.approval_status === 'pending'"
+                  v-if="shouldShowApprovalDialog(message)"
                   inline
                   :action="message.metadata?.tool_name || message.toolDisplay.action"
                   :details="getApprovalDetailsPayload(message)"
                   :display-type="message.metadata?.display_type || message.toolDisplay.displayType"
                   :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
                   :loading="approvalLoading && activeApprovalId === message.metadata?.tool_call_id"
+                  :pending-count="inlineBulkApprovalCount"
                   @update:rejection-message="
                     value => setApprovalDraft(message.metadata?.tool_call_id, value)
                   "
                   @approve="$emit('approve-tool', message.metadata?.tool_call_id)"
                   @approve-all="$emit('approve-all-tool', message.metadata?.tool_call_id)"
+                  @approve-all-pending="onApproveAllPending(message.metadata?.tool_call_id)"
                   @reject="
                     $emit(
                       'reject-tool',
@@ -345,8 +353,19 @@
                 {{ message.reasoning || message.message }}
               </div>
             </div>
+            <el-alert
+              v-if="!isContextSnapshotMessage(message) && shouldShowErrorAlert(message)"
+              type="error"
+              :closable="false"
+              show-icon
+              class="workflow-error-alert">
+              <template #title>{{ getErrorAlertTitle(message) }}</template>
+              <div class="workflow-error-alert__body">
+                <MarkdownSimple :content="getErrorAlertContent(message)" />
+              </div>
+            </el-alert>
             <MarkdownSimple
-              v-if="!isContextSnapshotMessage(message) && getParsedMessage(message).content"
+              v-else-if="!isContextSnapshotMessage(message) && getParsedMessage(message).content"
               :content="getParsedMessage(message).content" />
 
             <!-- Tool Call Indicators SECOND (Only pending ones) -->
@@ -453,6 +472,7 @@ import { computed, ref, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
 import ApprovalDialog from './ApprovalDialog.vue'
+import FilePreviewDiff from './FilePreviewDiff.vue'
 import MarkdownSimple from './MarkdownSimple.vue'
 import { useWorkflowStore } from '@/stores/workflow'
 
@@ -510,6 +530,14 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  currentWorkflowId: {
+    type: String,
+    default: ''
+  },
+  isApprovalSubmitting: {
+    type: Function,
+    default: () => false
+  },
   isMessageExpanded: {
     type: Function,
     required: true
@@ -545,6 +573,14 @@ const props = defineProps({
   askUserSubmitting: {
     type: Boolean,
     default: false
+  },
+  pendingCount: {
+    type: Number,
+    default: 0
+  },
+  pendingApprovalIds: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -555,6 +591,7 @@ const emit = defineEmits([
   'reveal-earlier-task-group',
   'approve-tool',
   'approve-all-tool',
+  'approve-all-pending',
   'reject-tool',
   'submit-ask-user'
 ])
@@ -707,6 +744,65 @@ const getToolCallArguments = message => {
   return typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : null
 }
 
+const decodeCompatJsonPayload = value => {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  if (!trimmed) return value
+  const looksLikeJson =
+    trimmed.startsWith('{') ||
+    trimmed.startsWith('[') ||
+    (trimmed.startsWith('"') && (trimmed.includes('{') || trimmed.includes('[')))
+  if (!looksLikeJson) return value
+
+  let current = value
+  for (let depth = 0; depth < 2; depth += 1) {
+    if (typeof current !== 'string') break
+    try {
+      current = JSON.parse(current)
+    } catch {
+      break
+    }
+  }
+  return current
+}
+
+const normalizeDiffPayload = message => {
+  const structuredDetails = message?.metadata?.details
+  if (structuredDetails && typeof structuredDetails === 'object') {
+    return structuredDetails
+  }
+
+  const content = props.removeSystemReminder(message?.message || '')
+  const parsedContent = decodeCompatJsonPayload(content)
+  if (parsedContent && typeof parsedContent === 'object' && !Array.isArray(parsedContent)) {
+    return parsedContent
+  }
+
+  const toolName = getMessageToolName(message)
+  if (['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note'].includes(toolName)) {
+    const args = getToolCallArguments(message)
+    if (args && typeof args === 'object') {
+      return args
+    }
+  }
+
+  return null
+}
+
+const getDiffContextData = message => normalizeDiffPayload(message)
+const getDiffFilePath = message => {
+  const payload = normalizeDiffPayload(message)
+  return payload?.display_path || payload?.file_path || payload?.path || ''
+}
+const getDiffOldContent = message => {
+  const payload = normalizeDiffPayload(message)
+  return payload?.old_string || ''
+}
+const getDiffNewContent = message => {
+  const payload = normalizeDiffPayload(message)
+  return payload?.new_string ?? payload?.content ?? ''
+}
+
 const getApprovalDetailsPayload = message => {
   const structuredDetails = message?.metadata?.details
   if (structuredDetails !== undefined && structuredDetails !== null) {
@@ -829,8 +925,15 @@ const visibleMessages = computed(() =>
 const lastVisibleMessage = computed(
   () => visibleMessages.value[visibleMessages.value.length - 1] || null
 )
+const pendingApprovalIdSet = computed(() => {
+  const ids = (props.pendingApprovalIds || [])
+    .map(id => String(id || '').trim())
+    .filter(Boolean)
+  return new Set(ids)
+})
 const getVisibleMessageIndex = message =>
   visibleMessages.value.findIndex(item => item.displayId === message?.displayId)
+const getMessageToolCallId = message => String(message?.metadata?.tool_call_id || '').trim()
 
 const hasSubsequentVisibleOutput = message => {
   const index = getVisibleMessageIndex(message)
@@ -867,6 +970,74 @@ const hasThoughtCompleted = message => {
   return false
 }
 
+const isApprovalPending = message => {
+  const toolCallId = getMessageToolCallId(message)
+  if (!toolCallId) return false
+  return pendingApprovalIdSet.value.has(toolCallId)
+}
+
+const isApprovalInFlight = message =>
+  !!props.isApprovalSubmitting(props.currentWorkflowId, message?.metadata?.tool_call_id)
+
+const isActiveApproval = message =>
+  !!props.approvalLoading && props.activeApprovalId === message?.metadata?.tool_call_id
+
+const shouldShowApprovalDialog = message =>
+  isApprovalPending(message) && (!isApprovalInFlight(message) || isActiveApproval(message))
+
+const shouldShowErrorAlert = message => {
+  if (!message?.isError) return false
+  if (message?.role === 'tool') return false
+  return !!getErrorAlertContent(message)
+}
+
+const getErrorAlertTitle = message => {
+  const rawContent = props.removeSystemReminder(message?.message || '').trim()
+  if (/^critical error:/i.test(rawContent)) {
+    return 'Critical Error'
+  }
+
+  const rawType = String(
+    message?.metadata?.error_type || message?.metadata?.errorType || message?.errorType || ''
+  ).trim()
+  if (rawType) {
+    return rawType.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+  }
+
+  return t('common.error') || 'Error'
+}
+
+const getErrorAlertContent = message => {
+  const parsed = props.getParsedMessage(message)
+  const rawContent = String(
+    parsed?.content || props.removeSystemReminder(message?.message || '')
+  ).trim()
+
+  return rawContent
+    .replace(/^critical error:\s*/i, '')
+    .replace(/^\[?error\]?:\s*/i, '')
+    .trim()
+}
+
+const getVisiblePendingApprovalIds = () => {
+  const orderedIds = []
+  const seen = new Set()
+
+  for (const message of visibleMessages.value || []) {
+    const toolCallId = getMessageToolCallId(message)
+    if (!toolCallId || seen.has(toolCallId)) continue
+    if (!isApprovalPending(message)) continue
+    if (!shouldShowApprovalDialog(message)) continue
+
+    seen.add(toolCallId)
+    orderedIds.push(toolCallId)
+  }
+
+  return orderedIds
+}
+
+const inlineBulkApprovalCount = computed(() => getVisiblePendingApprovalIds().length)
+
 const getApprovalDraft = toolCallId => {
   if (!toolCallId) return ''
   return approvalDrafts.value[toolCallId] || ''
@@ -878,6 +1049,13 @@ const setApprovalDraft = (toolCallId, value) => {
     ...approvalDrafts.value,
     [toolCallId]: value
   }
+}
+
+const onApproveAllPending = toolCallId => {
+  emit('approve-all-pending', {
+    startingToolCallId: toolCallId,
+    orderedToolCallIds: getVisiblePendingApprovalIds()
+  })
 }
 
 const getChoiceKey = message =>
@@ -1252,6 +1430,25 @@ defineExpose({
 .context-snapshot-card__body {
   padding: var(--cs-space-sm) var(--cs-space);
   border-top: 1px solid var(--cs-border-color);
+}
+
+.workflow-error-alert {
+  margin-top: var(--cs-space-sm);
+  border: 1px solid var(--el-color-danger-light-5);
+
+  :deep(.el-alert__content) {
+    width: 100%;
+  }
+}
+
+.workflow-error-alert__body {
+  margin-top: var(--cs-space-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-diff-view {
+  margin-top: var(--cs-space-xs);
 }
 
 .history-window-indicator {

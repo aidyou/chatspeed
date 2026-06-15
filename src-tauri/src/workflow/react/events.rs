@@ -127,20 +127,24 @@ impl WorkflowEvent {
     pub fn approval_resolved(
         session_id: String,
         tool_call_id: String,
+        tool_name: String,
         approved: bool,
         approve_all: bool,
         approval_status: Option<String>,
         execution_status: Option<String>,
+        rejection_message: Option<String>,
     ) -> Self {
         Self::new(
             WorkflowEventType::ApprovalResolved,
             session_id,
             serde_json::json!({
                 "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
                 "approved": approved,
                 "approve_all": approve_all,
                 "approval_status": approval_status,
-                "execution_status": execution_status
+                "execution_status": execution_status,
+                "rejection_message": rejection_message
             }),
         )
     }
@@ -334,10 +338,12 @@ mod tests {
         let resolved = WorkflowEvent::approval_resolved(
             "test-session".to_string(),
             "call_123".to_string(),
+            "bash".to_string(),
             true,
             false,
             Some("approved".to_string()),
             Some("approval_submitted".to_string()),
+            None,
         );
         assert_eq!(resolved.event_type, WorkflowEventType::ApprovalResolved);
         assert_eq!(resolved.event_data["approved"], true);

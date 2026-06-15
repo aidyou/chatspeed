@@ -53,6 +53,10 @@ export function useWorkflowApproval({
         sessionId,
         signal
       })
+
+      if (!approved) {
+        workflowStore.markToolRejected(toolCallId, rejectionMessage)
+      }
     } catch (error) {
       workflowStore.clearApprovalSubmission(sessionId, toolCallId)
       if (pendingEntry) {

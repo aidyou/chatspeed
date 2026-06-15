@@ -33,6 +33,10 @@ const props = defineProps({
   newContent: {
     type: String,
     default: ''
+  },
+  contextData: {
+    type: Object,
+    default: null
   }
 })
 
@@ -145,12 +149,35 @@ const createDiffLine = (prefix, oldLineNumber, newLineNumber, content, html, typ
   type
 })
 
+const appendContextLines = (diff, lines, startLine, htmlLines) => {
+  if (!Array.isArray(lines) || !lines.length) return
+
+  lines.forEach((line, index) => {
+    const lineNo = startLine + index
+    diff.push(createDiffLine(' ', lineNo.toString(), lineNo.toString(), line, htmlLines[index] || '&nbsp;', 'context'))
+  })
+}
+
 const diffLines = computed(() => {
   const oldStr = props.oldContent ?? ''
   const newStr = props.newContent ?? ''
+  const contextData = props.contextData && typeof props.contextData === 'object' ? props.contextData : {}
+  const startLine = Number(contextData.start_line) || 1
+  const contextBefore = Array.isArray(contextData.context_before) ? contextData.context_before : []
+  const contextAfter = Array.isArray(contextData.context_after) ? contextData.context_after : []
   const lines = []
   const highlightedOldLines = highlightBlock(oldStr, language.value)
   const highlightedNewLines = highlightBlock(newStr, language.value)
+  const highlightedBeforeLines = highlightBlock(contextBefore.join('\n'), language.value)
+  const highlightedAfterLines = highlightBlock(contextAfter.join('\n'), language.value)
+
+  appendContextLines(
+    lines,
+    contextBefore,
+    Number(contextData.context_before_start_line) ||
+      Math.max(1, startLine - contextBefore.length),
+    highlightedBeforeLines
+  )
 
   if (oldStr === newStr) {
     const rawLines = newStr.split('\n')
@@ -158,15 +185,41 @@ const diffLines = computed(() => {
       rawLines.pop()
     }
     rawLines.forEach((line, index) => {
-      const lineNo = (index + 1).toString()
+      const lineNo = (startLine + index).toString()
       lines.push(createDiffLine(' ', lineNo, lineNo, line, highlightedNewLines[index] || '&nbsp;', 'context'))
     })
+    appendContextLines(
+      lines,
+      contextAfter,
+      Number(contextData.context_after_start_line) || startLine + rawLines.length,
+      highlightedAfterLines
+    )
+    return lines
+  }
+
+  if (!oldStr && newStr) {
+    const rawLines = newStr.split('\n')
+    if (rawLines[rawLines.length - 1] === '') {
+      rawLines.pop()
+    }
+
+    lines.push(createDiffLine('-', startLine.toString(), '', '(empty)', '(empty)', 'removed'))
+    rawLines.forEach((line, index) => {
+      const newLineNumber = (startLine + index).toString()
+      lines.push(createDiffLine('+', '', newLineNumber, line, highlightedNewLines[index] || '&nbsp;', 'added'))
+    })
+    appendContextLines(
+      lines,
+      contextAfter,
+      Number(contextData.context_after_start_line) || startLine + rawLines.length,
+      highlightedAfterLines
+    )
     return lines
   }
 
   const changes = Diff.diffLines(oldStr, newStr)
-  let currentLineOld = 1
-  let currentLineNew = 1
+  let currentLineOld = startLine
+  let currentLineNew = startLine
 
   changes.forEach(change => {
     const rawLines = change.value.split('\n')
@@ -221,6 +274,13 @@ const diffLines = computed(() => {
   if (!lines.length) {
     lines.push(createDiffLine(' ', '', '', '(No visible changes)', '(No visible changes)', 'context'))
   }
+
+  appendContextLines(
+    lines,
+    contextAfter,
+    Number(contextData.context_after_start_line) || currentLineNew,
+    highlightedAfterLines
+  )
 
   return lines
 })
