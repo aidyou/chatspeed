@@ -102,24 +102,26 @@
                 <div
                   v-if="message.subAgentCard.hasResult"
                   class="sub-agent-card__result"
-                  :class="{ expanded: isMessageExpanded(message) }">
+                  :class="{ expanded: isSubAgentResultExpanded(message) }">
                   <div
                     class="sub-agent-card__result-toggle"
-                    @click="$emit('toggle-expand', message.displayId)">
+                    @click="$emit('toggle-expand', getSubAgentResultExpandId(message))">
                     <div class="sub-agent-card__result-heading">
                       <span class="sub-agent-card__label">Result</span>
                       <span
-                        v-if="!isMessageExpanded(message)"
+                        v-if="!isSubAgentResultExpanded(message)"
                         class="sub-agent-card__result-preview"
                         >{{ getSubAgentResultPreview(message) }}</span
                       >
                     </div>
                     <cs
-                      :name="isMessageExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                      :name="isSubAgentResultExpanded(message) ? 'chevron-up' : 'chevron-down'"
                       size="14px"
                       class="sub-agent-card__result-chevron" />
                   </div>
-                  <div v-if="isMessageExpanded(message)" class="sub-agent-card__result-body">
+                  <div
+                    v-if="isSubAgentResultExpanded(message)"
+                    class="sub-agent-card__result-body">
                     <MarkdownSimple :content="message.subAgentCard.resultMarkdown" />
                   </div>
                 </div>
@@ -260,7 +262,7 @@
                   v-if="message.metadata?.approval_status === 'pending'"
                   inline
                   :action="message.metadata?.tool_name || message.toolDisplay.action"
-                  :details="removeSystemReminder(message.message)"
+                  :details="getApprovalDetailsPayload(message)"
                   :display-type="message.metadata?.display_type || message.toolDisplay.displayType"
                   :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
                   :loading="approvalLoading && activeApprovalId === message.metadata?.tool_call_id"
@@ -692,6 +694,36 @@ const getMessageToolName = message => {
   ).toLowerCase()
 }
 
+const getToolCallArguments = message => {
+  const toolCall = message?.metadata?.tool_call || {}
+  const rawArgs = toolCall.function?.arguments ?? toolCall.arguments
+  if (typeof rawArgs === 'string') {
+    try {
+      return JSON.parse(rawArgs)
+    } catch {
+      return null
+    }
+  }
+  return typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : null
+}
+
+const getApprovalDetailsPayload = message => {
+  const structuredDetails = message?.metadata?.details
+  if (structuredDetails !== undefined && structuredDetails !== null) {
+    return structuredDetails
+  }
+
+  const toolName = getMessageToolName(message)
+  if (['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note'].includes(toolName)) {
+    const args = getToolCallArguments(message)
+    if (args && typeof args === 'object') {
+      return args
+    }
+  }
+
+  return props.removeSystemReminder(message?.message || '')
+}
+
 const isFinishTaskMessage = message => {
   const metaToolName = getMessageToolName(message)
   const action = message?.toolDisplay?.action || ''
@@ -925,10 +957,19 @@ const getSubAgentResultPreview = message => {
 }
 
 const getSubAgentTaskExpandId = message => `${message?.displayId || message?.id || ''}:task`
+const getSubAgentResultExpandId = message => `${message?.displayId || message?.id || ''}:result`
 
 const isSubAgentTaskExpanded = message => {
   return props.isMessageExpanded({
     displayId: getSubAgentTaskExpandId(message),
+    metadata: {},
+    toolDisplay: {}
+  })
+}
+
+const isSubAgentResultExpanded = message => {
+  return props.isMessageExpanded({
+    displayId: getSubAgentResultExpandId(message),
     metadata: {},
     toolDisplay: {}
   })

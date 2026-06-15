@@ -429,6 +429,87 @@ export function useWorkflowMessages(options = {}) {
     const toolMessageIds = new Set() // tool_call_id with dedicated tool/user-observe messages
     const subAgentCompletions = new Map()
 
+    const tryParseJsonValue = value => {
+      if (value === null || value === undefined) return null
+      if (typeof value === 'object') return value
+      if (typeof value !== 'string') return null
+
+      const trimmed = value.trim()
+      if (!trimmed) return null
+      if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) return null
+
+      try {
+        return JSON.parse(trimmed)
+      } catch {
+        return null
+      }
+    }
+
+    const toBulletList = items =>
+      items
+        .map(item => {
+          if (!item || typeof item !== 'object') {
+            return `- ${String(item ?? '').trim()}`
+          }
+
+          const severity = String(item.severity || '').trim()
+          const file = String(item.file || '').trim()
+          const detail = String(item.detail || item.summary || '').trim()
+          const labelParts = [severity && `**${severity}**`, file && `\`${file}\``].filter(Boolean)
+          const label = labelParts.length ? `${labelParts.join(' ')}:` : '-'
+          return `${label} ${detail || JSON.stringify(item)}`
+        })
+        .join('\n')
+
+    const formatSubAgentResultMarkdown = value => {
+      const parsed = tryParseJsonValue(value)
+      if (!parsed) {
+        return typeof value === 'string' ? value : String(value ?? '')
+      }
+
+      if (Array.isArray(parsed)) {
+        return `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``
+      }
+
+      const approved = parsed.approved
+      const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : ''
+      const findings = Array.isArray(parsed.findings) ? parsed.findings : []
+      const requiredFixes = Array.isArray(parsed.required_fixes)
+        ? parsed.required_fixes
+        : Array.isArray(parsed.requiredFixes)
+          ? parsed.requiredFixes
+          : []
+
+      if (
+        Object.prototype.hasOwnProperty.call(parsed, 'approved') ||
+        summary ||
+        findings.length > 0 ||
+        requiredFixes.length > 0
+      ) {
+        const sections = []
+
+        if (typeof approved === 'boolean') {
+          sections.push(`**Verdict:** ${approved ? 'Approved' : 'Changes Required'}`)
+        }
+
+        if (summary) {
+          sections.push(`**Summary**\n\n${summary}`)
+        }
+
+        if (findings.length > 0) {
+          sections.push(`**Findings**\n\n${toBulletList(findings)}`)
+        }
+
+        if (requiredFixes.length > 0) {
+          sections.push(`**Required Fixes**\n\n${toBulletList(requiredFixes)}`)
+        }
+
+        return sections.join('\n\n')
+      }
+
+      return `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``
+    }
+
     const extractSubAgentTask = content => {
       if (!content || typeof content !== 'string') return ''
       const patterns = [
@@ -500,7 +581,7 @@ export function useWorkflowMessages(options = {}) {
         mode: payload.mode || 'call',
         status: completionStatus,
         result: resultContent,
-        resultMarkdown: resultContent,
+        resultMarkdown: formatSubAgentResultMarkdown(resultContent),
         hasResult: Boolean(resultContent)
       }
     }
@@ -680,6 +761,7 @@ export function useWorkflowMessages(options = {}) {
               }
             })
             .filter(call => {
+              if (isInternalTodoTool(call.toolName)) return false
               if (toolMessageIds.has(call.id)) return false
               const state = toolStates.get(call.id)
               if (!state) return true
@@ -825,6 +907,30 @@ export function useWorkflowMessages(options = {}) {
       ...(Array.isArray(workflow?.agentConfig?.allowedPaths) ? workflow.agentConfig.allowedPaths : [])
     ]
     return [...new Set(roots.filter(Boolean))]
+  }
+
+  const isInternalTodoTool = toolName => String(toolName || '').toLowerCase().startsWith('todo_')
+
+  const decodeCompatJsonPayload = value => {
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    if (!trimmed) return value
+    const looksLikeJson =
+      trimmed.startsWith('{') ||
+      trimmed.startsWith('[') ||
+      (trimmed.startsWith('"') && (trimmed.includes('{') || trimmed.includes('[')))
+    if (!looksLikeJson) return value
+
+    let current = value
+    for (let depth = 0; depth < 2; depth += 1) {
+      if (typeof current !== 'string') break
+      try {
+        current = JSON.parse(current)
+      } catch {
+        break
+      }
+    }
+    return current
   }
 
   // Format tool title with icon, tool type class, and display text
@@ -1070,6 +1176,36 @@ export function useWorkflowMessages(options = {}) {
         args = {}
       }
     }
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
+      args = {}
+    }
+
+    let parsedPayload = meta.details && typeof meta.details === 'object' ? meta.details : null
+
+    if ((!args || Object.keys(args).length === 0) && parsedPayload && typeof parsedPayload === 'object') {
+      args = parsedPayload
+    }
+
+    const canUseLegacyMessagePayload =
+      typeof message.message === 'string' &&
+      !parsedPayload &&
+      ['diff', 'markdown', 'text'].includes(meta.display_type || '') &&
+      !!toolCallId
+
+    if ((!args || Object.keys(args).length === 0) && canUseLegacyMessagePayload) {
+      const parsedDetails = decodeCompatJsonPayload(message.message)
+      if (parsedDetails && typeof parsedDetails === 'object') {
+        args = parsedDetails
+        parsedPayload = parsedDetails
+      }
+    }
+
+    if (!parsedPayload && canUseLegacyMessagePayload) {
+      const parsedDetails = decodeCompatJsonPayload(message.message)
+      if (parsedDetails && typeof parsedDetails === 'object') {
+        parsedPayload = parsedDetails
+      }
+    }
 
     // 2. Format using standard rules
     const formatted = formatToolTitle(name, args)
@@ -1085,9 +1221,18 @@ export function useWorkflowMessages(options = {}) {
     if (name === 'complete_workflow_with_summary') {
       finalAction = t('workflow.finishTask')
       finalTarget = ''
-    } else if (meta.title && meta.title.trim()) {
+    } else if (typeof meta.title === 'string' && meta.title.trim()) {
       finalAction = normalizeToolDisplayText(removeSystemReminder(meta.title), displayRoots())
-      finalTarget = '' // Target is usually embedded in the title
+      const normalizedFormattedAction = normalizeToolDisplayText(formatted.action || '', displayRoots())
+      const normalizedFinalAction = normalizeToolDisplayText(finalAction || '', displayRoots())
+      const titleAlreadyIncludesTarget = finalTarget && normalizedFinalAction.includes(finalTarget)
+      if (
+        !finalTarget ||
+        titleAlreadyIncludesTarget ||
+        normalizedFinalAction !== normalizedFormattedAction
+      ) {
+        finalTarget = ''
+      }
     }
 
     // Fallback for missing action (prevents empty titles)
@@ -1120,6 +1265,27 @@ export function useWorkflowMessages(options = {}) {
                         ? 'failed'
                         : undefined
 
+    const looksLikeFileChangePayload = payload => {
+      if (!payload || typeof payload !== 'object') return false
+      const hasPath =
+        typeof payload.file_path === 'string' ||
+        typeof payload.path === 'string' ||
+        typeof payload.display_path === 'string'
+      const hasEditFields =
+        payload.old_string !== undefined ||
+        payload.new_string !== undefined ||
+        payload.content !== undefined
+      return hasPath && hasEditFields
+    }
+
+    const inferredDisplayType =
+      meta.display_type ||
+      (['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note'].includes(name)
+        ? 'diff'
+        : looksLikeFileChangePayload(parsedPayload) || looksLikeFileChangePayload(args)
+          ? 'diff'
+          : 'text')
+
     return {
       title: finalAction + (finalTarget ? ` ${finalTarget}` : ''),
       summary:
@@ -1127,7 +1293,7 @@ export function useWorkflowMessages(options = {}) {
           ? ''
           : getToolStatusSummary(name, summaryStatus, fallbackSummary),
       isError: isError,
-      displayType: meta.display_type || 'text',
+      displayType: inferredDisplayType,
       icon: finalIcon,
       toolType: finalToolType,
       action: finalAction,

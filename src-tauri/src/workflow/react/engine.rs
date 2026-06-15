@@ -4673,19 +4673,19 @@ impl WorkflowExecutor {
                     self.session_id,
                     name
                 );
-                result_map.insert(id, (ReinforcedResult {
-                    content: "<SYSTEM_REMINDER>Action postponed. A preceding tool in this turn is awaiting user intervention. Please re-issue this command if still necessary once the previous action is resolved.</SYSTEM_REMINDER>".into(),
-                    llm_content: None,
-                    title: format!("Postponed: {}", name),
-                    summary: "Turn blocked".to_string(),
-                    is_error: false,
-                    error_type: None,
-                    display_type: "text".to_string(),
-                    approval_status: Some("rejected".to_string()),
-                    observation_kind: Some(ObservationKind::TurnBlockedPostponed),
-                }, call));
-                continue;
-            }
+                        result_map.insert(
+                            id,
+                            (
+                                Self::turn_blocked_postponed_result(
+                                    &name,
+                                    "<SYSTEM_REMINDER>Action postponed. A preceding tool in this turn is awaiting user intervention. Please re-issue this command if still necessary once the previous action is resolved.</SYSTEM_REMINDER>",
+                                    "Turn blocked",
+                                ),
+                                call,
+                            ),
+                        );
+                        continue;
+                    }
 
             // --- SEMANTIC AUDIT ---
             let approval_batch_active = self.state == WorkflowState::AwaitingApproval;
@@ -4720,17 +4720,17 @@ impl WorkflowExecutor {
                             self.session_id,
                             name
                         );
-                        result_map.insert(id, (ReinforcedResult {
-                            content: "<SYSTEM_REMINDER>Action postponed. Earlier tools in this turn are queued for FIFO approval. Re-issue this command after those approved actions finish if it is still needed.</SYSTEM_REMINDER>".into(),
-                            llm_content: None,
-                            title: format!("Postponed: {}", name),
-                            summary: "Approval queue blocked".to_string(),
-                            is_error: false,
-                            error_type: None,
-                            display_type: "text".to_string(),
-                            approval_status: Some("rejected".to_string()),
-                            observation_kind: Some(ObservationKind::TurnBlockedPostponed),
-                        }, call));
+                        result_map.insert(
+                            id,
+                            (
+                                Self::turn_blocked_postponed_result(
+                                    &name,
+                                    "<SYSTEM_REMINDER>Action postponed. Earlier tools in this turn are queued for FIFO approval. Re-issue this command after those approved actions finish if it is still needed.</SYSTEM_REMINDER>",
+                                    "Approval queue blocked",
+                                ),
+                                call,
+                            ),
+                        );
                         continue;
                     }
 
@@ -4833,7 +4833,8 @@ impl WorkflowExecutor {
         }
 
         // Phase B: Sequential Batch (State-sensitive tools like todo_*)
-        for (id, name, args, call) in sequential_execution_queue {
+        let mut sequential_execution_queue = sequential_execution_queue.into_iter();
+        while let Some((id, name, args, call)) = sequential_execution_queue.next() {
             self.append_tool_started_event(&id, &name, &args);
             self.dispatch_tool_started_payload(&id, &name, &args).await;
 
@@ -4861,6 +4862,27 @@ impl WorkflowExecutor {
                 || self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::Paused
             {
+                for (remaining_id, remaining_name, _remaining_args, remaining_call) in
+                    sequential_execution_queue.by_ref()
+                {
+                    log::info!(
+                        "WorkflowExecutor {}: Postponing queued sequential tool '{}' because workflow entered waiting state {:?}",
+                        self.session_id,
+                        remaining_name,
+                        self.state
+                    );
+                    result_map.insert(
+                        remaining_id,
+                        (
+                            Self::turn_blocked_postponed_result(
+                                &remaining_name,
+                                "<SYSTEM_REMINDER>Action postponed. An earlier tool in this turn moved the workflow into a waiting state before this command could run. Re-issue this command if it is still needed after the blocking action is resolved.</SYSTEM_REMINDER>",
+                                "Sequential queue blocked",
+                            ),
+                            remaining_call,
+                        ),
+                    );
+                }
                 break;
             }
         }
@@ -4876,6 +4898,24 @@ impl WorkflowExecutor {
             .collect();
 
         Ok((final_results, has_todo_call))
+    }
+
+    fn turn_blocked_postponed_result(
+        tool_name: &str,
+        content: &str,
+        summary: &str,
+    ) -> ReinforcedResult {
+        ReinforcedResult {
+            content: content.to_string(),
+            llm_content: None,
+            title: format!("Postponed: {}", tool_name),
+            summary: summary.to_string(),
+            is_error: false,
+            error_type: None,
+            display_type: "text".to_string(),
+            approval_status: Some("rejected".to_string()),
+            observation_kind: Some(ObservationKind::TurnBlockedPostponed),
+        }
     }
 
     /// Optimized version of post-processing that ensures reinforced results reflect the system state.
@@ -6998,5 +7038,23 @@ mod recovery_tests {
             sanitized,
             "Check whether dev_data is tracked\n\nActual constraint"
         );
+    }
+
+    #[test]
+    fn test_turn_blocked_postponed_result_marks_tool_as_postponed() {
+        let result = WorkflowExecutor::turn_blocked_postponed_result(
+            "todo_update",
+            "<SYSTEM_REMINDER>postponed</SYSTEM_REMINDER>",
+            "Sequential queue blocked",
+        );
+
+        assert_eq!(result.title, "Postponed: todo_update");
+        assert_eq!(result.summary, "Sequential queue blocked");
+        assert_eq!(result.approval_status.as_deref(), Some("rejected"));
+        assert_eq!(
+            result.observation_kind,
+            Some(ObservationKind::TurnBlockedPostponed)
+        );
+        assert!(!result.is_error);
     }
 }

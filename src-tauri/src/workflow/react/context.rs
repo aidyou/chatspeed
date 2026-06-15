@@ -444,22 +444,52 @@ impl ContextManager {
     ) -> Vec<WorkflowAiContextMessage> {
         let mut protocol_safe = Vec::with_capacity(projected.len());
         let mut pending_tool_call_ids: Option<HashSet<String>> = None;
+        let mut resolved_tool_call_ids: HashSet<String> = HashSet::new();
         let mut pending_assistant_index: Option<usize> = None;
 
-        fn strip_unresolved_tool_calls(
+        fn finalize_pending_tool_calls(
             projected: &mut Vec<WorkflowAiContextMessage>,
             assistant_index: usize,
+            resolved_tool_call_ids: &HashSet<String>,
         ) {
             let Some(message) = projected.get_mut(assistant_index) else {
                 return;
             };
 
-            if let Some(meta) = message
+            if let Some(tool_calls) = message
                 .metadata
                 .as_mut()
                 .and_then(|value| value.as_object_mut())
+                .and_then(|meta| meta.get_mut("tool_calls"))
+                .and_then(|value| value.as_array_mut())
             {
-                meta.remove("tool_calls");
+                tool_calls.retain(|tool_call| {
+                    tool_call
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .or_else(|| {
+                            tool_call
+                                .get("tool_call_id")
+                                .and_then(|value| value.as_str())
+                        })
+                        .is_some_and(|tool_call_id| resolved_tool_call_ids.contains(tool_call_id))
+                });
+            }
+
+            let remove_tool_calls = message
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("tool_calls"))
+                .and_then(|value| value.as_array())
+                .is_none_or(|calls| calls.is_empty());
+            if remove_tool_calls {
+                if let Some(meta) = message
+                    .metadata
+                    .as_mut()
+                    .and_then(|value| value.as_object_mut())
+                {
+                    meta.remove("tool_calls");
+                }
             }
 
             let has_tool_calls = message
@@ -484,12 +514,17 @@ impl ContextManager {
                 "assistant" => {
                     if pending_tool_call_ids.take().is_some() {
                         if let Some(assistant_index) = pending_assistant_index.take() {
-                            strip_unresolved_tool_calls(&mut protocol_safe, assistant_index);
+                            finalize_pending_tool_calls(
+                                &mut protocol_safe,
+                                assistant_index,
+                                &resolved_tool_call_ids,
+                            );
                         }
                     }
 
                     let tool_call_ids = Self::tool_call_ids_from_message(&message);
                     pending_assistant_index = None;
+                    resolved_tool_call_ids.clear();
                     pending_tool_call_ids = (!tool_call_ids.is_empty()).then(|| {
                         pending_assistant_index = Some(protocol_safe.len());
                         tool_call_ids
@@ -514,21 +549,28 @@ impl ContextManager {
                         continue;
                     }
 
+                    resolved_tool_call_ids.insert(tool_call_id.clone());
                     protocol_safe.push(message);
 
                     if open_tool_calls.is_empty() {
                         pending_tool_call_ids = None;
+                        resolved_tool_call_ids.clear();
                         pending_assistant_index = None;
                     }
                 }
                 _ => {
                     if pending_tool_call_ids.take().is_some() {
                         if let Some(assistant_index) = pending_assistant_index.take() {
-                            strip_unresolved_tool_calls(&mut protocol_safe, assistant_index);
+                            finalize_pending_tool_calls(
+                                &mut protocol_safe,
+                                assistant_index,
+                                &resolved_tool_call_ids,
+                            );
                         }
                     }
 
                     pending_tool_call_ids = None;
+                    resolved_tool_call_ids.clear();
                     protocol_safe.push(message);
                 }
             }
@@ -536,7 +578,11 @@ impl ContextManager {
 
         if pending_tool_call_ids.take().is_some() {
             if let Some(assistant_index) = pending_assistant_index.take() {
-                strip_unresolved_tool_calls(&mut protocol_safe, assistant_index);
+                finalize_pending_tool_calls(
+                    &mut protocol_safe,
+                    assistant_index,
+                    &resolved_tool_call_ids,
+                );
             }
         }
 
@@ -2924,6 +2970,160 @@ mod tests {
                 .is_none(),
             "unresolved assistant tool_calls should be stripped from projection"
         );
+    }
+
+    #[tokio::test]
+    async fn get_messages_for_llm_keeps_resolved_tool_calls_when_batch_is_partially_unresolved() {
+        let (_dir, store) = setup_store();
+        insert_workflow(&store, "partially_resolved_tool_calls");
+        let mut context = ContextManager::new(
+            "partially_resolved_tool_calls".to_string(),
+            store,
+            20_000,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Continue".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message");
+
+        context
+            .add_message(
+                "assistant".to_string(),
+                "Working through the next checks.".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_calls": [
+                        {
+                            "id": "tool_done_1",
+                            "type": "function",
+                            "function": {
+                                "name": "todo_update",
+                                "arguments": "{}"
+                            }
+                        },
+                        {
+                            "id": "tool_missing",
+                            "type": "function",
+                            "function": {
+                                "name": "todo_update",
+                                "arguments": "{}"
+                            }
+                        },
+                        {
+                            "id": "tool_done_2",
+                            "type": "function",
+                            "function": {
+                                "name": "grep",
+                                "arguments": "{}"
+                            }
+                        }
+                    ]
+                })),
+            )
+            .await
+            .expect("failed to add assistant tool call");
+
+        context
+            .add_message(
+                "tool".to_string(),
+                "first result".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                3,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool_done_1",
+                    "tool_name": "todo_update",
+                    "approval_status": "completed"
+                })),
+            )
+            .await
+            .expect("failed to add first tool result");
+
+        context
+            .add_message(
+                "tool".to_string(),
+                "third result".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                4,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool_done_2",
+                    "tool_name": "grep",
+                    "approval_status": "completed"
+                })),
+            )
+            .await
+            .expect("failed to add third tool result");
+
+        context
+            .add_message(
+                "assistant".to_string(),
+                "Next turn".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                5,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add trailing assistant");
+
+        let llm_messages = context.get_messages_for_llm();
+        let assistant = llm_messages
+            .iter()
+            .find(|message| message.role == "assistant" && message.message.contains("Working through"))
+            .expect("assistant message should remain");
+
+        let tool_calls = assistant
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("tool_calls"))
+            .and_then(|value| value.as_array())
+            .expect("resolved tool calls should remain");
+
+        let projected_ids = tool_calls
+            .iter()
+            .filter_map(|tool_call| tool_call.get("id").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(projected_ids, vec!["tool_done_1", "tool_done_2"]);
+
+        let projected_tool_ids = llm_messages
+            .iter()
+            .filter(|message| message.role == "tool")
+            .filter_map(|message| {
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("tool_call_id"))
+                    .and_then(|value| value.as_str())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(projected_tool_ids, vec!["tool_done_1", "tool_done_2"]);
     }
 
     #[tokio::test]
