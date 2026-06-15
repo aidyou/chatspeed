@@ -1,5 +1,13 @@
 <template>
   <div class="messages" ref="messagesRef" @scroll.passive="handleScroll">
+    <a
+      v-if="props.hiddenCompletedTaskGroupCount > 0"
+      class="history-window-indicator"
+      @click="revealEarlierTaskGroup">
+      <cs name="double-arrow-down" class="cs-rotate" size="var(--cs-font-size-xs)" />
+      <span>{{ t('workflow.earlierTasks', { count: props.hiddenCompletedTaskGroupCount }) }}</span>
+    </a>
+
     <div
       v-for="(message, index) in visibleMessages"
       :key="message.displayId"
@@ -60,7 +68,9 @@
                     </div>
                     <div class="sub-agent-card__row">
                       <span class="sub-agent-card__label">Mode</span>
-                      <span class="sub-agent-card__value mode">{{ message.subAgentCard.mode }}</span>
+                      <span class="sub-agent-card__value mode">{{
+                        message.subAgentCard.mode
+                      }}</span>
                     </div>
                   </div>
                 </div>
@@ -357,7 +367,9 @@
                   <span class="summary-text">{{ call.summary }}</span>
                 </div>
                 <div
-                  v-if="call.toolName === 'complete_workflow_with_summary' && call.completionSummary"
+                  v-if="
+                    call.toolName === 'complete_workflow_with_summary' && call.completionSummary
+                  "
                   class="finish-task-summary markdown-body">
                   <MarkdownSimple :content="call.completionSummary" />
                 </div>
@@ -435,7 +447,7 @@
 </template>
 
 <script setup>
-import { computed, ref, nextTick } from 'vue'
+import { computed, ref, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
 import ApprovalDialog from './ApprovalDialog.vue'
@@ -450,6 +462,10 @@ const props = defineProps({
   messages: {
     type: Array,
     default: () => []
+  },
+  hiddenCompletedTaskGroupCount: {
+    type: Number,
+    default: 0
   },
   queuedMessages: {
     type: Array,
@@ -534,6 +550,7 @@ const emit = defineEmits([
   'toggle-expand',
   'toggle-reasoning',
   'scroll-bottom',
+  'reveal-earlier-task-group',
   'approve-tool',
   'approve-all-tool',
   'reject-tool',
@@ -543,6 +560,7 @@ const emit = defineEmits([
 const messagesRef = ref(null)
 const approvalDrafts = ref({})
 const askUserDrafts = ref({})
+const isRevealingEarlierTaskGroup = ref(false)
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
 
@@ -553,6 +571,25 @@ const isNearBottom = el => {
 
 const handleScroll = () => {
   shouldAutoScroll.value = isNearBottom(messagesRef.value)
+}
+
+const revealEarlierTaskGroup = () => {
+  if (isRevealingEarlierTaskGroup.value || props.hiddenCompletedTaskGroupCount <= 0) return
+
+  const container = messagesRef.value
+  const previousScrollHeight = container?.scrollHeight || 0
+  const previousScrollTop = container?.scrollTop || 0
+
+  isRevealingEarlierTaskGroup.value = true
+  emit('reveal-earlier-task-group')
+
+  nextTick(() => {
+    if (container) {
+      const nextScrollHeight = container.scrollHeight
+      container.scrollTop = previousScrollTop + (nextScrollHeight - previousScrollHeight)
+    }
+    isRevealingEarlierTaskGroup.value = false
+  })
 }
 
 const isHiddenSystemObservation = message => {
@@ -656,8 +693,7 @@ const getMessageToolName = message => {
 }
 
 const isFinishTaskMessage = message => {
-  const metaToolName =
-    getMessageToolName(message)
+  const metaToolName = getMessageToolName(message)
   const action = message?.toolDisplay?.action || ''
   return (
     metaToolName === 'complete_workflow_with_summary' ||
@@ -881,7 +917,9 @@ const subAgentStatusClass = message => {
 }
 
 const getSubAgentResultPreview = message => {
-  const result = props.removeSystemReminder(message?.subAgentCard?.result || '').replace(/\s+/g, ' ')
+  const result = props
+    .removeSystemReminder(message?.subAgentCard?.result || '')
+    .replace(/\s+/g, ' ')
   if (!result) return ''
   return result.length > 96 ? `${result.slice(0, 96)}...` : result
 }
@@ -1044,17 +1082,78 @@ const submitAskUserResponse = message => {
   emit('submit-ask-user', result.content)
 }
 
-const scrollToBottom = (force = false) => {
-  if (messagesRef.value) {
-    const el = messagesRef.value
-    if (force || shouldAutoScroll.value || isNearBottom(el)) {
-      nextTick(() => {
-        el.scrollTop = el.scrollHeight
-        shouldAutoScroll.value = true
+const performScrollToBottom = (force = false, frameBudget = 3) => {
+  const el = messagesRef.value
+  if (!el) return
+  if (!force && !shouldAutoScroll.value && !isNearBottom(el)) return
+
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      const target = el.scrollHeight - el.clientHeight
+      el.scrollTop = Math.max(0, target)
+      shouldAutoScroll.value = true
+
+      if (frameBudget <= 1) return
+
+      requestAnimationFrame(() => {
+        const remaining = el.scrollHeight - el.scrollTop - el.clientHeight
+        if (remaining > 2) {
+          performScrollToBottom(true, frameBudget - 1)
+        }
       })
-    }
-  }
+    })
+  })
 }
+
+const scrollToBottom = (force = false) => {
+  performScrollToBottom(force)
+}
+
+const visibleMessagesSignature = computed(() =>
+  visibleMessages.value
+    .map(message => {
+      const toolCallsCount = Array.isArray(message?.pendingToolCalls) ? message.pendingToolCalls.length : 0
+      return [
+        message?.displayId || message?.id || '',
+        message?.message || '',
+        message?.reasoning || '',
+        message?.metadata?.execution_status || '',
+        message?.metadata?.approval_status || '',
+        toolCallsCount
+      ].join('::')
+    })
+    .join('||')
+)
+
+const streamingSignature = computed(() =>
+  [
+    props.isChatting ? '1' : '0',
+    props.chatState?.content || '',
+    props.chatState?.reasoning || '',
+    Array.isArray(props.chatState?.blocks)
+      ? props.chatState.blocks.map(block => block?.content || '').join('\u0001')
+      : '',
+    props.chatState?.retryInfo?.nextRetryIn ?? ''
+  ].join('\u0002')
+)
+
+watch(
+  visibleMessagesSignature,
+  (next, prev) => {
+    if (next === prev) return
+    performScrollToBottom()
+  },
+  { flush: 'post' }
+)
+
+watch(
+  streamingSignature,
+  (next, prev) => {
+    if (next === prev) return
+    performScrollToBottom()
+  },
+  { flush: 'post' }
+)
 
 defineExpose({
   scrollToBottom,
@@ -1112,5 +1211,30 @@ defineExpose({
 .context-snapshot-card__body {
   padding: var(--cs-space-sm) var(--cs-space);
   border-top: 1px solid var(--cs-border-color);
+}
+
+.history-window-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cs-space-xs);
+  margin: 0 var(--cs-space) var(--cs-space) 0;
+  padding: var(--cs-space-xs) var(--cs-space-sm);
+  border: 1px dashed var(--cs-border-color);
+  border-radius: var(--cs-border-radius-md);
+  background: var(--cs-bg-color);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
+
+  &:hover {
+    color: var(--cs-text-color-primary);
+    background: var(--cs-hover-bg-color);
+    border-color: var(--el-color-primary-light-5);
+  }
 }
 </style>

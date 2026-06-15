@@ -291,7 +291,7 @@ SYSTEM_REMINDER {
     font-size: var(--cs-font-size);
     color: var(--cs-text-color-primary);
     line-height: 1.8;
-    word-break: break-word  ;
+    word-break: break-word;
 
     &.chatting {
       width: auto;
@@ -888,6 +888,11 @@ SYSTEM_REMINDER {
   }
 }
 
+.cs-rotate {
+  display: inline-flex;
+  transform: rotate(180deg);
+}
+
 .cs-spin {
   animation: spin 1s infinite;
 }
@@ -922,6 +927,6 @@ SYSTEM_REMINDER {
   top: var(--cs-titlebar-height) !important;
 }
 
-.el-image-viewer__mask{
+.el-image-viewer__mask {
   border-radius: var(--cs-border-radius-md);
 }
