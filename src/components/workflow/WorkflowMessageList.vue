@@ -38,7 +38,36 @@
               >
             </div>
           </div>
-          <pre v-else class="simple-text">{{ getVisibleUserContent(message) }}</pre>
+          <div
+            v-else
+            class="user-message-wrap"
+            :class="{ 'is-expandable': isExpandableUserMessage(message) }"
+            @click="
+              isExpandableUserMessage(message) &&
+              $emit('toggle-expand', getUserMessageExpandId(message))
+            ">
+            <pre
+              :data-user-expand-id="getUserMessageExpandId(message)"
+              class="simple-text"
+              :class="{
+                'is-collapsed': isExpandableUserMessage(message) && !isUserMessageExpanded(message),
+                'is-expandable': isExpandableUserMessage(message)
+              }"
+              >{{ getVisibleUserContent(message) }}</pre
+            >
+            <button
+              v-if="isExpandableUserMessage(message)"
+              type="button"
+              class="user-message-toggle"
+              :aria-label="isUserMessageExpanded(message) ? 'Collapse message' : 'Expand message'"
+              @click.stop="$emit('toggle-expand', getUserMessageExpandId(message))">
+              <cs
+                name="double-arrow-down"
+                size="14px"
+                class="user-message-toggle__icon"
+                :class="{ expanded: isUserMessageExpanded(message) }" />
+            </button>
+          </div>
         </div>
         <div v-else class="ai-content chat">
           <!-- CLI Style Tool Call (Results) -->
@@ -460,15 +489,43 @@
     <!-- Frontend queued user messages -->
     <div v-if="queuedMessages.length > 0" class="queued-list">
       <div v-for="item in queuedMessages" :key="item.id" class="queued-item">
-        <cs name="clock" size="12px" class="queued-icon" />
-        <span class="queued-text">{{ item.content }}</span>
+        <div class="queued-item-main">
+          <cs :name="item.icon || 'clock'" size="12px" class="queued-icon" />
+          <div class="queued-content">
+            <span v-if="item.content" class="queued-text">{{ item.content }}</span>
+            <div v-if="item.attachments?.length > 0" class="queued-attachments">
+              <div
+                v-for="(attachment, attachmentIndex) in item.attachments"
+                :key="`${item.id}_attachment_${attachment.id || attachmentIndex}`"
+                class="queued-attachment-item">
+                <el-image
+                  v-if="attachment.type === 'image' && (attachment.url || attachment.sourceUrl)"
+                  :src="attachment.url || attachment.sourceUrl"
+                  :preview-src-list="[attachment.url || attachment.sourceUrl]"
+                  :initial-index="0"
+                  fit="cover"
+                  class="queued-attachment-image"
+                  preview-teleported />
+                <span v-else class="queued-attachment-name">{{ attachment.name }}</span>
+              </div>
+            </div>
+            <span v-if="item.statusText" class="queued-status-text">{{ item.statusText }}</span>
+          </div>
+        </div>
+        <button
+          v-if="canRemoveQueuedMessage(item)"
+          type="button"
+          class="queued-remove"
+          @click="$emit('remove-queued-message', item.id)">
+          <cs name="close" size="12px" />
+        </button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, nextTick, watch } from 'vue'
+import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
 import ApprovalDialog from './ApprovalDialog.vue'
@@ -479,6 +536,7 @@ import { useWorkflowStore } from '@/stores/workflow'
 const workflowStore = useWorkflowStore()
 const { t } = useI18n()
 const CUSTOM_ASK_USER_VALUE = '__custom__'
+const USER_MESSAGE_COLLAPSED_LINE_COUNT = 4
 
 const props = defineProps({
   messages: {
@@ -593,20 +651,25 @@ const emit = defineEmits([
   'approve-all-tool',
   'approve-all-pending',
   'reject-tool',
-  'submit-ask-user'
+  'submit-ask-user',
+  'remove-queued-message'
 ])
 
 const messagesRef = ref(null)
 const approvalDrafts = ref({})
 const askUserDrafts = ref({})
+const userMessageOverflowMap = ref({})
 const isRevealingEarlierTaskGroup = ref(false)
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
+let userMessageResizeObserver = null
 
 const isNearBottom = el => {
   if (!el) return true
   return el.scrollHeight - el.scrollTop - el.clientHeight <= AUTO_SCROLL_THRESHOLD
 }
+
+const canRemoveQueuedMessage = item => item?.removable !== false
 
 const handleScroll = () => {
   shouldAutoScroll.value = isNearBottom(messagesRef.value)
@@ -1171,6 +1234,110 @@ const getFinishTaskLabel = message => {
 
 const getVisibleUserContent = message => props.removeSystemReminder(message?.message || '')
 
+const getUserMessageExpandId = message => `${message?.displayId || message?.id || 'user'}:user`
+
+const getUserMessageCollapsedMaxHeight = el => {
+  if (!el || typeof window === 'undefined') return 0
+
+  const styles = window.getComputedStyle(el)
+  const wrapperStyles = window.getComputedStyle(el.parentElement || el)
+  const fontSize = Number.parseFloat(styles.fontSize) || 14
+  const lineHeight =
+    Number.parseFloat(styles.lineHeight) ||
+    Number.parseFloat(styles.getPropertyValue('--user-message-line-height-multiplier')) *
+      fontSize ||
+    fontSize * 1.6
+  const safeBottom =
+    Number.parseFloat(wrapperStyles.getPropertyValue('--user-message-toggle-safe-bottom')) || 0
+
+  return lineHeight * USER_MESSAGE_COLLAPSED_LINE_COUNT + safeBottom
+}
+
+const getUserMessageNaturalHeight = el => {
+  if (!el || typeof window === 'undefined' || typeof document === 'undefined') return 0
+
+  const styles = window.getComputedStyle(el)
+  const wrapperStyles = window.getComputedStyle(el.parentElement || el)
+  const safeRight =
+    Number.parseFloat(wrapperStyles.getPropertyValue('--user-message-toggle-safe-right')) || 0
+  const measureEl = document.createElement('pre')
+  measureEl.textContent = el.textContent || ''
+  measureEl.style.position = 'absolute'
+  measureEl.style.visibility = 'hidden'
+  measureEl.style.pointerEvents = 'none'
+  measureEl.style.zIndex = '-1'
+  measureEl.style.margin = '0'
+  measureEl.style.padding = '0'
+  measureEl.style.border = '0'
+  measureEl.style.maxHeight = 'none'
+  measureEl.style.overflow = 'visible'
+  measureEl.style.whiteSpace = styles.whiteSpace
+  measureEl.style.wordBreak = styles.wordBreak
+  measureEl.style.font = styles.font
+  measureEl.style.lineHeight = styles.lineHeight
+  measureEl.style.letterSpacing = styles.letterSpacing
+  measureEl.style.boxSizing = styles.boxSizing
+  measureEl.style.width = `${Math.max(el.clientWidth - safeRight, 0)}px`
+
+  document.body.appendChild(measureEl)
+  const naturalHeight = measureEl.scrollHeight
+  document.body.removeChild(measureEl)
+
+  return naturalHeight
+}
+
+const updateUserMessageOverflowMap = overflowMap => {
+  const current = userMessageOverflowMap.value
+  const currentKeys = Object.keys(current)
+  const nextKeys = Object.keys(overflowMap)
+
+  if (
+    currentKeys.length === nextKeys.length &&
+    nextKeys.every(key => current[key] === overflowMap[key])
+  ) {
+    return
+  }
+
+  userMessageOverflowMap.value = overflowMap
+}
+
+const measureUserMessageOverflow = () => {
+  const overflowMap = {}
+  const container = messagesRef.value
+  if (!container) {
+    updateUserMessageOverflowMap(overflowMap)
+    return
+  }
+
+  const elements = container.querySelectorAll('[data-user-expand-id]')
+  for (const el of elements) {
+    const expandId = el.getAttribute('data-user-expand-id')
+    if (!expandId) continue
+
+    overflowMap[expandId] = getUserMessageNaturalHeight(el) > getUserMessageCollapsedMaxHeight(el)
+  }
+
+  updateUserMessageOverflowMap(overflowMap)
+}
+
+const scheduleMeasureUserMessageOverflow = () => {
+  nextTick(() => {
+    measureUserMessageOverflow()
+  })
+}
+
+const isUserMessageExpanded = message =>
+  props.isMessageExpanded({
+    displayId: getUserMessageExpandId(message),
+    metadata: {},
+    toolDisplay: {}
+  })
+
+const isExpandableUserMessage = message => {
+  if (!message || getAskUserResponseItems(message).length > 0) return false
+  return !!userMessageOverflowMap.value[getUserMessageExpandId(message)]
+}
+
 const getMessageSubAgentId = message => {
   const meta = message?.metadata || {}
   if (meta.sub_agent_id || meta.subAgentId) return meta.sub_agent_id || meta.subAgentId
@@ -1442,6 +1609,7 @@ watch(
   (next, prev) => {
     if (next === prev) return
     performScrollToBottom()
+    scheduleMeasureUserMessageOverflow()
   },
   { flush: 'post' }
 )
@@ -1454,6 +1622,38 @@ watch(
   },
   { flush: 'post' }
 )
+
+watch(
+  () => props.currentWorkflowId,
+  () => {
+    isRevealingEarlierTaskGroup.value = false
+    shouldAutoScroll.value = true
+    userMessageOverflowMap.value = {}
+    scheduleMeasureUserMessageOverflow()
+  }
+)
+
+onMounted(() => {
+  if (typeof ResizeObserver !== 'undefined') {
+    userMessageResizeObserver = new ResizeObserver(() => {
+      measureUserMessageOverflow()
+    })
+    if (messagesRef.value) userMessageResizeObserver.observe(messagesRef.value)
+  } else if (typeof window !== 'undefined') {
+    window.addEventListener('resize', measureUserMessageOverflow)
+  }
+
+  scheduleMeasureUserMessageOverflow()
+})
+
+onBeforeUnmount(() => {
+  if (userMessageResizeObserver) {
+    userMessageResizeObserver.disconnect()
+    userMessageResizeObserver = null
+  } else if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', measureUserMessageOverflow)
+  }
+})
 
 defineExpose({
   scrollToBottom,
@@ -1528,6 +1728,20 @@ defineExpose({
   word-break: break-word;
 }
 
+.user-message-wrap {
+  position: relative;
+  --user-message-line-height-multiplier: 1.6;
+  --user-message-toggle-size: var(--cs-size-lg);
+  --user-message-toggle-right: var(--cs-space);
+  --user-message-toggle-bottom: var(--cs-space);
+  --user-message-toggle-safe-right: calc(var(--cs-size-xl) + var(--cs-space-sm));
+  --user-message-toggle-safe-bottom: calc(var(--cs-size-xl) + var(--cs-space-sm));
+}
+
+.user-message-wrap.is-expandable {
+  cursor: pointer;
+}
+
 .tool-diff-view {
   margin-top: var(--cs-space-xs);
 }
@@ -1555,5 +1769,148 @@ defineExpose({
     background: var(--cs-hover-bg-color);
     border-color: var(--el-color-primary-light-5);
   }
+}
+
+.queued-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--cs-size-xl);
+  height: var(--cs-size-xl);
+  border: none;
+  border-radius: var(--cs-border-radius-full);
+  background: transparent;
+  color: var(--cs-text-color-secondary);
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.queued-remove:hover {
+  color: var(--cs-text-color-primary);
+  background: var(--cs-hover-bg-color);
+}
+
+.queued-status-text {
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+  line-height: 1.4;
+}
+
+.queued-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-xs);
+}
+
+.queued-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--cs-space-xs);
+  margin-left: auto;
+  max-width: min(80%, 720px);
+  padding: var(--cs-space-sm) var(--cs-space);
+  border-radius: var(--cs-border-radius-lg);
+  background: var(--cs-hover-bg-color);
+}
+
+.queued-item-main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--cs-space-xs);
+  min-width: 0;
+  flex: 1;
+}
+
+.queued-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--cs-text-color-secondary);
+}
+
+.queued-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-2xs);
+  min-width: 0;
+}
+
+.queued-text {
+  color: var(--cs-text-color-primary);
+  font-size: var(--cs-font-size-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.queued-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cs-space-xs);
+}
+
+.queued-attachment-item {
+  flex-shrink: 0;
+}
+
+.queued-attachment-image {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--cs-border-radius-md);
+  object-fit: cover;
+}
+
+.queued-attachment-name {
+  display: inline-flex;
+  max-width: 180px;
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.simple-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: calc(1em * var(--user-message-line-height-multiplier));
+
+  &.is-collapsed {
+    position: relative;
+    max-height: calc(
+      1em * var(--user-message-line-height-multiplier) * 4 + var(--user-message-toggle-safe-bottom)
+    );
+    overflow: hidden;
+    padding-right: var(--user-message-toggle-safe-right);
+    padding-bottom: var(--user-message-toggle-safe-bottom);
+  }
+}
+
+.user-message-toggle {
+  position: absolute;
+  right: var(--user-message-toggle-right);
+  bottom: var(--user-message-toggle-bottom);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: var(--cs-size-xl);
+  height: var(--cs-size-xl);
+  padding: 0;
+  border: 0;
+  border-radius: var(--cs-border-radius-full);
+  background: var(--cs-bg-color-light);
+  color: var(--cs-text-color-secondary);
+  cursor: pointer;
+}
+
+.user-message-toggle__icon {
+  transition: transform 0.2s ease;
+}
+
+.user-message-toggle__icon.expanded {
+  transform: rotate(180deg);
 }
 </style>
