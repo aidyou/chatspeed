@@ -101,6 +101,13 @@
         <div class="label"></div>
         <div class="value">
           <el-button type="primary" @click="runTest" :loading="loading">Run Test</el-button>
+          <el-button
+            v-if="requestType !== 'search'"
+            @click="runWebFetchTest"
+            :loading="loading"
+          >
+            Run WebFetch
+          </el-button>
         </div>
       </div>
 
@@ -217,6 +224,44 @@ const runTest = async () => {
     } else {
       showMessage('Test Failed: ' + (e.message || String(e)), 'error')
       console.error('Scraper test failed:', e)
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+const runWebFetchTest = async () => {
+  if (requestType.value === 'search') return
+
+  loading.value = true
+  result.value = null
+  error.value = null
+
+  if (!url.value) {
+    showMessage('Url Required', 'error')
+    loading.value = false
+    return
+  }
+
+  const params = {
+    type: 'web_fetch',
+    url: url.value,
+    format: format.value,
+    keep_link: keepLink.value,
+    keep_image: keepImage.value
+  }
+
+  try {
+    const response = await invokeWrapper('test_scrape', { requestData: params })
+    result.value = JSON.parse(response)
+  } catch (e) {
+    error.value = e
+    if (e instanceof FrontendAppError) {
+      showMessage('WebFetch Test Failed: ' + e.toFormattedString(), 'error')
+      console.error('WebFetch test failed:', e.originalError)
+    } else {
+      showMessage('WebFetch Test Failed: ' + (e.message || String(e)), 'error')
+      console.error('WebFetch test failed:', e)
     }
   } finally {
     loading.value = false

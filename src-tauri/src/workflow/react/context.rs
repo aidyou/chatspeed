@@ -3096,7 +3096,9 @@ mod tests {
         let llm_messages = context.get_messages_for_llm();
         let assistant = llm_messages
             .iter()
-            .find(|message| message.role == "assistant" && message.message.contains("Working through"))
+            .find(|message| {
+                message.role == "assistant" && message.message.contains("Working through")
+            })
             .expect("assistant message should remain");
 
         let tool_calls = assistant

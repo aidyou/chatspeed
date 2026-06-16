@@ -47,18 +47,40 @@ pub struct HttpClient {
     client: Client,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct HttpProxyConfig {
+    pub server: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
 impl HttpClient {
     /// Creates a new HTTP client instance
     pub fn new(proxy: Option<String>) -> HttpResult<Self> {
+        Self::new_with_proxy_config(HttpProxyConfig {
+            server: proxy,
+            username: None,
+            password: None,
+        })
+    }
+
+    /// Creates a new HTTP client instance with proxy authentication support
+    pub fn new_with_proxy_config(proxy: HttpProxyConfig) -> HttpResult<Self> {
         let mut client = reqwest::Client::builder().timeout(Duration::from_secs(30));
 
-        if let Some(proxy) = proxy {
-            if !proxy.is_empty() {
-                client = client.proxy(reqwest::Proxy::all(proxy).map_err(|e| {
+        if let Some(proxy_server) = proxy.server {
+            if !proxy_server.is_empty() {
+                let mut reqwest_proxy = reqwest::Proxy::all(proxy_server).map_err(|e| {
                     HttpError::Config(
                         t!("http.proxy_config_failed", error = e.to_string()).to_string(),
                     )
-                })?);
+                })?;
+                if let (Some(username), Some(password)) = (proxy.username, proxy.password) {
+                    if !username.is_empty() && !password.is_empty() {
+                        reqwest_proxy = reqwest_proxy.basic_auth(&username, &password);
+                    }
+                }
+                client = client.proxy(reqwest_proxy);
             }
         }
 

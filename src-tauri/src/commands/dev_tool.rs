@@ -11,6 +11,7 @@ use crate::{
         engine::run as run_scraper,
         types::{ContentOptions, ScrapeRequest},
     },
+    tools::TOOL_WEB_FETCH,
 };
 
 #[command]
@@ -59,6 +60,40 @@ pub async fn test_scrape(
                 })
             };
             run_scraper(app_handle, request)
+                .await
+                .map(|result| serde_json::to_string_pretty(&result).unwrap_or_default())
+                .map_err(|e| AppError::General {
+                    message: e.to_string(),
+                })
+        }
+        "web_fetch" => {
+            log::debug!(
+                "request: {}",
+                serde_json::to_string_pretty(&request_data).unwrap_or_default()
+            );
+
+            let url = request_data["url"]
+                .as_str()
+                .ok_or(AppError::General {
+                    message: "Missing 'url' for web_fetch request".to_string(),
+                })?
+                .to_string();
+            let format = request_data["format"].as_str().unwrap_or("markdown");
+            let keep_link = request_data["keep_link"].as_bool().unwrap_or(false);
+            let keep_image = request_data["keep_image"].as_bool().unwrap_or(false);
+
+            chat_state
+                .inner()
+                .tool_manager
+                .native_tool_call(
+                    TOOL_WEB_FETCH,
+                    serde_json::json!({
+                        "url": url,
+                        "format": format,
+                        "keep_link": keep_link,
+                        "keep_image": keep_image,
+                    }),
+                )
                 .await
                 .map(|result| serde_json::to_string_pretty(&result).unwrap_or_default())
                 .map_err(|e| AppError::General {

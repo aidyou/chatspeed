@@ -1,17 +1,99 @@
 use async_trait::async_trait;
+use reqwest::Url;
 use rust_i18n::t;
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use std::time::Duration;
+use tauri::{AppHandle, Manager};
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
     constants::RESTRICTED_EXTENSIONS,
+    db::MainStore,
+    http::{
+        client::{HttpClient, HttpProxyConfig},
+        types::HttpConfig,
+    },
     scraper::{
         engine,
         types::{ContentOptions, ScrapeRequest},
     },
     tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition},
 };
+
+const DIRECT_TEXT_FETCH_EXTENSIONS: &[&str] = &[
+    "bat",
+    "c",
+    "cc",
+    "cfg",
+    "conf",
+    "cpp",
+    "cs",
+    "css",
+    "csv",
+    "cxx",
+    "env",
+    "gitignore",
+    "go",
+    "h",
+    "hpp",
+    "ini",
+    "java",
+    "js",
+    "json",
+    "jsx",
+    "log",
+    "mjs",
+    "md",
+    "php",
+    "py",
+    "rb",
+    "rs",
+    "scss",
+    "sh",
+    "sql",
+    "svg",
+    "toml",
+    "ts",
+    "tsx",
+    "txt",
+    "vue",
+    "xml",
+    "yaml",
+    "yml",
+];
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
+const DIRECT_TEXT_FETCH_ACCEPT: &str = "text/plain,text/markdown,text/css,application/javascript,text/javascript,application/json,text/csv,text/html,application/xhtml+xml,application/xml,text/xml,*/*;q=0.8";
+const HTML_CONTENT_TYPES: &[&str] = &["text/html", "application/xhtml+xml"];
+const DIRECT_TEXT_CONTENT_TYPES: &[&str] = &[
+    "application/javascript",
+    "application/json",
+    "application/octet-stream",
+    "application/xml",
+    "application/x-sh",
+    "application/x-yaml",
+    "text/css",
+    "text/csv",
+    "text/javascript",
+    "text/markdown",
+    "text/plain",
+    "text/xml",
+    "text/x-python",
+    "text/x-rust",
+    "text/yaml",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectFetchDecision {
+    Browser,
+    Direct,
+}
+
+#[derive(Debug, Clone, Default)]
+struct WebFetchProxyConfig {
+    server: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+}
 
 /// A web scraper tool that uses Tauri's Webview to extract content from URLs
 pub struct WebFetch {
@@ -21,6 +103,228 @@ pub struct WebFetch {
 impl WebFetch {
     pub fn new(app_handle: AppHandle<tauri::Wry>) -> Self {
         Self { app_handle }
+    }
+
+    fn is_direct_text_candidate(url: &str) -> bool {
+        Url::parse(url)
+            .ok()
+            .and_then(|parsed| {
+                parsed
+                    .path_segments()
+                    .and_then(|segments| segments.last())
+                    .and_then(|filename| filename.rsplit('.').next().map(str::to_string))
+            })
+            .map(|ext| {
+                let ext = ext.to_ascii_lowercase();
+                DIRECT_TEXT_FETCH_EXTENSIONS.contains(&ext.as_str())
+            })
+            .unwrap_or(false)
+    }
+
+    fn classify_content_type(
+        content_type: &str,
+        is_direct_text_candidate: bool,
+    ) -> Option<DirectFetchDecision> {
+        let mime = content_type
+            .split(';')
+            .next()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+
+        if mime.is_empty() {
+            return None;
+        }
+
+        if HTML_CONTENT_TYPES.contains(&mime.as_str()) {
+            return Some(DirectFetchDecision::Browser);
+        }
+
+        if mime == "application/octet-stream" {
+            return if is_direct_text_candidate {
+                Some(DirectFetchDecision::Direct)
+            } else {
+                Some(DirectFetchDecision::Browser)
+            };
+        }
+
+        if DIRECT_TEXT_CONTENT_TYPES.contains(&mime.as_str()) || mime.starts_with("text/") {
+            return Some(DirectFetchDecision::Direct);
+        }
+
+        None
+    }
+
+    fn get_proxy(&self) -> Result<WebFetchProxyConfig, ToolError> {
+        let main_store = self
+            .app_handle
+            .state::<std::sync::Arc<std::sync::RwLock<MainStore>>>()
+            .inner();
+        let store = main_store.read().map_err(|e| {
+            ToolError::Store(t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())
+        })?;
+
+        let proxy_type = store.get_config("proxy_type", String::new());
+        if proxy_type == "http" {
+            let proxy_server = store.get_config("proxy_server", String::new());
+            if proxy_server.is_empty() {
+                Ok(WebFetchProxyConfig::default())
+            } else {
+                let proxy_username = store.get_config("proxy_username", String::new());
+                let proxy_password = store.get_config("proxy_password", String::new());
+                Ok(WebFetchProxyConfig {
+                    server: Some(proxy_server),
+                    username: if proxy_username.is_empty() {
+                        None
+                    } else {
+                        Some(proxy_username)
+                    },
+                    password: if proxy_password.is_empty() {
+                        None
+                    } else {
+                        Some(proxy_password)
+                    },
+                })
+            }
+        } else {
+            Ok(WebFetchProxyConfig::default())
+        }
+    }
+
+    async fn probe_direct_fetch_decision(
+        &self,
+        url: &str,
+    ) -> Result<DirectFetchDecision, ToolError> {
+        let is_direct_text_candidate = Self::is_direct_text_candidate(url);
+        let proxy = self.get_proxy()?;
+        let mut client_builder = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(15))
+            .user_agent(BROWSER_USER_AGENT);
+        if let Some(proxy_server) = proxy.server.as_ref() {
+            let mut reqwest_proxy = reqwest::Proxy::all(proxy_server).map_err(|e| {
+                ToolError::ExecutionFailed(
+                    t!(
+                        "tools.web_scraper_failed",
+                        url = url,
+                        details = e.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
+            if let (Some(username), Some(password)) =
+                (proxy.username.as_ref(), proxy.password.as_ref())
+            {
+                reqwest_proxy = reqwest_proxy.basic_auth(username, password);
+            }
+            client_builder = client_builder.proxy(reqwest_proxy);
+        }
+        let client = client_builder.build().map_err(|e| {
+            ToolError::ExecutionFailed(
+                t!(
+                    "tools.web_scraper_failed",
+                    url = url,
+                    details = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+
+        let head_response = client
+            .head(url)
+            .header("Accept", DIRECT_TEXT_FETCH_ACCEPT)
+            .send()
+            .await;
+
+        if let Ok(response) = head_response {
+            if let Some(content_type) = response.headers().get(reqwest::header::CONTENT_TYPE) {
+                if let Ok(content_type) = content_type.to_str() {
+                    if let Some(decision) =
+                        Self::classify_content_type(content_type, is_direct_text_candidate)
+                    {
+                        return Ok(decision);
+                    }
+                }
+            }
+        }
+
+        let get_response = client
+            .get(url)
+            .header("Accept", DIRECT_TEXT_FETCH_ACCEPT)
+            .send()
+            .await
+            .map_err(|e| {
+                ToolError::ExecutionFailed(
+                    t!(
+                        "tools.web_scraper_failed",
+                        url = url,
+                        details = e.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
+
+        if let Some(content_type) = get_response.headers().get(reqwest::header::CONTENT_TYPE) {
+            if let Ok(content_type) = content_type.to_str() {
+                if let Some(decision) =
+                    Self::classify_content_type(content_type, is_direct_text_candidate)
+                {
+                    return Ok(decision);
+                }
+            }
+        }
+
+        Ok(DirectFetchDecision::Browser)
+    }
+
+    async fn fetch_text_directly(&self, url: &str) -> Result<String, ToolError> {
+        let proxy = self.get_proxy()?;
+        let client = HttpClient::new_with_proxy_config(HttpProxyConfig {
+            server: proxy.server,
+            username: proxy.username,
+            password: proxy.password,
+        })
+        .map_err(|e| {
+            ToolError::ExecutionFailed(
+                t!(
+                    "tools.web_scraper_failed",
+                    url = url,
+                    details = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+
+        let response = client
+            .send_request(
+                HttpConfig::get(url)
+                    .header("User-Agent", BROWSER_USER_AGENT)
+                    .header("Accept", DIRECT_TEXT_FETCH_ACCEPT),
+            )
+            .await
+            .map_err(|e| {
+                ToolError::ExecutionFailed(
+                    t!(
+                        "tools.web_scraper_failed",
+                        url = url,
+                        details = e.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
+
+        if !response.is_success() {
+            return Err(ToolError::ExecutionFailed(
+                t!(
+                    "tools.web_scraper_failed",
+                    url = url,
+                    details = format!("unexpected status {}", response.status)
+                )
+                .to_string(),
+            ));
+        }
+
+        Ok(response.body.unwrap_or_default())
     }
 }
 
@@ -139,26 +443,32 @@ impl ToolDefinition for WebFetch {
         }
 
         let keep_image = params["keep_image"].as_bool().unwrap_or(false);
-        let request = ScrapeRequest::Content(ContentOptions {
-            url: url.to_string(),
-            content_format,
-            keep_link,
-            keep_image,
-        });
+        let content = if Self::is_direct_text_candidate(url)
+            && self.probe_direct_fetch_decision(url).await? == DirectFetchDecision::Direct
+        {
+            self.fetch_text_directly(url).await?
+        } else {
+            let request = ScrapeRequest::Content(ContentOptions {
+                url: url.to_string(),
+                content_format,
+                keep_link,
+                keep_image,
+            });
 
-        // Execute the scraper engine and propagate errors directly
-        let content = engine::run(self.app_handle.clone(), request)
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(
-                    t!(
-                        "tools.web_scraper_failed",
-                        url = url,
-                        details = e.to_string()
+            // Execute the scraper engine and propagate errors directly
+            engine::run(self.app_handle.clone(), request)
+                .await
+                .map_err(|e| {
+                    ToolError::ExecutionFailed(
+                        t!(
+                            "tools.web_scraper_failed",
+                            url = url,
+                            details = e.to_string()
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
-                )
-            })?;
+                })?
+        };
 
         let format_webpage = |content: &str| -> String {
             format!(
@@ -201,6 +511,9 @@ impl ToolDefinition for WebFetch {
 
 #[cfg(test)]
 mod tests {
+    use crate::tools::web_fetch::DirectFetchDecision;
+
+    use super::WebFetch;
     use serde_json::json;
 
     // Note: These tests require a Tauri app handle and are integration tests
@@ -225,5 +538,83 @@ mod tests {
         let params = json!({});
         let url = params["url"].as_str();
         assert!(url.is_none());
+    }
+
+    #[test]
+    fn test_is_direct_text_candidate_for_known_text_extensions() {
+        assert!(WebFetch::is_direct_text_candidate(
+            "https://example.com/assets/app.js"
+        ));
+        assert!(WebFetch::is_direct_text_candidate(
+            "https://example.com/docs/readme.md?raw=1"
+        ));
+        assert!(WebFetch::is_direct_text_candidate(
+            "https://example.com/data/report.CSV"
+        ));
+        assert!(WebFetch::is_direct_text_candidate(
+            "https://example.com/styles/site.css#hash"
+        ));
+    }
+
+    #[test]
+    fn test_is_not_direct_text_candidate_for_non_text_extensions() {
+        assert!(!WebFetch::is_direct_text_candidate(
+            "https://example.com/image.png"
+        ));
+        assert!(!WebFetch::is_direct_text_candidate(
+            "https://example.com/archive.zip"
+        ));
+        assert!(!WebFetch::is_direct_text_candidate(
+            "https://example.com/article"
+        ));
+    }
+
+    #[test]
+    fn test_classify_content_type_prefers_browser_for_html() {
+        assert_eq!(
+            WebFetch::classify_content_type("text/html; charset=utf-8", true),
+            Some(DirectFetchDecision::Browser)
+        );
+        assert_eq!(
+            WebFetch::classify_content_type("application/xhtml+xml", true),
+            Some(DirectFetchDecision::Browser)
+        );
+    }
+
+    #[test]
+    fn test_classify_content_type_allows_direct_text_fetch() {
+        assert_eq!(
+            WebFetch::classify_content_type("text/markdown; charset=utf-8", true),
+            Some(DirectFetchDecision::Direct)
+        );
+        assert_eq!(
+            WebFetch::classify_content_type("application/json", true),
+            Some(DirectFetchDecision::Direct)
+        );
+        assert_eq!(
+            WebFetch::classify_content_type("text/plain", true),
+            Some(DirectFetchDecision::Direct)
+        );
+    }
+
+    #[test]
+    fn test_classify_content_type_allows_octet_stream_for_text_candidates() {
+        assert_eq!(
+            WebFetch::classify_content_type("application/octet-stream", true),
+            Some(DirectFetchDecision::Direct)
+        );
+        assert_eq!(
+            WebFetch::classify_content_type("application/octet-stream", false),
+            Some(DirectFetchDecision::Browser)
+        );
+    }
+
+    #[test]
+    fn test_classify_content_type_returns_none_for_unknown_types() {
+        assert_eq!(
+            WebFetch::classify_content_type("application/unknown", true),
+            None
+        );
+        assert_eq!(WebFetch::classify_content_type("", true), None);
     }
 }

@@ -3891,10 +3891,12 @@ mod tests {
             .append_workflow_event(&WorkflowEvent::approval_resolved(
                 session_id.to_string(),
                 "edit_2".to_string(),
+                crate::tools::TOOL_EDIT_FILE.to_string(),
                 true,
                 false,
                 Some("approved".to_string()),
                 Some("approval_submitted".to_string()),
+                None,
             ))
             .expect("failed to append approval resolved");
         let tool_started_id = store
@@ -4070,10 +4072,12 @@ mod tests {
             .append_workflow_event(&WorkflowEvent::approval_resolved(
                 session_id.to_string(),
                 "edit_wait_1".to_string(),
+                crate::tools::TOOL_EDIT_FILE.to_string(),
                 true,
                 false,
                 Some("approved".to_string()),
                 Some("approval_submitted".to_string()),
+                None,
             ))
             .expect("failed to append approval resolved");
 
@@ -4308,10 +4312,12 @@ mod tests {
             .append_workflow_event(&WorkflowEvent::approval_resolved(
                 session_id.to_string(),
                 "submit_plan_1".to_string(),
+                crate::tools::TOOL_SUBMIT_PLAN.to_string(),
                 true,
                 false,
                 Some("approved".to_string()),
                 Some("completed".to_string()),
+                None,
             ))
             .expect("failed to append approval resolved");
         let tool_started_id = store

@@ -2594,10 +2594,7 @@ impl WorkflowExecutor {
                                     );
 
                                     let pretty_title = ObservationReinforcer::generate_title(
-                                        &tool_name,
-                                        &tool_args,
-                                        None,
-                                        None,
+                                        &tool_name, &tool_args, None, None,
                                     );
                                     let observation = if tool_name == TOOL_SUBMIT_PLAN {
                                         Self::build_plan_rejection_observation(
@@ -2610,11 +2607,11 @@ impl WorkflowExecutor {
                                         )
                                     };
 
-                            self.add_message_and_notify_internal(
-                                "tool".to_string(),
-                                observation,
-                                None,
-                                None,
+                                    self.add_message_and_notify_internal(
+                                        "tool".to_string(),
+                                        observation,
+                                        None,
+                                        None,
                                         Some(StepType::Observe),
                                         true,
                                         Some("UserRejected".to_string()),
@@ -3083,12 +3080,12 @@ impl WorkflowExecutor {
                                 )
                             };
 
-                                    self.add_message_and_notify_internal(
-                                        "tool".to_string(),
-                                        observation,
-                                        None,
-                                        None,
-                                        Some(StepType::Observe),
+                            self.add_message_and_notify_internal(
+                                "tool".to_string(),
+                                observation,
+                                None,
+                                None,
+                                Some(StepType::Observe),
                                 true,
                                 Some("UserRejected".to_string()),
                                 Some(serde_json::json!({
@@ -4398,7 +4395,10 @@ impl WorkflowExecutor {
                 self.session_id.clone(),
                 tool_call_id.to_string(),
                 tool_name.to_string(),
-                reinforced.llm_content.clone().unwrap_or_else(|| reinforced.content.clone()),
+                reinforced
+                    .llm_content
+                    .clone()
+                    .unwrap_or_else(|| reinforced.content.clone()),
             )
         } else {
             WorkflowEvent::tool_completed(
@@ -4702,7 +4702,7 @@ impl WorkflowExecutor {
                     self.session_id,
                     name
                 );
-                        result_map.insert(
+                result_map.insert(
                             id,
                             (
                                 Self::turn_blocked_postponed_result(
@@ -4713,8 +4713,8 @@ impl WorkflowExecutor {
                                 call,
                             ),
                         );
-                        continue;
-                    }
+                continue;
+            }
 
             // --- SEMANTIC AUDIT ---
             let approval_batch_active = self.state == WorkflowState::AwaitingApproval;

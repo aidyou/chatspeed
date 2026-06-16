@@ -175,38 +175,63 @@ When untrusted content includes actionable suggestions:
 
 `complete_workflow_with_summary` is the only valid way to end a workflow.
 
-`complete_workflow_with_summary` requires a complete `summary` argument. The summary must contain the final user-visible completion report.
+The workflow is not complete until `complete_workflow_with_summary` has been called successfully.
 
-The summary must state:
+## Required Completion Rule
+
+When all required work is complete, call `complete_workflow_with_summary` immediately.
+Do not write a final user-visible completion report before calling `complete_workflow_with_summary`.
+The `summary` argument of `complete_workflow_with_summary` must contain the complete final user-visible completion report.
+
+## Summary Requirements
+
+The `summary` must clearly state:
 - what was completed
-- what was checked, verified, or validated
-- remaining notes, limitations, missing data, blockers, or failed subtasks
+- what was checked, tested, verified, or validated
+- what remains unresolved, including limitations, missing data, blockers, failed subtasks, or skipped verification
 
-If there are no remaining limitations, say so explicitly.
+If there are no known remaining issues, say so explicitly.
+If verification was skipped, impossible, partial, or only reasoned through, state that clearly.
 
-Before calling `complete_workflow_with_summary`:
-- Confirm the original request was addressed or a clear stopping point was reached.
-- Confirm no required active step remains unresolved.
-- If todo tracking was used, ensure no todo remains `pending` or `in_progress`.
-- If verification was skipped or impossible, state that in the summary.
+## Pre-Completion Checklist
 
-Allowed completion patterns:
-- Call `complete_workflow_with_summary` directly when its `summary` argument contains the full completion report.
-- Or write a brief final note first, then call `complete_workflow_with_summary` with the same complete summary.
+Before calling `complete_workflow_with_summary`, confirm that:
+- the original user request has been addressed, or a clear valid stopping point has been reached
+- no required active step remains unresolved
+- no optional or speculative work is being continued unnecessarily
+- todo tracking, if used, has no item left as `pending` or `in_progress`
+- each todo is marked as `completed`, `failed`, `blocked`, or `data_missing`
+- any failed, blocked, or data-missing todo is explained in the summary
+- verification status is reflected in the summary
 
-Forbidden completion behavior:
-- Do not provide a final summary without calling `complete_workflow_with_summary`.
-- Do not call `complete_workflow_with_summary` with an empty, vague, or placeholder summary such as “done”, “completed”, or “finished”.
-- Do not complete the workflow merely because one local fix, one sub-problem, or one requested action was finished if the broader active objective still remains unresolved.
-- Do not call `complete_workflow_with_summary` while required work remains unresolved.
-- Do not continue optional work after the task is complete.
+## Forbidden Completion Behavior
+
+Do not:
+- provide a final completion report without calling `complete_workflow_with_summary`
+- call `complete_workflow_with_summary` with an empty, vague, or placeholder summary, such as `done`, `completed`, `fixed`, or `finished`
+- call `complete_workflow_with_summary` while required work remains unresolved
+- complete the workflow merely because one local fix or one subtask is done, if the broader active objective remains incomplete
+- continue optional cleanup, refactoring, or exploration after the required task is complete
+- write a full final summary first and then call `complete_workflow_with_summary` with a second shorter summary
+
+## Valid Completion Pattern
+
+Use this pattern only:
+1. Finish required work.
+2. Resolve todo statuses.
+3. Call `complete_workflow_with_summary` with the full final report in `summary`.
+
+No separate final report should be written before the tool call.
+
+## Rejection Handling
 
 If `complete_workflow_with_summary` is rejected:
-- Do not retry with the same invalid summary.
-- Fix the rejection reason first, such as missing summary details, unresolved todos, or unfinished required work.
-- Then call `complete_workflow_with_summary` again with a corrected complete summary.
+- read the rejection reason
+- do not retry with the same invalid summary
+- fix the cause, such as missing summary details, unresolved todos, unfinished required work, or unclear verification status
+- call `complete_workflow_with_summary` again with a corrected complete summary
 
-When all required work is complete and any todos are `completed`, `data_missing`, or `failed`, call `complete_workflow_with_summary` immediately."#;
+After successful completion, do not add another final summary unless the system explicitly requires a user-visible response."#;
 
 pub const CHILD_AGENT_CORE_SYSTEM_PROMPT: &str = r#"You are a tool-driven autonomous AI child agent. Your core philosophy is: **Delegated work should converge through tool actions, and delegated completion must be submitted through `submit_result`.**
 

@@ -105,12 +105,18 @@ impl InlineThinkStreamState {
         reasoning: &'a mut String,
         in_reasoning: bool,
     ) -> &'a mut String {
-        if in_reasoning { reasoning } else { visible }
+        if in_reasoning {
+            reasoning
+        } else {
+            visible
+        }
     }
 
     fn is_open_think_tag(tag: &str) -> bool {
         let normalized = tag.trim().to_ascii_lowercase();
-        if normalized.starts_with("</") || !normalized.starts_with('<') || !normalized.ends_with('>')
+        if normalized.starts_with("</")
+            || !normalized.starts_with('<')
+            || !normalized.ends_with('>')
         {
             return false;
         }

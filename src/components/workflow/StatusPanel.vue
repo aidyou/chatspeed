@@ -1699,10 +1699,6 @@ onUnmounted(() => {
 watch(
   () => workflowStore.currentWorkflowId,
   newId => {
-    const wasCollapsed = isCollapsed.value
-    if (newId && isCollapsed.value) {
-      isCollapsed.value = false
-    }
     activeTab.value = 'main'
     childSnapshotProgress.value = new Map()
     efficiencyReport.value = null
@@ -1711,9 +1707,7 @@ watch(
     efficiencyLastUpdatedAt.value = 0
 
     nextTick(() => {
-      if (wasCollapsed && isVisible.value) {
-        restorePositionForMode(getPanelMode())
-      }
+      if (newId) restorePositionForMode(getPanelMode())
       constrainPosition()
     })
   }
