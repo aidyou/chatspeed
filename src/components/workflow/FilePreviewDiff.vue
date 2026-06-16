@@ -73,15 +73,20 @@ const language = computed(() => {
   return LANGUAGE_MAP[ext] || ''
 })
 
+const wrapHighlightedLines = lines =>
+  lines.map(line => `<span class="hljs">${line && line !== '&nbsp;' ? line : '&nbsp;'}</span>`)
+
 const highlightBlock = (content, languageName) => {
   if (!content) return ['&nbsp;']
   try {
     if (languageName) {
-      return splitHighlightedHtmlByLines(hljs.highlight(content, { language: languageName }).value)
+      return wrapHighlightedLines(
+        splitHighlightedHtmlByLines(hljs.highlight(content, { language: languageName }).value)
+      )
     }
-    return splitHighlightedHtmlByLines(hljs.highlightAuto(content).value)
+    return wrapHighlightedLines(splitHighlightedHtmlByLines(hljs.highlightAuto(content).value))
   } catch {
-    return splitHighlightedHtmlByLines(hljs.highlightAuto(content).value)
+    return wrapHighlightedLines(splitHighlightedHtmlByLines(hljs.highlightAuto(content).value))
   }
 }
 
@@ -220,6 +225,8 @@ const diffLines = computed(() => {
   const changes = Diff.diffLines(oldStr, newStr)
   let currentLineOld = startLine
   let currentLineNew = startLine
+  let oldHighlightIndex = 0
+  let newHighlightIndex = 0
 
   changes.forEach(change => {
     const rawLines = change.value.split('\n')
@@ -235,11 +242,12 @@ const diffLines = computed(() => {
             '',
             currentLineNew.toString(),
             line,
-            highlightedNewLines[currentLineNew - 1] || '&nbsp;',
+            highlightedNewLines[newHighlightIndex] || '&nbsp;',
             'added'
           )
         )
         currentLineNew += 1
+        newHighlightIndex += 1
       } else if (change.removed) {
         lines.push(
           createDiffLine(
@@ -247,11 +255,12 @@ const diffLines = computed(() => {
             currentLineOld.toString(),
             '',
             line,
-            highlightedOldLines[currentLineOld - 1] || '&nbsp;',
+            highlightedOldLines[oldHighlightIndex] || '&nbsp;',
             'removed'
           )
         )
         currentLineOld += 1
+        oldHighlightIndex += 1
       } else {
         const oldLine = currentLineOld.toString()
         const newLine = currentLineNew.toString()
@@ -261,12 +270,16 @@ const diffLines = computed(() => {
             oldLine,
             newLine,
             line,
-            highlightedNewLines[currentLineNew - 1] || highlightedOldLines[currentLineOld - 1] || '&nbsp;',
+            highlightedNewLines[newHighlightIndex] ||
+              highlightedOldLines[oldHighlightIndex] ||
+              '&nbsp;',
             'context'
           )
         )
         currentLineOld += 1
         currentLineNew += 1
+        oldHighlightIndex += 1
+        newHighlightIndex += 1
       }
     })
   })
