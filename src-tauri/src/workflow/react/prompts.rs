@@ -447,32 +447,6 @@ Your output MUST be a valid JSON object with this shape:
   }
 }"#;
 
-/// Content Filtering & Summarization Prompt
-/// Used to condense large text (e.g., from web_fetch) while maintaining 100% fidelity
-/// for critical data like financial figures, legal clauses, and technical specs.
-pub const CONTENT_FILTERING_PROMPT: &str = r#"Analyze and filter the provided content relative to the user's intent. Your goal is to compress the text while maintaining 100% fidelity for critical information.
-
-## CRITICAL PRESERVATION RULES (DO NOT SUMMARIZE THESE):
-1. **Financial & Quantitative Data**: Extract stock prices, market caps, revenue, ratios, and timestamps EXACTLY as they appear. Never approximate or round numbers.
-2. **Legal & Official Text**: If the content contains legal clauses, regulations, or formal definitions, preserve the text verbatim. Do NOT paraphrase legal requirements.
-3. **Technical Specs**: Keep all technical metrics, version numbers, and specific architectural details.
-4. **Entities**: Maintain all names of people, organizations, and specific identifiers.
-
-## EXTRACTION STRATEGY:
-- **Discard Noise**: Remove navigation menus, ads, and irrelevant boilerplates.
-- **Contextual Alignment**: Use the following multi-layered context to determine relevance. Keep any information that supports the **Immediate Intent** or the **Current Task**, even if it seems too specific for the **Global Goal**.
-
-### Intent Context:
-- **Global Goal**: {global_goal}
-- **Current Task**: {current_task}
-- **Immediate Intent**: {immediate_intent}
-
-- **Structure**: If data is in a table or list, maintain that structure in Markdown.
-
-- **Fall-back**: If no specific evidence or data matching the preservation rules is found, provide a concise 2-3 paragraph high-level summary of the overall content. DO NOT return an empty response.
-
-Your output should be a high-fidelity condensed version of the original source, optimized for further analysis."#;
-
 /// Tool approval review prompt for smart approval mode.
 /// Used to decide whether a proposed tool call should be auto-approved or escalated.
 pub const TOOL_APPROVAL_REVIEW_PROMPT: &str = r#"You are a tool approval reviewer for a ReAct agent.

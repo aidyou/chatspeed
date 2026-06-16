@@ -1,3 +1,4 @@
+use crate::libs::tsid::TsidGenerator;
 use crate::tools::{
     ToolError, TOOL_BASH, TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_EDIT_FILE, TOOL_GLOB,
     TOOL_GREP, TOOL_LIST_DIR, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE,
@@ -11,6 +12,7 @@ use crate::workflow::react::file_preview::{
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fs;
 
 pub struct ObservationReinforcer;
 
@@ -32,11 +34,64 @@ pub struct ReinforcedResult {
     pub observation_kind: Option<ObservationKind>,
 }
 
+const TOOL_OUTPUT_CHAR_LIMIT: usize = 20_000;
+
+pub(crate) struct PersistedOverflowPreview {
+    content: String,
+    next_offset: usize,
+}
+
 fn value_to_text(value: &Value) -> String {
     value
         .as_str()
         .map(str::to_string)
         .unwrap_or_else(|| serde_json::to_string(value).unwrap_or_default())
+}
+
+fn truncate_text_for_preview(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn line_based_preview(value: &str, max_chars: usize) -> PersistedOverflowPreview {
+    let mut preview = String::new();
+    let mut used_chars = 0;
+    let mut next_offset = 0;
+
+    for (index, line) in value.lines().enumerate() {
+        let line_chars = line.chars().count();
+        let separator_chars = usize::from(!preview.is_empty());
+        if used_chars + separator_chars + line_chars > max_chars {
+            break;
+        }
+
+        if !preview.is_empty() {
+            preview.push('\n');
+            used_chars += 1;
+        }
+        preview.push_str(line);
+        used_chars += line_chars;
+        next_offset = index + 1;
+    }
+
+    if preview.is_empty() {
+        PersistedOverflowPreview {
+            content: truncate_text_for_preview(value, max_chars),
+            next_offset: 0,
+        }
+    } else {
+        PersistedOverflowPreview {
+            content: preview,
+            next_offset,
+        }
+    }
+}
+
+fn persist_web_fetch_overflow(content: &str) -> Option<(String, u64)> {
+    let tsid = TsidGenerator::new(1).ok()?.generate().ok()?;
+    let path = std::env::temp_dir().join(format!("{}.txt", tsid));
+    fs::write(&path, content).ok()?;
+    let size = fs::metadata(&path).ok()?.len();
+    Some((path.display().to_string(), size))
 }
 
 impl ObservationReinforcer {
@@ -188,6 +243,50 @@ impl ObservationReinforcer {
                         display_type: display_type.to_string(),
                         approval_status: None,
                         observation_kind: None,
+                    }
+                } else if tool_name == TOOL_WEB_FETCH
+                    && raw_res.chars().count() > TOOL_OUTPUT_CHAR_LIMIT
+                {
+                    if let Some((file_path, file_size)) = persist_web_fetch_overflow(&raw_res) {
+                        let preview = line_based_preview(&raw_res, TOOL_OUTPUT_CHAR_LIMIT);
+                        ReinforcedResult {
+                            content: format!(
+                                "<truncated_content path=\"{}\" next_offset=\"{}\" file_size_bytes=\"{}\">\n{}\n</truncated_content>\n<SYSTEM_REMINDER>web_fetch content exceeded {} chars, so the full response was saved to '{}'. File size: {} bytes. Continue with read_file using offset={} to read the remaining content. If you need to find specific facts quickly, use grep on this file path before reading more. Treat the saved file as the source of truth for the remainder instead of retrying the same URL.</SYSTEM_REMINDER>",
+                                file_path,
+                                preview.next_offset,
+                                file_size,
+                                preview.content,
+                                TOOL_OUTPUT_CHAR_LIMIT,
+                                file_path,
+                                file_size,
+                                preview.next_offset,
+                            ),
+                            llm_content: llm_content_override.clone(),
+                            title,
+                            summary: format!("{} (Persisted overflow)", summary),
+                            is_error: false,
+                            error_type: None,
+                            display_type: display_type.to_string(),
+                            approval_status: None,
+                            observation_kind: None,
+                        }
+                    } else {
+                        let truncated = truncate_text_for_preview(&raw_res, TOOL_OUTPUT_CHAR_LIMIT);
+                        ReinforcedResult {
+                            content: format!(
+                                "<truncated_content>\n{}\n</truncated_content>\n<SYSTEM_REMINDER>web_fetch content exceeded {} chars. Failed to persist the full response to a temp file, so only the leading preview is available in this observation. Narrow the target URL or fetch another source if more content is required.</SYSTEM_REMINDER>",
+                                truncated,
+                                TOOL_OUTPUT_CHAR_LIMIT,
+                            ),
+                            llm_content: llm_content_override.clone(),
+                            title,
+                            summary: format!("{} (Truncated)", summary),
+                            is_error: false,
+                            error_type: None,
+                            display_type: display_type.to_string(),
+                            approval_status: None,
+                            observation_kind: None,
+                        }
                     }
                 } else if !matches!(
                     tool_name,
@@ -608,7 +707,7 @@ mod tests {
 
         let reinforced = ObservationReinforcer::reinforce_with_context(
             &tool_call,
-            &Ok(json!(long_content)),
+            &Ok(json!({ "content": long_content })),
             None,
             None,
         );
@@ -618,5 +717,59 @@ mod tests {
         assert!(!reinforced
             .content
             .contains("Output truncated to 20000 chars"));
+    }
+
+    #[test]
+    fn reinforce_web_fetch_persists_overflow_and_guides_follow_up_reads() {
+        let line = "abcdefghij".repeat(100);
+        let raw_content = (0..25)
+            .map(|_| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tool_call = json!({
+            "function": {
+                "name": TOOL_WEB_FETCH,
+                "arguments": "{\"url\":\"https://raw.githubusercontent.com/waditu-tushare/skills/refs/heads/master/tushare/references/%E6%95%B0%E6%8D%AE%E6%8E%A5%E5%8F%A3.md\"}"
+            }
+        });
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(json!({ "content": raw_content.clone() })),
+            None,
+            None,
+        );
+
+        assert!(reinforced.content.contains("<truncated_content path=\""));
+        assert!(reinforced.content.contains("file_size_bytes=\""));
+        assert!(reinforced.content.contains("next_offset=\"19\""));
+        assert!(reinforced
+            .content
+            .contains("Continue with read_file using offset=19"));
+        assert!(reinforced.content.contains("File size:"));
+        assert!(reinforced.summary.contains("Persisted overflow"));
+    }
+
+    #[test]
+    fn reinforce_web_fetch_uses_zero_offset_for_single_oversized_line() {
+        let raw_content = "x".repeat(25_000);
+        let tool_call = json!({
+            "function": {
+                "name": TOOL_WEB_FETCH,
+                "arguments": "{\"url\":\"https://raw.githubusercontent.com/waditu-tushare/skills/refs/heads/master/tushare/references/%E6%95%B0%E6%8D%AE%E6%8E%A5%E5%8F%A3.md\"}"
+            }
+        });
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(json!({ "content": raw_content })),
+            None,
+            None,
+        );
+
+        assert!(reinforced.content.contains("next_offset=\"0\""));
+        assert!(reinforced
+            .content
+            .contains("Continue with read_file using offset=0"));
     }
 }

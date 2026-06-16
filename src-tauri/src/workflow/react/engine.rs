@@ -15,7 +15,7 @@ use crate::tools::{
     helper::generate_shell_approval_patterns as shared_generate_shell_approval_patterns,
     ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
     TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
-    TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_WEB_FETCH,
+    TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
@@ -5012,44 +5012,7 @@ impl WorkflowExecutor {
             });
         }
 
-        // 2. Auto-summarization for web_fetch
-        if name == TOOL_WEB_FETCH {
-            if let Ok(val) = &result {
-                let content_opt = val
-                    .get("structured_content")
-                    .and_then(|sc| sc.get("content"))
-                    .and_then(|v| v.as_str())
-                    .or_else(|| val.get("content").and_then(|v| v.as_str()));
-
-                if let Some(content) = content_opt {
-                    if content.len() > 15000 {
-                        match self
-                            .intelligence_manager
-                            .summarize_web_content(content, &self.context)
-                            .await
-                        {
-                            Ok(summary) if !summary.trim().is_empty() => {
-                                let url = args["url"].as_str().unwrap_or("");
-                                return Ok(ReinforcedResult {
-                                    content: format!("<webpage>\n<url>{}</url>\n<content>\n{}\n</content>\n\n<SYSTEM_REMINDER>\n[Auto-Summarized] High-fidelity filtered content.\n</SYSTEM_REMINDER>\n</webpage>", url, summary),
-                                    llm_content: None,
-                                    title: format!("Fetch({})", url),
-                                    summary: "Content summarized (XML)".to_string(),
-                                    is_error: false,
-                                    error_type: None,
-                                    display_type: "text".to_string(),
-                                    approval_status: None,
-                                    observation_kind: None,
-                                });
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Reinforce with Todo Context (Freshly fetched from DB)
+        // 2. Reinforce with Todo Context (Freshly fetched from DB)
         let primary_root = self
             .path_guard
             .read()
