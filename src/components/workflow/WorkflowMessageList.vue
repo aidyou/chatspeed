@@ -1098,12 +1098,6 @@ const normalizeDiffPayload = message => {
     return structuredDetails
   }
 
-  const content = props.removeSystemReminder(message?.message || '')
-  const parsedContent = normalizeStructuredDiffPayload(content)
-  if (parsedContent) {
-    return parsedContent
-  }
-
   const toolName = getMessageToolName(message)
   if (['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note'].includes(toolName)) {
     const args = normalizeStructuredDiffPayload(getToolCallArguments(message))
@@ -1599,14 +1593,7 @@ const isExpandableUserMessage = message => {
 const getMessageSubAgentId = message => {
   const meta = message?.metadata || {}
   if (meta.sub_agent_id || meta.subAgentId) return meta.sub_agent_id || meta.subAgentId
-  if ((meta.tool_name || '').toLowerCase() !== 'sub_agent_run') return null
-
-  try {
-    const parsed = JSON.parse(message.message || '{}')
-    return parsed.task_id || parsed.taskId || null
-  } catch {
-    return null
-  }
+  return null
 }
 
 const getChoiceGroups = message =>

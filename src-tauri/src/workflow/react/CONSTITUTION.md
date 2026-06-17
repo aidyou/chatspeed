@@ -88,6 +88,16 @@ Legacy handling must normalize immediately into canonical structured form.
 
 No new feature may be built directly on top of a legacy or fallback representation.
 
+### 3.5 Naming-case conversion belongs at language boundaries
+
+Workflow backend structures, persisted metadata, runtime events, tool results, and internal JSON keys use canonical `snake_case`.
+
+Frontend JavaScript and Vue-local data may use `camelCase`, but conversion between `snake_case` and `camelCase` must happen only at explicit backend/frontend adapter boundaries.
+
+Core workflow logic must not accept both casing styles for the same field as a normal compatibility path. If a field crosses the Rust-to-JavaScript boundary, the boundary adapter is responsible for converting it once into the target-side convention.
+
+Do not add ad-hoc dual reads such as `field_name || fieldName` inside workflow state recovery, approval handling, observation reinforcement, or runtime metadata construction for newly produced data.
+
 ## 4. Session Lifecycle Law
 
 ### 4.1 `WorkflowManager` is the lifecycle registry

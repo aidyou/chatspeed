@@ -772,4 +772,41 @@ mod tests {
             .content
             .contains("Continue with read_file using offset=0"));
     }
+
+    #[test]
+    fn reinforce_write_file_overwrite_preserves_old_content_for_diff() {
+        let tool_call = json!({
+            "function": {
+                "name": TOOL_WRITE_FILE,
+                "arguments": {
+                    "file_path": "/tmp/demo.txt",
+                    "content": "new content",
+                    "overwrite": true
+                }
+            }
+        });
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(json!({
+                "content": "File written successfully; existing file was backed up first.",
+                "structured_content": {
+                    "file_path": "/tmp/demo.txt",
+                    "display_path": "demo.txt",
+                    "bytes_written": 11,
+                    "overwritten": true,
+                    "old_string": "original content",
+                    "content": "new content",
+                    "backup_path": "/tmp/demo.txt.bak"
+                }
+            })),
+            None,
+            None,
+        );
+
+        let details: Value = serde_json::from_str(&reinforced.content).unwrap();
+        assert_eq!(details["old_string"].as_str(), Some("original content"));
+        assert_eq!(details["content"].as_str(), Some("new content"));
+        assert_eq!(details["overwritten"].as_bool(), Some(true));
+    }
 }

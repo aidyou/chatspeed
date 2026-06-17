@@ -25,7 +25,9 @@ use crate::workflow::react::{
     dispatcher::{Dispatcher, DispatcherConfig},
     error::WorkflowEngineError,
     events::WorkflowEvent,
-    file_preview::{attach_display_context, normalize_preview_details},
+    file_preview::{
+        attach_display_context, attach_write_file_overwrite_old_content, normalize_preview_details,
+    },
     gateway::Gateway,
     intelligence::IntelligenceManager,
     llm::LlmProcessor,
@@ -246,8 +248,33 @@ impl WorkflowExecutor {
             .read()
             .ok()
             .and_then(|guard| guard.get_primary_root().map(|path| path.to_path_buf()));
+        if tool_name == crate::tools::TOOL_WRITE_FILE {
+            attach_write_file_overwrite_old_content(&mut preview_args, primary_root.as_deref());
+        }
         attach_display_context(&mut preview_args, false, primary_root.as_deref());
         Some(normalize_preview_details(preview_args))
+    }
+
+    fn build_completed_tool_result_details(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        reinforced: &ReinforcedResult,
+    ) -> Option<serde_json::Value> {
+        if !matches!(
+            tool_name,
+            crate::tools::TOOL_EDIT_FILE
+                | crate::tools::TOOL_WRITE_FILE
+                | TOOL_PLAN_EDIT_NOTE
+                | TOOL_PLAN_WRITE_NOTE
+        ) {
+            return None;
+        }
+
+        serde_json::from_str::<serde_json::Value>(&reinforced.content)
+            .ok()
+            .map(normalize_preview_details)
+            .or_else(|| self.build_tool_result_details(tool_name, args))
     }
 
     fn build_rejection_observation(tool_name: &str, rejection_message: Option<&str>) -> String {
@@ -2519,14 +2546,14 @@ impl WorkflowExecutor {
                                     let tool_call_obj = serde_json::json!({
                                         "id": tool_call_id,
                                         "name": tool_name,
-                                        "arguments": tool_args
+                                        "arguments": tool_args_obj
                                     });
 
                                     // 3. Post-processing and Notification
                                     let reinforced = self
                                         .post_process_tool_result(
                                             &tool_name,
-                                            &tool_args,
+                                            &tool_args_obj,
                                             &tool_call_obj,
                                             result,
                                         )
@@ -2545,9 +2572,11 @@ impl WorkflowExecutor {
                                         "display_type": reinforced.display_type,
                                         "approval_status": "approved"
                                     });
-                                    if let Some(details) =
-                                        self.build_tool_result_details(&tool_name, &tool_args)
-                                    {
+                                    if let Some(details) = self.build_completed_tool_result_details(
+                                        &tool_name,
+                                        &tool_args_obj,
+                                        &reinforced,
+                                    ) {
                                         metadata["details"] = details;
                                     }
                                     Self::enrich_tool_observation_metadata(
@@ -2985,14 +3014,14 @@ impl WorkflowExecutor {
                             let tool_call_obj = serde_json::json!({
                                 "id": signal_id,
                                 "name": tool_name,
-                                "arguments": tool_args
+                                "arguments": tool_args_obj
                             });
 
                             // 3. Post-processing and Notification
                             let reinforced = self
                                 .post_process_tool_result(
                                     &tool_name,
-                                    &tool_args,
+                                    &tool_args_obj,
                                     &tool_call_obj,
                                     result,
                                 )
@@ -3011,9 +3040,11 @@ impl WorkflowExecutor {
                                 "display_type": reinforced.display_type,
                                 "approval_status": "approved"
                             });
-                            if let Some(details) =
-                                self.build_tool_result_details(&tool_name, &tool_args)
-                            {
+                            if let Some(details) = self.build_completed_tool_result_details(
+                                &tool_name,
+                                &tool_args_obj,
+                                &reinforced,
+                            ) {
                                 metadata["details"] = details;
                             }
                             Self::enrich_tool_observation_metadata(
@@ -3590,9 +3621,11 @@ impl WorkflowExecutor {
                             .and_then(|value| value.get("arguments"))
                     }) {
                         let normalized_args = Self::normalize_tool_arguments_value(args.clone());
-                        if let Some(details) =
-                            self.build_tool_result_details(tool_name, &normalized_args)
-                        {
+                        if let Some(details) = self.build_completed_tool_result_details(
+                            tool_name,
+                            &normalized_args,
+                            reinforced,
+                        ) {
                             metadata["details"] = details;
                         }
                     }
@@ -4942,7 +4975,7 @@ impl WorkflowExecutor {
             is_error: false,
             error_type: None,
             display_type: "text".to_string(),
-            approval_status: Some("rejected".to_string()),
+            approval_status: None,
             observation_kind: Some(ObservationKind::TurnBlockedPostponed),
         }
     }
@@ -7042,7 +7075,7 @@ mod recovery_tests {
 
         assert_eq!(result.title, "Postponed: todo_update");
         assert_eq!(result.summary, "Sequential queue blocked");
-        assert_eq!(result.approval_status.as_deref(), Some("rejected"));
+        assert_eq!(result.approval_status, None);
         assert_eq!(
             result.observation_kind,
             Some(ObservationKind::TurnBlockedPostponed)

@@ -12,14 +12,7 @@ const extractSubAgentIdFromMessage = message => {
   if (meta.data?.sub_agent_id || meta.data?.subAgentId) {
     return meta.data.sub_agent_id || meta.data.subAgentId
   }
-  if ((meta.tool_name || '').toLowerCase() !== 'sub_agent_run') return null
-
-  try {
-    const parsed = JSON.parse(message?.message || '{}')
-    return parsed.task_id || parsed.taskId || null
-  } catch {
-    return null
-  }
+  return null
 }
 
 const normalizeChildPanelStatus = (status, isError = false) => {

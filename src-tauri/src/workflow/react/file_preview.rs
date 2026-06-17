@@ -37,6 +37,37 @@ pub fn normalize_preview_details(value: Value) -> Value {
     }
 }
 
+pub fn attach_write_file_overwrite_old_content(
+    preview_args: &mut Value,
+    primary_root: Option<&Path>,
+) {
+    let Some(preview_obj) = preview_args.as_object_mut() else {
+        return;
+    };
+
+    let overwrite = preview_obj
+        .get("overwrite")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if !overwrite || preview_obj.get("old_string").is_some() {
+        return;
+    }
+
+    let Some(file_path) = preview_obj
+        .get("file_path")
+        .and_then(|value| value.as_str())
+    else {
+        return;
+    };
+
+    let resolved_path = resolve_preview_file_path(file_path, primary_root);
+    let Ok(old_content) = fs::read_to_string(resolved_path) else {
+        return;
+    };
+
+    preview_obj.insert("old_string".to_string(), json!(old_content));
+}
+
 pub fn render_preview_details_text(details: &Value, display_type: &str) -> String {
     match display_type {
         "diff" => render_diff_preview_text(details),
@@ -351,6 +382,35 @@ mod tests {
                 .get("context_after_start_line")
                 .and_then(|v| v.as_u64()),
             Some(5)
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn attach_write_file_overwrite_old_content_reads_existing_file() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("file_preview_overwrite_test_{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        let file_path = root.join("demo.txt");
+        fs::write(&file_path, "original content").unwrap();
+
+        let mut preview_args = json!({
+            "file_path": "demo.txt",
+            "content": "new content",
+            "overwrite": true
+        });
+
+        attach_write_file_overwrite_old_content(&mut preview_args, Some(root.as_path()));
+
+        assert_eq!(
+            preview_args
+                .get("old_string")
+                .and_then(|value| value.as_str()),
+            Some("original content")
         );
 
         let _ = fs::remove_dir_all(&root);

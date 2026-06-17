@@ -678,6 +678,7 @@ impl ToolDefinition for WriteFile {
         let path = resolve_tool_path(path_str, self.path_guard.as_ref());
         let mut backup_path: Option<PathBuf> = None;
         let mut overwritten = false;
+        let mut old_content: Option<String> = None;
 
         if path.exists() {
             if path.is_dir() {
@@ -694,6 +695,12 @@ impl ToolDefinition for WriteFile {
                 )));
             }
 
+            old_content = Some(fs::read_to_string(&path).map_err(|e| {
+                ToolError::IoError(format!(
+                    "Read failed before overwrite: {}. Ensure the file is readable.",
+                    e
+                ))
+            })?);
             let backup = overwrite_backup_path(&path)?;
             fs::copy(&path, &backup).map_err(|e| {
                 ToolError::IoError(format!(
@@ -725,6 +732,8 @@ impl ToolDefinition for WriteFile {
                 "display_path": display_path_for_tool_output(&path, self.path_guard.as_ref()),
                 "bytes_written": content.len(),
                 "overwritten": overwritten,
+                "old_string": old_content,
+                "content": content,
                 "backup_path": backup_path.as_ref().map(|value| value.to_string_lossy().to_string())
             })),
         ))
@@ -1455,6 +1464,8 @@ mod tests {
             content.len() as u64
         );
         assert_eq!(structured["overwritten"].as_bool(), Some(false));
+        assert!(structured["old_string"].is_null());
+        assert_eq!(structured["content"].as_str(), Some(content));
         assert!(structured["backup_path"].is_null());
 
         // Verify file was written
@@ -1538,6 +1549,8 @@ mod tests {
         );
         let structured = result.structured_content.unwrap();
         assert_eq!(structured["overwritten"].as_bool(), Some(true));
+        assert_eq!(structured["old_string"].as_str(), Some("original content"));
+        assert_eq!(structured["content"].as_str(), Some("new content"));
 
         let backup_path = structured["backup_path"]
             .as_str()

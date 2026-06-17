@@ -11,7 +11,8 @@ use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::file_preview::{
-    attach_display_context, normalize_preview_details, render_preview_details_text,
+    attach_display_context, attach_write_file_overwrite_old_content, normalize_preview_details,
+    render_preview_details_text,
 };
 use crate::workflow::react::intelligence::ToolApprovalReview;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
@@ -1373,6 +1374,12 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                         self.path_guard.read().ok().and_then(|guard| {
                             guard.get_primary_root().map(|path| path.to_path_buf())
                         });
+                    if name == TOOL_WRITE_FILE {
+                        attach_write_file_overwrite_old_content(
+                            &mut preview_args,
+                            primary_root.as_deref(),
+                        );
+                    }
                     attach_display_context(&mut preview_args, false, primary_root.as_deref());
                     let normalized_details = normalize_preview_details(preview_args);
                     (
