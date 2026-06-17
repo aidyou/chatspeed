@@ -522,6 +522,7 @@
       "searchByIdOrName": "Buscar por ID o nombre",
       "stop": "Token de parada",
       "stopPlaceholder": "Establece los tokens en los que el modelo dejará de generar texto. Separe varios con saltos de línea.",
+      "supportsResponsesApi": "Admite la API Responses",
       "temperature": "Temperatura",
       "temperaturePlaceholder": "Controla la aleatoriedad de la salida del modelo. Un valor más alto da como resultado una salida más aleatoria.",
       "thinkingBudgetTokens": "Presupuesto de razonamiento",

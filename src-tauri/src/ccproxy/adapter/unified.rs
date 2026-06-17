@@ -449,6 +449,13 @@ pub struct SseStatus {
     // For ollama tools
     pub tool_name: Option<String>,
     pub tool_arguments: Option<String>,
+    // For Responses output stream adaptation
+    pub responses_message_item_id: String,
+    pub responses_reasoning_item_id: String,
+    pub responses_reasoning_buffer: String,
+    pub responses_reasoning_started: bool,
+    pub responses_text_buffer: String,
+    pub responses_text_started: bool,
 }
 
 impl Default for SseStatus {
@@ -476,6 +483,12 @@ impl Default for SseStatus {
             tool_id_to_index: HashMap::new(),
             tool_name: None,
             tool_arguments: None,
+            responses_message_item_id: String::new(),
+            responses_reasoning_item_id: String::new(),
+            responses_reasoning_buffer: String::new(),
+            responses_reasoning_started: false,
+            responses_text_buffer: String::new(),
+            responses_text_started: false,
         }
     }
 }

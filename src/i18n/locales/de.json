@@ -522,6 +522,7 @@
       "searchByIdOrName": "Nach ID oder Name suchen",
       "stop": "Stoppzeichen",
       "stopPlaceholder": "Legt die Zeichen fest, bei denen das Modell die Textgenerierung beenden soll. Mehrere durch Zeilenumbrüche trennen.",
+      "supportsResponsesApi": "Unterstützt Responses API",
       "temperature": "Temperatur",
       "temperaturePlaceholder": "Steuert die Zufälligkeit der Modellausgabe. Ein höherer Wert führt zu einer zufälligeren Ausgabe.",
       "thinkingBudgetTokens": "Thinking-Budget",

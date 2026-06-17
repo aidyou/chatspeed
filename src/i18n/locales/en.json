@@ -522,6 +522,7 @@
       "searchByIdOrName": "Search by ID or name",
       "stop": "Stop Token",
       "stopPlaceholder": "Sets the tokens at which the model will stop generating text. Separate multiple with newlines.",
+      "supportsResponsesApi": "Supports Responses API",
       "temperature": "Temperature",
       "temperaturePlaceholder": "Controls the randomness of the model's output. A higher value results in more random output.",
       "thinkingBudgetTokens": "Thinking Budget",

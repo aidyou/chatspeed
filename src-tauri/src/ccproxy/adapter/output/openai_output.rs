@@ -63,23 +63,6 @@ impl OutputAdapter for OpenAIOutputAdapter {
             }
         }
 
-        let choice = OpenAIChatCompletionChoice {
-            index: 0,
-            message: UnifiedChatMessage {
-                role: Some("assistant".to_string()),
-                content: Some(OpenAIMessageContent::Text(text_content)),
-                tool_calls: if tool_calls.is_empty() {
-                    None
-                } else {
-                    Some(tool_calls)
-                },
-                reasoning_content,
-                ..Default::default()
-            },
-            finish_reason: response.stop_reason,
-            logprobs: None, // Add missing logprobs field
-        };
-
         let model = if let Ok(status) = sse_status.read() {
             status.model_id.clone()
         } else {
@@ -110,14 +93,33 @@ impl OutputAdapter for OpenAIOutputAdapter {
             "response",
         );
 
+        let created = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| anyhow::anyhow!("Failed to get system time: {}", e))?
+            .as_secs();
+
+        let choice = OpenAIChatCompletionChoice {
+            index: 0,
+            message: UnifiedChatMessage {
+                role: Some("assistant".to_string()),
+                content: Some(OpenAIMessageContent::Text(text_content)),
+                tool_calls: if tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(tool_calls)
+                },
+                reasoning_content,
+                ..Default::default()
+            },
+            finish_reason: response.stop_reason,
+            logprobs: None, // Add missing logprobs field
+        };
+
         let openai_response = OpenAIChatCompletionResponse {
             id: response_id,
             object: "chat.completion".to_string(),
-            created: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| anyhow::anyhow!("Failed to get system time: {}", e))?
-                .as_secs(),
-            model: model,
+            created,
+            model,
             choices: vec![choice],
             usage: Some(OpenAIUsage {
                 prompt_tokens: input_tokens,

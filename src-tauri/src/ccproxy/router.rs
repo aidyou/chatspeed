@@ -39,6 +39,7 @@
 //! These endpoints mimic the OpenAI API.
 //! - `GET /v1/models`: Lists available models.
 //! - `POST /v1/chat/completions`: Creates a chat completion.
+//! - `POST /v1/responses`: Creates an OpenAI Responses-compatible non-streaming response.
 //! - `POST /v1/embeddings`: Creates an embedding vector.
 //!
 //! ### Claude-Compatible Endpoints
@@ -91,6 +92,7 @@ use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
     auth::authenticate_request,
     handle_chat_completion, handle_embedding, handle_list_models, handle_ollama_tags,
+    handle_responses,
     handler::{handle_gemini_list_models, handle_ollama_show, ollama_extra_handler::ShowRequest},
     helper::CcproxyQuery,
 };
@@ -163,6 +165,28 @@ async fn openai_chat_logic(
         compat_mode,
         "".to_string(), // model_id
         "".to_string(), // action
+        state.main_store.clone(),
+    )
+    .await
+    .into_response())
+}
+
+async fn openai_responses_logic(
+    state: Arc<SharedState>,
+    query: CcproxyQuery,
+    headers: HeaderMap,
+    body: Bytes,
+    group_name: Option<String>,
+    compat_mode: bool,
+) -> Result<Response, CCProxyError> {
+    let final_group = resolve_group_name(&state, group_name);
+
+    Ok(handle_responses(
+        headers,
+        query,
+        body,
+        final_group,
+        compat_mode,
         state.main_store.clone(),
     )
     .await
@@ -389,6 +413,24 @@ fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                         .map_err(|e| e.into_response())
                 },
             );
+            let responses_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Path(group_name): Path<String>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    openai_responses_logic(
+                        state,
+                        query,
+                        headers,
+                        body,
+                        Some(group_name),
+                        compat_mode,
+                    )
+                    .await
+                    .map_err(|e| e.into_response())
+                },
+            );
             let list_model_handler = get(
                 |State(state): State<Arc<SharedState>>, Path(group_name): Path<String>| async move {
                     openai_list_models_logic(state, Some(group_name))
@@ -409,6 +451,7 @@ fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
             );
             Router::new()
                 .route("/v1/chat/completions", chat_handler)
+                .route("/v1/responses", responses_handler)
                 .route("/v1/models", list_model_handler)
                 .route("/v1/embeddings", embedding_handler)
         }
@@ -419,6 +462,16 @@ fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
                       headers: HeaderMap,
                       body: Bytes| async move {
                     openai_chat_logic(state, query, headers, body, None, compat_mode)
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
+            let responses_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Query(query): Query<CcproxyQuery>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    openai_responses_logic(state, query, headers, body, None, compat_mode)
                         .await
                         .map_err(|e| e.into_response())
                 },
@@ -440,6 +493,7 @@ fn openai_routes(compat_mode: bool, mode: GroupMode) -> Router<Arc<SharedState>>
             );
             Router::new()
                 .route("/v1/chat/completions", chat_handler)
+                .route("/v1/responses", responses_handler)
                 .route("/v1/models", list_model_handler)
                 .route("/v1/embeddings", embedding_handler)
         }
@@ -967,7 +1021,7 @@ fn log_registered_routes() {
     log::info!("  - GET /");
     log::info!("  - GET /api/version");
     log::info!("[OpenAI-Compatible]");
-    log::info!("  - /v1/models, /v1/chat/completions, /v1/embeddings");
+    log::info!("  - /v1/models, /v1/chat/completions, /v1/responses, /v1/embeddings");
     log::info!("[Claude-Compatible]");
     log::info!("  - /v1/messages, /v1/claude/embeddings");
     log::info!("[Gemini-Compatible]");

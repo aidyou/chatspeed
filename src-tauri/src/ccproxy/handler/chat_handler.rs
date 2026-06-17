@@ -28,7 +28,7 @@ use crate::ccproxy::{
         ModelResolver,
     },
     openai::OpenAIChatCompletionRequest,
-    types::ollama::OllamaChatCompletionRequest,
+    types::{ollama::OllamaChatCompletionRequest, ProxyModel},
 };
 use crate::constants::{
     CFG_CCPROXY_LOG_PROXY_TO_FILE, CFG_CCPROXY_LOG_TO_FILE, CFG_CCPROXY_RETRY_ON_429,
@@ -215,6 +215,332 @@ fn build_unified_request(
     }
 }
 
+pub(crate) fn prepare_unified_request_for_proxy_model(
+    unified_request: &mut UnifiedRequest,
+    proxy_model: &ProxyModel,
+) {
+    unified_request.custom_params = proxy_model.custom_params.clone();
+
+    // --- Inject Engine Defaults only if missing from client AND configured with valid non-default values ---
+    ModelResolver::merge_parameters_unified(unified_request, proxy_model);
+
+    preprocess_unified_request(unified_request, proxy_model);
+
+    if proxy_model.tool_filter.len() > 0 {
+        unified_request.tools = unified_request.tools.take().map(|tools| {
+            tools
+                .into_iter()
+                .filter(|tool| !proxy_model.tool_filter.contains_key(&tool.name))
+                .collect()
+        });
+    }
+
+    let has_tools = unified_request
+        .tools
+        .as_ref()
+        .map_or(false, |t| t.len() > 0);
+
+    if proxy_model.prompt_injection != "off" && !proxy_model.prompt_text.is_empty() && has_tools {
+        unified_request.prompt_injection = Some(proxy_model.prompt_injection.clone());
+        unified_request.prompt_enhance_text = Some(proxy_model.prompt_text.clone());
+        unified_request.prompt_injection_position = proxy_model.prompt_injection_position.clone();
+    }
+
+    if !proxy_model.prompt_replace.is_empty() {
+        if let Some(system_prompt) = &mut unified_request.system_prompt {
+            for (key, value) in &proxy_model.prompt_replace {
+                if !key.is_empty() {
+                    *system_prompt = system_prompt.replace(key, value);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) async fn execute_unified_chat_request(
+    client_protocol: ChatProtocol,
+    client_headers: HeaderMap,
+    mut unified_request: UnifiedRequest,
+    proxy_alias: String,
+    proxy_model: ProxyModel,
+    is_streaming_request: bool,
+    tool_compat_mode: bool,
+    final_tool_compat_mode: bool,
+    message_id: String,
+    log_org_to_file: bool,
+    log_proxy_to_file: bool,
+    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+    output_adapter: OutputAdapterEnum,
+) -> ProxyResult<Response> {
+    let full_url = get_provider_chat_full_url(
+        proxy_model.chat_protocol.clone(),
+        &proxy_model.base_url,
+        &proxy_model.model,
+        &proxy_model.api_key,
+        is_streaming_request,
+    );
+
+    let backend_adapter: Arc<dyn BackendAdapter> = match proxy_model.chat_protocol {
+        ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
+            Arc::new(crate::ccproxy::adapter::backend::OpenAIBackendAdapter)
+        }
+        ChatProtocol::Ollama => Arc::new(backend::OllamaBackendAdapter),
+        ChatProtocol::Claude => Arc::new(backend::ClaudeBackendAdapter),
+        ChatProtocol::Gemini => Arc::new(backend::GeminiBackendAdapter),
+    };
+
+    let http_client = ModelResolver::build_http_client(
+        main_store_arc.clone(),
+        proxy_model.model_metadata.clone(),
+    )?;
+
+    let mut final_headers = reqwest::header::HeaderMap::new();
+    ModelResolver::inject_proxy_headers(
+        &mut final_headers,
+        &client_headers,
+        &proxy_model,
+        &message_id,
+    );
+
+    final_headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+
+    if is_streaming_request {
+        final_headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("text/event-stream"),
+        );
+    } else {
+        final_headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+    }
+
+    let mut onward_request_builder = backend_adapter
+        .adapt_request(
+            &http_client,
+            &mut unified_request,
+            &proxy_model.api_key,
+            &full_url,
+            &proxy_model.model,
+            log_proxy_to_file,
+            &mut final_headers,
+        )
+        .await
+        .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
+
+    onward_request_builder = onward_request_builder.headers(final_headers);
+
+    let max_retries = if let Ok(store) = main_store_arc.read() {
+        store.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT)
+    } else {
+        CFG_CCPROXY_RETRY_ON_429_DEFAULT
+    };
+    let retry_config = RetryConfig::from_settings(max_retries);
+
+    let target_response = send_with_retry(onward_request_builder, &retry_config).await?;
+
+    if !target_response.status().is_success() {
+        let status_code = target_response.status();
+        let headers_from_target = target_response.headers().clone();
+        let error_body_bytes = match target_response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                log::error!("Failed to read backend error response: {}", e);
+                let err_msg = t!("network.response_read_error", error = e.to_string()).to_string();
+                return Err(CCProxyError::InternalError(err_msg));
+            }
+        };
+        let error_body_str = String::from_utf8_lossy(&error_body_bytes);
+
+        if log_org_to_file {
+            log::info!(target: "ccproxy_logger", "[ERROR] {} Response Error, model: {}, Status: {}, Body: \n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, status_code, error_body_str);
+        }
+
+        log::warn!(
+            "Backend API error (alias: '{}', model: '{}', provider: '{}'): url={}, status_code={}, response={}",
+            proxy_alias,
+            proxy_model.model,
+            proxy_model.provider,
+            &full_url,
+            status_code,
+            error_body_str
+        );
+
+        let mut error_type_str = "upstream_api_error".to_string();
+        let message_content = if let Ok(json_error) = serde_json::from_str::<Value>(&error_body_str)
+        {
+            if let Some(err_obj) = json_error.get("error") {
+                error_type_str = err_obj
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&error_type_str)
+                    .to_string();
+                err_obj
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&error_body_str)
+                    .to_string()
+            } else {
+                error_body_str.to_string()
+            }
+        } else {
+            error_body_str.to_string()
+        };
+        let final_error_json = serde_json::json!({
+            "message": message_content,
+            "type": error_type_str,
+            "param": null,
+            "code": status_code.as_u16().to_string()
+        });
+
+        if let Ok(store) = main_store_arc.read() {
+            let _ = store.record_ccproxy_stat(CcproxyStat {
+                id: None,
+                client_model: proxy_model.client_alias.clone(),
+                backend_model: proxy_model.model.clone(),
+                provider: proxy_model.provider.clone(),
+                protocol: client_protocol.to_string(),
+                tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
+                status_code: status_code.as_u16() as i32,
+                error_message: Some(message_content),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                request_at: None,
+            });
+        }
+
+        let mut response =
+            (status_code, Json(json!({ "error": final_error_json }))).into_response();
+
+        let filtered_headers =
+            crate::ccproxy::utils::http::filter_proxy_headers(&headers_from_target);
+        let final_headers = response.headers_mut();
+
+        for (name, value) in filtered_headers.iter() {
+            let name_str = name.as_str().to_lowercase();
+            if name_str.starts_with("x-") || name_str == "retry-after" {
+                final_headers.insert(name.clone(), value.clone());
+            }
+        }
+
+        if !final_headers.contains_key(http::header::CONTENT_TYPE) {
+            final_headers.insert(
+                http::header::CONTENT_TYPE,
+                http::header::HeaderValue::from_static("application/json"),
+            );
+        }
+        return Ok(response);
+    }
+
+    let estimated_input_tokens =
+        crate::ccproxy::utils::token_estimator::estimate_unified_request_tokens(&unified_request);
+
+    let sse_status = Arc::new(RwLock::new(SseStatus::new(
+        message_id,
+        proxy_alias.clone(),
+        tool_compat_mode,
+        estimated_input_tokens,
+    )));
+
+    if is_streaming_request {
+        let res = handle_streamed_response(
+            Arc::new(proxy_model.chat_protocol),
+            client_protocol,
+            target_response,
+            backend_adapter,
+            output_adapter,
+            sse_status,
+            log_org_to_file,
+            main_store_arc.clone(),
+            proxy_model.client_alias.clone(),
+            proxy_model.model.clone(),
+            proxy_model.provider.clone(),
+            final_tool_compat_mode,
+        )
+        .await?;
+        Ok(res.into_response())
+    } else {
+        let response_headers_from_target = target_response.headers().clone();
+        let body_bytes = target_response
+            .bytes()
+            .await
+            .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
+
+        if log_org_to_file {
+            log::info!(target: "ccproxy_logger", "[Backend Raw Response] {} Body: \n{}\n================\n\n", proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
+        }
+
+        let backend_response = crate::ccproxy::adapter::backend::BackendResponse {
+            body: body_bytes,
+            tool_compat_mode,
+        };
+        let unified_response = backend_adapter
+            .adapt_response(backend_response)
+            .await
+            .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
+
+        if let Ok(store) = main_store_arc.read() {
+            log::info!(
+                "Recording ccproxy stats for non-streaming response: model={}, provider={}",
+                &proxy_model.model,
+                &proxy_model.provider
+            );
+
+            #[cfg(debug_assertions)]
+            log::debug!(
+                "Stat details: provider='{}', model='{}', client_alias='{}'",
+                &proxy_model.provider,
+                &proxy_model.model,
+                &proxy_model.client_alias
+            );
+
+            let cache_tokens = unified_response
+                .usage
+                .cache_read_input_tokens
+                .or(unified_response.usage.prompt_cached_tokens)
+                .or(unified_response.usage.cached_content_tokens)
+                .unwrap_or(0);
+
+            let _ = store.record_ccproxy_stat(CcproxyStat {
+                id: None,
+                client_model: proxy_model.client_alias.clone(),
+                backend_model: proxy_model.model.clone(),
+                provider: proxy_model.provider.clone(),
+                protocol: client_protocol.to_string(),
+                tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
+                status_code: 200,
+                error_message: None,
+                input_tokens: unified_response.usage.input_tokens as i64,
+                output_tokens: unified_response.usage.output_tokens as i64,
+                cache_tokens: cache_tokens as i64,
+                request_at: None,
+            });
+        }
+
+        let mut response = output_adapter
+            .adapt_response(unified_response, sse_status)
+            .map_err(|e| CCProxyError::InternalError(e.to_string()))?
+            .into_response();
+
+        let filtered_headers =
+            crate::ccproxy::utils::http::filter_proxy_headers(&response_headers_from_target);
+        let final_headers = response.headers_mut();
+        for (name, value) in filtered_headers.iter() {
+            let name_str = name.as_str().to_lowercase();
+            if name_str.starts_with("x-") || name_str == "retry-after" {
+                final_headers.insert(name.clone(), value.clone());
+            }
+        }
+
+        Ok(response)
+    }
+}
+
 pub async fn handle_chat_completion(
     chat_protocol: ChatProtocol,
     client_headers: HeaderMap,
@@ -239,11 +565,6 @@ pub async fn handle_chat_completion(
     } else {
         false
     };
-
-    if log_org_to_file {
-        // Log the raw request body
-        log::info!(target: "ccproxy_logger", "message id:{}\n{} Origin Request Body: \n{}\n----------------\n", &message_id, &protocol_string, String::from_utf8_lossy(&client_request_body));
-    }
 
     let proxy_model = if let Some(provider_id) = client_headers
         .get("x-cs-provider-id")
@@ -325,11 +646,14 @@ pub async fn handle_chat_completion(
             proxy_model,
             is_streaming,
             main_store_arc,
-            log_org_to_file,
             log_proxy_to_file,
         )
         .await?;
         return Ok(result.into_response());
+    }
+
+    if log_org_to_file {
+        log::info!(target: "ccproxy_logger", "message id:{}\n{} Origin Request Body: \n{}\n----------------\n", &message_id, &protocol_string, String::from_utf8_lossy(&preprocessed_request_body));
     }
 
     let (mut unified_request, proxy_alias, is_streaming_request) = build_unified_request(
@@ -340,227 +664,8 @@ pub async fn handle_chat_completion(
         generate_action,
     )?;
 
-    unified_request.custom_params = proxy_model.custom_params.clone();
+    prepare_unified_request_for_proxy_model(&mut unified_request, &proxy_model);
 
-    // --- Inject Engine Defaults only if missing from client AND configured with valid non-default values ---
-    ModelResolver::merge_parameters_unified(&mut unified_request, &proxy_model);
-
-    preprocess_unified_request(&mut unified_request, &proxy_model);
-
-    // Tool filtering logic remains same
-    if proxy_model.tool_filter.len() > 0 {
-        unified_request.tools = unified_request.tools.map(|tools| {
-            tools
-                .into_iter()
-                .filter(|tool| !proxy_model.tool_filter.contains_key(&tool.name))
-                .collect()
-        });
-    }
-
-    let has_tools = unified_request
-        .tools
-        .as_ref()
-        .map_or(false, |t| t.len() > 0);
-
-    if proxy_model.prompt_injection != "off" && !proxy_model.prompt_text.is_empty() && has_tools {
-        unified_request.prompt_injection = Some(proxy_model.prompt_injection.clone());
-        unified_request.prompt_enhance_text = Some(proxy_model.prompt_text.clone());
-        unified_request.prompt_injection_position = proxy_model.prompt_injection_position.clone();
-    }
-
-    // --- Apply Prompt Replacement (Metadata KV) ---
-    if !proxy_model.prompt_replace.is_empty() {
-        if let Some(system_prompt) = &mut unified_request.system_prompt {
-            for (key, value) in &proxy_model.prompt_replace {
-                if !key.is_empty() {
-                    *system_prompt = system_prompt.replace(key, value);
-                }
-            }
-        }
-    }
-
-    // 2. Use the already resolved proxy_model from above
-
-    let full_url = get_provider_chat_full_url(
-        proxy_model.chat_protocol.clone(),
-        &proxy_model.base_url,
-        &proxy_model.model,
-        &proxy_model.api_key,
-        is_streaming_request,
-    );
-
-    let backend_adapter: Arc<dyn BackendAdapter> = match proxy_model.chat_protocol {
-        ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
-            Arc::new(crate::ccproxy::adapter::backend::OpenAIBackendAdapter)
-        }
-        ChatProtocol::Ollama => Arc::new(backend::OllamaBackendAdapter),
-        ChatProtocol::Claude => Arc::new(backend::ClaudeBackendAdapter),
-        ChatProtocol::Gemini => Arc::new(backend::GeminiBackendAdapter),
-    };
-
-    // Build HTTP client with proxy settings
-    let http_client = ModelResolver::build_http_client(
-        main_store_arc.clone(),
-        proxy_model.model_metadata.clone(),
-    )?;
-
-    // Build consolidated headers using HeaderMap to handle overrides correctly
-    let mut final_headers = reqwest::header::HeaderMap::new();
-
-    // Inject all proxy headers (Metadata + Protocol Defaults + Client Overrides)
-    ModelResolver::inject_proxy_headers(
-        &mut final_headers,
-        &client_headers,
-        &proxy_model,
-        &message_id,
-    );
-
-    // Set mandatory content headers (these shouldn't be overridden)
-    final_headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        reqwest::header::HeaderValue::from_static("application/json"),
-    );
-
-    // Set streaming request headers
-    if is_streaming_request {
-        final_headers.insert(
-            reqwest::header::ACCEPT,
-            reqwest::header::HeaderValue::from_static("text/event-stream"),
-        );
-    } else {
-        final_headers.insert(
-            reqwest::header::ACCEPT,
-            reqwest::header::HeaderValue::from_static("application/json"),
-        );
-    }
-
-    // 3. Adapt request (Adapter will handle body transformation and specific protocol adjustments)
-    let mut onward_request_builder = backend_adapter
-        .adapt_request(
-            &http_client,
-            &mut unified_request,
-            &proxy_model.api_key,
-            &full_url,
-            &proxy_model.model,
-            log_proxy_to_file,
-            &mut final_headers,
-        )
-        .await
-        .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
-
-    // Apply consolidated headers to the request builder
-    onward_request_builder = onward_request_builder.headers(final_headers);
-
-    // Get retry configuration from settings
-    let max_retries = if let Ok(store) = main_store_arc.read() {
-        store.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT)
-    } else {
-        CFG_CCPROXY_RETRY_ON_429_DEFAULT
-    };
-    let retry_config = RetryConfig::from_settings(max_retries);
-
-    // Send request with retry support for 429 status code
-    let target_response = send_with_retry(onward_request_builder, &retry_config).await?;
-
-    // Handle error response
-    if !target_response.status().is_success() {
-        let status_code = target_response.status();
-        let headers_from_target = target_response.headers().clone();
-        let error_body_bytes = match target_response.bytes().await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                log::error!("Failed to read backend error response: {}", e);
-                let err_msg = t!("network.response_read_error", error = e.to_string()).to_string();
-                return Err(CCProxyError::InternalError(err_msg));
-            }
-        };
-        let error_body_str = String::from_utf8_lossy(&error_body_bytes);
-
-        if log_org_to_file {
-            log::info!(target: "ccproxy_logger", "[ERROR] {} Response Error, model: {}, Status: {}, Body: \n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, status_code, error_body_str);
-        }
-
-        log::warn!(
-            "Backend API error (alias: '{}', model: '{}', provider: '{}'): url={}, status_code={}, response={}",
-            proxy_alias,
-            proxy_model.model,
-            proxy_model.provider,
-            &full_url,
-            status_code,
-            error_body_str
-        );
-
-        let final_error_json: Value;
-        let mut error_type_str = "upstream_api_error".to_string();
-
-        let message_content = if let Ok(json_error) = serde_json::from_str::<Value>(&error_body_str)
-        {
-            if let Some(err_obj) = json_error.get("error") {
-                error_type_str = err_obj
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or(&error_type_str)
-                    .to_string();
-                err_obj
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or(&error_body_str)
-                    .to_string()
-            } else {
-                error_body_str.to_string()
-            }
-        } else {
-            error_body_str.to_string()
-        };
-        final_error_json = serde_json::json!({
-            "message": message_content,
-            "type": error_type_str,
-            "param": null,
-            "code": status_code.as_u16().to_string()
-        });
-
-        // Record error statistics
-        if let Ok(store) = main_store_arc.read() {
-            let _ = store.record_ccproxy_stat(CcproxyStat {
-                id: None,
-                client_model: proxy_model.client_alias.clone(),
-                backend_model: proxy_model.model.clone(),
-                provider: proxy_model.provider.clone(),
-                protocol: chat_protocol.to_string(),
-                tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
-                status_code: status_code.as_u16() as i32,
-                error_message: Some(message_content),
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_tokens: 0,
-                request_at: None,
-            });
-        }
-
-        let mut response =
-            (status_code, Json(json!({ "error": final_error_json }))).into_response();
-
-        let filtered_headers =
-            crate::ccproxy::utils::http::filter_proxy_headers(&headers_from_target);
-        let final_headers = response.headers_mut();
-
-        for (name, value) in filtered_headers.iter() {
-            let name_str = name.as_str().to_lowercase();
-            if name_str.starts_with("x-") || name_str == "retry-after" {
-                final_headers.insert(name.clone(), value.clone());
-            }
-        }
-
-        if !final_headers.contains_key(http::header::CONTENT_TYPE) {
-            final_headers.insert(
-                http::header::CONTENT_TYPE,
-                http::header::HeaderValue::from_static("application/json"),
-            );
-        }
-        return Ok(response);
-    }
-
-    // 4. Adapt response back to client format
     let output_adapter: OutputAdapterEnum = match chat_protocol {
         ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
             OutputAdapterEnum::OpenAI(OpenAIOutputAdapter)
@@ -570,107 +675,20 @@ pub async fn handle_chat_completion(
         ChatProtocol::Ollama => OutputAdapterEnum::Ollama(OllamaOutputAdapter),
     };
 
-    let estimated_input_tokens =
-        crate::ccproxy::utils::token_estimator::estimate_unified_request_tokens(&unified_request);
-
-    let sse_status = Arc::new(RwLock::new(SseStatus::new(
-        message_id,
-        proxy_alias.clone(),
+    execute_unified_chat_request(
+        chat_protocol,
+        client_headers,
+        unified_request,
+        proxy_alias,
+        proxy_model,
+        is_streaming_request,
         tool_compat_mode,
-        estimated_input_tokens,
-    )));
-
-    if is_streaming_request {
-        let res = handle_streamed_response(
-            Arc::new(proxy_model.chat_protocol),
-            chat_protocol,
-            target_response,
-            backend_adapter,
-            output_adapter,
-            sse_status,
-            log_org_to_file,
-            main_store_arc.clone(),
-            proxy_model.client_alias.clone(),
-            proxy_model.model.clone(),
-            proxy_model.provider.clone(),
-            final_tool_compat_mode,
-        )
-        .await?;
-        Ok(res.into_response())
-    } else {
-        let response_headers_from_target = target_response.headers().clone();
-        let body_bytes = target_response
-            .bytes()
-            .await
-            .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
-
-        if log_org_to_file {
-            log::info!(target: "ccproxy_logger", "[Backend Raw Response] {} Body: \n{}\n================\n\n", proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
-        }
-
-        let backend_response = crate::ccproxy::adapter::backend::BackendResponse {
-            body: body_bytes,
-            tool_compat_mode,
-        };
-        let unified_response = backend_adapter
-            .adapt_response(backend_response)
-            .await
-            .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
-
-        // Record success statistics
-        if let Ok(store) = main_store_arc.read() {
-            log::info!(
-                "Recording ccproxy stats for non-streaming response: model={}, provider={}",
-                &proxy_model.model,
-                &proxy_model.provider
-            );
-
-            #[cfg(debug_assertions)]
-            log::debug!(
-                "Stat details: provider='{}', model='{}', client_alias='{}'",
-                &proxy_model.provider,
-                &proxy_model.model,
-                &proxy_model.client_alias
-            );
-
-            let cache_tokens = unified_response
-                .usage
-                .cache_read_input_tokens
-                .or(unified_response.usage.prompt_cached_tokens)
-                .or(unified_response.usage.cached_content_tokens)
-                .unwrap_or(0);
-
-            let _ = store.record_ccproxy_stat(CcproxyStat {
-                id: None,
-                client_model: proxy_model.client_alias.clone(),
-                backend_model: proxy_model.model.clone(),
-                provider: proxy_model.provider.clone(),
-                protocol: chat_protocol.to_string(),
-                tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
-                status_code: 200,
-                error_message: None,
-                input_tokens: unified_response.usage.input_tokens as i64,
-                output_tokens: unified_response.usage.output_tokens as i64,
-                cache_tokens: cache_tokens as i64,
-                request_at: None,
-            });
-        }
-
-        let mut response = output_adapter
-            .adapt_response(unified_response, sse_status)
-            .map_err(|e| CCProxyError::InternalError(e.to_string()))?
-            .into_response();
-
-        let filtered_headers =
-            crate::ccproxy::utils::http::filter_proxy_headers(&response_headers_from_target);
-        let final_headers = response.headers_mut();
-        for (name, value) in filtered_headers.iter() {
-            let name_str = name.as_str().to_lowercase();
-            if name_str.starts_with("x-") || name_str == "retry-after" {
-                final_headers.insert(name.clone(), value.clone());
-            }
-        }
-
-        Ok(response)
-    }
+        final_tool_compat_mode,
+        message_id,
+        log_org_to_file,
+        log_proxy_to_file,
+        main_store_arc,
+        output_adapter,
+    )
+    .await
 }

@@ -121,6 +121,11 @@
               :autosize="{ minRows: 2, maxRows: 5 }"
               :placeholder="$t('settings.model.apiKeyPlaceholder')" />
           </el-form-item>
+          <el-form-item
+            :label="$t('settings.model.supportsResponsesApi')"
+            prop="supportsResponsesApi">
+            <el-switch v-model="modelForm.supportsResponsesApi" />
+          </el-form-item>
           <el-form-item :label="$t('settings.general.proxyType')" prop="proxyType">
             <el-radio-group v-model="modelForm.proxyType">
               <el-radio
@@ -843,6 +848,7 @@ const defaultFormData = {
   proxyServer: '',
   proxyUsername: '',
   proxyPassword: '',
+  supportsResponsesApi: false,
   customHeaders: [],
   disabled: false
 }
@@ -903,6 +909,8 @@ const createFromModel = srcModel => {
     proxyServer: srcModel?.metadata?.proxyServer || '',
     proxyUsername: srcModel?.metadata?.proxyUsername || '',
     proxyPassword: srcModel?.metadata?.proxyPassword || '',
+    supportsResponsesApi:
+      srcModel?.metadata?.supportsResponsesApi || srcModel?.metadata?.supports_responses_api || false,
     customHeaders: srcModel?.metadata?.customHeaders || []
   }
 }
@@ -1059,6 +1067,7 @@ const updateModel = () => {
           proxyServer: modelForm.value.proxyServer.trim() || '',
           proxyUsername: modelForm.value.proxyUsername.trim() || '',
           proxyPassword: modelForm.value.proxyPassword.trim() || '',
+          supportsResponsesApi: modelForm.value.supportsResponsesApi,
           customHeaders: modelForm.value.customHeaders.filter(h => h.key.trim() !== '')
         }
       }

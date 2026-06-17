@@ -522,6 +522,7 @@
       "searchByIdOrName": "按ID或名称搜索",
       "stop": "终止标记",
       "stopPlaceholder": "设置模型生成文本时遇到即停止的标记。多个请用换行符分隔。",
+      "supportsResponsesApi": "支持 Responses 接口",
       "temperature": "温度",
       "temperaturePlaceholder": "控制模型输出的随机性。值越大，输出越随机。",
       "thinkingBudgetTokens": "思考预算",

@@ -3,13 +3,61 @@
 #[cfg(test)]
 mod tests {
     use super::super::openai::OpenAIBackendAdapter;
-    use super::super::BackendAdapter;
+    use super::super::{BackendAdapter, BackendResponse};
     use crate::ccproxy::adapter::{
         input::{from_claude, from_ollama},
         unified::{UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool},
     };
     use reqwest::Client;
     use serde_json::{json, Value};
+
+    #[tokio::test]
+    async fn test_malformed_tool_arguments_do_not_fail_response_adaptation() {
+        let adapter = OpenAIBackendAdapter;
+        let response = BackendResponse {
+            body: serde_json::to_vec(&json!({
+                "id": "chatcmpl_test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "test-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call_test",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": "{\"query\":\"abc\""
+                            }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2
+                }
+            }))
+            .expect("response should serialize")
+            .into(),
+            tool_compat_mode: false,
+        };
+
+        let unified = adapter
+            .adapt_response(response)
+            .await
+            .expect("malformed tool arguments should not fail adaptation");
+
+        assert!(matches!(
+            &unified.content[0],
+            UnifiedContentBlock::ToolUse { name, input, .. }
+                if name == "lookup" && input.get("partial_data").is_some()
+        ));
+    }
 
     fn request_json(builder: reqwest::RequestBuilder) -> Value {
         let request = builder.build().expect("request should build");

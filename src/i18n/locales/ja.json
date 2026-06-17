@@ -522,6 +522,7 @@
       "searchByIdOrName": "IDまたは名前で検索",
       "stop": "停止トークン",
       "stopPlaceholder": "モデルがテキストの生成を停止するトークンを設定します。複数ある場合は改行で区切ってください。",
+      "supportsResponsesApi": "Responses API対応",
       "temperature": "温度",
       "temperaturePlaceholder": "モデルの出力のランダム性を制御します。値が大きいほど、出力はよりランダムになります。",
       "thinkingBudgetTokens": "思考予算",

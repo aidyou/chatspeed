@@ -14,6 +14,7 @@ pub mod utils;
 pub use errors::CCProxyError;
 pub use handler::{
     handle_chat_completion, handle_embedding, handle_list_models, handle_ollama_tags,
+    handle_responses,
 };
 pub use helper::{get_tool_id, StreamProcessor};
 pub use router::routes;

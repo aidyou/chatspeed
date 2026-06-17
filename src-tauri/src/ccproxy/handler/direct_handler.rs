@@ -26,8 +26,7 @@ pub async fn handle_direct_forward(
     proxy_model: ProxyModel,
     is_streaming_request: bool,
     main_store_arc: Arc<std::sync::RwLock<MainStore>>,
-    _log_origin_request_to_file: bool,
-    log_response_to_file: bool,
+    log_proxy_to_file: bool,
 ) -> ProxyResult<Response> {
     let message_id = crate::ccproxy::helper::get_msg_id();
     let provider_name = proxy_model.provider.clone();
@@ -119,7 +118,7 @@ pub async fn handle_direct_forward(
         CCProxyError::InternalError(format!("Failed to serialize modified body: {}", e))
     })?;
 
-    if log_response_to_file {
+    if log_proxy_to_file {
         log::info!(
             target: "ccproxy_logger",
             "[Direct] {} Final Request Body: \n{}\n----------------\n",
@@ -263,7 +262,7 @@ pub async fn handle_direct_forward(
                     log_recorder.clone(),
                     &chat_protocol,
                     sse_status.clone(),
-                    log_response_to_file,
+                    log_proxy_to_file,
                 );
 
                 inject_openai_estimated_usage_before_done(
@@ -289,7 +288,7 @@ pub async fn handle_direct_forward(
             .await
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
-        if log_response_to_file {
+        if log_proxy_to_file {
             log::info!(target: "ccproxy_logger", "[Direct] {} Response Body: {}\n================\n\n",proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
         }
 

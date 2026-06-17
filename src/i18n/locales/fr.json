@@ -522,6 +522,7 @@
       "searchByIdOrName": "Rechercher par ID ou nom",
       "stop": "Jeton d'arrêt",
       "stopPlaceholder": "Définit les jetons auxquels le modèle arrêtera de générer du texte. Séparez plusieurs jetons par des sauts de ligne.",
+      "supportsResponsesApi": "Prend en charge l'API Responses",
       "temperature": "Température",
       "temperaturePlaceholder": "Contrôle le caractère aléatoire de la sortie du modèle. Une valeur plus élevée donne une sortie plus aléatoire.",
       "thinkingBudgetTokens": "Budget de raisonnement",

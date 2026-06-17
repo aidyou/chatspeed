@@ -743,13 +743,9 @@ impl BackendAdapter for OpenAIBackendAdapter {
                         content_blocks.push(UnifiedContentBlock::ToolUse {
                             id: get_tool_id(), // IGNORE upstream ID, use our own unique ID
                             name: function.name.clone().unwrap_or_default(),
-                            input: serde_json::from_str(
-                                &function
-                                    .arguments
-                                    .clone()
-                                    .unwrap_or_default()
-                                    .replace("'", "\""),
-                            )?,
+                            input: Self::parse_tool_arguments(
+                                function.arguments.as_deref().unwrap_or_default(),
+                            ),
                         });
                     }
                 }
@@ -998,6 +994,26 @@ fn cleanup_content(text: &str) -> String {
 
 // Private helper methods for OpenAIBackendAdapter
 impl OpenAIBackendAdapter {
+    fn parse_tool_arguments(arguments: &str) -> serde_json::Value {
+        if arguments.trim().is_empty() {
+            return json!({});
+        }
+
+        if let Ok(parsed_args) = serde_json::from_str(arguments) {
+            return parsed_args;
+        }
+
+        let cleaned_args = arguments.replace("'", "\"");
+        serde_json::from_str(&cleaned_args).unwrap_or_else(|error| {
+            log::warn!(
+                "Failed to parse OpenAI tool arguments as JSON: {}, rawString: {}",
+                error,
+                arguments
+            );
+            json!({ "partial_data": arguments })
+        })
+    }
+
     /// Extract SSE data from event block
     fn extract_sse_data(&self, event_block: &str) -> Option<String> {
         for line in event_block.lines() {

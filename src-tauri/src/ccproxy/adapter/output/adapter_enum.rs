@@ -6,6 +6,7 @@ use super::traits::OutputAdapter;
 use super::{
     claude_output::ClaudeOutputAdapter, gemini_output::GeminiOutputAdapter,
     ollama_output::OllamaOutputAdapter, openai_output::OpenAIOutputAdapter,
+    openai_responses_output::OpenAIResponsesOutputAdapter,
 };
 use crate::ccproxy::adapter::unified::{
     SseStatus, UnifiedEmbeddingResponse, UnifiedResponse, UnifiedStreamChunk,
@@ -14,6 +15,7 @@ use crate::ccproxy::helper::sse::Event;
 
 pub enum OutputAdapterEnum {
     OpenAI(OpenAIOutputAdapter),
+    OpenAIResponses(OpenAIResponsesOutputAdapter),
     Claude(ClaudeOutputAdapter),
     Gemini(GeminiOutputAdapter),
     Ollama(OllamaOutputAdapter),
@@ -28,6 +30,9 @@ impl OutputAdapter for OutputAdapterEnum {
     ) -> Result<Response, anyhow::Error> {
         let reply = match self {
             Self::OpenAI(adapter) => adapter
+                .adapt_response(response, sse_status)?
+                .into_response(),
+            Self::OpenAIResponses(adapter) => adapter
                 .adapt_response(response, sse_status)?
                 .into_response(),
             Self::Claude(adapter) => adapter
@@ -50,6 +55,7 @@ impl OutputAdapter for OutputAdapterEnum {
     ) -> Result<Vec<Event>, Infallible> {
         match self {
             Self::OpenAI(adapter) => adapter.adapt_stream_chunk(chunk, sse_status),
+            Self::OpenAIResponses(adapter) => adapter.adapt_stream_chunk(chunk, sse_status),
             Self::Claude(adapter) => adapter.adapt_stream_chunk(chunk, sse_status),
             Self::Gemini(adapter) => adapter.adapt_stream_chunk(chunk, sse_status),
             Self::Ollama(adapter) => adapter.adapt_stream_chunk(chunk, sse_status),
@@ -62,6 +68,9 @@ impl OutputAdapter for OutputAdapterEnum {
     ) -> Result<Response, anyhow::Error> {
         let reply = match self {
             Self::OpenAI(adapter) => adapter.adapt_embedding_response(response)?.into_response(),
+            Self::OpenAIResponses(adapter) => {
+                adapter.adapt_embedding_response(response)?.into_response()
+            }
             Self::Claude(adapter) => adapter.adapt_embedding_response(response)?.into_response(),
             Self::Gemini(adapter) => adapter.adapt_embedding_response(response)?.into_response(),
             Self::Ollama(adapter) => adapter.adapt_embedding_response(response)?.into_response(),
