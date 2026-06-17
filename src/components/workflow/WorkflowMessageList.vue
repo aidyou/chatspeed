@@ -471,16 +471,19 @@
                 class="context-snapshot-card__header"
                 @click="$emit('toggle-expand', getContextSnapshotExpandId(message))">
                 <cs name="archive" size="14px" class="context-snapshot-card__icon" />
-                <span class="context-snapshot-card__title">Previous Context Snapshot</span>
+                <span class="context-snapshot-card__title">{{
+                  getContextSnapshotTitle(message)
+                }}</span>
                 <span
                   v-if="!isContextSnapshotExpanded(message)"
                   class="context-snapshot-card__preview">
                   {{ getContextSnapshotPreview(message) }}
                 </span>
                 <cs
-                  :name="isContextSnapshotExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                  name="double-arrow-down"
                   size="14px"
-                  class="context-snapshot-card__chevron" />
+                  class="context-snapshot-card__chevron"
+                  :class="{ expanded: isContextSnapshotExpanded(message) }" />
               </div>
               <div v-if="isContextSnapshotExpanded(message)" class="context-snapshot-card__body">
                 <MarkdownSimple :content="formatContextSnapshotForDisplay(message)" />
@@ -998,6 +1001,24 @@ const getContextSnapshotPreview = message => {
 
   if (!content) return ''
   return content.length > 96 ? `${content.slice(0, 96)}...` : content
+}
+
+const getContextSnapshotTitle = message => {
+  const content = getContextSnapshotContent(message)
+
+  if (content.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(content)
+      const taskState = jsonSnapshotSectionText(parsed.task_state)
+      if (taskState) {
+        return `Context Snapshot · ${taskState.split('\n')[0]}`
+      }
+    } catch {
+      // Fall back to default title.
+    }
+  }
+
+  return 'Previous Context Snapshot'
 }
 
 const getMessageToolName = message => {
@@ -1956,7 +1977,13 @@ defineExpose({
 
 .context-snapshot-card__chevron {
   flex-shrink: 0;
+  margin-left: auto;
   color: var(--cs-text-color-secondary);
+  transition: transform 0.2s ease;
+}
+
+.context-snapshot-card__chevron.expanded {
+  transform: rotate(180deg);
 }
 
 .context-snapshot-card__body {
