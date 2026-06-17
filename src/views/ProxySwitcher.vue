@@ -58,6 +58,14 @@
                         >{{ $t('settings.proxy.stats.cacheTokens') }}
                         {{ formatCompactNumber(proxy.stats.cacheTokens) }}</span
                       >
+                      <span
+                        >{{ $t('proxySwitcher.hitRate') }}
+                        {{
+                          formatPercent(
+                            getCacheHitRateValue(proxy.stats.cacheTokens, proxy.stats.inputTokens)
+                          )
+                        }}</span
+                      >
                     </div>
                   </div>
                 </div>
@@ -438,6 +446,18 @@ const formatCompactNumber = val => {
   if (num >= 1000000) return `${(num / 1000000).toFixed(2)}M`
   if (num >= 1000) return `${(num / 1000).toFixed(2)}K`
   return num.toLocaleString()
+}
+
+const getCacheHitRateValue = (cacheTokens, inputTokens) => {
+  const input = Number(inputTokens || 0)
+  const cache = Number(cacheTokens || 0)
+  if (input <= 0 || cache <= 0) return 0
+  return (cache / input) * 100
+}
+
+const formatPercent = val => {
+  const num = Number(val || 0)
+  return `${num.toFixed(2)}%`
 }
 
 const getLocalDateString = date => {
@@ -1122,7 +1142,7 @@ onMounted(async () => {
   .token-stats-inline {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--cs-space);
+    gap: var(--cs-space-sm);
     color: var(--cs-text-color-secondary);
     font-size: var(--cs-font-size-xs);
     font-weight: 400;

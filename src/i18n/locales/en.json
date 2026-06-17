@@ -169,6 +169,7 @@
   },
   "proxySwitcher": {
     "groupSwitch": "Group Switch",
+    "hitRate": "Hit Rate",
     "serverSwitch": "Server Switch",
     "switchBackendModels": "Switch Target Backend Models",
     "title": "Proxy Switcher"

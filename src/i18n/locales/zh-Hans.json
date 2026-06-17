@@ -169,6 +169,7 @@
   },
   "proxySwitcher": {
     "groupSwitch": "分组切换",
+    "hitRate": "命中率",
     "serverSwitch": "服务器切换",
     "switchBackendModels": "切换目标后端模型",
     "title": "代理切换"
