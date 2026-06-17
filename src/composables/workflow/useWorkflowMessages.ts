@@ -1,5 +1,6 @@
 import { ref, computed, watch } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
+import { useSubAgentSummaries } from './useSubAgentSummaries'
 import { resolveWorkflowToolIcon } from './toolIcons'
 import { isAutoExecuteWorkflowTool } from './toolApproval'
 import { useI18n } from 'vue-i18n'
@@ -52,6 +53,11 @@ export function useWorkflowMessages(options = {}) {
     return removeSystemReminder(message.message || '').trim() === ''
   }
 
+  const isSubAgentCompletionObservation = message => {
+    const meta = message?.metadata || {}
+    return meta?.observation_type === 'sub_agent_completion'
+  }
+
   const isFinishTaskMessage = message => {
     const toolName = String(
       message?.metadata?.tool_name ||
@@ -91,16 +97,46 @@ export function useWorkflowMessages(options = {}) {
 
   const filteredWorkflowMessages = computed(() =>
     (workflowStore.messages || []).filter(message => {
-      if (isHiddenSystemObservation(message)) return false
+      if (isHiddenSystemObservation(message) && !isSubAgentCompletionObservation(message)) {
+        return false
+      }
       const messageWorkflowId = message?.sessionId || message?.session_id
       return !messageWorkflowId || messageWorkflowId === workflowStore.currentWorkflowId
     })
+  )
+
+  const { childAgentSummariesAll } = useSubAgentSummaries()
+  const childAgentSummariesRevision = computed(() =>
+    childAgentSummariesAll.value
+      .map(summary => `${summary.id}:${summary.contextPercent ?? 'null'}:${summary.toolCalls}:${summary.status}`)
+      .join('|')
+  )
+
+  const childAgentSummaryById = computed(
+    () => new Map(childAgentSummariesAll.value.map(summary => [summary.id, summary]))
   )
 
   const getMessageSegmentId = message => {
     const rawSegmentId = message?.segment_id ?? message?.segmentId ?? message?.metadata?.segment_id
     const parsed = Number(rawSegmentId)
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  }
+
+  const pickPreferredNumber = (...values) => {
+    for (const value of values) {
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+    }
+    for (const value of values) {
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
+    }
+    return null
+  }
+
+  const pickPreferredText = (...values) => {
+    for (const value of values) {
+      if (typeof value === 'string' && value.trim()) return value
+    }
+    return ''
   }
 
   const buildTaskGroupId = messages => {
@@ -513,6 +549,87 @@ export function useWorkflowMessages(options = {}) {
       return `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``
     }
 
+    const buildExplorationBatch = message => {
+      if (message?.metadata?.message_kind !== 'exploration_batch') return null
+
+      const parsed = tryParseJsonValue(message?.message)
+      if (!parsed || typeof parsed !== 'object') return null
+
+      const groups = Array.isArray(parsed.groups)
+        ? parsed.groups.map(group => {
+            const thought = typeof group?.thought === 'string' ? group.thought.trim() : ''
+            const tools = Array.isArray(group?.tools)
+              ? group.tools.map((tool, toolIndex) => {
+                  const name = tool?.tool_name || tool?.toolName || tool?.name || ''
+                  const args =
+                    tool?.args && typeof tool.args === 'object'
+                      ? tool.args
+                      : tool?.arguments && typeof tool.arguments === 'object'
+                        ? tool.arguments
+                        : {}
+                  const { icon, toolType, action, target } = formatToolTitle(name, args)
+                  const messageContent =
+                    typeof tool?.message === 'string'
+                      ? tool.message
+                      : typeof tool?.content === 'string'
+                        ? tool.content
+                        : ''
+                  return {
+                    id: `${message.id || message.stepIndex || 'exploration'}:${toolIndex}`,
+                    icon,
+                    toolType,
+                    action,
+                    target,
+                    summary: typeof tool?.summary === 'string' ? tool.summary.trim() : '',
+                    displayType: typeof tool?.display_type === 'string' ? tool.display_type : 'text',
+                    message: messageContent,
+                    sourceMessage: {
+                      ...message,
+                      message: messageContent,
+                      metadata: {
+                        ...(message.metadata || {}),
+                        display_type: tool?.display_type || 'text'
+                      }
+                    }
+                  }
+                })
+              : []
+
+            return {
+              thought,
+              tools
+            }
+          })
+        : []
+
+      const files = groups.flatMap(group =>
+        group.tools
+          .map(tool => tool.target || '')
+          .filter(target => typeof target === 'string' && target.trim())
+      )
+
+      return {
+        groups,
+        files,
+        readCount: groups.reduce(
+          (count, group) => count + group.tools.filter(tool => tool.action.startsWith('Read ')).length,
+          0
+        ),
+        searchCount: groups.reduce(
+          (count, group) =>
+            count +
+            group.tools.filter(
+              tool =>
+                tool.action.startsWith('Search ') ||
+                tool.action.startsWith('Grep ') ||
+                tool.action.startsWith('Glob ')
+            ).length,
+          0
+        ),
+        thoughtCount: groups.filter(group => group.thought).length
+      }
+    }
+
     const extractSubAgentTask = content => {
       if (!content || typeof content !== 'string') return ''
       const patterns = [
@@ -557,6 +674,7 @@ export function useWorkflowMessages(options = {}) {
 
     const buildSubAgentCard = message => {
       const meta = message?.metadata || {}
+      const observationData = meta.data || {}
       const toolName = String(meta.tool_name || '').toLowerCase()
       const directTaskId =
         meta.sub_agent_id || meta.subAgentId || meta.data?.sub_agent_id || meta.data?.subAgentId || ''
@@ -581,59 +699,127 @@ export function useWorkflowMessages(options = {}) {
                 meta.data?.subAgentName ||
                 ''
             }
+      const childWorkflow = payload.taskId
+        ? workflowStore.workflows?.find?.(workflow => workflow?.id === payload.taskId) || null
+        : null
+      const childExecutionContext = childWorkflow?.executionContext || {}
+      const summary = payload.taskId ? childAgentSummaryById.value.get(payload.taskId) : null
       const liveProgress = payload.taskId ? subAgentProgressById.get(payload.taskId) : null
+      const aggregateProgress = {
+        ...(liveProgress || {}),
+        agentName: pickPreferredText(
+          liveProgress?.agentName,
+          liveProgress?.agent_name,
+          summary?.agentName
+        ),
+        task: pickPreferredText(liveProgress?.task, summary?.task),
+        toolCallsCount: pickPreferredNumber(
+          liveProgress?.toolCallsCount,
+          liveProgress?.tool_calls_count,
+          summary?.toolCalls
+        )
+      }
       const completion = payload.taskId ? subAgentCompletions.get(payload.taskId) : null
-      const completionResult = completion?.result || completion?.data?.result || {}
+      const completionData = completion?.data || {}
+      const completionResult = completion?.result || completionData.result || {}
       const completionStatus =
         completion?.execution_status ||
-        completion?.data?.execution_status ||
+        completionData.execution_status ||
         completionResult.status ||
         liveProgress?.status ||
         meta.sub_agent_status ||
+        observationData.execution_status ||
         meta.execution_status ||
         'running'
       const toolCallsCount =
         completionResult.tool_calls_count ??
+        completionResult.toolCallsCount ??
         completion?.tool_calls_count ??
-        completion?.data?.tool_calls_count ??
+        completionData.tool_calls_count ??
+        completionData.toolCallsCount ??
         liveProgress?.toolCallsCount ??
         liveProgress?.tool_calls_count ??
         0
       const currentContextTokens =
         completionResult.current_context_tokens ??
+        completionResult.currentContextTokens ??
         completion?.current_context_tokens ??
-        completion?.data?.current_context_tokens ??
-        liveProgress?.currentContextTokens ??
-        liveProgress?.current_context_tokens ??
+        completionData.current_context_tokens ??
+        completionData.currentContextTokens ??
+        childExecutionContext.currentContextTokens ??
+        childExecutionContext.current_context_tokens ??
         null
       const maxContextTokens =
         completionResult.max_context_tokens ??
+        completionResult.maxContextTokens ??
         completion?.max_context_tokens ??
-        completion?.data?.max_context_tokens ??
-        liveProgress?.maxContextTokens ??
-        liveProgress?.max_context_tokens ??
+        completionData.max_context_tokens ??
+        completionData.maxContextTokens ??
+        childExecutionContext.maxContextTokens ??
+        childExecutionContext.max_context_tokens ??
         null
-      const resultContent =
-        completionResult.result ||
-        completionResult.error ||
-        completion?.summary ||
-        completion?.data?.summary ||
+      const rawResultValue =
+        completionResult.result ??
+        completionResult.error ??
+        completionData.result ??
+        completionData.error ??
+        completion?.result ??
+        completion?.summary ??
+        completionData.summary ??
         ''
-      const resultMarkdown = formatSubAgentResultMarkdown(resultContent)
+      const resultContent =
+        typeof rawResultValue === 'string'
+          ? rawResultValue
+          : JSON.stringify(rawResultValue, null, 2)
+      const resultMarkdown = formatSubAgentResultMarkdown(rawResultValue)
+      const hasResult =
+        typeof rawResultValue === 'string'
+          ? rawResultValue.trim().length > 0
+          : Array.isArray(rawResultValue)
+            ? rawResultValue.length > 0
+            : !!(rawResultValue && typeof rawResultValue === 'object'
+              ? Object.keys(rawResultValue).length
+              : rawResultValue)
 
       return {
         taskId: payload.taskId,
-        agent: payload.agent || 'Sub-agent',
-        task: payload.task || 'Delegated task',
-        taskMarkdown: payload.task || 'Delegated task',
+        agent:
+          payload.agent ||
+          completion?.sub_agent_name ||
+          completionData.sub_agent_name ||
+          completionData.subAgentName ||
+          observationData.sub_agent_name ||
+          observationData.subAgentName ||
+          aggregateProgress?.agentName ||
+          'Sub-agent',
+        task:
+          payload.task ||
+          completion?.sub_agent_task ||
+          completionData.sub_agent_task ||
+          completionData.subAgentTask ||
+          observationData.sub_agent_task ||
+          observationData.subAgentTask ||
+          aggregateProgress?.task ||
+          'Delegated task',
+        taskMarkdown:
+          payload.task ||
+          completion?.sub_agent_task ||
+          completionData.sub_agent_task ||
+          completionData.subAgentTask ||
+          observationData.sub_agent_task ||
+          observationData.subAgentTask ||
+          aggregateProgress?.task ||
+          'Delegated task',
         mode: payload.mode || 'call',
-        status: completionStatus,
+        status: summary?.status === 'success' ? 'completed' : summary?.status || completionStatus,
         toolCallsCount,
         currentContextTokens,
         maxContextTokens,
+        contextPercent:
+          typeof summary?.contextPercent === 'number' ? summary.contextPercent : null,
         result: resultContent,
         resultMarkdown,
-        hasResult: Boolean(resultContent)
+        hasResult
       }
     }
 
@@ -714,6 +900,8 @@ export function useWorkflowMessages(options = {}) {
           summary: meta.summary || '',
           execution_status: meta.execution_status || '',
           result: meta.result || {},
+          sub_agent_name: meta.sub_agent_name || meta.subAgentName || '',
+          sub_agent_task: meta.sub_agent_task || meta.subAgentTask || '',
           data: meta.data || {}
         })
       }
@@ -848,6 +1036,7 @@ export function useWorkflowMessages(options = {}) {
           ...message,
           displayId,
           toolDisplay,
+          explorationBatch: buildExplorationBatch(message),
           subAgentCard: buildSubAgentCard(message),
           pendingToolCalls,
           isRejected,
@@ -916,6 +1105,8 @@ export function useWorkflowMessages(options = {}) {
   }
 
   const rawEnhancedMessages = computed(() => {
+    void childAgentSummaryById.value
+    void childAgentSummariesRevision.value
     const { groups, activeGroupId } = visibleTaskGroupsState.value
     if (!groups.length) return []
 
@@ -931,12 +1122,16 @@ export function useWorkflowMessages(options = {}) {
       const cachedEntry = taskGroupCache.get(group.id)
 
       if (group.isCompleted && group.id !== activeGroupId && cachedEntry?.signature === signature) {
-        return cachedEntry.messages
+        const summarySignature = childAgentSummariesRevision.value
+        if (cachedEntry.summarySignature === summarySignature) {
+          return cachedEntry.messages
+        }
       }
 
       const enhanced = reuseUnchangedEnhancedMessages(cachedEntry, enhanceRawMessages(group.messages))
       taskGroupCache.set(group.id, {
         signature,
+        summarySignature: childAgentSummariesRevision.value,
         messages: enhanced.messages,
         messageSignatures: enhanced.messageSignatures
       })

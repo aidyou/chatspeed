@@ -1296,6 +1296,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       metadata: message.metadata || null,
       attachments: Array.isArray(message.attachments) ? message.attachments : [],
       createdAt: message.createdAt || Date.now(),
+      removable: message.removable !== false,
     });
   };
 

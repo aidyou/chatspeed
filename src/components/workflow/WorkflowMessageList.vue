@@ -70,9 +70,127 @@
           </div>
         </div>
         <div v-else class="ai-content chat">
+          <div v-if="isExplorationBatchMessage(message)" class="exploration-card">
+            <div
+              class="exploration-card__header"
+              @click="$emit('toggle-expand', message.displayId)">
+              <div class="exploration-card__title-wrap">
+                <div class="exploration-card__title">
+                  <cs name="search" size="15px" class="exploration-card__icon" />
+                  <span>{{ $t('workflow.exploration.title') }}</span>
+                </div>
+                <div class="exploration-card__meta">
+                  <span>{{ getExplorationBatchSummary(message) }}</span>
+                </div>
+              </div>
+              <span v-if="!isMessageExpanded(message)" class="exploration-card__preview">
+                {{ getExplorationBatchPreview(message) }}
+              </span>
+              <cs
+                name="double-arrow-down"
+                size="14px"
+                class="exploration-card__chevron"
+                :class="{ expanded: isMessageExpanded(message) }" />
+            </div>
+
+            <div v-if="isMessageExpanded(message)" class="exploration-card__body">
+              <div
+                v-for="(group, groupIndex) in message.explorationBatch.groups"
+                :key="`${message.displayId}_group_${groupIndex}`"
+                class="exploration-card__step-card">
+                <template v-if="group.thought">
+                  <div class="reasoning-container exploration-card__reasoning">
+                    <div
+                      class="reasoning-header"
+                      @click="
+                        $emit(
+                          'toggle-reasoning',
+                          getExplorationGroupReasoningId(message, groupIndex)
+                        )
+                      ">
+                      <cs name="reasoning" size="14px" class="reasoning-icon" />
+                      <span
+                        class="reasoning-text"
+                        :class="{
+                          expanded: isExplorationGroupReasoningExpanded(message, groupIndex)
+                        }">
+                        {{
+                          isExplorationGroupReasoningExpanded(message, groupIndex)
+                            ? $t('workflow.thinkingExpanded') || 'Thinking Process'
+                            : $t('workflow.thoughtCompleted') || 'Thought Complete'
+                        }}
+                      </span>
+                      <span class="reasoning-toggle">
+                        {{ isExplorationGroupReasoningExpanded(message, groupIndex) ? '▲' : '▼' }}
+                      </span>
+                    </div>
+                    <div
+                      v-if="isExplorationGroupReasoningExpanded(message, groupIndex)"
+                      class="reasoning-content">
+                      {{ sanitizeReasoningContent(group.thought) }}
+                    </div>
+                  </div>
+                </template>
+
+                <div
+                  v-for="(tool, toolIndex) in group.tools"
+                  :key="`${message.displayId}_group_${groupIndex}_tool_${toolIndex}`"
+                  class="cli-tool-call exploration-card__tool"
+                  :class="[tool.toolType || 'tool-system']">
+                  <div
+                    class="tool-line title-wrap expandable"
+                    @click="
+                      $emit(
+                        'toggle-expand',
+                        getExplorationToolExpandId(message, groupIndex, toolIndex)
+                      )
+                    ">
+                    <cs :name="tool.icon || 'tool'" size="14px" class="tool-type-icon" />
+                    <span class="tool-name">{{ tool.action }}</span>
+                    <span class="tool-target">{{ tool.target }}</span>
+                  </div>
+                  <div
+                    v-if="
+                      tool.summary && !isExplorationToolExpanded(message, groupIndex, toolIndex)
+                    "
+                    class="tool-line summary expandable"
+                    @click="
+                      $emit(
+                        'toggle-expand',
+                        getExplorationToolExpandId(message, groupIndex, toolIndex)
+                      )
+                    ">
+                    <span class="corner-icon">⎿</span>
+                    <span class="summary-text">{{ tool.summary }}</span>
+                    <span class="expand-hint">(click to expand)</span>
+                  </div>
+                  <div
+                    v-if="isExplorationToolExpanded(message, groupIndex, toolIndex)"
+                    class="tool-detail">
+                    <MarkdownSimple
+                      v-if="
+                        shouldShowExplorationToolRawContent(tool) && tool.displayType === 'diff'
+                      "
+                      :content="getDiffMarkdown(removeSystemReminder(tool.message))" />
+                    <MarkdownSimple
+                      v-else-if="
+                        shouldShowExplorationToolRawContent(tool) && tool.displayType === 'markdown'
+                      "
+                      :content="removeSystemReminder(tool.message)" />
+                    <pre
+                      v-else-if="shouldShowExplorationToolRawContent(tool)"
+                      class="raw-content"
+                      >{{ removeSystemReminder(tool.message) }}</pre
+                    >
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- CLI Style Tool Call (Results) -->
           <div
-            v-if="message.role === 'tool'"
+            v-else-if="message.role === 'tool'"
             class="cli-tool-call"
             :class="[
               message.toolDisplay.toolType || 'tool-system',
@@ -99,6 +217,16 @@
                       <span class="sub-agent-card__label">Mode</span>
                       <span class="sub-agent-card__value mode">{{
                         message.subAgentCard.mode
+                      }}</span>
+                    </div>
+                    <div class="sub-agent-card__row">
+                      <span class="sub-agent-card__label">Tools</span>
+                      <span class="sub-agent-card__value">{{ getSubAgentLiveTools(message) }}</span>
+                    </div>
+                    <div class="sub-agent-card__row">
+                      <span class="sub-agent-card__label">Context</span>
+                      <span class="sub-agent-card__value">{{
+                        getSubAgentLiveContext(message)
                       }}</span>
                     </div>
                   </div>
@@ -1165,6 +1293,57 @@ const getErrorAlertContent = message => {
     .trim()
 }
 
+const isExplorationBatchMessage = message => message?.metadata?.message_kind === 'exploration_batch'
+
+const getExplorationBatchSummary = message => {
+  const batch = message?.explorationBatch
+  if (!batch) return ''
+  const parts = []
+  if (batch.readCount) parts.push(t('workflow.exploration.reads', { count: batch.readCount }))
+  if (batch.searchCount)
+    parts.push(t('workflow.exploration.searches', { count: batch.searchCount }))
+  if (batch.thoughtCount)
+    parts.push(t('workflow.exploration.thoughts', { count: batch.thoughtCount }))
+  return parts.join(', ')
+}
+
+const getExplorationBatchPreview = message => {
+  const files = message?.explorationBatch?.files || []
+  if (files.length === 0) return ''
+  return files
+    .map(file => {
+      const normalized = String(file || '').replace(/\\/g, '/')
+      const name = normalized.split('/').filter(Boolean).pop() || normalized
+      return `Read ${name}`
+    })
+    .join(', ')
+}
+
+const getExplorationGroupReasoningId = (message, groupIndex) =>
+  `${message?.displayId || message?.id || 'exploration'}:group_reasoning:${groupIndex}`
+
+const isExplorationGroupReasoningExpanded = (message, groupIndex) =>
+  props.isReasoningExpanded(getExplorationGroupReasoningId(message, groupIndex))
+
+const sanitizeReasoningContent = content =>
+  String(content || '').replace(/^\s*<(?:think|thinking)(?:\s+class="[^"]*")?>\s*/i, '')
+
+const getExplorationToolExpandId = (message, groupIndex, toolIndex) =>
+  `${message?.displayId || message?.id || 'exploration'}:group_tool:${groupIndex}:${toolIndex}`
+
+const isExplorationToolExpanded = (message, groupIndex, toolIndex) =>
+  props.isMessageExpanded({
+    displayId: getExplorationToolExpandId(message, groupIndex, toolIndex),
+    metadata: {},
+    toolDisplay: {}
+  })
+
+const shouldShowExplorationToolRawContent = tool => {
+  if (!tool) return false
+  if (tool.sourceMessage) return props.shouldShowToolRawContent(tool.sourceMessage)
+  return !!props.removeSystemReminder(tool.message || '').trim()
+}
+
 const getVisiblePendingApprovalIds = () => {
   const orderedIds = []
   const seen = new Set()
@@ -1376,6 +1555,43 @@ const getSubAgentStatusLabel = message => {
   if (status === 'failed') return 'Failed'
   if (status === 'cancelled' || status === 'interrupted') return 'Stopped'
   return 'Running'
+}
+
+const getSubAgentLiveContext = message => {
+  const card = message?.subAgentCard || {}
+  const hasContextPercent =
+    card.contextPercent !== null &&
+    card.contextPercent !== undefined &&
+    card.contextPercent !== ''
+  const contextPercent = hasContextPercent ? Number(card.contextPercent) : NaN
+
+  if (Number.isFinite(contextPercent) && contextPercent >= 0) {
+    return `${Math.min(contextPercent, 100)}% ctx`
+  }
+
+  const currentContextTokens = Number(card.currentContextTokens)
+  const maxContextTokens = Number(card.maxContextTokens)
+
+  if (
+    Number.isFinite(currentContextTokens) &&
+    currentContextTokens >= 0 &&
+    Number.isFinite(maxContextTokens) &&
+    maxContextTokens > 0
+  ) {
+    return `${Math.round((currentContextTokens / maxContextTokens) * 100)}% ctx`
+  }
+
+  return '--'
+}
+
+const getSubAgentLiveTools = message => {
+  const card = message?.subAgentCard || {}
+  const toolCallsCount = Number(card.toolCallsCount || 0)
+
+  if (Number.isFinite(toolCallsCount) && toolCallsCount > 0) {
+    return `${toolCallsCount} tools`
+  }
+  return '0 tools'
 }
 
 const subAgentStatusClass = message => {
@@ -1930,5 +2146,103 @@ defineExpose({
 
 .user-message-toggle__icon.expanded {
   transform: rotate(180deg);
+}
+
+.exploration-card {
+  margin-bottom: 12px;
+  border: 1px solid var(--cs-border-color);
+  border-radius: var(--cs-border-radius-md);
+  background: var(--cs-bg-color-light);
+  overflow: hidden;
+}
+
+.exploration-card__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--cs-space-sm) var(--cs-space);
+  cursor: pointer;
+  background: var(--cs-bg-color);
+}
+
+.exploration-card__header:hover {
+  background: var(--cs-hover-bg-color);
+}
+
+.exploration-card__title-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.exploration-card__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--cs-text-color-primary);
+  font-size: var(--cs-font-size-sm);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.exploration-card__icon {
+  color: var(--el-color-primary);
+}
+
+.exploration-card__meta,
+.exploration-card__preview,
+.exploration-card__tool-summary,
+.exploration-card__thought-label {
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+}
+
+.exploration-card__preview {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.exploration-card__chevron {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--cs-text-color-secondary);
+  transition: transform 0.2s ease;
+}
+
+.exploration-card__chevron.expanded {
+  transform: rotate(180deg);
+}
+
+.exploration-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-sm);
+  padding: var(--cs-space-sm) var(--cs-space);
+  border-top: 1px solid var(--cs-border-color);
+}
+
+.exploration-card__step-card {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: var(--cs-border-radius);
+}
+
+.exploration-card__reasoning {
+  margin-bottom: 0;
+
+  .reasoning-content {
+    background: none !important;
+  }
+}
+
+.exploration-card__tool {
+  margin-bottom: 0;
+  padding-left: 0;
+  border-left: none;
 }
 </style>

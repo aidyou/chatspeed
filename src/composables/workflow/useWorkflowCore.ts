@@ -1376,7 +1376,9 @@ export function useWorkflowCore({
             // Backend will validate signal type based on wait_reason
             if (hasLiveSession.value || isRunning.value || isWaiting.value) {
                 const shouldQueueLocally =
-                    isRunning.value || waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
+                    isRunning.value ||
+                    waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL ||
+                    waitReason.value === WORKFLOW_WAIT_REASONS.SUB_AGENT
                 let queuedId = null
                 if (shouldQueueLocally) {
                     queuedId = `local_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`

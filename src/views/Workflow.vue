@@ -133,7 +133,7 @@
             :messages="enhancedMessages"
             :hidden-completed-task-group-count="hiddenCompletedTaskGroupCount"
             :is-running="isRunning"
-            :queued-messages="workflowStore.displayQueueItems"
+            :queued-messages="workflowStore.messageQueue"
             :is-chatting="isChatting"
             :chat-state="chatState"
             :is-compressing="isCompressing"
