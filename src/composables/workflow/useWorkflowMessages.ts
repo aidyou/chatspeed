@@ -630,35 +630,18 @@ export function useWorkflowMessages(options = {}) {
       }
     }
 
-    const extractSubAgentTask = content => {
-      if (!content || typeof content !== 'string') return ''
-      const patterns = [
-        /Task '([^']+)' has been spawned/i,
-        /Sub-agent '([^']+)' has been started/i
-      ]
-      for (const pattern of patterns) {
-        const match = content.match(pattern)
-        if (match?.[1]) return match[1]
-      }
-      return ''
-    }
-
     const parseSubAgentRunPayload = message => {
       const meta = message?.metadata || {}
-      let parsed = {}
-      try {
-        parsed = JSON.parse(message?.message || '{}')
-      } catch {
-        parsed = {}
-      }
-
-      const taskId = meta.sub_agent_id || meta.subAgentId || parsed.task_id || parsed.taskId || ''
-      const mode = meta.sub_agent_mode || meta.subAgentMode || parsed.mode || ''
+      const observationData = meta.data || {}
+      const taskId =
+        meta.sub_agent_id || meta.subAgentId || observationData.sub_agent_id || observationData.subAgentId || ''
+      const mode = meta.sub_agent_mode || meta.subAgentMode || observationData.sub_agent_mode || observationData.subAgentMode || ''
       const task =
         meta.sub_agent_task ||
         meta.subAgentTask ||
-        parsed.task ||
-        extractSubAgentTask(parsed.message || message?.message || '')
+        observationData.sub_agent_task ||
+        observationData.subAgentTask ||
+        ''
       return {
         taskId,
         mode,
@@ -666,8 +649,8 @@ export function useWorkflowMessages(options = {}) {
         agent:
           meta.sub_agent_name ||
           meta.subAgentName ||
-          parsed.agent_name ||
-          parsed.agentName ||
+          observationData.sub_agent_name ||
+          observationData.subAgentName ||
           ''
       }
     }
