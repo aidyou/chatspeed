@@ -858,6 +858,8 @@
     "earlierTasks": "{count} frühere abgeschlossene Aufgaben anzeigen",
     "edited": "Bearbeitet",
     "editWorkflowTitle": "Workflow-Titel bearbeiten",
+    "executionCompleted": "Ausfuehrung abgeschlossen",
+    "executionFailed": "Ausfuehrung fehlgeschlagen",
     "executing": "Wird ausgeführt...",
     "exploration": {
       "reads": "{count} Lesevorgänge",

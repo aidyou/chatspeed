@@ -858,6 +858,8 @@
     "earlierTasks": "Show {count} earlier completed tasks",
     "edited": "Edited",
     "editWorkflowTitle": "Edit Workflow Title",
+    "executionCompleted": "Execution completed",
+    "executionFailed": "Execution failed",
     "executing": "Executing...",
     "exploration": {
       "reads": "{count} reads",

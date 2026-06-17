@@ -858,6 +858,8 @@
     "earlierTasks": "Mostrar {count} tareas completadas anteriores",
     "edited": "Editado",
     "editWorkflowTitle": "Editar título del flujo de trabajo",
+    "executionCompleted": "Ejecucion completada",
+    "executionFailed": "Ejecucion fallida",
     "executing": "Ejecutando...",
     "exploration": {
       "reads": "{count} lecturas",

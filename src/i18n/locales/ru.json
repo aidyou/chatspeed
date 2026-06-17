@@ -858,6 +858,8 @@
     "earlierTasks": "Показать {count} более ранних завершённых задач",
     "edited": "Изменено",
     "editWorkflowTitle": "Изменить название рабочего процесса",
+    "executionCompleted": "Выполнение завершено",
+    "executionFailed": "Ошибка выполнения",
     "executing": "Выполнение...",
     "exploration": {
       "reads": "Чтений: {count}",

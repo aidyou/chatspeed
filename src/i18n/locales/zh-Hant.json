@@ -858,6 +858,8 @@
     "earlierTasks": "顯示更早的 {count} 個已完成任務",
     "edited": "已編輯",
     "editWorkflowTitle": "編輯工作流程標題",
+    "executionCompleted": "執行完成",
+    "executionFailed": "執行失敗",
     "executing": "執行中...",
     "exploration": {
       "reads": "讀取 {count} 次",

@@ -352,6 +352,14 @@
                     {{ line }}
                   </div>
                 </div>
+                <div
+                  v-else-if="shouldShowRunningPlaceholder(message)"
+                  class="tool-running-placeholder">
+                  <cs name="loading" size="14px" class="tool-running-placeholder__icon cs-spin" />
+                  <span class="tool-running-placeholder__text">
+                    {{ getRunningPlaceholderText(message) }}
+                  </span>
+                </div>
                 <!-- Final Result -->
                 <div
                   v-if="
@@ -1303,6 +1311,21 @@ const isActiveApproval = message =>
 const shouldShowApprovalDialog = message =>
   isApprovalPending(message) && (!isApprovalInFlight(message) || isActiveApproval(message))
 
+const shouldShowRunningPlaceholder = message => {
+  const meta = message?.metadata || {}
+  const toolCallId = String(meta.tool_call_id || '').trim()
+  if (!toolCallId) return false
+
+  const executionStatus = String(meta.execution_status || '').toLowerCase()
+  if (executionStatus !== 'approval_submitted' && executionStatus !== 'running') return false
+  if (workflowStore.getToolStream(toolCallId).length > 0) return false
+  if (props.shouldShowToolRawContent(message)) return false
+  return true
+}
+
+const getRunningPlaceholderText = message =>
+  message?.toolDisplay?.summary || t('workflow.executing') || 'Executing...'
+
 const shouldShowErrorAlert = message => {
   if (!message?.isError) return false
   if (message?.role === 'tool') return false
@@ -2022,6 +2045,25 @@ defineExpose({
 
 .tool-diff-view {
   margin-top: var(--cs-space-xs);
+}
+
+.tool-running-placeholder {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-xs);
+  padding: var(--cs-space-sm) var(--cs-space-md);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-sm);
+}
+
+.tool-running-placeholder__icon {
+  color: var(--el-color-primary);
+  flex-shrink: 0;
+}
+
+.tool-running-placeholder__text {
+  min-width: 0;
+  word-break: break-word;
 }
 
 .workflow-message-attachments {

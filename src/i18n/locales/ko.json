@@ -858,6 +858,8 @@
     "earlierTasks": "이전 완료 작업 {count}개 표시",
     "edited": "편집됨",
     "editWorkflowTitle": "워크플로우 제목 편집",
+    "executionCompleted": "실행 완료",
+    "executionFailed": "실행 실패",
     "executing": "실행 중...",
     "exploration": {
       "reads": "읽기 {count}회",

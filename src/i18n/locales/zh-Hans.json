@@ -858,6 +858,8 @@
     "earlierTasks": "显示更早的 {count} 个已完成任务",
     "edited": "已编辑",
     "editWorkflowTitle": "编辑工作流标题",
+    "executionCompleted": "执行完成",
+    "executionFailed": "执行失败",
     "executing": "执行中...",
     "exploration": {
       "reads": "读取 {count} 次",

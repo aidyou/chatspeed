@@ -124,6 +124,13 @@ export function useWorkflowCore({
     const approvalNotificationAudio = ref<HTMLAudioElement>()
     const completionAudio = ref<HTMLAudioElement>()
 
+    const isAbortedAudioPlaybackError = (error: unknown) => {
+        if (!error || typeof error !== 'object') return false
+
+        const domException = error as DOMException
+        return domException.name === 'AbortError'
+    }
+
     const playApprovalNotificationSound = async () => {
         if (settingStore.settings.workflowApprovalMuted) return
 
@@ -137,6 +144,7 @@ export function useWorkflowCore({
             approvalNotificationAudio.value.currentTime = 0
             await approvalNotificationAudio.value.play()
         } catch (error) {
+            if (isAbortedAudioPlaybackError(error)) return
             console.warn('[Workflow] Failed to play approval notification sound:', error)
         }
     }
@@ -154,6 +162,7 @@ export function useWorkflowCore({
             completionAudio.value.currentTime = 0
             await completionAudio.value.play()
         } catch (error) {
+            if (isAbortedAudioPlaybackError(error)) return
             console.warn('[Workflow] Failed to play completion sound:', error)
         }
     }

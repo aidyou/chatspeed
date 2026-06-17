@@ -1405,7 +1405,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
       };
 
       if (hasStream) {
-        message.metadata.summary = isError ? 'Execution failed' : 'Execution completed';
+        message.metadata.summary = isError
+          ? 'workflow.executionFailed'
+          : 'workflow.executionCompleted';
       }
     }
 

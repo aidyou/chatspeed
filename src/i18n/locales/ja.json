@@ -858,6 +858,8 @@
     "earlierTasks": "以前の完了済みタスクを {count} 件表示",
     "edited": "編集済み",
     "editWorkflowTitle": "ワークフロータイトルを編集",
+    "executionCompleted": "実行完了",
+    "executionFailed": "実行失敗",
     "executing": "実行中...",
     "exploration": {
       "reads": "読取 {count} 回",
