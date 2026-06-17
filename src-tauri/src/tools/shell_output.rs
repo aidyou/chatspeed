@@ -170,7 +170,7 @@ fn is_plain_cargo_check(command: &str) -> bool {
 }
 
 fn is_plain_go_build(command: &str) -> bool {
-    command.ends_with("go build")
+    command == "go build" || command.contains(" go build ") || command.starts_with("go build ")
 }
 
 fn is_plain_go_test(command: &str) -> bool {

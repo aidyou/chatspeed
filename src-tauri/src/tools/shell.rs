@@ -813,6 +813,7 @@ impl ShellExecute {
         let mut full_stderr = String::new();
         let mut stdout_eof = false;
         let mut stderr_eof = false;
+        let mut last_stream_name: Option<&'static str> = None;
 
         // Read stdout and stderr concurrently with timeout
         let start_time = std::time::Instant::now();
@@ -834,6 +835,24 @@ impl ShellExecute {
                     Ok(Some(status)) => {
                         // Process has exited
                         let exit_code = status.code().unwrap_or(-1);
+                        let _ = gateway
+                            .send(
+                                session_id,
+                                GatewayPayload::ToolStream {
+                                    tool_id: tool_id.clone(),
+                                    output: if last_stream_name.is_some() {
+                                        format!("\nExit code: {}", exit_code)
+                                    } else {
+                                        format!("Exit code: {}", exit_code)
+                                    },
+                                    timestamp: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis()
+                                        as u64,
+                                },
+                            )
+                            .await;
                         return Ok(build_shell_tool_result(
                             command_str,
                             exit_code,
@@ -871,13 +890,18 @@ impl ShellExecute {
                                 session_id,
                                 GatewayPayload::ToolStream {
                                     tool_id: tool_id.clone(),
-                                    output: l.clone(),
+                                    output: if last_stream_name == Some("stderr") {
+                                        format!("\nstdout:\n{}", l)
+                                    } else {
+                                        l.clone()
+                                    },
                                     timestamp: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap_or_default()
                                         .as_millis() as u64,
                                 },
                             ).await;
+                            last_stream_name = Some("stdout");
                             got_output = true;
                         }
                         Ok(None) => {
@@ -905,10 +929,15 @@ impl ShellExecute {
                                     session_id,
                                     GatewayPayload::ToolStream {
                                         tool_id: tool_id.clone(),
-                                        output: l.clone(),
+                                        output: if last_stream_name == Some("stderr") {
+                                            format!("\nstdout:\n{}", l)
+                                        } else {
+                                            l.clone()
+                                        },
                                         timestamp,
                                     },
                                 ).await;
+                                last_stream_name = Some("stdout");
                             } else {
                                 full_stderr.push_str(&l);
                                 full_stderr.push('\n');
@@ -917,10 +946,15 @@ impl ShellExecute {
                                     session_id,
                                     GatewayPayload::ToolStream {
                                         tool_id: tool_id.clone(),
-                                        output: format!("[STDERR] {}", l),
+                                        output: if last_stream_name == Some("stderr") {
+                                            l.clone()
+                                        } else {
+                                            format!("\nstderr:\n{}", l)
+                                        },
                                         timestamp,
                                     },
                                 ).await;
+                                last_stream_name = Some("stderr");
                             }
                             got_output = true;
                         }
@@ -947,6 +981,24 @@ impl ShellExecute {
                                 full_stderr.push_str("\n[Truncated]");
                             }
                             let exit_code = status.code().unwrap_or(-1);
+                            let _ = gateway
+                                .send(
+                                    session_id,
+                                    GatewayPayload::ToolStream {
+                                        tool_id: tool_id.clone(),
+                                        output: if last_stream_name.is_some() {
+                                            format!("\nExit code: {}", exit_code)
+                                        } else {
+                                            format!("Exit code: {}", exit_code)
+                                        },
+                                        timestamp: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis()
+                                            as u64,
+                                    },
+                                )
+                                .await;
                             return Ok(build_shell_tool_result(
                                 command_str,
                                 exit_code,

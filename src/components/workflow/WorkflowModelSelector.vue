@@ -180,6 +180,21 @@ const onModelIdChange = () => {
   currentModel.value.model = ''
 }
 
+const applyModelCapabilityOverrides = (selected) => {
+  if (!selected) return
+
+  currentModel.value.functionCall = selected.functionCall ?? false
+  currentModel.value.thinking = selected.thinking || null
+  currentModel.value.thinkingEnabled = isThinkingEnabled(selected.thinking)
+  currentModel.value.thinkingLevel = thinkingLevelFromBudget(selected.thinking?.budgetTokens)
+  if (selected.contextSize !== undefined && selected.contextSize !== null) {
+    currentModel.value.contextSize = selected.contextSize
+  }
+  if (selected.maxTokens !== undefined && selected.maxTokens !== null) {
+    currentModel.value.maxTokens = selected.maxTokens
+  }
+}
+
 const normalizeModelDraft = (model) => ({
   ...defaultModelConfig(),
   ...(model || {}),
@@ -197,15 +212,7 @@ const applyProviderModelOverrides = (modelId) => {
   if (selected.temperature !== undefined && selected.temperature !== null) {
     currentModel.value.temperature = selected.temperature
   }
-  currentModel.value.thinking = selected.thinking || null
-  currentModel.value.thinkingEnabled = isThinkingEnabled(selected.thinking)
-  currentModel.value.thinkingLevel = thinkingLevelFromBudget(selected.thinking?.budgetTokens)
-  if (selected.contextSize !== undefined && selected.contextSize !== null) {
-    currentModel.value.contextSize = selected.contextSize
-  }
-  if (selected.maxTokens !== undefined && selected.maxTokens !== null) {
-    currentModel.value.maxTokens = selected.maxTokens
-  }
+  applyModelCapabilityOverrides(selected)
 }
 
 const onProviderModelChange = (value) => {
@@ -218,12 +225,22 @@ const getProxyAliases = (groupName) => {
   return groupData ? Object.keys(groupData) : []
 }
 
+const getProxyTargetModel = (groupName, alias) => {
+  if (!groupName || !alias) return null
+  const target = settingStore.settings.chatCompletionProxy[groupName]?.[alias]?.[0]
+  if (!target?.id || !target?.model) return null
+
+  const provider = modelStore.getModelProviderById(target.id)
+  return provider?.models?.find(model => model.id === target.model) || null
+}
+
 const onProxyGroupChange = () => {
   proxyAliases[activeTab.value] = ''
 }
 
 const onProxyAliasChange = (value) => {
   currentModel.value.model = `${proxyGroups[activeTab.value]}@${value}`
+  applyModelCapabilityOverrides(getProxyTargetModel(proxyGroups[activeTab.value], value))
 }
 
 const supportsThinking = (key) => {

@@ -354,6 +354,7 @@ impl LlmProcessor {
             let mut temperature = None;
             let mut max_tokens = None;
             let mut thinking = None;
+            let mut function_call = None;
 
             // Search through configured workflow model roles to find the active model.
             if let Some(ref models) = self.agent_config.models {
@@ -379,6 +380,7 @@ impl LlmProcessor {
                             }
                         }
                         thinking = model_config.thinking.clone();
+                        function_call = model_config.function_call;
                         break;
                     }
                 }
@@ -397,6 +399,11 @@ impl LlmProcessor {
                         custom_headers: Some(custom_headers),
                         temperature,
                         max_tokens,
+                        extra: function_call.map(|enabled| {
+                            let mut extra = serde_json::Map::new();
+                            extra.insert("functionCall".to_string(), serde_json::json!(enabled));
+                            extra
+                        }),
                         tool_choice: if require_tool_call && !tools.is_empty() {
                             Some(serde_json::json!("required"))
                         } else {

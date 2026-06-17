@@ -1029,10 +1029,34 @@ impl AiChatTrait for OpenAIChat {
                 proxy_group = Some(group.to_string());
                 final_model = alias.to_string();
             }
+            let metadata_function_call = metadata
+                .as_ref()
+                .and_then(|m| m.extra.as_ref())
+                .and_then(|extra| extra.get("functionCall"))
+                .and_then(|value| value.as_bool());
+            let proxy_function_call = proxy_group.as_ref().and_then(|group| {
+                let store = self.main_store.read().ok()?;
+                let proxy_config: crate::ccproxy::ChatCompletionProxyConfig =
+                    store.get_config(crate::constants::CFG_CHAT_COMPLETION_PROXY, HashMap::new());
+                let target = proxy_config.get(group)?.get(&final_model)?.first()?;
+                let ai_model = store.config.get_ai_model_by_id(target.id).ok()?;
+                ai_model
+                    .models
+                    .into_iter()
+                    .find(|model_config| model_config.id == target.model)
+                    .and_then(|model_config| model_config.function_call)
+            });
+            let function_call = metadata_function_call.or(proxy_function_call);
+
             // Return a default model config for proxy mode
             AiModel {
                 name: "Internal Proxy".to_string(),
                 api_protocol: "openai".to_string(),
+                models: vec![ModelConfig {
+                    id: final_model.clone(),
+                    function_call,
+                    ..ModelConfig::default()
+                }],
                 ..Default::default()
             }
         } else {

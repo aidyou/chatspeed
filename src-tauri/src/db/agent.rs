@@ -115,6 +115,8 @@ pub struct ModelConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_call: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context_size: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<i32>,
