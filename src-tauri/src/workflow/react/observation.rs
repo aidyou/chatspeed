@@ -229,8 +229,8 @@ impl ObservationReinforcer {
 
                 if raw_res == "[]" || raw_res == "{}" || raw_res.is_empty() {
                     let empty_hint = match tool_name {
-                        "web_search" => "No results. Try narrower keywords; use Chinese for China-centric topics.",
-                        "web_fetch" => "No page content. Try another source or treat this URL as unavailable.",
+                        TOOL_WEB_SEARCH => "No results. Try narrower keywords; use Chinese for China-centric topics.",
+                        TOOL_WEB_FETCH => "No page content. Try another source or treat this URL as unavailable.",
                         _ => "No data returned. Narrow the query or verify the target exists.",
                     };
                     ReinforcedResult {
