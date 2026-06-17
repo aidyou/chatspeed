@@ -20,6 +20,21 @@
       </div>
       <div class="content-container">
         <div class="content" v-if="message.role === 'user'">
+          <div v-if="message.metadata?.attachments?.length > 0" class="workflow-message-attachments">
+            <div
+              v-for="(attachment, attachmentIndex) in message.metadata.attachments"
+              :key="`${message.displayId || message.id || attachmentIndex}_attachment_${attachmentIndex}`"
+              class="workflow-message-attachment-item">
+              <el-image
+                v-if="attachment.type === 'image'"
+                :src="attachment.url"
+                :preview-src-list="[attachment.url]"
+                :initial-index="0"
+                fit="cover"
+                class="workflow-message-attachment-image"
+                preview-teleported />
+            </div>
+          </div>
           <div v-if="getAskUserResponseItems(message).length > 0" class="ask-user-response-card">
             <div class="ask-user-response-title">{{ $t('workflow.askUser.responseTitle') }}</div>
             <div
@@ -618,9 +633,17 @@
 
     <!-- Frontend queued user messages -->
     <div v-if="queuedMessages.length > 0" class="queued-list">
-      <div v-for="item in queuedMessages" :key="item.id" class="queued-item">
+      <div
+        v-for="item in queuedMessages"
+        :key="item.id"
+        class="queued-item"
+        :class="{ 'queued-item--processing': item.status === 'preparing_attachments' }">
         <div class="queued-item-main">
-          <cs :name="item.icon || 'clock'" size="12px" class="queued-icon" />
+          <cs
+            :name="item.icon || 'clock'"
+            size="12px"
+            class="queued-icon"
+            :class="{ 'cs-spin': item.status === 'preparing_attachments' }" />
           <div class="queued-content">
             <span v-if="item.content" class="queued-text">{{ item.content }}</span>
             <div v-if="item.attachments?.length > 0" class="queued-attachments">
@@ -1974,6 +1997,25 @@ defineExpose({
   margin-top: var(--cs-space-xs);
 }
 
+.workflow-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cs-space-xs);
+  margin-bottom: var(--cs-space-sm);
+}
+
+.workflow-message-attachment-item {
+  display: flex;
+}
+
+.workflow-message-attachment-image {
+  width: 88px;
+  height: 88px;
+  border-radius: var(--cs-border-radius-md);
+  overflow: hidden;
+  border: 1px solid var(--cs-border-color);
+}
+
 .history-window-indicator {
   display: flex;
   align-items: center;
@@ -2043,6 +2085,11 @@ defineExpose({
   padding: var(--cs-space-sm) var(--cs-space);
   border-radius: var(--cs-border-radius-lg);
   background: var(--cs-hover-bg-color);
+}
+
+.queued-item--processing {
+  border: 1px solid var(--el-color-primary-light-5);
+  background: var(--cs-bg-color);
 }
 
 .queued-item-main {

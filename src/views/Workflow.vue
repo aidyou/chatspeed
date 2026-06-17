@@ -789,6 +789,36 @@ async function analyzeImageAttachments(attachments, userMessage) {
       return 'Vision analysis failed'
     }
 
+    const extractStructuredErrorMessage = value => {
+      const trimmed = String(value || '').trim()
+      if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
+        return ''
+      }
+
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object') {
+          const parsedMessage = String(parsed.message || parsed.error || '').trim()
+          const parsedStatus = String(parsed.status || parsed.code || '').trim()
+          if (parsedMessage && parsedStatus) {
+            return `${parsedMessage} (status: ${parsedStatus})`
+          }
+          if (parsedMessage) {
+            return parsedMessage
+          }
+        }
+      } catch {
+        return ''
+      }
+
+      return ''
+    }
+
+    const structuredErrorMessage = extractStructuredErrorMessage(raw)
+    if (structuredErrorMessage) {
+      return structuredErrorMessage
+    }
+
     const sizeMatch = raw.match(
       /input size exceed limit\s+(\d+)x(\d+),\s*current input:\((\d+),\s*(\d+)\)/i
     )
@@ -901,6 +931,41 @@ function buildImageAttachmentMetadata(attachments) {
   }
 }
 
+function clearImageAnalysisErrorMessages() {
+  workflowStore.removeCurrentWorkflowMessages(message => {
+    const errorType = String(
+      message?.metadata?.error_type || message?.metadata?.errorType || message?.errorType || ''
+    ).trim()
+    return errorType === 'image_analysis_error'
+  })
+}
+
+function appendImageAnalysisErrorMessage(error, attachments = []) {
+  const sessionId = workflowStore.currentWorkflowId
+  if (!sessionId) {
+    return
+  }
+
+  const errorMessage = String(
+    error?.message || t('chat.errorOnAddAttachment', { error: String(error) })
+  ).trim()
+
+  workflowStore.addMessage({
+    sessionId,
+    role: 'assistant',
+    message: errorMessage,
+    stepType: 'Observe',
+    stepIndex: workflowStore.messages.length,
+    isError: true,
+    errorType: 'image_analysis_error',
+    metadata: {
+      ...buildImageAttachmentMetadata(attachments),
+      error_type: 'image_analysis_error',
+      is_error: true
+    }
+  })
+}
+
 function buildPendingImageQueueText(message, attachments) {
   if (message) {
     return message
@@ -947,6 +1012,8 @@ inputComposable.onSendMessage.value = async () => {
   let preparingQueueId = null
 
   try {
+    clearImageAnalysisErrorMessages()
+
     if (backupAttachments.length > 0) {
       preparingQueueId = `local_queue_prepare_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
       workflowStore.addMessageToQueue({
@@ -954,7 +1021,9 @@ inputComposable.onSendMessage.value = async () => {
         content: buildPendingImageQueueText(rawMessage, backupAttachments),
         status: 'preparing_attachments',
         statusText: t('chat.analyzingImages'),
-        attachments: buildPendingQueueAttachments(backupAttachments)
+        attachments: buildPendingQueueAttachments(backupAttachments),
+        removable: false,
+        icon: 'loading'
       })
       scrollMessageListToBottom()
       clearInput()
@@ -972,12 +1041,14 @@ inputComposable.onSendMessage.value = async () => {
     if (preparingQueueId) {
       workflowStore.removeQueuedMessage(preparingQueueId)
     }
+    appendImageAnalysisErrorMessage(error, backupAttachments)
     inputMessage.value = backupMessage
     imageAttachments.value = backupAttachments
     resetChatState()
     isChatting.value = false
     isPreparingImageSend.value = false
     showMessage(error?.message || t('chat.errorOnAddAttachment', { error: String(error) }), 'error')
+    scrollMessageListToBottom()
     return
   }
 

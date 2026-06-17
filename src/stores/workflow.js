@@ -1484,6 +1484,20 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   };
 
+  const removeCurrentWorkflowMessages = (predicate) => {
+    if (typeof predicate !== 'function') return;
+    const sessionId = currentWorkflowId.value;
+    if (!sessionId) return;
+
+    messages.value = messages.value.filter((message) => {
+      if (message?.sessionId && message.sessionId !== sessionId) {
+        return true;
+      }
+
+      return !predicate(message);
+    });
+  };
+
   const updateWorkflowStatus = async (workflowId, status, waitReasonValue = null) => {
     error.value = null;
     try {
@@ -1719,6 +1733,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     selectWorkflow,
     createWorkflow,
     addMessage,
+    removeCurrentWorkflowMessages,
     addMessageToQueue,
     markQueuedMessageSent,
     updateQueuedMessage,
