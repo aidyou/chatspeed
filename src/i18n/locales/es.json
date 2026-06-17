@@ -169,6 +169,7 @@
   },
   "proxySwitcher": {
     "groupSwitch": "Cambiar grupo",
+    "hitRate": "Tasa de acierto",
     "serverSwitch": "Cambiar servidor",
     "switchBackendModels": "Cambiar modelos backend de destino",
     "title": "Selector de proxy"

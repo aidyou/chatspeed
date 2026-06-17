@@ -169,6 +169,7 @@
   },
   "proxySwitcher": {
     "groupSwitch": "Gruppenwechsel",
+    "hitRate": "Trefferquote",
     "serverSwitch": "Serverwechsel",
     "switchBackendModels": "Ziel-Backend-Modelle wechseln",
     "title": "Proxy-Umschalter"

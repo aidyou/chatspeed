@@ -169,6 +169,7 @@
   },
   "proxySwitcher": {
     "groupSwitch": "グループ切替",
+    "hitRate": "命中率",
     "serverSwitch": "サーバー切替",
     "switchBackendModels": "ターゲットバックエンドモデルを切替",
     "title": "プロキシ切り替え"

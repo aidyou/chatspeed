@@ -169,6 +169,7 @@
   },
   "proxySwitcher": {
     "groupSwitch": "Переключить группу",
+    "hitRate": "Доля попаданий",
     "serverSwitch": "Переключить сервер",
     "switchBackendModels": "Переключить целевые backend-модели",
     "title": "Переключатель прокси"

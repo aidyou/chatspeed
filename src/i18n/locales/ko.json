@@ -169,6 +169,7 @@
   },
   "proxySwitcher": {
     "groupSwitch": "그룹 전환",
+    "hitRate": "적중률",
     "serverSwitch": "서버 전환",
     "switchBackendModels": "대상 백엔드 모델 전환",
     "title": "프록시 전환"
