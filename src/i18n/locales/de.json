@@ -168,6 +168,9 @@
     "searchNotePlaceholder": "Notiz durchsuchen"
   },
   "proxySwitcher": {
+    "groupSwitch": "Gruppenwechsel",
+    "serverSwitch": "Serverwechsel",
+    "switchBackendModels": "Ziel-Backend-Modelle wechseln",
     "title": "Proxy-Umschalter"
   },
   "settings": {
@@ -637,9 +640,9 @@
         "deleteAll": "Alle Datensätze löschen",
         "deleteAllConfirm": "Sind Sie sicher, dass Sie alle Proxy-Statistiken löschen möchten? Diese Aktion kann nicht rückgängig gemacht werden.",
         "deleteConfirm": "Sind Sie sicher, dass Sie Proxy-Statistiken löschen möchten, die älter als {days} Tage sind?",
+        "deleteOlderThan7Days": "Datensätze älter als 7 Tage löschen",
         "deleteOlderThan30Days": "Datensätze älter als 30 Tage löschen",
         "deleteOlderThan365Days": "Datensätze älter als 365 Tage löschen",
-        "deleteOlderThan7Days": "Datensätze älter als 7 Tage löschen",
         "deleteOlderThan90Days": "Datensätze älter als 90 Tage löschen",
         "errorDetailTitle": "Fehlerdetails für {date}",
         "errorDistTitle": "Fehlerstatuscode-Verteilung (nicht 200)",
@@ -929,10 +932,10 @@
       "titleModel": "Titel",
       "todos": "To-do-Liste",
       "totalCalls": "Aufrufe",
-      "visionModel": "Vision",
       "utilityFallback": "Hilfs-Fallback",
       "utilityModel": "Hilfs",
       "verificationCalls": "Prüfen",
+      "visionModel": "Vision",
       "workFallback": "Arbeits-Fallback",
       "workModel": "Arbeits"
     },

@@ -168,6 +168,9 @@
     "searchNotePlaceholder": "지식 노트 검색"
   },
   "proxySwitcher": {
+    "groupSwitch": "그룹 전환",
+    "serverSwitch": "서버 전환",
+    "switchBackendModels": "대상 백엔드 모델 전환",
     "title": "프록시 전환"
   },
   "settings": {
@@ -627,8 +630,8 @@
         "allTime": "전체",
         "autoRefresh": "자동 새로고침",
         "backendModel": "백엔드 모델",
-        "cacheTokens": "캐시",
         "cacheHitRate": "Cache Hit Rate",
+        "cacheTokens": "캐시",
         "clientModel": "모델 별칭",
         "count": "횟수",
         "dailyRequestsTitle": "일일 요청 및 오류율 추세",
@@ -637,9 +640,9 @@
         "deleteAll": "모든 기록 삭제",
         "deleteAllConfirm": "모든 프록시 통계 기록을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
         "deleteConfirm": "{days}일 이전의 프록시 통계 기록을 삭제하시겠습니까?",
+        "deleteOlderThan7Days": "7일 이전 기록 삭제",
         "deleteOlderThan30Days": "30일 이전 기록 삭제",
         "deleteOlderThan365Days": "365일 이전 기록 삭제",
-        "deleteOlderThan7Days": "7일 이전 기록 삭제",
         "deleteOlderThan90Days": "90일 이전 기록 삭제",
         "errorDetailTitle": "{date} 오류 상세 정보",
         "errorDistTitle": "오류 상태 코드 분포 (200 제외)",

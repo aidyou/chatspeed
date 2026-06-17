@@ -168,6 +168,9 @@
     "searchNotePlaceholder": "搜索智记"
   },
   "proxySwitcher": {
+    "groupSwitch": "分组切换",
+    "serverSwitch": "服务器切换",
+    "switchBackendModels": "切换目标后端模型",
     "title": "代理切换"
   },
   "settings": {
@@ -637,9 +640,9 @@
         "deleteAll": "清空全部记录",
         "deleteAllConfirm": "确定要清空所有的代理统计记录吗？此操作不可撤销。",
         "deleteConfirm": "确定要删除 {days} 天前的代理统计记录吗？",
+        "deleteOlderThan7Days": "删除 7 天前记录",
         "deleteOlderThan30Days": "删除 30 天前记录",
         "deleteOlderThan365Days": "删除 365 天前记录",
-        "deleteOlderThan7Days": "删除 7 天前记录",
         "deleteOlderThan90Days": "删除 90 天前记录",
         "errorDetailTitle": "{date} 错误详情",
         "errorDistTitle": "错误状态码分布 (非 200)",

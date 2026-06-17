@@ -435,7 +435,7 @@ pub async fn run() -> crate::error::Result<()> {
                     return;
                 }
                 let window_label = window.label();
-                if window_label == "main" || window_label == "assistant" || window_label == "workflow" {
+                if window_label == "main" || window_label == "assistant" || window_label == "workflow" || window_label == "proxy_switcher" {
                     if let Some(config_state) = window.try_state::<Arc<RwLock<MainStore>>>() {
                         let window_size = get_saved_window_size(config_state.inner().clone(), window_label).unwrap_or_default();
                         if (window_size.width != size.width as f64
@@ -846,6 +846,8 @@ fn get_saved_window_size(
             CFG_ASSISTANT_WINDOW_SIZE
         } else if window_label == "workflow" {
             CFG_WORKFLOW_WINDOW_SIZE
+        } else if window_label == "proxy_switcher" {
+            CFG_PROXY_SWITCHER_WINDOW_SIZE
         } else {
             return None;
         };

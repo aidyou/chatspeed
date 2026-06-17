@@ -168,6 +168,9 @@
     "searchNotePlaceholder": "Поиск в заметках"
   },
   "proxySwitcher": {
+    "groupSwitch": "Переключить группу",
+    "serverSwitch": "Переключить сервер",
+    "switchBackendModels": "Переключить целевые backend-модели",
     "title": "Переключатель прокси"
   },
   "settings": {
@@ -637,9 +640,9 @@
         "deleteAll": "Очистить все записи",
         "deleteAllConfirm": "Вы уверены, что хотите очистить всю статистику прокси? Это действие невозможно отменить.",
         "deleteConfirm": "Вы уверены, что хотите удалить статистику прокси старше {days} дней?",
+        "deleteOlderThan7Days": "Удалить записи старше 7 дней",
         "deleteOlderThan30Days": "Удалить записи старше 30 дней",
         "deleteOlderThan365Days": "Удалить записи старше 365 дней",
-        "deleteOlderThan7Days": "Удалить записи старше 7 дней",
         "deleteOlderThan90Days": "Удалить записи старше 90 дней",
         "errorDetailTitle": "Детали ошибки за {date}",
         "errorDistTitle": "Распределение кодов ошибок (не 200)",
@@ -929,10 +932,10 @@
       "titleModel": "Заголовок",
       "todos": "Задачи",
       "totalCalls": "Вызовы",
-      "visionModel": "Зрение",
       "utilityFallback": "Резерв утил.",
       "utilityModel": "Утилита",
       "verificationCalls": "Проверка",
+      "visionModel": "Зрение",
       "workFallback": "Резерв раб.",
       "workModel": "Работа"
     },

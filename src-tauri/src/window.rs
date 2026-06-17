@@ -18,6 +18,7 @@ use tauri::WebviewWindowBuilder;
 use tauri::Window;
 use tauri::{AppHandle, Manager};
 
+use crate::constants::CFG_PROXY_SWITCHER_WINDOW_SIZE;
 use crate::constants::CFG_WINDOW_POSITION;
 use crate::constants::CFG_WINDOW_SIZE;
 use crate::constants::{
@@ -607,8 +608,12 @@ pub fn restore_window_config(
             PhysicalSize::new(800, 600) // Default size if current size cannot be obtained
         } else if window_label == "assistant" {
             PhysicalSize::new(500, 600)
-        } else {
+        } else if window_label == "workflow" {
             PhysicalSize::new(1024, 650)
+        } else if window_label == "proxy_switcher" {
+            PhysicalSize::new(450, 450)
+        } else {
+            PhysicalSize::new(800, 600)
         }
     });
 
@@ -631,6 +636,9 @@ pub fn restore_window_config(
                 Some(WindowSize::default()),
             )
             .unwrap_or_default()
+        } else if window_label == "proxy_switcher" {
+            c.get_config(CFG_PROXY_SWITCHER_WINDOW_SIZE, Some(WindowSize::default()))
+                .unwrap_or_default()
         } else {
             // For other windows, use the default size
             WindowSize::default()
@@ -979,8 +987,8 @@ pub fn create_proxy_switcher_window(
         "proxy_switcher",
         "Proxy Switcher",
         "/proxy-switcher",
-        (360.0, 420.0),
-        (360.0, 420.0),
+        (450.0, 450.0),
+        (450.0, 450.0),
         visible,
         true,
         true,

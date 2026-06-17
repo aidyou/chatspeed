@@ -168,6 +168,9 @@
     "searchNotePlaceholder": "Buscar en notas"
   },
   "proxySwitcher": {
+    "groupSwitch": "Cambiar grupo",
+    "serverSwitch": "Cambiar servidor",
+    "switchBackendModels": "Cambiar modelos backend de destino",
     "title": "Selector de proxy"
   },
   "settings": {
@@ -637,9 +640,9 @@
         "deleteAll": "Borrar todos los registros",
         "deleteAllConfirm": "¿Está seguro de que desea borrar todas las estadísticas de proxy? Esta acción no se puede deshacer.",
         "deleteConfirm": "¿Está seguro de que desea eliminar las estadísticas de proxy con más de {days} días de antigüedad?",
+        "deleteOlderThan7Days": "Eliminar registros de más de 7 días",
         "deleteOlderThan30Days": "Eliminar registros de más de 30 días",
         "deleteOlderThan365Days": "Eliminar registros de más de 365 días",
-        "deleteOlderThan7Days": "Eliminar registros de más de 7 días",
         "deleteOlderThan90Days": "Eliminar registros de más de 90 días",
         "errorDetailTitle": "Detalles del error para {date}",
         "errorDistTitle": "Distribución de códigos de error (no 200)",
@@ -859,9 +862,9 @@
     "earlierTasks": "Mostrar {count} tareas completadas anteriores",
     "edited": "Editado",
     "editWorkflowTitle": "Editar título del flujo de trabajo",
+    "executing": "Ejecutando...",
     "executionCompleted": "Ejecucion completada",
     "executionFailed": "Ejecucion fallida",
-    "executing": "Ejecutando...",
     "exploration": {
       "reads": "{count} lecturas",
       "searches": "{count} búsquedas",

@@ -528,6 +528,8 @@ impl MainStore {
             crate::constants::CFG_ASSISTANT_WINDOW_SIZE
         } else if window_label == "workflow" {
             crate::constants::CFG_WORKFLOW_WINDOW_SIZE
+        } else if window_label == "proxy_switcher" {
+            crate::constants::CFG_PROXY_SWITCHER_WINDOW_SIZE
         } else {
             return Ok(()); // Skip unknown window types
         };

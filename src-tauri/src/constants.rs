@@ -9,6 +9,7 @@ pub const CFG_WINDOW_POSITION: &str = "window_position";
 pub const CFG_WINDOW_SIZE: &str = "window_size";
 pub const CFG_ASSISTANT_WINDOW_SIZE: &str = "assistant_window_size";
 pub const CFG_WORKFLOW_WINDOW_SIZE: &str = "workflow_window_size";
+pub const CFG_PROXY_SWITCHER_WINDOW_SIZE: &str = "proxy_switcher_window_size";
 pub const CFG_WORKFLOW_WINDOW_POSITION: &str = "workflow_window_position";
 
 pub const TRAY_ID: &str = "Chatspeed";

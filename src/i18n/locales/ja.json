@@ -168,6 +168,9 @@
     "searchNotePlaceholder": "智記を検索"
   },
   "proxySwitcher": {
+    "groupSwitch": "グループ切替",
+    "serverSwitch": "サーバー切替",
+    "switchBackendModels": "ターゲットバックエンドモデルを切替",
     "title": "プロキシ切り替え"
   },
   "settings": {
@@ -637,10 +640,10 @@
         "deleteAll": "すべての記録を消去",
         "deleteAllConfirm": "すべてのプロキシ統計記録を消去してもよろしいですか？この操作は取り消せません。",
         "deleteConfirm": "{days} 日より前のプロキシ統計記録を削除してもよろしいですか？",
-        "deleteOlderThan30Days": "30日より前の記録を削除",
-        "deleteOlderThan365Days": "365日より前の記録を削除",
         "deleteOlderThan7Days": "7日より前の記録を削除",
+        "deleteOlderThan30Days": "30日より前の記録を削除",
         "deleteOlderThan90Days": "90日より前の記録を削除",
+        "deleteOlderThan365Days": "365日より前の記録を削除",
         "errorDetailTitle": "{date} のエラー詳細",
         "errorDistTitle": "エラーステータスコード分布 (非 200)",
         "errorMessage": "エラーメッセージ",

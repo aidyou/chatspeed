@@ -168,6 +168,9 @@
     "searchNotePlaceholder": "Rechercher dans les notes"
   },
   "proxySwitcher": {
+    "groupSwitch": "Changer de groupe",
+    "serverSwitch": "Changer de serveur",
+    "switchBackendModels": "Changer les modeles backend cibles",
     "title": "Sélecteur de proxy"
   },
   "settings": {
@@ -637,9 +640,9 @@
         "deleteAll": "Effacer tous les enregistrements",
         "deleteAllConfirm": "Êtes-vous sûr de vouloir effacer toutes les statistiques du proxy ? Cette action est irréversible.",
         "deleteConfirm": "Êtes-vous sûr de vouloir supprimer les statistiques du proxy datant de plus de {days} jours ?",
+        "deleteOlderThan7Days": "Supprimer les enregistrements de plus de 7 jours",
         "deleteOlderThan30Days": "Supprimer les enregistrements de plus de 30 jours",
         "deleteOlderThan365Days": "Supprimer les enregistrements de plus de 365 jours",
-        "deleteOlderThan7Days": "Supprimer les enregistrements de plus de 7 jours",
         "deleteOlderThan90Days": "Supprimer les enregistrements de plus de 90 jours",
         "errorDetailTitle": "Détails de l'erreur pour {date}",
         "errorDistTitle": "Distribution des codes d'erreur (non-200)",
@@ -648,10 +651,10 @@
         "errors": "Erreurs",
         "inputTokens": "Entrée",
         "last1Day": "Dernières 24 heures",
-        "last30Days": "Derniers 30 jours",
-        "last365Days": "Les 365 derniers jours",
         "last7Days": "Derniers 7 jours",
+        "last30Days": "Derniers 30 jours",
         "last90Days": "Derniers 90 jours",
+        "last365Days": "Les 365 derniers jours",
         "modelTokenUsageTitle": "Distribution de la consommation de tokens par modèle de backend",
         "modelUsageTitle": "Distribution d'utilisation des modèles backend",
         "no": "Non",

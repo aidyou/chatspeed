@@ -168,6 +168,9 @@
     "searchNotePlaceholder": "搜尋智記"
   },
   "proxySwitcher": {
+    "groupSwitch": "分組切換",
+    "serverSwitch": "伺服器切換",
+    "switchBackendModels": "切換目標後端模型",
     "title": "代理切換"
   },
   "settings": {
@@ -637,9 +640,9 @@
         "deleteAll": "清空全部記錄",
         "deleteAllConfirm": "確定要清空所有的代理統計記錄嗎？此操作不可撤銷。",
         "deleteConfirm": "確定要刪除 {days} 天前的代理統計記錄嗎？",
+        "deleteOlderThan7Days": "刪除 7 天前記錄",
         "deleteOlderThan30Days": "刪除 30 天前記錄",
         "deleteOlderThan365Days": "刪除 365 天前記錄",
-        "deleteOlderThan7Days": "刪除 7 天前記錄",
         "deleteOlderThan90Days": "刪除 90 天前記錄",
         "errorDetailTitle": "{date} 錯誤詳情",
         "errorDistTitle": "錯誤狀態碼分佈 (非 200)",

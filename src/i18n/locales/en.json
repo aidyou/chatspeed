@@ -168,6 +168,9 @@
     "searchNotePlaceholder": "Search Notes"
   },
   "proxySwitcher": {
+    "groupSwitch": "Group Switch",
+    "serverSwitch": "Server Switch",
+    "switchBackendModels": "Switch Target Backend Models",
     "title": "Proxy Switcher"
   },
   "settings": {
@@ -637,9 +640,9 @@
         "deleteAll": "Clear All Records",
         "deleteAllConfirm": "Are you sure you want to clear all proxy statistics? This action cannot be undone.",
         "deleteConfirm": "Are you sure you want to delete proxy statistics older than {days} days?",
+        "deleteOlderThan7Days": "Delete records older than 7 days",
         "deleteOlderThan30Days": "Delete records older than 30 days",
         "deleteOlderThan365Days": "Delete records older than 365 days",
-        "deleteOlderThan7Days": "Delete records older than 7 days",
         "deleteOlderThan90Days": "Delete records older than 90 days",
         "errorDetailTitle": "Error Details for {date}",
         "errorDistTitle": "Error Code Distribution (non-200)",
