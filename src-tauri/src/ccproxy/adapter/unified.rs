@@ -456,6 +456,10 @@ pub struct SseStatus {
     pub responses_reasoning_started: bool,
     pub responses_text_buffer: String,
     pub responses_text_started: bool,
+    pub responses_tool_item_ids: HashMap<String, String>,
+    pub responses_tool_names: HashMap<String, String>,
+    pub responses_tool_arguments: HashMap<String, String>,
+    pub responses_tool_indexes: HashMap<String, u32>,
 }
 
 impl Default for SseStatus {
@@ -489,6 +493,10 @@ impl Default for SseStatus {
             responses_reasoning_started: false,
             responses_text_buffer: String::new(),
             responses_text_started: false,
+            responses_tool_item_ids: HashMap::new(),
+            responses_tool_names: HashMap::new(),
+            responses_tool_arguments: HashMap::new(),
+            responses_tool_indexes: HashMap::new(),
         }
     }
 }

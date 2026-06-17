@@ -438,11 +438,11 @@ const startRefreshTimer = () => {
 const formatTokens = val => {
   if (val === undefined || val === null || isNaN(val)) return '0'
   const num = Number(val)
-  if (num >= 100000000) {
-    return (num / 100000000).toFixed(2) + ' 亿'
+  if (num >= 1000000) {
+    return (num / 1000000).toFixed(2) + 'M'
   }
-  if (num >= 100000) {
-    return (num / 10000).toFixed(2) + ' 万'
+  if (num >= 1000) {
+    return (num / 1000).toFixed(2) + 'K'
   }
   return num.toLocaleString()
 }
@@ -450,11 +450,11 @@ const formatTokens = val => {
 const formatNumber = val => {
   if (val === undefined || val === null || isNaN(val)) return '0'
   const num = Number(val)
-  if (num >= 100000000) {
-    return (num / 100000000).toFixed(2) + ' 亿'
+  if (num >= 1000000) {
+    return (num / 1000000).toFixed(2) + 'M'
   }
-  if (num >= 10000) {
-    return (num / 10000).toFixed(2) + ' 万'
+  if (num >= 1000) {
+    return (num / 1000).toFixed(2) + 'K'
   }
   return num.toLocaleString()
 }
@@ -479,11 +479,11 @@ const getCssVar = varName => {
 const formatAxisValue = val => {
   if (val === undefined || val === null || isNaN(val)) return '0'
   const num = Number(val)
-  if (num >= 100000000) {
-    return (num / 100000000).toFixed(1) + '亿'
+  if (num >= 1000000) {
+    return (num / 1000000).toFixed(2) + 'M'
   }
-  if (num >= 10000) {
-    return (num / 10000).toFixed(1) + '万'
+  if (num >= 1000) {
+    return (num / 1000).toFixed(2) + 'K'
   }
   return num.toString()
 }

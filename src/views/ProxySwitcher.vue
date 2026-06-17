@@ -45,13 +45,37 @@
                   <Avatar :size="36" :text="proxy.alias" />
                   <div class="label-text">
                     {{ proxy.alias }}
-                    <small>{{
-                      $t('settings.proxy.mapsToModels', { count: proxy.targets.length })
-                    }}</small>
+                    <div class="token-stats-inline">
+                      <span
+                        >{{ $t('settings.proxy.stats.inputTokens') }}
+                        {{ formatCompactNumber(proxy.stats.inputTokens) }}</span
+                      >
+                      <span
+                        >{{ $t('settings.proxy.stats.outputTokens') }}
+                        {{ formatCompactNumber(proxy.stats.outputTokens) }}</span
+                      >
+                      <span
+                        >{{ $t('settings.proxy.stats.cacheTokens') }}
+                        {{ formatCompactNumber(proxy.stats.cacheTokens) }}</span
+                      >
+                    </div>
                   </div>
                 </div>
 
                 <div class="value" @click.stop>
+                  <el-tooltip
+                    :content="$t('settings.proxy.stats.dailyTokensTitle')"
+                    placement="top"
+                    :hide-after="0"
+                    :enterable="false">
+                    <span
+                      class="icon-btn action-btn"
+                      :class="{ active: activeTrendProxyKey === proxy.key }"
+                      @click.stop="openTrendDrawer(proxy)">
+                      <el-icon><Coin /></el-icon>
+                    </span>
+                  </el-tooltip>
+
                   <el-tooltip
                     :content="$t('proxySwitcher.switchBackendModels')"
                     placement="top"
@@ -159,6 +183,51 @@
           </div>
         </div>
       </el-drawer>
+
+      <el-drawer
+        v-model="trendDrawerVisible"
+        direction="btt"
+        size="72%"
+        :show-close="false"
+        :with-header="false"
+        class="proxy-model-drawer proxy-trend-drawer"
+        @opened="handleTrendDrawerOpened"
+        @closed="closeTrendDrawer">
+        <div class="model-selector-panel trend-drawer-panel">
+          <div class="model-selector-header">
+            <div class="model-selector-title">
+              <span>{{ activeTrendProxy?.alias || '' }}</span>
+              <small>{{ activeTrendProxy?.groupName || '' }}</small>
+            </div>
+            <div class="trend-header-actions">
+              <span
+                class="icon-btn action-btn"
+                :class="{ loading: trendLoading }"
+                @click.stop="refreshTrendPopover">
+                <cs name="refresh" size="14px" />
+              </span>
+              <span class="icon-btn close-btn" @click="closeTrendDrawer">
+                <cs name="close" size="14px" />
+              </span>
+            </div>
+          </div>
+
+          <div class="trend-drawer-body">
+            <div v-if="trendError" class="trend-empty">{{ trendError }}</div>
+            <div v-else-if="trendLoading" class="trend-empty">
+              {{ $t('common.loading') }}
+            </div>
+            <div v-else-if="!trendChartData.length" class="trend-empty">
+              {{ $t('common.noData') }}
+            </div>
+            <div
+              v-show="!trendError && !trendLoading && trendChartData.length"
+              ref="trendChartRef"
+              id="proxy-switcher-trend-chart"
+              class="trend-chart"></div>
+          </div>
+        </div>
+      </el-drawer>
     </div>
 
     <div v-else-if="proxyGroupStore.list.length > 0" class="proxy-list" ref="listRef">
@@ -226,14 +295,17 @@
 
 <script setup>
 import { onMounted, computed, onUnmounted, ref, nextTick, watch } from 'vue'
+import { Line } from '@antv/g2plot'
 import { useI18n } from 'vue-i18n'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { useSettingStore } from '@/stores/setting'
 import { useModelStore } from '@/stores/model'
+import { invokeWrapper } from '@/libs/tauri'
 import { showMessage, isEmpty } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
 import Avatar from '@/components/common/Avatar.vue'
+import { Coin } from '@element-plus/icons-vue'
 
 const { t } = useI18n()
 const proxyGroupStore = useProxyGroupStore()
@@ -254,7 +326,20 @@ const selectedTargets = ref([])
 const searchQuery = ref('')
 const filterByChecked = ref(false)
 const saveTimer = ref(null)
+const serverStatsToday = ref({})
+const serverStatsTimer = ref(null)
+const activeTrendProxyKey = ref('')
+const activeTrendProxy = ref(null)
+const trendDrawerVisible = ref(false)
+const trendLoading = ref(false)
+const trendError = ref('')
+const trendChartData = ref([])
+const trendSummary = ref(null)
+const trendChartRef = ref(null)
+const trendPendingRender = ref(false)
+let trendChart = null
 let unlistenFocus = null
+const TREND_CHART_ID = 'proxy-switcher-trend-chart'
 
 const sortedProxyGroupList = computed(() => {
   return [...proxyGroupStore.list].sort((a, b) => {
@@ -285,7 +370,12 @@ const sortedProxyServerGroups = computed(() => {
       aliases: Object.entries(aliases).map(([alias, targets]) => ({
         alias,
         targets,
-        key: `${name}::${alias}`
+        key: `${name}::${alias}`,
+        stats: serverStatsToday.value[`${name}::${alias}`] || {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheTokens: 0
+        }
       }))
     }))
     .filter(group => group.aliases.length > 0)
@@ -341,6 +431,244 @@ const filteredProviders = computed(() => {
     })
     .filter(provider => provider.models.length > 0)
 })
+
+const formatCompactNumber = val => {
+  if (val === undefined || val === null || Number.isNaN(Number(val))) return '0'
+  const num = Number(val)
+  if (num >= 1000000) return `${(num / 1000000).toFixed(2)}M`
+  if (num >= 1000) return `${(num / 1000).toFixed(2)}K`
+  return num.toLocaleString()
+}
+
+const getLocalDateString = date => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const getLastNDates = days => {
+  return Array.from({ length: days }, (_, index) => {
+    const date = new Date()
+    date.setDate(date.getDate() - (days - index - 1))
+    return getLocalDateString(date)
+  })
+}
+
+const getProviderNameById = providerId => {
+  return (
+    modelStore.providers.find(provider => String(provider.id) === String(providerId))?.name || ''
+  )
+}
+
+const calculateServerStatsFromRows = (rows, targets) => {
+  const targetMap = new Map(
+    (targets || [])
+      .map(target => {
+        const providerName = getProviderNameById(target.id)
+        if (!providerName || !target.model) return null
+        return [`${providerName}::${target.model}`, true]
+      })
+      .filter(Boolean)
+  )
+
+  return (rows || []).reduce(
+    (totals, row) => {
+      if (!targetMap.has(`${row.provider}::${row.backendModel}`)) return totals
+      totals.inputTokens += Number(row.totalInputTokens || 0)
+      totals.outputTokens += Number(row.totalOutputTokens || 0)
+      totals.cacheTokens += Number(row.totalCacheTokens || 0)
+      return totals
+    },
+    { inputTokens: 0, outputTokens: 0, cacheTokens: 0 }
+  )
+}
+
+const refreshTodayServerStats = async () => {
+  const today = getLocalDateString(new Date())
+  try {
+    const rows = await invokeWrapper('get_ccproxy_provider_stats_by_date', { date: today })
+    const nextStats = {}
+    sortedProxyServerGroups.value.forEach(group => {
+      group.aliases.forEach(proxy => {
+        nextStats[proxy.key] = calculateServerStatsFromRows(rows, proxy.targets)
+      })
+    })
+    serverStatsToday.value = nextStats
+  } catch (error) {
+    console.error('Failed to refresh proxy switcher server stats:', error)
+  }
+}
+
+const startServerStatsRefresh = () => {
+  if (serverStatsTimer.value) {
+    clearInterval(serverStatsTimer.value)
+  }
+  serverStatsTimer.value = setInterval(() => {
+    refreshTodayServerStats()
+  }, 5000)
+}
+
+const destroyTrendChart = () => {
+  if (trendChart) {
+    trendChart.destroy()
+    trendChart = null
+  }
+}
+
+const waitForChartContainer = async () => {
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+}
+
+const renderTrendChart = async () => {
+  await waitForChartContainer()
+  const container = trendChartRef.value || document.getElementById(TREND_CHART_ID)
+  if (!container || !trendChartData.value.length) return false
+  if (container.clientWidth <= 0 || container.clientHeight <= 0) return false
+
+  const config = {
+    data: trendChartData.value,
+    autoFit: true,
+    xField: 'date',
+    yField: 'value',
+    seriesField: 'type',
+    height: Math.max(container.clientHeight, 220),
+    padding: [16, 18, 64, 56],
+    smooth: true,
+    color: ['#409eff', '#67c23a', '#e6a23c'],
+    legend: {
+      position: 'bottom',
+      offsetY: 8
+    },
+    xAxis: {
+      label: {
+        autoHide: true
+      }
+    },
+    yAxis: {
+      grid: {
+        line: {
+          style: {
+            lineDash: [4, 4],
+            stroke: 'rgba(128, 128, 128, 0.25)'
+          }
+        }
+      },
+      label: {
+        formatter: value => formatCompactNumber(value)
+      }
+    },
+    tooltip: {
+      formatter: datum => ({
+        name: datum.type,
+        value: formatCompactNumber(datum.value)
+      })
+    }
+  }
+
+  if (!trendChart) {
+    trendChart = new Line(container, config)
+    trendChart.render()
+    return true
+  }
+
+  trendChart.update(config)
+  return true
+}
+
+const loadTrendPopoverData = async proxy => {
+  activeTrendProxy.value = proxy
+  trendLoading.value = true
+  trendError.value = ''
+  trendChartData.value = []
+  trendSummary.value = null
+  trendPendingRender.value = false
+  destroyTrendChart()
+
+  try {
+    const dates = getLastNDates(7)
+    const dailyRows = await Promise.all(
+      dates.map(date => invokeWrapper('get_ccproxy_provider_stats_by_date', { date }))
+    )
+
+    const dailyStats = dates.map((date, index) => ({
+      date,
+      ...calculateServerStatsFromRows(dailyRows[index], proxy.targets)
+    }))
+
+    trendSummary.value = dailyStats.reduce(
+      (totals, day) => {
+        totals.inputTokens += day.inputTokens
+        totals.outputTokens += day.outputTokens
+        totals.cacheTokens += day.cacheTokens
+        return totals
+      },
+      { inputTokens: 0, outputTokens: 0, cacheTokens: 0 }
+    )
+
+    trendChartData.value = dailyStats.flatMap(day => [
+      {
+        date: day.date.slice(5),
+        type: t('settings.proxy.stats.inputTokens'),
+        value: day.inputTokens
+      },
+      {
+        date: day.date.slice(5),
+        type: t('settings.proxy.stats.outputTokens'),
+        value: day.outputTokens
+      },
+      {
+        date: day.date.slice(5),
+        type: t('settings.proxy.stats.cacheTokens'),
+        value: day.cacheTokens
+      }
+    ])
+
+    trendPendingRender.value = true
+  } catch (error) {
+    trendError.value = formatError(error)
+    trendPendingRender.value = false
+    destroyTrendChart()
+  } finally {
+    trendLoading.value = false
+    if (trendPendingRender.value && trendDrawerVisible.value) {
+      trendPendingRender.value = !(await renderTrendChart())
+    }
+  }
+}
+
+const openTrendDrawer = async proxy => {
+  activeTrendProxyKey.value = proxy.key
+  activeTrendProxy.value = {
+    ...proxy,
+    groupName: proxy.key.split('::')[0]
+  }
+  trendDrawerVisible.value = true
+  await loadTrendPopoverData(proxy)
+}
+
+const refreshTrendPopover = async () => {
+  if (!activeTrendProxy.value) return
+  await loadTrendPopoverData(activeTrendProxy.value)
+}
+
+const handleTrendDrawerOpened = async () => {
+  if (!trendPendingRender.value || !trendChartData.value.length) return
+  trendPendingRender.value = !(await renderTrendChart())
+}
+
+const closeTrendDrawer = () => {
+  activeTrendProxyKey.value = ''
+  activeTrendProxy.value = null
+  trendDrawerVisible.value = false
+  trendLoading.value = false
+  trendError.value = ''
+  trendChartData.value = []
+  trendSummary.value = null
+  trendPendingRender.value = false
+  destroyTrendChart()
+}
 
 const handleHide = async () => {
   if (isHiding.value) return
@@ -399,6 +727,7 @@ const toggleServerGroup = groupName => {
 }
 
 const openServerModelSelector = (groupName, alias) => {
+  closeTrendDrawer()
   selectedProxyGroup.value = groupName
   selectedProxyAlias.value = alias
   const availableModelIds = new Set()
@@ -567,14 +896,32 @@ watch(
   { immediate: true }
 )
 
+watch(
+  () => chatCompletionProxy.value,
+  groups => {
+    if (!Object.keys(groups || {}).length) {
+      serverStatsToday.value = {}
+      closeTrendDrawer()
+      return
+    }
+    refreshTodayServerStats()
+  },
+  { deep: true, immediate: true }
+)
+
 onUnmounted(() => {
   if (unlistenFocus) unlistenFocus()
   if (saveTimer.value) clearTimeout(saveTimer.value)
+  if (serverStatsTimer.value) clearInterval(serverStatsTimer.value)
+  destroyTrendChart()
 })
 
 onMounted(async () => {
   await proxyGroupStore.getList()
   settingStore.updateSettingStore()
+  if (isEmpty(modelStore.providers)) {
+    modelStore.updateModelStore()
+  }
   const activeIdx = sortedProxyGroupList.value.findIndex(
     g => g.name === proxyGroupStore.activeGroup
   )
@@ -589,6 +936,7 @@ onMounted(async () => {
       handleHide()
     }
   })
+  startServerStatsRefresh()
 })
 </script>
 
@@ -769,13 +1117,17 @@ onMounted(async () => {
     color: var(--cs-text-color-primary);
     font-size: var(--cs-font-size-sm);
     font-weight: 600;
+  }
 
-    small {
-      overflow: hidden;
-      color: var(--cs-text-color-secondary);
-      font-size: var(--cs-font-size-xs);
-      font-weight: 400;
-      text-overflow: ellipsis;
+  .token-stats-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--cs-space);
+    color: var(--cs-text-color-secondary);
+    font-size: var(--cs-font-size-xs);
+    font-weight: 400;
+
+    span {
       white-space: nowrap;
     }
   }
@@ -877,6 +1229,10 @@ onMounted(async () => {
   background-color: var(--cs-bg-color);
   border-top-left-radius: var(--cs-border-radius-lg);
   border-top-right-radius: var(--cs-border-radius-lg);
+}
+
+:deep(.proxy-trend-drawer) {
+  max-height: 400px;
 }
 
 .model-selector-panel {
@@ -1020,6 +1376,46 @@ onMounted(async () => {
   text-align: center;
 }
 
+.trend-drawer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-sm);
+  padding: var(--cs-space-sm) var(--cs-space-sm) 15px;
+}
+
+.trend-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-sm);
+}
+
+.trend-drawer-panel {
+  min-height: 0;
+}
+
+.trend-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cs-space-sm);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+}
+
+.trend-chart {
+  width: 100%;
+  flex: 1;
+  min-height: 220px;
+}
+
+.trend-empty {
+  padding: var(--cs-space-sm) 0;
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+  text-align: center;
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -1049,6 +1445,11 @@ onMounted(async () => {
   &.active {
     color: var(--cs-color-primary);
   }
+
+  &.loading {
+    pointer-events: none;
+    opacity: 0.7;
+  }
 }
 
 .empty-state {
@@ -1058,5 +1459,8 @@ onMounted(async () => {
   justify-content: center;
   color: var(--cs-text-color-secondary);
   font-size: 13px;
+}
+:deep(.el-drawer__body) {
+  padding-top: 0;
 }
 </style>

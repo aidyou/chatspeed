@@ -330,48 +330,116 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
             }
             UnifiedStreamChunk::ToolUseStart {
                 id, name, index, ..
-            } => Ok(vec![Event::default()
-                .event("response.output_item.added")
-                .data(
-                    json!({
-                        "type": "response.output_item.added",
-                        "output_index": index,
-                        "item": {
-                            "id": id,
-                            "type": "function_call",
-                            "status": "in_progress",
-                            "call_id": id,
-                            "name": name,
-                            "arguments": ""
-                        }
-                    })
-                    .to_string(),
-                )]),
-            UnifiedStreamChunk::ToolUseDelta { id, delta, index } => Ok(vec![Event::default()
-                .event("response.function_call_arguments.delta")
-                .data(
-                    json!({
-                        "type": "response.function_call_arguments.delta",
-                        "item_id": id,
-                        "output_index": index,
-                        "delta": delta
-                    })
-                    .to_string(),
-                )]),
-            UnifiedStreamChunk::ToolUseEnd { id } => Ok(vec![Event::default()
-                .event("response.output_item.done")
-                .data(
-                    json!({
-                        "type": "response.output_item.done",
-                        "output_index": 0,
-                        "item": {
-                            "id": id,
-                            "type": "function_call",
-                            "status": "completed"
-                        }
-                    })
-                    .to_string(),
-                )]),
+            } => {
+                let item_id = get_tool_id();
+                if let Ok(mut status) = sse_status.write() {
+                    status
+                        .responses_tool_item_ids
+                        .insert(id.clone(), item_id.clone());
+                    status.responses_tool_names.insert(id.clone(), name.clone());
+                    status
+                        .responses_tool_arguments
+                        .entry(id.clone())
+                        .or_insert_with(String::new);
+                    status.responses_tool_indexes.insert(id.clone(), index);
+                }
+                Ok(vec![Event::default()
+                    .event("response.output_item.added")
+                    .data(
+                        json!({
+                            "type": "response.output_item.added",
+                            "output_index": index,
+                            "item": {
+                                "id": item_id,
+                                "type": "function_call",
+                                "status": "in_progress",
+                                "call_id": id,
+                                "name": name,
+                                "arguments": ""
+                            }
+                        })
+                        .to_string(),
+                    )])
+            }
+            UnifiedStreamChunk::ToolUseDelta { id, delta, index } => {
+                let item_id = if let Ok(mut status) = sse_status.write() {
+                    status
+                        .responses_tool_arguments
+                        .entry(id.clone())
+                        .or_insert_with(String::new)
+                        .push_str(&delta);
+                    status
+                        .responses_tool_item_ids
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(get_tool_id)
+                } else {
+                    get_tool_id()
+                };
+                Ok(vec![Event::default()
+                    .event("response.function_call_arguments.delta")
+                    .data(
+                        json!({
+                            "type": "response.function_call_arguments.delta",
+                            "item_id": item_id,
+                            "output_index": index,
+                            "delta": delta
+                        })
+                        .to_string(),
+                    )])
+            }
+            UnifiedStreamChunk::ToolUseEnd { id } => {
+                let (item_id, name, arguments, output_index) = if let Ok(mut status) = sse_status.write()
+                {
+                    let item_id = status
+                        .responses_tool_item_ids
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(get_tool_id);
+                    let name = status
+                        .responses_tool_names
+                        .remove(&id)
+                        .unwrap_or_default();
+                    let arguments = status
+                        .responses_tool_arguments
+                        .remove(&id)
+                        .unwrap_or_default();
+                    let output_index = status.responses_tool_indexes.remove(&id).unwrap_or(0);
+                    status.responses_tool_item_ids.remove(&id);
+                    (item_id, name, arguments, output_index)
+                } else {
+                    (get_tool_id(), String::new(), String::new(), 0)
+                };
+
+                Ok(vec![
+                    Event::default()
+                        .event("response.function_call_arguments.done")
+                        .data(
+                            json!({
+                                "type": "response.function_call_arguments.done",
+                                "item_id": item_id,
+                                "output_index": output_index,
+                                "arguments": arguments
+                            })
+                            .to_string(),
+                        ),
+                    Event::default().event("response.output_item.done").data(
+                        json!({
+                            "type": "response.output_item.done",
+                            "output_index": output_index,
+                            "item": {
+                                "id": item_id,
+                                "type": "function_call",
+                                "status": "completed",
+                                "call_id": id,
+                                "name": name,
+                                "arguments": arguments
+                            }
+                        })
+                        .to_string(),
+                    ),
+                ])
+            }
             UnifiedStreamChunk::MessageStop {
                 stop_reason: _,
                 usage,
@@ -829,6 +897,70 @@ mod tests {
         assert!(completed.contains("\"reasoning_tokens\":1"));
         assert!(completed.contains("\"output\":["));
         assert!(completed.contains("\"text\":\"hello\""));
+    }
+
+    #[test]
+    fn tool_call_stream_emits_arguments_done_and_complete_item() {
+        let adapter = OpenAIResponsesOutputAdapter;
+        let status = Arc::new(RwLock::new(SseStatus::new(
+            "msg_tool".to_string(),
+            "glm-5".to_string(),
+            false,
+            10.0,
+        )));
+
+        let start = adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::ToolUseStart {
+                    tool_type: "tool_use".to_string(),
+                    id: "call_123".to_string(),
+                    name: "write_stdin".to_string(),
+                    index: 1,
+                },
+                status.clone(),
+            )
+            .expect("tool start should adapt")
+            .into_iter()
+            .map(|event| event.to_string())
+            .collect::<String>();
+        assert!(start.contains("response.output_item.added"));
+        assert!(start.contains("\"type\":\"function_call\""));
+        assert!(start.contains("\"call_id\":\"call_123\""));
+        assert!(start.contains("\"name\":\"write_stdin\""));
+
+        let delta = adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::ToolUseDelta {
+                    id: "call_123".to_string(),
+                    delta: "{\"chars\":\"n\\n\"}".to_string(),
+                    index: 1,
+                },
+                status.clone(),
+            )
+            .expect("tool delta should adapt")
+            .into_iter()
+            .map(|event| event.to_string())
+            .collect::<String>();
+        assert!(delta.contains("response.function_call_arguments.delta"));
+        assert!(delta.contains("\"delta\":\"{\\\"chars\\\":\\\"n\\\\n\\\"}\""));
+
+        let end = adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::ToolUseEnd {
+                    id: "call_123".to_string(),
+                },
+                status,
+            )
+            .expect("tool end should adapt")
+            .into_iter()
+            .map(|event| event.to_string())
+            .collect::<String>();
+        assert!(end.contains("response.function_call_arguments.done"));
+        assert!(end.contains("\"arguments\":\"{\\\"chars\\\":\\\"n\\\\n\\\"}\""));
+        assert!(end.contains("response.output_item.done"));
+        assert!(end.contains("\"call_id\":\"call_123\""));
+        assert!(end.contains("\"name\":\"write_stdin\""));
+        assert!(end.contains("\"status\":\"completed\""));
     }
 
     #[test]
