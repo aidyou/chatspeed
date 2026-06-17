@@ -119,9 +119,10 @@
                       >
                     </div>
                     <cs
-                      :name="isSubAgentTaskExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                      name="double-arrow-down"
                       size="14px"
-                      class="sub-agent-card__task-chevron" />
+                      class="sub-agent-card__task-chevron"
+                      :class="{ expanded: isSubAgentTaskExpanded(message) }" />
                   </div>
                   <div v-if="isSubAgentTaskExpanded(message)" class="sub-agent-card__task-body">
                     <MarkdownSimple :content="message.subAgentCard.taskMarkdown" />
@@ -144,9 +145,10 @@
                       >
                     </div>
                     <cs
-                      :name="isSubAgentResultExpanded(message) ? 'chevron-up' : 'chevron-down'"
+                      name="double-arrow-down"
                       size="14px"
-                      class="sub-agent-card__result-chevron" />
+                      class="sub-agent-card__result-chevron"
+                      :class="{ expanded: isSubAgentResultExpanded(message) }" />
                   </div>
                   <div
                     v-if="isSubAgentResultExpanded(message)"
@@ -1277,6 +1279,7 @@ const getUserMessageNaturalHeight = el => {
   measureEl.style.lineHeight = styles.lineHeight
   measureEl.style.letterSpacing = styles.letterSpacing
   measureEl.style.boxSizing = styles.boxSizing
+  measureEl.style.display = 'block'
   measureEl.style.width = `${Math.max(el.clientWidth - safeRight, 0)}px`
 
   document.body.appendChild(measureEl)
@@ -1322,7 +1325,16 @@ const measureUserMessageOverflow = () => {
 
 const scheduleMeasureUserMessageOverflow = () => {
   nextTick(() => {
-    measureUserMessageOverflow()
+    if (typeof requestAnimationFrame === 'undefined') {
+      measureUserMessageOverflow()
+      return
+    }
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        measureUserMessageOverflow()
+      })
+    })
   })
 }
 
@@ -1874,9 +1886,15 @@ defineExpose({
 
 .simple-text {
   margin: 0;
+  display: block;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: break-word;
   line-height: calc(1em * var(--user-message-line-height-multiplier));
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+  padding-bottom: 0;
 
   &.is-collapsed {
     position: relative;

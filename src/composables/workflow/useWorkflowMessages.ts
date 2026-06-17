@@ -430,6 +430,7 @@ export function useWorkflowMessages(options = {}) {
     const subAgentCompletions = new Map()
     const rejectedUserMessageIds = new Set()
     const ledgerStateById = new Map((workflowStore.toolList || []).map(tool => [tool.toolCallId, tool]))
+    const subAgentProgressById = workflowStore.subAgentProgress || new Map()
 
     const tryParseJsonValue = value => {
       if (value === null || value === undefined) return null
@@ -556,24 +557,69 @@ export function useWorkflowMessages(options = {}) {
 
     const buildSubAgentCard = message => {
       const meta = message?.metadata || {}
-      if (String(meta.tool_name || '').toLowerCase() !== 'sub_agent_run') return null
+      const toolName = String(meta.tool_name || '').toLowerCase()
+      const directTaskId =
+        meta.sub_agent_id || meta.subAgentId || meta.data?.sub_agent_id || meta.data?.subAgentId || ''
+      if (toolName !== 'sub_agent_run' && !directTaskId) return null
 
-      const payload = parseSubAgentRunPayload(message)
+      const payload =
+        toolName === 'sub_agent_run'
+          ? parseSubAgentRunPayload(message)
+          : {
+              taskId: directTaskId,
+              mode: meta.sub_agent_mode || meta.subAgentMode || 'call',
+              task:
+                meta.sub_agent_task ||
+                meta.subAgentTask ||
+                meta.data?.sub_agent_task ||
+                meta.data?.subAgentTask ||
+                '',
+              agent:
+                meta.sub_agent_name ||
+                meta.subAgentName ||
+                meta.data?.sub_agent_name ||
+                meta.data?.subAgentName ||
+                ''
+            }
+      const liveProgress = payload.taskId ? subAgentProgressById.get(payload.taskId) : null
       const completion = payload.taskId ? subAgentCompletions.get(payload.taskId) : null
       const completionResult = completion?.result || completion?.data?.result || {}
       const completionStatus =
         completion?.execution_status ||
         completion?.data?.execution_status ||
         completionResult.status ||
+        liveProgress?.status ||
         meta.sub_agent_status ||
         meta.execution_status ||
         'running'
+      const toolCallsCount =
+        completionResult.tool_calls_count ??
+        completion?.tool_calls_count ??
+        completion?.data?.tool_calls_count ??
+        liveProgress?.toolCallsCount ??
+        liveProgress?.tool_calls_count ??
+        0
+      const currentContextTokens =
+        completionResult.current_context_tokens ??
+        completion?.current_context_tokens ??
+        completion?.data?.current_context_tokens ??
+        liveProgress?.currentContextTokens ??
+        liveProgress?.current_context_tokens ??
+        null
+      const maxContextTokens =
+        completionResult.max_context_tokens ??
+        completion?.max_context_tokens ??
+        completion?.data?.max_context_tokens ??
+        liveProgress?.maxContextTokens ??
+        liveProgress?.max_context_tokens ??
+        null
       const resultContent =
         completionResult.result ||
         completionResult.error ||
         completion?.summary ||
         completion?.data?.summary ||
         ''
+      const resultMarkdown = formatSubAgentResultMarkdown(resultContent)
 
       return {
         taskId: payload.taskId,
@@ -582,8 +628,11 @@ export function useWorkflowMessages(options = {}) {
         taskMarkdown: payload.task || 'Delegated task',
         mode: payload.mode || 'call',
         status: completionStatus,
+        toolCallsCount,
+        currentContextTokens,
+        maxContextTokens,
         result: resultContent,
-        resultMarkdown: formatSubAgentResultMarkdown(resultContent),
+        resultMarkdown,
         hasResult: Boolean(resultContent)
       }
     }
@@ -787,6 +836,7 @@ export function useWorkflowMessages(options = {}) {
             })
             .filter(call => {
               if (isInternalTodoTool(call.toolName)) return false
+              if (call.toolName === 'sub_agent_run') return false
               if (toolMessageIds.has(call.id)) return false
               const state = toolStates.get(call.id)
               if (!state) return true
