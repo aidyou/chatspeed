@@ -91,25 +91,31 @@ mod tests {
 
     #[test]
     fn test_temperature_adaptation() {
-        // OpenAI (0-2) to Claude (0-1): value 2.0 should become 1.0
-        assert_eq!(adapt_temperature(2.0, ChatProtocol::Claude), 1.0);
+        // OpenAI and Claude now share the same temperature range (0-1)
+        // adapt_temperature now only clamps, no longer converts between ranges
 
-        // OpenAI (0-2) to Claude (0-1): value 1.0 should become 0.5
-        assert_eq!(adapt_temperature(1.0, ChatProtocol::Claude), 0.5);
+        // Value within range stays the same
+        assert_eq!(adapt_temperature(0.5, ChatProtocol::Claude), 0.5);
+        assert_eq!(adapt_temperature(0.5, ChatProtocol::OpenAI), 0.5);
 
-        // Claude (0-1) to OpenAI (0-2): value 1.0 should become 2.0
-        assert_eq!(adapt_temperature(1.0, ChatProtocol::OpenAI), 2.0);
+        // Value at max stays at max
+        assert_eq!(adapt_temperature(1.0, ChatProtocol::Claude), 1.0);
+        assert_eq!(adapt_temperature(1.0, ChatProtocol::OpenAI), 1.0);
 
-        // Same protocol should return same value
-        assert_eq!(adapt_temperature(1.5, ChatProtocol::OpenAI), 1.5);
+        // Value exceeding max is clamped to 1.0
+        assert_eq!(adapt_temperature(1.5, ChatProtocol::OpenAI), 1.0);
+        assert_eq!(adapt_temperature(1.5, ChatProtocol::Claude), 1.0);
+
+        // Value below min is clamped to 0.0
+        assert_eq!(adapt_temperature(-0.5, ChatProtocol::OpenAI), 0.0);
     }
 
     #[test]
     fn test_clamp_to_protocol_range() {
-        // OpenAI temperature clamping
+        // OpenAI temperature clamping (max is now 1.0)
         assert_eq!(
-            clamp_to_protocol_range(3.0, ChatProtocol::OpenAI, Parameter::Temperature),
-            2.0
+            clamp_to_protocol_range(1.5, ChatProtocol::OpenAI, Parameter::Temperature),
+            1.0
         );
         assert_eq!(
             clamp_to_protocol_range(-1.0, ChatProtocol::OpenAI, Parameter::Temperature),

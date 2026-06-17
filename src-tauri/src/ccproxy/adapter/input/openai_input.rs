@@ -120,7 +120,7 @@ pub fn from_openai(
     Ok(UnifiedRequest {
         model: req.model,
         messages,
-        system_prompt: system_prompt.map(|s: String| s.clone()),
+        system_prompt: system_prompt.map(|s: String| s.trim_end().to_string()),
         tools,
         tool_choice,
         stream: req.stream.unwrap_or(false),
