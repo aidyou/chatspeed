@@ -148,7 +148,6 @@
             :get-diff-markdown="getDiffMarkdown"
             :parse-choice-content="parseChoiceContent"
             :get-parsed-message="getParsedMessage"
-            :get-reasoning-preview="getReasoningPreview"
             :should-show-tool-raw-content="shouldShowToolRawContent"
             :pending-count="currentInlinePendingApprovalIds.length"
             :pending-approval-ids="currentInlinePendingApprovalIds"
@@ -173,7 +172,9 @@
           ref="inputAreaRef"
           v-model:input-message="inputMessage"
           :is-running="isRunning"
+          :is-chatting="isChatting"
           :has-live-session="hasLiveSession"
+          :chat-state="chatState"
           :wait-reason="waitReason"
           :current-workflow="currentWorkflow"
           :current-workflow-id="currentWorkflowId"
@@ -392,7 +393,6 @@ const {
   isCompressing,
   compressionMessage,
   clearRetryTimer,
-  getReasoningPreview,
   resetChatState,
   setRetryStatus,
   processChunk,

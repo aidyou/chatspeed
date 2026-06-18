@@ -59,7 +59,7 @@
         </span>
       </div>
     </div>
-    <StatusNotifier />
+    <StatusNotifier :chat-state="chatState" :is-chatting="isChatting" />
     <div class="input">
       <div v-if="attachments.length > 0" class="workflow-attachments">
         <div v-for="attachment in attachments" :key="attachment.id" class="workflow-attachment-item">
@@ -391,9 +391,21 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  isChatting: {
+    type: Boolean,
+    default: false
+  },
   hasLiveSession: {
     type: Boolean,
     default: false
+  },
+  chatState: {
+    type: Object,
+    default: () => ({
+      content: '',
+      reasoning: '',
+      reasoningStatus: 'idle'
+    })
   },
   waitReason: {
     type: String,

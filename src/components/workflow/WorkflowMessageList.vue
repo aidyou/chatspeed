@@ -502,7 +502,7 @@
             <div
               v-else-if="message.reasoning || message.stepType === 'Think'"
               class="reasoning-container">
-              <div class="reasoning-header" @click="$emit('toggle-reasoning', message.displayId)">
+              <div class="reasoning-header" @click="toggleReasoningForMessage(message)">
                 <cs
                   name="reasoning"
                   size="14px"
@@ -511,30 +511,30 @@
                     rotating:
                       isRunning &&
                       !hasThoughtCompleted(message) &&
-                      !isReasoningExpanded(message.displayId) &&
+                      !isReasoningExpandedForMessage(message) &&
                       message === lastAssistantMessage
                   }" />
                 <span
                   class="reasoning-text"
-                  :class="{ expanded: isReasoningExpanded(message.displayId) }">
-                  <template v-if="isReasoningExpanded(message.displayId)">
+                  :class="{ expanded: isReasoningExpandedForMessage(message) }">
+                  <template v-if="isReasoningExpandedForMessage(message)">
                     {{ $t('workflow.thinkingExpanded') || 'Thinking Process' }}
                   </template>
                   <template
                     v-else-if="
                       isRunning && !hasThoughtCompleted(message) && message === lastAssistantMessage
                     ">
-                    {{ getReasoningPreview(message.reasoning || message.message) }}
+                    {{ $t('workflow.thinking') || 'Thinking...' }}
                   </template>
                   <template v-else>
                     {{ $t('workflow.thoughtCompleted') || 'Thought Complete' }}
                   </template>
                 </span>
                 <span class="reasoning-toggle">
-                  {{ isReasoningExpanded(message.displayId) ? '▲' : '▼' }}
+                  {{ isReasoningExpandedForMessage(message) ? '▲' : '▼' }}
                 </span>
               </div>
-              <div v-if="isReasoningExpanded(message.displayId)" class="reasoning-content">
+              <div v-if="isReasoningExpandedForMessage(message)" class="reasoning-content">
                 {{ message.reasoning || message.message }}
               </div>
             </div>
@@ -593,19 +593,34 @@
       <div class="content-container">
         <div class="ai-content chat">
           <div v-if="chatState.reasoning" class="reasoning-container">
-            <div class="reasoning-header">
+            <div
+              class="reasoning-header"
+              @click="$emit('toggle-reasoning', STREAMING_REASONING_ID)">
               <cs
                 name="reasoning"
                 size="14px"
                 class="reasoning-icon"
-                :class="{ rotating: !hasStreamingThoughtCompleted }" />
-              <span class="reasoning-text">
+                :class="{
+                  rotating:
+                    !hasStreamingThoughtCompleted && !isReasoningExpanded(STREAMING_REASONING_ID)
+                }" />
+              <span
+                class="reasoning-text"
+                :class="{ expanded: isReasoningExpanded(STREAMING_REASONING_ID) }">
                 {{
-                  hasStreamingThoughtCompleted
-                    ? $t('workflow.thoughtCompleted') || 'Thought Complete'
-                    : getReasoningPreview(chatState.reasoning)
+                  isReasoningExpanded(STREAMING_REASONING_ID)
+                    ? $t('workflow.thinkingExpanded') || 'Thinking Process'
+                    : hasStreamingThoughtCompleted
+                      ? $t('workflow.thoughtCompleted') || 'Thought Complete'
+                      : $t('workflow.thinking') || 'Thinking...'
                 }}
               </span>
+              <span class="reasoning-toggle">
+                {{ isReasoningExpanded(STREAMING_REASONING_ID) ? '▲' : '▼' }}
+              </span>
+            </div>
+            <div v-if="isReasoningExpanded(STREAMING_REASONING_ID)" class="reasoning-content">
+              {{ chatState.reasoning }}
             </div>
           </div>
           <!-- Streaming Blocks (Optimized rendering) -->
@@ -701,6 +716,7 @@ const workflowStore = useWorkflowStore()
 const { t } = useI18n()
 const CUSTOM_ASK_USER_VALUE = '__custom__'
 const USER_MESSAGE_COLLAPSED_LINE_COUNT = 4
+const STREAMING_REASONING_ID = '__streaming_reasoning__'
 
 const props = defineProps({
   messages: {
@@ -785,10 +801,6 @@ const props = defineProps({
     required: true
   },
   shouldShowToolRawContent: {
-    type: Function,
-    required: true
-  },
-  getReasoningPreview: {
     type: Function,
     required: true
   },
@@ -1245,6 +1257,24 @@ const visibleMessages = computed(() =>
 const lastVisibleMessage = computed(
   () => visibleMessages.value[visibleMessages.value.length - 1] || null
 )
+const isReasoningExpandedForMessage = message => {
+  const messageId = String(message?.displayId || '')
+  if (messageId && props.isReasoningExpanded(messageId)) return true
+
+  return message === props.lastAssistantMessage && props.isReasoningExpanded(STREAMING_REASONING_ID)
+}
+const toggleReasoningForMessage = message => {
+  const messageId = String(message?.displayId || '')
+  const shouldUseStreamingState =
+    message === props.lastAssistantMessage && props.isReasoningExpanded(STREAMING_REASONING_ID)
+
+  if (shouldUseStreamingState) {
+    emit('toggle-reasoning', STREAMING_REASONING_ID)
+    return
+  }
+
+  if (messageId) emit('toggle-reasoning', messageId)
+}
 const pendingApprovalIdSet = computed(() => {
   const ids = (props.pendingApprovalIds || [])
     .map(id => String(id || '').trim())
