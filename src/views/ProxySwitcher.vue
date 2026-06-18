@@ -221,6 +221,32 @@
           </div>
 
           <div class="trend-drawer-body">
+            <div class="trend-filters">
+              <el-select
+                v-model="selectedTrendProvider"
+                size="small"
+                clearable
+                class="trend-filter-select"
+                :placeholder="$t('settings.proxy.stats.provider')"
+                @change="refreshTrendPopover">
+                <el-option :label="$t('common.all')" value="" />
+                <el-option
+                  v-for="provider in trendProviderOptions"
+                  :key="provider.value"
+                  :label="provider.label"
+                  :value="provider.value" />
+              </el-select>
+
+              <el-select
+                v-model="selectedTrendRange"
+                size="small"
+                class="trend-filter-select"
+                @change="refreshTrendPopover">
+                <el-option :label="$t('settings.proxy.stats.last7Days')" :value="7" />
+                <el-option :label="$t('settings.proxy.stats.last30Days')" :value="30" />
+              </el-select>
+            </div>
+
             <div v-if="trendError" class="trend-empty">{{ trendError }}</div>
             <div v-else-if="trendLoading" class="trend-empty">
               {{ $t('common.loading') }}
@@ -345,6 +371,8 @@ const trendChartData = ref([])
 const trendSummary = ref(null)
 const trendChartRef = ref(null)
 const trendPendingRender = ref(false)
+const selectedTrendProvider = ref('')
+const selectedTrendRange = ref(7)
 let trendChart = null
 let unlistenFocus = null
 const TREND_CHART_ID = 'proxy-switcher-trend-chart'
@@ -440,6 +468,25 @@ const filteredProviders = computed(() => {
     .filter(provider => provider.models.length > 0)
 })
 
+const trendProviderOptions = computed(() => {
+  const proxy = activeTrendProxy.value
+  if (!proxy?.targets?.length) return []
+
+  const providers = new Map()
+  proxy.targets.forEach(target => {
+    const provider = modelStore.providers.find(item => String(item.id) === String(target.id))
+    if (!provider) return
+    providers.set(String(provider.id), {
+      value: String(provider.id),
+      label: provider.name
+    })
+  })
+
+  return Array.from(providers.values()).sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' })
+  )
+})
+
 const formatCompactNumber = val => {
   if (val === undefined || val === null || Number.isNaN(Number(val))) return '0'
   const num = Number(val)
@@ -481,10 +528,11 @@ const getProviderNameById = providerId => {
   )
 }
 
-const calculateServerStatsFromRows = (rows, targets) => {
+const calculateServerStatsFromRows = (rows, targets, providerFilter = '') => {
   const targetMap = new Map(
     (targets || [])
       .map(target => {
+        if (providerFilter && String(target.id) !== String(providerFilter)) return null
         const providerName = getProviderNameById(target.id)
         if (!providerName || !target.model) return null
         return [`${providerName}::${target.model}`, true]
@@ -607,14 +655,26 @@ const loadTrendPopoverData = async proxy => {
   destroyTrendChart()
 
   try {
-    const dates = getLastNDates(7)
+    const dates = getLastNDates(Number(selectedTrendRange.value))
+
+    if (!dates.length) {
+      trendSummary.value = { inputTokens: 0, outputTokens: 0, cacheTokens: 0 }
+      trendChartData.value = []
+      trendPendingRender.value = false
+      return
+    }
+
     const dailyRows = await Promise.all(
       dates.map(date => invokeWrapper('get_ccproxy_provider_stats_by_date', { date }))
     )
 
     const dailyStats = dates.map((date, index) => ({
       date,
-      ...calculateServerStatsFromRows(dailyRows[index], proxy.targets)
+      ...calculateServerStatsFromRows(
+        dailyRows[index],
+        proxy.targets,
+        selectedTrendProvider.value
+      )
     }))
 
     trendSummary.value = dailyStats.reduce(
@@ -660,6 +720,8 @@ const loadTrendPopoverData = async proxy => {
 
 const openTrendDrawer = async proxy => {
   activeTrendProxyKey.value = proxy.key
+  selectedTrendProvider.value = ''
+  selectedTrendRange.value = 7
   activeTrendProxy.value = {
     ...proxy,
     groupName: proxy.key.split('::')[0]
@@ -1265,7 +1327,9 @@ onMounted(async () => {
 .model-selector-header {
   min-height: 44px;
   padding: 0 var(--cs-space);
+  margin: auto calc(-1 * var(--el-drawer-padding-primary));
   border-bottom: 1px solid var(--cs-border-color);
+  border-radius: var(--cs-border-radius-lg) var(--cs-border-radius-lg) 0 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1403,6 +1467,17 @@ onMounted(async () => {
   flex-direction: column;
   gap: var(--cs-space-sm);
   padding: var(--cs-space-sm) var(--cs-space-sm) 15px;
+}
+
+.trend-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-sm);
+}
+
+.trend-filter-select {
+  flex: 1;
+  min-width: 0;
 }
 
 .trend-header-actions {
