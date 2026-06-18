@@ -1,49 +1,71 @@
+[简体中文](./README.zh-CN.md) | English
+
 # Module Introduction
 
 ## About ccproxy
 
-The `@src-tauri/src/ccproxy` module is a high-performance AI proxy and conversion engine. It focuses on full-duplex conversion, routing, and feature enhancement between **OpenAI-compatible**, **Gemini**, **Claude**, and **Ollama** protocols.
+`src-tauri/src/ccproxy` is ChatSpeed's AI proxy and protocol adaptation engine. It routes, forwards, and converts traffic between **OpenAI-compatible**, **Claude**, **Gemini**, and **Ollama** protocols.
 
 ## Core Features
 
-### 1. Flexible Routing System
+### 1. Flexible Routing
 
-ccproxy utilizes a hierarchical routing design supporting multiple access modes:
+ccproxy supports multiple access modes:
 
-- **Direct Access**: e.g., `/v1/chat/completions`, uses global default settings.
-- **Grouped Routing**: e.g., `/{group_name}/v1/...`, isolates model configurations for different scenarios or clients.
-- **Dynamic Switching**: Using the `/switch` prefix (e.g., `/switch/v1/...`) automatically routes requests to the currently "Active" group set in the application.
-- **Tool Compatibility Mode**: Enabled via `/compat` or `/compat_mode` (e.g., `/switch/compat/v1/...`), bringing function-calling capabilities to models that lack native support.
+- **Direct routes**: `/v1/...`, `/v1beta/...`, `/api/...`
+- **Grouped routes**: `/{group_name}/v1/...`
+- **Dynamic switching**: `/switch/v1/...` resolves to the active proxy group
+- **Compat mode**: `/compat/...` or `/compat_mode/...` enables tool compatibility for models without native tool calling
 
-### 2. Multi-Protocol Adapters
+### 2. Multi-Protocol Adaptation
 
-The module implements protocol conversion through a tri-layer adapter architecture: **Input -> Backend -> Output**.
-**Data Flow Example (Claude Client -> OpenAI Backend):**
-`Client -> Claude Input (Unified format) -> OpenAI Backend (OpenAI format) -> Upstream AI -> OpenAI Backend (Unified format) -> Claude Output (Claude format) -> Client`
+Requests flow through **Input -> Unified -> Backend -> Unified -> Output** adapters when protocol conversion is required.
 
-### 3. Tool Compatibility Mode (Compat Mode)
+### 3. OpenAI-Compatible API Surface
 
-For models without native function-calling support, ccproxy injects specific prompts and utilizes XML interception to parse and convert text output back into protocol-standard tool calls, making the process seamless for clients.
+ccproxy exposes OpenAI-style endpoints including:
+
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- `POST /v1/responses`
+- `POST /v1/embeddings`
+
+`/v1/responses` is now a first-class protocol path:
+
+- Route variants include direct, grouped, `/switch`, and compat forms
+- `handler/responses_handler.rs` is the entry point
+- `adapter/input/openai_responses_input.rs` converts Responses requests into the unified request model when adaptation is needed
+- `adapter/output/openai_responses_output.rs` converts unified responses and streams back into OpenAI Responses-compatible output
+- If provider metadata sets `supports_responses_api` or `supportsResponsesApi`, ccproxy prefers direct forwarding to the upstream `/responses` endpoint
+- Otherwise, ccproxy falls back to the unified chat pipeline and re-serializes the result as Responses output
 
 ### 4. Embedding Proxy
 
-Standardized embedding endpoints across protocols:
+Standardized embedding endpoints:
 
 - **OpenAI**: `/v1/embeddings`
-- **Claude**: `/v1/claude/embeddings` (Provided by ccproxy for protocol consistency)
-- **Gemini**: Supports `:embedContent` or `/embedContent` actions.
-- **Ollama**: `/api/embed` and `/api/embeddings`.
+- **Claude**: `/v1/claude/embeddings`
+- **Gemini**: `:embedContent` or `/embedContent`
+- **Ollama**: `/api/embed` and `/api/embeddings`
 
 ## How It Works
 
-Requests enter the `handle_chat_completion` function and undergo the following:
+Requests enter protocol handlers and then follow one of two canonical paths:
 
-1. **Model Resolution**: Locates the backend model instance using aliases or `X-CS-*` headers.
-2. **Direct Forwarding**: If the client and backend protocols match and Compat Mode is off, it performs high-performance direct pass-through with header filtering.
-3. **Adaptation**: If protocols differ, it uses specialized `Adapters` for bi-directional formatting.
-4. **Header Filtering**: All responses are processed by `filter_proxy_headers` to remove transport-level headers (`Content-Length`, `Connection`, etc.), ensuring compatibility with the Axum framework.
+1. **Direct forwarding**: used when client protocol matches backend protocol and compat mode is off
+2. **Unified adaptation**: used when protocol conversion or compat behavior is required
+
+In both cases, ccproxy still handles:
+
+- model resolution
+- auth and proxy header injection
+- retry and stat recording
+- protocol-safe response conversion
+- header filtering through `filter_proxy_headers`
 
 ## Important Notes
 
-- **Route Integration**: While the `ccproxy/router.rs` mounts routes for other components like MCP, those are independent business modules and not part of the `ccproxy` proxy engine's core logic.
-- **DO NOT modify the route mounting order.** The current hierarchy (Fixed Prefixes > Direct Routes > Global Compat > Grouped Routes) is meticulously ordered to prevent "Route Shadowing".
+- `router.rs` is order-sensitive. Keep the route hierarchy stable to avoid route shadowing.
+- Static protocol prefixes must remain ahead of grouped dynamic routes.
+- Transport headers such as `Content-Length`, `Transfer-Encoding`, `Connection`, and `Content-Encoding` must not be forwarded directly.
+- For maintenance constraints and invariants, follow `CONSTITUTION.md`.

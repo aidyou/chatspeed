@@ -1,49 +1,71 @@
-# 模块介绍
+[简体中文](./README.zh-CN.md) | English
 
-## 关于ccproxy
+# 模块说明
 
-@src-tauri/src/ccproxy 模块是一个高性能 AI 代理转换引擎，专注于在 **OpenAI 兼容协议**、**Gemini**、**Claude** 和 **Ollama** 协议之间进行全双工转换、请求路由及功能增强。
+## 关于 ccproxy
 
-## 核心特性
+`src-tauri/src/ccproxy` 是 ChatSpeed 的 AI 代理与协议适配引擎，负责在 **OpenAI 兼容协议**、**Claude**、**Gemini** 和 **Ollama** 之间进行路由、直通和协议转换。
 
-### 1. 灵活的路由系统
+## 核心能力
 
-ccproxy 采用层次化路由设计，支持多种访问模式：
+### 1. 灵活路由
 
-- **直接访问**: 如 `/v1/chat/completions`，使用全局默认配置。
-- **分组路由 (Grouping)**: 如 `/{group_name}/v1/...`，为不同场景/客户端隔离模型配置。
-- **动态切换 (Switching)**: 使用 `/switch` 前缀（如 `/switch/v1/...`）自动路由到应用后台当前设定的“活动”分组。
-- **工具兼容模式 (Compat Mode)**: 通过 `/compat` 或 `/compat_mode` 路径（支持组合，如 `/switch/compat/v1/...`）为原生不支持工具调用的模型开启增强功能。
+ccproxy 支持多种访问模式：
 
-### 2. 多协议适配器
+- **直连路由**：`/v1/...`、`/v1beta/...`、`/api/...`
+- **分组路由**：`/{group_name}/v1/...`
+- **动态切换**：`/switch/v1/...` 会解析到当前激活的代理分组
+- **兼容模式**：`/compat/...` 或 `/compat_mode/...` 可为不支持原生 tool calling 的模型开启工具兼容能力
 
-模块通过“输入-后端-输出”三层适配器架构实现协议转换。
-**数据流示例 (Claude 客户端 -> OpenAI 后端):**
-`Client -> Claude Input (转换为 Unified 格式) -> OpenAI Backend (转换为 OpenAI 格式) -> Upstream AI -> OpenAI Backend (转回 Unified) -> Claude Output (转回 Claude 格式) -> Client`
+### 2. 多协议适配
 
-### 3. 工具兼容模式 (Tool Compat)
+当请求需要协议转换时，会经过 **Input -> Unified -> Backend -> Unified -> Output** 这条适配链路。
 
-针对原生不支持函数调用的模型，ccproxy 通过 Prompt 注入和 XML 拦截技术，将模型输出的文本实时解析并转换为协议标准的工具调用格式，对客户端完全透明。
+### 3. OpenAI 兼容接口面
 
-### 4. 嵌入 (Embedding) 代理
+ccproxy 提供 OpenAI 风格接口，包括：
 
-统一了各协议的嵌入接口：
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- `POST /v1/responses`
+- `POST /v1/embeddings`
 
-- **OpenAI**: `/v1/embeddings`
-- **Claude**: `/v1/claude/embeddings` (由代理提供，用于协议一致性)
-- **Gemini**: 支持 `:embedContent` 或 `/embedContent` 动作
-- **Ollama**: `/api/embed` 和 `/api/embeddings`
+`/v1/responses` 现已成为一等协议路径：
 
-## 模块原理
+- 路由覆盖直连、分组、`/switch` 和 compat 变体
+- 入口处理器是 `handler/responses_handler.rs`
+- `adapter/input/openai_responses_input.rs` 在需要适配时会把 Responses 请求转换为统一请求模型
+- `adapter/output/openai_responses_output.rs` 会把统一响应和流式事件重新转换为 OpenAI Responses 兼容输出
+- 当 provider metadata 设置了 `supports_responses_api` 或 `supportsResponsesApi` 时，ccproxy 会优先直通上游 `/responses` 端点
+- 否则会回退到统一 chat 流水线，再将结果重新序列化为 Responses 输出
 
-数据经过路由进入 `handle_chat_completion` 函数后，会经历以下步骤：
+### 4. Embedding 代理
 
-1. **解析模型**: 根据别名或 X-CS 头部定位具体的后台模型实例。
-2. **直连检查**: 如果客户端协议与后端一致且未开启兼容模式，则执行高性能头部过滤透传（Direct Forward）。
-3. **适配转换**: 若协议不一致，通过对应的 `Adapter` 进行双向格式化。
-4. **头部过滤**: 所有响应都会经过 `filter_proxy_headers` 处理，移除 `Content-Length`、`Connection` 等传输级头部，确保与 Axum 框架兼容。
+统一的 embedding 端点：
 
-## 注意事项
+- **OpenAI**：`/v1/embeddings`
+- **Claude**：`/v1/claude/embeddings`
+- **Gemini**：`:embedContent` 或 `/embedContent`
+- **Ollama**：`/api/embed` 和 `/api/embeddings`
 
-- **路由挂载**: 虽然本项目在 `ccproxy/router.rs` 中同步挂载了 MCP 等其他模块的路由，但那些属于独立业务模块，不属于 `ccproxy` 代理引擎的核心逻辑。
-- **严禁随意修改路由挂载顺序**: 当前的顺序（固定前缀 > 直接路由 > 全局兼容模式 > 动态分组）是经过精心设计的，旨在防止路由遮蔽（Route Shadowing）。
+## 工作方式
+
+请求进入协议处理器后，只会走两条规范路径之一：
+
+1. **直通转发**：客户端协议与后端协议一致，且 compat mode 关闭
+2. **统一适配**：需要协议转换或工具兼容时使用
+
+无论走哪条路径，ccproxy 都会继续负责：
+
+- 模型解析
+- 鉴权与代理头注入
+- 重试与统计记录
+- 协议安全的响应转换
+- 通过 `filter_proxy_headers` 进行响应头过滤
+
+## 重要说明
+
+- `router.rs` 对顺序敏感，调整路由层级时必须避免 route shadowing。
+- 静态协议前缀必须始终排在动态分组路由前面。
+- `Content-Length`、`Transfer-Encoding`、`Connection`、`Content-Encoding` 等传输层响应头不能直接透传。
+- 维护本模块时，以 `CONSTITUTION.md` 中的约束和不变量为准。
