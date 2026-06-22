@@ -483,126 +483,166 @@
   <el-dialog
     v-model="modelConfigDialogVisible"
     align-center
-    width="500px"
+    width="560px"
     :title="$t('settings.model.modelConfig')"
     :show-close="false"
     :close-on-click-modal="false"
     :close-on-press-escape="false">
     <el-form
       :model="modelConfigForm"
-      label-width="100px"
+      label-width="110px"
       :rules="modelConfigRules"
       ref="configFormRef">
-      <el-form-item :label="$t('settings.model.modelId')" prop="id">
-        <el-input v-model="modelConfigForm.id" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.modelAlias')" prop="name">
-        <el-input v-model="modelConfigForm.name" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.modelGroup')" prop="group">
-        <el-input v-model="modelConfigForm.group" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
-        <el-switch v-model="modelConfigForm.reasoning" />
-      </el-form-item>
-      <el-form-item
-        v-if="modelConfigForm.reasoning"
-        :label="$t('settings.model.thinkingLevel')">
-        <el-select v-model="modelConfigForm.thinkingLevel" style="width: 100%">
-          <el-option
-            v-for="option in modelThinkingLevelOptions"
-            :key="option.value"
-            :label="$t(option.label)"
-            :value="option.value" />
-        </el-select>
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
-        <el-switch v-model="modelConfigForm.functionCall" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
-        <el-switch v-model="modelConfigForm.imageInput" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.contextSize')" prop="contextSize">
-        <el-input-number
-          v-model="modelConfigForm.contextSize"
-          :min="1024"
-          :max="2000000"
-          :step="1024"
-          controls-position="right"
-          style="width: 100%" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.maxTokens')" prop="maxTokens">
-        <el-input-number
-          v-model="modelConfigForm.maxTokens"
-          :min="0"
-          :max="128000"
-          :step="1024"
-          controls-position="right"
-          style="width: 100%" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.model.temperature')" prop="temperature">
-        <el-tooltip
-          :content="$t('settings.model.temperaturePlaceholder')"
-          placement="top"
-          :hide-after="0"
-          :enterable="false"
-          transition="none">
-          <div style="display: flex; align-items: center; width: 100%; gap: 12px">
-            <el-slider
-              v-model="modelConfigForm.temperature"
-              :min="-0.1"
-              :max="2"
-              :step="0.1"
-              :show-tooltip="false"
-              style="flex: 1" />
-            <span style="font-size: 12px; min-width: 32px; text-align: right">
-              {{ modelConfigForm.temperature < 0 ? 'Off' : modelConfigForm.temperature.toFixed(1) }}
-            </span>
+      <el-tabs v-model="modelConfigActiveTab">
+        <el-tab-pane :label="$t('settings.model.basicInfo')" name="basic">
+          <el-form-item :label="$t('settings.model.modelId')" prop="id">
+            <el-input v-model="modelConfigForm.id" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.modelAlias')" prop="name">
+            <el-input v-model="modelConfigForm.name" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.modelGroup')" prop="group">
+            <el-input v-model="modelConfigForm.group" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
+            <el-switch v-model="modelConfigForm.reasoning" />
+          </el-form-item>
+          <el-form-item
+            v-if="modelConfigForm.reasoning"
+            :label="$t('settings.model.thinkingLevel')">
+            <el-select v-model="modelConfigForm.thinkingLevel" style="width: 100%">
+              <el-option
+                v-for="option in modelThinkingLevelOptions"
+                :key="option.value"
+                :label="$t(option.label)"
+                :value="option.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
+            <el-switch v-model="modelConfigForm.functionCall" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
+            <el-switch v-model="modelConfigForm.imageInput" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.contextSize')" prop="contextSize">
+            <el-input-number
+              v-model="modelConfigForm.contextSize"
+              :min="1024"
+              :max="2000000"
+              :step="1024"
+              controls-position="right"
+              style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.maxTokens')" prop="maxTokens">
+            <el-input-number
+              v-model="modelConfigForm.maxTokens"
+              :min="0"
+              :max="128000"
+              :step="1024"
+              controls-position="right"
+              style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.temperature')" prop="temperature">
+            <el-tooltip
+              :content="$t('settings.model.temperaturePlaceholder')"
+              placement="top"
+              :hide-after="0"
+              :enterable="false"
+              transition="none">
+              <div style="display: flex; align-items: center; width: 100%; gap: 12px">
+                <el-slider
+                  v-model="modelConfigForm.temperature"
+                  :min="-0.1"
+                  :max="2"
+                  :step="0.1"
+                  :show-tooltip="false"
+                  style="flex: 1" />
+                <span style="font-size: 12px; min-width: 32px; text-align: right">
+                  {{
+                    modelConfigForm.temperature < 0 ? 'Off' : modelConfigForm.temperature.toFixed(1)
+                  }}
+                </span>
+              </div>
+            </el-tooltip>
+          </el-form-item>
+        </el-tab-pane>
+
+        <el-tab-pane :label="$t('settings.model.additionalInfo')" name="additional">
+          <el-form-item :label="$t('settings.model.inputPricePerMillion')" label-width="auto">
+            <el-input-number
+              v-model="modelConfigForm.pricing.inputPerMillion"
+              :min="0"
+              :step="0.01"
+              :precision="6"
+              controls-position="right"
+              style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.outputPricePerMillion')" label-width="auto">
+            <el-input-number
+              v-model="modelConfigForm.pricing.outputPerMillion"
+              :min="0"
+              :step="0.01"
+              :precision="6"
+              controls-position="right"
+              style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.cachePricePerMillion')" label-width="auto">
+            <el-input-number
+              v-model="modelConfigForm.pricing.cachePerMillion"
+              :min="0"
+              :step="0.01"
+              :precision="6"
+              controls-position="right"
+              style="width: 100%" />
+          </el-form-item>
+
+          <div class="form-tip">
+            {{ $t('settings.model.pricingNote') }}
           </div>
-        </el-tooltip>
-      </el-form-item>
 
-      <el-divider border-style="dashed" />
+          <el-divider border-style="dashed" />
 
-      <div class="custom-headers-section">
-        <div class="header-title">
-          <span>{{ $t('settings.model.customParams') }}</span>
-          <el-tooltip :content="$t('settings.model.customParamsTip')" placement="top">
-            <cs name="help-circle" size="14px" color="secondary" style="margin-left: 4px" />
-          </el-tooltip>
-        </div>
+          <div class="custom-headers-section">
+            <div class="header-title">
+              <span>{{ $t('settings.model.customParams') }}</span>
+              <el-tooltip :content="$t('settings.model.customParamsTip')" placement="top">
+                <cs name="help-circle" size="14px" color="secondary" style="margin-left: 4px" />
+              </el-tooltip>
+            </div>
 
-        <div
-          v-for="(param, index) in modelConfigForm.customParams"
-          :key="index"
-          class="header-row"
-          style="display: flex; gap: 10px; margin-bottom: 10px">
-          <el-input
-            v-model="param.key"
-            :placeholder="$t('settings.model.paramKey')"
-            style="flex: 1" />
-          <el-input
-            v-model="param.value"
-            :placeholder="$t('settings.model.paramValue')"
-            style="flex: 2" />
-          <el-button
-            type="danger"
-            link
-            @click="removeModelConfigParam(index)"
-            style="padding: 0; min-width: 24px">
-            <cs name="trash" size="16px" />
-          </el-button>
-        </div>
+            <div
+              v-for="(param, index) in modelConfigForm.customParams"
+              :key="index"
+              class="header-row"
+              style="display: flex; gap: 10px; margin-bottom: 10px">
+              <el-input
+                v-model="param.key"
+                :placeholder="$t('settings.model.paramKey')"
+                style="flex: 1" />
+              <el-input
+                v-model="param.value"
+                :placeholder="$t('settings.model.paramValue')"
+                style="flex: 2" />
+              <el-button
+                type="danger"
+                link
+                @click="removeModelConfigParam(index)"
+                style="padding: 0; min-width: 24px">
+                <cs name="trash" size="16px" />
+              </el-button>
+            </div>
 
-        <el-button
-          type="primary"
-          plain
-          size="small"
-          @click="addModelConfigParam"
-          style="width: 100%">
-          <cs name="add" /> {{ $t('settings.model.addParam') }}
-        </el-button>
-      </div>
+            <el-button
+              type="primary"
+              plain
+              size="small"
+              @click="addModelConfigParam"
+              style="width: 100%">
+              <cs name="add" /> {{ $t('settings.model.addParam') }}
+            </el-button>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </el-form>
     <template #footer>
       <div class="dialog-footer">
@@ -687,6 +727,7 @@ import { Sortable } from 'sortablejs-vue3'
 
 import { showMessage, toInt, toFloat, openUrl } from '@/libs/util'
 import { FrontendAppError } from '@/libs/tauri'
+import { createDefaultPricing, normalizePricing } from '@/libs/modelPricing'
 import { useModelStore } from '@/stores/model'
 
 const isValidUrl = url => {
@@ -910,7 +951,9 @@ const createFromModel = srcModel => {
     proxyUsername: srcModel?.metadata?.proxyUsername || '',
     proxyPassword: srcModel?.metadata?.proxyPassword || '',
     supportsResponsesApi:
-      srcModel?.metadata?.supportsResponsesApi || srcModel?.metadata?.supports_responses_api || false,
+      srcModel?.metadata?.supportsResponsesApi ||
+      srcModel?.metadata?.supports_responses_api ||
+      false,
     customHeaders: srcModel?.metadata?.customHeaders || []
   }
 }
@@ -1162,7 +1205,7 @@ const toggleModelStatus = async model => {
 // Model Config area
 // =================================================
 // Reactive object to hold the form data for the model config
-const defaultModelConfig = {
+const createDefaultModelConfig = () => ({
   id: '',
   name: '',
   group: '',
@@ -1174,22 +1217,24 @@ const defaultModelConfig = {
   contextSize: 128000,
   temperature: -0.1,
   maxTokens: 0,
+  pricing: createDefaultPricing(),
   customParams: []
-}
+})
 const THINKING_LEVEL_TO_BUDGET = {
   low: 1024,
   medium: 2048,
   high: 4096,
   max: 8192
 }
-const thinkingLevelFromBudget = (budget) => {
+const thinkingLevelFromBudget = budget => {
   const normalized = Number(budget) || 0
   if (normalized > 4096) return 'max'
   if (normalized > 2048) return 'high'
   if (normalized > 1024) return 'medium'
   return 'low'
 }
-const budgetFromThinkingLevel = (level) => THINKING_LEVEL_TO_BUDGET[level] || THINKING_LEVEL_TO_BUDGET.low
+const budgetFromThinkingLevel = level =>
+  THINKING_LEVEL_TO_BUDGET[level] || THINKING_LEVEL_TO_BUDGET.low
 const modelThinkingLevelOptions = [
   { value: 'low', label: 'settings.model.reasoningLow' },
   { value: 'medium', label: 'settings.model.reasoningMedium' },
@@ -1200,8 +1245,9 @@ const modelConfigRules = {
   id: [{ required: true, message: t('settings.model.modelIdRequired') }]
 }
 const prevModelConfigId = ref('')
-const modelConfigForm = ref({ ...defaultModelConfig })
+const modelConfigForm = ref(createDefaultModelConfig())
 const modelConfigDialogVisible = ref(false)
+const modelConfigActiveTab = ref('basic')
 const modelGroups = computed(() => {
   return modelForm.value.models.reduce((groups, x) => {
     if (!x.group) {
@@ -1217,19 +1263,21 @@ const modelGroups = computed(() => {
  * @param {Object} model - The model config to edit.
  */
 const onModelConfig = model => {
+  modelConfigActiveTab.value = 'basic'
   if (model) {
     prevModelConfigId.value = model.id
     model.group = model.group === t('settings.model.ungrouped') ? '' : model.group
     modelConfigForm.value = {
-      ...defaultModelConfig,
+      ...createDefaultModelConfig(),
       ...model,
       customParams: model.customParams || [],
+      pricing: normalizePricing(model.pricing),
       thinking: model.thinking || null,
       thinkingLevel: thinkingLevelFromBudget(model.thinking?.budgetTokens)
     }
   } else {
     prevModelConfigId.value = ''
-    modelConfigForm.value = { ...defaultModelConfig }
+    modelConfigForm.value = createDefaultModelConfig()
   }
   modelConfigDialogVisible.value = true
 }
@@ -1263,13 +1311,15 @@ const updateModelConfig = () => {
   const updatedModelConfig = {
     ...modelConfigForm.value,
     id: trimmedId,
-    thinking:
-      modelConfigForm.value.reasoning
-        ? {
+    name: modelConfigForm.value.name?.trim() || trimmedId,
+    group: modelConfigForm.value.group?.trim() || '',
+    thinking: modelConfigForm.value.reasoning
+      ? {
           type: 'enabled',
           budgetTokens: budgetFromThinkingLevel(modelConfigForm.value.thinkingLevel)
         }
-        : null,
+      : null,
+    pricing: normalizePricing(modelConfigForm.value.pricing),
     customParams: modelConfigForm.value.customParams.filter(p => p.key.trim() !== '')
   }
   delete updatedModelConfig.thinkingLevel
@@ -1772,5 +1822,12 @@ const importPresetModel = model => {
       font-size: 12px;
     }
   }
+}
+
+.form-tip {
+  margin: calc(-1 * var(--cs-space-xs)) 0 var(--cs-space-sm);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+  line-height: 1.5;
 }
 </style>

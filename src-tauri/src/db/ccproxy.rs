@@ -389,6 +389,81 @@ impl MainStore {
         Ok(stats)
     }
 
+    /// Retrieves grouped proxy statistics for a date range.
+    ///
+    /// The result is grouped by date, provider, backend model, protocol and tool compatibility mode.
+    pub fn get_ccproxy_grouped_stats(&self, days: i32) -> Result<Vec<serde_json::Value>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let (sql, params) = if days == -1 {
+            (
+                "SELECT
+                    DATE(request_at, 'localtime') as date,
+                    COALESCE(provider, '-') as provider,
+                    COALESCE(backend_model, '-') as backend_model,
+                    COALESCE(protocol, '-') as protocol,
+                    tool_compat_mode,
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                    COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                    COALESCE(SUM(cache_tokens), 0) as total_cache_tokens
+                 FROM ccproxy_stats
+                 GROUP BY date, provider, backend_model, protocol, tool_compat_mode
+                 ORDER BY date DESC"
+                    .to_string(),
+                params![],
+            )
+        } else {
+            (
+                "SELECT
+                    DATE(request_at, 'localtime') as date,
+                    COALESCE(provider, '-') as provider,
+                    COALESCE(backend_model, '-') as backend_model,
+                    COALESCE(protocol, '-') as protocol,
+                    tool_compat_mode,
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                    COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                    COALESCE(SUM(cache_tokens), 0) as total_cache_tokens
+                 FROM ccproxy_stats
+                 WHERE DATE(request_at, 'localtime') >= DATE('now', 'localtime', '-' || ?1 || ' days')
+                 GROUP BY date, provider, backend_model, protocol, tool_compat_mode
+                 ORDER BY date DESC"
+                    .to_string(),
+                params![days],
+            )
+        };
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params, |row| {
+                Ok(serde_json::json!({
+                    "date": row.get::<_, String>(0)?,
+                    "provider": row.get::<_, String>(1)?,
+                    "backendModel": row.get::<_, String>(2)?,
+                    "protocol": row.get::<_, String>(3)?,
+                    "toolCompatMode": row.get::<_, i32>(4).unwrap_or(0),
+                    "requestCount": row.get::<_, u32>(5).unwrap_or(0),
+                    "totalInputTokens": row.get::<_, i64>(6).unwrap_or(0),
+                    "totalOutputTokens": row.get::<_, i64>(7).unwrap_or(0),
+                    "totalCacheTokens": row.get::<_, i64>(8).unwrap_or(0),
+                }))
+            })
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+
+        let mut stats = Vec::new();
+        for row in rows {
+            stats.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
+        }
+        Ok(stats)
+    }
+
     pub fn get_ccproxy_error_stats_by_date(
         &self,
         date: &str,

@@ -79,6 +79,14 @@ pub struct ThinkingConfig {
     pub budget_tokens: Option<u32>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PricingConfig {
+    pub input_per_million: f64,
+    pub output_per_million: f64,
+    pub cache_per_million: f64,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelConfig {
     pub id: String,
@@ -98,6 +106,8 @@ pub struct ModelConfig {
     pub temperature: Option<f32>,
     #[serde(rename = "customParams", skip_serializing_if = "Option::is_none")]
     pub custom_params: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<PricingConfig>,
 }
 
 impl Default for ModelConfig {
@@ -113,6 +123,7 @@ impl Default for ModelConfig {
             max_tokens: Some(0),
             temperature: Some(-0.1),
             custom_params: None,
+            pricing: None,
         }
     }
 }

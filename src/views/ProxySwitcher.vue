@@ -66,13 +66,17 @@
                           )
                         }}</span
                       >
+                      <span
+                        >{{ $t('settings.proxy.stats.estimatedCost') }}
+                        {{ formatCurrencyCompact(proxy.stats.estimatedCost) }}</span
+                      >
                     </div>
                   </div>
                 </div>
 
                 <div class="value" @click.stop>
                   <el-tooltip
-                    :content="$t('settings.proxy.stats.dailyTokensTitle')"
+                    :content="$t('settings.proxy.stats.dailyCostTitle')"
                     placement="top"
                     :hide-after="0"
                     :enterable="false">
@@ -254,6 +258,39 @@
             <div v-else-if="!trendChartData.length" class="trend-empty">
               {{ $t('common.noData') }}
             </div>
+            <div v-else class="trend-summary">
+              <div class="trend-summary-item">
+                <span class="trend-summary-label">{{
+                  $t('settings.proxy.stats.estimatedCost')
+                }}</span>
+                <strong>{{ formatCurrency(trendSummary?.estimatedCost || 0) }}</strong>
+              </div>
+              <div class="trend-summary-item">
+                <span class="trend-summary-label">{{
+                  $t('settings.proxy.stats.inputTokens')
+                }}</span>
+                <strong>{{ formatCompactNumber(trendSummary?.inputTokens || 0) }}</strong>
+              </div>
+              <div class="trend-summary-item">
+                <span class="trend-summary-label">{{
+                  $t('settings.proxy.stats.outputTokens')
+                }}</span>
+                <strong>{{ formatCompactNumber(trendSummary?.outputTokens || 0) }}</strong>
+              </div>
+              <div class="trend-summary-item">
+                <span class="trend-summary-label">{{
+                  $t('settings.proxy.stats.cacheTokens')
+                }}</span>
+                <strong>{{ formatCompactNumber(trendSummary?.cacheTokens || 0) }}</strong>
+              </div>
+            </div>
+            <el-tabs
+              v-if="!trendError && !trendLoading && trendChartData.length"
+              v-model="selectedTrendMetric"
+              class="trend-metric-tabs">
+              <el-tab-pane :label="$t('settings.proxy.stats.dailyCostTitle')" name="cost" />
+              <el-tab-pane :label="$t('settings.proxy.stats.dailyTokensTitle')" name="tokens" />
+            </el-tabs>
             <div
               v-show="!trendError && !trendLoading && trendChartData.length"
               ref="trendChartRef"
@@ -338,6 +375,12 @@ import { useModelStore } from '@/stores/model'
 import { invokeWrapper } from '@/libs/tauri'
 import { showMessage, isEmpty } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
+import {
+  buildPricingMaps,
+  estimateCostFromPricing,
+  formatCurrency,
+  formatCurrencyCompact
+} from '@/libs/modelPricing'
 import Avatar from '@/components/common/Avatar.vue'
 import { Coin } from '@element-plus/icons-vue'
 
@@ -371,8 +414,12 @@ const trendChartData = ref([])
 const trendSummary = ref(null)
 const trendChartRef = ref(null)
 const trendPendingRender = ref(false)
+const trendTokenChartData = ref([])
+const trendCostChartData = ref([])
+const selectedTrendMetric = ref('cost')
 const selectedTrendProvider = ref('')
 const selectedTrendRange = ref(7)
+const pricingMaps = ref(buildPricingMaps(modelStore.providers))
 let trendChart = null
 let unlistenFocus = null
 const TREND_CHART_ID = 'proxy-switcher-trend-chart'
@@ -410,7 +457,8 @@ const sortedProxyServerGroups = computed(() => {
         stats: serverStatsToday.value[`${name}::${alias}`] || {
           inputTokens: 0,
           outputTokens: 0,
-          cacheTokens: 0
+          cacheTokens: 0,
+          estimatedCost: 0
         }
       }))
     }))
@@ -528,6 +576,18 @@ const getProviderNameById = providerId => {
   )
 }
 
+const estimateRowCost = row => {
+  const pricing = pricingMaps.value.byProviderName.get(`${row.provider}::${row.backendModel}`)
+  return estimateCostFromPricing(
+    {
+      inputTokens: row.totalInputTokens,
+      outputTokens: row.totalOutputTokens,
+      cacheTokens: row.totalCacheTokens
+    },
+    pricing
+  )
+}
+
 const calculateServerStatsFromRows = (rows, targets, providerFilter = '') => {
   const targetMap = new Map(
     (targets || [])
@@ -546,9 +606,10 @@ const calculateServerStatsFromRows = (rows, targets, providerFilter = '') => {
       totals.inputTokens += Number(row.totalInputTokens || 0)
       totals.outputTokens += Number(row.totalOutputTokens || 0)
       totals.cacheTokens += Number(row.totalCacheTokens || 0)
+      totals.estimatedCost += estimateRowCost(row)
       return totals
     },
-    { inputTokens: 0, outputTokens: 0, cacheTokens: 0 }
+    { inputTokens: 0, outputTokens: 0, cacheTokens: 0, estimatedCost: 0 }
   )
 }
 
@@ -600,15 +661,23 @@ const renderTrendChart = async () => {
     autoFit: true,
     xField: 'date',
     yField: 'value',
-    seriesField: 'type',
     height: Math.max(container.clientHeight, 220),
     padding: [16, 18, 64, 56],
     smooth: true,
-    color: ['#409eff', '#67c23a', '#e6a23c'],
-    legend: {
-      position: 'bottom',
-      offsetY: 8
-    },
+    seriesField: selectedTrendMetric.value === 'tokens' ? 'type' : undefined,
+    color:
+      selectedTrendMetric.value === 'tokens'
+        ? ['#409eff', '#67c23a', '#e6a23c']
+        : getComputedStyle(document.documentElement)
+            .getPropertyValue('--cs-success-color')
+            .trim() || '#67c23a',
+    legend:
+      selectedTrendMetric.value === 'tokens'
+        ? {
+            position: 'bottom',
+            offsetY: 8
+          }
+        : false,
     xAxis: {
       label: {
         autoHide: true
@@ -624,13 +693,22 @@ const renderTrendChart = async () => {
         }
       },
       label: {
-        formatter: value => formatCompactNumber(value)
+        formatter: value =>
+          selectedTrendMetric.value === 'tokens'
+            ? formatCompactNumber(value)
+            : formatCurrencyCompact(value)
       }
     },
     tooltip: {
       formatter: datum => ({
-        name: datum.type,
-        value: formatCompactNumber(datum.value)
+        name:
+          selectedTrendMetric.value === 'tokens'
+            ? datum.type
+            : t('settings.proxy.stats.estimatedCost'),
+        value:
+          selectedTrendMetric.value === 'tokens'
+            ? formatCompactNumber(datum.value)
+            : formatCurrency(datum.value)
       })
     }
   }
@@ -652,13 +730,15 @@ const loadTrendPopoverData = async proxy => {
   trendChartData.value = []
   trendSummary.value = null
   trendPendingRender.value = false
+  trendTokenChartData.value = []
+  trendCostChartData.value = []
   destroyTrendChart()
 
   try {
     const dates = getLastNDates(Number(selectedTrendRange.value))
 
     if (!dates.length) {
-      trendSummary.value = { inputTokens: 0, outputTokens: 0, cacheTokens: 0 }
+      trendSummary.value = { inputTokens: 0, outputTokens: 0, cacheTokens: 0, estimatedCost: 0 }
       trendChartData.value = []
       trendPendingRender.value = false
       return
@@ -670,11 +750,7 @@ const loadTrendPopoverData = async proxy => {
 
     const dailyStats = dates.map((date, index) => ({
       date,
-      ...calculateServerStatsFromRows(
-        dailyRows[index],
-        proxy.targets,
-        selectedTrendProvider.value
-      )
+      ...calculateServerStatsFromRows(dailyRows[index], proxy.targets, selectedTrendProvider.value)
     }))
 
     trendSummary.value = dailyStats.reduce(
@@ -682,12 +758,13 @@ const loadTrendPopoverData = async proxy => {
         totals.inputTokens += day.inputTokens
         totals.outputTokens += day.outputTokens
         totals.cacheTokens += day.cacheTokens
+        totals.estimatedCost += day.estimatedCost
         return totals
       },
-      { inputTokens: 0, outputTokens: 0, cacheTokens: 0 }
+      { inputTokens: 0, outputTokens: 0, cacheTokens: 0, estimatedCost: 0 }
     )
 
-    trendChartData.value = dailyStats.flatMap(day => [
+    trendTokenChartData.value = dailyStats.flatMap(day => [
       {
         date: day.date.slice(5),
         type: t('settings.proxy.stats.inputTokens'),
@@ -704,6 +781,12 @@ const loadTrendPopoverData = async proxy => {
         value: day.cacheTokens
       }
     ])
+    trendCostChartData.value = dailyStats.map(day => ({
+      date: day.date.slice(5),
+      value: day.estimatedCost
+    }))
+    trendChartData.value =
+      selectedTrendMetric.value === 'tokens' ? trendTokenChartData.value : trendCostChartData.value
 
     trendPendingRender.value = true
   } catch (error) {
@@ -720,6 +803,7 @@ const loadTrendPopoverData = async proxy => {
 
 const openTrendDrawer = async proxy => {
   activeTrendProxyKey.value = proxy.key
+  selectedTrendMetric.value = 'cost'
   selectedTrendProvider.value = ''
   selectedTrendRange.value = 7
   activeTrendProxy.value = {
@@ -749,8 +833,30 @@ const closeTrendDrawer = () => {
   trendChartData.value = []
   trendSummary.value = null
   trendPendingRender.value = false
+  trendTokenChartData.value = []
+  trendCostChartData.value = []
   destroyTrendChart()
 }
+
+watch(
+  () => modelStore.providers,
+  () => {
+    pricingMaps.value = buildPricingMaps(modelStore.providers)
+    refreshTodayServerStats()
+    if (activeTrendProxy.value) {
+      refreshTrendPopover()
+    }
+  },
+  { deep: true }
+)
+
+watch(selectedTrendMetric, async metric => {
+  trendChartData.value = metric === 'tokens' ? trendTokenChartData.value : trendCostChartData.value
+  destroyTrendChart()
+  if (trendDrawerVisible.value && trendChartData.value.length) {
+    trendPendingRender.value = !(await renderTrendChart())
+  }
+})
 
 const handleHide = async () => {
   if (isHiding.value) return
@@ -1314,7 +1420,7 @@ onMounted(async () => {
 }
 
 :deep(.proxy-trend-drawer) {
-  max-height: 400px;
+  max-height: 500px;
 }
 
 .model-selector-panel {
@@ -1491,11 +1597,38 @@ onMounted(async () => {
 }
 
 .trend-summary {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--cs-space-sm);
-  color: var(--cs-text-color-secondary);
-  font-size: var(--cs-font-size-xs);
+
+  .trend-summary-item {
+    padding: var(--cs-space-xs) var(--cs-space-sm);
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius);
+    background-color: var(--cs-bg-color-light);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    strong {
+      color: var(--cs-text-color-primary);
+      font-size: var(--cs-font-size-sm);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .trend-summary-label {
+      color: var(--cs-text-color-secondary);
+      font-size: var(--cs-font-size-xs);
+    }
+  }
+
+  .trend-metric-tabs {
+    :deep(.el-tabs__header) {
+      margin: 0;
+    }
+  }
 }
 
 .trend-chart {

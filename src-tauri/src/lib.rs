@@ -189,6 +189,7 @@ pub async fn run() -> crate::error::Result<()> {
             // ccproxy stats
             delete_ccproxy_stats,
             get_ccproxy_daily_stats,
+            get_ccproxy_grouped_stats,
             get_ccproxy_provider_stats_by_date,
             get_ccproxy_error_stats_by_date,
             get_ccproxy_model_usage_stats,
@@ -805,8 +806,13 @@ pub async fn run() -> crate::error::Result<()> {
             }
 
             // 4. Proxy Switcher Window (Hidden)
-            if let Err(e) = window::create_proxy_switcher_window(&app.handle(), false) {
-                log::error!("Failed to create proxy switcher window: {}", e);
+            match window::create_proxy_switcher_window(&app.handle(), false) {
+                Ok(win) => {
+                    restore_window_config(&win, main_store.clone());
+                }
+                Err(e) => {
+                    log::error!("Failed to create proxy switcher window: {}", e);
+                }
             }
 
             // create tray

@@ -56,6 +56,17 @@
     <!-- KPI Cards -->
     <div class="kpi-cards">
       <div class="kpi-card">
+        <div class="kpi-icon" style="background-color: rgba(103, 194, 58, 0.1); color: #67c23a">
+          <el-icon>
+            <Coin />
+          </el-icon>
+        </div>
+        <div class="kpi-content">
+          <div class="kpi-value">{{ formatCurrencyCompact(kpiData.estimatedCost) }}</div>
+          <div class="kpi-label">{{ $t('settings.proxy.stats.estimatedCost') }}</div>
+        </div>
+      </div>
+      <div class="kpi-card">
         <div class="kpi-icon" style="background-color: rgba(64, 158, 255, 0.1); color: #409eff">
           <el-icon>
             <DataLine />
@@ -67,7 +78,7 @@
         </div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-icon" style="background-color: rgba(103, 194, 58, 0.1); color: #67c23a">
+        <div class="kpi-icon" style="background-color: rgba(144, 147, 153, 0.1); color: #909399">
           <el-icon>
             <Coin />
           </el-icon>
@@ -75,6 +86,17 @@
         <div class="kpi-content">
           <div class="kpi-value">{{ formatTokens(kpiData.totalTokens) }}</div>
           <div class="kpi-label">{{ $t('settings.proxy.stats.totalTokens') }}</div>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon" style="background-color: rgba(230, 162, 60, 0.1); color: #e6a23c">
+          <el-icon>
+            <Collection />
+          </el-icon>
+        </div>
+        <div class="kpi-content">
+          <div class="kpi-value">{{ formatPercent(kpiData.cacheHitRate) }}</div>
+          <div class="kpi-label">{{ $t('settings.proxy.stats.cacheHitRate') }}</div>
         </div>
       </div>
       <div class="kpi-card">
@@ -88,17 +110,6 @@
             {{ kpiData.errorRate.toFixed(2) }}%
           </div>
           <div class="kpi-label">{{ $t('settings.proxy.stats.errorRate') }}</div>
-        </div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-icon" style="background-color: rgba(230, 162, 60, 0.1); color: #e6a23c">
-          <el-icon>
-            <Collection />
-          </el-icon>
-        </div>
-        <div class="kpi-content">
-          <div class="kpi-value">{{ formatPercent(kpiData.cacheHitRate) }}</div>
-          <div class="kpi-label">{{ $t('settings.proxy.stats.cacheHitRate') }}</div>
         </div>
       </div>
     </div>
@@ -204,10 +215,25 @@
                 width="110"
                 sortable
                 :sort-method="
-                  (a, b) => getCacheHitRateValue(a.totalCacheTokens, a.totalInputTokens) - getCacheHitRateValue(b.totalCacheTokens, b.totalInputTokens)
+                  (a, b) =>
+                    getCacheHitRateValue(a.totalCacheTokens, a.totalInputTokens) -
+                    getCacheHitRateValue(b.totalCacheTokens, b.totalInputTokens)
                 ">
                 <template #default="scope">
-                  {{ formatPercent(getCacheHitRateValue(scope.row.totalCacheTokens, scope.row.totalInputTokens)) }}
+                  {{
+                    formatPercent(
+                      getCacheHitRateValue(scope.row.totalCacheTokens, scope.row.totalInputTokens)
+                    )
+                  }}
+                </template>
+              </el-table-column>
+              <el-table-column
+                :label="$t('settings.proxy.stats.estimatedCost')"
+                width="130"
+                sortable
+                sort-by="estimatedCost">
+                <template #default="scope">
+                  {{ formatCurrency(scope.row.estimatedCost) }}
                 </template>
               </el-table-column>
               <el-table-column
@@ -257,7 +283,16 @@
       </el-table-column>
       <el-table-column :label="$t('settings.proxy.stats.cacheHitRate')" width="110">
         <template #default="scope">
-          {{ formatPercent(getCacheHitRateValue(scope.row.totalCacheTokens, scope.row.totalInputTokens)) }}
+          {{
+            formatPercent(
+              getCacheHitRateValue(scope.row.totalCacheTokens, scope.row.totalInputTokens)
+            )
+          }}
+        </template>
+      </el-table-column>
+      <el-table-column :label="$t('settings.proxy.stats.estimatedCost')" width="130">
+        <template #default="scope">
+          {{ formatCurrency(scope.row.estimatedCost) }}
         </template>
       </el-table-column>
       <el-table-column prop="errorCount" :label="$t('settings.proxy.stats.errors')" width="100" />
@@ -271,6 +306,11 @@
             <el-tab-pane :label="$t('settings.proxy.stats.dailyTokensTitle')" name="dailyTokens">
               <div class="tab-chart-content">
                 <div v-show="activeTrendTab === 'dailyTokens'" id="daily-tokens-column"></div>
+              </div>
+            </el-tab-pane>
+            <el-tab-pane :label="$t('settings.proxy.stats.dailyCostTitle')" name="dailyCost">
+              <div class="tab-chart-content">
+                <div v-show="activeTrendTab === 'dailyCost'" id="daily-cost-line"></div>
               </div>
             </el-tab-pane>
             <el-tab-pane
@@ -354,26 +394,38 @@
 
 <script setup>
 import { markRaw, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { Bar, Column, DualAxes } from '@antv/g2plot'
+import { Bar, DualAxes, Line } from '@antv/g2plot'
 import { invokeWrapper } from '@/libs/tauri'
 import { useI18n } from 'vue-i18n'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import { showMessage } from '@/libs/util'
 import { ElMessageBox } from 'element-plus'
 import { DataLine, Coin, Warning, Collection } from '@element-plus/icons-vue'
+import { useModelStore } from '@/stores/model'
+import {
+  buildPricingMaps,
+  estimateCostFromPricing,
+  formatCurrency,
+  formatCurrencyCompact
+} from '@/libs/modelPricing'
 
 const { t } = useI18n()
+const modelStore = useModelStore()
 
 const STORAGE_KEY_AUTO_REFRESH = 'ccproxy_stats_auto_refresh'
 
 const loading = ref(false)
 const selectedDays = ref(0)
 const autoRefreshEnabled = ref(localStorage.getItem(STORAGE_KEY_AUTO_REFRESH) === 'true')
+const dailyStatsRaw = ref([])
 const dailyStats = ref([])
+const groupedStatsRaw = ref([])
 // Use reactive to ensure reactivity when dynamically adding keys
 const providerStats = ref({})
+const providerStatsRaw = ref({})
 const providerLoading = ref({})
 const expandedDates = ref(new Set())
+const pricingMaps = ref(buildPricingMaps(modelStore.providers))
 
 const errorDialogVisible = ref(false)
 const errorLoading = ref(false)
@@ -385,7 +437,8 @@ const kpiData = ref({
   totalRequests: 0,
   totalTokens: 0,
   errorRate: 0,
-  cacheHitRate: 0
+  cacheHitRate: 0,
+  estimatedCost: 0
 })
 
 // Active tab for trend charts (Token first)
@@ -399,6 +452,7 @@ let modelTokenBarChart = null
 let providerTokenBarChart = null
 let errorBarChart = null
 let tokenBarChart = null
+let costLineChart = null
 let requestsDualAxisChart = null
 let refreshTimer = null
 let isRefreshing = false
@@ -457,6 +511,18 @@ const formatNumber = val => {
     return (num / 1000).toFixed(2) + 'K'
   }
   return num.toLocaleString()
+}
+
+const estimateRowCost = row => {
+  const pricing = pricingMaps.value.byProviderName.get(`${row.provider}::${row.backendModel}`)
+  return estimateCostFromPricing(
+    {
+      inputTokens: row.totalInputTokens,
+      outputTokens: row.totalOutputTokens,
+      cacheTokens: row.totalCacheTokens
+    },
+    pricing
+  )
 }
 
 const getCacheHitRateValue = (cacheTokens, inputTokens) => {
@@ -523,7 +589,8 @@ const calculateKPI = (modelUsage = []) => {
       totalRequests: 0,
       totalTokens: 0,
       errorRate: 0,
-      cacheHitRate: 0
+      cacheHitRate: 0,
+      estimatedCost: 0
     }
     return
   }
@@ -533,6 +600,7 @@ const calculateKPI = (modelUsage = []) => {
   let totalErrors = 0
   let totalInputTokens = 0
   let totalCacheTokens = 0
+  let estimatedCost = 0
 
   dailyStats.value.forEach(day => {
     totalRequests += Number(day.totalRequestCount || 0)
@@ -540,6 +608,7 @@ const calculateKPI = (modelUsage = []) => {
     totalCacheTokens += Number(day.totalCacheTokens || 0)
     totalTokens += Number(day.totalInputTokens || 0) + Number(day.totalOutputTokens || 0)
     totalErrors += Number(day.errorCount || 0)
+    estimatedCost += Number(day.estimatedCost || 0)
   })
 
   const errorRate = totalRequests > 0 ? (totalErrors / totalRequests) * 100 : 0
@@ -549,8 +618,28 @@ const calculateKPI = (modelUsage = []) => {
     totalRequests,
     totalTokens,
     errorRate,
-    cacheHitRate
+    cacheHitRate,
+    estimatedCost
   }
+}
+
+const enrichProviderRows = rows =>
+  (rows || []).map(row => ({
+    ...row,
+    estimatedCost: estimateRowCost(row)
+  }))
+
+const syncDailyStatsWithCosts = () => {
+  const groupedByDate = groupedStatsRaw.value.reduce((map, row) => {
+    const date = row.date
+    map.set(date, (map.get(date) || 0) + estimateRowCost(row))
+    return map
+  }, new Map())
+
+  dailyStats.value = (dailyStatsRaw.value || []).map(day => ({
+    ...day,
+    estimatedCost: groupedByDate.get(day.date) || 0
+  }))
 }
 
 const getProtocolColor = protocol => {
@@ -577,14 +666,21 @@ const fetchDailyStats = async (isAutoRefresh = false) => {
   if (isAutoRefresh === false) {
     startRefreshTimer()
     loading.value = true
+    dailyStatsRaw.value = []
     dailyStats.value = []
+    groupedStatsRaw.value = []
     providerStats.value = {}
+    providerStatsRaw.value = {}
     providerLoading.value = {}
   }
   try {
-    const res = await invokeWrapper('get_ccproxy_daily_stats', { days: selectedDays.value })
-    // Use spread to ensure Vue detects array update even if content is similar
-    dailyStats.value = res ? [...res] : []
+    const [dailyRes, groupedRes] = await Promise.all([
+      invokeWrapper('get_ccproxy_daily_stats', { days: selectedDays.value }),
+      invokeWrapper('get_ccproxy_grouped_stats', { days: selectedDays.value })
+    ])
+    dailyStatsRaw.value = dailyRes ? [...dailyRes] : []
+    groupedStatsRaw.value = groupedRes ? [...groupedRes] : []
+    syncDailyStatsWithCosts()
 
     // If auto-refreshing, also refresh data for currently expanded rows
     if (isAutoRefresh === true && expandedDates.value.size > 0) {
@@ -605,10 +701,8 @@ const fetchDailyStats = async (isAutoRefresh = false) => {
 
 const updateCharts = async () => {
   try {
-    const [modelUsage, modelTokenUsage, providerTokenUsage, errorDist] = await Promise.all([
+    const [modelUsage, errorDist] = await Promise.all([
       invokeWrapper('get_ccproxy_model_usage_stats', { days: selectedDays.value }),
-      invokeWrapper('get_ccproxy_model_token_usage_stats', { days: selectedDays.value }),
-      invokeWrapper('get_ccproxy_provider_token_usage_stats', { days: selectedDays.value }),
       invokeWrapper('get_ccproxy_error_distribution_stats', { days: selectedDays.value })
     ])
 
@@ -621,6 +715,7 @@ const updateCharts = async () => {
     const errorRateData = []
     const tokenBarData = []
     const tokenLineData = []
+    const costLineData = []
 
     ;(dailyStats.value || [])
       .slice()
@@ -655,6 +750,10 @@ const updateCharts = async () => {
           date: day.date,
           type: t('settings.proxy.stats.cacheTokens'),
           value: Number(day.totalCacheTokens || 0)
+        })
+        costLineData.push({
+          date: day.date,
+          value: Number(day.estimatedCost || 0)
         })
       })
 
@@ -776,10 +875,7 @@ const updateCharts = async () => {
                 ],
                 label: {
                   position: 'middle',
-                  layout: [
-                    { type: 'interval-adjust-position' },
-                    { type: 'interval-hide-overlap' }
-                  ],
+                  layout: [{ type: 'interval-adjust-position' }, { type: 'interval-hide-overlap' }],
                   formatter: datum => {
                     const dayCount = dailyStats.value?.length || 0
                     return dayCount <= 5 ? formatTokens(datum.value) : ''
@@ -849,6 +945,52 @@ const updateCharts = async () => {
       })
     }
 
+    if (!costLineChart) {
+      const container = document.getElementById('daily-cost-line')
+      if (container) {
+        costLineChart = markRaw(
+          new Line('daily-cost-line', {
+            data: costLineData,
+            xField: 'date',
+            yField: 'value',
+            smooth: true,
+            color: getCssVar('--cs-success-color') || '#67c23a',
+            lineStyle: {
+              lineWidth: 3
+            },
+            point: {
+              size: 4,
+              shape: 'circle'
+            },
+            xAxis: {
+              ...getCommonAxisConfig(),
+              grid: null
+            },
+            yAxis: {
+              ...getCommonAxisConfig(),
+              label: {
+                formatter: val => formatCurrencyCompact(val)
+              }
+            },
+            tooltip: {
+              formatter: datum => ({
+                name: t('settings.proxy.stats.estimatedCost'),
+                value: formatCurrency(datum.value)
+              })
+            },
+            slider: (dailyStats.value?.length || 0) > 10 ? { start: 0, end: 1 } : null
+          })
+        )
+        costLineChart.render()
+      }
+    } else {
+      costLineChart.changeData(costLineData)
+      const dayCount = dailyStats.value?.length || 0
+      costLineChart.update({
+        slider: dayCount > 10 ? { start: 0, end: 1 } : null
+      })
+    }
+
     const sortedModelUsage = (modelUsage || [])
       .map(item => ({ ...item, value: Number(item.value) }))
       .sort((a, b) => b.value - a.value)
@@ -891,8 +1033,19 @@ const updateCharts = async () => {
       modelBarChart.render()
     }
 
-    const sortedModelTokenUsage = (modelTokenUsage || [])
-      .map(item => ({ ...item, value: Number(item.value) }))
+    const sortedModelTokenUsage = Array.from(
+      groupedStatsRaw.value.reduce((map, row) => {
+        const key = row.backendModel || '-'
+        map.set(
+          key,
+          (map.get(key) || 0) +
+            Number(row.totalInputTokens || 0) +
+            Number(row.totalOutputTokens || 0)
+        )
+        return map
+      }, new Map())
+    )
+      .map(([type, value]) => ({ type, value: Number(value) }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 10)
 
@@ -933,8 +1086,19 @@ const updateCharts = async () => {
       modelTokenBarChart.render()
     }
 
-    const sortedProviderTokenUsage = (providerTokenUsage || [])
-      .map(item => ({ ...item, value: Number(item.value) }))
+    const sortedProviderTokenUsage = Array.from(
+      groupedStatsRaw.value.reduce((map, row) => {
+        const key = row.provider || '-'
+        map.set(
+          key,
+          (map.get(key) || 0) +
+            Number(row.totalInputTokens || 0) +
+            Number(row.totalOutputTokens || 0)
+        )
+        return map
+      }, new Map())
+    )
+      .map(([type, value]) => ({ type, value: Number(value) }))
       .sort((a, b) => b.value - a.value)
 
     if (!providerTokenBarChart) {
@@ -1027,7 +1191,11 @@ const fetchProviderStats = async (date, force = false) => {
 
   try {
     const stats = await invokeWrapper('get_ccproxy_provider_stats_by_date', { date })
-    providerStats.value = { ...providerStats.value, [date]: stats || [] }
+    providerStatsRaw.value = { ...providerStatsRaw.value, [date]: stats || [] }
+    providerStats.value = {
+      ...providerStats.value,
+      [date]: enrichProviderRows(stats || [])
+    }
   } catch (error) {
     console.error('Failed to fetch provider stats:', error)
   } finally {
@@ -1102,6 +1270,21 @@ watch(autoRefreshEnabled, val => {
   }
 })
 
+watch(
+  () => modelStore.providers,
+  () => {
+    pricingMaps.value = buildPricingMaps(modelStore.providers)
+    syncDailyStatsWithCosts()
+    providerStats.value = Object.fromEntries(
+      Object.entries(providerStatsRaw.value).map(([date, rows]) => [date, enrichProviderRows(rows)])
+    )
+    if (dailyStats.value.length) {
+      updateCharts()
+    }
+  },
+  { deep: true }
+)
+
 onMounted(() => {
   fetchDailyStats()
 })
@@ -1113,6 +1296,7 @@ onUnmounted(() => {
   if (providerTokenBarChart) providerTokenBarChart.destroy()
   if (errorBarChart) errorBarChart.destroy()
   if (tokenBarChart) tokenBarChart.destroy()
+  if (costLineChart) costLineChart.destroy()
   if (requestsDualAxisChart) requestsDualAxisChart.destroy()
 })
 </script>
@@ -1148,13 +1332,13 @@ onUnmounted(() => {
 // KPI Cards
 .kpi-cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: var(--cs-space-md);
   margin-bottom: var(--cs-space-lg);
   padding: 4px;
 
-  @media (max-width: 1000px) {
-    grid-template-columns: repeat(2, 1fr);
+  @media (max-width: 1200px) {
+    grid-template-columns: repeat(3, 1fr);
   }
 
   @media (max-width: 600px) {
