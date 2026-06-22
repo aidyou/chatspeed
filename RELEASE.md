@@ -2,7 +2,7 @@
 
 # Release Notes
 
-## [2.0.0] - planning
+## [2.0.0]
 
 ### ⚠️ Breaking Changes
 
