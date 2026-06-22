@@ -8,13 +8,15 @@ const toFiniteNumber = value => {
 export const createDefaultPricing = () => ({
   inputPerMillion: 0,
   outputPerMillion: 0,
-  cachePerMillion: 0
+  cachePerMillion: 0,
+  multiplier: 1
 })
 
 export const normalizePricing = pricing => ({
   inputPerMillion: Math.max(0, toFiniteNumber(pricing?.inputPerMillion)),
   outputPerMillion: Math.max(0, toFiniteNumber(pricing?.outputPerMillion)),
-  cachePerMillion: Math.max(0, toFiniteNumber(pricing?.cachePerMillion))
+  cachePerMillion: Math.max(0, toFiniteNumber(pricing?.cachePerMillion)),
+  multiplier: Math.max(0, toFiniteNumber(pricing?.multiplier) || 1)
 })
 
 export const buildPricingMaps = providers => {
@@ -53,7 +55,7 @@ export const estimateCostFromPricing = (
     (inputTokens * normalizedPricing.inputPerMillion) / PRICE_SCALE +
     (outputTokens * normalizedPricing.outputPerMillion) / PRICE_SCALE +
     (cacheTokens * normalizedPricing.cachePerMillion) / PRICE_SCALE
-  )
+  ) * normalizedPricing.multiplier
 }
 
 export const formatCurrency = value => {

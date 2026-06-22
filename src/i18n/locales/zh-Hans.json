@@ -510,6 +510,7 @@
       "paramKey": "参数名",
       "paramValue": "值",
       "outputPricePerMillion": "输出单价 / 百万",
+      "priceMultiplier": "倍率",
       "presencePenalty": "存在惩罚",
       "presencePenaltyPlaceholder": "调整模型重复已出现词语的可能性。值越大，越不容易重复。设为0或留空则不启用。",
       "pricingNote": "单价支持任意币种或计价单位，统计结果会按你填写的单位直接计算；为避免汇总偏差，请尽量在不同模型之间使用同一单位。",

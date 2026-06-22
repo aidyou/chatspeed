@@ -510,6 +510,7 @@
       "inputPricePerMillion": "입력 단가 / 100만",
       "outputPricePerMillion": "출력 단가 / 100만",
       "cachePricePerMillion": "캐시 단가 / 100만",
+      "priceMultiplier": "배율",
       "presencePenalty": "존재 패널티",
       "presencePenaltyPlaceholder": "모델이 이미 나타난 단어를 반복할 가능성을 조정합니다. 값이 높을수록 반복 가능성이 낮아집니다. 비활성화하려면 0으로 설정하거나 비워 둡니다.",
       "pricingNote": "단가는 어떤 통화나 과금 단위로 입력해도 되며, 통계는 입력한 단위로 그대로 계산됩니다. 집계 오차를 줄이려면 모델 간에는 가능한 한 같은 단위를 사용하세요.",

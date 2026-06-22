@@ -595,6 +595,15 @@
               controls-position="right"
               style="width: 100%" />
           </el-form-item>
+          <el-form-item :label="$t('settings.model.priceMultiplier')" label-width="auto">
+            <el-input-number
+              v-model="modelConfigForm.pricing.multiplier"
+              :min="0"
+              :step="0.1"
+              :precision="4"
+              controls-position="right"
+              style="width: 100%" />
+          </el-form-item>
 
           <div class="form-tip">
             {{ $t('settings.model.pricingNote') }}

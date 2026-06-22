@@ -82,9 +82,18 @@ pub struct ThinkingConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PricingConfig {
+    #[serde(default)]
     pub input_per_million: f64,
+    #[serde(default)]
     pub output_per_million: f64,
+    #[serde(default)]
     pub cache_per_million: f64,
+    #[serde(default = "default_pricing_multiplier")]
+    pub multiplier: f64,
+}
+
+fn default_pricing_multiplier() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

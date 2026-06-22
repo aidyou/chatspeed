@@ -510,6 +510,7 @@
       "inputPricePerMillion": "入力単価 / 100万",
       "outputPricePerMillion": "出力単価 / 100万",
       "cachePricePerMillion": "キャッシュ単価 / 100万",
+      "priceMultiplier": "倍率",
       "presencePenalty": "存在ペナルティ",
       "presencePenaltyPlaceholder": "モデルが既に出現した単語を繰り返す可能性を調整します。値が大きいほど、繰り返しにくくなります。0に設定するか、空白のままにすると無効になります。",
       "pricingNote": "単価は任意の通貨または計価単位で入力できます。統計は入力した単位でそのまま計算されますが、集計のずれを避けるため、モデル間ではできるだけ同じ単位を使用してください。",

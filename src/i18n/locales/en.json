@@ -510,6 +510,7 @@
       "paramKey": "Parameter Name",
       "paramValue": "Value",
       "outputPricePerMillion": "Output Price / 1M",
+      "priceMultiplier": "Multiplier",
       "presencePenalty": "Presence Penalty",
       "presencePenaltyPlaceholder": "Adjusts the likelihood of the model repeating words that have already appeared. A higher value makes repetition less likely. Set to 0 or leave blank to disable.",
       "pricingNote": "Prices can use any currency or billing unit. Statistics are calculated directly in the unit you enter; use the same unit across models to avoid inconsistent totals.",

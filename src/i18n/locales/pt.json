@@ -510,6 +510,7 @@
       "inputPricePerMillion": "Preço de entrada / 1M",
       "outputPricePerMillion": "Preço de saída / 1M",
       "cachePricePerMillion": "Preço de cache / 1M",
+      "priceMultiplier": "Multiplicador",
       "presencePenalty": "Penalidade de presença",
       "presencePenaltyPlaceholder": "Ajusta a probabilidade do modelo repetir palavras que já apareceram. Um valor mais alto torna a repetição menos provável. Defina como 0 ou deixe em branco para desativar.",
       "pricingNote": "Os preços podem usar qualquer moeda ou unidade de cobrança. As estatísticas são calculadas diretamente na unidade informada; use a mesma unidade entre os modelos para evitar totais inconsistentes.",
