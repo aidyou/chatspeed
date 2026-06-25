@@ -106,10 +106,7 @@
     ],
     "withGlobalTauri": true,
     "security": {
-      "capabilities": [
-        "default",
-        "scraper"
-      ]
+      "capabilities": ["default", "scraper"]
     }
   },
   "bundle": {
@@ -122,9 +119,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "assets"
-    ],
+    "resources": ["assets"],
     "copyright": "",
     "category": "DeveloperTool",
     "shortDescription": "",

@@ -1,10 +1,6 @@
 <template>
   <div class="proxy-settings-container">
     <el-tabs v-model="activeTab">
-      <el-tab-pane :label="$t('settings.proxy.tabs.stats')" name="stats">
-        <ProxyStats />
-      </el-tab-pane>
-
       <el-tab-pane :label="$t('settings.proxy.tabs.servers')" name="servers">
         <!-- proxy list -->
         <div class="card">
@@ -295,6 +291,9 @@
             </el-text>
           </div>
         </div>
+      </el-tab-pane>
+      <el-tab-pane :label="$t('settings.proxy.tabs.stats')" name="stats">
+        <ProxyStats />
       </el-tab-pane>
     </el-tabs>
 

@@ -65,7 +65,7 @@
               :data-user-expand-id="getUserMessageExpandId(message)"
               class="simple-text"
               :class="{
-                'is-collapsed': isExpandableUserMessage(message) && !isUserMessageExpanded(message),
+                'is-collapsed': !isUserMessageExpanded(message),
                 'is-expandable': isExpandableUserMessage(message)
               }"
               >{{ getVisibleUserContent(message) }}</pre
