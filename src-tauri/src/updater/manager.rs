@@ -5,12 +5,15 @@
 use super::error::{Result, UpdateError};
 use super::types::VersionInfo;
 use log::{info, warn};
+use reqwest::Proxy;
 use semver::Version;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::async_runtime::spawn;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
+
+use crate::db::MainStore;
 
 const EVENT_UPDATE_PROGRESS: &str = "update://download-progress";
 const EVENT_UPDATE_READY: &str = "update://ready";
@@ -40,8 +43,7 @@ impl UpdateManager {
     /// Checks for available updates and automatically downloads them in the background.
     pub async fn check_and_download_update(&self) -> Result<()> {
         let updater = self
-            .app
-            .updater()
+            .build_updater()
             .map_err(|e| UpdateError::ConfigError(e.to_string()))?;
 
         if let Ok(Some(update)) = updater.check().await {
@@ -69,6 +71,50 @@ impl UpdateManager {
         }
 
         Ok(())
+    }
+
+    fn build_updater(&self) -> Result<tauri_plugin_updater::Updater> {
+        let mut builder = self.app.updater_builder();
+
+        if let Some(main_store) = self.app.try_state::<Arc<std::sync::RwLock<MainStore>>>() {
+            let store = main_store.read().map_err(|_| {
+                UpdateError::LockError("Failed to read MainStore state".to_string())
+            })?;
+
+            let proxy_type = store.get_config("proxy_type", "none".to_string());
+            match proxy_type.as_str() {
+                "none" => {
+                    builder = builder.no_proxy();
+                }
+                "http" => {
+                    let proxy_server = store.get_config("proxy_server", String::new());
+                    if proxy_server.trim().is_empty() {
+                        return Err(UpdateError::ConfigError(
+                            "HTTP proxy is enabled for updates, but proxy_server is empty"
+                                .to_string(),
+                        ));
+                    }
+
+                    let mut proxy = Proxy::all(proxy_server.as_str())
+                        .map_err(|e| UpdateError::ConfigError(e.to_string()))?;
+                    let proxy_username = store.get_config("proxy_username", String::new());
+                    let proxy_password = store.get_config("proxy_password", String::new());
+
+                    if !proxy_username.is_empty() && !proxy_password.is_empty() {
+                        proxy = proxy.basic_auth(&proxy_username, &proxy_password);
+                    }
+
+                    builder = builder.configure_client(move |client| client.proxy(proxy.clone()));
+                }
+                _ => {
+                    // Keep reqwest default behavior so updater follows system/env proxy settings.
+                }
+            }
+        }
+
+        builder
+            .build()
+            .map_err(|e| UpdateError::ConfigError(e.to_string()))
     }
 
     /// Installs the latest downloaded update and restarts the application.

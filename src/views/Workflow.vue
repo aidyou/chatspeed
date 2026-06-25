@@ -48,6 +48,17 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <el-tooltip
+          v-if="updateStore.isUpdateReady"
+          :content="$t('common.newVersionReady')"
+          :hide-after="0"
+          :enterable="false"
+          placement="bottom">
+          <div class="menu icon-btn upperLayer restart update-ready-btn" @click="updateStore.restartApp">
+            <cs name="restart" />
+            {{ $t('common.updateButtonText') }}
+          </div>
+        </el-tooltip>
         <el-dropdown trigger="click">
           <div class="icon-btn upperLayer">
             <el-tooltip
@@ -267,6 +278,7 @@ import { showMessage, Uuid } from '@/libs/util'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingStore } from '@/stores/setting'
+import { useUpdateStore } from '@/stores/update'
 import { useWindowStore } from '@/stores/window'
 
 import Titlebar from '@/components/window/Titlebar.vue'
@@ -293,6 +305,7 @@ const { t } = useI18n()
 const workflowStore = useWorkflowStore()
 const agentStore = useAgentStore()
 const settingStore = useSettingStore()
+const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
 
 // Component refs
@@ -1553,5 +1566,14 @@ onBeforeUnmount(() => {
   font-size: var(--cs-font-size-sm);
   font-weight: 500;
   color: var(--cs-text-primary);
+}
+
+.update-ready-btn {
+  font-size: var(--cs-font-size);
+  color: var(--cs-success-color);
+
+  .cs {
+    color: var(--cs-success-color);
+  }
 }
 </style>

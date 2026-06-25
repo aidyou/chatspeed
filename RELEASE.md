@@ -2,6 +2,35 @@
 
 # Release Notes
 
+## [2.0.1]
+
+### 🪄 Improvements
+
+- **Updater now respects network proxy settings**:
+  - Auto-update checks and update package downloads now follow the app's proxy configuration.
+  - `http` mode uses the configured proxy server and optional username/password.
+  - `none` mode explicitly disables proxy usage for updater requests.
+  - `system` mode keeps the default system/environment proxy behavior.
+- **Workflow window now exposes the update action**:
+  - Added the same green restart/update entry used by the chat window to the Workflow titlebar.
+  - This makes update installation discoverable for users who primarily stay in Workflow after upgrading from the 1.2.x line.
+- **Floating window behavior is more stable during dragging**:
+  - Improved assistant and proxy switcher auto-hide behavior so they no longer disappear immediately while being dragged, especially on Linux/Ubuntu where focus changes are more aggressive.
+- **Proxy stats and switcher polish**:
+  - Embedded proxy statistics into the proxy switcher as an additional tab for quicker inspection.
+  - Added backend model cost distribution to the proxy stats distribution charts.
+- **Dependency maintenance**:
+  - Updated vulnerable dependencies and removed unused Rust crates to reduce maintenance and security risk.
+
+### 🐞 Bug Fixes
+
+- **Workflow status preview flicker**:
+  - Removed the per-message fade transition from the workflow status notifier text updates, reducing visible flicker during fast streaming output.
+- **Proxy switcher / workflow update UX gaps**:
+  - Fixed the missing in-context update entry when the main chat window is no longer the primary surface.
+
+---
+
 ## [2.0.0]
 
 ### ⚠️ Breaking Changes
