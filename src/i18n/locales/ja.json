@@ -663,6 +663,7 @@
         "last365Days": "過去365日間",
         "last7Days": "直近 7 日",
         "last90Days": "直近 90 日",
+        "modelCostUsageTitle": "バックエンドモデルのコスト分布",
         "modelTokenUsageTitle": "バックエンドモデルのトークン消費分布",
         "modelUsageTitle": "バックエンドモデル使用状況 (回数別)",
         "no": "いいえ",

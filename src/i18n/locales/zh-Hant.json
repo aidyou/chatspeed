@@ -663,6 +663,7 @@
         "last365Days": "最近 365 天",
         "last7Days": "最近 7 天",
         "last90Days": "最近 90 天",
+        "modelCostUsageTitle": "後端模型費用分佈",
         "modelTokenUsageTitle": "後端模型 Token 消耗分佈",
         "modelUsageTitle": "後端模型使用分佈 (按次數)",
         "no": "否",

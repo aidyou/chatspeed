@@ -663,6 +663,7 @@
         "last365Days": "최근 365일",
         "last7Days": "최근 7일",
         "last90Days": "최근 90일",
+        "modelCostUsageTitle": "백엔드 모델 비용 분포",
         "modelTokenUsageTitle": "백엔드 모델 토큰 사용량 분포",
         "modelUsageTitle": "백엔드 모델 사용 분포 (횟수 기준)",
         "no": "아니요",

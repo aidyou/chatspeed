@@ -25,9 +25,11 @@ pub mod test;
 
 use log::{error, warn};
 use rust_i18n::{i18n, set_locale};
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -103,10 +105,31 @@ i18n!("i18n", fallback = "en");
 // Define a static variable to track if the window is ready
 static WINDOW_READY: AtomicBool = AtomicBool::new(false);
 
-// Define a static variable outside the run function to store the timer handle
-static HIDE_TIMER: StdMutex<Option<JoinHandle<()>>> = StdMutex::new(None);
-static MOVE_TIMER: StdMutex<Option<JoinHandle<()>>> = StdMutex::new(None);
-static LAST_MOVE: StdMutex<Option<Instant>> = StdMutex::new(None);
+// Store auto-hide timers by window label so assistant and proxy switcher do not interfere.
+static HIDE_TIMERS: LazyLock<StdMutex<HashMap<String, JoinHandle<()>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+static MOVE_TIMERS: LazyLock<StdMutex<HashMap<String, JoinHandle<()>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+static LAST_MOVES: LazyLock<StdMutex<HashMap<String, Instant>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+fn should_auto_hide_on_focus_loss(label: &str) -> bool {
+    matches!(label, "assistant" | "proxy_switcher")
+}
+
+fn should_preserve_visibility_while_dragging(label: &str) -> bool {
+    matches!(label, "assistant" | "proxy_switcher")
+}
+
+fn should_keep_window_visible(label: &str) -> bool {
+    match label {
+        "assistant" => {
+            ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed)
+                || crate::constants::ON_MOUSE_EVENT.load(Ordering::Relaxed)
+        }
+        _ => false,
+    }
+}
 
 pub async fn run() -> crate::error::Result<()> {
     let builder = tauri::Builder::default()
@@ -305,67 +328,48 @@ pub async fn run() -> crate::error::Result<()> {
         .plugin(tauri_plugin_opener::init())
                 .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(focused) => {
-                // This logic is specifically for the "assistant" window.
-                if window.label() == "assistant" {
-                    // When the window gains focus...
+                let label = window.label().to_string();
+                if should_auto_hide_on_focus_loss(&label) {
                     if *focused {
-                        // It's crucial to cancel any pending hide timer.
-                        // This prevents the window from disappearing after being re-focused.
-                        if let Ok(mut timer) = HIDE_TIMER.lock() {
-                            if let Some(handle) = timer.take() {
+                        if let Ok(mut timers) = HIDE_TIMERS.lock() {
+                            if let Some(handle) = timers.remove(&label) {
                                 handle.abort();
-                                log::debug!("Assistant window gained focus, hide timer cancelled.");
+                                log::debug!("Window '{}' gained focus, hide timer cancelled.", label);
                             }
                         }
-                    } else {
-                        // When the window loses focus...
-                        // We don't hide it immediately. We start a delayed task.
-                        // This robustly handles cases like dragging, where focus is lost but the window should stay visible.
-                        if let Ok(mut timer) = HIDE_TIMER.lock() {
-                            // Always cancel any previous timer to ensure only one hide task is active.
-                            if let Some(handle) = timer.take() {
-                                handle.abort();
+                    } else if let Ok(mut timers) = HIDE_TIMERS.lock() {
+                        if let Some(handle) = timers.remove(&label) {
+                            handle.abort();
+                        }
+
+                        let window_clone = window.clone();
+                        let label_clone = label.clone();
+                        let timer = spawn(async move {
+                            #[cfg(target_os = "macos")]
+                            let hide_duration = Duration::from_millis(10);
+
+                            #[cfg(not(target_os = "macos"))]
+                            let hide_duration = Duration::from_millis(200);
+
+                            tokio::time::sleep(hide_duration).await;
+
+                            if should_keep_window_visible(&label_clone) {
+                                log::debug!(
+                                    "Hiding window '{}' cancelled because it should remain visible.",
+                                    label_clone
+                                );
+                                return;
                             }
 
-                            let window_clone = window.clone();
-                            *timer = Some(spawn(async move {
-                                #[cfg(target_os = "macos")]
-                                let hide_duration = Duration::from_millis(10);
-
-                                #[cfg(not(target_os = "macos"))]
-                                let hide_duration = Duration::from_millis(200);
-
-                                // Wait for a short duration. This delay is the key to solving the race condition.
-                                // It allows the `mousedown` event from the frontend (which indicates a drag start)
-                                // to be processed and set the ON_MOUSE_EVENT flag before we check it.
-                                tokio::time::sleep(hide_duration).await;
-
-                                // After the delay, we perform the definitive checks.
-                                let is_pinned =
-                                    ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed);
-                                let is_mouse_interacting =
-                                    crate::constants::ON_MOUSE_EVENT.load(Ordering::Relaxed);
-
-                                // Do not hide the window if it's pinned (always on top) or if a mouse drag is in progress.
-                                if is_pinned || is_mouse_interacting {
-                                    log::debug!(
-                                        "Hiding assistant window cancelled. Pinned: {}, Mouse Event: {}",
-                                        is_pinned,
-                                        is_mouse_interacting
-                                    );
-                                    return;
+                            if window_clone.is_visible().unwrap_or(false)
+                                && !window_clone.is_focused().unwrap_or(false)
+                            {
+                                if let Err(e) = window_clone.hide() {
+                                    warn!("Failed to hide window '{}': {}", label_clone, e);
                                 }
-
-                                // Final check: only hide if the window is still visible and has NOT regained focus during our delay.
-                                if window_clone.is_visible().unwrap_or(false)
-                                    && !window_clone.is_focused().unwrap_or(false)
-                                {
-                                    if let Err(e) = window_clone.hide() {
-                                        warn!("Failed to hide assistant window: {}", e);
-                                    }
-                                }
-                            }));
-                        }
+                            }
+                        });
+                        timers.insert(label, timer);
                     }
                 }
             }
@@ -436,7 +440,8 @@ pub async fn run() -> crate::error::Result<()> {
                     return;
                 }
                 let window_label = window.label();
-                if window_label == "main" || window_label == "assistant" || window_label == "workflow" || window_label == "proxy_switcher" {
+                if window_label == "main" || window_label == "assistant" ||
+                    window_label == "workflow" || window_label == "proxy_switcher" {
                     if let Some(config_state) = window.try_state::<Arc<RwLock<MainStore>>>() {
                         let window_size = get_saved_window_size(config_state.inner().clone(), window_label).unwrap_or_default();
                         if (window_size.width != size.width as f64
@@ -487,67 +492,70 @@ pub async fn run() -> crate::error::Result<()> {
                             |store, pos| store.save_workflow_window_position(pos),
                         );
                     }
-                } else if window.label() == "assistant" {
-                    constants::ON_MOUSE_EVENT.store(true, Ordering::Relaxed);
+                } else if should_preserve_visibility_while_dragging(window.label()) {
+                    let label = window.label().to_string();
 
-                    // Update last move time, log error if mutex is poisoned
-                    if let Ok(mut last_move) = LAST_MOVE.lock() {
-                        *last_move = Some(Instant::now());
-                    } else {
-                        error!("LAST_MOVE mutex is poisoned");
+                    if label == "assistant" {
+                        constants::ON_MOUSE_EVENT.store(true, Ordering::Relaxed);
                     }
 
-                    // Cancel any pending hide timer immediately when window movement starts
-                    if let Ok(mut hide_timer) = HIDE_TIMER.lock() {
-                        if let Some(handle) = hide_timer.take() {
+                    if let Ok(mut last_moves) = LAST_MOVES.lock() {
+                        last_moves.insert(label.clone(), Instant::now());
+                    } else {
+                        error!("LAST_MOVES mutex is poisoned");
+                    }
+
+                    if let Ok(mut hide_timers) = HIDE_TIMERS.lock() {
+                        if let Some(handle) = hide_timers.remove(&label) {
                             handle.abort();
-                            log::debug!("Hide timer cancelled due to window movement");
+                            log::debug!("Hide timer for '{}' cancelled due to window movement", label);
                         }
                     }
 
-                    // Reset the movement detection timer
-                    if let Ok(mut move_timer) = MOVE_TIMER.lock() {
-                        if let Some(handle) = move_timer.take() {
+                    if let Ok(mut move_timers) = MOVE_TIMERS.lock() {
+                        if let Some(handle) = move_timers.remove(&label) {
                             handle.abort();
                         }
                     } else {
-                        error!("MOVE_TIMER mutex is poisoned");
+                        error!("MOVE_TIMERS mutex is poisoned");
                         return;
                     }
 
                     let window_clone = window.clone();
+                    let label_clone = label.clone();
                     let new_timer = spawn(async move {
-                        // Increase detection time to 1 second to accommodate actual dragging
                         tokio::time::sleep(Duration::from_secs(1)).await;
 
-                        // Check if movement has ended
-                        let movement_ended = if let Ok(last_move) = LAST_MOVE.lock() {
-                            last_move.map_or(false, |t| t.elapsed() >= Duration::from_secs(1))
+                        let movement_ended = if let Ok(last_moves) = LAST_MOVES.lock() {
+                            last_moves
+                                .get(&label_clone)
+                                .map_or(false, |t| t.elapsed() >= Duration::from_secs(1))
                         } else {
-                            error!("LAST_MOVE mutex is poisoned in timer task");
+                            error!("LAST_MOVES mutex is poisoned in timer task");
                             false
                         };
 
                         if movement_ended {
-                            constants::ON_MOUSE_EVENT.store(false, Ordering::Relaxed);
-                            log::debug!("Window move ended");
+                            if label_clone == "assistant" {
+                                constants::ON_MOUSE_EVENT.store(false, Ordering::Relaxed);
+                            }
+                            log::debug!("Window '{}' move ended", label_clone);
 
-                            // After movement ends, check if window should be hidden
                             if !window_clone.is_focused().unwrap_or(false)
-                                && !ASSISTANT_ALWAYS_ON_TOP.load(Ordering::Relaxed) {
+                                && !should_keep_window_visible(&label_clone)
+                            {
                                 if let Err(e) = window_clone.hide() {
-                                    warn!("Failed to hide window: {}", e);
+                                    warn!("Failed to hide window '{}': {}", label_clone, e);
                                 }
                             }
                         }
                     });
 
-                    // Store the new timer handle
-                    if let Ok(mut move_timer) = MOVE_TIMER.lock() {
-                        *move_timer = Some(new_timer);
+                    if let Ok(mut move_timers) = MOVE_TIMERS.lock() {
+                        move_timers.insert(label, new_timer);
                     } else {
-                        error!("MOVE_TIMER mutex is poisoned when storing new timer");
-                        new_timer.abort(); // Clean up the timer if we can't store it
+                        error!("MOVE_TIMERS mutex is poisoned when storing new timer");
+                        new_timer.abort();
                     }
                 }
             }

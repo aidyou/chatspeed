@@ -424,7 +424,6 @@ let unlistenChunkResponse = ref(null)
 let unlistenPasteResponse = ref(null)
 let unlistenSyncState = ref(null)
 let unlistenFocusInput = ref(null)
-let unlistenFocus = ref(null)
 
 // Do not remove this, it's useful when user does not set default model at assistant dialog
 const currentModelProvider = ref({ ...modelStore.defaultModelProvider })
@@ -575,12 +574,6 @@ onMounted(async () => {
   inputRef.value?.focus()
   await sensitiveStore.fetchConfig()
 
-  unlistenFocus.value = await appWindow.onFocusChanged(({ payload: focused }) => {
-    if (!focused && !windowStore.assistantAlwaysOnTop) {
-      appWindow.hide()
-    }
-  })
-
   unlistenFocusInput.value = await listen('cs://assistant-focus-input', event => {
     if (event.payload && event.payload.windowLabel === settingStore.windowLabel) {
       inputRef.value?.focus()
@@ -668,10 +661,6 @@ onUnmounted(() => {
 
   if (unlistenFocusInput.value) {
     unlistenFocusInput.value()
-  }
-
-  if (unlistenFocus.value) {
-    unlistenFocus.value()
   }
 
   if (chatMessagesRef.value?.contentRef) {

@@ -17,6 +17,7 @@
     <el-tabs v-model="activeTab" class="switcher-tabs">
       <el-tab-pane :label="$t('proxySwitcher.serverSwitch')" name="servers" />
       <el-tab-pane :label="$t('proxySwitcher.groupSwitch')" name="groups" />
+      <el-tab-pane :label="$t('settings.proxy.stats.title')" name="stats" />
     </el-tabs>
 
     <div v-if="activeTab === 'servers'" class="server-switch-panel">
@@ -301,6 +302,10 @@
       </el-drawer>
     </div>
 
+    <div v-else-if="activeTab === 'stats'" class="proxy-stats-panel">
+      <ProxyStats />
+    </div>
+
     <div v-else-if="proxyGroupStore.list.length > 0" class="proxy-list" ref="listRef">
       <div
         v-for="(group, index) in sortedProxyGroupList"
@@ -382,6 +387,7 @@ import {
   formatCurrencyCompact
 } from '@/libs/modelPricing'
 import Avatar from '@/components/common/Avatar.vue'
+import ProxyStats from '@/components/setting/ProxyStats.vue'
 import { Coin } from '@element-plus/icons-vue'
 
 const { t } = useI18n()
@@ -421,7 +427,6 @@ const selectedTrendProvider = ref('')
 const selectedTrendRange = ref(7)
 const pricingMaps = ref(buildPricingMaps(modelStore.providers))
 let trendChart = null
-let unlistenFocus = null
 const TREND_CHART_ID = 'proxy-switcher-trend-chart'
 
 const sortedProxyGroupList = computed(() => {
@@ -1098,7 +1103,6 @@ watch(
 )
 
 onUnmounted(() => {
-  if (unlistenFocus) unlistenFocus()
   if (saveTimer.value) clearTimeout(saveTimer.value)
   if (serverStatsTimer.value) clearInterval(serverStatsTimer.value)
   destroyTrendChart()
@@ -1117,12 +1121,6 @@ onMounted(async () => {
 
   nextTick(() => {
     windowRef.value?.focus()
-  })
-
-  unlistenFocus = await appWindow.onFocusChanged(({ payload: focused }) => {
-    if (!focused && !isHiding.value) {
-      handleHide()
-    }
   })
   startServerStatsRefresh()
 })
@@ -1335,6 +1333,22 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--cs-space-xs);
+
+  &::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--cs-border-color);
+    border-radius: 2px;
+  }
+}
+
+.proxy-stats-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--cs-space-sm);
 
   &::-webkit-scrollbar {
     width: 4px;

@@ -339,6 +339,15 @@
                   id="model-token-usage-bar"></div>
               </div>
             </el-tab-pane>
+            <el-tab-pane
+              :label="$t('settings.proxy.stats.modelCostUsageTitle')"
+              name="modelCostUsage">
+              <div class="tab-chart-content">
+                <div
+                  v-show="activeDistributionTab === 'modelCostUsage'"
+                  id="model-cost-usage-bar"></div>
+              </div>
+            </el-tab-pane>
             <el-tab-pane :label="$t('settings.proxy.stats.modelUsageTitle')" name="modelUsage">
               <div class="tab-chart-content">
                 <div v-show="activeDistributionTab === 'modelUsage'" id="model-usage-bar"></div>
@@ -448,6 +457,7 @@ const activeTrendTab = ref('dailyTokens')
 const activeDistributionTab = ref('modelTokenUsage')
 
 let modelBarChart = null
+let modelCostBarChart = null
 let modelTokenBarChart = null
 let providerTokenBarChart = null
 let errorBarChart = null
@@ -1033,6 +1043,54 @@ const updateCharts = async () => {
       modelBarChart.render()
     }
 
+    const sortedModelCostUsage = Array.from(
+      groupedStatsRaw.value.reduce((map, row) => {
+        const key = row.backendModel || '-'
+        map.set(key, (map.get(key) || 0) + estimateRowCost(row))
+        return map
+      }, new Map())
+    )
+      .map(([type, value]) => ({ type, value: Number(value) }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 10)
+
+    if (!modelCostBarChart) {
+      const container = document.getElementById('model-cost-usage-bar')
+      if (container) {
+        modelCostBarChart = markRaw(
+          new Bar('model-cost-usage-bar', {
+            data: sortedModelCostUsage,
+            xField: 'value',
+            yField: 'type',
+            seriesField: 'type',
+            legend: false,
+            xAxis: {
+              ...getCommonAxisConfig(),
+              label: {
+                formatter: val => formatCurrencyCompact(val)
+              }
+            },
+            yAxis: {
+              ...getCommonAxisConfig()
+            },
+            label: {
+              position: 'right',
+              formatter: datum => formatCurrency(datum.value)
+            },
+            tooltip: {
+              formatter: datum => {
+                return { name: datum.type, value: formatCurrency(datum.value) }
+              }
+            }
+          })
+        )
+        modelCostBarChart.render()
+      }
+    } else {
+      modelCostBarChart.changeData(sortedModelCostUsage)
+      modelCostBarChart.render()
+    }
+
     const sortedModelTokenUsage = Array.from(
       groupedStatsRaw.value.reduce((map, row) => {
         const key = row.backendModel || '-'
@@ -1292,6 +1350,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (refreshTimer) clearTimeout(refreshTimer)
   if (modelBarChart) modelBarChart.destroy()
+  if (modelCostBarChart) modelCostBarChart.destroy()
   if (modelTokenBarChart) modelTokenBarChart.destroy()
   if (providerTokenBarChart) providerTokenBarChart.destroy()
   if (errorBarChart) errorBarChart.destroy()
@@ -1342,6 +1401,10 @@ onUnmounted(() => {
   }
 
   @media (max-width: 600px) {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  @media (max-width: 300px) {
     grid-template-columns: 1fr;
   }
 }

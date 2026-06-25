@@ -7,9 +7,7 @@
         class="status-icon"
         :class="{ rotating: displayState.spinning }" />
 
-      <transition name="fade-slide" mode="out-in">
-        <span :key="displayMessage" class="status-message">{{ displayMessage }}</span>
-      </transition>
+      <span class="status-message">{{ displayMessage }}</span>
     </div>
   </div>
 </template>
@@ -351,16 +349,4 @@ watch(() => workflowStore.currentWorkflow?.status, (newStatus, oldStatus) => {
   }
 }
 
-.fade-slide-enter-active,
-.fade-slide-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.fade-slide-enter-from {
-  opacity: 0;
-}
-
-.fade-slide-leave-to {
-  opacity: 0;
-}
 </style>

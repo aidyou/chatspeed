@@ -663,6 +663,7 @@
         "last365Days": "Letzte 365 Tage",
         "last7Days": "Letzte 7 Tage",
         "last90Days": "Letzte 90 Tage",
+        "modelCostUsageTitle": "Backend-Modell Kostenverteilung",
         "modelTokenUsageTitle": "Backend-Modell Token-Verbrauch Verteilung",
         "modelUsageTitle": "Backend-Modell-Nutzung",
         "no": "Nein",
