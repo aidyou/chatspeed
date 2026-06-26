@@ -2,15 +2,26 @@
   <div class="workflow-layout">
     <Titlebar :show-menu-button="settingStore.settings.showMenuButton">
       <template #left>
-        <el-tooltip
-          :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)"
-          placement="right"
-          :hide-after="0"
-          :enterable="false">
-          <div class="icon-btn upperLayer" @click="onToggleSidebar">
-            <cs name="sidebar" />
-          </div>
-        </el-tooltip>
+        <div class="workflow-titlebar-left-actions">
+          <el-tooltip
+            :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)"
+            placement="right"
+            :hide-after="0"
+            :enterable="false">
+            <div class="icon-btn upperLayer" @click="onToggleSidebar">
+              <cs name="sidebar" />
+            </div>
+          </el-tooltip>
+          <el-tooltip
+            :content="$t('workflow.automation.title')"
+            :hide-after="0"
+            :enterable="false"
+            placement="bottom">
+            <div class="icon-btn upperLayer" @click="openCreateAutomation">
+              <cs name="clock" />
+            </div>
+          </el-tooltip>
+        </div>
       </template>
       <template #center>
         <div
@@ -123,7 +134,14 @@
         :current-paths="currentPaths"
         :can-switch-workflow="canSwitchWorkflow"
         :is-dragging="isDragging"
+        :automations="workflowAutomationStore.automations"
+        :selected-automation-id="workflowAutomationStore.selectedAutomationId"
+        v-model:active-tab="workflowSidebarActiveTab"
         @select-workflow="selectWorkflow"
+        @select-automation="onEditAutomation"
+        @create-automation="openCreateAutomation"
+        @edit-automation="onEditAutomation"
+        @delete-automation="onDeleteAutomation"
         @edit-workflow="onEditWorkflow"
         @delete-workflow="onDeleteWorkflow"
         @add-path-from-tree="onAddPathFromTree"
@@ -262,6 +280,11 @@
       :agent="selectedAgent"
       :system-skills="systemSkills"
       @save="onSkillsConfigSave" />
+
+    <WorkflowAutomationDrawer
+      v-model="automationDrawerVisible"
+      @saved="onAutomationSaved"
+      @started-workflow="onAutomationStartedWorkflow" />
   </div>
 </template>
 
@@ -276,6 +299,7 @@ import { imagePreview, imageSourceUrl } from '@/libs/fs'
 import { showMessage, Uuid } from '@/libs/util'
 
 import { useWorkflowStore } from '@/stores/workflow'
+import { useWorkflowAutomationStore } from '@/stores/workflowAutomation'
 import { useAgentStore } from '@/stores/agent'
 import { useSettingStore } from '@/stores/setting'
 import { useUpdateStore } from '@/stores/update'
@@ -288,6 +312,7 @@ import WorkflowSkillsSelector from '@/components/workflow/WorkflowSkillsSelector
 import WorkflowSidebar from '@/components/workflow/WorkflowSidebar.vue'
 import WorkflowMessageList from '@/components/workflow/WorkflowMessageList.vue'
 import WorkflowInputArea from '@/components/workflow/WorkflowInputArea.vue'
+import WorkflowAutomationDrawer from '@/components/workflow/automation/WorkflowAutomationDrawer.vue'
 
 // Composables
 import { useWorkflowSidebar } from '@/composables/workflow/useWorkflowSidebar'
@@ -303,6 +328,7 @@ const IMAGE_FILE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp
 
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
+const workflowAutomationStore = useWorkflowAutomationStore()
 const agentStore = useAgentStore()
 const settingStore = useSettingStore()
 const updateStore = useUpdateStore()
@@ -329,6 +355,8 @@ const autoCompressEnabled = ref(true)
 const imageAttachments = ref([])
 const defaultImageRecognitionPrompt = ref('')
 const visibleCompletedTaskGroupCount = ref(3)
+const automationDrawerVisible = ref(false)
+const workflowSidebarActiveTab = ref('history')
 
 const showPlanningModeToggle = computed(() => {
   const workflow = workflowStore.currentWorkflow
@@ -1192,6 +1220,57 @@ const onApproveAllPendingAction = async payload => {
   }
 }
 
+const openCreateAutomation = () => {
+  workflowAutomationStore.selectedAutomationId = null
+  automationDrawerVisible.value = true
+}
+
+const onEditAutomation = async automationId => {
+  workflowAutomationStore.selectedAutomationId = automationId
+  automationDrawerVisible.value = true
+}
+
+const onDeleteAutomation = async automationId => {
+  const deletingSelectedAutomation =
+    workflowAutomationStore.selectedAutomationId === automationId
+
+  try {
+    await ElMessageBox.confirm(
+      t('workflow.automation.deleteConfirm'),
+      t('workflow.automation.delete'),
+      {
+        confirmButtonText: t('common.delete'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+
+  try {
+    await workflowAutomationStore.deleteAutomation(automationId)
+    workflowSidebarActiveTab.value = 'automation'
+    await workflowAutomationStore.fetchAutomations()
+    showMessage(t('common.deleteSuccess'), 'success')
+    if (deletingSelectedAutomation) {
+      automationDrawerVisible.value = false
+    }
+  } catch (error) {
+    showMessage(error?.message || String(error), 'error')
+  }
+}
+
+const onAutomationSaved = async () => {
+  workflowSidebarActiveTab.value = 'automation'
+  await workflowAutomationStore.fetchAutomations()
+}
+
+const onAutomationStartedWorkflow = async workflowSessionId => {
+  await workflowStore.loadWorkflows()
+  await selectWorkflow(workflowSessionId)
+}
+
 // ============================================================
 // Computed properties
 // ============================================================
@@ -1517,6 +1596,7 @@ onMounted(async () => {
   }
 
   await workflowStore.loadWorkflows()
+  await workflowAutomationStore.fetchAutomations()
   await agentStore.fetchAgents()
   await fetchSystemSkills()
   try {
@@ -1557,6 +1637,12 @@ onBeforeUnmount(() => {
 
 <style lang="scss">
 @use '@/styles/workflow/index' as *;
+
+.workflow-titlebar-left-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-xs);
+}
 
 .workflow-titlebar-primary-path {
   max-width: min(40vw, 360px);

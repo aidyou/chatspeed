@@ -132,6 +132,12 @@
     height: calc(100% - 60px);
 
     .list {
+      .sidebar-empty {
+        padding: 8px 15px;
+        color: var(--cs-text-color-secondary);
+        font-size: var(--cs-font-size-xs);
+      }
+
       .item {
         padding: 10px 15px;
         cursor: pointer;
@@ -164,6 +170,9 @@
           font-weight: 500;
           overflow: hidden;
           text-overflow: ellipsis;
+          display: flex;
+          align-items: center;
+          gap: 6px;
         }
 
         .workflow-status {

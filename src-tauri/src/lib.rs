@@ -26,17 +26,17 @@ pub mod test;
 use log::{error, warn};
 use rust_i18n::{i18n, set_locale};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::Manager;
+use tauri::async_runtime::{JoinHandle, spawn};
 
 // use commands::toolbar::*;
 use crate::error::AppError;
@@ -57,6 +57,7 @@ use commands::setting::*;
 use commands::updater::install_and_restart;
 use commands::window::*;
 use commands::workflow::*;
+use commands::workflow_automation::*;
 use constants::*;
 use db::MainStore;
 use http::server::start_http_server;
@@ -68,6 +69,7 @@ use scraper::pool::ScraperPool;
 use tray::create_tray;
 use updater::*;
 use window::*;
+use workflow::automation::scheduler::spawn_workflow_automation_scheduler;
 
 // Initialize internationalization with the "i18n" directory
 // - Base directory is src-tauri/, so this will look for translations in src-tauri/i18n/
@@ -315,6 +317,13 @@ pub async fn run() -> crate::error::Result<()> {
             workflow_signal,
             workflow_start,
             workflow_stop,
+            workflow_automation_delete,
+            workflow_automation_get,
+            workflow_automation_list,
+            workflow_automation_list_runs,
+            workflow_automation_run_now,
+            workflow_automation_save,
+            workflow_automation_set_enabled,
             get_workflow_events,
             get_workflow_dispatcher_metrics,
             get_workflow_efficiency_report,
@@ -728,6 +737,8 @@ pub async fn run() -> crate::error::Result<()> {
                 tsid_generator: tsid_generator.clone(),
             });
             app.manage(factory);
+
+            spawn_workflow_automation_scheduler(app.handle().clone());
 
             // === END STATE REGISTRATION SECTION ===
 

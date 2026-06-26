@@ -1,10 +1,15 @@
-use crate::db::sql::migrations::{v1, v2, v3, v4, v5, MigrationDefinition};
 use crate::db::StoreError;
+use crate::db::sql::migrations::{MigrationDefinition, v1, v2, v3, v4, v5, v6};
 use rusqlite::Connection;
 
 // Register all migrations with their corresponding SQL.
-const MIGRATIONS: &[MigrationDefinition] =
-    &[v2::MIGRATION, v3::MIGRATION, v4::MIGRATION, v5::MIGRATION];
+const MIGRATIONS: &[MigrationDefinition] = &[
+    v2::MIGRATION,
+    v3::MIGRATION,
+    v4::MIGRATION,
+    v5::MIGRATION,
+    v6::MIGRATION,
+];
 
 fn latest_migration_version() -> i32 {
     MIGRATIONS.last().map_or(1, |migration| migration.version)
