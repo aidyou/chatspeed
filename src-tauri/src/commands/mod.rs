@@ -16,3 +16,4 @@ pub mod types;
 pub mod updater;
 pub mod window;
 pub mod workflow;
+pub mod workflow_automation;

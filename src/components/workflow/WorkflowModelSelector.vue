@@ -111,6 +111,10 @@ const props = defineProps({
   agent: {
     type: Object,
     default: null
+  },
+  initialModels: {
+    type: Object,
+    default: null
   }
 })
 
@@ -300,6 +304,14 @@ const initFromStore = () => {
   agentModels.utility = defaultModelConfig()
   agentModels.vision = defaultModelConfig()
 
+  if (props.initialModels) {
+    const modelsObj = props.initialModels.models || props.initialModels
+    if (modelsObj.plan) agentModels.plan = normalizeModelDraft(modelsObj.plan)
+    if (modelsObj.act) agentModels.act = normalizeModelDraft(modelsObj.act)
+    if (modelsObj.utility) agentModels.utility = normalizeModelDraft(modelsObj.utility)
+    if (modelsObj.vision) agentModels.vision = normalizeModelDraft(modelsObj.vision)
+  }
+
   // 1. Get reference agent:
   // - Direct prop agent
   // - Or current workflow's agentConfig (has higher priority if workflow is active)
@@ -308,7 +320,7 @@ const initFromStore = () => {
 
   // 1a. Check current workflow's agentConfig first (higher priority for active workflow)
   const currentWf = workflowStore.currentWorkflow
-  if (currentWf?.agentConfig?.models) {
+  if (!props.initialModels && currentWf?.agentConfig?.models) {
     const wfModels = currentWf.agentConfig.models
     if (wfModels.plan) agentModels.plan = normalizeModelDraft(wfModels.plan)
     if (wfModels.act) agentModels.act = normalizeModelDraft(wfModels.act)
@@ -321,7 +333,7 @@ const initFromStore = () => {
   }
 
   // 2. Parse models from agent (only if workflow didn't have models)
-  if (!workflowStore.currentWorkflow?.agentConfig?.models && refAgent && refAgent.models) {
+  if (!props.initialModels && !workflowStore.currentWorkflow?.agentConfig?.models && refAgent && refAgent.models) {
     try {
       const modelsObj = typeof refAgent.models === 'string' ? JSON.parse(refAgent.models) : refAgent.models
       if (modelsObj.plan) agentModels.plan = normalizeModelDraft(modelsObj.plan)

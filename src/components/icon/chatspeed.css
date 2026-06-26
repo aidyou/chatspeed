@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-clock:before {
+  content: "\e819";
+}
+
 .cs-undo:before {
   content: "\e7f2";
 }

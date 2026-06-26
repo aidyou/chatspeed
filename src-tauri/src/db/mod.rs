@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod automation;
 pub mod backup;
 pub mod backup_crypto;
 pub mod chat;
@@ -15,6 +16,10 @@ mod types;
 mod workflow;
 
 pub use agent::{Agent, AgentConfig};
+pub use automation::{
+    WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationRunInsert,
+    WorkflowAutomationUpsert,
+};
 pub use backup::{BackupConfig, DbBackup};
 pub use error::StoreError;
 pub use main_store::MainStore;

@@ -74,6 +74,72 @@
             </div>
           </div>
         </el-tab-pane>
+        <el-tab-pane :label="$t('workflow.automation.title')" name="automation">
+          <div class="sidebar-header">
+            <el-input v-model="automationSearchQuery" :placeholder="$t('chat.searchChat')" :clearable="true" round>
+              <template #prefix>
+                <cs name="search" />
+              </template>
+              <template #suffix>
+                <el-tooltip
+                  :content="$t('workflow.automation.create')"
+                  :hide-after="0"
+                  :enterable="false"
+                  placement="bottom">
+                  <div class="workflow-root-filter-trigger" @click.stop="$emit('create-automation')">
+                    <cs name="add" />
+                  </div>
+                </el-tooltip>
+              </template>
+            </el-input>
+          </div>
+          <div class="workflow-list">
+            <div class="list">
+              <div
+                v-if="automations.length === 0"
+                class="sidebar-empty">
+                {{ $t('workflow.automation.empty') }}
+              </div>
+              <div
+                class="item automation-item"
+                v-for="automation in filteredAutomations"
+                :key="automation.id"
+                :class="{ active: automation.id === selectedAutomationId }"
+                @click="$emit('edit-automation', automation.id)"
+                @mouseenter="hoveredWorkflowIndex = automation.id"
+                @mouseleave="hoveredWorkflowIndex = null">
+                <div class="workflow-title">
+                  <cs name="clock" size="12px" />
+                  {{ automation.title || $t('workflow.automation.untitled') }}
+                </div>
+                <div class="workflow-status-row">
+                  <div class="workflow-status">
+                    <span
+                      :class="[
+                        'status-indicator',
+                        automation.enabled ? 'completed' : 'paused'
+                      ]"></span>
+                    {{ automation.enabled ? $t('workflow.automation.enabled') : $t('workflow.automation.disabled') }}
+                  </div>
+                  <div
+                    v-if="automation.nextRunAt"
+                    class="workflow-primary-root"
+                    :title="automation.nextRunAt">
+                    {{ automation.nextRunAt }}
+                  </div>
+                </div>
+                <div class="icons" v-show="automation.id === hoveredWorkflowIndex">
+                  <div class="icon icon-edit" @click.stop="$emit('edit-automation', automation.id)">
+                    <cs name="edit" />
+                  </div>
+                  <div class="icon icon-delete" @click.stop="$emit('delete-automation', automation.id)">
+                    <cs name="delete" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
         <el-tab-pane :label="$t('settings.agent.authorizedPaths')" name="files">
           <FileTree :paths="currentPaths" @add-path="$emit('add-path-from-tree', $event)"
             @remove-path="$emit('remove-path-from-tree', $event)" />
@@ -126,6 +192,18 @@ const props = defineProps({
   isDragging: {
     type: Boolean,
     default: false
+  },
+  automations: {
+    type: Array,
+    default: () => []
+  },
+  selectedAutomationId: {
+    type: String,
+    default: null
+  },
+  activeTab: {
+    type: String,
+    default: 'history'
   }
 })
 
@@ -133,13 +211,22 @@ const emit = defineEmits([
   'select-workflow',
   'edit-workflow',
   'delete-workflow',
+  'select-automation',
+  'create-automation',
+  'edit-automation',
+  'delete-automation',
+  'update:activeTab',
   'toggle-sidebar',
   'add-path-from-tree',
   'remove-path-from-tree'
 ])
 
-const activeSidebarTab = ref('history')
+const activeSidebarTab = computed({
+  get: () => props.activeTab,
+  set: value => emit('update:activeTab', value)
+})
 const searchQuery = ref('')
+const automationSearchQuery = ref('')
 const hoveredWorkflowIndex = ref(null)
 const selectedPrimaryRootFilter = ref('')
 const runningStatuses = new Set(['thinking', 'executing', 'auditing', 'running'])
@@ -234,6 +321,14 @@ const filteredWorkflows = computed(() => {
     return title.toLowerCase().includes(query) ||
       userQuery.toLowerCase().includes(query) ||
       ((!title && !userQuery) && untitled.includes(query))
+  })
+})
+
+const filteredAutomations = computed(() => {
+  return props.automations.filter((automation) => {
+    if (!automationSearchQuery.value) return true
+    const query = automationSearchQuery.value.toLowerCase()
+    return String(automation.title || '').toLowerCase().includes(query)
   })
 })
 </script>
