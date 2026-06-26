@@ -16,6 +16,7 @@ const normalizeAutomation = item => ({
   ...item,
   allowedPaths: parseJsonField(item.allowedPaths, []),
   agentConfig: parseJsonField(item.agentConfig, null),
+  shellConfig: parseJsonField(item.shellConfig, null),
   scheduleConfig: parseJsonField(item.scheduleConfig, {})
 })
 

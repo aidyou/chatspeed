@@ -1,4 +1,7 @@
-use super::MigrationDefinition;
+use super::{column_exists, MigrationDefinition};
+use crate::db::StoreError;
+use rusqlite::Connection;
+use serde_json::Value;
 
 /// Version 6 migration SQL statements.
 /// Adds workflow automation definitions and run history.
@@ -13,6 +16,7 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             agent_id TEXT NOT NULL REFERENCES agents(id),
             agent_config TEXT,
             allowed_paths TEXT NOT NULL DEFAULT '[]',
+            shell_config TEXT,
             schedule_kind TEXT NOT NULL,
             schedule_config TEXT NOT NULL,
             self_review INTEGER NOT NULL DEFAULT 0,
@@ -60,9 +64,61 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
     ),
 ];
 
+fn ensure_workflow_automation_shell_config(conn: &Connection) -> Result<(), StoreError> {
+    if !column_exists(conn, "workflow_automations", "shell_config")? {
+        conn.execute(
+            "ALTER TABLE workflow_automations ADD COLUMN shell_config TEXT",
+            [],
+        )?;
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT id, schedule_config
+         FROM workflow_automations
+         WHERE schedule_kind = 'interval'",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    for row in rows {
+        let (id, schedule_config) = row?;
+        let Ok(mut value) = serde_json::from_str::<Value>(&schedule_config) else {
+            continue;
+        };
+
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+
+        if object.contains_key("interval_minutes") {
+            continue;
+        }
+
+        let interval_hours = object
+            .remove("interval_hours")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(1);
+        object.insert(
+            "interval_minutes".to_string(),
+            Value::from(interval_hours.saturating_mul(60)),
+        );
+
+        let updated_schedule_config = serde_json::to_string(&value)?;
+        conn.execute(
+            "UPDATE workflow_automations
+             SET schedule_config = ?2, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1",
+            [&id, &updated_schedule_config],
+        )?;
+    }
+
+    Ok(())
+}
+
 pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     version: 6,
     description: "v6 migration: Add workflow automation tables",
     sql: MIGRATION_SQL,
-    ensure: None,
+    ensure: Some(ensure_workflow_automation_shell_config),
 };

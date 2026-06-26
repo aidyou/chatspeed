@@ -281,7 +281,7 @@
       :system-skills="systemSkills"
       @save="onSkillsConfigSave" />
 
-    <WorkflowAutomationDrawer
+    <WorkflowAutomationEditor
       v-model="automationDrawerVisible"
       @saved="onAutomationSaved"
       @started-workflow="onAutomationStartedWorkflow" />
@@ -312,7 +312,7 @@ import WorkflowSkillsSelector from '@/components/workflow/WorkflowSkillsSelector
 import WorkflowSidebar from '@/components/workflow/WorkflowSidebar.vue'
 import WorkflowMessageList from '@/components/workflow/WorkflowMessageList.vue'
 import WorkflowInputArea from '@/components/workflow/WorkflowInputArea.vue'
-import WorkflowAutomationDrawer from '@/components/workflow/automation/WorkflowAutomationDrawer.vue'
+import WorkflowAutomationEditor from '@/components/workflow/automation/WorkflowAutomationEditor.vue'
 
 // Composables
 import { useWorkflowSidebar } from '@/composables/workflow/useWorkflowSidebar'

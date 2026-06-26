@@ -392,7 +392,10 @@ impl MainStore {
     /// Retrieves grouped proxy statistics for a date range.
     ///
     /// The result is grouped by date, provider, backend model, protocol and tool compatibility mode.
-    pub fn get_ccproxy_grouped_stats(&self, days: i32) -> Result<Vec<serde_json::Value>, StoreError> {
+    pub fn get_ccproxy_grouped_stats(
+        &self,
+        days: i32,
+    ) -> Result<Vec<serde_json::Value>, StoreError> {
         let conn = self
             .conn
             .lock()

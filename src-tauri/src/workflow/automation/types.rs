@@ -2,6 +2,16 @@ use crate::db::{WorkflowAutomation, WorkflowAutomationRun};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowAutomationShellConfig {
+    pub command: Option<String>,
+    #[serde(default)]
+    pub file_path: Option<String>,
+    #[serde(default)]
+    pub args: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowAutomationRequest {
@@ -12,6 +22,7 @@ pub struct WorkflowAutomationRequest {
     pub agent_id: String,
     pub agent_config: Option<Value>,
     pub allowed_paths: Vec<String>,
+    pub shell_config: Option<Value>,
     pub schedule_kind: String,
     pub schedule_config: Value,
     pub self_review: bool,
@@ -39,7 +50,8 @@ pub struct DailyScheduleConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct IntervalScheduleConfig {
-    pub interval_hours: u32,
+    #[serde(alias = "interval_hours")]
+    pub interval_minutes: u32,
     #[serde(default)]
     pub weekdays: Vec<u32>,
     pub start_date: Option<String>,

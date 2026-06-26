@@ -1,5 +1,5 @@
 use crate::db::{MainStore, StoreError};
-use rusqlite::{Row, params};
+use rusqlite::{params, Row};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +12,7 @@ pub struct WorkflowAutomation {
     pub agent_id: String,
     pub agent_config: Option<String>,
     pub allowed_paths: String,
+    pub shell_config: Option<String>,
     pub schedule_kind: String,
     pub schedule_config: String,
     pub self_review: bool,
@@ -46,6 +47,7 @@ pub struct WorkflowAutomationUpsert {
     pub agent_id: String,
     pub agent_config: Option<String>,
     pub allowed_paths: String,
+    pub shell_config: Option<String>,
     pub schedule_kind: String,
     pub schedule_config: String,
     pub self_review: bool,
@@ -77,6 +79,7 @@ impl From<&Row<'_>> for WorkflowAutomation {
             allowed_paths: row
                 .get("allowed_paths")
                 .unwrap_or_else(|_| "[]".to_string()),
+            shell_config: row.get("shell_config").ok(),
             schedule_kind: row.get("schedule_kind").unwrap_or_default(),
             schedule_config: row
                 .get("schedule_config")
@@ -154,8 +157,8 @@ impl MainStore {
         conn.execute(
             "INSERT INTO workflow_automations
              (id, title, prompt, prompt_file_path, agent_id, agent_config, allowed_paths,
-              schedule_kind, schedule_config, self_review, enabled, next_run_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+              shell_config, schedule_kind, schedule_config, self_review, enabled, next_run_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 prompt = excluded.prompt,
@@ -163,6 +166,7 @@ impl MainStore {
                 agent_id = excluded.agent_id,
                 agent_config = excluded.agent_config,
                 allowed_paths = excluded.allowed_paths,
+                shell_config = excluded.shell_config,
                 schedule_kind = excluded.schedule_kind,
                 schedule_config = excluded.schedule_config,
                 self_review = excluded.self_review,
@@ -177,6 +181,7 @@ impl MainStore {
                 automation.agent_id,
                 automation.agent_config,
                 automation.allowed_paths,
+                automation.shell_config,
                 automation.schedule_kind,
                 automation.schedule_config,
                 automation.self_review as i64,

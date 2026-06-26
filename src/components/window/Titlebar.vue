@@ -23,9 +23,7 @@
       <div class="control-icon minimize" @click="minimizeWindow" v-if="showMinimizeButton">
         <cs name="minimize" size="10px" />
       </div>
-
     </div>
-
 
     <!-- main content wrapper -->
     <div class="titlebar-content-wrapper">
@@ -37,7 +35,9 @@
       <!-- center area -->
       <div class="center">
         <slot name="center"></slot>
-        <el-tooltip placement="bottom" v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
+        <el-tooltip
+          placement="bottom"
+          v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
           :content="t('common.newVersionReady')">
           <div class="menu icon-btn upperLayer restart" @click="updateStore.restartApp">
             <cs name="restart" />
@@ -51,8 +51,13 @@
         <slot name="right"></slot>
 
         <!-- menu show control -->
-        <el-dropdown @command="handleCommand" trigger="click" placement="bottom-end"
-          popper-class="titlebar-dropdown-popper" :popper-options="menuDropdownPopperOptions" v-if="showMenuButton">
+        <el-dropdown
+          @command="handleCommand"
+          trigger="click"
+          placement="bottom-end"
+          popper-class="titlebar-dropdown-popper"
+          :popper-options="menuDropdownPopperOptions"
+          v-if="showMenuButton">
           <div class="menu icon-btn upperLayer">
             <cs name="menu" />
           </div>
@@ -117,6 +122,7 @@ const availableMenus = [
   'assistant',
   { name: 'workflow', icon: 'skill-plan3' },
   'note',
+  { name: 'proxy_switcher', icon: 'switch' },
   'divider',
   'setting',
   'model',
@@ -124,8 +130,6 @@ const availableMenus = [
   'mcp',
   'proxy',
   'agent',
-  'divider',
-  { name: 'proxy_switcher', icon: 'switch' },
   'divider',
   { name: 'scraperTest', icon: 'extract' },
   'divider',
@@ -283,7 +287,7 @@ const handleCommand = async command => {
   console.log(command)
   try {
     switch (command) {
-      case 'main':
+      case 'chat':
         await invoke('show_window', { windowLabel: 'main' })
         break
       case 'note':

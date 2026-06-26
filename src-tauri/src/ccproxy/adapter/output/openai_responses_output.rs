@@ -389,27 +389,24 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
                     )])
             }
             UnifiedStreamChunk::ToolUseEnd { id } => {
-                let (item_id, name, arguments, output_index) = if let Ok(mut status) = sse_status.write()
-                {
-                    let item_id = status
-                        .responses_tool_item_ids
-                        .get(&id)
-                        .cloned()
-                        .unwrap_or_else(get_tool_id);
-                    let name = status
-                        .responses_tool_names
-                        .remove(&id)
-                        .unwrap_or_default();
-                    let arguments = status
-                        .responses_tool_arguments
-                        .remove(&id)
-                        .unwrap_or_default();
-                    let output_index = status.responses_tool_indexes.remove(&id).unwrap_or(0);
-                    status.responses_tool_item_ids.remove(&id);
-                    (item_id, name, arguments, output_index)
-                } else {
-                    (get_tool_id(), String::new(), String::new(), 0)
-                };
+                let (item_id, name, arguments, output_index) =
+                    if let Ok(mut status) = sse_status.write() {
+                        let item_id = status
+                            .responses_tool_item_ids
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(get_tool_id);
+                        let name = status.responses_tool_names.remove(&id).unwrap_or_default();
+                        let arguments = status
+                            .responses_tool_arguments
+                            .remove(&id)
+                            .unwrap_or_default();
+                        let output_index = status.responses_tool_indexes.remove(&id).unwrap_or(0);
+                        status.responses_tool_item_ids.remove(&id);
+                        (item_id, name, arguments, output_index)
+                    } else {
+                        (get_tool_id(), String::new(), String::new(), 0)
+                    };
 
                 Ok(vec![
                     Event::default()

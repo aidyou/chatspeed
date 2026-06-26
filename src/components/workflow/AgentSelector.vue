@@ -3,7 +3,7 @@
     <el-dropdown trigger="click" :disabled="disabled">
       <div class="el-dropdown-link">
         <cs name="agent" size="var(--cs-font-size-lg)" />
-        <span class="agent-name">{{ selectedAgent?.name || 'Select Agent' }}</span>
+        <span class="agent-name">{{ selectedAgent?.name || t('workflow.automation.selectAgent') }}</span>
         <cs name="caret-down" size="var(--cs-font-size-sm)" />
       </div>
       <template #dropdown>
@@ -24,11 +24,13 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
 
 const agentStore = useAgentStore()
 const agents = computed(() => agentStore.primaryAgents)
+const { t } = useI18n()
 
 const emit = defineEmits(['update:modelValue'])
 const props = defineProps({

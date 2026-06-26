@@ -6,19 +6,30 @@ use crate::db::{
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::automation::types::{
     DailyScheduleConfig, IntervalScheduleConfig, OnceScheduleConfig, WorkflowAutomationRequest,
-    WorkflowAutomationRunNowResult,
+    WorkflowAutomationRunNowResult, WorkflowAutomationShellConfig,
 };
 use crate::workflow::react::gateway::TauriGateway;
 use crate::workflow::react::manager::WorkflowManager;
 use crate::workflow::react::orchestrator::SubAgentFactory;
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
+use tokio::process::Command;
 
 pub fn normalize_datetime_for_db(datetime: DateTime<Local>) -> String {
     datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+const SHELL_PROMPT_OUTPUT_LIMIT: usize = 8_000;
+const SHELL_ATTACHED_CONTEXT_LIMIT: usize = 16_000;
+
+#[derive(Debug, Clone)]
+struct PreWorkflowShellResult {
+    command: String,
+    stdout: String,
+    stderr: String,
 }
 
 fn parse_date(value: &Option<String>) -> Result<Option<NaiveDate>, String> {
@@ -105,7 +116,7 @@ fn next_interval_run_from(
     config: IntervalScheduleConfig,
     now: DateTime<Local>,
 ) -> Result<Option<String>, String> {
-    let interval_hours = i64::from(config.interval_hours.max(1));
+    let interval_minutes = i64::from(config.interval_minutes.max(5));
     let start_date = parse_date(&config.start_date)?;
     let end_date = parse_date(&config.end_date)?;
     let anchor_time = config
@@ -118,7 +129,7 @@ fn next_interval_run_from(
         local_datetime(start_date.unwrap_or_else(|| now.date_naive()), anchor_time)?;
 
     while candidate <= now {
-        candidate += Duration::hours(interval_hours);
+        candidate += Duration::minutes(interval_minutes);
     }
 
     for _ in 0..10000 {
@@ -128,7 +139,7 @@ fn next_interval_run_from(
         {
             return Ok(Some(normalize_datetime_for_db(candidate)));
         }
-        candidate += Duration::hours(interval_hours);
+        candidate += Duration::minutes(interval_minutes);
     }
 
     Ok(None)
@@ -180,16 +191,36 @@ fn compute_next_run_at_from(
             serde_json::from_value(schedule_config.clone()).map_err(|e| e.to_string())?,
             now,
         ),
-        "interval" => next_interval_run_from(
-            serde_json::from_value(schedule_config.clone()).map_err(|e| e.to_string())?,
-            now,
-        ),
+        "interval" => {
+            next_interval_run_from(normalize_interval_schedule_config(schedule_config)?, now)
+        }
         "once" => next_once_run_from(
             serde_json::from_value(schedule_config.clone()).map_err(|e| e.to_string())?,
             now,
         ),
         other => Err(format!("Unsupported schedule kind: {}", other)),
     }
+}
+
+fn normalize_interval_schedule_config(
+    schedule_config: &Value,
+) -> Result<IntervalScheduleConfig, String> {
+    let mut normalized = schedule_config.clone();
+    if let Some(object) = normalized.as_object_mut() {
+        if !object.contains_key("interval_minutes") {
+            if let Some(interval_hours) = object
+                .remove("interval_hours")
+                .and_then(|value| value.as_u64())
+            {
+                object.insert(
+                    "interval_minutes".to_string(),
+                    Value::from(interval_hours.saturating_mul(60)),
+                );
+            }
+        }
+    }
+
+    serde_json::from_value(normalized).map_err(|e| e.to_string())
 }
 
 fn validate_request(request: &WorkflowAutomationRequest) -> Result<(), String> {
@@ -209,6 +240,7 @@ fn validate_request(request: &WorkflowAutomationRequest) -> Result<(), String> {
     {
         return Err("Automation prompt or prompt file is required".to_string());
     }
+    validate_shell_config(request.shell_config.as_ref())?;
     compute_next_run_at(&request.schedule_kind, &request.schedule_config)?;
     Ok(())
 }
@@ -227,9 +259,13 @@ fn build_agent_config(request: &WorkflowAutomationRequest) -> Result<String, Str
 }
 
 fn request_to_upsert(
-    request: WorkflowAutomationRequest,
+    mut request: WorkflowAutomationRequest,
     id: String,
 ) -> Result<WorkflowAutomationUpsert, String> {
+    if let Some(prompt_from_file) = read_prompt_file_if_exists(request.prompt_file_path.as_deref())?
+    {
+        request.prompt = Some(prompt_from_file);
+    }
     validate_request(&request)?;
     let next_run_at = if request.enabled {
         compute_next_run_at(&request.schedule_kind, &request.schedule_config)?
@@ -238,6 +274,7 @@ fn request_to_upsert(
     };
     let agent_config = build_agent_config(&request)?;
     let allowed_paths = serde_json::to_string(&request.allowed_paths).map_err(|e| e.to_string())?;
+    let shell_config = build_shell_config(&request)?;
     let schedule_config =
         serde_json::to_string(&request.schedule_config).map_err(|e| e.to_string())?;
 
@@ -249,6 +286,7 @@ fn request_to_upsert(
         agent_id: request.agent_id,
         agent_config: Some(agent_config),
         allowed_paths,
+        shell_config,
         schedule_kind: request.schedule_kind,
         schedule_config,
         self_review: request.self_review,
@@ -261,7 +299,87 @@ fn parse_allowed_paths(raw: &str) -> Vec<String> {
     serde_json::from_str(raw).unwrap_or_default()
 }
 
+fn normalize_shell_config(
+    value: Option<Value>,
+) -> Result<Option<WorkflowAutomationShellConfig>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let mut config: WorkflowAutomationShellConfig =
+        serde_json::from_value(value).map_err(|e| e.to_string())?;
+    if let Some(command) = config.command.as_mut() {
+        *command = command.trim().to_string();
+    }
+    if let Some(file_path) = config.file_path.as_mut() {
+        *file_path = file_path.trim().to_string();
+    }
+    if let Some(args) = config.args.as_mut() {
+        *args = args.trim().to_string();
+    }
+
+    if config
+        .command
+        .as_deref()
+        .is_none_or(|command| command.is_empty())
+    {
+        config.command = None;
+    }
+    if config
+        .file_path
+        .as_deref()
+        .is_none_or(|file_path| file_path.is_empty())
+    {
+        config.file_path = None;
+    }
+    if config.args.as_deref().is_none_or(|args| args.is_empty()) {
+        config.args = None;
+    }
+
+    if config.command.is_none() {
+        if let Some(file_path) = config.file_path.as_deref() {
+            let mut command = file_path.to_string();
+            if let Some(args) = config.args.as_deref() {
+                command.push(' ');
+                command.push_str(args);
+            }
+            config.command = Some(command);
+        }
+    }
+
+    if config.command.is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(config))
+}
+
+fn validate_shell_config(value: Option<&Value>) -> Result<(), String> {
+    normalize_shell_config(value.cloned()).map(|_| ())
+}
+
+fn build_shell_config(request: &WorkflowAutomationRequest) -> Result<Option<String>, String> {
+    normalize_shell_config(request.shell_config.clone())?
+        .map(|config| serde_json::to_string(&config).map_err(|e| e.to_string()))
+        .transpose()
+}
+
+fn parse_shell_config(raw: Option<&str>) -> Result<Option<WorkflowAutomationShellConfig>, String> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+
+    let value = serde_json::from_str::<Value>(raw).map_err(|e| e.to_string())?;
+    normalize_shell_config(Some(value))
+}
+
 fn automation_prompt(automation: &WorkflowAutomation) -> Result<String, String> {
+    if let Some(prompt_from_file) =
+        read_prompt_file_if_exists(automation.prompt_file_path.as_deref())?
+    {
+        return Ok(prompt_from_file);
+    }
+
     if let Some(prompt) = automation
         .prompt
         .as_deref()
@@ -278,6 +396,131 @@ fn automation_prompt(automation: &WorkflowAutomation) -> Result<String, String> 
         .filter(|path| !path.is_empty())
         .ok_or_else(|| "Automation prompt is empty".to_string())?;
     std::fs::read_to_string(PathBuf::from(path)).map_err(|e| e.to_string())
+}
+
+fn read_prompt_file_if_exists(path: Option<&str>) -> Result<Option<String>, String> {
+    let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+
+    let path_buf = PathBuf::from(path);
+    if !path_buf.exists() {
+        return Ok(None);
+    }
+
+    std::fs::read_to_string(&path_buf)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+fn truncate_text(value: &str, limit: usize) -> String {
+    let char_count = value.chars().count();
+    if char_count <= limit {
+        return value.to_string();
+    }
+
+    let truncated: String = value.chars().take(limit).collect();
+    format!(
+        "{}\n...[truncated {} chars]",
+        truncated,
+        char_count.saturating_sub(limit)
+    )
+}
+
+fn shell_result_prompt_suffix(result: &PreWorkflowShellResult) -> String {
+    let stdout = truncate_text(&result.stdout, SHELL_PROMPT_OUTPUT_LIMIT);
+    let stderr = truncate_text(&result.stderr, SHELL_PROMPT_OUTPUT_LIMIT);
+
+    format!(
+        "<automation_shell_result>\ncommand: {}\nstdout:\n{}\nstderr:\n{}\n</automation_shell_result>",
+        result.command, stdout, stderr
+    )
+}
+
+fn shell_result_attached_context(result: &PreWorkflowShellResult) -> String {
+    format!(
+        "<automation_shell_context>\n{}\n</automation_shell_context>",
+        truncate_text(
+            &shell_result_prompt_suffix(result),
+            SHELL_ATTACHED_CONTEXT_LIMIT
+        )
+    )
+}
+
+fn build_workflow_prompt(prompt: &str, shell_result: Option<&PreWorkflowShellResult>) -> String {
+    let Some(shell_result) = shell_result else {
+        return prompt.to_string();
+    };
+
+    format!("{}\n\n{}", prompt, shell_result_prompt_suffix(shell_result))
+}
+
+fn combine_context_sections(sections: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+    let combined = sections
+        .into_iter()
+        .flatten()
+        .filter(|section| !section.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    if combined.trim().is_empty() {
+        None
+    } else {
+        Some(combined)
+    }
+}
+
+async fn execute_shell_command(command_text: &str) -> Result<std::process::Output, String> {
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", command_text]);
+        command
+    };
+
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.args(["-c", command_text]);
+        command
+    };
+
+    command
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute shell command: {}", e))
+}
+
+async fn execute_pre_workflow_shell(
+    automation: &WorkflowAutomation,
+) -> Result<Option<PreWorkflowShellResult>, String> {
+    let Some(shell_config) = parse_shell_config(automation.shell_config.as_deref())? else {
+        return Ok(None);
+    };
+
+    let command_text = shell_config
+        .command
+        .clone()
+        .ok_or_else(|| "Shell command is required".to_string())?;
+    let output = execute_shell_command(&command_text).await?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if !output.status.success() {
+        let status = output.status.code().unwrap_or(-1);
+        let detail = if !stderr.is_empty() { &stderr } else { &stdout };
+        return Err(format!(
+            "Pre-workflow shell failed with exit code {}: {}",
+            status,
+            truncate_text(detail, 500)
+        ));
+    }
+
+    Ok(Some(PreWorkflowShellResult {
+        command: command_text,
+        stdout,
+        stderr,
+    }))
 }
 
 pub fn save_automation(
@@ -347,12 +590,46 @@ pub async fn run_automation_now(
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Automation {} not found", automation_id))?
     };
-    let prompt = automation_prompt(&automation)?;
-    let workflow_session_id = tsid_generator.generate().map_err(|e| e.to_string())?;
     let run_id = tsid_generator.generate().map_err(|e| e.to_string())?;
     let scheduled_for = normalize_datetime_for_db(Local::now());
 
     let run = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store
+            .add_workflow_automation_run(&WorkflowAutomationRunInsert {
+                id: run_id.clone(),
+                automation_id: automation.id.clone(),
+                workflow_session_id: None,
+                status: "pending".to_string(),
+                scheduled_for: scheduled_for.clone(),
+                started_at: None,
+                finished_at: None,
+                error: None,
+            })
+            .map_err(|e| e.to_string())?
+    };
+
+    let prompt = automation_prompt(&automation)?;
+    let shell_result = match execute_pre_workflow_shell(&automation).await {
+        Ok(result) => result,
+        Err(error) => {
+            let store = state.read().map_err(|e| e.to_string())?;
+            if let Err(update_error) = store.update_workflow_automation_run_failed(&run_id, &error)
+            {
+                log::error!(
+                    "[WorkflowAutomation][automation={}][run={}] Failed to mark shell failure: {}",
+                    automation.id,
+                    run_id,
+                    update_error
+                );
+            }
+            return Err(error);
+        }
+    };
+    let initial_prompt = build_workflow_prompt(&prompt, shell_result.as_ref());
+    let workflow_session_id = tsid_generator.generate().map_err(|e| e.to_string())?;
+
+    {
         let store = state.read().map_err(|e| e.to_string())?;
         store
             .create_workflow(
@@ -363,27 +640,22 @@ pub async fn run_automation_now(
                 None,
             )
             .map_err(|e| e.to_string())?;
-        store
-            .add_workflow_automation_run(&WorkflowAutomationRunInsert {
-                id: run_id.clone(),
-                automation_id: automation.id.clone(),
-                workflow_session_id: Some(workflow_session_id.clone()),
-                status: "pending".to_string(),
-                scheduled_for: scheduled_for.clone(),
-                started_at: None,
-                finished_at: None,
-                error: None,
-            })
-            .map_err(|e| e.to_string())?
-    };
+    }
 
     let allowed_paths = parse_allowed_paths(&automation.allowed_paths);
-    let metadata = json!({
+    let mut metadata = json!({
         "automation_id": automation.id.clone(),
         "automation_run_id": run_id.clone(),
         "scheduled_for": scheduled_for,
     });
-    let attached_context = if allowed_paths.is_empty() {
+
+    if let Some(shell_result) = shell_result.as_ref() {
+        metadata["shell"] = json!({
+            "command": shell_result.command,
+        });
+    }
+
+    let allowed_paths_context = if allowed_paths.is_empty() {
         None
     } else {
         Some(format!(
@@ -391,6 +663,10 @@ pub async fn run_automation_now(
             allowed_paths.join("\n")
         ))
     };
+    let attached_context = combine_context_sections([
+        allowed_paths_context,
+        shell_result.as_ref().map(shell_result_attached_context),
+    ]);
 
     {
         let store = state.read().map_err(|e| e.to_string())?;
@@ -416,7 +692,7 @@ pub async fn run_automation_now(
         workflow_manager,
         workflow_session_id.clone(),
         automation.agent_id.clone(),
-        Some(prompt),
+        Some(initial_prompt),
         Some(metadata),
         attached_context,
         Some(false),
@@ -534,7 +810,7 @@ mod tests {
         let next = compute_next_run_at_from(
             "interval",
             &json!({
-                "interval_hours": 3,
+                "interval_minutes": 180,
                 "weekdays": [1, 2, 3, 4, 5, 6, 7],
                 "start_date": "2026-06-25",
                 "end_date": null,
@@ -553,7 +829,7 @@ mod tests {
         let next = compute_next_run_at_from(
             "interval",
             &json!({
-                "interval_hours": 6,
+                "interval_minutes": 360,
                 "weekdays": [5],
                 "start_date": "2026-06-25",
                 "end_date": null,
@@ -572,7 +848,7 @@ mod tests {
         let next = compute_next_run_at_from(
             "interval",
             &json!({
-                "interval_hours": 2,
+                "interval_minutes": 120,
                 "weekdays": [1, 2, 3, 4, 5, 6, 7],
                 "start_date": "2026-06-25",
                 "end_date": "2026-06-25",
@@ -583,6 +859,25 @@ mod tests {
         .expect("interval schedule should compute");
 
         assert_eq!(next, None);
+    }
+
+    #[test]
+    fn interval_schedule_accepts_legacy_hour_config() {
+        let now = test_now("2026-06-25 10:30:00");
+        let next = compute_next_run_at_from(
+            "interval",
+            &json!({
+                "interval_hours": 3,
+                "weekdays": [1, 2, 3, 4, 5, 6, 7],
+                "start_date": "2026-06-25",
+                "end_date": null,
+                "anchor_time": "09:00"
+            }),
+            now,
+        )
+        .expect("legacy interval schedule should compute");
+
+        assert_eq!(next, Some("2026-06-25 12:00:00".to_string()));
     }
 
     #[test]
@@ -613,6 +908,7 @@ mod tests {
                 }
             })),
             allowed_paths: vec!["/tmp/project".to_string()],
+            shell_config: None,
             schedule_kind: "daily".to_string(),
             schedule_config: json!({
                 "time": "09:00",

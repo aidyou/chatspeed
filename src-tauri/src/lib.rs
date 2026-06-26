@@ -26,17 +26,17 @@ pub mod test;
 use log::{error, warn};
 use rust_i18n::{i18n, set_locale};
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 use std::sync::RwLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::Manager;
-use tauri::async_runtime::{JoinHandle, spawn};
 
 // use commands::toolbar::*;
 use crate::error::AppError;

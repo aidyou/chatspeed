@@ -1,5 +1,5 @@
+use crate::db::sql::migrations::{v1, v2, v3, v4, v5, v6, MigrationDefinition};
 use crate::db::StoreError;
-use crate::db::sql::migrations::{MigrationDefinition, v1, v2, v3, v4, v5, v6};
 use rusqlite::Connection;
 
 // Register all migrations with their corresponding SQL.

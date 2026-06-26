@@ -37,6 +37,7 @@ mod tests {
             agent_id: "agent-1".to_string(),
             agent_config: Some("{}".to_string()),
             allowed_paths: "[]".to_string(),
+            shell_config: None,
             schedule_kind: schedule_kind.to_string(),
             schedule_config: "{}".to_string(),
             self_review: false,
