@@ -50,9 +50,10 @@ export const estimateCostFromPricing = (
   const inputTokens = Math.max(0, toFiniteNumber(usage?.inputTokens))
   const outputTokens = Math.max(0, toFiniteNumber(usage?.outputTokens))
   const cacheTokens = Math.max(0, toFiniteNumber(usage?.cacheTokens))
+  const billableInputTokens = Math.max(0, inputTokens - cacheTokens)
 
   return (
-    (inputTokens * normalizedPricing.inputPerMillion) / PRICE_SCALE +
+    (billableInputTokens * normalizedPricing.inputPerMillion) / PRICE_SCALE +
     (outputTokens * normalizedPricing.outputPerMillion) / PRICE_SCALE +
     (cacheTokens * normalizedPricing.cachePerMillion) / PRICE_SCALE
   ) * normalizedPricing.multiplier
