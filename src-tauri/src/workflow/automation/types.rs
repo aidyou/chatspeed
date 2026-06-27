@@ -42,7 +42,10 @@ pub struct WorkflowAutomationRunNowResult {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct DailyScheduleConfig {
-    pub time: String,
+    #[serde(default)]
+    pub time: Option<String>,
+    #[serde(default)]
+    pub times: Vec<String>,
     #[serde(default)]
     pub weekdays: Vec<u32>,
     pub start_date: Option<String>,

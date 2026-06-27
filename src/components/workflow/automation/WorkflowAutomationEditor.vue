@@ -61,7 +61,30 @@
 
             <template v-if="form.scheduleKind === 'daily'">
               <el-form-item :label="$t('workflow.automation.executionTime')">
-                <el-time-picker v-model="dailyTime" format="HH:mm" value-format="HH:mm" />
+                <div class="daily-time-list">
+                  <div v-for="(time, index) in dailyTimes" :key="index" class="daily-time-row">
+                    <el-time-picker
+                      v-model="dailyTimes[index]"
+                      format="HH:mm"
+                      value-format="HH:mm" />
+                    <el-button
+                      circle
+                      plain
+                      type="primary"
+                      @click="addDailyTime"
+                      :disabled="dailyTimes.length >= 24">
+                      +
+                    </el-button>
+                    <el-button
+                      circle
+                      plain
+                      type="danger"
+                      @click="removeDailyTime(index)"
+                      :disabled="dailyTimes.length <= 1">
+                      -
+                    </el-button>
+                  </div>
+                </div>
               </el-form-item>
               <WeekdayPicker v-model="form.weekdays" />
               <el-form-item :label="$t('workflow.automation.effectiveRange')">
@@ -238,7 +261,14 @@ const defaultForm = () => ({
 
 const form = reactive(defaultForm())
 const selectedAgent = ref(null)
-const dailyTime = ref('09:00')
+const defaultDailyTime = () => '09:00'
+const normalizeDailyTimes = values => {
+  const normalized = Array.isArray(values)
+    ? values.map(value => (typeof value === 'string' ? value : '')).filter(Boolean)
+    : []
+  return normalized.length > 0 ? Array.from(new Set(normalized)).sort() : [defaultDailyTime()]
+}
+const dailyTimes = ref([defaultDailyTime()])
 const onceRunAt = ref('')
 const activeTab = ref('basic')
 const saving = ref(false)
@@ -325,6 +355,10 @@ const effectiveDateRange = computed({
 
 const hasPromptSource = computed(() => Boolean(form.prompt.trim() || form.promptFilePath.trim()))
 
+const hasValidDailyTimes = computed(
+  () => normalizeDailyTimes(dailyTimes.value).length > 0 && dailyTimes.value.every(Boolean)
+)
+
 const hasCompleteEffectiveRange = computed(
   () => (!form.startDate && !form.endDate) || Boolean(form.startDate && form.endDate)
 )
@@ -336,7 +370,7 @@ const canSaveAutomation = computed(() => {
   if (!hasCompleteEffectiveRange.value) return false
 
   if (form.scheduleKind === 'daily') {
-    return Boolean(dailyTime.value && form.weekdays.length > 0)
+    return Boolean(hasValidDailyTimes.value && form.weekdays.length > 0)
   }
   if (form.scheduleKind === 'interval') {
     return Boolean(form.intervalMinutes >= 5 && form.weekdays.length > 0)
@@ -344,10 +378,20 @@ const canSaveAutomation = computed(() => {
   return Boolean(onceRunAt.value)
 })
 
+const addDailyTime = () => {
+  if (dailyTimes.value.length >= 24) return
+  dailyTimes.value = [...dailyTimes.value, defaultDailyTime()]
+}
+
+const removeDailyTime = index => {
+  if (dailyTimes.value.length <= 1) return
+  dailyTimes.value = dailyTimes.value.filter((_, currentIndex) => currentIndex !== index)
+}
+
 const resetForm = () => {
   Object.assign(form, defaultForm())
   selectedAgent.value = agentStore.primaryAgents[0] || null
-  dailyTime.value = '09:00'
+  dailyTimes.value = [defaultDailyTime()]
   onceRunAt.value = ''
   activeTab.value = 'basic'
 }
@@ -404,14 +448,18 @@ const applyAutomationToForm = automation => {
     agentStore.agents.find(agent => agent.id === automation.agentId) ||
     agentStore.primaryAgents[0] ||
     null
-  dailyTime.value = automation.scheduleConfig?.time || '09:00'
+  dailyTimes.value = normalizeDailyTimes(
+    automation.scheduleConfig?.times || [automation.scheduleConfig?.time || defaultDailyTime()]
+  )
   onceRunAt.value = automation.scheduleConfig?.run_at || automation.scheduleConfig?.runAt || ''
 }
 
 const scheduleConfig = () => {
   if (form.scheduleKind === 'daily') {
+    const times = normalizeDailyTimes(dailyTimes.value)
     return {
-      time: dailyTime.value || '09:00',
+      time: times[0] || defaultDailyTime(),
+      times,
       weekdays: form.weekdays,
       start_date: form.startDate || null,
       end_date: form.endDate || null
@@ -423,7 +471,7 @@ const scheduleConfig = () => {
       weekdays: form.weekdays,
       start_date: form.startDate || null,
       end_date: form.endDate || null,
-      anchor_time: dailyTime.value || '09:00'
+      anchor_time: dailyTimes.value[0] || defaultDailyTime()
     }
   }
   return {
@@ -651,11 +699,36 @@ watch(
   }
 }
 
-.selection-field {
+.daily-time-list {
   display: flex;
   flex-direction: column;
-  gap: var(--cs-space-xs);
-  flex: 1;
+  gap: var(--cs-space-sm);
+  width: 100%;
+}
+
+.daily-time-row {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-sm);
+  width: 100%;
+
+  :deep(.el-date-editor) {
+    flex: 1;
+  }
+
+  :deep(.el-button) {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    min-height: 30px;
+    border-radius: var(--cs-border-radius);
+    padding: 0;
+    margin: 0;
+
+    &:last-child {
+      margin-right: 2px;
+    }
+  }
 }
 
 .selection-row {

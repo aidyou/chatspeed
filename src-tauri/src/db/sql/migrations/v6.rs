@@ -89,16 +89,20 @@ fn ensure_workflow_automation_shell_config(conn: &Connection) -> Result<(), Stor
     }
 
     let mut stmt = conn.prepare(
-        "SELECT id, schedule_config
+        "SELECT id, schedule_kind, schedule_config
          FROM workflow_automations
-         WHERE schedule_kind = 'interval'",
+         WHERE schedule_kind IN ('daily', 'interval')",
     )?;
     let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
     })?;
 
     for row in rows {
-        let (id, schedule_config) = row?;
+        let (id, schedule_kind, schedule_config) = row?;
         let Ok(mut value) = serde_json::from_str::<Value>(&schedule_config) else {
             continue;
         };
@@ -107,18 +111,38 @@ fn ensure_workflow_automation_shell_config(conn: &Connection) -> Result<(), Stor
             continue;
         };
 
-        if object.contains_key("interval_minutes") {
-            continue;
+        let mut changed = false;
+
+        if schedule_kind == "interval" && !object.contains_key("interval_minutes") {
+            let interval_hours = object
+                .remove("interval_hours")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(1);
+            object.insert(
+                "interval_minutes".to_string(),
+                Value::from(interval_hours.saturating_mul(60)),
+            );
+            changed = true;
         }
 
-        let interval_hours = object
-            .remove("interval_hours")
-            .and_then(|value| value.as_u64())
-            .unwrap_or(1);
-        object.insert(
-            "interval_minutes".to_string(),
-            Value::from(interval_hours.saturating_mul(60)),
-        );
+        if schedule_kind == "daily" {
+            let times_missing = !matches!(object.get("times"), Some(Value::Array(_)));
+            if times_missing {
+                let time = object
+                    .get("time")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or("09:00")
+                    .to_string();
+                object.insert("time".to_string(), Value::from(time.clone()));
+                object.insert("times".to_string(), Value::Array(vec![Value::from(time)]));
+                changed = true;
+            }
+        }
+
+        if !changed {
+            continue;
+        }
 
         let updated_schedule_config = serde_json::to_string(&value)?;
         conn.execute(

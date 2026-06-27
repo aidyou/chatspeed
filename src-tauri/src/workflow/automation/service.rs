@@ -80,11 +80,38 @@ fn within_effective_range(
     true
 }
 
+fn normalize_daily_schedule_times(config: &DailyScheduleConfig) -> Result<Vec<NaiveTime>, String> {
+    let mut raw_times = config.times.clone();
+    if raw_times.is_empty() {
+        if let Some(time) = config.time.as_ref() {
+            raw_times.push(time.clone());
+        }
+    }
+    if raw_times.is_empty() {
+        raw_times.push("09:00".to_string());
+    }
+
+    let mut normalized = raw_times
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| parse_time(&value))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    normalized.sort_unstable();
+    normalized.dedup();
+
+    if normalized.is_empty() {
+        return Err("Daily schedule requires at least one execution time".to_string());
+    }
+
+    Ok(normalized)
+}
+
 fn next_daily_run_from(
     config: DailyScheduleConfig,
     now: DateTime<Local>,
 ) -> Result<Option<String>, String> {
-    let time = parse_time(&config.time)?;
+    let times = normalize_daily_schedule_times(&config)?;
     let start_date = parse_date(&config.start_date)?;
     let end_date = parse_date(&config.end_date)?;
     let mut date = start_date.unwrap_or_else(|| now.date_naive());
@@ -103,9 +130,11 @@ fn next_daily_run_from(
         if !matches_weekday(candidate_date, &config.weekdays) {
             continue;
         }
-        let candidate = local_datetime(candidate_date, time)?;
-        if candidate > now {
-            return Ok(Some(normalize_datetime_for_db(candidate)));
+        for time in &times {
+            let candidate = local_datetime(candidate_date, *time)?;
+            if candidate > now {
+                return Ok(Some(normalize_datetime_for_db(candidate)));
+            }
         }
     }
 
@@ -850,6 +879,78 @@ mod tests {
         .expect("daily schedule should compute");
 
         assert_eq!(next, Some("2026-06-27 09:00:00".to_string()));
+    }
+
+    #[test]
+    fn daily_schedule_uses_next_time_slot_on_same_day() {
+        let now = test_now("2026-06-25 08:30:00");
+        let next = compute_next_run_at_from(
+            "daily",
+            &json!({
+                "times": ["08:00", "09:00", "18:00"],
+                "weekdays": [1, 2, 3, 4, 5, 6, 7],
+                "start_date": null,
+                "end_date": null
+            }),
+            now,
+        )
+        .expect("daily schedule should compute");
+
+        assert_eq!(next, Some("2026-06-25 09:00:00".to_string()));
+    }
+
+    #[test]
+    fn daily_schedule_rolls_to_next_day_after_all_time_slots_pass() {
+        let now = test_now("2026-06-25 19:00:00");
+        let next = compute_next_run_at_from(
+            "daily",
+            &json!({
+                "times": ["08:00", "09:00", "18:00"],
+                "weekdays": [1, 2, 3, 4, 5, 6, 7],
+                "start_date": null,
+                "end_date": null
+            }),
+            now,
+        )
+        .expect("daily schedule should compute");
+
+        assert_eq!(next, Some("2026-06-26 08:00:00".to_string()));
+    }
+
+    #[test]
+    fn daily_schedule_accepts_legacy_single_time_config() {
+        let now = test_now("2026-06-25 08:30:00");
+        let next = compute_next_run_at_from(
+            "daily",
+            &json!({
+                "time": "09:00",
+                "weekdays": [1, 2, 3, 4, 5, 6, 7],
+                "start_date": null,
+                "end_date": null
+            }),
+            now,
+        )
+        .expect("legacy daily schedule should compute");
+
+        assert_eq!(next, Some("2026-06-25 09:00:00".to_string()));
+    }
+
+    #[test]
+    fn daily_schedule_defaults_to_morning_when_time_list_is_empty() {
+        let now = test_now("2026-06-25 08:30:00");
+        let next = compute_next_run_at_from(
+            "daily",
+            &json!({
+                "times": [],
+                "weekdays": [1, 2, 3, 4, 5, 6, 7],
+                "start_date": null,
+                "end_date": null
+            }),
+            now,
+        )
+        .expect("daily schedule should compute");
+
+        assert_eq!(next, Some("2026-06-25 09:00:00".to_string()));
     }
 
     #[test]
