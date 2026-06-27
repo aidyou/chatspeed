@@ -245,6 +245,10 @@ fn validate_request(request: &WorkflowAutomationRequest) -> Result<(), String> {
     Ok(())
 }
 
+fn normalized_continuous_context(request: &WorkflowAutomationRequest) -> bool {
+    request.schedule_kind != "once" && request.continuous_context
+}
+
 fn build_agent_config(request: &WorkflowAutomationRequest) -> Result<String, String> {
     let mut value = request.agent_config.clone().unwrap_or_else(|| json!({}));
     if !value.is_object() {
@@ -261,6 +265,7 @@ fn build_agent_config(request: &WorkflowAutomationRequest) -> Result<String, Str
 fn request_to_upsert(
     mut request: WorkflowAutomationRequest,
     id: String,
+    existing_workflow_session_id: Option<String>,
 ) -> Result<WorkflowAutomationUpsert, String> {
     if let Some(prompt_from_file) = read_prompt_file_if_exists(request.prompt_file_path.as_deref())?
     {
@@ -278,6 +283,8 @@ fn request_to_upsert(
     let schedule_config =
         serde_json::to_string(&request.schedule_config).map_err(|e| e.to_string())?;
 
+    let continuous_context = normalized_continuous_context(&request);
+
     Ok(WorkflowAutomationUpsert {
         id,
         title: request.title.trim().to_string(),
@@ -289,6 +296,12 @@ fn request_to_upsert(
         shell_config,
         schedule_kind: request.schedule_kind,
         schedule_config,
+        continuous_context,
+        current_workflow_session_id: if continuous_context {
+            existing_workflow_session_id
+        } else {
+            None
+        },
         self_review: request.self_review,
         enabled: request.enabled,
         next_run_at,
@@ -537,7 +550,11 @@ pub fn save_automation(
                 .generate()
                 .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
         });
-    let upsert = request_to_upsert(request, id)?;
+    let existing_workflow_session_id = store
+        .get_workflow_automation(&id)
+        .map_err(|e| e.to_string())?
+        .and_then(|automation| automation.current_workflow_session_id);
+    let upsert = request_to_upsert(request, id, existing_workflow_session_id)?;
     store
         .upsert_workflow_automation(&upsert)
         .map_err(|e| e.to_string())
@@ -627,9 +644,37 @@ pub async fn run_automation_now(
         }
     };
     let initial_prompt = build_workflow_prompt(&prompt, shell_result.as_ref());
-    let workflow_session_id = tsid_generator.generate().map_err(|e| e.to_string())?;
+    let workflow_session_id = {
+        let existing_session_id = automation
+            .current_workflow_session_id
+            .clone()
+            .filter(|_| automation.continuous_context);
 
-    {
+        if let Some(session_id) = existing_session_id {
+            let store = state.read().map_err(|e| e.to_string())?;
+            let exists = store
+                .get_workflow(&session_id)
+                .map_err(|e| e.to_string())?
+                .is_some();
+            if exists {
+                session_id
+            } else {
+                tsid_generator.generate().map_err(|e| e.to_string())?
+            }
+        } else {
+            tsid_generator.generate().map_err(|e| e.to_string())?
+        }
+    };
+
+    let workflow_exists = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store
+            .get_workflow(&workflow_session_id)
+            .map_err(|e| e.to_string())?
+            .is_some()
+    };
+
+    if !workflow_exists {
         let store = state.read().map_err(|e| e.to_string())?;
         store
             .create_workflow(
@@ -676,6 +721,9 @@ pub async fn run_automation_now(
                 &run_id,
                 &workflow_session_id,
                 &scheduled_for,
+                automation
+                    .continuous_context
+                    .then_some(workflow_session_id.as_str()),
             )
             .map_err(|e| e.to_string())?;
     }
@@ -916,6 +964,7 @@ mod tests {
                 "start_date": null,
                 "end_date": null
             }),
+            continuous_context: true,
             self_review: false,
             enabled: true,
         };

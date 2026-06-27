@@ -105,7 +105,7 @@
                 v-for="automation in filteredAutomations"
                 :key="automation.id"
                 :class="{ active: automation.id === selectedAutomationId }"
-                @click="$emit('edit-automation', automation.id)"
+                @click="$emit('select-automation', automation.id)"
                 @mouseenter="hoveredWorkflowIndex = automation.id"
                 @mouseleave="hoveredWorkflowIndex = null">
                 <div class="workflow-title">

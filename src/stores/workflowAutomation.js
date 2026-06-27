@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { invokeWrapper } from '@/libs/tauri'
+import { useSettingStore } from '@/stores/setting'
 
 const parseJsonField = (value, fallback) => {
   if (value === null || value === undefined || value === '') return fallback
@@ -17,10 +18,13 @@ const normalizeAutomation = item => ({
   allowedPaths: parseJsonField(item.allowedPaths, []),
   agentConfig: parseJsonField(item.agentConfig, null),
   shellConfig: parseJsonField(item.shellConfig, null),
-  scheduleConfig: parseJsonField(item.scheduleConfig, {})
+  scheduleConfig: parseJsonField(item.scheduleConfig, {}),
+  continuousContext: Boolean(item.continuousContext),
+  currentWorkflowSessionId: item.currentWorkflowSessionId || null
 })
 
 export const useWorkflowAutomationStore = defineStore('workflowAutomation', () => {
+  const settingStore = useSettingStore()
   const automations = ref([])
   const runsByAutomation = ref({})
   const loading = ref(false)
@@ -31,12 +35,47 @@ export const useWorkflowAutomationStore = defineStore('workflowAutomation', () =
     automations.value.find(item => item.id === selectedAutomationId.value) || null
   )
 
+  const persistSelectedAutomationId = automationId => {
+    void settingStore
+      .setSetting('workflowAutomationLastSelectedId', automationId || '')
+      .catch(error => {
+        console.warn('[WorkflowAutomation] Failed to persist last selected automation id:', error)
+      })
+  }
+
+  const selectAutomation = automationId => {
+    selectedAutomationId.value = automationId || null
+    persistSelectedAutomationId(selectedAutomationId.value)
+  }
+
+  const toAutomationRequest = automation => ({
+    id: automation.id,
+    title: automation.title || '',
+    prompt: automation.prompt || '',
+    promptFilePath: automation.promptFilePath || '',
+    agentId: automation.agentId || '',
+    agentConfig: automation.agentConfig || null,
+    allowedPaths: Array.isArray(automation.allowedPaths) ? [...automation.allowedPaths] : [],
+    shellConfig: automation.shellConfig || null,
+    scheduleKind: automation.scheduleKind || 'daily',
+    scheduleConfig: automation.scheduleConfig || {},
+    continuousContext: Boolean(automation.continuousContext),
+    selfReview: Boolean(automation.selfReview),
+    enabled: automation.enabled !== false
+  })
+
   const fetchAutomations = async () => {
     loading.value = true
     error.value = null
     try {
       const result = await invokeWrapper('workflow_automation_list')
       automations.value = (result || []).map(normalizeAutomation)
+      if (
+        selectedAutomationId.value &&
+        !automations.value.some(item => item.id === selectedAutomationId.value)
+      ) {
+        selectedAutomationId.value = null
+      }
       return automations.value
     } catch (err) {
       error.value = err.message || String(err)
@@ -58,7 +97,7 @@ export const useWorkflowAutomationStore = defineStore('workflowAutomation', () =
       } else {
         automations.value.unshift(automation)
       }
-      selectedAutomationId.value = automation.id
+      selectAutomation(automation.id)
       return automation
     } catch (err) {
       error.value = err.message || String(err)
@@ -72,8 +111,20 @@ export const useWorkflowAutomationStore = defineStore('workflowAutomation', () =
     await invokeWrapper('workflow_automation_delete', { id })
     automations.value = automations.value.filter(item => item.id !== id)
     if (selectedAutomationId.value === id) {
-      selectedAutomationId.value = automations.value[0]?.id || null
+      selectAutomation(automations.value[0]?.id || null)
     }
+  }
+
+  const updateAutomationAllowedPaths = async (id, allowedPaths) => {
+    const automation = automations.value.find(item => item.id === id)
+    if (!automation) {
+      throw new Error(`Automation not found: ${id}`)
+    }
+
+    return saveAutomation({
+      ...toAutomationRequest(automation),
+      allowedPaths
+    })
   }
 
   const setAutomationEnabled = async (id, enabled) => {
@@ -104,9 +155,11 @@ export const useWorkflowAutomationStore = defineStore('workflowAutomation', () =
     error,
     selectedAutomationId,
     selectedAutomation,
+    selectAutomation,
     fetchAutomations,
     saveAutomation,
     deleteAutomation,
+    updateAutomationAllowedPaths,
     setAutomationEnabled,
     runAutomationNow,
     fetchRuns

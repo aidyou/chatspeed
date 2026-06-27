@@ -19,6 +19,8 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
             shell_config TEXT,
             schedule_kind TEXT NOT NULL,
             schedule_config TEXT NOT NULL,
+            continuous_context INTEGER NOT NULL DEFAULT 0,
+            current_workflow_session_id TEXT,
             self_review INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
             next_run_at DATETIME,
@@ -65,6 +67,20 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
 ];
 
 fn ensure_workflow_automation_shell_config(conn: &Connection) -> Result<(), StoreError> {
+    if !column_exists(conn, "workflow_automations", "continuous_context")? {
+        conn.execute(
+            "ALTER TABLE workflow_automations ADD COLUMN continuous_context INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "workflow_automations", "current_workflow_session_id")? {
+        conn.execute(
+            "ALTER TABLE workflow_automations ADD COLUMN current_workflow_session_id TEXT",
+            [],
+        )?;
+    }
+
     if !column_exists(conn, "workflow_automations", "shell_config")? {
         conn.execute(
             "ALTER TABLE workflow_automations ADD COLUMN shell_config TEXT",

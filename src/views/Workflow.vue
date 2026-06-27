@@ -137,8 +137,8 @@
         :automations="workflowAutomationStore.automations"
         :selected-automation-id="workflowAutomationStore.selectedAutomationId"
         v-model:active-tab="workflowSidebarActiveTab"
-        @select-workflow="selectWorkflow"
-        @select-automation="onEditAutomation"
+        @select-workflow="onSelectWorkflowFromHistory"
+        @select-automation="onSelectAutomation"
         @create-automation="openCreateAutomation"
         @edit-automation="onEditAutomation"
         @delete-automation="onDeleteAutomation"
@@ -357,6 +357,7 @@ const defaultImageRecognitionPrompt = ref('')
 const visibleCompletedTaskGroupCount = ref(3)
 const automationDrawerVisible = ref(false)
 const workflowSidebarActiveTab = ref('history')
+const lastHistoryWorkflowId = ref(null)
 
 const showPlanningModeToggle = computed(() => {
   const workflow = workflowStore.currentWorkflow
@@ -477,7 +478,11 @@ const {
   onRemovePathFromTree
 } = useWorkflowPaths({
   currentWorkflowId: computed(() => workflowStore.currentWorkflowId),
-  selectedAgent: computed(() => selectedAgent.value)
+  selectedAgent: computed(() => selectedAgent.value),
+  activeTab: computed(() => workflowSidebarActiveTab.value),
+  selectedAutomation: computed(() => workflowAutomationStore.selectedAutomation),
+  historyItemCount: computed(() => filteredWorkflows.value.length),
+  automationItemCount: computed(() => workflowAutomationStore.automations.length)
 })
 
 // Input composable - needs currentPaths, systemSkills
@@ -1221,13 +1226,77 @@ const onApproveAllPendingAction = async payload => {
 }
 
 const openCreateAutomation = () => {
-  workflowAutomationStore.selectedAutomationId = null
+  workflowAutomationStore.selectAutomation(null)
   automationDrawerVisible.value = true
 }
 
 const onEditAutomation = async automationId => {
-  workflowAutomationStore.selectedAutomationId = automationId
+  workflowAutomationStore.selectAutomation(automationId)
   automationDrawerVisible.value = true
+}
+
+const resolveInitialAutomationId = () => {
+  const savedAutomationId = settingStore.settings.workflowAutomationLastSelectedId
+  if (
+    savedAutomationId &&
+    workflowAutomationStore.automations.some(automation => automation.id === savedAutomationId)
+  ) {
+    return savedAutomationId
+  }
+
+  return workflowAutomationStore.automations[0]?.id || null
+}
+
+const resolveAutomationWorkflowId = async automationId => {
+  if (!automationId) return null
+
+  const automation = workflowAutomationStore.automations.find(item => item.id === automationId)
+  if (automation?.currentWorkflowSessionId) {
+    return automation.currentWorkflowSessionId
+  }
+
+  const runs = await workflowAutomationStore.fetchRuns(automationId)
+  const run = (runs || []).find(item => item?.workflowSessionId)
+  return run?.workflowSessionId || null
+}
+
+const onSelectWorkflowFromHistory = async workflowId => {
+  if (
+    workflowSidebarActiveTab.value === 'history' &&
+    currentWorkflowId.value === workflowId &&
+    currentWorkflow.value?.isAutomationRun !== true
+  ) {
+    return
+  }
+
+  lastHistoryWorkflowId.value = workflowId || null
+  await selectWorkflow(workflowId)
+}
+
+const onSelectAutomation = async automationId => {
+  if (!automationId) return
+  const workflowSessionId = await resolveAutomationWorkflowId(automationId)
+
+  if (
+    workflowSidebarActiveTab.value === 'automation' &&
+    workflowAutomationStore.selectedAutomationId === automationId &&
+    currentWorkflowId.value === workflowSessionId
+  ) {
+    return
+  }
+
+  workflowAutomationStore.selectAutomation(automationId)
+
+  if (workflowSessionId) {
+    try {
+      await selectWorkflow(workflowSessionId)
+      return
+    } catch (error) {
+      console.warn('[WorkflowAutomation] Failed to load linked workflow session:', error)
+    }
+  }
+
+  workflowStore.clearCurrentWorkflow()
 }
 
 const onDeleteAutomation = async automationId => {
@@ -1255,6 +1324,12 @@ const onDeleteAutomation = async automationId => {
     showMessage(t('common.deleteSuccess'), 'success')
     if (deletingSelectedAutomation) {
       automationDrawerVisible.value = false
+      const nextAutomationId = workflowAutomationStore.selectedAutomationId || resolveInitialAutomationId()
+      if (nextAutomationId) {
+        await onSelectAutomation(nextAutomationId)
+      } else {
+        workflowStore.clearCurrentWorkflow()
+      }
     }
   } catch (error) {
     showMessage(error?.message || String(error), 'error')
@@ -1264,6 +1339,9 @@ const onDeleteAutomation = async automationId => {
 const onAutomationSaved = async () => {
   workflowSidebarActiveTab.value = 'automation'
   await workflowAutomationStore.fetchAutomations()
+  if (workflowAutomationStore.selectedAutomationId) {
+    await onSelectAutomation(workflowAutomationStore.selectedAutomationId)
+  }
 }
 
 const onAutomationStartedWorkflow = async workflowSessionId => {
@@ -1396,6 +1474,7 @@ const filteredWorkflows = computed(() => {
       )
 
   return [...base].sort((a, b) => getWorkflowSortTime(b) - getWorkflowSortTime(a))
+    .filter(wf => wf?.isAutomationRun !== true)
 })
 
 const askUserSubmitting = ref(false)
@@ -1501,13 +1580,55 @@ const resolveInitialWorkflowId = () => {
   const savedWorkflowId = settingStore.settings.workflowLastSelectedId
   if (
     savedWorkflowId &&
-    workflowStore.workflows.some(workflow => workflow.id === savedWorkflowId)
+    workflowStore.workflows.some(
+      workflow => workflow.id === savedWorkflowId && workflow.isAutomationRun !== true
+    )
   ) {
     return savedWorkflowId
   }
 
-  return workflowStore.workflows[0]?.id || null
+  return workflowStore.workflows.find(workflow => workflow.isAutomationRun !== true)?.id || null
 }
+
+watch(
+  () => workflowSidebarActiveTab.value,
+  async tab => {
+    if (tab === 'automation') {
+      const automationId =
+        workflowAutomationStore.selectedAutomationId || resolveInitialAutomationId()
+      if (automationId) {
+        await onSelectAutomation(automationId)
+      }
+      return
+    }
+
+    if (tab === 'history') {
+      const currentHistoryWorkflowVisible =
+        currentWorkflowId.value &&
+        workflowStore.workflows.some(
+          workflow =>
+            workflow.id === currentWorkflowId.value && workflow.isAutomationRun !== true
+        )
+
+      if (currentHistoryWorkflowVisible) {
+        return
+      }
+
+      const workflowId =
+        lastHistoryWorkflowId.value &&
+        workflowStore.workflows.some(
+          workflow =>
+            workflow.id === lastHistoryWorkflowId.value && workflow.isAutomationRun !== true
+        )
+          ? lastHistoryWorkflowId.value
+          : resolveInitialWorkflowId()
+
+      if (workflowId) {
+        await onSelectWorkflowFromHistory(workflowId)
+      }
+    }
+  }
+)
 
 const onGlobalKeyDown = event => {
   const isMac = osType.value === 'macos'
@@ -1610,6 +1731,7 @@ onMounted(async () => {
   // Restore the last selected workflow if it still exists.
   const initialWorkflowId = resolveInitialWorkflowId()
   if (initialWorkflowId) {
+    lastHistoryWorkflowId.value = initialWorkflowId
     await selectWorkflow(initialWorkflowId)
   } else {
     // First launch bootstrap: create one empty workflow so sending messages never hits "no session".

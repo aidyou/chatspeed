@@ -860,6 +860,8 @@
       "agent": "Agent",
       "allowedDirectories": "Authorized directories",
       "basicInfo": "Basic info",
+      "continuousContext": "Continuous context",
+      "continuousContextHint": "Reuse the same workflow session for each run. If that session was deleted, a new one is created automatically.",
       "create": "Create",
       "createTitle": "Create automation task",
       "daily": "Daily",

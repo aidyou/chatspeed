@@ -1,6 +1,7 @@
 use crate::db::{MainStore, StoreError};
-use rusqlite::{params, Row};
+use rusqlite::{params, OptionalExtension, Row, Transaction};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +16,8 @@ pub struct WorkflowAutomation {
     pub shell_config: Option<String>,
     pub schedule_kind: String,
     pub schedule_config: String,
+    pub continuous_context: bool,
+    pub current_workflow_session_id: Option<String>,
     pub self_review: bool,
     pub enabled: bool,
     pub next_run_at: Option<String>,
@@ -50,6 +53,8 @@ pub struct WorkflowAutomationUpsert {
     pub shell_config: Option<String>,
     pub schedule_kind: String,
     pub schedule_config: String,
+    pub continuous_context: bool,
+    pub current_workflow_session_id: Option<String>,
     pub self_review: bool,
     pub enabled: bool,
     pub next_run_at: Option<String>,
@@ -84,6 +89,8 @@ impl From<&Row<'_>> for WorkflowAutomation {
             schedule_config: row
                 .get("schedule_config")
                 .unwrap_or_else(|_| "{}".to_string()),
+            continuous_context: row.get::<_, i64>("continuous_context").unwrap_or(0) != 0,
+            current_workflow_session_id: row.get("current_workflow_session_id").ok(),
             self_review: row.get::<_, i64>("self_review").unwrap_or(0) != 0,
             enabled: row.get::<_, i64>("enabled").unwrap_or(1) != 0,
             next_run_at: row.get("next_run_at").ok(),
@@ -112,6 +119,61 @@ impl From<&Row<'_>> for WorkflowAutomationRun {
 }
 
 impl MainStore {
+    fn delete_workflow_tree_tx(tx: &Transaction<'_>, id: &str) -> Result<(), StoreError> {
+        let workflow_ids = {
+            let mut stmt = tx.prepare(
+                "WITH RECURSIVE workflow_tree(id, depth) AS (
+                    SELECT id, 0 FROM workflows WHERE id = ?1
+                    UNION ALL
+                    SELECT workflows.id, workflow_tree.depth + 1
+                    FROM workflows
+                    JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+                )
+                SELECT id FROM workflow_tree ORDER BY depth DESC",
+            )?;
+            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
+            let mut ids = Vec::new();
+            for row in rows {
+                ids.push(row?);
+            }
+            ids
+        };
+
+        for workflow_id in &workflow_ids {
+            tx.execute(
+                "DELETE FROM workflow_context_messages WHERE session_id = ?1",
+                params![workflow_id],
+            )?;
+
+            tx.execute(
+                "DELETE FROM workflow_messages WHERE session_id = ?1",
+                params![workflow_id],
+            )?;
+
+            tx.execute(
+                "DELETE FROM workflow_snapshots WHERE session_id = ?1",
+                params![workflow_id],
+            )?;
+
+            if let Err(e) = tx.execute(
+                "DELETE FROM workflow_events WHERE session_id = ?1",
+                params![workflow_id],
+            ) {
+                log::error!(
+                    "[Workflow][session={}] Failed to delete workflow events (non-fatal, continuing): {}",
+                    workflow_id,
+                    e
+                );
+            }
+        }
+
+        for workflow_id in &workflow_ids {
+            tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+        }
+
+        Ok(())
+    }
+
     pub fn list_workflow_automations(&self) -> Result<Vec<WorkflowAutomation>, StoreError> {
         let conn = self
             .conn
@@ -157,8 +219,9 @@ impl MainStore {
         conn.execute(
             "INSERT INTO workflow_automations
              (id, title, prompt, prompt_file_path, agent_id, agent_config, allowed_paths,
-              shell_config, schedule_kind, schedule_config, self_review, enabled, next_run_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+              shell_config, schedule_kind, schedule_config, continuous_context,
+              current_workflow_session_id, self_review, enabled, next_run_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 prompt = excluded.prompt,
@@ -169,6 +232,8 @@ impl MainStore {
                 shell_config = excluded.shell_config,
                 schedule_kind = excluded.schedule_kind,
                 schedule_config = excluded.schedule_config,
+                continuous_context = excluded.continuous_context,
+                current_workflow_session_id = excluded.current_workflow_session_id,
                 self_review = excluded.self_review,
                 enabled = excluded.enabled,
                 next_run_at = excluded.next_run_at,
@@ -184,6 +249,8 @@ impl MainStore {
                 automation.shell_config,
                 automation.schedule_kind,
                 automation.schedule_config,
+                automation.continuous_context as i64,
+                automation.current_workflow_session_id,
                 automation.self_review as i64,
                 automation.enabled as i64,
                 automation.next_run_at,
@@ -204,10 +271,45 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         let tx = conn.transaction()?;
+        let mut workflow_ids = {
+            let mut stmt = tx.prepare(
+                "SELECT DISTINCT workflow_session_id
+                 FROM workflow_automation_runs
+                 WHERE automation_id = ?1 AND workflow_session_id IS NOT NULL",
+            )?;
+            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
+            let mut ids = Vec::new();
+            for row in rows {
+                ids.push(row?);
+            }
+            ids
+        };
+        if let Some(current_workflow_session_id) = tx
+            .query_row(
+                "SELECT current_workflow_session_id
+                 FROM workflow_automations
+                 WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+        {
+            workflow_ids.push(current_workflow_session_id);
+        }
+
+        let mut seen_workflow_ids = HashSet::new();
+        workflow_ids.retain(|workflow_id| seen_workflow_ids.insert(workflow_id.clone()));
+
         tx.execute(
             "DELETE FROM workflow_automation_runs WHERE automation_id = ?1",
             params![id],
         )?;
+
+        for workflow_id in &workflow_ids {
+            Self::delete_workflow_tree_tx(&tx, workflow_id)?;
+        }
+
         tx.execute(
             "DELETE FROM workflow_automations WHERE id = ?1",
             params![id],
@@ -241,6 +343,7 @@ impl MainStore {
         run_id: &str,
         workflow_session_id: &str,
         scheduled_for: &str,
+        current_workflow_session_id: Option<&str>,
     ) -> Result<(), StoreError> {
         let conn = self
             .conn
@@ -248,9 +351,9 @@ impl MainStore {
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         conn.execute(
             "UPDATE workflow_automations
-             SET last_run_at = ?2, updated_at = CURRENT_TIMESTAMP
+             SET last_run_at = ?2, current_workflow_session_id = ?3, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1",
-            params![automation_id, scheduled_for],
+            params![automation_id, scheduled_for, current_workflow_session_id],
         )?;
         conn.execute(
             "UPDATE workflow_automation_runs
@@ -335,5 +438,106 @@ impl MainStore {
             runs.push(row?);
         }
         Ok(runs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::workflow::WorkflowMessage;
+    use crate::db::MainStore;
+    use crate::db::StoreError;
+    use tempfile::tempdir;
+
+    fn create_test_store() -> MainStore {
+        let dir = tempdir().expect("failed to create temp dir");
+        let db_path = dir.path().join("automation_test.db");
+        MainStore::new(db_path).expect("failed to create MainStore")
+    }
+
+    fn seed_agent(store: &MainStore, id: &str) {
+        let conn = store
+            .conn
+            .lock()
+            .expect("failed to lock db connection for agent seed");
+        conn.execute(
+            "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, format!("Agent {}", id), "You are a test agent.", "autonomous", 20],
+        )
+        .expect("failed to seed agent");
+    }
+
+    #[test]
+    fn test_delete_workflow_automation_removes_associated_workflows() -> Result<(), StoreError> {
+        let store = create_test_store();
+        seed_agent(&store, "agent-main");
+        seed_agent(&store, "agent-child");
+
+        store.create_workflow("auto-session", "Auto task", "agent-main", None, None)?;
+        store.create_workflow(
+            "auto-child-session",
+            "Auto child task",
+            "agent-child",
+            None,
+            Some("auto-session"),
+        )?;
+
+        store.add_workflow_message(&WorkflowMessage {
+            id: None,
+            session_id: "auto-session".to_string(),
+            role: "assistant".to_string(),
+            message: "hello".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: None,
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        })?;
+
+        let automation = WorkflowAutomationUpsert {
+            id: "automation-1".to_string(),
+            title: "Automation".to_string(),
+            prompt: Some("run".to_string()),
+            prompt_file_path: None,
+            agent_id: "agent-main".to_string(),
+            agent_config: Some("{}".to_string()),
+            allowed_paths: "[]".to_string(),
+            shell_config: None,
+            schedule_kind: "daily".to_string(),
+            schedule_config: "{}".to_string(),
+            continuous_context: true,
+            current_workflow_session_id: Some("auto-session".to_string()),
+            self_review: false,
+            enabled: true,
+            next_run_at: None,
+        };
+        store.upsert_workflow_automation(&automation)?;
+        store.add_workflow_automation_run(&WorkflowAutomationRunInsert {
+            id: "run-1".to_string(),
+            automation_id: "automation-1".to_string(),
+            workflow_session_id: None,
+            status: "completed".to_string(),
+            scheduled_for: "2026-06-27 10:00:00".to_string(),
+            started_at: None,
+            finished_at: None,
+            error: None,
+        })?;
+
+        store.delete_workflow_automation("automation-1")?;
+
+        assert!(store.get_workflow("auto-session")?.is_none());
+        assert!(store.get_workflow("auto-child-session")?.is_none());
+        assert!(store.get_workflow_automation("automation-1")?.is_none());
+        assert!(store.list_workflow_automation_runs("automation-1")?.is_empty());
+
+        Ok(())
     }
 }

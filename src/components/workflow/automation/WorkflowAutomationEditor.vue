@@ -1,10 +1,12 @@
 <template>
   <el-dialog
     v-model="visible"
+    :close-on-press-escape="false"
+    :close-on-click-modal="false"
     :title="dialogTitle"
-    width="500px"
-    class="workflow-automation-dialog"
     @open="prepareForm"
+    width="600px"
+    class="workflow-automation-dialog"
     destroy-on-close>
     <div class="automation-form-shell">
       <el-tabs v-model="activeTab" class="automation-tabs">
@@ -76,7 +78,7 @@
 
             <template v-else-if="form.scheduleKind === 'interval'">
               <el-form-item :label="$t('workflow.automation.intervalMinutes')">
-                <el-input-number v-model="form.intervalMinutes" :min="5" :max="259200" step="5" />
+                <el-input-number v-model="form.intervalMinutes" :min="5" :max="259200" :step="5" />
               </el-form-item>
               <WeekdayPicker v-model="form.weekdays" />
               <el-form-item :label="$t('workflow.automation.effectiveRange')">
@@ -132,6 +134,17 @@
                   :placeholder="$t('workflow.automation.shellCommandPlaceholder')" />
                 <div class="field-hint">
                   {{ $t('workflow.automation.shellCommandHint') }}
+                </div>
+              </div>
+            </el-form-item>
+
+            <el-form-item
+              v-if="showContinuousContext"
+              :label="$t('workflow.automation.continuousContext')">
+              <div class="selection-field">
+                <el-switch v-model="form.continuousContext" />
+                <div class="field-hint">
+                  {{ $t('workflow.automation.continuousContextHint') }}
                 </div>
               </div>
             </el-form-item>
@@ -218,6 +231,7 @@ const defaultForm = () => ({
   startDate: '',
   endDate: '',
   intervalMinutes: 5,
+  continuousContext: false,
   selfReview: false,
   enabled: true
 })
@@ -230,6 +244,7 @@ const activeTab = ref('basic')
 const saving = ref(false)
 const runningNow = ref(false)
 const modelSelectorVisible = ref(false)
+const showContinuousContext = computed(() => form.scheduleKind !== 'once')
 
 const dialogTitle = computed(() =>
   form.id ? t('workflow.automation.edit') : t('workflow.automation.createTitle')
@@ -381,6 +396,7 @@ const applyAutomationToForm = automation => {
       automation.scheduleConfig?.intervalMinutes ||
       (automation.scheduleConfig?.interval_hours || automation.scheduleConfig?.intervalHours || 1) *
         60,
+    continuousContext: Boolean(automation.continuousContext),
     selfReview: Boolean(automation.selfReview),
     enabled: automation.enabled !== false
   })
@@ -430,6 +446,7 @@ const automationRequest = () => ({
     : null,
   scheduleKind: form.scheduleKind,
   scheduleConfig: scheduleConfig(),
+  continuousContext: form.scheduleKind === 'once' ? false : form.continuousContext,
   selfReview: form.selfReview,
   enabled: form.enabled
 })
@@ -543,6 +560,15 @@ watch(
     }
   }
 )
+
+watch(
+  () => form.scheduleKind,
+  scheduleKind => {
+    if (scheduleKind === 'once') {
+      form.continuousContext = false
+    }
+  }
+)
 </script>
 
 <style lang="scss" scoped>
@@ -629,6 +655,7 @@ watch(
   display: flex;
   flex-direction: column;
   gap: var(--cs-space-xs);
+  flex: 1;
 }
 
 .selection-row {
@@ -710,6 +737,7 @@ watch(
     color: var(--cs-text-primary);
     line-height: 1.4;
     flex-shrink: 0;
+    box-sizing: border-box;
   }
 
   :deep(.weekday-picker-content) {

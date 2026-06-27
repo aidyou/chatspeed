@@ -25,6 +25,8 @@ pub struct WorkflowAutomationRequest {
     pub shell_config: Option<Value>,
     pub schedule_kind: String,
     pub schedule_config: Value,
+    #[serde(default)]
+    pub continuous_context: bool,
     pub self_review: bool,
     pub enabled: bool,
 }

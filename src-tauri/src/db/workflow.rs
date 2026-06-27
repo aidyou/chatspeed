@@ -20,6 +20,8 @@ use std::collections::{HashMap, HashSet};
 #[serde(rename_all = "camelCase")]
 pub struct Workflow {
     pub id: Option<String>,
+    #[serde(default)]
+    pub is_automation_run: bool,
     pub parent_session_id: Option<String>,
     pub title: Option<String>,
     pub user_query: String,
@@ -169,6 +171,10 @@ impl From<&Row<'_>> for Workflow {
     fn from(row: &Row<'_>) -> Self {
         Self {
             id: row.get("id").ok(),
+            is_automation_run: row
+                .get::<_, Option<i64>>("is_automation_run")
+                .map(|value| value == Some(1))
+                .unwrap_or(false),
             parent_session_id: row.get("parent_session_id").ok(),
             title: row.get("title").ok(),
             user_query: row.get("user_query").unwrap_or_default(),
@@ -940,7 +946,13 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt = conn.prepare(
-            "SELECT * FROM workflows
+            "SELECT workflows.*,
+                    EXISTS(
+                        SELECT 1
+                        FROM workflow_automation_runs
+                        WHERE workflow_session_id = workflows.id
+                    ) AS is_automation_run
+             FROM workflows
              WHERE parent_session_id IS NULL
                AND id NOT LIKE 'subagent\\_%' ESCAPE '\\'
                AND id NOT LIKE 'task\\_%' ESCAPE '\\'
@@ -1291,7 +1303,14 @@ impl MainStore {
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         let mut workflow: Workflow = conn.query_row(
-            "SELECT * FROM workflows WHERE id = ?1",
+            "SELECT workflows.*,
+                    EXISTS(
+                        SELECT 1
+                        FROM workflow_automation_runs
+                        WHERE workflow_session_id = workflows.id
+                    ) AS is_automation_run
+             FROM workflows
+             WHERE workflows.id = ?1",
             params![id],
             |row| Ok(Workflow::from(row)),
         )?;
@@ -2494,6 +2513,91 @@ mod tests {
             Some("parent-session"),
             "child workflow should not appear in top-level workflow list"
         );
+    }
+
+    #[test]
+    fn test_list_workflows_marks_automation_runs() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-main");
+
+        store
+            .create_workflow("normal-session", "Normal query", "agent-main", None, None)
+            .expect("failed to create normal workflow");
+        store
+            .create_workflow("automation-session", "Automation query", "agent-main", None, None)
+            .expect("failed to create automation workflow");
+
+        let conn = store
+            .conn
+            .lock()
+            .expect("failed to lock db connection for automation marker test");
+        conn.execute(
+            "INSERT INTO workflow_automations
+             (id, title, agent_id, allowed_paths, schedule_kind, schedule_config, enabled)
+             VALUES (?1, ?2, ?3, '[]', 'daily', '{}', 1)",
+            params!["automation-1", "Automation", "agent-main"],
+        )
+        .expect("failed to insert automation");
+        conn.execute(
+            "INSERT INTO workflow_automation_runs
+             (id, automation_id, workflow_session_id, status, scheduled_for)
+             VALUES (?1, ?2, ?3, 'running', '2026-06-27 10:00:00')",
+            params!["run-1", "automation-1", "automation-session"],
+        )
+        .expect("failed to insert automation run");
+        drop(conn);
+
+        let workflows = store
+            .list_workflows()
+            .expect("failed to list top-level workflows");
+
+        let normal = workflows
+            .iter()
+            .find(|workflow| workflow.id.as_deref() == Some("normal-session"))
+            .expect("normal workflow should exist");
+        let automation = workflows
+            .iter()
+            .find(|workflow| workflow.id.as_deref() == Some("automation-session"))
+            .expect("automation workflow should exist");
+
+        assert!(!normal.is_automation_run);
+        assert!(automation.is_automation_run);
+    }
+
+    #[test]
+    fn test_get_workflow_snapshot_marks_automation_runs() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-main");
+
+        store
+            .create_workflow("automation-session", "Automation query", "agent-main", None, None)
+            .expect("failed to create automation workflow");
+
+        let conn = store
+            .conn
+            .lock()
+            .expect("failed to lock db connection for snapshot automation marker test");
+        conn.execute(
+            "INSERT INTO workflow_automations
+             (id, title, agent_id, allowed_paths, schedule_kind, schedule_config, enabled)
+             VALUES (?1, ?2, ?3, '[]', 'daily', '{}', 1)",
+            params!["automation-1", "Automation", "agent-main"],
+        )
+        .expect("failed to insert automation");
+        conn.execute(
+            "INSERT INTO workflow_automation_runs
+             (id, automation_id, workflow_session_id, status, scheduled_for)
+             VALUES (?1, ?2, ?3, 'running', '2026-06-27 10:00:00')",
+            params!["run-1", "automation-1", "automation-session"],
+        )
+        .expect("failed to insert automation run");
+        drop(conn);
+
+        let snapshot = store
+            .get_workflow_snapshot("automation-session")
+            .expect("failed to get workflow snapshot");
+
+        assert!(snapshot.workflow.is_automation_run);
     }
 
     #[test]

@@ -24,6 +24,7 @@ const defaultSettings = {
   workflowApprovalMuted: true,
   workflowCompletionMuted: true,
   workflowLastSelectedId: '',
+  workflowAutomationLastSelectedId: '',
   // chat settings
   historyMessages: 5,
   conversationTitleGenModel: { id: '', model: '' },

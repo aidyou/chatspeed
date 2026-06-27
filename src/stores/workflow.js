@@ -1249,7 +1249,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
         };
       }
 
-      persistLastSelectedWorkflowId(workflowId);
+      const selectedWorkflow = workflowIndex !== -1 ? workflows.value[workflowIndex] : snapshot.workflow;
+      if (selectedWorkflow?.isAutomationRun !== true) {
+        persistLastSelectedWorkflowId(workflowId);
+      }
     } catch (err) {
       if (currentWorkflowId.value !== workflowId) {
         return;

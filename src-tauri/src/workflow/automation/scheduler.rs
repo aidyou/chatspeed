@@ -40,6 +40,8 @@ mod tests {
             shell_config: None,
             schedule_kind: schedule_kind.to_string(),
             schedule_config: "{}".to_string(),
+            continuous_context: false,
+            current_workflow_session_id: None,
             self_review: false,
             enabled,
             next_run_at: next_run_at.map(str::to_string),

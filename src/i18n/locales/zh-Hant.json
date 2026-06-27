@@ -860,6 +860,8 @@
       "agent": "智能体",
       "allowedDirectories": "授權目錄",
       "basicInfo": "基礎資訊",
+      "continuousContext": "連續上下文",
+      "continuousContextHint": "每次執行都會重用同一個工作流會話；如果該會話已被刪除，會自動建立新的會話。",
       "create": "创建",
       "createTitle": "建立自動化任務",
       "daily": "每天",
