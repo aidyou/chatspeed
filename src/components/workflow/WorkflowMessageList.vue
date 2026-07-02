@@ -63,6 +63,7 @@
             ">
             <pre
               :data-user-expand-id="getUserMessageExpandId(message)"
+              :style="getUserMessageCollapsedStyle(message)"
               class="simple-text"
               :class="{
                 'is-collapsed': !isUserMessageExpanded(message),
@@ -835,6 +836,7 @@ const messagesRef = ref(null)
 const approvalDrafts = ref({})
 const askUserDrafts = ref({})
 const userMessageOverflowMap = ref({})
+const userMessageCollapsedHeightMap = ref({})
 const isRevealingEarlierTaskGroup = ref(false)
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
@@ -1574,11 +1576,28 @@ const updateUserMessageOverflowMap = overflowMap => {
   userMessageOverflowMap.value = overflowMap
 }
 
+const updateUserMessageCollapsedHeightMap = heightMap => {
+  const current = userMessageCollapsedHeightMap.value
+  const currentKeys = Object.keys(current)
+  const nextKeys = Object.keys(heightMap)
+
+  if (
+    currentKeys.length === nextKeys.length &&
+    nextKeys.every(key => current[key] === heightMap[key])
+  ) {
+    return
+  }
+
+  userMessageCollapsedHeightMap.value = heightMap
+}
+
 const measureUserMessageOverflow = () => {
   const overflowMap = {}
+  const collapsedHeightMap = {}
   const container = messagesRef.value
   if (!container) {
     updateUserMessageOverflowMap(overflowMap)
+    updateUserMessageCollapsedHeightMap(collapsedHeightMap)
     return
   }
 
@@ -1587,10 +1606,13 @@ const measureUserMessageOverflow = () => {
     const expandId = el.getAttribute('data-user-expand-id')
     if (!expandId) continue
 
-    overflowMap[expandId] = getUserMessageNaturalHeight(el) > getUserMessageCollapsedMaxHeight(el)
+    const collapsedMaxHeight = getUserMessageCollapsedMaxHeight(el)
+    overflowMap[expandId] = getUserMessageNaturalHeight(el) > collapsedMaxHeight
+    collapsedHeightMap[expandId] = collapsedMaxHeight > 0 ? `${collapsedMaxHeight}px` : undefined
   }
 
   updateUserMessageOverflowMap(overflowMap)
+  updateUserMessageCollapsedHeightMap(collapsedHeightMap)
 }
 
 const scheduleMeasureUserMessageOverflow = () => {
@@ -1618,6 +1640,13 @@ const isUserMessageExpanded = message =>
 const isExpandableUserMessage = message => {
   if (!message || getAskUserResponseItems(message).length > 0) return false
   return !!userMessageOverflowMap.value[getUserMessageExpandId(message)]
+}
+
+const getUserMessageCollapsedStyle = message => {
+  if (!message || isUserMessageExpanded(message)) return undefined
+
+  const maxHeight = userMessageCollapsedHeightMap.value[getUserMessageExpandId(message)]
+  return maxHeight ? { maxHeight } : undefined
 }
 
 const getMessageSubAgentId = message => {
@@ -1941,6 +1970,7 @@ watch(
     isRevealingEarlierTaskGroup.value = false
     shouldAutoScroll.value = true
     userMessageOverflowMap.value = {}
+    userMessageCollapsedHeightMap.value = {}
     scheduleMeasureUserMessageOverflow()
   }
 )
@@ -2247,9 +2277,6 @@ defineExpose({
 
   &.is-collapsed {
     position: relative;
-    max-height: calc(
-      1em * var(--user-message-line-height-multiplier) * 4 + var(--user-message-toggle-safe-bottom)
-    );
     overflow: hidden;
     padding-right: var(--user-message-toggle-safe-right);
     padding-bottom: var(--user-message-toggle-safe-bottom);
