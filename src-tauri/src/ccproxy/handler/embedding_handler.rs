@@ -221,6 +221,7 @@ pub async fn handle_embedding(
             id: None,
             client_model: proxy_alias,
             backend_model: proxy_model.model.clone(),
+            provider_id: Some(proxy_model.provider_id),
             provider: proxy_model.provider.clone(),
             protocol: chat_protocol.to_string(),
             tool_compat_mode: 0,

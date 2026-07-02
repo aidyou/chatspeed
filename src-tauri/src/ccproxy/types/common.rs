@@ -74,6 +74,7 @@ impl fmt::Debug for StreamFormat {
 pub struct ProxyModel {
     /// User-facing alias (from alias lookup) or model_id (from direct header specification)
     pub client_alias: String,
+    pub provider_id: i64,
     pub provider: String,
     pub chat_protocol: ChatProtocol,
     pub base_url: String,

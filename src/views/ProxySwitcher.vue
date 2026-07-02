@@ -85,7 +85,7 @@
                       class="icon-btn action-btn"
                       :class="{ active: activeTrendProxyKey === proxy.key }"
                       @click.stop="openTrendDrawer(proxy)">
-                      <el-icon><Coin /></el-icon>
+                      <cs name="skill-piechart" size="16px" color="secondary" />
                     </span>
                   </el-tooltip>
 
@@ -98,7 +98,7 @@
                       class="icon-btn action-btn"
                       :class="{ active: selectedProxyKey === proxy.key }"
                       @click="openServerModelSelector(group.name, proxy.alias)">
-                      <cs name="edit" size="16px" color="secondary" />
+                      <cs name="switch" size="16px" color="secondary" />
                     </span>
                   </el-tooltip>
                 </div>
@@ -383,12 +383,12 @@ import { sendSyncState } from '@/libs/sync'
 import {
   buildPricingMaps,
   estimateCostFromPricing,
+  findPricingForUsageRow,
   formatCurrency,
   formatCurrencyCompact
 } from '@/libs/modelPricing'
 import Avatar from '@/components/common/Avatar.vue'
 import ProxyStats from '@/components/setting/ProxyStats.vue'
-import { Coin } from '@element-plus/icons-vue'
 
 const { t } = useI18n()
 const proxyGroupStore = useProxyGroupStore()
@@ -582,7 +582,7 @@ const getProviderNameById = providerId => {
 }
 
 const estimateRowCost = row => {
-  const pricing = pricingMaps.value.byProviderName.get(`${row.provider}::${row.backendModel}`)
+  const pricing = findPricingForUsageRow(pricingMaps.value, row)
   return estimateCostFromPricing(
     {
       inputTokens: row.totalInputTokens,

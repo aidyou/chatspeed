@@ -28,6 +28,7 @@ pub async fn handle_streamed_response(
     main_store_arc: Arc<std::sync::RwLock<MainStore>>,
     client_model: String,
     backend_model: String,
+    provider_id: i64,
     provider: String,
     tool_compat_mode: bool,
 ) -> ProxyResult<Response> {
@@ -100,6 +101,7 @@ pub async fn handle_streamed_response(
         main_store: main_store_arc.clone(),
         client_model: client_model.clone(),
         backend_model: backend_model.clone(),
+        provider_id,
         provider: provider.clone(),
         protocol: client_protocol.to_string(),
         tool_compat_mode,

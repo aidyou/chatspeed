@@ -32,11 +32,16 @@
 - **Pricing calculation for cached tokens**:
   - Fixed an issue where cached input tokens could be charged twice in price estimation.
   - Proxy Stats and Proxy Switcher now calculate billable input tokens more accurately.
+- **Proxy stats pricing matching and provider aggregation**:
+  - CCProxy stats now persist a stable `provider_id`, and existing local data is backfilled through a database migration.
+  - Proxy Stats and Proxy Switcher now match model pricing by provider ID first, avoiding incorrect cost estimation when provider names or displayed model names differ from the stored backend model identifier.
 - **Managed window recreation and cleanup stability**:
   - Main window and proxy switcher are now created on demand and can be recreated after being closed, instead of depending on startup-time pre-creation.
   - Window creation events are now emitted and listened for at the app level, so opening settings, notes, URLs, or the proxy switcher no longer depends on the main window remaining alive.
   - Closing the proxy switcher now follows the same hide-then-destroy flow as other transient windows, reducing stale-window state and unnecessary background resource retention on macOS and other platforms.
   - Tray actions and app re-activation now restore the target window more reliably when the window instance has already been destroyed.
+- **Workflow user message collapse height**:
+  - Fixed the maximum collapsed height of user messages in Workflow so long messages no longer render with incorrect collapsed sizing.
 
 ---
 

@@ -22,11 +22,12 @@ impl MainStore {
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         match conn.execute(
-            "INSERT INTO ccproxy_stats (client_model, backend_model, provider, protocol, tool_compat_mode, status_code, error_message, input_tokens, output_tokens, cache_tokens)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO ccproxy_stats (client_model, backend_model, provider_id, provider, protocol, tool_compat_mode, status_code, error_message, input_tokens, output_tokens, cache_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 stat.client_model,
                 stat.backend_model,
+                stat.provider_id,
                 stat.provider,
                 stat.protocol,
                 stat.tool_compat_mode,
@@ -349,6 +350,7 @@ impl MainStore {
             .prepare(
                 "SELECT
                 COALESCE(provider, '-') as provider,
+                provider_id,
                 COALESCE(client_model, '-') as client_model,
                 COALESCE(backend_model, '-') as backend_model,
                 COALESCE(protocol, '-') as protocol,
@@ -360,7 +362,7 @@ impl MainStore {
                 COUNT(*) FILTER (WHERE status_code != 200) as error_count
              FROM ccproxy_stats
              WHERE DATE(request_at, 'localtime') = ?1
-             GROUP BY provider, client_model, backend_model, protocol, tool_compat_mode
+             GROUP BY provider_id, provider, client_model, backend_model, protocol, tool_compat_mode
              ORDER BY request_count DESC",
             )
             .map_err(|e| StoreError::Query(e.to_string()))?;
@@ -369,15 +371,16 @@ impl MainStore {
             .query_map([date], |row| {
                 Ok(serde_json::json!({
                     "provider": row.get::<_, String>(0)?,
-                    "clientModel": row.get::<_, String>(1)?,
-                    "backendModel": row.get::<_, String>(2)?,
-                    "protocol": row.get::<_, String>(3)?,
-                    "toolCompatMode": row.get::<_, i32>(4).unwrap_or(0),
-                    "requestCount": row.get::<_, u32>(5).unwrap_or(0),
-                    "totalInputTokens": row.get::<_, i64>(6).unwrap_or(0),
-                    "totalOutputTokens": row.get::<_, i64>(7).unwrap_or(0),
-                    "totalCacheTokens": row.get::<_, i64>(8).unwrap_or(0),
-                    "errorCount": row.get::<_, u32>(9).unwrap_or(0),
+                    "providerId": row.get::<_, Option<i64>>(1)?,
+                    "clientModel": row.get::<_, String>(2)?,
+                    "backendModel": row.get::<_, String>(3)?,
+                    "protocol": row.get::<_, String>(4)?,
+                    "toolCompatMode": row.get::<_, i32>(5).unwrap_or(0),
+                    "requestCount": row.get::<_, u32>(6).unwrap_or(0),
+                    "totalInputTokens": row.get::<_, i64>(7).unwrap_or(0),
+                    "totalOutputTokens": row.get::<_, i64>(8).unwrap_or(0),
+                    "totalCacheTokens": row.get::<_, i64>(9).unwrap_or(0),
+                    "errorCount": row.get::<_, u32>(10).unwrap_or(0),
                 }))
             })
             .map_err(|e| StoreError::Query(e.to_string()))?;
@@ -405,6 +408,7 @@ impl MainStore {
             (
                 "SELECT
                     DATE(request_at, 'localtime') as date,
+                    provider_id,
                     COALESCE(provider, '-') as provider,
                     COALESCE(backend_model, '-') as backend_model,
                     COALESCE(protocol, '-') as protocol,
@@ -414,7 +418,7 @@ impl MainStore {
                     COALESCE(SUM(output_tokens), 0) as total_output_tokens,
                     COALESCE(SUM(cache_tokens), 0) as total_cache_tokens
                  FROM ccproxy_stats
-                 GROUP BY date, provider, backend_model, protocol, tool_compat_mode
+                 GROUP BY date, provider_id, provider, backend_model, protocol, tool_compat_mode
                  ORDER BY date DESC"
                     .to_string(),
                 params![],
@@ -423,6 +427,7 @@ impl MainStore {
             (
                 "SELECT
                     DATE(request_at, 'localtime') as date,
+                    provider_id,
                     COALESCE(provider, '-') as provider,
                     COALESCE(backend_model, '-') as backend_model,
                     COALESCE(protocol, '-') as protocol,
@@ -433,7 +438,7 @@ impl MainStore {
                     COALESCE(SUM(cache_tokens), 0) as total_cache_tokens
                  FROM ccproxy_stats
                  WHERE DATE(request_at, 'localtime') >= DATE('now', 'localtime', '-' || ?1 || ' days')
-                 GROUP BY date, provider, backend_model, protocol, tool_compat_mode
+                 GROUP BY date, provider_id, provider, backend_model, protocol, tool_compat_mode
                  ORDER BY date DESC"
                     .to_string(),
                 params![days],
@@ -448,14 +453,15 @@ impl MainStore {
             .query_map(params, |row| {
                 Ok(serde_json::json!({
                     "date": row.get::<_, String>(0)?,
-                    "provider": row.get::<_, String>(1)?,
-                    "backendModel": row.get::<_, String>(2)?,
-                    "protocol": row.get::<_, String>(3)?,
-                    "toolCompatMode": row.get::<_, i32>(4).unwrap_or(0),
-                    "requestCount": row.get::<_, u32>(5).unwrap_or(0),
-                    "totalInputTokens": row.get::<_, i64>(6).unwrap_or(0),
-                    "totalOutputTokens": row.get::<_, i64>(7).unwrap_or(0),
-                    "totalCacheTokens": row.get::<_, i64>(8).unwrap_or(0),
+                    "providerId": row.get::<_, Option<i64>>(1)?,
+                    "provider": row.get::<_, String>(2)?,
+                    "backendModel": row.get::<_, String>(3)?,
+                    "protocol": row.get::<_, String>(4)?,
+                    "toolCompatMode": row.get::<_, i32>(5).unwrap_or(0),
+                    "requestCount": row.get::<_, u32>(6).unwrap_or(0),
+                    "totalInputTokens": row.get::<_, i64>(7).unwrap_or(0),
+                    "totalOutputTokens": row.get::<_, i64>(8).unwrap_or(0),
+                    "totalCacheTokens": row.get::<_, i64>(9).unwrap_or(0),
                 }))
             })
             .map_err(|e| StoreError::Query(e.to_string()))?;

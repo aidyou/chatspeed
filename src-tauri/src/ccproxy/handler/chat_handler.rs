@@ -402,6 +402,7 @@ pub(crate) async fn execute_unified_chat_request(
                 id: None,
                 client_model: proxy_model.client_alias.clone(),
                 backend_model: proxy_model.model.clone(),
+                provider_id: Some(proxy_model.provider_id),
                 provider: proxy_model.provider.clone(),
                 protocol: client_protocol.to_string(),
                 tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
@@ -459,6 +460,7 @@ pub(crate) async fn execute_unified_chat_request(
             main_store_arc.clone(),
             proxy_model.client_alias.clone(),
             proxy_model.model.clone(),
+            proxy_model.provider_id,
             proxy_model.provider.clone(),
             final_tool_compat_mode,
         )
@@ -510,6 +512,7 @@ pub(crate) async fn execute_unified_chat_request(
                 id: None,
                 client_model: proxy_model.client_alias.clone(),
                 backend_model: proxy_model.model.clone(),
+                provider_id: Some(proxy_model.provider_id),
                 provider: proxy_model.provider.clone(),
                 protocol: client_protocol.to_string(),
                 tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },

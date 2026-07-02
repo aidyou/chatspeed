@@ -211,6 +211,7 @@ async fn direct_forward_responses(
             id: None,
             client_model: proxy_model.client_alias.clone(),
             backend_model: model_name,
+            provider_id: Some(proxy_model.provider_id),
             provider: provider_name,
             protocol: ChatProtocol::OpenAI.to_string(),
             tool_compat_mode: 0,
@@ -348,6 +349,7 @@ mod tests {
     fn proxy_model_with_metadata(metadata: Option<serde_json::Value>) -> ProxyModel {
         ProxyModel {
             client_alias: "alias".to_string(),
+            provider_id: 1,
             provider: "provider".to_string(),
             chat_protocol: ChatProtocol::OpenAI,
             base_url: "https://api.example.com/v1".to_string(),

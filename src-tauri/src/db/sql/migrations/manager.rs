@@ -1,4 +1,4 @@
-use crate::db::sql::migrations::{v1, v2, v3, v4, v5, v6, MigrationDefinition};
+use crate::db::sql::migrations::{v1, v2, v3, v4, v5, v6, v7, MigrationDefinition};
 use crate::db::StoreError;
 use rusqlite::Connection;
 
@@ -9,6 +9,7 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v4::MIGRATION,
     v5::MIGRATION,
     v6::MIGRATION,
+    v7::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -163,6 +164,23 @@ mod tests {
         .expect("failed to query sqlite_master for table existence")
     }
 
+    fn has_column(conn: &Connection, table_name: &str, column_name: &str) -> bool {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({})", table_name))
+            .expect("failed to prepare pragma table_info");
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("failed to read pragma table_info rows");
+
+        for column in columns {
+            if column.expect("failed to read column name") == column_name {
+                return true;
+            }
+        }
+
+        false
+    }
+
     #[test]
     fn fresh_install_builds_latest_schema_directly() {
         let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
@@ -177,6 +195,7 @@ mod tests {
         assert!(table_exists(&conn, "workflows"));
         assert!(table_exists(&conn, "workflow_events"));
         assert!(table_exists(&conn, "memory_candidates"));
+        assert!(has_column(&conn, "ccproxy_stats", "provider_id"));
 
         let recorded_versions: i64 = conn
             .query_row("SELECT COUNT(1) FROM db_version", [], |row| row.get(0))
@@ -208,6 +227,7 @@ mod tests {
         assert!(table_exists(&conn, "ccproxy_stats"));
         assert!(table_exists(&conn, "workflows"));
         assert!(table_exists(&conn, "workflow_context_messages"));
+        assert!(has_column(&conn, "ccproxy_stats", "provider_id"));
 
         let has_v3_marker: i64 = conn
             .query_row(

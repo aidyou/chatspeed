@@ -414,6 +414,7 @@ import { useModelStore } from '@/stores/model'
 import {
   buildPricingMaps,
   estimateCostFromPricing,
+  findPricingForUsageRow,
   formatCurrency,
   formatCurrencyCompact
 } from '@/libs/modelPricing'
@@ -524,7 +525,7 @@ const formatNumber = val => {
 }
 
 const estimateRowCost = row => {
-  const pricing = pricingMaps.value.byProviderName.get(`${row.provider}::${row.backendModel}`)
+  const pricing = findPricingForUsageRow(pricingMaps.value, row)
   return estimateCostFromPricing(
     {
       inputTokens: row.totalInputTokens,

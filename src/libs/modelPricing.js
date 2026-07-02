@@ -5,6 +5,21 @@ const toFiniteNumber = value => {
   return Number.isFinite(num) ? num : 0
 }
 
+const hasConfiguredPricing = pricing => {
+  if (!pricing || typeof pricing !== 'object') return false
+  return [pricing.inputPerMillion, pricing.outputPerMillion, pricing.cachePerMillion].some(
+    value => Number(value) > 0
+  )
+}
+
+const setPricingMapEntry = (map, key, pricing, configured) => {
+  if (!key) return
+  const current = map.get(key)
+  if (!current || (!current.configured && configured)) {
+    map.set(key, { pricing, configured })
+  }
+}
+
 export const createDefaultPricing = () => ({
   inputPerMillion: 0,
   outputPerMillion: 0,
@@ -27,19 +42,37 @@ export const buildPricingMaps = providers => {
     const providerId = String(provider?.id ?? '')
     const providerName = provider?.name || ''
     ;(provider?.models || []).forEach(model => {
+      const configured = hasConfiguredPricing(model?.pricing)
       const pricing = normalizePricing(model?.pricing)
       const modelId = model?.id || ''
-      if (!modelId) return
-      if (providerId) {
-        byProviderId.set(`${providerId}::${modelId}`, pricing)
+      const modelName = model?.name || ''
+
+      if (providerId && modelId) {
+        setPricingMapEntry(byProviderId, `${providerId}::${modelId}`, pricing, configured)
       }
-      if (providerName) {
-        byProviderName.set(`${providerName}::${modelId}`, pricing)
+      if (providerName && modelId) {
+        setPricingMapEntry(byProviderName, `${providerName}::${modelId}`, pricing, configured)
+      }
+      if (providerName && modelName) {
+        setPricingMapEntry(byProviderName, `${providerName}::${modelName}`, pricing, configured)
       }
     })
   })
 
   return { byProviderId, byProviderName }
+}
+
+export const findPricingForUsageRow = (pricingMaps, row) => {
+  const providerId = String(row?.providerId ?? '').trim()
+  const provider = row?.provider || ''
+  const backendModel = row?.backendModel || ''
+  return (
+    (providerId
+      ? pricingMaps?.byProviderId?.get(`${providerId}::${backendModel}`)?.pricing
+      : null) ||
+    pricingMaps?.byProviderName?.get(`${provider}::${backendModel}`)?.pricing ||
+    createDefaultPricing()
+  )
 }
 
 export const estimateCostFromPricing = (

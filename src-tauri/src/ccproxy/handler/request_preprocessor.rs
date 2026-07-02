@@ -161,6 +161,7 @@ mod tests {
     fn deepseek_proxy_model() -> ProxyModel {
         ProxyModel {
             client_alias: "deepseek-v4-flash".to_string(),
+            provider_id: 1,
             provider: "Deepseek".to_string(),
             chat_protocol: ChatProtocol::OpenAI,
             base_url: "https://api.deepseek.com".to_string(),

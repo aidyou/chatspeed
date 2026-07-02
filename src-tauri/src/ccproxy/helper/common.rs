@@ -319,6 +319,7 @@ impl ModelResolver {
 
             return Ok(ProxyModel {
                 client_alias: matched_alias_key,
+                provider_id: ai_model_detail.id.unwrap_or_default(),
                 provider: ai_model_detail.name.clone(),
                 chat_protocol: ai_model_detail.api_protocol.try_into().unwrap_or_default(),
                 base_url: ai_model_detail.base_url,
@@ -423,6 +424,7 @@ impl ModelResolver {
 
         Ok(ProxyModel {
             client_alias: matched_alias_key,
+            provider_id: ai_model_details.id.unwrap_or_default(),
             provider: ai_model_details.name.clone(),
             chat_protocol: backend_chat_protocol,
             base_url: ai_model_details.base_url,
@@ -694,6 +696,7 @@ impl ModelResolver {
 
         Ok(ProxyModel {
             client_alias: model_id.clone(), // For internal requests, alias is the ID
+            provider_id,
             provider: ai_model_detail.name.clone(),
             chat_protocol,
             base_url: ai_model_detail.base_url,

@@ -57,6 +57,8 @@ pub struct CcproxyStat {
     pub client_model: String,
     /// Actual backend model ID (e.g., "Qwen/Qwen3-Next-80B-A3B-Instruct")
     pub backend_model: String,
+    /// Stable provider identifier from `ai_model.id`, used for pricing/stat matching across renames
+    pub provider_id: Option<i64>,
     pub provider: String,
     pub protocol: String,
     pub tool_compat_mode: i32,
