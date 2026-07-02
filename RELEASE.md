@@ -33,7 +33,7 @@
   - Fixed an issue where cached input tokens could be charged twice in price estimation.
   - Proxy Stats and Proxy Switcher now calculate billable input tokens more accurately.
 - **Managed window recreation and cleanup stability**:
-  - Main window, assistant window, workflow window, and proxy switcher can now be recreated on demand after being closed, instead of depending on startup-time pre-creation.
+  - Main window and proxy switcher are now created on demand and can be recreated after being closed, instead of depending on startup-time pre-creation.
   - Window creation events are now emitted and listened for at the app level, so opening settings, notes, URLs, or the proxy switcher no longer depends on the main window remaining alive.
   - Closing the proxy switcher now follows the same hide-then-destroy flow as other transient windows, reducing stale-window state and unnecessary background resource retention on macOS and other platforms.
   - Tray actions and app re-activation now restore the target window more reliably when the window instance has already been destroyed.
