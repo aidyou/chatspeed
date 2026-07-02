@@ -463,7 +463,13 @@ mod tests {
         conn.execute(
             "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, format!("Agent {}", id), "You are a test agent.", "autonomous", 20],
+            params![
+                id,
+                format!("Agent {}", id),
+                "You are a test agent.",
+                "autonomous",
+                20
+            ],
         )
         .expect("failed to seed agent");
     }
@@ -536,7 +542,9 @@ mod tests {
         assert!(store.get_workflow("auto-session")?.is_none());
         assert!(store.get_workflow("auto-child-session")?.is_none());
         assert!(store.get_workflow_automation("automation-1")?.is_none());
-        assert!(store.list_workflow_automation_runs("automation-1")?.is_empty());
+        assert!(store
+            .list_workflow_automation_runs("automation-1")?
+            .is_empty());
 
         Ok(())
     }

@@ -241,9 +241,7 @@ async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent
     let menu_id = event.id().as_ref().to_string();
     match menu_id.as_str() {
         "main" | "assistant" | "workflow" => {
-            if let Some(_) = app.get_webview_window(&menu_id) {
-                crate::window::show_and_focus_window(&app, &menu_id);
-            }
+            crate::window::show_and_focus_window(&app, &menu_id);
         }
         "note" => {
             if let Err(e) = crate::open_note_window(app.clone()).await {

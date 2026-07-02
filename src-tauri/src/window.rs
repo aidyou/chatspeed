@@ -26,6 +26,45 @@ use crate::constants::{
 };
 use crate::db::MainStore;
 
+fn restore_managed_window_config(app: &AppHandle, window: &WebviewWindow) {
+    if let Some(main_store) = app.try_state::<Arc<std::sync::RwLock<MainStore>>>() {
+        restore_window_config(window, main_store.inner().clone());
+    } else {
+        warn!(
+            "MainStore state not found when restoring window config for '{}'",
+            window.label()
+        );
+    }
+}
+
+fn ensure_window(app: &tauri::AppHandle, label: &str, visible: bool) -> Option<WebviewWindow> {
+    if let Some(window) = app.get_webview_window(label) {
+        return Some(window);
+    }
+
+    let created_window = match label {
+        "main" => create_main_window(app, visible),
+        "assistant" => create_assistant_window(app, visible),
+        "workflow" => create_workflow_window(app, visible),
+        "proxy_switcher" => create_proxy_switcher_window(app, visible),
+        _ => {
+            log::warn!("Unsupported window label for dynamic creation: {}", label);
+            return None;
+        }
+    };
+
+    match created_window {
+        Ok(window) => {
+            restore_managed_window_config(app, &window);
+            Some(window)
+        }
+        Err(e) => {
+            log::error!("Failed to create window '{}': {}", label, e);
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WindowSize {
     pub width: f64,
@@ -190,7 +229,7 @@ pub fn get_user_always_on_top_preference(label: &str) -> bool {
 /// reliably on Linux (Ubuntu) by temporarily setting the window to be always-on-top.
 /// It respects the user's existing "pin" setting to avoid conflicts.
 pub fn show_and_focus_window(app: &AppHandle, label: &str) {
-    if let Some(window) = app.get_webview_window(label) {
+    if let Some(window) = ensure_window(app, label, false) {
         log::debug!("Attempting to show and focus window: {}", label);
 
         let is_visible = window.is_visible().unwrap_or(false);
@@ -260,20 +299,13 @@ pub fn show_and_focus_window(app: &AppHandle, label: &str) {
 /// Toggles the visibility of the assistant window.
 pub fn toggle_assistant_window(app: &tauri::AppHandle) {
     let window_label = "assistant";
-    if app.get_webview_window(window_label).is_none() {
-        let _ = create_assistant_window(app, false);
-    }
     show_and_focus_window(app, window_label);
 }
 
 /// Toggles the visibility of the proxy switcher window.
 pub fn toggle_proxy_switcher_window(app: &tauri::AppHandle) {
     let window_label = "proxy_switcher";
-    if app.get_webview_window(window_label).is_none() {
-        let _ = create_proxy_switcher_window(app, false);
-    }
-
-    if let Some(window) = app.get_webview_window(window_label) {
+    if let Some(window) = ensure_window(app, window_label, false) {
         match (window.is_visible(), window.is_focused()) {
             (Ok(true), Ok(true)) => {
                 let _ = window.hide();
@@ -287,7 +319,7 @@ pub fn toggle_proxy_switcher_window(app: &tauri::AppHandle) {
 
 /// Toggles the visibility of a window using the robust helper function.
 pub fn activate_window(app: &tauri::AppHandle, label: &str) {
-    if let Some(window) = app.get_webview_window(label) {
+    if let Some(window) = ensure_window(app, label, false) {
         match (window.is_visible(), window.is_focused()) {
             (Ok(true), Ok(true)) => {
                 // If the window is visible and has focus, ignore it.
@@ -309,7 +341,7 @@ pub fn activate_window(app: &tauri::AppHandle, label: &str) {
 }
 
 pub fn toggle_window_activate(app: &tauri::AppHandle, label: &str, enabled_toggle: bool) {
-    if let Some(window) = app.get_webview_window(label) {
+    if let Some(window) = ensure_window(app, label, false) {
         let is_visible = window.is_visible().unwrap_or(false);
         let is_focused = window.is_focused().unwrap_or(false);
 
@@ -525,14 +557,6 @@ pub async fn create_or_focus_url_window(
 /// # Arguments
 /// - `app_handle` - The Tauri application handle
 pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
-    // Get main window once safely
-    let main_window = if let Some(window) = app_handle.get_webview_window("main") {
-        window
-    } else {
-        log::error!("Main window not found when setting up handlers");
-        return;
-    };
-
     // Helper function to spawn window creation task
     let spawn_window_task = |task: Pin<Box<dyn Future<Output = Result<(), String>> + Send>>| {
         tauri::async_runtime::spawn(async move {
@@ -544,7 +568,7 @@ pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
 
     // Register note window creation event
     let app_handle_clone = app_handle.clone();
-    main_window.listen("create-note-window", move |_| {
+    app_handle.listen("create-note-window", move |_| {
         let app = app_handle_clone.clone();
         spawn_window_task(Box::pin(
             async move { create_or_focus_note_window(app).await },
@@ -553,7 +577,7 @@ pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
 
     // Register setting window creation event
     let app_handle_clone = app_handle.clone();
-    main_window.listen("create-setting-window", move |event| {
+    app_handle.listen("create-setting-window", move |event| {
         let app = app_handle_clone.clone();
         let setting_type = serde_json::from_str::<SettingWindowPayload>(event.payload())
             .unwrap_or_else(|_| SettingWindowPayload {
@@ -568,13 +592,14 @@ pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
 
     // Register proxy switcher window creation event
     let app_handle_clone = app_handle.clone();
-    main_window.listen("create-proxy-switcher-window", move |_| {
+    app_handle.listen("create-proxy-switcher-window", move |_| {
         toggle_proxy_switcher_window(&app_handle_clone);
     });
 
     // Register URL window creation event
-    main_window.listen("create-url-window", move |event| {
-        let app = app_handle.clone();
+    let app_handle_clone = app_handle.clone();
+    app_handle.listen("create-url-window", move |event| {
+        let app = app_handle_clone.clone();
         let url = serde_json::from_str::<UrlWindowPayload>(event.payload())
             .unwrap_or_else(|_| UrlWindowPayload {
                 url: "https://www.aidyou.ai".to_string(),

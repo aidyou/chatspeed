@@ -2524,7 +2524,13 @@ mod tests {
             .create_workflow("normal-session", "Normal query", "agent-main", None, None)
             .expect("failed to create normal workflow");
         store
-            .create_workflow("automation-session", "Automation query", "agent-main", None, None)
+            .create_workflow(
+                "automation-session",
+                "Automation query",
+                "agent-main",
+                None,
+                None,
+            )
             .expect("failed to create automation workflow");
 
         let conn = store
@@ -2570,7 +2576,13 @@ mod tests {
         seed_agent(&store, "agent-main");
 
         store
-            .create_workflow("automation-session", "Automation query", "agent-main", None, None)
+            .create_workflow(
+                "automation-session",
+                "Automation query",
+                "agent-main",
+                None,
+                None,
+            )
             .expect("failed to create automation workflow");
 
         let conn = store

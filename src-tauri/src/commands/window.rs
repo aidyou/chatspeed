@@ -76,16 +76,7 @@ pub async fn open_setting_window(
     app_handle: tauri::AppHandle,
     setting_type: Option<String>,
 ) -> Result<()> {
-    // Get the main window to emit the event
-    let main_window = app_handle
-        .get_webview_window("main")
-        .ok_or_else(|| AppError::General {
-            message: t!("main.window_not_ready").to_string(),
-        })?;
-
-    // Emit an event to create the window on the main thread
-    // use events instead of direct window creation to avoid deadlocks on Windows
-    main_window
+    app_handle
         .emit(
             "create-setting-window",
             SettingWindowPayload {
@@ -119,16 +110,7 @@ pub async fn open_setting_window(
 /// ```
 #[command]
 pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<()> {
-    // Get the main window to emit the event
-    let main_window = app_handle
-        .get_webview_window("main")
-        .ok_or_else(|| AppError::General {
-            message: t!("main.window_not_ready").to_string(),
-        })?;
-
-    // Emit an event to create the window on the main thread
-    // use events instead of direct window creation to avoid deadlocks on Windows
-    main_window
+    app_handle
         .emit("create-note-window", ())
         .map_err(|e| AppError::General {
             message: t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
@@ -150,15 +132,7 @@ pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<()> {
 /// ```
 #[command]
 pub fn open_proxy_switcher_window(app_handle: tauri::AppHandle) -> Result<()> {
-    // Get the main window to emit the event
-    let main_window = app_handle
-        .get_webview_window("main")
-        .ok_or_else(|| AppError::General {
-            message: t!("main.window_not_ready").to_string(),
-        })?;
-
-    // Emit an event to create the window on the main thread
-    main_window
+    app_handle
         .emit("create-proxy-switcher-window", ())
         .map_err(|e| AppError::General {
             message: t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
@@ -209,16 +183,7 @@ struct UrlWindowPayload {
 /// ```
 #[command]
 pub async fn open_url(app_handle: tauri::AppHandle, url: String) -> Result<()> {
-    // Get the main window to emit the event
-    let main_window = app_handle
-        .get_webview_window("main")
-        .ok_or_else(|| AppError::General {
-            message: t!("main.window_not_ready").to_string(),
-        })?;
-
-    // Emit an event to create the window on the main thread
-    // use events instead of direct window creation to avoid deadlocks on Windows
-    main_window
+    app_handle
         .emit("create-url-window", UrlWindowPayload { url })
         .map_err(|e| AppError::General {
             message: t!("main.failed_to_emit_event", error = e.to_string()).to_string(),

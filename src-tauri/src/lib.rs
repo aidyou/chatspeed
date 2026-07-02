@@ -107,7 +107,7 @@ i18n!("i18n", fallback = "en");
 // Define a static variable to track if the window is ready
 static WINDOW_READY: AtomicBool = AtomicBool::new(false);
 
-// Store auto-hide timers by window label so assistant and proxy switcher do not interfere.
+// Store auto-hide timers by window label so assistant interactions do not interfere.
 static HIDE_TIMERS: LazyLock<StdMutex<HashMap<String, JoinHandle<()>>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
 static MOVE_TIMERS: LazyLock<StdMutex<HashMap<String, JoinHandle<()>>>> =
@@ -116,11 +116,11 @@ static LAST_MOVES: LazyLock<StdMutex<HashMap<String, Instant>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
 
 fn should_auto_hide_on_focus_loss(label: &str) -> bool {
-    matches!(label, "assistant" | "proxy_switcher")
+    matches!(label, "assistant")
 }
 
 fn should_preserve_visibility_while_dragging(label: &str) -> bool {
-    matches!(label, "assistant" | "proxy_switcher")
+    matches!(label, "assistant")
 }
 
 fn should_keep_window_visible(label: &str) -> bool {
@@ -131,6 +131,42 @@ fn should_keep_window_visible(label: &str) -> bool {
         }
         _ => false,
     }
+}
+
+fn hide_then_destroy_window(window: &tauri::Window) {
+    if window.is_visible().unwrap_or(false) {
+        if let Err(e) = window.hide() {
+            warn!("Failed to hide window '{}': {}", window.label(), e);
+        }
+    }
+
+    let app_handle = window.app_handle().clone();
+    let window_label = window.label().to_string();
+    spawn(async move {
+        #[cfg(target_os = "macos")]
+        let destroy_delay = Duration::from_millis(120);
+
+        #[cfg(not(target_os = "macos"))]
+        let destroy_delay = Duration::from_millis(0);
+
+        tokio::time::sleep(destroy_delay).await;
+
+        if let Some(target_window) = app_handle.get_webview_window(&window_label) {
+            if target_window.is_visible().unwrap_or(false) {
+                log::debug!(
+                    "Skip destroying window '{}' because it became visible again",
+                    window_label
+                );
+                return;
+            }
+
+            if let Err(e) = target_window.destroy() {
+                warn!("Failed to destroy window '{}': {}", window_label, e);
+            } else {
+                log::debug!("Window '{}' destroyed after delayed hide", window_label);
+            }
+        }
+    });
 }
 
 pub async fn run() -> crate::error::Result<()> {
@@ -153,9 +189,7 @@ pub async fn run() -> crate::error::Result<()> {
             argv,
             cwd
         );
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.set_focus();
-        }
+        window::show_and_focus_window(app, "main");
     }));
 
     builder
@@ -382,13 +416,14 @@ pub async fn run() -> crate::error::Result<()> {
                     }
                 }
             }
-            // When the user clicks on the close button, main/assistant/workflow are hidden.
-            // The settings window is briefly hidden and then force-destroyed on macOS to avoid
-            // WKWebView close-time layer tree races while still releasing resources.
+            // When the user clicks the close button, assistant/workflow are hidden.
+            // Main and proxy switcher are allowed to close so they can release resources.
+            // Settings, note, and proxy switcher are briefly hidden and then force-destroyed on
+            // macOS to avoid WKWebView close-time layer tree races while still releasing resources.
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 match window.label() {
                     // For these windows, we just hide them.
-                    "main" | "assistant" | "workflow" => {
+                    "assistant" | "workflow" => {
                         api.prevent_close();
                         // Check if the window is valid before trying to hide it.
                         if window.is_visible().unwrap_or(false) {
@@ -402,41 +437,9 @@ pub async fn run() -> crate::error::Result<()> {
                             log::debug!("Window '{}' is already hidden", window.label());
                         }
                     }
-                    "settings" | "note" => {
+                    "settings" | "note" | "proxy_switcher" => {
                         api.prevent_close();
-
-                        if window.is_visible().unwrap_or(false) {
-                            if let Err(e) = window.hide() {
-                                warn!("Failed to hide window '{}': {}", window.label(), e);
-                            }
-                        }
-
-                        let app_handle = window.app_handle().clone();
-                        spawn(async move {
-                            #[cfg(target_os = "macos")]
-                            let destroy_delay = Duration::from_millis(120);
-
-                            #[cfg(not(target_os = "macos"))]
-                            let destroy_delay = Duration::from_millis(0);
-
-                            tokio::time::sleep(destroy_delay).await;
-
-                            if let Some(settings_window) = app_handle.get_webview_window("settings")
-                            {
-                                if settings_window.is_visible().unwrap_or(false) {
-                                    log::debug!(
-                                        "Skip destroying settings window because it became visible again"
-                                    );
-                                    return;
-                                }
-
-                                if let Err(e) = settings_window.destroy() {
-                                    warn!("Failed to destroy window 'settings': {}", e);
-                                } else {
-                                    log::debug!("Window 'settings' destroyed after delayed hide");
-                                }
-                            }
-                        });
+                        hide_then_destroy_window(window);
                     }
                     _ => {
                         log::debug!("Window '{}' closed", window.label());
@@ -806,32 +809,16 @@ pub async fn run() -> crate::error::Result<()> {
             // For any future windows, ensure `"create": false` is set in the configuration and
             // initialize them manually here or via specific logic after backend readiness is guaranteed.
 
-            // 1. Main Window (Hidden by default)
-            match window::create_main_window(&app.handle(), false) {
-                Ok(win) => { restore_window_config(&win, main_store.clone()); },
-                Err(e) => { log::error!("Failed to create main window: {}", e); }
-            }
-
-            // 2. Assistant Window (Hidden)
+            // 1. Assistant Window (Hidden)
             match window::create_assistant_window(&app.handle(), false) {
                 Ok(win) => { restore_window_config(&win, main_store.clone()); },
                 Err(e) => { log::error!("Failed to create assistant window: {}", e); }
             }
 
-            // 3. Workflow Window (Visible by default)
+            // 2. Workflow Window (Visible by default)
             match window::create_workflow_window(&app.handle(), true) {
                 Ok(win) => { restore_window_config(&win, main_store.clone()); },
                 Err(e) => { log::error!("Failed to create workflow window: {}", e); }
-            }
-
-            // 4. Proxy Switcher Window (Hidden)
-            match window::create_proxy_switcher_window(&app.handle(), false) {
-                Ok(win) => {
-                    restore_window_config(&win, main_store.clone());
-                }
-                Err(e) => {
-                    log::error!("Failed to create proxy switcher window: {}", e);
-                }
             }
 
             // create tray

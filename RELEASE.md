@@ -2,6 +2,44 @@
 
 # Release Notes
 
+## [2.0.2]
+
+### ⚠️ Known Limitations
+
+- **The new Automation module is not fully tested yet**:
+  - `2.0.2` introduces a new standalone Workflow Automation runtime for AI automation, but this functionality has **not been fully tested** yet and still needs broader real-world feedback.
+  - This module is an independent addition and **does not affect the normal operation of the existing Agent module**; if you do not use Automation, the existing core workflow remains unchanged.
+  - Because the Automation module is still being refined, its interaction model, configuration flow, or some feature details **may still change in future releases**.
+  - If you are willing to try it, additional testing feedback would be especially valuable in helping improve this module.
+
+### 🚀 New Features
+
+- **New Workflow Automation module**:
+  - Added a dedicated Automation module for Workflow, including creation, editing, persistence, scheduling, and execution management.
+  - Users can now configure automated Workflow runs directly from the Workflow interface.
+  - The automation configuration UI is now provided as a dedicated editor dialog for easier management.
+- **Automation executor and scheduler**:
+  - Added backend automation execution, scheduling service, related commands, and database persistence support.
+  - Added database migration support for automation configuration and runtime data.
+- **Continuous context for automation runs**:
+  - Added an optional continuous-context mode so automation can reuse the same Workflow session across executions when needed.
+- **Multiple execution times for daily schedules**:
+  - Daily automation schedules can now define multiple run times instead of being limited to a single time slot.
+  - Existing daily schedule data remains compatibility-aware during migration and scheduling.
+
+### 🐞 Bug Fixes
+
+- **Pricing calculation for cached tokens**:
+  - Fixed an issue where cached input tokens could be charged twice in price estimation.
+  - Proxy Stats and Proxy Switcher now calculate billable input tokens more accurately.
+- **Managed window recreation and cleanup stability**:
+  - Main window, assistant window, workflow window, and proxy switcher can now be recreated on demand after being closed, instead of depending on startup-time pre-creation.
+  - Window creation events are now emitted and listened for at the app level, so opening settings, notes, URLs, or the proxy switcher no longer depends on the main window remaining alive.
+  - Closing the proxy switcher now follows the same hide-then-destroy flow as other transient windows, reducing stale-window state and unnecessary background resource retention on macOS and other platforms.
+  - Tray actions and app re-activation now restore the target window more reliably when the window instance has already been destroyed.
+
+---
+
 ## [2.0.1]
 
 ### 🪄 Improvements

@@ -867,9 +867,9 @@ const handleHide = async () => {
   if (isHiding.value) return
   isHiding.value = true
   try {
-    await appWindow.hide()
+    await appWindow.close()
   } catch (e) {
-    console.error('Failed to hide window:', e)
+    console.error('Failed to close window:', e)
   } finally {
     isHiding.value = false
   }
