@@ -99,6 +99,9 @@ export const formatCurrency = value => {
 
 export const formatCurrencyCompact = value => {
   const num = toFiniteNumber(value)
+  if (num == 0) {
+    return '$0.00';
+  }
   if (num >= 1000) return `$${(num / 1000).toFixed(2)}K`
   if (num >= 1) return `$${num.toFixed(2)}`
   if (num >= 0.01) return `$${num.toFixed(4)}`

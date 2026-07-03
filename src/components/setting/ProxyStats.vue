@@ -78,7 +78,7 @@
         </div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-icon" style="background-color: rgba(144, 147, 153, 0.1); color: #909399">
+        <div class="kpi-icon" style="background-color: rgba(155, 89, 182, 0.1); color: #9b59b6">
           <el-icon>
             <Coin />
           </el-icon>
@@ -99,7 +99,7 @@
           <div class="kpi-label">{{ $t('settings.proxy.stats.cacheHitRate') }}</div>
         </div>
       </div>
-      <div class="kpi-card">
+      <!-- <div class="kpi-card">
         <div class="kpi-icon" style="background-color: rgba(245, 108, 108, 0.1); color: #f56c6c">
           <el-icon>
             <Warning />
@@ -111,7 +111,7 @@
           </div>
           <div class="kpi-label">{{ $t('settings.proxy.stats.errorRate') }}</div>
         </div>
-      </div>
+      </div> -->
     </div>
 
     <el-table
@@ -1392,21 +1392,27 @@ onUnmounted(() => {
 // KPI Cards
 .kpi-cards {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: var(--cs-space-md);
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--cs-space-sm);
   margin-bottom: var(--cs-space-lg);
   padding: 4px;
 
-  @media (max-width: 1200px) {
+  @media (max-width: 1000px) {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  @media (max-width: 800px) {
     grid-template-columns: repeat(3, 1fr);
   }
 
   @media (max-width: 600px) {
     grid-template-columns: repeat(2, 1fr);
-  }
-
-  @media (max-width: 300px) {
-    grid-template-columns: 1fr;
+    .kpi-card {
+      .kpi-content {
+        .kpi-value {
+          font-size: var(--cs-font-size-xl);
+        }
+      }
+    }
   }
 }
 
@@ -1417,7 +1423,7 @@ onUnmounted(() => {
   background-color: var(--cs-primary-bg-color);
   border: 1px solid var(--cs-border-color-light);
   border-radius: var(--cs-border-radius-md);
-  padding: var(--cs-space-md);
+  padding: var(--cs-space);
   transition: box-shadow 0.3s ease;
 
   &:hover {
