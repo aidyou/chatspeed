@@ -2,6 +2,26 @@
 
 # Release Notes
 
+## [2.0.3]
+
+### 🪄 Improvements
+
+- **Proxy Stats KPI cards visual polish**:
+  - Refined the KPI card layout in Proxy Stats to use a more compact 4-card grid with improved responsive behavior on narrower windows.
+  - Adjusted KPI card styling and icon colors for clearer visual hierarchy.
+- **Estimated cost zero-state formatting**:
+  - Proxy Stats now displays `$0.00` for zero estimated cost values instead of overly precise fractional formatting.
+- **Workflow collapsed user message styling**:
+  - Improved the collapsed presentation of long user messages in Workflow.
+  - Added a fade-out treatment and adjusted the expand/collapse affordance so long messages are easier to scan without looking abruptly cut off.
+
+### 🐞 Bug Fixes
+
+- **Workflow message list state after creating a new workflow**:
+  - Fixed an issue where the message list could still reference the previous workflow immediately after creating a new workflow, causing stale content to appear in the new session view.
+
+---
+
 ## [2.0.2]
 
 ### ⚠️ Known Limitations
