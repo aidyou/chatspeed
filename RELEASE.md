@@ -2,6 +2,30 @@
 
 # Release Notes
 
+## [2.0.4-planning]
+
+### 🪄 Improvements
+
+- **Workflow shell policy management UX**:
+  - Added a search box before the custom allowed-shell rule form so allowed shell command patterns can be filtered quickly by keyword.
+  - Improved the empty-state behavior in the shell policy list so searches with no matches are distinguished from a truly empty list.
+- **Workflow model selector auto-selection behavior**:
+  - Switching model providers now automatically selects the provider's default model when available.
+  - If a provider has no default model configured, the first available model is selected automatically.
+  - Switching proxy groups now auto-selects the first available alias to reduce empty intermediate states.
+
+### 🐞 Bug Fixes
+
+- **Workflow provider/proxy model switching sync**:
+  - Fixed an issue where switching from proxy mode back to provider mode could leave the provider-side model field showing the previous proxy alias instead of a valid provider model.
+  - Provider/proxy mode changes now rehydrate the corresponding provider model or proxy alias immediately, keeping both selectors in sync.
+- **Workflow auto-approved tools runtime sync**:
+  - Fixed an issue where checking auto-approved tools in the Workflow UI could update the stored config without updating the active workflow runtime, causing approval dialogs to continue appearing unexpectedly.
+  - Added a dedicated runtime update path for auto-approved tool lists so the executor refreshes its in-memory approval set immediately after config changes.
+  - Tightened the update path to keep frontend camelCase input (`autoApprove`) and backend snake_case runtime signals (`auto_approve`) clearly separated according to the workflow runtime constitution.
+
+---
+
 ## [2.0.3]
 
 ### 🪄 Improvements

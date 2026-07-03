@@ -297,6 +297,11 @@ pub enum WorkflowSignal {
         #[serde(alias = "selectedSkills", default)]
         selected_skills: Vec<String>,
     },
+    /// Replace auto-approve tool list at runtime
+    UpdateAutoApprovedTools {
+        #[serde(alias = "tools", default)]
+        auto_approve: Vec<String>,
+    },
     /// Remove a tool from auto-approve list
     RemoveAutoApprovedTool {
         tool_name: String,
@@ -344,6 +349,7 @@ impl WorkflowSignal {
             (WorkflowSignal::UpdateAllowedPaths { .. }, _) => true,
             (WorkflowSignal::UpdateModelConfig { .. }, _) => true,
             (WorkflowSignal::UpdateSkillsConfig { .. }, _) => true,
+            (WorkflowSignal::UpdateAutoApprovedTools { .. }, _) => true,
             (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
             (WorkflowSignal::RemoveShellPolicyItem { .. }, _) => true,
             (WorkflowSignal::RemoveQueuedUserMessage { .. }, _) => true,
@@ -378,6 +384,7 @@ impl WorkflowSignal {
             WorkflowSignal::UpdateAllowedPaths { .. } => "update_allowed_paths",
             WorkflowSignal::UpdateModelConfig { .. } => "update_model_config",
             WorkflowSignal::UpdateSkillsConfig { .. } => "update_skills_config",
+            WorkflowSignal::UpdateAutoApprovedTools { .. } => "update_auto_approved_tools",
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",
             WorkflowSignal::RemoveShellPolicyItem { .. } => "remove_shell_policy_item",
             WorkflowSignal::SubAgentComplete { .. } => "sub_agent_complete",

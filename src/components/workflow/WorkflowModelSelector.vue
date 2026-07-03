@@ -17,7 +17,7 @@
       <div class="model-item-compact">
         <div class="header">
           <span class="title">{{ activeTab.toUpperCase() }} {{ $t('settings.agent.models') }}</span>
-          <el-radio-group v-model="modelModes[activeTab]" size="small">
+          <el-radio-group v-model="modelModes[activeTab]" size="small" @change="onModelModeChange">
             <el-radio-button value="provider">{{ $t('settings.agent.modeProvider') }}</el-radio-button>
             <el-radio-button value="proxy">{{ $t('settings.agent.modeProxy') }}</el-radio-button>
           </el-radio-group>
@@ -180,8 +180,20 @@ const getModelList = () => {
   return id ? modelStore.getModelProviderById(id)?.models || [] : []
 }
 
-const onModelIdChange = () => {
-  currentModel.value.model = ''
+const getPreferredProviderModelId = (providerId) => {
+  if (!providerId) return ''
+  const provider = modelStore.getModelProviderById(providerId)
+  const models = provider?.models || []
+  if (!models.length) return ''
+
+  return provider?.defaultModel || models[0]?.id || ''
+}
+
+const onModelIdChange = (value) => {
+  currentModel.value.model = getPreferredProviderModelId(value)
+  if (currentModel.value.model) {
+    applyProviderModelOverrides(currentModel.value.model)
+  }
 }
 
 const applyModelCapabilityOverrides = (selected) => {
@@ -223,6 +235,35 @@ const onProviderModelChange = (value) => {
   applyProviderModelOverrides(value)
 }
 
+const onModelModeChange = (mode) => {
+  if (mode === 'provider') {
+    if (!currentModel.value.id) {
+      const fallbackProvider = modelStore.getAvailableProviders.find(p => p.isDefault) || modelStore.getAvailableProviders[0]
+      currentModel.value.id = fallbackProvider?.id || ''
+    }
+
+    currentModel.value.model = getPreferredProviderModelId(currentModel.value.id)
+    if (currentModel.value.model) {
+      applyProviderModelOverrides(currentModel.value.model)
+    }
+    return
+  }
+
+  currentModel.value.id = 0
+  if (!proxyGroups[activeTab.value] && proxyGroupStore.list.length > 0) {
+    proxyGroups[activeTab.value] = proxyGroupStore.list[0].name
+  }
+
+  const nextAliases = getProxyAliases(proxyGroups[activeTab.value])
+  proxyAliases[activeTab.value] = nextAliases[0] || ''
+
+  if (proxyAliases[activeTab.value]) {
+    onProxyAliasChange(proxyAliases[activeTab.value])
+  } else {
+    currentModel.value.model = ''
+  }
+}
+
 const getProxyAliases = (groupName) => {
   if (!groupName) return []
   const groupData = settingStore.settings.chatCompletionProxy[groupName]
@@ -238,8 +279,15 @@ const getProxyTargetModel = (groupName, alias) => {
   return provider?.models?.find(model => model.id === target.model) || null
 }
 
-const onProxyGroupChange = () => {
-  proxyAliases[activeTab.value] = ''
+const onProxyGroupChange = (value) => {
+  const aliases = getProxyAliases(value)
+  proxyAliases[activeTab.value] = aliases[0] || ''
+
+  if (proxyAliases[activeTab.value]) {
+    onProxyAliasChange(proxyAliases[activeTab.value])
+  } else {
+    currentModel.value.model = ''
+  }
 }
 
 const onProxyAliasChange = (value) => {
@@ -350,19 +398,19 @@ const initFromStore = () => {
   if (fallbackP) {
     if (!agentModels.plan.id && !agentModels.plan.model.includes('@')) {
       agentModels.plan.id = fallbackP.id
-      agentModels.plan.model = fallbackP.defaultModel
+      agentModels.plan.model = getPreferredProviderModelId(fallbackP.id)
     }
     if (!agentModels.act.id && !agentModels.act.model.includes('@')) {
       agentModels.act.id = fallbackP.id
-      agentModels.act.model = fallbackP.defaultModel
+      agentModels.act.model = getPreferredProviderModelId(fallbackP.id)
     }
     if (!agentModels.utility.id && !agentModels.utility.model.includes('@')) {
       agentModels.utility.id = fallbackP.id
-      agentModels.utility.model = fallbackP.defaultModel
+      agentModels.utility.model = getPreferredProviderModelId(fallbackP.id)
     }
     if (!agentModels.vision.id && !agentModels.vision.model.includes('@')) {
       agentModels.vision.id = fallbackP.id
-      agentModels.vision.model = fallbackP.defaultModel
+      agentModels.vision.model = getPreferredProviderModelId(fallbackP.id)
     }
   }
 

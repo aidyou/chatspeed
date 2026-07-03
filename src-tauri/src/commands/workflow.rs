@@ -4128,13 +4128,41 @@ pub async fn update_workflow_phase(
 #[tauri::command]
 pub async fn update_workflow_agent_config(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     agent_config: String,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    store
-        .update_workflow_agent_config(&session_id, &agent_config)
-        .map_err(|e| e.to_string())?;
+    let previous_config_json = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        raw_workflow_agent_config_json(&store, &session_id)?
+    };
+
+    let signal_agent_config = serde_json::from_str::<Value>(&agent_config)
+        .map_err(|e| format!("Invalid agent config JSON: {}", e))?;
+
+    {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store
+            .update_workflow_agent_config(&session_id, &agent_config)
+            .map_err(|e| e.to_string())?;
+    }
+
+    if let Some(auto_approve) = signal_agent_config.get("autoApprove").cloned() {
+        inject_runtime_config_signal(
+            gateway.inner(),
+            workflow_manager.inner(),
+            state.inner(),
+            &session_id,
+            &previous_config_json,
+            serde_json::json!({
+                "type": "update_auto_approved_tools",
+                "auto_approve": auto_approve
+            }),
+        )
+        .await?;
+    }
+
     Ok(())
 }
 

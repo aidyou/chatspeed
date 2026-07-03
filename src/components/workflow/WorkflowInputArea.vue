@@ -2,10 +2,7 @@
   <el-footer class="input-container">
     <!-- Slash Command Suggestion Panel -->
     <div v-if="showSkillSuggestions && filteredSystemSkills.length > 0" class="slash-command-panel">
-      <div
-        v-for="group in groupedSkillSuggestions"
-        :key="group.key"
-        class="command-group">
+      <div v-for="group in groupedSkillSuggestions" :key="group.key" class="command-group">
         <div class="command-group-header">
           <div class="command-group-title">{{ group.title }}</div>
           <button
@@ -62,7 +59,10 @@
     <StatusNotifier :chat-state="chatState" :is-chatting="isChatting" />
     <div class="input">
       <div v-if="attachments.length > 0" class="workflow-attachments">
-        <div v-for="attachment in attachments" :key="attachment.id" class="workflow-attachment-item">
+        <div
+          v-for="attachment in attachments"
+          :key="attachment.id"
+          class="workflow-attachment-item">
           <div
             v-if="attachment.uploading"
             class="workflow-attachment-preview workflow-attachment-preview-loading">
@@ -225,57 +225,58 @@
 
             <!-- Auto-Approved Tools & Shell Commands Popover -->
             <el-popover
-              v-if="
-                approvalLevel === 'default' &&
-                (autoApprovedTools.length > 0 || allowedShellCommands.length > 0)
-              "
+              v-if="approvalLevel === 'default'"
               placement="top"
               :width="360"
               trigger="click"
               popper-class="auto-approved-popover">
               <template #reference>
-                <label class="icon-btn upperLayer auto-approve-badge has-items">
+                <label
+                  class="icon-btn upperLayer auto-approve-badge"
+                  :class="{ 'has-items': autoApprovedItemCount > 0 }">
                   <cs name="tool" class="small" />
-                  <span
-                    v-if="autoApprovedTools.length > 0 || allowedShellCommands.length > 0"
-                    class="badge">
-                    {{ autoApprovedTools.length + allowedShellCommands.length }}
+                  <span v-if="autoApprovedItemCount > 0" class="badge">
+                    {{ autoApprovedItemCount }}
                   </span>
                 </label>
               </template>
 
               <div class="auto-approved-panel">
                 <!-- Auto-Approved Tools Section -->
-                <div v-if="autoApprovedTools.length > 0" class="panel-section">
+                <div class="panel-section">
                   <div class="section-header">
                     <cs name="tool" size="14px" class="section-icon" />
                     <span class="section-title">{{ $t('workflow.autoApprovedTools') }}</span>
                     <span class="section-count">{{ autoApprovedTools.length }}</span>
                   </div>
-                  <div class="section-content">
-                    <div v-for="tool in autoApprovedTools" :key="tool" class="tool-item">
-                      <div class="tool-info">
-                        <code class="tool-name">{{ tool }}</code>
-                      </div>
-                      <el-button
-                        size="small"
-                        type="danger"
-                        text
-                        class="remove-btn"
-                        @click="removeAutoApprovedTool(tool)">
-                        <cs name="trash" size="12px" />
-                      </el-button>
-                    </div>
+                  <div
+                    v-if="availableApprovalTools.length > 0"
+                    class="section-content checkbox-list">
+                    <label
+                      v-for="tool in availableApprovalTools"
+                      :key="tool.id"
+                      class="checkbox-item tool-checkbox-item">
+                      <el-checkbox
+                        :model-value="autoApprovedTools.includes(tool.id)"
+                        @change="checked => toggleAutoApprovedTool(tool.id, checked)">
+                        <span class="checkbox-label-wrap">
+                          <code class="tool-name">{{ tool.id }}</code>
+                          <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">
+                            {{ tool.name }}
+                          </span>
+                        </span>
+                      </el-checkbox>
+                    </label>
+                  </div>
+                  <div v-else class="section-empty-text">
+                    {{ $t('common.noData') || 'No tools available' }}
                   </div>
                 </div>
 
-                <!-- Divider -->
-                <div
-                  v-if="autoApprovedTools.length > 0 && allowedShellCommands.length > 0"
-                  class="section-divider"></div>
+                <div class="section-divider"></div>
 
                 <!-- Allowed Shell Commands Section -->
-                <div v-if="allowedShellCommands.length > 0" class="panel-section">
+                <div class="panel-section">
                   <div class="section-header">
                     <cs name="skill-terminal" size="14px" class="section-icon" />
                     <span class="section-title">{{
@@ -283,9 +284,37 @@
                     }}</span>
                     <span class="section-count">{{ allowedShellCommands.length }}</span>
                   </div>
-                  <div class="section-content">
+                  <el-space>
+                    <div class="section-toolbar">
+                      <el-input
+                        v-model="shellCommandSearch"
+                        size="small"
+                        clearable
+                        :placeholder="$t('common.search') || 'Search shell command pattern'" />
+                    </div>
+                    <div class="section-toolbar">
+                      <el-input
+                        v-model="newShellCommandPattern"
+                        size="small"
+                        clearable
+                        :placeholder="
+                          $t('settings.agent.shellPolicyPattern') || 'Enter shell command pattern'
+                        "
+                        @keydown.enter.prevent="addShellPolicyItem">
+                        <template #append>
+                          <el-button
+                            size="small"
+                            :disabled="!canAddShellPolicyItem"
+                            @click="addShellPolicyItem">
+                            {{ $t('settings.agent.shellPolicyAdd') || 'Add' }}
+                          </el-button>
+                        </template>
+                      </el-input>
+                    </div>
+                  </el-space>
+                  <div v-if="filteredAllowedShellCommands.length > 0" class="section-content">
                     <div
-                      v-for="(cmd, idx) in allowedShellCommands"
+                      v-for="(cmd, idx) in filteredAllowedShellCommands"
                       :key="idx"
                       class="tool-item shell-item">
                       <div class="tool-info">
@@ -301,6 +330,13 @@
                         <cs name="trash" size="12px" />
                       </el-button>
                     </div>
+                  </div>
+                  <div v-else class="section-empty-text">
+                    {{
+                      shellCommandSearch
+                        ? $t('common.noData') || 'No matching shell command patterns'
+                        : $t('workflow.noAutoApprovedItems') || 'No auto-approved items'
+                    }}
                   </div>
                   <div class="section-footer">
                     <div class="section-footer-hint">
@@ -323,16 +359,6 @@
                       </button>
                     </el-tooltip>
                   </div>
-                </div>
-
-                <!-- Empty State -->
-                <div
-                  v-if="autoApprovedTools.length === 0 && allowedShellCommands.length === 0"
-                  class="empty-state">
-                  <cs name="tool" size="32px" class="empty-icon" />
-                  <span class="empty-text">{{
-                    $t('workflow.noAutoApprovedItems') || 'No auto-approved items'
-                  }}</span>
                 </div>
               </div>
             </el-popover>
@@ -365,11 +391,7 @@
             @click="$emit('continue')">
             {{ $t('workflow.continue') }}
           </el-button>
-          <el-button
-            v-else-if="isStopping"
-            size="small"
-            round
-            disabled>
+          <el-button v-else-if="isStopping" size="small" round disabled>
             {{ $t('workflow.stopping') }}
           </el-button>
           <cs name="stop" @click="$emit('stop')" v-if="canStop" />
@@ -554,12 +576,45 @@ const { t } = useI18n()
 const workflowStore = useWorkflowStore()
 const defaultShellPolicies = ref([])
 const isImportingShellPolicies = ref(false)
+const newShellCommandPattern = ref('')
+const shellCommandSearch = ref('')
 
 const autoApprovedTools = computed(() =>
   [...workflowStore.autoApprovedTools].sort((a, b) => a.localeCompare(b))
 )
 const allowedShellCommands = computed(() =>
   [...workflowStore.allowedShellCommands].sort((a, b) => a.pattern.localeCompare(b.pattern))
+)
+const filteredAllowedShellCommands = computed(() => {
+  const keyword = shellCommandSearch.value.trim().toLowerCase()
+  if (!keyword) return allowedShellCommands.value
+
+  return allowedShellCommands.value.filter(cmd => {
+    const pattern = String(cmd.pattern || '').toLowerCase()
+    const description = String(cmd.description || '').toLowerCase()
+    return pattern.includes(keyword) || description.includes(keyword)
+  })
+})
+const availableApprovalTools = computed(() => {
+  const tools = Array.isArray(props.selectedAgent?.availableTools)
+    ? props.selectedAgent.availableTools
+    : Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)
+      ? props.currentWorkflow.agentConfig.availableTools
+      : []
+
+  return tools
+    .filter(toolId => toolId && toolId !== 'bash')
+    .map(toolId => ({
+      id: toolId,
+      name: toolId
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
+})
+const autoApprovedItemCount = computed(
+  () => autoApprovedTools.value.length + allowedShellCommands.value.length
+)
+const canAddShellPolicyItem = computed(() =>
+  Boolean(props.currentWorkflowId && newShellCommandPattern.value.trim())
 )
 
 // Phase 3: Use semantic computed fields from store for UI control
@@ -568,16 +623,55 @@ const canContinue = computed(() => workflowStore.canContinue)
 const canApprovePlan = computed(() => workflowStore.canApprovePlan)
 const isStopping = computed(() => workflowStore.isStopping)
 
-const removeAutoApprovedTool = async toolName => {
-  try {
-    await invokeWrapper('remove_auto_approved_tool', {
-      sessionId: props.currentWorkflowId,
-      toolName
-    })
-    workflowStore.removeAutoApprovedTool(toolName)
-  } catch (error) {
-    console.error('Failed to remove auto-approved tool:', error)
+const buildNextAgentConfig = overrides => {
+  const currentAgentConfig = props.currentWorkflow?.agentConfig || {}
+  return {
+    ...currentAgentConfig,
+    ...overrides
   }
+}
+
+const persistAgentConfig = async overrides => {
+  if (!props.currentWorkflowId) return false
+
+  const nextAgentConfig = buildNextAgentConfig(overrides)
+
+  await invokeWrapper('update_workflow_agent_config', {
+    sessionId: props.currentWorkflowId,
+    agentConfig: JSON.stringify(nextAgentConfig)
+  })
+
+  if (props.currentWorkflow) {
+    props.currentWorkflow.agentConfig = nextAgentConfig
+    if (Object.prototype.hasOwnProperty.call(overrides, 'shellPolicy')) {
+      props.currentWorkflow.shellPolicy = nextAgentConfig.shellPolicy || []
+    }
+  }
+
+  return nextAgentConfig
+}
+
+const toggleAutoApprovedTool = async (toolName, checked) => {
+  if (!props.currentWorkflowId) return
+
+  const currentAutoApprove = Array.isArray(props.currentWorkflow?.agentConfig?.autoApprove)
+    ? props.currentWorkflow.agentConfig.autoApprove
+    : [...workflowStore.autoApprovedTools]
+
+  const nextAutoApprove = checked
+    ? [...new Set([...currentAutoApprove, toolName])]
+    : currentAutoApprove.filter(tool => tool !== toolName)
+
+  try {
+    await persistAgentConfig({ autoApprove: nextAutoApprove })
+    workflowStore.setAutoApprovedTools(nextAutoApprove)
+  } catch (error) {
+    console.error('Failed to toggle auto-approved tool:', error)
+  }
+}
+
+const removeAutoApprovedTool = async toolName => {
+  await toggleAutoApprovedTool(toolName, false)
 }
 
 const removeShellPolicyItem = async pattern => {
@@ -597,6 +691,35 @@ const ensureDefaultShellPoliciesLoaded = async () => {
 
   const result = await invokeWrapper('get_default_shell_policy')
   defaultShellPolicies.value = Array.isArray(result) ? result : []
+}
+
+const addShellPolicyItem = async () => {
+  const pattern = newShellCommandPattern.value.trim()
+  if (!props.currentWorkflowId || !pattern) return
+
+  const currentPolicy = Array.isArray(props.currentWorkflow?.agentConfig?.shellPolicy)
+    ? props.currentWorkflow.agentConfig.shellPolicy
+    : Array.isArray(props.currentWorkflow?.shellPolicy)
+      ? props.currentWorkflow.shellPolicy
+      : []
+
+  const exists = currentPolicy.some(
+    rule => rule.pattern === pattern && (rule.decision || 'review') === 'allow'
+  )
+  if (exists) {
+    showMessage(t('common.noData') || 'Pattern already exists', 'info')
+    return
+  }
+
+  const nextPolicy = [...currentPolicy, { pattern, decision: 'allow' }]
+
+  try {
+    await persistAgentConfig({ shellPolicy: nextPolicy })
+    workflowStore.setShellPolicy(nextPolicy)
+    newShellCommandPattern.value = ''
+  } catch (error) {
+    console.error('Failed to add shell policy item:', error)
+  }
 }
 
 const importDefaultShellPolicies = async () => {
@@ -628,20 +751,7 @@ const importDefaultShellPolicies = async () => {
       return
     }
 
-    const nextAgentConfig = {
-      ...(props.currentWorkflow?.agentConfig || {}),
-      shellPolicy: mergedPolicy
-    }
-
-    await invokeWrapper('update_workflow_agent_config', {
-      sessionId: props.currentWorkflowId,
-      agentConfig: JSON.stringify(nextAgentConfig)
-    })
-
-    if (props.currentWorkflow) {
-      props.currentWorkflow.agentConfig = nextAgentConfig
-      props.currentWorkflow.shellPolicy = mergedPolicy
-    }
+    await persistAgentConfig({ shellPolicy: mergedPolicy })
     workflowStore.setShellPolicy(mergedPolicy)
     showMessage(t('common.saveSuccess'), 'success')
   } catch (error) {
@@ -741,6 +851,44 @@ defineExpose({
 .workflow-attachment-remove {
   cursor: pointer;
   flex-shrink: 0;
+  color: var(--cs-text-secondary);
+}
+
+.checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.checkbox-item {
+  display: block;
+}
+
+.tool-checkbox-item :deep(.el-checkbox) {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  margin-right: 0;
+}
+
+.tool-checkbox-item :deep(.el-checkbox__label) {
+  min-width: 0;
+  flex: 1;
+}
+
+.checkbox-label-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.section-toolbar {
+  margin-bottom: 10px;
+}
+
+.section-empty-text {
+  font-size: 12px;
   color: var(--cs-text-secondary);
 }
 

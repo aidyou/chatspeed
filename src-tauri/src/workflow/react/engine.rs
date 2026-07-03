@@ -6277,6 +6277,21 @@ impl WorkflowExecutor {
             return Ok(true);
         }
 
+        if sig_type_enum == Some(SignalType::UpdateAutoApprovedTools) {
+            let tools = sig_json
+                .get("auto_approve")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+                .unwrap_or_default();
+
+            self.agent_config.auto_approve = serde_json::to_string(&tools).ok();
+            self.rebuild_auto_approve_from_agent_config();
+            let tools = self.get_auto_approved_tools();
+            self.dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated { tools })
+                .await?;
+            return Ok(true);
+        }
+
         if sig_type_enum == Some(SignalType::RemoveAutoApprovedTool) {
             if let Some(tool_name) = sig_json.get("tool_name").and_then(|v| v.as_str()) {
                 self.remove_auto_approved_tool(tool_name);

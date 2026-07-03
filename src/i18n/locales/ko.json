@@ -126,6 +126,7 @@
     "deleteSuccess": "성공적으로 삭제되었습니다",
     "detail": "세부정보",
     "diagram": "플로우차트",
+    "error": "오류",
     "downloadSvg": "SVG로 다운로드",
     "fullscreen": "전체 화면",
     "loading": "로드 중...",
