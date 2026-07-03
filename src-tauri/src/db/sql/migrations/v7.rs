@@ -6,7 +6,10 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[];
 
 fn ensure_ccproxy_provider_id(conn: &Connection) -> Result<(), StoreError> {
     if !column_exists(conn, "ccproxy_stats", "provider_id")? {
-        conn.execute("ALTER TABLE ccproxy_stats ADD COLUMN provider_id INTEGER", [])?;
+        conn.execute(
+            "ALTER TABLE ccproxy_stats ADD COLUMN provider_id INTEGER",
+            [],
+        )?;
     }
 
     conn.execute(
