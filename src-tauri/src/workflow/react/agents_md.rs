@@ -23,6 +23,14 @@ const MAX_INCLUDE_SIZE: u64 = 32 * 1024; // 32KB
 pub struct AgentsMdScanner;
 
 impl AgentsMdScanner {
+    pub fn global_path() -> Option<PathBuf> {
+        dirs::home_dir().map(|h| h.join(".chatspeed").join("AGENTS.md"))
+    }
+
+    pub fn project_path(project_root: &Path) -> PathBuf {
+        project_root.join("AGENTS.md")
+    }
+
     /// Scans for AGENTS.md files.
     ///
     /// # Arguments
@@ -39,19 +47,16 @@ impl AgentsMdScanner {
 
     /// Reads global AGENTS.md from ~/.chatspeed/AGENTS.md
     fn read_global() -> Option<String> {
-        dirs::home_dir()
-            .map(|h| h.join(".chatspeed").join("AGENTS.md"))
-            .filter(|p| p.exists())
-            .and_then(|p| {
-                let content = std::fs::read_to_string(&p).ok()?;
-                let parent = p.parent()?;
-                Some(Self::process_mentions(&content, parent))
-            })
+        Self::global_path().filter(|p| p.exists()).and_then(|p| {
+            let content = std::fs::read_to_string(&p).ok()?;
+            let parent = p.parent()?;
+            Some(Self::process_mentions(&content, parent))
+        })
     }
 
     /// Reads project AGENTS.md from {project_root}/AGENTS.md
     fn read_project(project_root: PathBuf) -> Option<String> {
-        let path = project_root.join("AGENTS.md");
+        let path = Self::project_path(&project_root);
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Some(parent) = path.parent() {

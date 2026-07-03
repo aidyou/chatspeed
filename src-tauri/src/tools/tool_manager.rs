@@ -463,6 +463,13 @@ impl ToolManager {
             }
         }
 
+        specs.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+                .then_with(|| left.name.cmp(&right.name))
+        });
+
         Ok(specs)
     }
 

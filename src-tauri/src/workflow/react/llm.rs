@@ -18,6 +18,7 @@ use crate::workflow::react::signals::{
 use crate::workflow::react::skills::SkillManifest;
 use crate::workflow::react::types::GatewayPayload;
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -40,9 +41,13 @@ pub struct LlmProcessor {
     pub active_model_name: String,
     pub reasoning: bool,
     pub mcp_tool_summaries: Vec<MCPToolDeclaration>,
-    // New fields for memory and AGENTS.md support
-    pub memory_manager: Arc<MemoryManager>,
-    pub project_root: Option<PathBuf>,
+    // Cached prompt inputs that should remain stable for the workflow lifetime.
+    cached_global_agents_path: Option<PathBuf>,
+    cached_project_agents_path: Option<PathBuf>,
+    cached_global_agents: Option<String>,
+    cached_project_agents: Option<String>,
+    cached_global_memory: Option<String>,
+    cached_project_memory: Option<String>,
 }
 
 impl LlmProcessor {
@@ -94,6 +99,12 @@ impl LlmProcessor {
             }
         }
         should_stop
+    }
+
+    fn stable_name_cmp(left: &str, right: &str) -> Ordering {
+        left.to_ascii_lowercase()
+            .cmp(&right.to_ascii_lowercase())
+            .then_with(|| left.cmp(right))
     }
 
     fn normalize_and_validate_tool_calls(
@@ -200,6 +211,22 @@ impl LlmProcessor {
         memory_manager: Arc<MemoryManager>,
         project_root: Option<PathBuf>,
     ) -> Self {
+        let (cached_global_agents, cached_project_agents) =
+            AgentsMdScanner::scan(project_root.clone());
+        let cached_global_agents_path = AgentsMdScanner::global_path().filter(|path| path.exists());
+        let cached_project_agents_path = project_root
+            .as_deref()
+            .map(AgentsMdScanner::project_path)
+            .filter(|path| path.exists());
+        let cached_global_memory = memory_manager
+            .read_last_n_lines(MemoryScope::Global, 300)
+            .ok()
+            .flatten();
+        let cached_project_memory = memory_manager
+            .read_last_n_lines(MemoryScope::Project, 300)
+            .ok()
+            .flatten();
+
         Self {
             session_id,
             agent_config,
@@ -210,8 +237,12 @@ impl LlmProcessor {
             active_model_name,
             reasoning,
             mcp_tool_summaries,
-            memory_manager,
-            project_root,
+            cached_global_agents_path,
+            cached_project_agents_path,
+            cached_global_agents,
+            cached_project_agents,
+            cached_global_memory,
+            cached_project_memory,
         }
     }
 
@@ -1023,13 +1054,14 @@ impl LlmProcessor {
         _next_pending_task: Option<String>,
         policy: &ExecutionPolicy,
     ) -> Vec<serde_json::Value> {
-        let mut system_parts = Vec::new();
+        let mut stable_system_parts = Vec::new();
+        let mut dynamic_tail_parts = Vec::new();
 
         // 1. Core System Prompt
         if self.agent_config.role.as_deref() == Some("child") {
-            system_parts.push(CHILD_AGENT_CORE_SYSTEM_PROMPT.to_string());
+            stable_system_parts.push(CHILD_AGENT_CORE_SYSTEM_PROMPT.to_string());
         } else {
-            system_parts.push(CORE_SYSTEM_PROMPT.to_string());
+            stable_system_parts.push(CORE_SYSTEM_PROMPT.to_string());
         }
 
         // 2. Agent Specific Instructions
@@ -1043,7 +1075,7 @@ impl LlmProcessor {
             _ => self.agent_config.system_prompt.as_str(),
         };
         if !agent_prompt.trim().is_empty() {
-            system_parts.push(format!(
+            stable_system_parts.push(format!(
                 "<AGENT_SPECIFIC_INSTRUCTIONS>\n{}\n</AGENT_SPECIFIC_INSTRUCTIONS>",
                 agent_prompt
             ));
@@ -1067,86 +1099,78 @@ impl LlmProcessor {
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            system_parts
+            stable_system_parts
                 .push(CHILD_AGENT_DIRECTORY_PROMPT.replace("{{child_agents}}", &child_agent_lines));
         }
 
         if self.agent_config.role.as_deref() == Some("child") {
-            system_parts.push(CHILD_AGENT_COMPLETION_PROMPT.to_string());
+            stable_system_parts.push(CHILD_AGENT_COMPLETION_PROMPT.to_string());
         }
 
         // 3. Drafting for non-reasoning models
         if !self.reasoning {
-            system_parts.push(DRAFTING_PROMPT.to_string());
+            stable_system_parts.push(DRAFTING_PROMPT.to_string());
         }
 
         if self.agent_config.final_audit.unwrap_or(false) {
-            system_parts.push(FINAL_AUDIT_COMPLETION_REPORT_PROMPT.to_string());
+            stable_system_parts.push(FINAL_AUDIT_COMPLETION_REPORT_PROMPT.to_string());
         }
 
-        // === NEW: AGENTS.md and Memory ===
-
-        // Get memory and AGENTS.md content
-        let (global_agents, project_agents) = AgentsMdScanner::scan(self.project_root.clone());
-
-        // Use restricted read (last 300 non-empty lines) to stay within context limits
-        let global_memory = self
-            .memory_manager
-            .read_last_n_lines(MemoryScope::Global, 300)
-            .ok()
-            .flatten();
-
-        let project_memory = self
-            .memory_manager
-            .read_last_n_lines(MemoryScope::Project, 300)
-            .ok()
-            .flatten();
-
-        // 4. Global Instructions (AGENTS.md)
-        if let Some(content) = global_agents {
-            system_parts.push(format!(
-                "<GLOBAL_INSTRUCTIONS>\n{}\n\
+        // Stable prompt context: these sections should stay fixed for the workflow lifetime.
+        if let Some(content) = self.cached_global_agents.as_deref() {
+            let source_path = self
+                .cached_global_agents_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "~/.chatspeed/AGENTS.md".to_string());
+            stable_system_parts.push(format!(
+                "<GLOBAL_INSTRUCTIONS>\n\
+                <SOURCE_PATH>{}</SOURCE_PATH>\n{}\n\
                 <SYSTEM_REMINDER>\n\
                 This provides global guidance that may or may not relate to the current project. \
                 Please evaluate carefully and apply when relevant.\n\
                 </SYSTEM_REMINDER>\n\
                 </GLOBAL_INSTRUCTIONS>",
-                content
+                source_path, content
             ));
         }
 
-        // 5. Project Instructions (AGENTS.md)
-        if let Some(content) = project_agents {
-            system_parts.push(format!(
-                "<PROJECT_INSTRUCTIONS>\n{}\n\
+        if let Some(content) = self.cached_project_agents.as_deref() {
+            let source_path = self
+                .cached_project_agents_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "AGENTS.md".to_string());
+            stable_system_parts.push(format!(
+                "<PROJECT_INSTRUCTIONS>\n\
+                <SOURCE_PATH>{}</SOURCE_PATH>\n{}\n\
                 <SYSTEM_REMINDER>\n\
-                This provides project-specific guidance for the current codebase.\n\
+                This provides project-specific guidance for the current codebase. Reuse the injected content instead of re-reading this file unless the user asks for on-disk verification.\n\
                 </SYSTEM_REMINDER>\n\
                 </PROJECT_INSTRUCTIONS>",
-                content
+                source_path, content
             ));
         }
+
+        // Environment details are part of the stable execution boundary, so keep them
+        // before tool catalogs and memory while leaving drift-prone facts in the tail.
+        let reminders = self.build_environment_context(current_step, max_steps);
+        stable_system_parts.push(format!(
+            "<ENVIRONMENT_CONTEXT>\n{}\n</ENVIRONMENT_CONTEXT>",
+            reminders
+        ));
 
         // 6. Extend tool(skills, mcp) Context
         let extend_tools = self.build_extend_tools_prompt();
         if !extend_tools.is_empty() {
-            system_parts.push(format!(
+            stable_system_parts.push(format!(
                 "<EXTEND_TOOLS_CONTEXT>\n{}\n</EXTEND_TOOLS_CONTEXT>",
                 extend_tools
             ));
         }
 
-        // 7. State Snapshot
-        if let Some(snapshot) = state_snapshot {
-            system_parts.push(format!(
-                "<PREVIOUS_CONTEXT_SNAPSHOT>\n{}\n</PREVIOUS_CONTEXT_SNAPSHOT>",
-                snapshot
-            ));
-        }
-
-        // 8. Global Memory
-        if let Some(content) = global_memory {
-            system_parts.push(format!(
+        if let Some(content) = self.cached_global_memory.as_deref() {
+            stable_system_parts.push(format!(
                 "<GLOBAL_MEMORY>\n{}\n\
                 <SYSTEM_REMINDER>\n\
                 These memories may or may not relate to the current project. \
@@ -1158,9 +1182,8 @@ impl LlmProcessor {
             ));
         }
 
-        // 9. Project Memory
-        if let Some(content) = project_memory {
-            system_parts.push(format!(
+        if let Some(content) = self.cached_project_memory.as_deref() {
+            stable_system_parts.push(format!(
                 "<PROJECT_MEMORY>\n{}\n\
                 <SYSTEM_REMINDER>\n\
                 These memories are specific to the current project. \
@@ -1172,16 +1195,9 @@ impl LlmProcessor {
             ));
         }
 
-        // 10. Environment Context
-        let reminders = self.build_reminders(current_step, max_steps);
-        system_parts.push(format!(
-            "<ENVIRONMENT_CONTEXT>\n{}\n</ENVIRONMENT_CONTEXT>",
-            reminders
-        ));
-
         match policy.phase {
             ExecutionPhase::Implementation => {
-                system_parts.push(format!(
+                stable_system_parts.push(format!(
                     "<PHASE_INSTRUCTIONS>\n{}\n</PHASE_INSTRUCTIONS>",
                     EXECUTION_MODE_PROMPT
                 ));
@@ -1189,9 +1205,21 @@ impl LlmProcessor {
             ExecutionPhase::Standard | ExecutionPhase::Planning => {}
         }
 
-        // === END NEW ===
+        if let Some(reminder) = self.build_user_info_reminder() {
+            dynamic_tail_parts.push(reminder);
+        }
 
-        let combined_system_prompt = system_parts.join("\n\n---\n\n");
+        // Keep unstable sections at the very end so stable prompt prefixes remain
+        // cache-friendly even after a compaction boundary moves.
+        if let Some(snapshot) = state_snapshot {
+            dynamic_tail_parts.push(format!(
+                "<PREVIOUS_CONTEXT_SNAPSHOT>\n{}\n</PREVIOUS_CONTEXT_SNAPSHOT>",
+                snapshot
+            ));
+        }
+
+        stable_system_parts.extend(dynamic_tail_parts);
+        let combined_system_prompt = stable_system_parts.join("\n\n---\n\n");
 
         // 1. Remove all existing system messages
         history.retain(|m| m["role"] != "system");
@@ -1212,7 +1240,9 @@ impl LlmProcessor {
         // MCP tools (before skills)
         if !self.mcp_tool_summaries.is_empty() {
             reminders.push_str("## AVAILABLE MCP TOOLS:\n");
-            for tool in &self.mcp_tool_summaries {
+            let mut tools: Vec<_> = self.mcp_tool_summaries.iter().collect();
+            tools.sort_by(|left, right| Self::stable_name_cmp(&left.name, &right.name));
+            for tool in tools {
                 reminders.push_str(&format!(
                     "- {}: {}\n",
                     tool.name,
@@ -1225,7 +1255,9 @@ impl LlmProcessor {
         // Skills
         if skills_enabled && !self.available_skills.is_empty() {
             reminders.push_str("## AVAILABLE SKILLS:\n");
-            for skill in self.available_skills.values() {
+            let mut skills: Vec<_> = self.available_skills.values().collect();
+            skills.sort_by(|left, right| Self::stable_name_cmp(&left.name, &right.name));
+            for skill in skills {
                 reminders.push_str(&format!(
                     "- {}: {}\n",
                     skill.name,
@@ -1238,7 +1270,7 @@ impl LlmProcessor {
         reminders
     }
 
-    fn build_reminders(&self, _current_step: usize, _max_steps: usize) -> String {
+    fn build_environment_context(&self, _current_step: usize, _max_steps: usize) -> String {
         let (allowed_roots, cwd) = if let Ok(guard) = self.path_guard.read() {
             let roots = guard.workspace_roots();
             let primary = guard.get_primary_root().map(|p| p.to_path_buf());
@@ -1251,43 +1283,10 @@ impl LlmProcessor {
             .or_else(|| allowed_roots.first().cloned())
             .unwrap_or_default();
 
-        let is_git = if !cwd.as_os_str().is_empty() {
-            std::process::Command::new("git")
-                .args([
-                    "-C",
-                    &cwd.to_string_lossy(),
-                    "rev-parse",
-                    "--is-inside-work-tree",
-                ])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
-                .unwrap_or(false)
-        } else {
-            false
-        };
-
         let mut env_info =
             String::from("Environment\nYou have been invoked in the following environment:\n");
         if !cwd.as_os_str().is_empty() {
             env_info.push_str(&format!(" - Primary working directory: {:?}\n", cwd));
-
-            if is_git {
-                let branch = std::process::Command::new("git")
-                    .args([
-                        "-C",
-                        &cwd.to_string_lossy(),
-                        "rev-parse",
-                        "--abbrev-ref",
-                        "HEAD",
-                    ])
-                    .output()
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                    .unwrap_or_else(|_| "unknown".into());
-
-                env_info.push_str(&format!("  - Git Repository: [Branch: {}]\n", branch));
-            } else {
-                env_info.push_str("  - Is a git repository: false\n");
-            }
         }
 
         if allowed_roots.len() > 1 {
@@ -1317,16 +1316,23 @@ impl LlmProcessor {
                 .unwrap_or_else(|_| platform.to_string())
         };
 
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         env_info.push_str(&format!(
-            " - Platform: {}\n - Shell: {}\n - OS Version: {}\n - Today's date is {}.",
-            platform, shell, os_version, today
+            " - Platform: {}\n - Shell: {}\n - OS Version: {}.",
+            platform, shell, os_version
         ));
 
         format!(
             "{}\n\n<SYSTEM_REMINDER>\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</SYSTEM_REMINDER>\n",
             env_info
         )
+    }
+
+    fn build_user_info_reminder(&self) -> Option<String> {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        Some(format!(
+            "<SYSTEM_REMINDER>\nUser environment note: today's date is {}. Use it only when date-sensitive reasoning matters, and verify again if the workflow may cross into a new date.\n</SYSTEM_REMINDER>",
+            today
+        ))
     }
 
     pub fn build_workspace_context(&self) -> String {
@@ -1456,8 +1462,71 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
 #[cfg(test)]
 mod tests {
     use super::LlmProcessor;
+    use crate::ai::traits::chat::MCPToolDeclaration;
+    use crate::db::Agent;
     use crate::db::WorkflowMessage;
+    use crate::tools::ToolScope;
+    use crate::workflow::react::policy::ExecutionPolicy;
+    use crate::workflow::react::security::PathGuard;
+    use crate::workflow::react::skills::SkillManifest;
     use serde_json::json;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, RwLock};
+
+    fn test_agent() -> Agent {
+        Agent {
+            id: "agent-test".to_string(),
+            name: "Test Agent".to_string(),
+            description: None,
+            role: None,
+            parent_agent_id: None,
+            system_prompt: "System prompt".to_string(),
+            planning_prompt: None,
+            image_recognition_prompt: None,
+            available_tools: None,
+            auto_approve: None,
+            models: None,
+            shell_policy: None,
+            allowed_paths: None,
+            final_audit: Some(false),
+            approval_level: None,
+            skill_enabled: Some(true),
+            selected_skills: None,
+            phase: None,
+            is_system: None,
+            disabled: None,
+            version: None,
+            sort_index: None,
+            max_contexts: None,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    fn test_llm_processor() -> LlmProcessor {
+        LlmProcessor {
+            session_id: "test-session".to_string(),
+            agent_config: test_agent(),
+            child_agents: Vec::new(),
+            available_skills: HashMap::new(),
+            path_guard: Arc::new(RwLock::new(PathGuard::new(
+                vec![std::env::temp_dir()],
+                vec![],
+                vec![],
+            ))),
+            active_provider_id: 0,
+            active_model_name: "test-model".to_string(),
+            reasoning: true,
+            mcp_tool_summaries: Vec::new(),
+            cached_global_agents_path: None,
+            cached_project_agents_path: None,
+            cached_global_agents: None,
+            cached_project_agents: None,
+            cached_global_memory: None,
+            cached_project_memory: None,
+        }
+    }
 
     fn message(
         role: &str,
@@ -1510,6 +1579,109 @@ mod tests {
             error_type: None,
             created_at: None,
         }
+    }
+
+    #[test]
+    fn build_extend_tools_prompt_sorts_mcp_and_skills_stably() {
+        let mut processor = test_llm_processor();
+        processor.mcp_tool_summaries = vec![
+            MCPToolDeclaration {
+                name: "zeta_tool".into(),
+                description: "zeta".into(),
+                input_schema: json!({}),
+                output_schema: None,
+                disabled: false,
+                scope: Some(ToolScope::Workflow),
+            },
+            MCPToolDeclaration {
+                name: "Alpha_tool".into(),
+                description: "alpha".into(),
+                input_schema: json!({}),
+                output_schema: None,
+                disabled: false,
+                scope: Some(ToolScope::Workflow),
+            },
+        ];
+        processor.available_skills = HashMap::from([
+            (
+                "zeta".into(),
+                SkillManifest {
+                    name: "zeta".into(),
+                    version: "1.0.0".into(),
+                    source: "builtin".into(),
+                    description: "zeta skill".into(),
+                    tools: vec![],
+                    instructions: String::new(),
+                    skill_dir: None,
+                    references: vec![],
+                },
+            ),
+            (
+                "alpha".into(),
+                SkillManifest {
+                    name: "Alpha".into(),
+                    version: "1.0.0".into(),
+                    source: "builtin".into(),
+                    description: "alpha skill".into(),
+                    tools: vec![],
+                    instructions: String::new(),
+                    skill_dir: None,
+                    references: vec![],
+                },
+            ),
+        ]);
+
+        let rendered = processor.build_extend_tools_prompt();
+        let alpha_mcp = rendered.find("- Alpha_tool: alpha").unwrap();
+        let zeta_mcp = rendered.find("- zeta_tool: zeta").unwrap();
+        let alpha_skill = rendered.find("- Alpha: alpha skill").unwrap();
+        let zeta_skill = rendered.find("- zeta: zeta skill").unwrap();
+
+        assert!(alpha_mcp < zeta_mcp);
+        assert!(alpha_skill < zeta_skill);
+    }
+
+    #[test]
+    fn build_environment_context_omits_git_and_date() {
+        let processor = test_llm_processor();
+        let rendered = processor.build_environment_context(0, 0);
+
+        assert!(!rendered.contains("Git Repository"));
+        assert!(!rendered.contains("Today's date"));
+    }
+
+    #[test]
+    fn inject_prompts_keeps_dynamic_sections_at_the_end() {
+        let mut processor = test_llm_processor();
+        processor.cached_global_agents_path = Some(PathBuf::from("/tmp/global/AGENTS.md"));
+        processor.cached_project_agents_path = Some(PathBuf::from("/tmp/project/AGENTS.md"));
+        processor.cached_global_agents = Some("global agent".into());
+        processor.cached_project_agents = Some("project agent".into());
+        processor.cached_global_memory = Some("global memory".into());
+        processor.cached_project_memory = Some("project memory".into());
+
+        let history = vec![json!({ "role": "user", "content": "Do work" })];
+        let final_history = processor.inject_prompts(
+            history,
+            0,
+            0,
+            Some("snapshot body".into()),
+            None,
+            &ExecutionPolicy::standard(),
+        );
+        let system = final_history[0]["content"].as_str().unwrap_or_default();
+
+        let env_idx = system.find("<ENVIRONMENT_CONTEXT>").unwrap();
+        let date_idx = system
+            .rfind("User environment note: today's date is")
+            .unwrap();
+        let snapshot_idx = system.rfind("<PREVIOUS_CONTEXT_SNAPSHOT>").unwrap();
+
+        assert!(env_idx < date_idx);
+        assert!(date_idx < snapshot_idx);
+        assert!(system.contains("<SOURCE_PATH>/tmp/global/AGENTS.md</SOURCE_PATH>"));
+        assert!(system.contains("<SOURCE_PATH>/tmp/project/AGENTS.md</SOURCE_PATH>"));
+        assert!(system.trim_end().ends_with("</PREVIOUS_CONTEXT_SNAPSHOT>"));
     }
 
     #[test]

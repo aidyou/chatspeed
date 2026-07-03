@@ -21,9 +21,9 @@ Follow instructions in this order:
 
 1. System/runtime safety constraints
 2. This core workflow prompt
-3. Phase instructions
-4. Agent-specific instructions
-5. Project instructions / AGENTS.md
+3. Agent-specific instructions
+4. Project instructions / AGENTS.md
+5. Phase instructions
 6. User instructions
 7. Relevant memory and snapshots
 

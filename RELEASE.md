@@ -14,11 +14,25 @@
 - **Workflow collapsed user message styling**:
   - Improved the collapsed presentation of long user messages in Workflow.
   - Added a fade-out treatment and adjusted the expand/collapse affordance so long messages are easier to scan without looking abruptly cut off.
+- **Workflow system prompt structure and cache stability**:
+  - Reworked Workflow system prompt assembly to keep stable instruction blocks at the front and move drift-prone context to the tail.
+  - Sorted injected MCP tool summaries, skill summaries, and tool declaration arrays to avoid cache misses caused by nondeterministic ordering.
+  - Moved volatile compression snapshots to the end of the system prompt so prompt-prefix caching can remain effective across compaction boundaries.
+- **Workflow environment context ordering cleanup**:
+  - Removed Git branch details from the stable environment block and kept only relatively stable execution-boundary information such as working directories, platform, shell, and OS version.
+  - Kept the date as a separate tail reminder instead of embedding it into the main stable environment section.
+  - Repositioned environment context earlier in the stable prompt structure so execution-boundary information appears before tool catalogs and memory.
+- **Workflow AGENTS.md prompt reuse guidance**:
+  - Workflow now caches AGENTS.md and memory content when the runtime is created instead of reloading them every round.
+  - Injected AGENTS.md blocks now include their source path in the prompt.
+  - Added explicit guidance telling the model to reuse injected AGENTS.md content instead of re-reading the same file unless on-disk verification is explicitly requested.
 
 ### 🐞 Bug Fixes
 
 - **Workflow message list state after creating a new workflow**:
   - Fixed an issue where the message list could still reference the previous workflow immediately after creating a new workflow, causing stale content to appear in the new session view.
+- **Workflow prompt consistency**:
+  - Aligned the documented core-prompt priority order with the actual injected prompt structure to reduce instruction-order ambiguity during long-running workflows.
 
 ---
 
