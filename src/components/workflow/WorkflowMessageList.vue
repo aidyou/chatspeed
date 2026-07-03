@@ -20,7 +20,9 @@
       </div>
       <div class="content-container">
         <div class="content" v-if="message.role === 'user'">
-          <div v-if="message.metadata?.attachments?.length > 0" class="workflow-message-attachments">
+          <div
+            v-if="message.metadata?.attachments?.length > 0"
+            class="workflow-message-attachments">
             <div
               v-for="(attachment, attachmentIndex) in message.metadata.attachments"
               :key="`${message.displayId || message.id || attachmentIndex}_attachment_${attachmentIndex}`"
@@ -56,7 +58,10 @@
           <div
             v-else
             class="user-message-wrap"
-            :class="{ 'is-expandable': isExpandableUserMessage(message) }"
+            :class="{
+              'is-expandable': isExpandableUserMessage(message),
+              'is-collapsed': isExpandableUserMessage(message) && !isUserMessageExpanded(message)
+            }"
             @click="
               isExpandableUserMessage(message) &&
               $emit('toggle-expand', getUserMessageExpandId(message))
@@ -294,9 +299,7 @@
                       class="sub-agent-card__result-chevron"
                       :class="{ expanded: isSubAgentResultExpanded(message) }" />
                   </div>
-                  <div
-                    v-if="isSubAgentResultExpanded(message)"
-                    class="sub-agent-card__result-body">
+                  <div v-if="isSubAgentResultExpanded(message)" class="sub-agent-card__result-body">
                     <MarkdownSimple :content="message.subAgentCard.resultMarkdown" />
                   </div>
                 </div>
@@ -440,10 +443,7 @@
                   "
                   :content="removeSystemReminder(message.message)" />
                 <pre
-                  v-else-if="
-                    !isApprovalPending(message) &&
-                    shouldShowToolRawContent(message)
-                  "
+                  v-else-if="!isApprovalPending(message) && shouldShowToolRawContent(message)"
                   class="raw-content"
                   >{{ removeSystemReminder(message.message) }}</pre
                 >
@@ -1278,9 +1278,7 @@ const toggleReasoningForMessage = message => {
   if (messageId) emit('toggle-reasoning', messageId)
 }
 const pendingApprovalIdSet = computed(() => {
-  const ids = (props.pendingApprovalIds || [])
-    .map(id => String(id || '').trim())
-    .filter(Boolean)
+  const ids = (props.pendingApprovalIds || []).map(id => String(id || '').trim()).filter(Boolean)
   return new Set(ids)
 })
 const getVisibleMessageIndex = message =>
@@ -1673,9 +1671,7 @@ const getSubAgentStatusLabel = message => {
 const getSubAgentLiveContext = message => {
   const card = message?.subAgentCard || {}
   const hasContextPercent =
-    card.contextPercent !== null &&
-    card.contextPercent !== undefined &&
-    card.contextPercent !== ''
+    card.contextPercent !== null && card.contextPercent !== undefined && card.contextPercent !== ''
   const contextPercent = hasContextPercent ? Number(card.contextPercent) : NaN
 
   if (Number.isFinite(contextPercent) && contextPercent >= 0) {
@@ -1920,7 +1916,9 @@ const scrollToBottom = (force = false) => {
 const visibleMessagesSignature = computed(() =>
   visibleMessages.value
     .map(message => {
-      const toolCallsCount = Array.isArray(message?.pendingToolCalls) ? message.pendingToolCalls.length : 0
+      const toolCallsCount = Array.isArray(message?.pendingToolCalls)
+        ? message.pendingToolCalls.length
+        : 0
       return [
         message?.displayId || message?.id || '',
         message?.message || '',
@@ -2084,10 +2082,26 @@ defineExpose({
   --user-message-toggle-bottom: var(--cs-space);
   --user-message-toggle-safe-right: calc(var(--cs-size-xl) + var(--cs-space-sm));
   --user-message-toggle-safe-bottom: calc(var(--cs-size-xl) + var(--cs-space-sm));
+  --user-message-collapse-fade-height: 20px;
+  --user-message-collapse-fade-inset-x: var(--cs-space-xs);
+  --user-message-collapse-fade-radius: var(--cs-border-radius-lg);
 }
 
 .user-message-wrap.is-expandable {
   cursor: pointer;
+}
+
+.user-message-wrap.is-collapsed::after {
+  content: '';
+  position: absolute;
+  left: var(--user-message-collapse-fade-inset-x);
+  right: var(--user-message-collapse-fade-inset-x);
+  bottom: 1px;
+  height: calc(var(--user-message-collapse-fade-height) + var(--cs-space-xs));
+  border-radius: 0 0 var(--user-message-collapse-fade-radius)
+    var(--user-message-collapse-fade-radius);
+  background: linear-gradient(to top, var(--cs-bg-color-light) 40%, transparent 100%);
+  pointer-events: none;
 }
 
 .tool-diff-view {
@@ -2287,6 +2301,7 @@ defineExpose({
   position: absolute;
   right: var(--user-message-toggle-right);
   bottom: var(--user-message-toggle-bottom);
+  z-index: 1;
   display: flex;
   align-items: flex-end;
   justify-content: center;
