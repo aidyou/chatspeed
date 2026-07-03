@@ -425,6 +425,7 @@ const trendCostChartData = ref([])
 const selectedTrendMetric = ref('cost')
 const selectedTrendProvider = ref('')
 const selectedTrendRange = ref(7)
+const trendProviderOptions = ref([])
 const pricingMaps = ref(buildPricingMaps(modelStore.providers))
 let trendChart = null
 const TREND_CHART_ID = 'proxy-switcher-trend-chart'
@@ -521,25 +522,6 @@ const filteredProviders = computed(() => {
     .filter(provider => provider.models.length > 0)
 })
 
-const trendProviderOptions = computed(() => {
-  const proxy = activeTrendProxy.value
-  if (!proxy?.targets?.length) return []
-
-  const providers = new Map()
-  proxy.targets.forEach(target => {
-    const provider = modelStore.providers.find(item => String(item.id) === String(target.id))
-    if (!provider) return
-    providers.set(String(provider.id), {
-      value: String(provider.id),
-      label: provider.name
-    })
-  })
-
-  return Array.from(providers.values()).sort((a, b) =>
-    a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' })
-  )
-})
-
 const formatCompactNumber = val => {
   if (val === undefined || val === null || Number.isNaN(Number(val))) return '0'
   const num = Number(val)
@@ -593,21 +575,19 @@ const estimateRowCost = row => {
   )
 }
 
-const calculateServerStatsFromRows = (rows, targets, providerFilter = '') => {
-  const targetMap = new Map(
-    (targets || [])
-      .map(target => {
-        if (providerFilter && String(target.id) !== String(providerFilter)) return null
-        const providerName = getProviderNameById(target.id)
-        if (!providerName || !target.model) return null
-        return [`${providerName}::${target.model}`, true]
-      })
-      .filter(Boolean)
-  )
+const normalizeTrendProviderFilter = row => {
+  const providerId = String(row?.providerId ?? '').trim()
+  if (providerId) return `id:${providerId}`
 
+  const providerName = String(row?.provider || '').trim()
+  return providerName ? `name:${providerName}` : ''
+}
+
+const calculateServerStatsFromRows = (rows, proxyAlias, providerFilter = '') => {
   return (rows || []).reduce(
     (totals, row) => {
-      if (!targetMap.has(`${row.provider}::${row.backendModel}`)) return totals
+      if (String(row?.clientModel || '').trim() !== String(proxyAlias || '').trim()) return totals
+      if (providerFilter && normalizeTrendProviderFilter(row) !== providerFilter) return totals
       totals.inputTokens += Number(row.totalInputTokens || 0)
       totals.outputTokens += Number(row.totalOutputTokens || 0)
       totals.cacheTokens += Number(row.totalCacheTokens || 0)
@@ -625,7 +605,7 @@ const refreshTodayServerStats = async () => {
     const nextStats = {}
     sortedProxyServerGroups.value.forEach(group => {
       group.aliases.forEach(proxy => {
-        nextStats[proxy.key] = calculateServerStatsFromRows(rows, proxy.targets)
+        nextStats[proxy.key] = calculateServerStatsFromRows(rows, proxy.alias)
       })
     })
     serverStatsToday.value = nextStats
@@ -737,6 +717,7 @@ const loadTrendPopoverData = async proxy => {
   trendPendingRender.value = false
   trendTokenChartData.value = []
   trendCostChartData.value = []
+  trendProviderOptions.value = []
   destroyTrendChart()
 
   try {
@@ -753,9 +734,39 @@ const loadTrendPopoverData = async proxy => {
       dates.map(date => invokeWrapper('get_ccproxy_provider_stats_by_date', { date }))
     )
 
+    const providerOptionsMap = new Map()
+    dailyRows.flat().forEach(row => {
+      if (String(row?.clientModel || '').trim() !== String(proxy?.alias || '').trim()) return
+
+      const filterValue = normalizeTrendProviderFilter(row)
+      if (!filterValue) return
+
+      const providerLabel =
+        row?.providerId !== null && row?.providerId !== undefined
+          ? getProviderNameById(row.providerId) || row.provider || String(row.providerId)
+          : row?.provider || ''
+      if (!providerLabel) return
+
+      providerOptionsMap.set(filterValue, {
+        value: filterValue,
+        label: providerLabel
+      })
+    })
+
+    trendProviderOptions.value = Array.from(providerOptionsMap.values()).sort((a, b) =>
+      a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' })
+    )
+
+    if (
+      selectedTrendProvider.value &&
+      !trendProviderOptions.value.some(option => option.value === selectedTrendProvider.value)
+    ) {
+      selectedTrendProvider.value = ''
+    }
+
     const dailyStats = dates.map((date, index) => ({
       date,
-      ...calculateServerStatsFromRows(dailyRows[index], proxy.targets, selectedTrendProvider.value)
+      ...calculateServerStatsFromRows(dailyRows[index], proxy.alias, selectedTrendProvider.value)
     }))
 
     trendSummary.value = dailyStats.reduce(
@@ -840,6 +851,7 @@ const closeTrendDrawer = () => {
   trendPendingRender.value = false
   trendTokenChartData.value = []
   trendCostChartData.value = []
+  trendProviderOptions.value = []
   destroyTrendChart()
 }
 
