@@ -158,6 +158,7 @@
       <el-container class="main-container">
         <el-main class="message-list-container">
           <WorkflowMessageList
+            :key="currentWorkflowId || 'workflow-empty'"
             ref="messageListRef"
             :messages="enhancedMessages"
             :hidden-completed-task-group-count="hiddenCompletedTaskGroupCount"
