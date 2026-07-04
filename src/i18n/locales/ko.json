@@ -937,6 +937,33 @@
       "thoughts": "생각 {count}회",
       "title": "코드 탐색"
     },
+    "toolGroups": {
+      "commandTitle": "명령 실행",
+      "commands": "{count}개 명령",
+      "editVerb": "Edit",
+      "explorationTitle": "탐색",
+      "mutationTitle": "파일 수정",
+      "mutations": "{count}건 수정",
+      "readVerb": "Read",
+      "reads": "{count}회 파일 읽기",
+      "runVerb": "Run",
+      "searches": "{count}회 검색",
+      "searchVerb": "Search",
+      "todoFallbackTarget": "작업",
+      "todoTitle": "작업 상태 업데이트",
+      "todoStatuses": {
+        "completed": "완료됨",
+        "created": "생성됨",
+        "dataMissing": "데이터 누락",
+        "deleted": "삭제됨",
+        "failed": "실패",
+        "inProgress": "진행 중",
+        "listed": "목록 확인",
+        "pending": "대기 중",
+        "viewed": "확인됨"
+      },
+      "writeVerb": "Write"
+    },
     "finalAuditTooltip": "최종 감사 모드: 작업 완료 전 AI 가 자동으로 품질 검토를 수행합니다",
     "finalReviewPending": "최종 검토 중",
     "finishTask": "작업 완료",

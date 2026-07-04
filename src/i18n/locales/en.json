@@ -937,6 +937,33 @@
       "thoughts": "{count} thoughts",
       "title": "Code Exploration"
     },
+    "toolGroups": {
+      "commandTitle": "Command execution",
+      "commands": "{count} commands",
+      "editVerb": "Edit",
+      "explorationTitle": "Exploration",
+      "mutationTitle": "File changes",
+      "mutations": "{count} changes",
+      "readVerb": "Read",
+      "reads": "{count} file reads",
+      "runVerb": "Run",
+      "searches": "{count} searches",
+      "searchVerb": "Search",
+      "todoFallbackTarget": "Task",
+      "todoTitle": "Update task status",
+      "todoStatuses": {
+        "completed": "Completed",
+        "created": "Created",
+        "dataMissing": "Data missing",
+        "deleted": "Deleted",
+        "failed": "Failed",
+        "inProgress": "In progress",
+        "listed": "Listed",
+        "pending": "Pending",
+        "viewed": "Viewed"
+      },
+      "writeVerb": "Write"
+    },
     "finalAuditTooltip": "Final audit mode: AI automatically performs quality review before task completion",
     "finalReviewPending": "Final review",
     "finishTask": "Finish task",

@@ -91,7 +91,90 @@
           </div>
         </div>
         <div v-else class="ai-content chat">
-          <div v-if="isExplorationBatchMessage(message)" class="exploration-card">
+          <div v-if="isCollapsedToolGroupMessage(message)" class="cli-tool-call tool-system">
+            <div
+              class="tool-line title-wrap expandable"
+              @click="$emit('toggle-expand', message.displayId)">
+              <cs :name="message.groupDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
+              <span class="tool-name">{{ message.groupDisplay.action }}</span>
+              <span class="tool-target">{{ message.groupDisplay.target }}</span>
+            </div>
+            <div
+              v-if="!isMessageExpanded(message)"
+              class="tool-line summary expandable"
+              @click="$emit('toggle-expand', message.displayId)">
+              <span class="corner-icon">⎿</span>
+              <span class="summary-text">{{ message.groupDisplay.summary }}</span>
+              <span class="expand-hint">(click to expand)</span>
+            </div>
+            <div v-if="isMessageExpanded(message)" class="tool-detail collapsed-tool-group__body">
+              <div
+                v-for="(tool, toolIndex) in message.groupedTools"
+                :key="`${message.displayId}_grouped_tool_${toolIndex}`"
+                class="cli-tool-call collapsed-tool-group__item"
+                :class="[
+                  tool.toolDisplay?.toolType || 'tool-system',
+                  tool.toolDisplay?.isError ? 'status-error' : 'status-success'
+                ]">
+                <div
+                  class="tool-line title-wrap expandable"
+                  :class="{ 'tool-rejected': tool.isRejected }"
+                  @click="$emit('toggle-expand', tool.displayId)">
+                  <cs :name="tool.toolDisplay?.icon || 'tool'" size="15px" class="tool-type-icon" />
+                  <span class="tool-name">{{ tool.toolDisplay?.action }}</span>
+                  <span class="tool-target">{{ tool.toolDisplay?.target }}</span>
+                  <cs v-if="tool.isApproved" name="check" size="14px" class="approved-icon" />
+                </div>
+                <div
+                  v-if="!isMessageExpanded(tool)"
+                  class="tool-line summary expandable"
+                  @click="$emit('toggle-expand', tool.displayId)">
+                  <span class="corner-icon">⎿</span>
+                  <span class="summary-text">{{ tool.toolDisplay?.summary }}</span>
+                  <span class="expand-hint">(click to expand)</span>
+                </div>
+                <div v-if="isMessageExpanded(tool)" class="tool-detail">
+                  <MarkdownSimple
+                    v-if="
+                      shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'diff'
+                    "
+                    class="tool-diff-view"
+                    :content="getDiffMarkdown(removeSystemReminder(tool.message))" />
+                  <div
+                    v-else-if="
+                      shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'choice'
+                    "
+                    class="choice-container">
+                    <div
+                      v-for="group in getChoiceGroups(tool)"
+                      :key="group.title"
+                      class="choice-group">
+                      <div class="choice-question">
+                        {{ group.title }}
+                      </div>
+                      <div class="choice-options vertical numbered choice-options--readonly">
+                        <div
+                          v-for="(opt, optIndex) in group.options"
+                          :key="`${group.title}-${opt}`"
+                          class="choice-option-label">
+                          {{ optIndex + 1 }}. {{ opt }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <MarkdownSimple
+                    v-else-if="
+                      shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'markdown'
+                    "
+                    :content="removeSystemReminder(tool.message)" />
+                  <pre v-else-if="shouldShowToolRawContent(tool)" class="raw-content">{{
+                    removeSystemReminder(tool.message)
+                  }}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="isExplorationBatchMessage(message)" class="exploration-card">
             <div
               class="exploration-card__header"
               @click="$emit('toggle-expand', message.displayId)">
@@ -402,13 +485,13 @@
                         v-for="(opt, optIndex) in group.options"
                         :key="`${group.title}-${opt}`"
                         :value="opt"
-                        :disabled="!canAnswerAskUser(message, index) || askUserSubmitting">
+                        :disabled="!canAnswerAskUser(message) || askUserSubmitting">
                         <span class="choice-option-label">{{ optIndex + 1 }}. {{ opt }}</span>
                       </el-radio>
                       <div class="choice-custom-row">
                         <el-radio
                           :value="CUSTOM_ASK_USER_VALUE"
-                          :disabled="!canAnswerAskUser(message, index) || askUserSubmitting">
+                          :disabled="!canAnswerAskUser(message) || askUserSubmitting">
                           <span class="choice-option-label">{{ group.options.length + 1 }}.</span>
                         </el-radio>
                         <el-input
@@ -417,7 +500,7 @@
                           type="textarea"
                           :autosize="{ minRows: 1, maxRows: 6 }"
                           :placeholder="$t('workflow.askUser.customPlaceholder')"
-                          :disabled="!canAnswerAskUser(message, index) || askUserSubmitting"
+                          :disabled="!canAnswerAskUser(message) || askUserSubmitting"
                           @focus="setAskUserSelection(message, group.title, CUSTOM_ASK_USER_VALUE)"
                           @update:model-value="
                             value => setAskUserCustomInput(message, group.title, value)
@@ -425,7 +508,7 @@
                       </div>
                     </el-radio-group>
                   </div>
-                  <div v-if="canAnswerAskUser(message, index)" class="choice-submit-row">
+                  <div v-if="canAnswerAskUser(message)" class="choice-submit-row">
                     <el-button
                       size="small"
                       type="primary"
@@ -1249,10 +1332,419 @@ const collapseAssistantCompletionPairs = messages => {
   return collapsed
 }
 
+const COLLAPSIBLE_READ_TOOL_NAMES = new Set(['read_file', 'list_dir', 'web_fetch'])
+const COLLAPSIBLE_SEARCH_TOOL_NAMES = new Set(['grep', 'glob', 'web_search'])
+const COLLAPSIBLE_COMMAND_TOOL_NAMES = new Set(['bash'])
+const COLLAPSIBLE_MUTATION_TOOL_NAMES = new Set(['edit_file', 'write_file'])
+const NON_COLLAPSIBLE_TOOL_NAMES = new Set(['ask_user', 'submit_plan'])
+const TODO_TOOL_NAMES = new Set(['todo_create', 'todo_list', 'todo_update', 'todo_get'])
+const TODO_STATUS_LABELS = {
+  completed: 'workflow.toolGroups.todoStatuses.completed',
+  in_progress: 'workflow.toolGroups.todoStatuses.inProgress',
+  pending: 'workflow.toolGroups.todoStatuses.pending',
+  failed: 'workflow.toolGroups.todoStatuses.failed',
+  deleted: 'workflow.toolGroups.todoStatuses.deleted',
+  data_missing: 'workflow.toolGroups.todoStatuses.dataMissing'
+}
+
+const isCollapsedToolGroupMessage = message => message?.metadata?.message_kind === 'tool_group'
+
+const getCollapsedToolGroupExpandId = (messages, index, kind) => {
+  const first = messages[0]
+  const last = messages[messages.length - 1]
+  const firstId = first?.displayId || first?.id || `tool_group_${index}`
+  const lastId = last?.displayId || last?.id || firstId
+  return `${firstId}:${kind}:${lastId}:${messages.length}`
+}
+
+const truncateToolGroupText = (value, maxLength = 48) => {
+  const text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!text) return ''
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text
+}
+
+const normalizeToolPathLabel = value => {
+  const normalized = String(value || '')
+    .replace(/\\/g, '/')
+    .trim()
+  if (!normalized) return ''
+  return normalized.split('/').filter(Boolean).pop() || normalized
+}
+
+const getReadOnlyToolCategory = toolName => {
+  if (COLLAPSIBLE_READ_TOOL_NAMES.has(toolName)) return 'read'
+  if (COLLAPSIBLE_SEARCH_TOOL_NAMES.has(toolName)) return 'search'
+  return null
+}
+
+const getReadOnlyToolPreviewLabel = message => {
+  const toolName = getMessageToolName(message)
+  const args = getToolCallArguments(message) || {}
+
+  if (toolName === 'read_file' || toolName === 'list_dir') {
+    return normalizeToolPathLabel(args.file_path || args.path || message?.toolDisplay?.target || '')
+  }
+
+  if (toolName === 'web_fetch') {
+    return truncateToolGroupText(args.url || message?.toolDisplay?.target || '')
+  }
+
+  if (toolName === 'grep') {
+    return truncateToolGroupText(args.pattern || message?.toolDisplay?.target || '')
+  }
+
+  if (toolName === 'glob') {
+    return truncateToolGroupText(args.pattern || message?.toolDisplay?.target || '')
+  }
+
+  if (toolName === 'web_search') {
+    const query = Array.isArray(args.query) ? args.query.join(', ') : args.query
+    return truncateToolGroupText(query || message?.toolDisplay?.target || '')
+  }
+
+  return truncateToolGroupText(message?.toolDisplay?.target || message?.toolDisplay?.summary || '')
+}
+
+const buildReadOnlyToolSummary = messages => {
+  const readItems = []
+  const searchItems = []
+  const seenReadItems = new Set()
+  const seenSearchItems = new Set()
+
+  messages.forEach(message => {
+    const label = getReadOnlyToolPreviewLabel(message)
+    if (!label) return
+
+    const category = getReadOnlyToolCategory(getMessageToolName(message))
+    if (category === 'read' && !seenReadItems.has(label)) {
+      seenReadItems.add(label)
+      readItems.push(label)
+    }
+    if (category === 'search' && !seenSearchItems.has(label)) {
+      seenSearchItems.add(label)
+      searchItems.push(label)
+    }
+  })
+
+  const summaryParts = []
+  if (readItems.length > 0) {
+    summaryParts.push(`${t('workflow.toolGroups.readVerb')} ${readItems.slice(0, 3).join(', ')}`)
+  }
+  if (searchItems.length > 0) {
+    summaryParts.push(
+      `${t('workflow.toolGroups.searchVerb')} ${searchItems.slice(0, 3).join(', ')}`
+    )
+  }
+
+  return summaryParts.join(' · ')
+}
+
+const isToolWaitingApproval = message => {
+  const executionStatus = String(message?.metadata?.execution_status || '').toLowerCase()
+  return isApprovalPending(message) || executionStatus === 'approval_submitted'
+}
+
+const isToolStillRunning = message => {
+  const executionStatus = String(message?.metadata?.execution_status || '').toLowerCase()
+  return executionStatus === 'running' || executionStatus === 'approval_submitted'
+}
+
+const isCollapsibleReadOnlyToolMessage = message => {
+  if (message?.role !== 'tool') return false
+  const toolName = getMessageToolName(message)
+  if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName) || TODO_TOOL_NAMES.has(toolName)) {
+    return false
+  }
+  if (isToolWaitingApproval(message) || isToolStillRunning(message)) return false
+  return getReadOnlyToolCategory(toolName) !== null
+}
+
+const isCollapsibleTodoToolMessage = message => {
+  if (message?.role !== 'tool') return false
+  const toolName = getMessageToolName(message)
+  if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName)) return false
+  if (isToolWaitingApproval(message) || isToolStillRunning(message)) return false
+  return TODO_TOOL_NAMES.has(toolName)
+}
+
+const isCollapsibleCommandToolMessage = message => {
+  if (message?.role !== 'tool') return false
+  const toolName = getMessageToolName(message)
+  if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName)) return false
+  if (isToolWaitingApproval(message) || isToolStillRunning(message)) return false
+  return COLLAPSIBLE_COMMAND_TOOL_NAMES.has(toolName)
+}
+
+const isCollapsibleMutationToolMessage = message => {
+  if (message?.role !== 'tool') return false
+  const toolName = getMessageToolName(message)
+  if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName)) return false
+  if (isToolWaitingApproval(message) || isToolStillRunning(message)) return false
+  return COLLAPSIBLE_MUTATION_TOOL_NAMES.has(toolName)
+}
+
+const getTodoStatusLabel = status => {
+  const normalized = String(status || '')
+    .trim()
+    .toLowerCase()
+  const key = TODO_STATUS_LABELS[normalized]
+  return key ? t(key) : normalized
+}
+
+const getTodoToolLabel = message => {
+  const args = getToolCallArguments(message) || {}
+  const target = String(message?.toolDisplay?.target || '').trim()
+  const subject = String(args.subject || '').trim()
+  const todoId = String(args.todo_id || '').trim()
+  return target || subject || (todoId ? `#${todoId}` : t('workflow.toolGroups.todoFallbackTarget'))
+}
+
+const getTodoToolStatusText = message => {
+  const toolName = getMessageToolName(message)
+  const args = getToolCallArguments(message) || {}
+
+  if (toolName === 'todo_update') {
+    return `${getTodoToolLabel(message)} -> ${getTodoStatusLabel(args.status)}`
+  }
+
+  if (toolName === 'todo_create') {
+    return `${getTodoToolLabel(message)} -> ${t('workflow.toolGroups.todoStatuses.created')}`
+  }
+
+  if (toolName === 'todo_list') {
+    return t('workflow.toolGroups.todoStatuses.listed')
+  }
+
+  if (toolName === 'todo_get') {
+    return `${getTodoToolLabel(message)} -> ${t('workflow.toolGroups.todoStatuses.viewed')}`
+  }
+
+  return (
+    message?.toolDisplay?.summary ||
+    message?.toolDisplay?.target ||
+    message?.toolDisplay?.action ||
+    ''
+  )
+}
+
+const getBashCommandPreview = message => {
+  const args = getToolCallArguments(message) || {}
+  const command =
+    args.command || message?.toolDisplay?.target || message?.toolDisplay?.summary || ''
+  return truncateToolGroupText(command, 60)
+}
+
+const getMutationToolPreviewData = message => {
+  const toolName = getMessageToolName(message)
+  const verb = toolName === 'write_file' ? t('workflow.toolGroups.writeVerb') : t('workflow.toolGroups.editVerb')
+  const path = normalizeToolPathLabel(getDiffFilePath(message) || message?.toolDisplay?.target || '')
+  return {
+    verb,
+    path
+  }
+}
+
+const buildMutationToolSummary = messages => {
+  const grouped = new Map()
+
+  messages.forEach(message => {
+    const { verb, path } = getMutationToolPreviewData(message)
+    const key = verb
+    if (!grouped.has(key)) grouped.set(key, new Map())
+
+    const pathMap = grouped.get(key)
+    const normalizedPath = path || ''
+    pathMap.set(normalizedPath, (pathMap.get(normalizedPath) || 0) + 1)
+  })
+
+  return Array.from(grouped.entries())
+    .map(([verb, pathMap]) => {
+      const parts = Array.from(pathMap.entries())
+        .slice(0, 3)
+        .map(([path, count]) => {
+          if (!path) return verb
+          return count > 1 ? `${path} (${count})` : path
+        })
+        .filter(Boolean)
+
+      return parts.length > 0 ? `${verb} ${parts.join(' ')}` : verb
+    })
+    .filter(Boolean)
+    .join(' · ')
+}
+
+const buildReadOnlyToolGroupMessage = (messages, index) => {
+  let readCount = 0
+  let searchCount = 0
+
+  messages.forEach(message => {
+    const category = getReadOnlyToolCategory(getMessageToolName(message))
+    if (category === 'read') readCount += 1
+    if (category === 'search') searchCount += 1
+  })
+
+  const summaryParts = []
+  if (readCount > 0) {
+    summaryParts.push(t('workflow.toolGroups.reads', { count: readCount }))
+  }
+  if (searchCount > 0) {
+    summaryParts.push(t('workflow.toolGroups.searches', { count: searchCount }))
+  }
+
+  return {
+    ...messages[0],
+    role: 'assistant',
+    displayId: getCollapsedToolGroupExpandId(messages, index, 'readonly_tools'),
+    metadata: {
+      ...(messages[0]?.metadata || {}),
+      message_kind: 'tool_group',
+      tool_group_kind: 'readonly_tools'
+    },
+    groupDisplay: {
+      icon: 'search',
+      action: t('workflow.toolGroups.explorationTitle'),
+      target: summaryParts.join(' · '),
+      summary: buildReadOnlyToolSummary(messages)
+    },
+    groupedTools: messages
+  }
+}
+
+const buildTodoToolGroupMessage = (messages, index) => ({
+  ...messages[0],
+  role: 'assistant',
+  displayId: getCollapsedToolGroupExpandId(messages, index, 'todo_tools'),
+  metadata: {
+    ...(messages[0]?.metadata || {}),
+    message_kind: 'tool_group',
+    tool_group_kind: 'todo_tools'
+  },
+  groupDisplay: {
+    icon: 'todo',
+    action: t('workflow.toolGroups.todoTitle'),
+    target: '',
+    summary: messages.map(getTodoToolStatusText).filter(Boolean).join('  ')
+  },
+  groupedTools: messages
+})
+
+const buildCommandToolGroupMessage = (messages, index) => ({
+  ...messages[0],
+  role: 'assistant',
+  displayId: getCollapsedToolGroupExpandId(messages, index, 'command_tools'),
+  metadata: {
+    ...(messages[0]?.metadata || {}),
+    message_kind: 'tool_group',
+    tool_group_kind: 'command_tools'
+  },
+  groupDisplay: {
+    icon: 'bash',
+    action: t('workflow.toolGroups.commandTitle'),
+    target: t('workflow.toolGroups.commands', { count: messages.length }),
+    summary: `${t('workflow.toolGroups.runVerb')} ${messages
+      .map(getBashCommandPreview)
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(', ')}`
+  },
+  groupedTools: messages
+})
+
+const buildMutationToolGroupMessage = (messages, index) => ({
+  ...messages[0],
+  role: 'assistant',
+  displayId: getCollapsedToolGroupExpandId(messages, index, 'mutation_tools'),
+  metadata: {
+    ...(messages[0]?.metadata || {}),
+    message_kind: 'tool_group',
+    tool_group_kind: 'mutation_tools'
+  },
+  groupDisplay: {
+    icon: 'edit',
+    action: t('workflow.toolGroups.mutationTitle'),
+    target: t('workflow.toolGroups.mutations', { count: messages.length }),
+    summary: buildMutationToolSummary(messages)
+  },
+  groupedTools: messages
+})
+
+const collapseToolMessageGroups = messages => {
+  const collapsed = []
+
+  for (let index = 0; index < messages.length; ) {
+    const current = messages[index]
+
+    if (isCollapsibleReadOnlyToolMessage(current)) {
+      const group = [current]
+      let nextIndex = index + 1
+
+      while (nextIndex < messages.length && isCollapsibleReadOnlyToolMessage(messages[nextIndex])) {
+        group.push(messages[nextIndex])
+        nextIndex += 1
+      }
+
+      collapsed.push(group.length > 1 ? buildReadOnlyToolGroupMessage(group, index) : current)
+      index = nextIndex
+      continue
+    }
+
+    if (isCollapsibleTodoToolMessage(current)) {
+      const group = [current]
+      let nextIndex = index + 1
+
+      while (nextIndex < messages.length && isCollapsibleTodoToolMessage(messages[nextIndex])) {
+        group.push(messages[nextIndex])
+        nextIndex += 1
+      }
+
+      collapsed.push(group.length > 1 ? buildTodoToolGroupMessage(group, index) : current)
+      index = nextIndex
+      continue
+    }
+
+    if (isCollapsibleCommandToolMessage(current)) {
+      const group = [current]
+      let nextIndex = index + 1
+
+      while (nextIndex < messages.length && isCollapsibleCommandToolMessage(messages[nextIndex])) {
+        group.push(messages[nextIndex])
+        nextIndex += 1
+      }
+
+      collapsed.push(group.length > 1 ? buildCommandToolGroupMessage(group, index) : current)
+      index = nextIndex
+      continue
+    }
+
+    if (isCollapsibleMutationToolMessage(current)) {
+      const group = [current]
+      let nextIndex = index + 1
+
+      while (nextIndex < messages.length && isCollapsibleMutationToolMessage(messages[nextIndex])) {
+        group.push(messages[nextIndex])
+        nextIndex += 1
+      }
+
+      collapsed.push(group.length > 1 ? buildMutationToolGroupMessage(group, index) : current)
+      index = nextIndex
+      continue
+    }
+
+    collapsed.push(current)
+    index += 1
+  }
+
+  return collapsed
+}
+
 const visibleMessages = computed(() =>
-  collapseAssistantCompletionPairs(
-    collapseRepeatedFinishTaskErrors(
-      props.messages.filter(message => !isHiddenSystemObservation(message))
+  collapseToolMessageGroups(
+    collapseAssistantCompletionPairs(
+      collapseRepeatedFinishTaskErrors(
+        props.messages.filter(message => !isHiddenSystemObservation(message))
+      )
     )
   )
 )
@@ -1802,7 +2294,36 @@ const setAskUserCustomInput = (message, title, value) => {
   }))
 }
 
-const hasRealUserResponseAfter = fromIndex => {
+const findRawMessageIndex = message => {
+  if (!message) return -1
+
+  const toolCallId = String(message?.metadata?.tool_call_id || '').trim()
+  if (toolCallId) {
+    const byToolCallId = props.messages.findIndex(
+      item => String(item?.metadata?.tool_call_id || '').trim() === toolCallId
+    )
+    if (byToolCallId !== -1) return byToolCallId
+  }
+
+  const displayId = String(message?.displayId || '').trim()
+  if (displayId) {
+    const byDisplayId = props.messages.findIndex(item => String(item?.displayId || '').trim() === displayId)
+    if (byDisplayId !== -1) return byDisplayId
+  }
+
+  const id = String(message?.id || '').trim()
+  if (id) {
+    const byId = props.messages.findIndex(item => String(item?.id || '').trim() === id)
+    if (byId !== -1) return byId
+  }
+
+  return props.messages.findIndex(item => item === message)
+}
+
+const hasRealUserResponseAfter = message => {
+  const fromIndex = findRawMessageIndex(message)
+  if (fromIndex === -1) return false
+
   for (let i = fromIndex + 1; i < props.messages.length; i++) {
     const msg = props.messages[i]
     if (msg?.role !== 'user') continue
@@ -1814,10 +2335,9 @@ const hasRealUserResponseAfter = fromIndex => {
   return false
 }
 
-const canAnswerAskUser = (message, index) => {
-  if (props.isRunning) return false
+const canAnswerAskUser = message => {
   if (!getChoiceGroups(message).length) return false
-  return !hasRealUserResponseAfter(index)
+  return !hasRealUserResponseAfter(message)
 }
 
 const buildAskUserResponse = message => {
@@ -2419,5 +2939,21 @@ defineExpose({
   margin-bottom: 0;
   padding-left: 0;
   border-left: none;
+}
+
+.collapsed-tool-group__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-sm);
+}
+
+.collapsed-tool-group__item {
+  margin-bottom: 0;
+}
+
+.choice-options--readonly {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-2xs);
 }
 </style>

@@ -937,6 +937,33 @@
       "thoughts": "Размышлений: {count}",
       "title": "Исследование кода"
     },
+    "toolGroups": {
+      "commandTitle": "Выполнение команд",
+      "commands": "{count} команд",
+      "editVerb": "Edit",
+      "explorationTitle": "Исследование",
+      "mutationTitle": "Изменения файлов",
+      "mutations": "{count} изменений",
+      "readVerb": "Read",
+      "reads": "{count} чтений файлов",
+      "runVerb": "Run",
+      "searches": "{count} поисков",
+      "searchVerb": "Search",
+      "todoFallbackTarget": "Задача",
+      "todoTitle": "Обновление статуса задачи",
+      "todoStatuses": {
+        "completed": "Завершено",
+        "created": "Создано",
+        "dataMissing": "Нет данных",
+        "deleted": "Удалено",
+        "failed": "Ошибка",
+        "inProgress": "В процессе",
+        "listed": "Список показан",
+        "pending": "Ожидает",
+        "viewed": "Просмотрено"
+      },
+      "writeVerb": "Write"
+    },
     "finalAuditTooltip": "Режим финального аудита: ИИ автоматически выполняет проверку качества перед завершением задачи",
     "finalReviewPending": "Идет финальная проверка",
     "finishTask": "Завершить задачу",

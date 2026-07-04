@@ -937,6 +937,33 @@
       "thoughts": "{count} reflexões",
       "title": "Exploração de código"
     },
+    "toolGroups": {
+      "commandTitle": "Execução de comandos",
+      "commands": "{count} comandos",
+      "editVerb": "Edit",
+      "explorationTitle": "Exploração",
+      "mutationTitle": "Alterações de arquivo",
+      "mutations": "{count} alterações",
+      "readVerb": "Read",
+      "reads": "{count} leituras de arquivo",
+      "runVerb": "Run",
+      "searches": "{count} buscas",
+      "searchVerb": "Search",
+      "todoFallbackTarget": "Tarefa",
+      "todoTitle": "Atualizar status da tarefa",
+      "todoStatuses": {
+        "completed": "Concluída",
+        "created": "Criada",
+        "dataMissing": "Dados ausentes",
+        "deleted": "Excluída",
+        "failed": "Falhou",
+        "inProgress": "Em andamento",
+        "listed": "Listada",
+        "pending": "Pendente",
+        "viewed": "Visualizada"
+      },
+      "writeVerb": "Write"
+    },
     "finalAuditTooltip": "Modo de auditoria final: A IA realiza automaticamente uma revisão de qualidade antes de concluir a tarefa",
     "finalReviewPending": "Revisão final em andamento",
     "finishTask": "Concluir tarefa",

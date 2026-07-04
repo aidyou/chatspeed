@@ -1761,8 +1761,11 @@ export function useWorkflowCore({
                 } else if (workflows.value.length > 0) {
                     await selectWorkflow(workflows.value[0].id)
                 }
+
+                showMessage(t('common.deleteSuccess'), 'success')
             } catch (error) {
                 console.error('Failed to delete workflow:', error)
+                showMessage(t('common.operationFailed', { error: String(error) }), 'error')
             }
         })
     }

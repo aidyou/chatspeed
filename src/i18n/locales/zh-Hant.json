@@ -937,6 +937,33 @@
       "thoughts": "思考 {count} 次",
       "title": "程式碼探索"
     },
+    "toolGroups": {
+      "commandTitle": "命令執行",
+      "commands": "{count} 個命令",
+      "editVerb": "Edit",
+      "explorationTitle": "探索",
+      "mutationTitle": "檔案修改",
+      "mutations": "{count} 處修改",
+      "readVerb": "Read",
+      "reads": "{count} 次檔案讀取",
+      "runVerb": "Run",
+      "searches": "{count} 次搜尋",
+      "searchVerb": "Search",
+      "todoFallbackTarget": "任務",
+      "todoTitle": "更新任務狀態",
+      "todoStatuses": {
+        "completed": "已完成",
+        "created": "已建立",
+        "dataMissing": "資料缺失",
+        "deleted": "已刪除",
+        "failed": "失敗",
+        "inProgress": "進行中",
+        "listed": "已查看列表",
+        "pending": "待處理",
+        "viewed": "已查看"
+      },
+      "writeVerb": "Write"
+    },
     "finalAuditTooltip": "最終審核模式：AI 在任務完成前自動執行品質審查",
     "finalReviewPending": "終審中",
     "finishTask": "完成任務",

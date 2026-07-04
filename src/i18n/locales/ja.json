@@ -937,6 +937,33 @@
       "thoughts": "思考 {count} 回",
       "title": "コード探索"
     },
+    "toolGroups": {
+      "commandTitle": "コマンド実行",
+      "commands": "{count} 個のコマンド",
+      "editVerb": "Edit",
+      "explorationTitle": "探索",
+      "mutationTitle": "ファイル変更",
+      "mutations": "{count} 件の変更",
+      "readVerb": "Read",
+      "reads": "{count} 件のファイル読取",
+      "runVerb": "Run",
+      "searches": "{count} 件の検索",
+      "searchVerb": "Search",
+      "todoFallbackTarget": "タスク",
+      "todoTitle": "タスク状態を更新",
+      "todoStatuses": {
+        "completed": "完了",
+        "created": "作成済み",
+        "dataMissing": "データ不足",
+        "deleted": "削除済み",
+        "failed": "失敗",
+        "inProgress": "進行中",
+        "listed": "一覧表示済み",
+        "pending": "保留中",
+        "viewed": "表示済み"
+      },
+      "writeVerb": "Write"
+    },
     "finalAuditTooltip": "最終監査モード：タスク完了前に AI が自動的に品質レビューを実行します",
     "finalReviewPending": "最終レビュー中",
     "finishTask": "タスクを完了",

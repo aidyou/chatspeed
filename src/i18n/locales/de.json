@@ -937,6 +937,33 @@
       "thoughts": "{count} Denkzyklen",
       "title": "Code-Erkundung"
     },
+    "toolGroups": {
+      "commandTitle": "Befehlsausführung",
+      "commands": "{count} Befehle",
+      "editVerb": "Edit",
+      "explorationTitle": "Erkundung",
+      "mutationTitle": "Dateiänderungen",
+      "mutations": "{count} Änderungen",
+      "readVerb": "Read",
+      "reads": "{count} Datei-Lesevorgänge",
+      "runVerb": "Run",
+      "searches": "{count} Suchen",
+      "searchVerb": "Search",
+      "todoFallbackTarget": "Aufgabe",
+      "todoTitle": "Aufgabenstatus aktualisieren",
+      "todoStatuses": {
+        "completed": "Abgeschlossen",
+        "created": "Erstellt",
+        "dataMissing": "Daten fehlen",
+        "deleted": "Gelöscht",
+        "failed": "Fehlgeschlagen",
+        "inProgress": "In Bearbeitung",
+        "listed": "Aufgelistet",
+        "pending": "Ausstehend",
+        "viewed": "Angezeigt"
+      },
+      "writeVerb": "Write"
+    },
     "finalAuditTooltip": "Abschlussprüfungsmodus: Qualitätsprüfung durch KI vor Aufgabenabschluss",
     "finalReviewPending": "Abschlussprüfung läuft",
     "finishTask": "Aufgabe abschließen",
