@@ -23,10 +23,11 @@
   - Fixed an issue where checking auto-approved tools in the Workflow UI could update the stored config without updating the active workflow runtime, causing approval dialogs to continue appearing unexpectedly.
   - Added a dedicated runtime update path for auto-approved tool lists so the executor refreshes its in-memory approval set immediately after config changes.
   - Tightened the update path to keep frontend camelCase input (`autoApprove`) and backend snake_case runtime signals (`auto_approve`) clearly separated according to the workflow runtime constitution.
-- **Workflow ask_user interaction and runtime input syncing**:
+- **Workflow ask_user interaction and waiting-state recovery**:
   - Fixed an issue where ask_user choices could become non-interactive after rendering in the message list, preventing option selection or custom input.
   - ask_user reply controls now remain usable while the workflow is waiting for user input, and only lock during actual submission.
-  - Stabilized workflow runtime signal orchestration so queued user input and stop signals are preserved correctly across retry/backoff boundaries.
+  - The active workflow now surfaces its own awaiting-user state in the approval queue and message list consistently, so pending ask_user prompts remain visible after session switches or state refreshes.
+  - Background ask_user reminders now deduplicate notification sounds, avoiding repeated alert playback when the same waiting state is re-synced.
 
 ---
 

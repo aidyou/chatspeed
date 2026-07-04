@@ -182,6 +182,7 @@
             :pending-count="currentInlinePendingApprovalIds.length"
             :pending-approval-ids="currentInlinePendingApprovalIds"
             :current-workflow-id="currentWorkflowId"
+            :wait-reason="waitReason"
             :is-approval-submitting="isApprovalSubmitting"
             @toggle-expand="toggleMessageExpand"
             @toggle-reasoning="toggleReasoningExpand"
@@ -1381,7 +1382,24 @@ const globalPendingApprovalList = computed(() => {
       kind: 'approval'
     }))
     .filter(entry => entry?.kind === 'approval')
-  const merged = [...currentEntries, ...backgroundEntries]
+
+  const currentStatus = String(currentWorkflow.value?.status || '').toLowerCase()
+  const currentWaitReason = String(waitReason.value || currentWorkflow.value?.waitReason || '').toLowerCase()
+  const currentAskUserEntry =
+    activeSessionId &&
+    (currentStatus === 'awaiting_user' || currentWaitReason === 'user_input')
+      ? [{
+          key: `${activeSessionId}:awaiting_user`,
+          id: 'awaiting_user',
+          sessionId: activeSessionId,
+          kind: 'ask_user',
+          workflowTitle: currentWorkflow.value?.title || currentWorkflow.value?.userQuery || '',
+          action: t('workflow.awaitingUser'),
+          updatedAt: Date.now()
+        }]
+      : []
+
+  const merged = [...currentEntries, ...currentAskUserEntry, ...backgroundEntries]
   const deduped = []
   const seen = new Set()
 

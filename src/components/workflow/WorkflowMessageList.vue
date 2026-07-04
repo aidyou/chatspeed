@@ -856,6 +856,10 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  waitReason: {
+    type: String,
+    default: ''
+  },
   isApprovalSubmitting: {
     type: Function,
     default: () => false
@@ -2294,50 +2298,55 @@ const setAskUserCustomInput = (message, title, value) => {
   }))
 }
 
-const findRawMessageIndex = message => {
-  if (!message) return -1
+const getMessageIdentity = message => ({
+  toolCallId: String(message?.metadata?.tool_call_id || '').trim(),
+  displayId: String(message?.displayId || '').trim(),
+  id: String(message?.id || '').trim()
+})
 
-  const toolCallId = String(message?.metadata?.tool_call_id || '').trim()
-  if (toolCallId) {
-    const byToolCallId = props.messages.findIndex(
-      item => String(item?.metadata?.tool_call_id || '').trim() === toolCallId
-    )
-    if (byToolCallId !== -1) return byToolCallId
+const isSameMessageIdentity = (left, right) => {
+  if (!left || !right) return false
+
+  const leftIdentity = getMessageIdentity(left)
+  const rightIdentity = getMessageIdentity(right)
+
+  if (leftIdentity.toolCallId && rightIdentity.toolCallId) {
+    return leftIdentity.toolCallId === rightIdentity.toolCallId
+  }
+  if (leftIdentity.displayId && rightIdentity.displayId) {
+    return leftIdentity.displayId === rightIdentity.displayId
+  }
+  if (leftIdentity.id && rightIdentity.id) {
+    return leftIdentity.id === rightIdentity.id
   }
 
-  const displayId = String(message?.displayId || '').trim()
-  if (displayId) {
-    const byDisplayId = props.messages.findIndex(item => String(item?.displayId || '').trim() === displayId)
-    if (byDisplayId !== -1) return byDisplayId
-  }
-
-  const id = String(message?.id || '').trim()
-  if (id) {
-    const byId = props.messages.findIndex(item => String(item?.id || '').trim() === id)
-    if (byId !== -1) return byId
-  }
-
-  return props.messages.findIndex(item => item === message)
+  return left === right
 }
 
-const hasRealUserResponseAfter = message => {
-  const fromIndex = findRawMessageIndex(message)
-  if (fromIndex === -1) return false
-
-  for (let i = fromIndex + 1; i < props.messages.length; i++) {
-    const msg = props.messages[i]
-    if (msg?.role !== 'user') continue
-    if (msg?.metadata?.queue_status === 'queued') continue
-    const content = props.removeSystemReminder(msg.message || '').trim()
-    if (!content) continue
-    return true
-  }
-  return false
+const isAskUserToolMessage = message => {
+  return message?.role === 'tool' && getMessageToolName(message) === 'ask_user'
 }
+
+const latestPendingAskUserMessage = computed(() => {
+  for (let i = props.messages.length - 1; i >= 0; i -= 1) {
+    const message = props.messages[i]
+    if (!isAskUserToolMessage(message)) continue
+    if (!getChoiceGroups(message).length) continue
+    return message
+  }
+  return null
+})
+
+const isAskUserWaitActive = computed(() => props.waitReason === 'user_input')
 
 const canAnswerAskUser = message => {
   if (!getChoiceGroups(message).length) return false
-  return !hasRealUserResponseAfter(message)
+  if (!isAskUserWaitActive.value) return false
+
+  const latestMessage = latestPendingAskUserMessage.value
+  if (!latestMessage) return false
+
+  return isSameMessageIdentity(message, latestMessage)
 }
 
 const buildAskUserResponse = message => {

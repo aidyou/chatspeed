@@ -657,11 +657,18 @@ export function useWorkflowCore({
     }
 
     const showBackgroundAskUserNotification = (sessionId) => {
+        const reminderKey = `${sessionId}:awaiting_user`
+        const hadReminder = !!pendingApprovalEntries.value[reminderKey]
+
         upsertPendingApprovalEntry(sessionId, {
             id: 'awaiting_user',
             kind: 'ask_user',
             action: t('workflow.awaitingUser')
         })
+
+        if (!hadReminder) {
+            playApprovalNotificationSound()
+        }
     }
 
     const syncBackgroundStateListeners = async () => {
@@ -823,7 +830,6 @@ export function useWorkflowCore({
                     }
 
                     const prevState = workflowStore.currentWorkflow?.status
-                    const prevWaitReason = workflowStore.waitReason
                     workflowStore.updateWorkflowStatus(sessionId, payload.state, payload.wait_reason || null)
 
                     const isWaiting = WAITING_STATUSES.includes(payload.state)
