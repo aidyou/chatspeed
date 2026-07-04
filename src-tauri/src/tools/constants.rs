@@ -33,6 +33,7 @@ pub const TOOL_ASK_USER: &str = "ask_user";
 pub const TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY: &str = "complete_workflow_with_summary";
 pub const TOOL_SUBMIT_RESULT: &str = "submit_result";
 pub const TOOL_SUBMIT_PLAN: &str = "submit_plan";
+pub const TOOL_MCP_TOOL_LOAD: &str = "mcp_tool_load";
 
 pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";
 

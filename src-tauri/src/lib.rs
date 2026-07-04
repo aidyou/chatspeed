@@ -764,11 +764,11 @@ pub async fn run() -> crate::error::Result<()> {
             environment::init_environment();
 
             tauri::async_runtime::spawn(async move {
-                // 1. Register tools (Can be async)
+                // 1. Register native tools first (fast, local-only)
                 let tm = chat_state_clone.tool_manager.clone();
                 let _ = tm.register_available_tools(handle.clone()).await;
 
-                // 2. Start the HTTP server
+                // 2. Start the HTTP server without waiting for MCP startup
                 // The HTTP server includes:
                 // - Static file serving
                 // - CCProxy (OpenAI-compatible chat completion proxy)
@@ -783,7 +783,14 @@ pub async fn run() -> crate::error::Result<()> {
                     }
                 });
 
-                // 3. Update check (2 minutes later, non-critical)
+                // 3. Start configured MCP servers in the background
+                let tm_for_mcp = chat_state_clone.tool_manager.clone();
+                let main_store_for_mcp = main_store_clone.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = tm_for_mcp.register_available_mcp_tools(main_store_for_mcp).await;
+                });
+
+                // 4. Update check (2 minutes later, non-critical)
                 let auto_update = if let Ok(c) = main_store_clone.read() {
                     c.get_config(CFG_AUTO_UPDATE, true)
                 } else {

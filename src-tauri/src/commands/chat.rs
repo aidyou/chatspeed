@@ -429,7 +429,11 @@ pub async fn chat_completion(
     // Register MCP loader tool if MCP is enabled
     // Only register if it doesn't already exist (to avoid duplicate registration error)
     if mcp_enabled.unwrap_or(false) {
-        if !chat_state.tool_manager.has_tool("mcp_tool_load").await {
+        if !chat_state
+            .tool_manager
+            .has_tool(crate::tools::TOOL_MCP_TOOL_LOAD)
+            .await
+        {
             chat_state
                 .tool_manager
                 .register_tool(Arc::new(crate::tools::McpToolLoad {
@@ -453,7 +457,8 @@ pub async fn chat_completion(
         // But keep the mcp_tool_load tool itself
         if mcp_enabled.unwrap_or(false) {
             available_tools.retain(|tool| {
-                !tool.name.contains(MCP_TOOL_NAME_SPLIT) || tool.name == "mcp_tool_load"
+                !tool.name.contains(MCP_TOOL_NAME_SPLIT)
+                    || tool.name == crate::tools::TOOL_MCP_TOOL_LOAD
             });
         }
         // When MCP is disabled, remove all MCP tools

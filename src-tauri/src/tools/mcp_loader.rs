@@ -25,7 +25,7 @@ pub struct McpToolLoad {
 #[async_trait]
 impl ToolDefinition for McpToolLoad {
     fn name(&self) -> &str {
-        "mcp_tool_load"
+        crate::tools::TOOL_MCP_TOOL_LOAD
     }
 
     fn description(&self) -> &str {

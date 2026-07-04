@@ -1049,6 +1049,11 @@ export function useWorkflowCore({
         const previousInlineApprovals = Array.isArray(workflowStore.currentInlinePendingApprovals)
             ? [...workflowStore.currentInlinePendingApprovals]
             : []
+        const previousWorkflow = workflowStore.currentWorkflow
+        const previousStatus = String(previousWorkflow?.status || '').toLowerCase()
+        const previousWaitReason = String(
+            workflowStore.waitReason || previousWorkflow?.waitReason || previousWorkflow?.wait_reason || ''
+        ).toLowerCase()
 
         if (previousWorkflowId && previousWorkflowId !== id) {
             clearPendingApprovalEntries(previousWorkflowId, 'approval')
@@ -1059,6 +1064,15 @@ export function useWorkflowCore({
                     kind: 'approval',
                     action: entry.action || t('workflow.awaitingApproval')
                 })
+            }
+
+            if (
+                previousStatus === WORKFLOW_STATUSES.AWAITING_USER ||
+                previousWaitReason === WORKFLOW_WAIT_REASONS.USER_INPUT
+            ) {
+                showBackgroundAskUserNotification(previousWorkflowId)
+            } else {
+                clearPendingApprovalEntries(previousWorkflowId, 'ask_user')
             }
         }
 

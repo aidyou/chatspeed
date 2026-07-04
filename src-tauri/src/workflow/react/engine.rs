@@ -9,12 +9,13 @@ use tokio::time::{sleep, Duration};
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
+use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, MemoryCandidateUpsert, ModelConfig, WorkflowMessage};
 use crate::tools::{
     helper::generate_shell_approval_patterns as shared_generate_shell_approval_patterns,
     ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
-    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
+    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_MCP_TOOL_LOAD, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
     TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
 };
 use crate::workflow::react::policy::ApprovalLevel;
@@ -1268,24 +1269,7 @@ impl WorkflowExecutor {
             }
         }
         self.sync_runtime_skills_from_agent_config();
-
-        // Get MCP tool summaries for workflow
-        self.llm_processor.mcp_tool_summaries =
-            if self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
-                self.global_tool_manager
-                    .get_tool_calling_spec(Some(ToolScope::Workflow), None)
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|t| t.name.contains(MCP_TOOL_NAME_SPLIT))
-                    .map(|mut t| {
-                        t.input_schema = serde_json::json!({});
-                        t
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+        self.refresh_workflow_mcp_runtime_capabilities(false).await?;
 
         self.register_foundation_tools().await?;
 
@@ -1535,7 +1519,7 @@ impl WorkflowExecutor {
             let config_allowed = configured_tools.as_ref().map_or(true, |tools| {
                 is_core_workflow_builtin_tool(name)
                     || tools.contains(name)
-                    || (name == "mcp_tool_load"
+                    || (name == TOOL_MCP_TOOL_LOAD
                         && tools.iter().any(|tool| tool.contains(MCP_TOOL_NAME_SPLIT)))
             });
 
@@ -1770,7 +1754,7 @@ impl WorkflowExecutor {
                 .map(|specs| specs.iter().any(|s| s.name.contains(MCP_TOOL_NAME_SPLIT)))
                 .unwrap_or(false);
 
-            if has_mcp_tools && is_allowed("mcp_tool_load") {
+            if has_mcp_tools && is_allowed(TOOL_MCP_TOOL_LOAD) {
                 tm.register_tool(Arc::new(McpToolLoad {
                     tool_manager: self.global_tool_manager.clone(),
                 }))
@@ -3455,6 +3439,8 @@ impl WorkflowExecutor {
                         .or_insert_with(|| crate::create_chat!(self.context.main_store))
                         .clone()
                 };
+
+                self.refresh_workflow_mcp_runtime_capabilities(true).await?;
 
                 let available_tools = self
                     .tool_manager
@@ -5940,6 +5926,63 @@ impl WorkflowExecutor {
     ) -> Result<(), WorkflowEngineError> {
         self.tool_manager.clear(false).await;
         self.register_foundation_tools().await
+    }
+
+    async fn refresh_workflow_mcp_runtime_capabilities(
+        &mut self,
+        rebuild_if_loader_missing: bool,
+    ) -> Result<(), WorkflowEngineError> {
+        if !self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
+            self.llm_processor.mcp_tool_summaries.clear();
+            return Ok(());
+        }
+
+        let refreshed_summaries: Vec<MCPToolDeclaration> = self
+            .global_tool_manager
+            .get_tool_calling_spec(Some(ToolScope::Workflow), None)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|tool| tool.name.contains(MCP_TOOL_NAME_SPLIT))
+            .map(|mut tool| {
+                tool.input_schema = serde_json::json!({});
+                tool
+            })
+            .collect();
+
+        let had_loader = self.tool_manager.has_tool(TOOL_MCP_TOOL_LOAD).await;
+        let had_summary_names: Vec<String> = self
+            .llm_processor
+            .mcp_tool_summaries
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect();
+        let refreshed_summary_names: Vec<String> = refreshed_summaries
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect();
+        let summaries_changed = had_summary_names != refreshed_summary_names;
+        let has_global_mcp_tools = !refreshed_summaries.is_empty();
+
+        if summaries_changed {
+            log::info!(
+                "WorkflowExecutor {}: Refreshing MCP tool summaries ({} -> {})",
+                self.session_id,
+                had_summary_names.len(),
+                refreshed_summary_names.len()
+            );
+        }
+        self.llm_processor.mcp_tool_summaries = refreshed_summaries;
+
+        if rebuild_if_loader_missing && has_global_mcp_tools && !had_loader {
+            log::info!(
+                "WorkflowExecutor {}: MCP tools became available after session start; rebuilding workflow foundation tools to register mcp_tool_load",
+                self.session_id
+            );
+            self.rebuild_foundation_tools_for_runtime_update().await?;
+        }
+
+        Ok(())
     }
 
     async fn apply_runtime_phase_update(

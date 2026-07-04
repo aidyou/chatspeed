@@ -569,11 +569,13 @@ defineEmits([
 ])
 
 import { useWorkflowStore } from '@/stores/workflow'
+import { useAgentStore } from '@/stores/agent'
 import { invokeWrapper } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
 
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
+const agentStore = useAgentStore()
 const defaultShellPolicies = ref([])
 const isImportingShellPolicies = ref(false)
 const newShellCommandPattern = ref('')
@@ -596,17 +598,21 @@ const filteredAllowedShellCommands = computed(() => {
   })
 })
 const availableApprovalTools = computed(() => {
-  const tools = Array.isArray(props.selectedAgent?.availableTools)
+  const allowedToolIds = Array.isArray(props.selectedAgent?.availableTools)
     ? props.selectedAgent.availableTools
     : Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)
       ? props.currentWorkflow.agentConfig.availableTools
       : []
 
-  return tools
-    .filter(toolId => toolId && toolId !== 'bash')
-    .map(toolId => ({
-      id: toolId,
-      name: toolId
+  const allowedSet = new Set(
+    allowedToolIds.filter(toolId => toolId && toolId !== 'bash' && toolId !== 'mcp_tool_load')
+  )
+
+  return agentStore.availableTools
+    .filter(tool => allowedSet.has(tool.id))
+    .map(tool => ({
+      id: tool.id,
+      name: tool.name || tool.id
     }))
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })

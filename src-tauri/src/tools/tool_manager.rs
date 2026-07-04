@@ -278,16 +278,12 @@ impl ToolManager {
         // self.register_tool(Arc::new(crate::tools::FinishTask))
         //     .await?;
 
-        // =================================================
-        // MCP Tools
-        // =================================================
-        self.register_available_mcp_tools(main_store).await?;
         Ok(())
     }
 
     pub async fn register_available_mcp_tools(
         self: Arc<Self>, // Changed to take Arc<Self>
-        main_store: &Arc<std::sync::RwLock<MainStore>>,
+        main_store: Arc<std::sync::RwLock<MainStore>>,
     ) -> Result<(), ToolError> {
         // Collect MCP configurations first to release the lock on main_store
         let mcp_configs_to_process: Vec<_> = {
@@ -304,18 +300,17 @@ impl ToolManager {
         };
 
         for mcp_server_config in mcp_configs_to_process {
-            // Clone self (Arc<FunctionManager>) for the call
-            if let Err(e) = self
-                .clone()
-                .register_mcp_server(mcp_server_config.clone())
-                .await
-            {
-                log::error!(
-                    "Failed to register MCP server: {:?}. Error: {}",
-                    mcp_server_config,
-                    e
-                );
-            }
+            let tool_manager = self.clone();
+            tokio::spawn(async move {
+                let server_name = mcp_server_config.name.clone();
+                if let Err(e) = tool_manager.register_mcp_server(mcp_server_config).await {
+                    log::error!(
+                        "Failed to register MCP server '{}' during startup: {}",
+                        server_name,
+                        e
+                    );
+                }
+            });
         }
         Ok(())
     }

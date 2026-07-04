@@ -1373,7 +1373,7 @@ const currentInlinePendingApprovalIds = computed(() => workflowStore.currentInli
 const globalPendingApprovalList = computed(() => {
   const activeSessionId = currentWorkflowId.value
   const backgroundEntries = pendingApprovalList.value.filter(
-    entry => entry.sessionId !== activeSessionId && entry?.kind === 'approval'
+    entry => entry.sessionId !== activeSessionId && ['approval', 'ask_user'].includes(entry?.kind)
   )
   const currentEntries = workflowStore.currentInlinePendingApprovals
     .map(entry => ({

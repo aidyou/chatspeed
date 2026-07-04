@@ -889,6 +889,11 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             return false;
         }
 
+        // MCP tool schema loading is a built-in discovery step and should not require approval.
+        if name == crate::tools::TOOL_MCP_TOOL_LOAD {
+            return false;
+        }
+
         // If already in auto_approve list, don't intercept
         if self.auto_approve.contains(name) {
             return false;

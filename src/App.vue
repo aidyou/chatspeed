@@ -150,11 +150,19 @@ onMounted(async () => {
     // Global event handler
     if (eventType === 'mcp_status_changed') {
       mcpStore.updateServerStatus(event.payload.name, event.payload.status)
+      if (event.payload.status === 'running') {
+        agentStore.fetchAvailableTools().catch(error => {
+          console.error('Failed to refresh available tools after MCP became ready:', error)
+        })
+      }
     } else if (eventType === 'mcp') {
       // Pass the metadata to the store's handler
       if (event.payload?.metadata) {
         mcpStore.handleSyncStateUpdate(event.payload.metadata)
       }
+      agentStore.fetchAvailableTools().catch(error => {
+        console.error('Failed to refresh available tools after MCP config update:', error)
+      })
     }
 
     // Ignore events from current windows
