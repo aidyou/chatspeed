@@ -467,6 +467,13 @@ export function useWorkflowMessages(options = {}) {
     const rejectedUserMessageIds = new Set()
     const ledgerStateById = new Map((workflowStore.toolList || []).map(tool => [tool.toolCallId, tool]))
     const subAgentProgressById = workflowStore.subAgentProgress || new Map()
+    const backendPendingToolIds = new Set(
+      (workflowStore.currentWorkflow?.executionContext?.pendingTools ||
+        workflowStore.currentWorkflow?.executionContext?.pending_tools ||
+        [])
+        .map(tool => String(tool?.toolCallId || tool?.tool_call_id || '').trim())
+        .filter(Boolean)
+    )
 
     const tryParseJsonValue = value => {
       if (value === null || value === undefined) return null
@@ -1010,8 +1017,8 @@ export function useWorkflowMessages(options = {}) {
               if (call.toolName === 'sub_agent_run') return false
               if (toolMessageIds.has(call.id)) return false
               const state = toolStates.get(call.id)
-              if (!state) return true
-              return state.isRejected
+              if (state?.isRejected) return true
+              return backendPendingToolIds.has(String(call.id || '').trim())
             })
         }
 

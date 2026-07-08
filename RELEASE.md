@@ -37,6 +37,9 @@
 - **Workflow grouped edit diff highlighting regression**:
   - Fixed an issue where consecutive edit tools collapsed into a grouped tool section could lose syntax-highlighted file preview rendering when expanded.
   - Grouped edit entries now reuse the same structured file diff preview as standalone edit tools, keeping highlight and diff presentation consistent.
+- **Workflow postponed tool approval display mismatch**:
+  - Fixed an issue where later tool calls in the same turn could still appear as pending approval in the UI even though an earlier approval-blocked tool had already caused them to be postponed by the backend.
+  - Pending approval rendering now reconciles strictly against backend-authoritative `executionContext.pending_tools`, so postponed tool calls no longer linger as false approval items after turn-level blocking.
 
 ---
 

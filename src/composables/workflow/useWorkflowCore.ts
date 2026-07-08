@@ -649,6 +649,60 @@ export function useWorkflowCore({
         pendingApprovalEntries.value = nextEntries
     }
 
+    const reconcileApprovalEntriesFromExecutionContext = (sessionId, workflow) => {
+        if (!sessionId) return
+
+        const pendingTools = getExecutionContextPendingTools(workflow)
+        const pendingToolIds = new Set(
+            pendingTools
+                .map((tool) => String(tool?.toolCallId || tool?.tool_call_id || '').trim())
+                .filter(Boolean)
+        )
+
+        const nextEntries = { ...pendingApprovalEntries.value }
+        let changed = false
+
+        for (const key of Object.keys(nextEntries)) {
+            if (!key.startsWith(`${sessionId}:`)) continue
+            const entry = nextEntries[key]
+            if (entry?.kind === 'ask_user') continue
+            if (entry?.id === 'awaiting_approval') {
+                delete nextEntries[key]
+                changed = true
+                continue
+            }
+            if (!pendingToolIds.has(String(entry?.id || '').trim())) {
+                delete nextEntries[key]
+                changed = true
+            }
+        }
+
+        for (const pendingTool of pendingTools) {
+            const toolCallId = String(pendingTool?.toolCallId || pendingTool?.tool_call_id || '').trim()
+            if (!toolCallId || hasResolvedToolObservation(sessionId, toolCallId)) continue
+
+            const entryKey = `${sessionId}:${toolCallId}`
+            nextEntries[entryKey] = {
+                key: entryKey,
+                id: toolCallId,
+                sessionId,
+                kind: 'approval',
+                workflowTitle:
+                    workflow?.title || workflow?.userQuery || t('workflow.untitled'),
+                action:
+                    pendingTool?.toolName ||
+                    pendingTool?.tool_name ||
+                    t('workflow.awaitingApproval'),
+                updatedAt: Date.now()
+            }
+            changed = true
+        }
+
+        if (changed) {
+            pendingApprovalEntries.value = nextEntries
+        }
+    }
+
     const showBackgroundApprovalNotification = (sessionId, payload) => {
         if (!payload?.id) return
 
@@ -858,7 +912,9 @@ export function useWorkflowCore({
                     }
 
                     const isApprovalWaiting = payload.wait_reason === WORKFLOW_WAIT_REASONS.APPROVAL
-                    if (!isApprovalWaiting) {
+                    if (isApprovalWaiting) {
+                        reconcileApprovalEntriesFromExecutionContext(sessionId, workflowStore.currentWorkflow)
+                    } else {
                         clearPendingApprovalEntries(sessionId)
                         flushDeferredQueuedMessages().catch((error) => {
                             console.warn('Failed to flush deferred queue after state update:', error)
@@ -1130,6 +1186,8 @@ export function useWorkflowCore({
                         .filter(Boolean)
                 )
 
+                reconcileApprovalEntriesFromExecutionContext(id, workflowStore.currentWorkflow)
+
                 if (structuredPendingTools.length > 0) {
                     for (const pendingTool of structuredPendingTools) {
                         const toolCallId = pendingTool.toolCallId || pendingTool.tool_call_id || ''
@@ -1140,10 +1198,6 @@ export function useWorkflowCore({
                         if (!toolCallId) continue
                         if (hasResolvedToolObservation(id, toolCallId)) continue
 
-                        upsertPendingApprovalEntry(id, {
-                            id: toolCallId,
-                            action: toolName || t('workflow.awaitingApproval')
-                        })
                         workflowStore.addMessage({
                             sessionId: id,
                             role: 'tool',
