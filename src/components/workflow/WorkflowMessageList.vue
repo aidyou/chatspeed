@@ -134,12 +134,15 @@
                   <span class="expand-hint">(click to expand)</span>
                 </div>
                 <div v-if="isMessageExpanded(tool)" class="tool-detail">
-                  <MarkdownSimple
-                    v-if="
-                      shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'diff'
-                    "
-                    class="tool-diff-view"
-                    :content="getDiffMarkdown(removeSystemReminder(tool.message))" />
+                  <div
+                    v-if="shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'diff'"
+                    class="tool-diff-view">
+                    <FilePreviewDiff
+                      :file-path="getDiffFilePath(tool)"
+                      :old-content="getDiffOldContent(tool)"
+                      :new-content="getDiffNewContent(tool)"
+                      :context-data="getDiffContextData(tool)" />
+                  </div>
                   <div
                     v-else-if="
                       shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'choice'

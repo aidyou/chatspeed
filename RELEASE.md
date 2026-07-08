@@ -13,6 +13,12 @@
   - Switching model providers now automatically selects the provider's default model when available.
   - If a provider has no default model configured, the first available model is selected automatically.
   - Switching proxy groups now auto-selects the first available alias to reduce empty intermediate states.
+- **Model parameter input constraints relaxed**:
+  - Removed the frontend max-value caps from the `maxTokens` and `contextSize` inputs in model settings.
+  - Large-model configurations can now enter provider-specific limits directly without being blocked by outdated UI ceilings.
+- **Workflow tool orchestration display and input syncing**:
+  - Improved Workflow message orchestration and tool grouping so related tool calls render in a more stable, compact way during long-running sessions.
+  - Tightened input syncing between Workflow views and runtime state to reduce stale intermediate UI states while tools are running or waiting.
 
 ### 🐞 Bug Fixes
 
@@ -28,6 +34,9 @@
   - ask_user reply controls now remain usable while the workflow is waiting for user input, and only lock during actual submission.
   - The active workflow now surfaces its own awaiting-user state in the approval queue and message list consistently, so pending ask_user prompts remain visible after session switches or state refreshes.
   - Background ask_user reminders now deduplicate notification sounds, avoiding repeated alert playback when the same waiting state is re-synced.
+- **Workflow grouped edit diff highlighting regression**:
+  - Fixed an issue where consecutive edit tools collapsed into a grouped tool section could lose syntax-highlighted file preview rendering when expanded.
+  - Grouped edit entries now reuse the same structured file diff preview as standalone edit tools, keeping highlight and diff presentation consistent.
 
 ---
 
