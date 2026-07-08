@@ -248,7 +248,6 @@
             <el-input-number
               v-model="modelForm.maxTokens"
               :min="64"
-              :max="1000000"
               :step="1024"
               :step-strictly="false"
               controls-position="right"
@@ -528,7 +527,6 @@
             <el-input-number
               v-model="modelConfigForm.contextSize"
               :min="1024"
-              :max="2000000"
               :step="1024"
               controls-position="right"
               style="width: 100%" />
@@ -537,7 +535,6 @@
             <el-input-number
               v-model="modelConfigForm.maxTokens"
               :min="0"
-              :max="128000"
               :step="1024"
               controls-position="right"
               style="width: 100%" />
