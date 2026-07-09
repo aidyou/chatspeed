@@ -538,13 +538,26 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const canClearContext = computed(() => {
     if (!currentWorkflow.value?.id) return false;
-    const status = currentWorkflow.value?.status?.toLowerCase() || WORKFLOW_STATUSES.PENDING;
+    const executionContext = normalizeExecutionContext(currentWorkflow.value?.executionContext);
+    if (!executionContext) return false;
+    const state = String(executionContext.state || '').toLowerCase();
+    const waitReasonValue = String(executionContext.waitReason || '').toLowerCase();
+    if (
+      [
+        WORKFLOW_WAIT_REASONS.APPROVAL,
+        WORKFLOW_WAIT_REASONS.USER_INPUT,
+        WORKFLOW_WAIT_REASONS.CONFIRMATION,
+        WORKFLOW_WAIT_REASONS.SUB_AGENT
+      ].includes(waitReasonValue)
+    ) {
+      return false;
+    }
     return [
       WORKFLOW_STATUSES.PENDING,
       WORKFLOW_STATUSES.COMPLETED,
       WORKFLOW_STATUSES.ERROR,
       WORKFLOW_STATUSES.CANCELLED
-    ].includes(status);
+    ].includes(state);
   });
 
   const canStop = computed(() => {

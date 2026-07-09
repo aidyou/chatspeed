@@ -27,6 +27,60 @@ fn estimate_ai_context_tokens(messages: &[WorkflowAiContextMessage]) -> usize {
         .round() as usize
 }
 
+fn restore_execution_context_from_manual_clear_marker(
+    marker: Option<&WorkflowMessage>,
+    fallback_execution_context: Option<&ExecutionContext>,
+    session_id: &str,
+    remaining_segment_id: i32,
+    remaining_context_messages: &[WorkflowAiContextMessage],
+) -> ExecutionContext {
+    let metadata = marker.and_then(|message| message.metadata.as_ref());
+    let mut restored_context = metadata
+        .and_then(|value| value.get("previous_execution_context"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ExecutionContext>(value).ok())
+        .or_else(|| fallback_execution_context.cloned())
+        .unwrap_or_else(|| ExecutionContext {
+            session_id: session_id.to_string(),
+            state: RuntimeState::Pending,
+            wait_reason: None,
+            current_segment_id: remaining_segment_id,
+            current_step: 0,
+            max_steps: 100,
+            pending_tools: Vec::new(),
+            last_action_summary: None,
+            current_context_tokens: None,
+            max_context_tokens: None,
+            last_event_id: None,
+            version: ExecutionContext::CURRENT_VERSION.to_string(),
+            waiting_on_sub_agent_id: None,
+            sub_agent_sessions: Vec::new(),
+            pending_sub_agent_completions: Vec::new(),
+            pending_final_review: None,
+        });
+
+    restored_context.session_id = session_id.to_string();
+    restored_context.current_segment_id = metadata
+        .and_then(|value| value.get("previous_segment_id"))
+        .and_then(Value::as_i64)
+        .map(|value| value as i32)
+        .unwrap_or(remaining_segment_id);
+    restored_context.current_context_tokens = Some(
+        metadata
+            .and_then(|value| value.get("previous_context_tokens"))
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or_else(|| estimate_ai_context_tokens(remaining_context_messages)),
+    );
+    restored_context.max_context_tokens = metadata
+        .and_then(|value| value.get("previous_max_context_tokens"))
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .or(restored_context.max_context_tokens);
+
+    restored_context
+}
+
 // =================================================
 //  Structs
 // =================================================
@@ -314,17 +368,13 @@ fn is_pending_submit_plan_message(message: &WorkflowMessage) -> bool {
 fn is_manual_clear_context_message(message: &WorkflowMessage) -> bool {
     message.role == "system"
         && message.message_kind == "summary"
-        && message
-            .message_subtype
-            .as_deref()
-            .or_else(|| {
-                message
-                    .metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.get("subtype"))
-                    .and_then(Value::as_str)
-            })
-            == Some("manual_clear_context")
+        && message.message_subtype.as_deref().or_else(|| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("subtype"))
+                .and_then(Value::as_str)
+        }) == Some("manual_clear_context")
 }
 
 fn is_user_input_wait_event(event: &WorkflowEventRecord) -> bool {
@@ -1184,6 +1234,11 @@ impl MainStore {
 
         let updated_agent_config = update_agent_config_phase(agent_config.as_deref(), plan.phase)?;
         let preserve_manual_clear_context = plan.kind == "manual_clear_context";
+        let current_execution_context = if preserve_manual_clear_context {
+            self.get_execution_context(session_id)?
+        } else {
+            None
+        };
         let deleted_manual_clear_marker = if preserve_manual_clear_context {
             plan.delete_message_boundary_id.and_then(|boundary_id| {
                 messages
@@ -1306,49 +1361,19 @@ impl MainStore {
                          WHERE session_id = ?1 AND segment_id = ?2
                          ORDER BY id ASC",
                     )?;
-                    let rows = stmt.query_map(params![session_id, remaining_segment_id], |row| {
-                        Ok(WorkflowAiContextMessage::from(row))
-                    })?;
+                    let rows = stmt
+                        .query_map(params![session_id, remaining_segment_id], |row| {
+                            Ok(WorkflowAiContextMessage::from(row))
+                        })?;
                     rows.collect::<Result<Vec<_>, _>>()?
                 };
-                let restored_segment_id = deleted_manual_clear_marker
-                    .as_ref()
-                    .and_then(|message| message.metadata.as_ref())
-                    .and_then(|metadata| metadata.get("previous_segment_id"))
-                    .and_then(Value::as_i64)
-                    .map(|value| value as i32)
-                    .unwrap_or(remaining_segment_id);
-                let restored_context_tokens = deleted_manual_clear_marker
-                    .as_ref()
-                    .and_then(|message| message.metadata.as_ref())
-                    .and_then(|metadata| metadata.get("previous_context_tokens"))
-                    .and_then(Value::as_u64)
-                    .map(|value| value as usize)
-                    .unwrap_or_else(|| estimate_ai_context_tokens(&remaining_context_messages));
-                let restored_max_context_tokens = deleted_manual_clear_marker
-                    .as_ref()
-                    .and_then(|message| message.metadata.as_ref())
-                    .and_then(|metadata| metadata.get("previous_max_context_tokens"))
-                    .and_then(Value::as_u64)
-                    .map(|value| value as usize);
-                let restored_context = ExecutionContext {
-                    session_id: session_id.to_string(),
-                    state: RuntimeState::Pending,
-                    wait_reason: None,
-                    current_segment_id: restored_segment_id,
-                    current_step: 0,
-                    max_steps: 100,
-                    pending_tools: Vec::new(),
-                    last_action_summary: None,
-                    current_context_tokens: Some(restored_context_tokens),
-                    max_context_tokens: restored_max_context_tokens,
-                    last_event_id: None,
-                    version: ExecutionContext::CURRENT_VERSION.to_string(),
-                    waiting_on_sub_agent_id: None,
-                    sub_agent_sessions: Vec::new(),
-                    pending_sub_agent_completions: Vec::new(),
-                    pending_final_review: None,
-                };
+                let restored_context = restore_execution_context_from_manual_clear_marker(
+                    deleted_manual_clear_marker.as_ref(),
+                    current_execution_context.as_ref(),
+                    session_id,
+                    remaining_segment_id,
+                    &remaining_context_messages,
+                );
                 let context_json = serde_json::to_string(&restored_context)?;
                 tx.execute(
                     "INSERT OR REPLACE INTO workflow_snapshots
@@ -1359,11 +1384,28 @@ impl MainStore {
                         context_json,
                         restored_context.version,
                         restored_context.state.to_string(),
-                        Option::<String>::None,
-                        Option::<String>::None,
-                        "[]",
+                        restored_context
+                            .wait_reason
+                            .as_ref()
+                            .map(WaitReason::to_string),
+                        restored_context.waiting_on_sub_agent_id.clone(),
+                        serde_json::to_string(&restored_context.sub_agent_sessions)?,
                     ],
                 )?;
+                tx.execute(
+                    "UPDATE workflows
+                     SET status = ?2,
+                         agent_config = ?3,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?1",
+                    params![
+                        session_id,
+                        execution_context_to_workflow_status(&restored_context),
+                        updated_agent_config,
+                    ],
+                )?;
+                tx.commit()?;
+                return Ok(true);
             } else {
                 tx.execute(
                     "DELETE FROM workflow_snapshots WHERE session_id = ?1",
@@ -4751,7 +4793,15 @@ mod tests {
 
         let mut context = ExecutionContext::new(session_id.to_string());
         context.state = RuntimeState::Running;
+        context.wait_reason = Some(WaitReason::Approval);
         context.current_segment_id = 2;
+        context.current_step = 7;
+        context.max_steps = 42;
+        context.last_action_summary = Some("waiting for approval".to_string());
+        context.current_context_tokens = Some(2048);
+        context.max_context_tokens = Some(202752);
+        context.waiting_on_sub_agent_id = Some("sub-agent-1".to_string());
+        context.sub_agent_sessions = vec!["sub-agent-1".to_string(), "sub-agent-2".to_string()];
         store
             .upsert_execution_context(&context)
             .expect("failed to persist running snapshot");
@@ -4764,7 +4814,10 @@ mod tests {
             .get_workflow_snapshot(session_id)
             .expect("failed to load snapshot after deleting clear-context marker");
         assert_eq!(snapshot.messages.len(), 1);
-        assert!(snapshot.messages.iter().any(|message| message.id == user_message.id));
+        assert!(snapshot
+            .messages
+            .iter()
+            .any(|message| message.id == user_message.id));
         assert!(snapshot
             .messages
             .iter()
@@ -4774,10 +4827,25 @@ mod tests {
             .get_execution_context(session_id)
             .expect("failed to load rebuilt snapshot")
             .expect("manual clear-context deletion should restore a snapshot");
-        assert_eq!(rebuilt.state, RuntimeState::Pending);
+        assert_eq!(rebuilt.state, RuntimeState::Running);
+        assert_eq!(rebuilt.wait_reason, Some(WaitReason::Approval));
         assert_eq!(rebuilt.current_segment_id, 1);
         assert_eq!(rebuilt.current_context_tokens, Some(17753));
         assert_eq!(rebuilt.max_context_tokens, Some(202752));
+        assert_eq!(rebuilt.current_step, 7);
+        assert_eq!(rebuilt.max_steps, 42);
+        assert_eq!(
+            rebuilt.last_action_summary.as_deref(),
+            Some("waiting for approval")
+        );
+        assert_eq!(
+            rebuilt.waiting_on_sub_agent_id.as_deref(),
+            Some("sub-agent-1")
+        );
+        assert_eq!(
+            rebuilt.sub_agent_sessions,
+            vec!["sub-agent-1".to_string(), "sub-agent-2".to_string()]
+        );
 
         let conn = store
             .conn
@@ -4790,7 +4858,15 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("failed to read workflow status");
-        assert_eq!(status, "pending");
+        assert_eq!(status, execution_context_to_workflow_status(&rebuilt));
+        let wait_reason: Option<String> = conn
+            .query_row(
+                "SELECT wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .expect("failed to read workflow wait_reason");
+        assert_eq!(wait_reason.as_deref(), Some("approval"));
         let preserved_context_rows: i64 = conn
             .query_row(
                 "SELECT COUNT(1) FROM workflow_context_messages WHERE session_id = ?1 AND segment_id = 1",

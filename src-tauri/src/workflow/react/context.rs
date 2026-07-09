@@ -815,6 +815,12 @@ impl ContextManager {
         &mut self,
         step_index: i32,
     ) -> Result<(), WorkflowEngineError> {
+        let previous_execution_context = {
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            store.get_execution_context(&self.session_id)?
+        };
         let previous_segment_id = self.current_segment_id;
         let previous_context_tokens = self.current_token_estimate();
         self.current_segment_id += 1;
@@ -846,6 +852,7 @@ impl ContextManager {
                 "previous_segment_id": previous_segment_id,
                 "previous_context_tokens": previous_context_tokens,
                 "previous_max_context_tokens": self.max_tokens,
+                "previous_execution_context": previous_execution_context,
             })),
             attached_context: None,
             step_type: None,
