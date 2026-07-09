@@ -11,6 +11,7 @@ use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::intelligence::IntelligenceManager;
+use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::memory::MemoryManager;
 use crate::workflow::react::orchestrator::{
@@ -377,7 +378,10 @@ fn raw_workflow_agent_config(store: &MainStore, session_id: &str) -> Result<Agen
 }
 
 fn previous_completed_task_context(messages: &[WorkflowMessage]) -> Option<(String, String)> {
-    let completion_indices: Vec<usize> = messages
+    let scoped_messages = latest_manual_clear_context_index(messages)
+        .map(|index| &messages[index + 1..])
+        .unwrap_or(messages);
+    let completion_indices: Vec<usize> = scoped_messages
         .iter()
         .enumerate()
         .filter_map(|(index, message)| {
@@ -395,7 +399,7 @@ fn previous_completed_task_context(messages: &[WorkflowMessage]) -> Option<(Stri
         .nth(1)
         .map(|index| index + 1)
         .unwrap_or(0);
-    let segment = &messages[segment_start..=last_completion_index];
+    let segment = &scoped_messages[segment_start..=last_completion_index];
 
     let previous_query = segment
         .iter()
@@ -417,6 +421,44 @@ fn previous_completed_task_context(messages: &[WorkflowMessage]) -> Option<(Stri
         .filter(|value| !value.is_empty())?;
 
     Some((previous_query, previous_summary))
+}
+
+fn latest_manual_clear_context_index(messages: &[WorkflowMessage]) -> Option<usize> {
+    messages.iter().rposition(|message| {
+        crate::workflow::react::context::ContextManager::is_manual_clear_context_message(message)
+    })
+}
+
+fn wait_reason_blocks_manual_clear(wait_reason: Option<&WaitReason>) -> bool {
+    matches!(
+        wait_reason,
+        Some(
+            WaitReason::Approval
+                | WaitReason::UserInput
+                | WaitReason::Confirmation
+                | WaitReason::SubAgent
+        )
+    )
+}
+
+fn runtime_state_allows_manual_clear(state: &RuntimeState) -> bool {
+    matches!(
+        state,
+        RuntimeState::Pending
+            | RuntimeState::Completed
+            | RuntimeState::Failed
+            | RuntimeState::Cancelled
+    )
+}
+
+fn workflow_state_allows_manual_clear(state: &WorkflowState) -> bool {
+    matches!(
+        state,
+        WorkflowState::Pending
+            | WorkflowState::Completed
+            | WorkflowState::Error
+            | WorkflowState::Cancelled
+    )
 }
 
 fn workflow_auto_compress_enabled(config: &Value) -> bool {
@@ -1601,6 +1643,308 @@ pub async fn delete_last_workflow_message(
     store
         .delete_last_message(&session_id)
         .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowContextFrameResult {
+    pub noop: bool,
+    pub segment_id: i32,
+    pub marker_message: Option<WorkflowMessage>,
+    pub current_context_tokens: usize,
+    pub max_context_tokens: usize,
+}
+
+fn newest_persisted_segment_id(messages: &[WorkflowMessage]) -> i32 {
+    messages
+        .iter()
+        .map(|message| message.segment_id)
+        .max()
+        .unwrap_or(1)
+}
+
+fn effective_segment_id_from_snapshot(
+    messages: &[WorkflowMessage],
+    execution_context_segment_id: Option<i32>,
+) -> i32 {
+    newest_persisted_segment_id(messages)
+        .max(execution_context_segment_id.unwrap_or(1))
+        .max(1)
+}
+
+async fn hydrate_execution_context_for_snapshot(
+    main_store: Arc<std::sync::RwLock<MainStore>>,
+    session_id: &str,
+    workflow_status: Option<&str>,
+    execution_context: Option<ExecutionContext>,
+) -> Option<ExecutionContext> {
+    let needs_recovery = match execution_context.as_ref() {
+        Some(ctx) => ctx.current_context_tokens.is_none(),
+        None => true,
+    };
+    if !needs_recovery {
+        return execution_context;
+    }
+
+    let max_context_tokens = execution_context
+        .as_ref()
+        .and_then(|ctx| ctx.max_context_tokens)
+        .unwrap_or(4096);
+    let tsid_generator = Arc::new(TsidGenerator::new(0).ok()?);
+    let mut context = ContextManager::new(
+        session_id.to_string(),
+        main_store,
+        max_context_tokens,
+        tsid_generator,
+    );
+    context.load_history().await.ok()?;
+
+    let mut hydrated = execution_context.unwrap_or_else(|| {
+        let runtime_state = workflow_status
+            .and_then(|status| status.parse::<WorkflowState>().ok())
+            .map(|state| RuntimeState::from(&state))
+            .unwrap_or(RuntimeState::Pending);
+        ExecutionContext {
+            session_id: session_id.to_string(),
+            state: runtime_state,
+            wait_reason: None,
+            current_segment_id: context.current_segment_id,
+            current_step: 0,
+            max_steps: 100,
+            pending_tools: Vec::new(),
+            last_action_summary: None,
+            current_context_tokens: None,
+            max_context_tokens: Some(max_context_tokens),
+            last_event_id: None,
+            version: ExecutionContext::CURRENT_VERSION.to_string(),
+            waiting_on_sub_agent_id: None,
+            sub_agent_sessions: Vec::new(),
+            pending_sub_agent_completions: Vec::new(),
+            pending_final_review: None,
+        }
+    });
+    hydrated.current_segment_id = context.current_segment_id;
+    hydrated.current_context_tokens = Some(context.current_token_estimate());
+    hydrated.max_context_tokens = Some(context.max_tokens);
+
+    Some(hydrated)
+}
+
+async fn begin_new_context_frame_for_cold_session(
+    main_store: Arc<std::sync::RwLock<MainStore>>,
+    tsid_generator: Arc<TsidGenerator>,
+    session_id: &str,
+) -> Result<(i32, Option<WorkflowMessage>), String> {
+    let previous_execution_context = restore_context_for_signal(main_store.clone(), session_id);
+    if previous_execution_context
+        .as_ref()
+        .is_some_and(|ctx| !runtime_state_allows_manual_clear(&ctx.state))
+    {
+        return Err("Cannot clear context unless workflow is stopped".to_string());
+    }
+    if wait_reason_blocks_manual_clear(previous_execution_context.as_ref().and_then(|ctx| ctx.wait_reason.as_ref()))
+    {
+        return Err("Cannot clear context while workflow is waiting for user interaction".to_string());
+    }
+
+    let max_context_tokens = previous_execution_context
+        .as_ref()
+        .and_then(|ctx| ctx.max_context_tokens)
+        .unwrap_or(4096);
+
+    let mut context = ContextManager::new(
+        session_id.to_string(),
+        main_store.clone(),
+        max_context_tokens,
+        tsid_generator,
+    );
+    context.load_history().await.map_err(|e| e.to_string())?;
+    if context
+        .messages
+        .last()
+        .is_some_and(ContextManager::is_manual_clear_context_message)
+    {
+        return Ok((context.current_segment_id, context.messages.last().cloned()));
+    }
+    context
+        .begin_manual_clear_context_segment(0)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut execution_context = previous_execution_context.unwrap_or_else(|| {
+        crate::workflow::react::types::ExecutionContext {
+            session_id: session_id.to_string(),
+            state: RuntimeState::Pending,
+            wait_reason: None,
+            current_segment_id: context.current_segment_id,
+            current_step: 0,
+            max_steps: 100,
+            pending_tools: Vec::new(),
+            last_action_summary: None,
+            current_context_tokens: None,
+            max_context_tokens: Some(max_context_tokens),
+            last_event_id: None,
+            version: crate::workflow::react::types::ExecutionContext::CURRENT_VERSION.to_string(),
+            waiting_on_sub_agent_id: None,
+            sub_agent_sessions: Vec::new(),
+            pending_sub_agent_completions: Vec::new(),
+            pending_final_review: None,
+        }
+    });
+    execution_context.current_segment_id = context.current_segment_id;
+    execution_context.current_context_tokens = Some(context.current_token_estimate());
+    execution_context.max_context_tokens = Some(context.max_tokens);
+
+    let store = main_store.read().map_err(|e| e.to_string())?;
+    store
+        .upsert_execution_context(&execution_context)
+        .map_err(|e| e.to_string())?;
+
+    Ok((context.current_segment_id, context.messages.last().cloned()))
+}
+
+#[tauri::command]
+pub async fn workflow_begin_new_context_frame(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    tsid_generator: State<'_, Arc<TsidGenerator>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    session_id: String,
+) -> Result<WorkflowContextFrameResult, String> {
+    let main_store = state.inner().clone();
+    let workflow_manager = workflow_manager.inner().clone();
+    let tsid_generator = tsid_generator.inner().clone();
+
+    let snapshot = {
+        let store = main_store.read().map_err(|e| e.to_string())?;
+        store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?
+    };
+
+    let execution_context = hydrate_execution_context_for_snapshot(
+        main_store.clone(),
+        &session_id,
+        Some(snapshot.workflow.status.as_str()),
+        restore_context_for_signal(main_store.clone(), &session_id),
+    )
+    .await;
+    let effective_segment_id = effective_segment_id_from_snapshot(
+        &snapshot.messages,
+        execution_context.as_ref().map(|ctx| ctx.current_segment_id),
+    );
+    if snapshot
+        .messages
+        .last()
+        .is_some_and(ContextManager::is_manual_clear_context_message)
+    {
+        return Ok(WorkflowContextFrameResult {
+            noop: true,
+            segment_id: effective_segment_id,
+            marker_message: snapshot.messages.last().cloned(),
+            current_context_tokens: execution_context
+                .as_ref()
+                .and_then(|ctx| ctx.current_context_tokens)
+                .unwrap_or(0),
+            max_context_tokens: execution_context
+                .as_ref()
+                .and_then(|ctx| ctx.max_context_tokens)
+                .unwrap_or(4096),
+        });
+    }
+
+    if wait_reason_blocks_manual_clear(execution_context.as_ref().and_then(|ctx| ctx.wait_reason.as_ref())) {
+        return Err("Cannot clear context while workflow is waiting for user interaction".to_string());
+    }
+    if execution_context
+        .as_ref()
+        .is_some_and(|ctx| !runtime_state_allows_manual_clear(&ctx.state))
+    {
+        return Err("Cannot clear context unless workflow is stopped".to_string());
+    }
+
+    if has_reconciled_live_session(&workflow_manager, &session_id, "begin_new_context_frame").await {
+        let Some(executor) = workflow_manager.get_executor(&session_id) else {
+            return Err("Workflow session is live but executor is unavailable".to_string());
+        };
+
+        let state = {
+            let guard = executor.lock().await;
+            guard.state()
+        };
+        let live_wait_reason = match state {
+            WorkflowState::Paused => Some(WaitReason::Confirmation),
+            WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
+            WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
+                Some(WaitReason::Approval)
+            }
+            WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
+            _ => None,
+        };
+        if wait_reason_blocks_manual_clear(live_wait_reason.as_ref()) {
+            return Err("Cannot clear context while workflow is waiting for user interaction".to_string());
+        }
+        if !workflow_state_allows_manual_clear(&state) {
+            return Err("Cannot clear context unless workflow is stopped".to_string());
+        }
+
+        {
+            let mut guard = executor.lock().await;
+            guard
+                .begin_manual_clear_context_segment()
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+
+        let store = main_store.read().map_err(|e| e.to_string())?;
+        let marker_message = store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?
+            .messages
+            .last()
+            .cloned();
+        let segment_id = store
+            .get_execution_context(&session_id)
+            .map_err(|e| e.to_string())?
+            .map(|ctx| ctx.current_segment_id)
+            .unwrap_or(effective_segment_id.saturating_add(1));
+        return Ok(WorkflowContextFrameResult {
+            noop: false,
+            segment_id,
+            marker_message,
+            current_context_tokens: store
+                .get_execution_context(&session_id)
+                .map_err(|e| e.to_string())?
+                .and_then(|ctx| ctx.current_context_tokens)
+                .unwrap_or(0),
+            max_context_tokens: store
+                .get_execution_context(&session_id)
+                .map_err(|e| e.to_string())?
+                .and_then(|ctx| ctx.max_context_tokens)
+                .unwrap_or(4096),
+        });
+    }
+
+    let (segment_id, marker_message) =
+        begin_new_context_frame_for_cold_session(main_store, tsid_generator, &session_id).await?;
+    let current_context = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store
+            .get_execution_context(&session_id)
+            .map_err(|e| e.to_string())?
+    };
+    Ok(WorkflowContextFrameResult {
+        noop: false,
+        segment_id,
+        marker_message,
+        current_context_tokens: current_context
+            .as_ref()
+            .and_then(|ctx| ctx.current_context_tokens)
+            .unwrap_or(0),
+        max_context_tokens: current_context
+            .as_ref()
+            .and_then(|ctx| ctx.max_context_tokens)
+            .unwrap_or(4096),
+    })
 }
 
 #[tauri::command]
@@ -4566,6 +4910,34 @@ mod tests {
     }
 
     #[test]
+    fn test_runtime_state_allows_manual_clear() {
+        assert!(runtime_state_allows_manual_clear(&RuntimeState::Pending));
+        assert!(runtime_state_allows_manual_clear(&RuntimeState::Completed));
+        assert!(runtime_state_allows_manual_clear(&RuntimeState::Failed));
+        assert!(runtime_state_allows_manual_clear(&RuntimeState::Cancelled));
+        assert!(!runtime_state_allows_manual_clear(&RuntimeState::Running));
+        assert!(!runtime_state_allows_manual_clear(&RuntimeState::Stopping));
+        assert!(!runtime_state_allows_manual_clear(&RuntimeState::Waiting));
+    }
+
+    #[test]
+    fn test_workflow_state_allows_manual_clear() {
+        assert!(workflow_state_allows_manual_clear(&WorkflowState::Pending));
+        assert!(workflow_state_allows_manual_clear(&WorkflowState::Completed));
+        assert!(workflow_state_allows_manual_clear(&WorkflowState::Error));
+        assert!(workflow_state_allows_manual_clear(&WorkflowState::Cancelled));
+        assert!(!workflow_state_allows_manual_clear(&WorkflowState::Thinking));
+        assert!(!workflow_state_allows_manual_clear(&WorkflowState::Executing));
+        assert!(!workflow_state_allows_manual_clear(&WorkflowState::Auditing));
+        assert!(!workflow_state_allows_manual_clear(&WorkflowState::Stopping));
+        assert!(!workflow_state_allows_manual_clear(&WorkflowState::Paused));
+        assert!(!workflow_state_allows_manual_clear(&WorkflowState::AwaitingApproval));
+        assert!(!workflow_state_allows_manual_clear(&WorkflowState::AwaitingAutoApproval));
+        assert!(!workflow_state_allows_manual_clear(&WorkflowState::AwaitingUser));
+        assert!(!workflow_state_allows_manual_clear(&WorkflowState::AwaitingSubAgent));
+    }
+
+    #[test]
     fn test_can_resume_user_message_from_recovery_prefers_terminal_snapshot() {
         let mut running = ExecutionContext::new("session-5".to_string());
         running.state = RuntimeState::Running;
@@ -4900,5 +5272,55 @@ mod tests {
         reset_workflow_planning_note(&[root.path().to_path_buf()]).unwrap();
 
         assert_eq!(std::fs::read_to_string(note_path).unwrap(), "");
+    }
+
+    #[test]
+    fn test_hydrate_execution_context_for_snapshot_recovers_tokens_without_snapshot() {
+        let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        let store = Arc::new(std::sync::RwLock::new(create_test_store()));
+        let session_id = "snapshot-hydrate-context";
+        {
+            let store_guard = store.read().expect("failed to lock store");
+            seed_agent(&store_guard, "agent-test");
+            store_guard
+                .create_workflow(session_id, "Initial query", "agent-test", None, None)
+                .expect("failed to create workflow");
+            store_guard
+                .add_workflow_message(&WorkflowMessage {
+                    id: None,
+                    session_id: session_id.to_string(),
+                    role: "user".to_string(),
+                    message: "Please inspect the failing workflow and explain the root cause"
+                        .to_string(),
+                    reasoning: None,
+                    message_kind: "message".to_string(),
+                    message_subtype: None,
+                    segment_id: 1,
+                    source_event_type: None,
+                    metadata: None,
+                    attached_context: None,
+                    step_type: Some("think".to_string()),
+                    step_index: 1,
+                    is_error: false,
+                    error_type: None,
+                    created_at: None,
+                })
+                .expect("failed to add workflow message");
+        }
+
+        let hydrated = runtime.block_on(hydrate_execution_context_for_snapshot(
+            store,
+            session_id,
+            Some("pending"),
+            None,
+        ));
+
+        let hydrated = hydrated.expect("expected execution context to be recovered");
+        assert_eq!(hydrated.current_segment_id, 1);
+        assert_eq!(hydrated.max_context_tokens, Some(4096));
+        assert!(
+            hydrated.current_context_tokens.is_some_and(|tokens| tokens > 0),
+            "recovered snapshot should expose a positive current_context_tokens value"
+        );
     }
 }

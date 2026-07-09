@@ -563,7 +563,14 @@
 
           <!-- Regular Assistant Content -->
           <div v-else>
-            <div v-if="isContextSnapshotMessage(message)" class="context-snapshot-card">
+            <div v-if="isManualClearContextMessage(message)" class="manual-clear-context-divider">
+              <span class="manual-clear-context-divider__line"></span>
+              <span class="manual-clear-context-divider__label">{{
+                $t('workflow.clearContextDivider')
+              }}</span>
+              <span class="manual-clear-context-divider__line"></span>
+            </div>
+            <div v-else-if="isContextSnapshotMessage(message)" class="context-snapshot-card">
               <div
                 class="context-snapshot-card__header"
                 @click="$emit('toggle-expand', getContextSnapshotExpandId(message))">
@@ -980,8 +987,20 @@ const isHiddenSystemObservation = message => {
   return props.removeSystemReminder(message.message || '').trim() === ''
 }
 
+const getWorkflowMessageKind = message => message?.messageKind || message?.metadata?.message_kind
+const getWorkflowMessageSubtype = message =>
+  message?.messageSubtype || message?.metadata?.message_subtype || message?.metadata?.subtype
+const isLegacyManualClearContextMessage = message =>
+  message?.role === 'system' && props.removeSystemReminder(message?.message || '').trim() === 'MANUAL_CLEAR_CONTEXT'
+const isManualClearContextMessage = message =>
+  message?.role === 'system' &&
+  ((getWorkflowMessageKind(message) === 'summary' &&
+    getWorkflowMessageSubtype(message) === 'manual_clear_context') ||
+    isLegacyManualClearContextMessage(message))
 const isContextSnapshotMessage = message =>
-  message?.role === 'system' && message?.metadata?.type === 'summary'
+  message?.role === 'system' &&
+  getWorkflowMessageKind(message) === 'summary' &&
+  !isManualClearContextMessage(message)
 
 const getContextSnapshotContent = message => {
   const content = props.removeSystemReminder(message?.message || '')
@@ -1751,7 +1770,9 @@ const visibleMessages = computed(() =>
   collapseToolMessageGroups(
     collapseAssistantCompletionPairs(
       collapseRepeatedFinishTaskErrors(
-        props.messages.filter(message => !isHiddenSystemObservation(message))
+        props.messages.filter(
+          message => !isHiddenSystemObservation(message) || isManualClearContextMessage(message)
+        )
       )
     )
   )
@@ -2660,6 +2681,26 @@ defineExpose({
 .tool-running-placeholder__text {
   min-width: 0;
   word-break: break-word;
+}
+
+.manual-clear-context-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-sm);
+  margin: var(--cs-space) 0;
+  color: var(--cs-text-color-secondary);
+}
+
+.manual-clear-context-divider__line {
+  flex: 1;
+  height: 1px;
+  background: var(--cs-border-color);
+}
+
+.manual-clear-context-divider__label {
+  flex-shrink: 0;
+  font-size: var(--cs-font-size-xs);
+  color: var(--cs-text-color-secondary);
 }
 
 .workflow-message-attachments {

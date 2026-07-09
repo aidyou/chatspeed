@@ -325,6 +325,7 @@ pub async fn run() -> crate::error::Result<()> {
             delete_workflow,
             get_system_skills,
             get_workflow_agent_config,
+            workflow_begin_new_context_frame,
             get_workflow_snapshot,
             get_workflow_session_key,
             list_workflows,

@@ -757,6 +757,11 @@ const maxContexts = computed(() => {
 })
 
 const totalTokens = computed(() => {
+  const currentContextTokens = workflowStore.currentWorkflow?.executionContext?.currentContextTokens
+  if (typeof currentContextTokens === 'number' && currentContextTokens >= 0) {
+    return currentContextTokens
+  }
+
   // Find the most recent message with usage information
   const lastAssistantMsg = [...messages.value]
     .reverse()
@@ -788,11 +793,6 @@ const totalTokens = computed(() => {
   // 3. Fallback to flattened style
   const prompt = meta.input_tokens || meta.prompt_tokens || 0
   if (prompt > 0) return prompt
-
-  const currentContextTokens = workflowStore.currentWorkflow?.executionContext?.currentContextTokens
-  if (typeof currentContextTokens === 'number' && currentContextTokens >= 0) {
-    return currentContextTokens
-  }
 
   return 0
 })

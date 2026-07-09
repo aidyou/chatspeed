@@ -245,6 +245,7 @@
           @toggle-auto-compress="autoCompressEnabled = !autoCompressEnabled"
           @update-approval-level="approvalLevel = $event"
           @update-selected-agent="onSelectedAgentChange"
+          @clear-context-frame="onClearContextFrame"
           @create-new-workflow="createNewWorkflow"
           @open-image-dialog="openImageAttachmentDialog"
           @open-model-selector="openModelSelector"
@@ -1135,6 +1136,59 @@ const createNewWorkflow = async () => {
   await coreCreateNewWorkflow()
   clearInput()
   clearImageAttachments()
+}
+
+const onClearContextFrame = async () => {
+  if (!currentWorkflowId.value) {
+    showMessage(t('workflow.clearContextFrameNoSession'), 'warning')
+    return
+  }
+
+  if (!workflowStore.canClearContext) {
+    showMessage(t('workflow.clearContextFrameNotStopped'), 'warning')
+    return
+  }
+
+  try {
+    const result = await invokeWrapper('workflow_begin_new_context_frame', {
+      sessionId: currentWorkflowId.value
+    })
+
+    if (result?.noop) {
+      showMessage(t('workflow.clearContextFrameNoop'), 'info')
+      return
+    }
+
+    const markerMessage = result?.markerMessage || null
+    if (markerMessage) {
+      workflowStore.addMessage({
+        ...markerMessage,
+        sessionId: markerMessage.sessionId || currentWorkflowId.value
+      })
+    }
+
+    if (workflowStore.currentWorkflow?.executionContext) {
+      workflowStore.currentWorkflow.executionContext.currentSegmentId = result?.segmentId || null
+      workflowStore.currentWorkflow.executionContext.current_segment_id = result?.segmentId || null
+      workflowStore.currentWorkflow.executionContext.currentContextTokens =
+        result?.currentContextTokens ?? 0
+      workflowStore.currentWorkflow.executionContext.current_context_tokens =
+        result?.currentContextTokens ?? 0
+      workflowStore.currentWorkflow.executionContext.maxContextTokens =
+        result?.maxContextTokens ??
+        workflowStore.currentWorkflow.executionContext.maxContextTokens ??
+        null
+      workflowStore.currentWorkflow.executionContext.max_context_tokens =
+        result?.maxContextTokens ??
+        workflowStore.currentWorkflow.executionContext.max_context_tokens ??
+        null
+    }
+
+    showMessage(t('workflow.clearContextFrameDone'), 'success')
+  } catch (error) {
+    console.error('Failed to begin new workflow context frame:', error)
+    showMessage(t('workflow.clearContextFrameFailed', { error: String(error) }), 'error')
+  }
 }
 
 // Wrapper for skill select that properly handles send

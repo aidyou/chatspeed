@@ -40,6 +40,29 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return (toolStreams.value.get(toolId) || []).length > 0;
   };
 
+  const normalizeWorkflowMessage = (message, fallbackSessionId = null) => {
+    const normalized = {
+      ...message,
+      sessionId: message?.sessionId || message?.session_id || fallbackSessionId || null,
+      messageKind: message?.messageKind || message?.message_kind || 'message',
+      messageSubtype: message?.messageSubtype || message?.message_subtype || null,
+    };
+
+    if (normalized.metadata && typeof normalized.metadata === 'string') {
+      try {
+        normalized.metadata = JSON.parse(normalized.metadata);
+      } catch (e) {
+        console.error('Failed to parse snapshot message metadata:', e);
+      }
+    }
+
+    if (normalized.is_error !== undefined && normalized.isError === undefined) {
+      normalized.isError = normalized.is_error;
+    }
+
+    return normalized;
+  };
+
   // ==================== Core State ====================
   const workflows = ref([]);
   const currentWorkflowId = ref(null);
@@ -511,6 +534,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const isStopping = computed(() => {
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
     return status === WORKFLOW_STATUSES.STOPPING;
+  });
+
+  const canClearContext = computed(() => {
+    if (!currentWorkflow.value?.id) return false;
+    const status = currentWorkflow.value?.status?.toLowerCase() || WORKFLOW_STATUSES.PENDING;
+    return [
+      WORKFLOW_STATUSES.PENDING,
+      WORKFLOW_STATUSES.COMPLETED,
+      WORKFLOW_STATUSES.ERROR,
+      WORKFLOW_STATUSES.CANCELLED
+    ].includes(status);
   });
 
   const canStop = computed(() => {
@@ -1193,20 +1227,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
       waitReason.value = snapshot.workflow.waitReason || null;
 
-      const parsedMessages = (snapshot.messages || []).map(m => {
-        m.sessionId = m.sessionId || workflowId;
-        if (m.metadata && typeof m.metadata === 'string') {
-          try {
-            m.metadata = JSON.parse(m.metadata);
-          } catch (e) {
-            console.error('Failed to parse snapshot message metadata:', e);
-          }
-        }
-        if (m.is_error !== undefined) {
-          m.isError = m.is_error;
-        }
-        return m;
-      });
+      const parsedMessages = (snapshot.messages || []).map(m =>
+        normalizeWorkflowMessage(m, workflowId)
+      );
 
       messages.value = parsedMessages;
       clearApprovalSubmissionsForSession(workflowId);
@@ -1366,6 +1389,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       message.metadata = {};
     }
 
+    message = normalizeWorkflowMessage(message, currentWorkflowId.value);
+
     if (message.role === 'user') {
       const queuedId = message.metadata?.queued_user_message_id;
       const queueStatus = message.metadata?.queue_status;
@@ -1401,10 +1426,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const toolCallId = message.metadata.tool_call_id;
       const hasStream = hasStreamingOutput(toolCallId);
       const isError = message.isError || message.is_error || message.metadata?.is_error;
+      const visibleContent = String(message.message || '').trim();
       message.metadata = {
         ...message.metadata,
         execution_status: inferFinalExecutionStatus(message, message.metadata),
-        hide_approval_details: message.metadata?.approval_status === 'approved'
+        hide_approval_details:
+          message.metadata?.approval_status === 'approved' && !visibleContent
       };
 
       if (hasStream) {
@@ -1605,7 +1632,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     error.value = null;
     try {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
-      messages.value = snapshot.messages || [];
+      messages.value = (snapshot.messages || []).map(message =>
+        normalizeWorkflowMessage(message, workflowId)
+      );
 
       // 重建 Task Ledger
       if (taskLedgerEnabled.value) {
@@ -1695,6 +1724,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     isOrphanWaiting,
     isWaiting,
     isStopping,
+    canClearContext,
     canStop,
     canContinue,
     pendingApprovalMessage,

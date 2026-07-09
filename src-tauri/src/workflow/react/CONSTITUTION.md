@@ -307,6 +307,46 @@ Current required thresholds:
 
 Do not change these thresholds or retention rules unless the workflow compression design itself is explicitly being revised.
 
+### 8.6 Manual clear-context boundaries are durable transcript markers
+
+Manual "clear context" is a structured transcript boundary, not a cache reset.
+
+Its contract is:
+
+- `session_id` remains unchanged
+- durable transcript history remains complete in `messages`
+- the boundary is persisted as a structured summary marker
+- AI context projection starts after the latest manual clear-context boundary
+- compression and task carryover logic must treat the latest manual clear-context boundary as the active lower bound
+
+The boundary must not become a second authority for approvals, waiting, resumability, or lifecycle state.
+
+### 8.7 Manual clear-context is only allowed from stopped states
+
+Manual "clear context" must be rejected unless the workflow is in a stopped state.
+
+Allowed states are:
+
+- pending
+- completed
+- failed
+- cancelled
+
+It must be rejected while the workflow is still live or transitional, including:
+
+- running
+- stopping
+- any interactive wait
+
+Interactive waits include:
+
+- approval
+- user input
+- confirmation
+- sub-agent completion
+
+This exists to prevent splitting a live or interactive protocol across transcript segments in ways that would orphan tool calls, approvals, user-input waits, or stop/recovery state from their structured authority.
+
 ## 9. Recovery Law
 
 ### 9.1 Snapshot first, replay fallback
@@ -503,6 +543,31 @@ Frontend message projections may use `task_completed` to rotate completed-task
 windows. Snapshot and legacy recovery may reconstruct the same boundary from the
 durable successful completion tool observation, but live UI code must not independently
 reimplement completion approval rules.
+
+### 10.10 Manual clear-context rendering is projection-only
+
+The frontend may render a visible divider for each manual clear-context marker in the transcript.
+
+That divider is presentation only.
+
+It must not:
+
+- decide approval membership
+- suppress authoritative pending tool records
+- reset message identity semantics for live tool updates
+- replace structured runtime state reconciliation
+
+If the divider conflicts with structured approval or tool lifecycle state, the structured authority wins.
+
+### 10.11 Delete-last-step must treat manual clear-context as its own unit
+
+When manual clear-context exists as the last rewindable workflow interaction unit:
+
+- deleting last step must remove only that manual clear-context marker
+- deleting the marker must rebuild runtime snapshot/context state from the remaining structured authority
+- deleting the marker must not implicitly delete surrounding assistant, tool, approval, or task-completion records
+
+This rule applies only after manual clear-context has been durably persisted as a structured marker.
 
 ## 11. Command-Layer Discipline
 

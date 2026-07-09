@@ -478,6 +478,10 @@ mod tests {
             Ok(())
         }
 
+        async fn begin_manual_clear_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+
         async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError> {
             self.state = WorkflowState::Thinking;
             Ok(())

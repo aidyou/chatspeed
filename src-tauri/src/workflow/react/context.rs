@@ -97,12 +97,20 @@ impl ContextManager {
             && meta.get("compressed_until_message_id").is_some()
     }
 
-    fn is_successful_completion_message(message: &WorkflowMessage) -> bool {
-        if message.role != "tool" || message.is_error {
+    pub(crate) fn is_manual_clear_context_message(message: &WorkflowMessage) -> bool {
+        Self::effective_message_kind(message) == "summary"
+            && Self::effective_message_subtype(message) == Some("manual_clear_context")
+    }
+
+    fn metadata_marks_successful_completion(
+        metadata: Option<&serde_json::Value>,
+        is_error: bool,
+    ) -> bool {
+        if is_error {
             return false;
         }
 
-        let Some(meta) = message.metadata.as_ref() else {
+        let Some(meta) = metadata else {
             return false;
         };
 
@@ -129,11 +137,18 @@ impl ContextManager {
             && approval_status != "rejected"
     }
 
+    fn is_successful_completion_message(message: &WorkflowMessage) -> bool {
+        if message.role != "tool" {
+            return false;
+        }
+
+        Self::metadata_marks_successful_completion(message.metadata.as_ref(), message.is_error)
+    }
+
     fn latest_summary_message(messages: &[WorkflowMessage]) -> Option<&WorkflowMessage> {
-        messages
-            .iter()
-            .rev()
-            .find(|m| Self::is_compression_summary_message(m))
+        messages.iter().rev().find(|m| {
+            Self::is_compression_summary_message(m) || Self::is_manual_clear_context_message(m)
+        })
     }
 
     fn latest_summary_boundary_id(messages: &[WorkflowMessage]) -> Option<i64> {
@@ -161,9 +176,16 @@ impl ContextManager {
     }
 
     fn latest_summary_index(messages: &[WorkflowMessage]) -> Option<usize> {
+        messages.iter().rposition(|message| {
+            Self::is_compression_summary_message(message)
+                || Self::is_manual_clear_context_message(message)
+        })
+    }
+
+    fn latest_manual_clear_context_index(messages: &[WorkflowMessage]) -> Option<usize> {
         messages
             .iter()
-            .rposition(Self::is_compression_summary_message)
+            .rposition(Self::is_manual_clear_context_message)
     }
 
     fn estimate_context_message_tokens(message: &WorkflowAiContextMessage) -> f64 {
@@ -191,20 +213,27 @@ impl ContextManager {
         let Some(compressed_until_message_id) = Self::latest_summary_boundary_id(messages) else {
             return messages.to_vec();
         };
+        let latest_summary_id = latest_summary.id;
+        let latest_manual_clear_id = Self::latest_manual_clear_context_index(messages)
+            .and_then(|index| messages.get(index))
+            .and_then(|message| message.id);
 
-        let mut compacted = vec![latest_summary];
-        compacted.extend(
-            messages
-                .iter()
-                .filter(|message| !Self::is_summary_message(message))
-                .filter(|message| {
-                    message
+        messages
+            .iter()
+            .filter(|message| {
+                if message.id == latest_summary_id {
+                    return true;
+                }
+                if message.id == latest_manual_clear_id {
+                    return true;
+                }
+                !Self::is_summary_message(message)
+                    && message
                         .id
                         .is_some_and(|id| id > compressed_until_message_id)
-                })
-                .cloned(),
-        );
-        compacted
+            })
+            .cloned()
+            .collect()
     }
 
     pub fn current_token_estimate(&self) -> usize {
@@ -381,6 +410,18 @@ impl ContextManager {
             .collect()
     }
 
+    fn should_preserve_unpaired_tool_projection(
+        role: &str,
+        metadata: Option<&serde_json::Value>,
+        _is_error: bool,
+    ) -> bool {
+        if role != "tool" {
+            return false;
+        }
+
+        metadata.and_then(|meta| meta.get("llm_content")).is_some()
+    }
+
     fn should_project_message_for_llm(
         message: &WorkflowMessage,
         idx: usize,
@@ -406,7 +447,11 @@ impl ContextManager {
             .as_ref()
             .and_then(|meta| meta.get("tool_call_id").and_then(|value| value.as_str()))
         else {
-            return true;
+            return Self::should_preserve_unpaired_tool_projection(
+                &message.role,
+                message.metadata.as_ref(),
+                message.is_error,
+            );
         };
 
         latest_tool_message_index
@@ -538,14 +583,35 @@ impl ContextManager {
                         .and_then(|meta| meta.get("tool_call_id").and_then(|value| value.as_str()))
                         .map(str::to_string)
                     else {
+                        if Self::should_preserve_unpaired_tool_projection(
+                            &message.role,
+                            message.metadata.as_ref(),
+                            false,
+                        ) {
+                            protocol_safe.push(message);
+                        }
                         continue;
                     };
 
                     let Some(open_tool_calls) = pending_tool_call_ids.as_mut() else {
+                        if Self::should_preserve_unpaired_tool_projection(
+                            &message.role,
+                            message.metadata.as_ref(),
+                            false,
+                        ) {
+                            protocol_safe.push(message);
+                        }
                         continue;
                     };
 
                     if !open_tool_calls.remove(&tool_call_id) {
+                        if Self::should_preserve_unpaired_tool_projection(
+                            &message.role,
+                            message.metadata.as_ref(),
+                            false,
+                        ) {
+                            protocol_safe.push(message);
+                        }
                         continue;
                     }
 
@@ -590,34 +656,55 @@ impl ContextManager {
     }
 
     fn projection_source_messages(&self) -> Vec<WorkflowMessage> {
-        let Some(summary_idx) = Self::latest_summary_index(&self.messages) else {
-            return self.messages.clone();
+        let start_index = Self::latest_manual_clear_context_index(&self.messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let scoped_messages = &self.messages[start_index..];
+
+        let Some(summary_idx) = Self::latest_summary_index(scoped_messages) else {
+            return scoped_messages.to_vec();
         };
 
-        let mut projection = vec![self.messages[summary_idx].clone()];
-        let tail_start = summary_idx + 1;
-        if tail_start >= self.messages.len() {
+        let summary = scoped_messages[summary_idx].clone();
+        let Some(compressed_until_message_id) = summary
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("compressed_until_message_id"))
+            .and_then(|value| value.as_i64())
+        else {
+            let mut projection = vec![summary];
+            projection.extend(scoped_messages[summary_idx + 1..].iter().cloned());
             return projection;
-        }
+        };
 
-        let completion_indices_after_summary: Vec<usize> = self
-            .messages
+        let tail_messages = scoped_messages
+            .iter()
+            .filter(|message| {
+                !Self::is_summary_message(message)
+                    && message
+                        .id
+                        .is_some_and(|id| id > compressed_until_message_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let completion_indices_after_summary = tail_messages
             .iter()
             .enumerate()
-            .skip(tail_start)
             .filter_map(|(idx, message)| {
                 Self::is_successful_completion_message(message).then_some(idx)
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         let retained_start = completion_indices_after_summary
             .iter()
             .rev()
             .nth(1)
             .map(|index| index + 1)
-            .unwrap_or(tail_start);
+            .unwrap_or(0);
 
-        projection.extend(self.messages[retained_start..].iter().cloned());
+        let mut projection = vec![summary];
+        projection.extend(tail_messages[retained_start..].iter().cloned());
         projection
     }
 
@@ -722,6 +809,66 @@ impl ContextManager {
     ) -> Result<(), WorkflowEngineError> {
         self.rebuild_context_projection_from_runtime_messages(true, true)
             .await
+    }
+
+    pub async fn begin_manual_clear_context_segment(
+        &mut self,
+        step_index: i32,
+    ) -> Result<(), WorkflowEngineError> {
+        let previous_segment_id = self.current_segment_id;
+        let previous_context_tokens = self.current_token_estimate();
+        self.current_segment_id += 1;
+
+        let msg_id = self
+            .tsid_generator
+            .generate_u64()
+            .map_err(|e| WorkflowEngineError::General(e))?;
+        let clear_boundary_id = self
+            .messages
+            .iter()
+            .filter_map(|message| message.id)
+            .max()
+            .unwrap_or(0);
+        let marker = WorkflowMessage {
+            id: Some(msg_id as i64),
+            session_id: self.session_id.clone(),
+            role: "system".to_string(),
+            message: String::new(),
+            reasoning: None,
+            message_kind: "summary".to_string(),
+            message_subtype: Some("manual_clear_context".to_string()),
+            segment_id: self.current_segment_id,
+            source_event_type: None,
+            metadata: Some(json!({
+                "type": "summary",
+                "subtype": "manual_clear_context",
+                "compressed_until_message_id": clear_boundary_id,
+                "previous_segment_id": previous_segment_id,
+                "previous_context_tokens": previous_context_tokens,
+                "previous_max_context_tokens": self.max_tokens,
+            })),
+            attached_context: None,
+            step_type: None,
+            step_index,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        let persisted_marker = {
+            let store = self.main_store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+            })?;
+            store.add_workflow_message(&marker)?
+        };
+
+        let mut all_messages = self.messages.clone();
+        all_messages.push(persisted_marker.clone());
+        self.messages = Self::rebuild_compacted_messages(&all_messages, self.max_tokens);
+        self.rebuild_context_projection_from_runtime_messages(false, true)
+            .await?;
+
+        Ok(())
     }
 
     fn to_workflow_messages(messages: &[WorkflowAiContextMessage]) -> Vec<WorkflowMessage> {
@@ -871,6 +1018,10 @@ impl ContextManager {
     ) -> Result<(WorkflowMessage, bool), WorkflowEngineError> {
         let should_start_new_segment = role == "user"
             && step_type != Some(StepType::Observe)
+            && !self
+                .messages
+                .last()
+                .is_some_and(Self::is_manual_clear_context_message)
             && self
                 .messages_since_last_completion()
                 .into_iter()
@@ -1008,11 +1159,16 @@ impl ContextManager {
             .unwrap_or_default()
     }
 
-    /// Returns all messages that belong to the current work segment after the last successful complete_workflow_with_summary.
+    /// Returns all messages that belong to the current work segment after the last successful
+    /// complete_workflow_with_summary or the latest manual clear-context marker, whichever is later.
     pub fn messages_since_last_completion(&self) -> Vec<WorkflowMessage> {
-        let start_index = Self::latest_successful_completion_index(&self.messages)
+        let completion_start = Self::latest_successful_completion_index(&self.messages)
             .map(|index| index + 1)
             .unwrap_or(0);
+        let manual_clear_start = Self::latest_manual_clear_context_index(&self.messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let start_index = completion_start.max(manual_clear_start);
         self.messages.iter().skip(start_index).cloned().collect()
     }
 
@@ -2715,9 +2871,12 @@ mod tests {
         assert!(llm_contents
             .iter()
             .any(|content| content.contains("Original analysis")));
-        assert!(llm_contents
-            .iter()
-            .any(|content| content.contains(TASK_FINISHED)));
+        assert!(
+            llm_contents
+                .iter()
+                .all(|content| !content.contains(TASK_FINISHED)),
+            "completed tool responses without a paired assistant tool_call should not be replayed into the next task segment"
+        );
         assert!(llm_contents
             .iter()
             .any(|content| content.contains("Follow-up clarification")));
@@ -3180,7 +3339,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compression_preserves_latest_complete_workflow_summary_tool_response_in_ai_context() {
+    async fn compression_omits_unpaired_complete_workflow_summary_tool_response_from_llm_context() {
         let (_dir, store) = setup_store();
         let session_id = "compress-tool-response-test";
         insert_workflow(&store, session_id);
@@ -3359,7 +3518,8 @@ mod tests {
 
         // ===== THE KEY CHECK =====
         // After compression, the latest task's complete_workflow_with_summary
-        // tool response (with tool_call_id = "tool_complete_3") MUST be in ai_context_messages
+        // tool response may remain in ai_context_messages for transcript durability,
+        // but it must not be replayed to the LLM without a paired assistant tool_call.
 
         let tool_in_ai_ctx = context.ai_context_messages.iter().any(|m| {
             m.role == "tool"
@@ -3371,7 +3531,7 @@ mod tests {
 
         assert!(
             tool_in_ai_ctx,
-            "BUG: complete_workflow_with_summary tool response missing from ai_context_messages after compression"
+            "complete_workflow_with_summary tool response should remain in ai_context_messages for durable transcript state"
         );
 
         // Also check that the assistant with tool_calls has its tool response right after
@@ -3578,5 +3738,120 @@ mod tests {
         assert!(context.ai_context_messages[1]
             .message
             .contains("<approved_plan>\n1. edit files\n2. run tests\n</approved_plan>"));
+    }
+
+    #[tokio::test]
+    async fn manual_clear_context_drops_orphaned_tool_responses_from_llm_projection() {
+        let (_dir, store) = setup_store();
+        let session_id = "manual-clear-orphan-tool-projection";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 1".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user");
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "".to_string(),
+                None,
+                Some("submit completion".to_string()),
+                None,
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool_complete_before_clear",
+                        "type": "function",
+                        "function": {
+                            "name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                            "arguments": "{\"summary\":\"done\"}"
+                        }
+                    }]
+                })),
+            )
+            .await
+            .expect("failed to add assistant tool call");
+        let _ = context
+            .add_message(
+                "tool".to_string(),
+                TASK_FINISHED.to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool_complete_before_clear",
+                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "execution_status": "completed",
+                    "approval_status": "approved"
+                })),
+            )
+            .await
+            .expect("failed to add completion tool response");
+
+        context
+            .begin_manual_clear_context_segment(4)
+            .await
+            .expect("manual clear context should succeed");
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "task 2".to_string(),
+                None,
+                None,
+                None,
+                5,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add post-clear user");
+
+        let llm_messages = context.get_messages_for_llm();
+
+        assert!(
+            llm_messages.iter().all(|message| message.role != "tool"),
+            "manual clear context should prevent orphaned pre-clear tool responses from being replayed to the LLM"
+        );
+        assert!(
+            llm_messages.iter().all(|message| {
+                message.role != "assistant"
+                    || message
+                        .metadata
+                        .as_ref()
+                        .and_then(|meta| meta.get("tool_calls"))
+                        .is_none()
+            }),
+            "manual clear context should prevent replaying assistant tool_calls whose responses are outside the active segment"
+        );
+        assert_eq!(
+            llm_messages
+                .iter()
+                .filter(|message| message.role == "user")
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["<user_query>\ntask 2\n</user_query>"],
+            "manual clear context should scope LLM projection to the active post-clear segment"
+        );
     }
 }

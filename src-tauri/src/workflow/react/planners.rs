@@ -35,6 +35,10 @@ impl ReActExecutor for PlanningExecutor {
         self.executor.begin_new_context_segment().await
     }
 
+    async fn begin_manual_clear_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
+        self.executor.begin_manual_clear_context_segment().await
+    }
+
     async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError> {
         self.executor.prepare_completed_resume().await
     }

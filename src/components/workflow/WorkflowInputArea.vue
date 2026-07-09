@@ -364,6 +364,19 @@
             </el-popover>
 
             <el-tooltip
+              v-if="currentWorkflowId"
+              :content="$t('workflow.clearContextFrame')"
+              :hide-after="0"
+              :enterable="false"
+              placement="top">
+              <label
+                :class="{ disabled: !canClearContext }"
+                @click="canClearContext && $emit('clear-context-frame')">
+                <cs name="clear-context" class="small" />
+              </label>
+            </el-tooltip>
+
+            <el-tooltip
               :content="$t('workflow.newWorkflow')"
               :hide-after="0"
               :enterable="false"
@@ -561,6 +574,7 @@ defineEmits([
   'toggle-auto-compress',
   'update-approval-level',
   'update-selected-agent',
+  'clear-context-frame',
   'create-new-workflow',
   'open-model-selector',
   'open-skills-selector',
@@ -628,6 +642,7 @@ const canStop = computed(() => workflowStore.canStop)
 const canContinue = computed(() => workflowStore.canContinue)
 const canApprovePlan = computed(() => workflowStore.canApprovePlan)
 const isStopping = computed(() => workflowStore.isStopping)
+const canClearContext = computed(() => workflowStore.canClearContext)
 
 const buildNextAgentConfig = overrides => {
   const currentAgentConfig = props.currentWorkflow?.agentConfig || {}
