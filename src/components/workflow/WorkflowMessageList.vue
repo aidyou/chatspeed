@@ -91,7 +91,7 @@
           </div>
         </div>
         <div v-else class="ai-content chat">
-          <div v-if="isCollapsedToolGroupMessage(message)" class="cli-tool-call tool-system">
+          <div v-if="isCollapsedToolGroupMessage(message)" class="cli-tool-call tool-group">
             <div
               class="tool-line title-wrap expandable"
               @click="$emit('toggle-expand', message.displayId)">
@@ -120,7 +120,10 @@
                   class="tool-line title-wrap expandable"
                   :class="{ 'tool-rejected': tool.isRejected }"
                   @click="$emit('toggle-expand', tool.displayId)">
-                  <cs :name="tool.toolDisplay?.icon || 'tool'" size="15px" class="tool-type-icon" />
+                  <cs
+                    :name="tool.toolDisplay?.icon || 'tool'"
+                    size="15px"
+                    class="tool-type-icon" />
                   <span class="tool-name">{{ tool.toolDisplay?.action }}</span>
                   <span class="tool-target">{{ tool.toolDisplay?.target }}</span>
                   <cs v-if="tool.isApproved" name="check" size="14px" class="approved-icon" />
@@ -216,11 +219,7 @@
                         )
                       ">
                       <cs name="reasoning" size="14px" class="reasoning-icon" />
-                      <span
-                        class="reasoning-text"
-                        :class="{
-                          expanded: isExplorationGroupReasoningExpanded(message, groupIndex)
-                        }">
+                      <span class="reasoning-text">
                         {{
                           isExplorationGroupReasoningExpanded(message, groupIndex)
                             ? $t('workflow.thinkingExpanded') || 'Thinking Process'
@@ -252,7 +251,10 @@
                         getExplorationToolExpandId(message, groupIndex, toolIndex)
                       )
                     ">
-                    <cs :name="tool.icon || 'tool'" size="14px" class="tool-type-icon" />
+                    <cs
+                      :name="tool.icon || 'tool'"
+                      size="14px"
+                      class="tool-type-icon" />
                     <span class="tool-name">{{ tool.action }}</span>
                     <span class="tool-target">{{ tool.target }}</span>
                   </div>
@@ -601,9 +603,7 @@
                       !isReasoningExpandedForMessage(message) &&
                       message === lastAssistantMessage
                   }" />
-                <span
-                  class="reasoning-text"
-                  :class="{ expanded: isReasoningExpandedForMessage(message) }">
+                <span class="reasoning-text">
                   <template v-if="isReasoningExpandedForMessage(message)">
                     {{ $t('workflow.thinkingExpanded') || 'Thinking Process' }}
                   </template>
@@ -651,7 +651,10 @@
                   call.isRejected ? 'status-error' : 'status-running'
                 ]">
                 <div class="tool-line title-wrap" :class="{ 'tool-rejected': call.isRejected }">
-                  <cs :name="call.icon || 'tool'" size="14px" class="tool-type-icon" />
+                  <cs
+                    :name="call.icon || 'tool'"
+                    size="14px"
+                    class="tool-type-icon" />
                   <span class="tool-name">{{ call.action }}</span>
                   <span class="tool-target">{{ call.target }}</span>
                 </div>
@@ -691,9 +694,7 @@
                   rotating:
                     !hasStreamingThoughtCompleted && !isReasoningExpanded(STREAMING_REASONING_ID)
                 }" />
-              <span
-                class="reasoning-text"
-                :class="{ expanded: isReasoningExpanded(STREAMING_REASONING_ID) }">
+              <span class="reasoning-text">
                 {{
                   isReasoningExpanded(STREAMING_REASONING_ID)
                     ? $t('workflow.thinkingExpanded') || 'Thinking Process'
@@ -1916,7 +1917,9 @@ const isExplorationGroupReasoningExpanded = (message, groupIndex) =>
   props.isReasoningExpanded(getExplorationGroupReasoningId(message, groupIndex))
 
 const sanitizeReasoningContent = content =>
-  String(content || '').replace(/^\s*<(?:think|thinking)(?:\s+class="[^"]*")?>\s*/i, '')
+  String(content || '')
+    .replace(/^\s*<(?:think|thinking)(?:\s+class="[^"]*")?>\s*/i, '')
+    .replace(/\s*<\/(?:think|thinking)>\s*$/i, '')
 
 const getExplorationToolExpandId = (message, groupIndex, toolIndex) =>
   `${message?.displayId || message?.id || 'exploration'}:group_tool:${groupIndex}:${toolIndex}`

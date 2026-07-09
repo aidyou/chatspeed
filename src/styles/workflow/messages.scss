@@ -202,7 +202,15 @@
           }
 
           &.tool-system .tool-type-icon {
+            color: var(--cs-text-color-secondary);
+          }
+
+          &.tool-group > .tool-line.title-wrap .tool-type-icon {
             color: var(--el-color-warning);
+          }
+
+          &.tool-bash .tool-type-icon {
+            color: var(--el-color-info);
           }
 
           &.tool-todo .tool-type-icon {
@@ -705,44 +713,6 @@
           }
         }
 
-        // Legacy thought-content (keep for compatibility)
-        .thought-content {
-          margin-bottom: 12px;
-          color: var(--cs-text-color-secondary);
-          font-style: italic;
-          font-size: 13px;
-          line-height: 1.6;
-          padding: 8px 12px;
-          background-color: var(--cs-bg-color);
-          border-radius: var(--cs-border-radius-sm);
-          border-left: 3px solid var(--cs-border-color-light);
-          white-space: pre-wrap;
-        }
-
-        // Custom <thought> tag styling
-        thought {
-          display: block;
-          font-style: italic;
-          color: var(--cs-text-color-secondary);
-          background-color: var(--cs-bg-color-light);
-          padding: 8px 12px;
-          border-left: 3px solid var(--cs-border-color-light);
-          border-radius: var(--cs-border-radius);
-          margin: 10px 0;
-          font-size: 0.9em;
-          line-height: 1.5;
-          white-space: pre-wrap;
-
-          &::before {
-            content: "Thought";
-            display: block;
-            font-weight: bold;
-            font-size: 0.8em;
-            text-transform: uppercase;
-            margin-bottom: 4px;
-            opacity: 0.6;
-          }
-        }
       }
     }
 

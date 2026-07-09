@@ -2,7 +2,7 @@
 
 # Release Notes
 
-## [2.0.4-planning]
+## [2.0.4]
 
 ### 🪄 Improvements
 
@@ -37,6 +37,10 @@
 - **Workflow grouped edit diff highlighting regression**:
   - Fixed an issue where consecutive edit tools collapsed into a grouped tool section could lose syntax-highlighted file preview rendering when expanded.
   - Grouped edit entries now reuse the same structured file diff preview as standalone edit tools, keeping highlight and diff presentation consistent.
+- **Workflow grouped tool icon and reasoning display cleanup**:
+  - Fixed a regression where the grouped tool header icon color could leak into nested exploration and edit tool entries, causing child tool icons to render with the wrong yellow highlight.
+  - Tool-group header icons now use an isolated visual style, while nested tool calls, pending tool rows, and standalone tool entries share the same type-based icon color mapping.
+  - Removed redundant icon-color override paths and cleaned up legacy reasoning display code that no longer had effective styling hooks.
 - **Workflow postponed tool approval display mismatch**:
   - Fixed an issue where later tool calls in the same turn could still appear as pending approval in the UI even though an earlier approval-blocked tool had already caused them to be postponed by the backend.
   - Pending approval rendering now reconciles strictly against backend-authoritative `executionContext.pending_tools`, so postponed tool calls no longer linger as false approval items after turn-level blocking.

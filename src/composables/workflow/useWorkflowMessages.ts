@@ -139,6 +139,51 @@ export function useWorkflowMessages(options = {}) {
     return ''
   }
 
+  const buildEnhancedDisplayId = (message, idx) => {
+    const meta = message?.metadata || {}
+    const workflowId = String(workflowStore.currentWorkflowId || 'workflow').trim()
+    const toolCallId = pickPreferredText(meta.tool_call_id, meta.toolCallId)
+    if (toolCallId) return `${workflowId}:tool:${toolCallId}:${message?.role || 'message'}`
+
+    const queuedUserMessageId = pickPreferredText(meta.queued_user_message_id, meta.queuedUserMessageId)
+    if (queuedUserMessageId) {
+      return `${workflowId}:queued:${queuedUserMessageId}:${message?.role || 'message'}`
+    }
+
+    const subAgentId = pickPreferredText(
+      meta.sub_agent_id,
+      meta.subAgentId,
+      meta?.data?.sub_agent_id,
+      meta?.data?.subAgentId
+    )
+    if (subAgentId) {
+      return `${workflowId}:subagent:${subAgentId}:${message?.role || 'message'}`
+    }
+
+    const persistedId = pickPreferredText(message?.id)
+    if (persistedId) return `${workflowId}:message:${persistedId}`
+
+    const messageKind = pickPreferredText(meta.message_kind, meta.messageKind) || message?.role || 'message'
+    const segmentId = getMessageSegmentId(message)
+    const createdAt = pickPreferredNumber(
+      message?.createdAt,
+      message?.created_at,
+      message?.metadata?.created_at,
+      message?.metadata?.createdAt
+    )
+    const stepIndex = pickPreferredNumber(message?.stepIndex, message?.step_index, idx) ?? idx
+
+    return [
+      workflowId,
+      'derived',
+      messageKind,
+      segmentId ?? 'no-segment',
+      stepIndex,
+      createdAt ?? 'no-created-at',
+      idx
+    ].join(':')
+  }
+
   const buildTaskGroupId = messages => {
     const workflowId = workflowStore.currentWorkflowId || 'workflow'
     const segmentId = getMessageSegmentId(messages[0])
@@ -939,7 +984,7 @@ export function useWorkflowMessages(options = {}) {
       })
       .flatMap((message, idx) => {
         const toolDisplay = getToolDisplayInfo(message)
-        const displayId = message.id || `msg_${message.role}_${message.stepIndex}_${idx}`
+        const displayId = buildEnhancedDisplayId(message, idx)
 
         let isRejected = false
         let isApproved = false
@@ -1327,7 +1372,7 @@ export function useWorkflowMessages(options = {}) {
         const cmd = normalizeShellCommandForDisplay(args.command || '', displayRoots())
         return {
           icon: resolveWorkflowToolIcon(name, 'terminal'),
-          toolType: 'tool-system',
+          toolType: 'tool-bash',
           action: `Bash: ${cmd}`,
           target: ''
         }
