@@ -7,11 +7,11 @@ use crate::db::{
 };
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::child_tasks::get_sub_agent_registry;
+use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::intelligence::IntelligenceManager;
-use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::memory::MemoryManager;
 use crate::workflow::react::orchestrator::{
@@ -1742,9 +1742,14 @@ async fn begin_new_context_frame_for_cold_session(
     {
         return Err("Cannot clear context unless workflow is stopped".to_string());
     }
-    if wait_reason_blocks_manual_clear(previous_execution_context.as_ref().and_then(|ctx| ctx.wait_reason.as_ref()))
-    {
-        return Err("Cannot clear context while workflow is waiting for user interaction".to_string());
+    if wait_reason_blocks_manual_clear(
+        previous_execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.wait_reason.as_ref()),
+    ) {
+        return Err(
+            "Cannot clear context while workflow is waiting for user interaction".to_string(),
+        );
     }
 
     let max_context_tokens = previous_execution_context
@@ -1852,8 +1857,14 @@ pub async fn workflow_begin_new_context_frame(
         });
     }
 
-    if wait_reason_blocks_manual_clear(execution_context.as_ref().and_then(|ctx| ctx.wait_reason.as_ref())) {
-        return Err("Cannot clear context while workflow is waiting for user interaction".to_string());
+    if wait_reason_blocks_manual_clear(
+        execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.wait_reason.as_ref()),
+    ) {
+        return Err(
+            "Cannot clear context while workflow is waiting for user interaction".to_string(),
+        );
     }
     if execution_context
         .as_ref()
@@ -1862,7 +1873,8 @@ pub async fn workflow_begin_new_context_frame(
         return Err("Cannot clear context unless workflow is stopped".to_string());
     }
 
-    if has_reconciled_live_session(&workflow_manager, &session_id, "begin_new_context_frame").await {
+    if has_reconciled_live_session(&workflow_manager, &session_id, "begin_new_context_frame").await
+    {
         let Some(executor) = workflow_manager.get_executor(&session_id) else {
             return Err("Workflow session is live but executor is unavailable".to_string());
         };
@@ -1881,7 +1893,9 @@ pub async fn workflow_begin_new_context_frame(
             _ => None,
         };
         if wait_reason_blocks_manual_clear(live_wait_reason.as_ref()) {
-            return Err("Cannot clear context while workflow is waiting for user interaction".to_string());
+            return Err(
+                "Cannot clear context while workflow is waiting for user interaction".to_string(),
+            );
         }
         if !workflow_state_allows_manual_clear(&state) {
             return Err("Cannot clear context unless workflow is stopped".to_string());
@@ -4923,18 +4937,38 @@ mod tests {
     #[test]
     fn test_workflow_state_allows_manual_clear() {
         assert!(workflow_state_allows_manual_clear(&WorkflowState::Pending));
-        assert!(workflow_state_allows_manual_clear(&WorkflowState::Completed));
+        assert!(workflow_state_allows_manual_clear(
+            &WorkflowState::Completed
+        ));
         assert!(workflow_state_allows_manual_clear(&WorkflowState::Error));
-        assert!(workflow_state_allows_manual_clear(&WorkflowState::Cancelled));
-        assert!(!workflow_state_allows_manual_clear(&WorkflowState::Thinking));
-        assert!(!workflow_state_allows_manual_clear(&WorkflowState::Executing));
-        assert!(!workflow_state_allows_manual_clear(&WorkflowState::Auditing));
-        assert!(!workflow_state_allows_manual_clear(&WorkflowState::Stopping));
+        assert!(workflow_state_allows_manual_clear(
+            &WorkflowState::Cancelled
+        ));
+        assert!(!workflow_state_allows_manual_clear(
+            &WorkflowState::Thinking
+        ));
+        assert!(!workflow_state_allows_manual_clear(
+            &WorkflowState::Executing
+        ));
+        assert!(!workflow_state_allows_manual_clear(
+            &WorkflowState::Auditing
+        ));
+        assert!(!workflow_state_allows_manual_clear(
+            &WorkflowState::Stopping
+        ));
         assert!(!workflow_state_allows_manual_clear(&WorkflowState::Paused));
-        assert!(!workflow_state_allows_manual_clear(&WorkflowState::AwaitingApproval));
-        assert!(!workflow_state_allows_manual_clear(&WorkflowState::AwaitingAutoApproval));
-        assert!(!workflow_state_allows_manual_clear(&WorkflowState::AwaitingUser));
-        assert!(!workflow_state_allows_manual_clear(&WorkflowState::AwaitingSubAgent));
+        assert!(!workflow_state_allows_manual_clear(
+            &WorkflowState::AwaitingApproval
+        ));
+        assert!(!workflow_state_allows_manual_clear(
+            &WorkflowState::AwaitingAutoApproval
+        ));
+        assert!(!workflow_state_allows_manual_clear(
+            &WorkflowState::AwaitingUser
+        ));
+        assert!(!workflow_state_allows_manual_clear(
+            &WorkflowState::AwaitingSubAgent
+        ));
     }
 
     #[test]
@@ -5319,7 +5353,9 @@ mod tests {
         assert_eq!(hydrated.current_segment_id, 1);
         assert_eq!(hydrated.max_context_tokens, Some(4096));
         assert!(
-            hydrated.current_context_tokens.is_some_and(|tokens| tokens > 0),
+            hydrated
+                .current_context_tokens
+                .is_some_and(|tokens| tokens > 0),
             "recovered snapshot should expose a positive current_context_tokens value"
         );
     }

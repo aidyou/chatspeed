@@ -15,8 +15,8 @@ use crate::db::{Agent, MainStore, MemoryCandidateUpsert, ModelConfig, WorkflowMe
 use crate::tools::{
     helper::generate_shell_approval_patterns as shared_generate_shell_approval_patterns,
     ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
-    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_MCP_TOOL_LOAD, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
-    TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
+    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_MCP_TOOL_LOAD, TOOL_PLAN_EDIT_NOTE,
+    TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
@@ -1275,7 +1275,8 @@ impl WorkflowExecutor {
             }
         }
         self.sync_runtime_skills_from_agent_config();
-        self.refresh_workflow_mcp_runtime_capabilities(false).await?;
+        self.refresh_workflow_mcp_runtime_capabilities(false)
+            .await?;
 
         self.register_foundation_tools().await?;
 
