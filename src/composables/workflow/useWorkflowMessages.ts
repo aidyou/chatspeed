@@ -16,7 +16,7 @@ import {
  * Composable for managing message processing and display
  * Handles enhanced messages, tool formatting, and expansion states
  */
-const DEFAULT_VISIBLE_COMPLETED_TASK_GROUPS = 3
+const DEFAULT_VISIBLE_COMPLETED_TASK_GROUPS = 2
 
 export function useWorkflowMessages(options = {}) {
   const { t } = useI18n()
@@ -484,9 +484,7 @@ export function useWorkflowMessages(options = {}) {
         }
       : null
 
-    const completedLimit = activeGroup
-      ? visibleCompletedTaskGroupCount.value
-      : visibleCompletedTaskGroupCount.value + 1
+    const completedLimit = Math.max(0, visibleCompletedTaskGroupCount.value - (activeGroup ? 1 : 0))
     const visibleCompletedGroups = state.completedGroups.slice(-completedLimit)
 
     return {
@@ -496,9 +494,10 @@ export function useWorkflowMessages(options = {}) {
   })
 
   const hiddenCompletedTaskGroupCount = computed(() => {
-    const completedLimit = taskWindowState.value.activeMessages.length
-      ? visibleCompletedTaskGroupCount.value
-      : visibleCompletedTaskGroupCount.value + 1
+    const completedLimit = Math.max(
+      0,
+      visibleCompletedTaskGroupCount.value - (taskWindowState.value.activeMessages.length ? 1 : 0)
+    )
     return Math.max(0, taskWindowState.value.completedGroups.length - completedLimit)
   })
 

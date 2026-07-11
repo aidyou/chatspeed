@@ -19,6 +19,10 @@
 - **Workflow tool orchestration display and input syncing**:
   - Improved Workflow message orchestration and tool grouping so related tool calls render in a more stable, compact way during long-running sessions.
   - Tightened input syncing between Workflow views and runtime state to reduce stale intermediate UI states while tools are running or waiting.
+- **Workflow context resets and tool display controls**:
+  - Added a manual "Clear context" action for stopped Workflow sessions so later AI turns can continue from a fresh context boundary without creating a brand-new workflow.
+  - Clear-context markers now render as a localized "Start new session" divider in the message list, making context boundaries easier to scan in long conversations.
+  - Added a settings-level tool display control path for Workflow, including better in-message rendering of running tool output and more compact default visibility for older completed task groups.
 
 ### 🐞 Bug Fixes
 
@@ -44,6 +48,9 @@
 - **Workflow postponed tool approval display mismatch**:
   - Fixed an issue where later tool calls in the same turn could still appear as pending approval in the UI even though an earlier approval-blocked tool had already caused them to be postponed by the backend.
   - Pending approval rendering now reconciles strictly against backend-authoritative `executionContext.pending_tools`, so postponed tool calls no longer linger as false approval items after turn-level blocking.
+- **Workflow clear-context recovery and tool task window defaults**:
+  - Fixed an issue where reloading or revisiting a workflow after clearing context could leave the active context-frame state out of sync, causing the new boundary to recover inconsistently.
+  - Tuned the default completed-task window so active tool groups keep more room on screen while older completed groups stay collapsed sooner.
 
 ---
 

@@ -138,7 +138,28 @@
                 </div>
                 <div v-if="isMessageExpanded(tool)" class="tool-detail">
                   <div
-                    v-if="shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'diff'"
+                    v-if="
+                      tool.metadata?.tool_call_id &&
+                      workflowStore.getToolStream(tool.metadata.tool_call_id).length > 0
+                    "
+                    class="tool-stream-output">
+                    <div
+                      v-for="(line, idx) in workflowStore.getToolStream(tool.metadata.tool_call_id)"
+                      :key="idx"
+                      class="stream-line">
+                      {{ line }}
+                    </div>
+                  </div>
+                  <div
+                    v-else-if="shouldShowRunningPlaceholder(tool)"
+                    class="tool-running-placeholder">
+                    <cs name="loading" size="14px" class="tool-running-placeholder__icon cs-spin" />
+                    <span class="tool-running-placeholder__text">
+                      {{ getRunningPlaceholderText(tool) }}
+                    </span>
+                  </div>
+                  <div
+                    v-else-if="shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'diff'"
                     class="tool-diff-view">
                     <FilePreviewDiff
                       :file-path="getDiffFilePath(tool)"

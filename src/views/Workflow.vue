@@ -378,7 +378,7 @@ const planningMode = ref(false)
 const autoCompressEnabled = ref(true)
 const imageAttachments = ref([])
 const defaultImageRecognitionPrompt = ref('')
-const visibleCompletedTaskGroupCount = ref(3)
+const visibleCompletedTaskGroupCount = ref(2)
 const automationDrawerVisible = ref(false)
 const workflowSidebarActiveTab = ref('history')
 const lastHistoryWorkflowId = ref(null)
@@ -1823,7 +1823,7 @@ watch(
 watch(
   () => currentWorkflowId.value,
   () => {
-    visibleCompletedTaskGroupCount.value = 3
+    visibleCompletedTaskGroupCount.value = 2
     clearImageAttachments()
   }
 )
