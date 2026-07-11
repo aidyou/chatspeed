@@ -21,6 +21,7 @@ const defaultSettings = {
   codeLightTheme: 'atom-one-light',
   codeDarkTheme: 'github-dark',
   showMenuButton: true,
+  showTodayCostStats: false,
   workflowApprovalMuted: true,
   workflowCompletionMuted: true,
   workflowLastSelectedId: '',

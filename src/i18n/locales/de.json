@@ -354,6 +354,8 @@
       "shortcutSettings": "Tastenkombinationen",
       "showMenuButton": "Menüschaltfläche anzeigen",
       "showMenuButtonTooltip": "Zeigt die Menüschaltfläche in der oberen rechten Ecke des Dialogfensters an",
+      "showTodayCostStats": "Heutige Kostenstatistik anzeigen",
+      "showTodayCostStatsTooltip": "Zeigt den kumulierten heutigen Verbrauch in der Workflow-Titelleiste an und aktualisiert ihn alle 5 Sekunden automatisch",
       "startWordSelectionToolbarFailed": "Fehler beim Starten der KI-Textauswahl-Symbolleiste: {error}",
       "stopWordSelectionToolbarFailed": "Fehler beim Stoppen der KI-Textauswahl-Symbolleiste: {error}",
       "systemTheme": "System verwenden",

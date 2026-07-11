@@ -25,10 +25,21 @@
       </template>
       <template #center>
         <div
-          v-if="displayAllowedPathTitle"
-          class="workflow-titlebar-primary-path"
-          :title="displayAllowedPathTitle">
-          {{ displayAllowedPathTitle }}
+          v-if="displayAllowedPathTitle || shouldShowTodayCostStats"
+          class="workflow-titlebar-center-content">
+          <div
+            v-if="displayAllowedPathTitle"
+            class="workflow-titlebar-primary-path"
+            :title="displayAllowedPathTitle">
+            {{ displayAllowedPathTitle }}
+          </div>
+          <div
+            v-if="shouldShowTodayCostStats"
+            class="workflow-titlebar-today-cost"
+            :title="todayCostTitle">
+            <cs name="money" />
+            <span>{{ todayCostTitle }}</span>
+          </div>
         </div>
       </template>
       <template #right>
@@ -65,7 +76,9 @@
           :hide-after="0"
           :enterable="false"
           placement="bottom">
-          <div class="menu icon-btn upperLayer restart update-ready-btn" @click="updateStore.restartApp">
+          <div
+            class="menu icon-btn upperLayer restart update-ready-btn"
+            @click="updateStore.restartApp">
             <cs name="restart" />
             {{ $t('common.updateButtonText') }}
           </div>
@@ -300,6 +313,12 @@ import { ElMessageBox } from 'element-plus'
 import { invokeWrapper } from '@/libs/tauri'
 import { imagePreview, imageSourceUrl } from '@/libs/fs'
 import { showMessage, Uuid } from '@/libs/util'
+import {
+  buildPricingMaps,
+  estimateCostFromPricing,
+  findPricingForUsageRow,
+  formatCurrencyCompact
+} from '@/libs/modelPricing'
 
 import { useWorkflowStore } from '@/stores/workflow'
 import { useWorkflowAutomationStore } from '@/stores/workflowAutomation'
@@ -307,6 +326,7 @@ import { useAgentStore } from '@/stores/agent'
 import { useSettingStore } from '@/stores/setting'
 import { useUpdateStore } from '@/stores/update'
 import { useWindowStore } from '@/stores/window'
+import { useModelStore } from '@/stores/model'
 
 import Titlebar from '@/components/window/Titlebar.vue'
 import StatusPanel from '@/components/workflow/StatusPanel.vue'
@@ -336,6 +356,7 @@ const agentStore = useAgentStore()
 const settingStore = useSettingStore()
 const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
+const modelStore = useModelStore()
 
 // Component refs
 const messageListRef = ref(null)
@@ -361,6 +382,70 @@ const visibleCompletedTaskGroupCount = ref(3)
 const automationDrawerVisible = ref(false)
 const workflowSidebarActiveTab = ref('history')
 const lastHistoryWorkflowId = ref(null)
+const todayCostAmount = ref(0)
+const todayCostRefreshTimer = ref(null)
+const pricingMaps = computed(() => buildPricingMaps(modelStore.providers))
+const shouldShowTodayCostStats = computed(() => Boolean(settingStore.settings.showTodayCostStats))
+const todayCostTitle = computed(() => formatCurrencyCompact(todayCostAmount.value))
+
+const getLocalDateString = date => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const calculateTodayCost = rows => {
+  return (rows || []).reduce((total, row) => {
+    const pricing = findPricingForUsageRow(pricingMaps.value, row)
+    return (
+      total +
+      estimateCostFromPricing(
+        {
+          inputTokens: row.totalInputTokens,
+          outputTokens: row.totalOutputTokens,
+          cacheTokens: row.totalCacheTokens
+        },
+        pricing
+      )
+    )
+  }, 0)
+}
+
+const refreshTodayCost = async () => {
+  if (!shouldShowTodayCostStats.value) {
+    todayCostAmount.value = 0
+    return
+  }
+
+  try {
+    const today = getLocalDateString(new Date())
+    const rows = await invokeWrapper('get_ccproxy_grouped_stats', { days: 0 })
+    todayCostAmount.value = calculateTodayCost((rows || []).filter(row => row.date === today))
+  } catch (error) {
+    console.error('Failed to refresh workflow today cost stats:', error)
+  }
+}
+
+const stopTodayCostRefresh = () => {
+  if (todayCostRefreshTimer.value) {
+    clearInterval(todayCostRefreshTimer.value)
+    todayCostRefreshTimer.value = null
+  }
+}
+
+const startTodayCostRefresh = () => {
+  stopTodayCostRefresh()
+  if (!shouldShowTodayCostStats.value) {
+    todayCostAmount.value = 0
+    return
+  }
+
+  void refreshTodayCost()
+  todayCostRefreshTimer.value = setInterval(() => {
+    void refreshTodayCost()
+  }, 5000)
+}
 
 const showPlanningModeToggle = computed(() => {
   const workflow = workflowStore.currentWorkflow
@@ -1356,8 +1441,7 @@ const onSelectAutomation = async automationId => {
 }
 
 const onDeleteAutomation = async automationId => {
-  const deletingSelectedAutomation =
-    workflowAutomationStore.selectedAutomationId === automationId
+  const deletingSelectedAutomation = workflowAutomationStore.selectedAutomationId === automationId
 
   try {
     await ElMessageBox.confirm(
@@ -1380,7 +1464,8 @@ const onDeleteAutomation = async automationId => {
     showMessage(t('common.deleteSuccess'), 'success')
     if (deletingSelectedAutomation) {
       automationDrawerVisible.value = false
-      const nextAutomationId = workflowAutomationStore.selectedAutomationId || resolveInitialAutomationId()
+      const nextAutomationId =
+        workflowAutomationStore.selectedAutomationId || resolveInitialAutomationId()
       if (nextAutomationId) {
         await onSelectAutomation(nextAutomationId)
       } else {
@@ -1424,7 +1509,9 @@ const approvalQueueCount = computed(() => {
 })
 const sidebarRootFilterResetToken = ref(0)
 
-const currentInlinePendingApprovalIds = computed(() => workflowStore.currentInlinePendingApprovalIds)
+const currentInlinePendingApprovalIds = computed(
+  () => workflowStore.currentInlinePendingApprovalIds
+)
 const globalPendingApprovalList = computed(() => {
   const activeSessionId = currentWorkflowId.value
   const backgroundEntries = pendingApprovalList.value.filter(
@@ -1438,19 +1525,22 @@ const globalPendingApprovalList = computed(() => {
     .filter(entry => entry?.kind === 'approval')
 
   const currentStatus = String(currentWorkflow.value?.status || '').toLowerCase()
-  const currentWaitReason = String(waitReason.value || currentWorkflow.value?.waitReason || '').toLowerCase()
+  const currentWaitReason = String(
+    waitReason.value || currentWorkflow.value?.waitReason || ''
+  ).toLowerCase()
   const currentAskUserEntry =
-    activeSessionId &&
-    (currentStatus === 'awaiting_user' || currentWaitReason === 'user_input')
-      ? [{
-          key: `${activeSessionId}:awaiting_user`,
-          id: 'awaiting_user',
-          sessionId: activeSessionId,
-          kind: 'ask_user',
-          workflowTitle: currentWorkflow.value?.title || currentWorkflow.value?.userQuery || '',
-          action: t('workflow.awaitingUser'),
-          updatedAt: Date.now()
-        }]
+    activeSessionId && (currentStatus === 'awaiting_user' || currentWaitReason === 'user_input')
+      ? [
+          {
+            key: `${activeSessionId}:awaiting_user`,
+            id: 'awaiting_user',
+            sessionId: activeSessionId,
+            kind: 'ask_user',
+            workflowTitle: currentWorkflow.value?.title || currentWorkflow.value?.userQuery || '',
+            action: t('workflow.awaitingUser'),
+            updatedAt: Date.now()
+          }
+        ]
       : []
 
   const merged = [...currentEntries, ...currentAskUserEntry, ...backgroundEntries]
@@ -1546,7 +1636,8 @@ const filteredWorkflows = computed(() => {
         (wf.title || wf.userQuery).toLowerCase().includes(searchQuery.toLowerCase())
       )
 
-  return [...base].sort((a, b) => getWorkflowSortTime(b) - getWorkflowSortTime(a))
+  return [...base]
+    .sort((a, b) => getWorkflowSortTime(b) - getWorkflowSortTime(a))
     .filter(wf => wf?.isAutomationRun !== true)
 })
 
@@ -1679,8 +1770,7 @@ watch(
       const currentHistoryWorkflowVisible =
         currentWorkflowId.value &&
         workflowStore.workflows.some(
-          workflow =>
-            workflow.id === currentWorkflowId.value && workflow.isAutomationRun !== true
+          workflow => workflow.id === currentWorkflowId.value && workflow.isAutomationRun !== true
         )
 
       if (currentHistoryWorkflowVisible) {
@@ -1775,6 +1865,14 @@ watch(
   { deep: true, immediate: true }
 )
 
+watch(
+  () => shouldShowTodayCostStats.value,
+  () => {
+    startTodayCostRefresh()
+  },
+  { immediate: true }
+)
+
 onMounted(async () => {
   unlistenFocusInput.value = await listen('cs://workflow-focus-input', event => {
     if (event.payload && event.payload.windowLabel === settingStore.windowLabel) {
@@ -1814,6 +1912,7 @@ onMounted(async () => {
   windowStore.initWorkflowWindowAlwaysOnTop()
   window.addEventListener('keydown', onGlobalKeyDown)
   window.addEventListener('resize', updateMaxWidth)
+  startTodayCostRefresh()
 
   // Initial scroll
   scrollMessageListToBottom()
@@ -1826,6 +1925,7 @@ onBeforeUnmount(() => {
   unlistenFocusInput.value?.()
   window.removeEventListener('keydown', onGlobalKeyDown)
   window.removeEventListener('resize', updateMaxWidth)
+  stopTodayCostRefresh()
   clearRetryTimer()
 })
 </script>
@@ -1839,7 +1939,19 @@ onBeforeUnmount(() => {
   gap: var(--cs-space-xs);
 }
 
+.workflow-titlebar-center-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cs-space-lg);
+  min-width: 0;
+  max-width: min(60vw, 640px);
+  flex-wrap: nowrap;
+}
+
 .workflow-titlebar-primary-path {
+  flex: 1 1 auto;
+  min-width: 0;
   max-width: min(40vw, 360px);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1847,6 +1959,22 @@ onBeforeUnmount(() => {
   font-size: var(--cs-font-size-sm);
   font-weight: 500;
   color: var(--cs-text-primary);
+}
+
+.workflow-titlebar-today-cost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-width: 0;
+  font-size: var(--cs-font-size-sm);
+  font-weight: 600;
+  color: var(--cs-success-color);
+  white-space: nowrap;
+}
+
+.workflow-titlebar-today-cost .cs {
+  color: var(--cs-success-color);
 }
 
 .update-ready-btn {

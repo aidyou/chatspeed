@@ -354,6 +354,8 @@
       "shortcutSettings": "단축키 설정",
       "showMenuButton": "메뉴 버튼 표시",
       "showMenuButtonTooltip": "대화 채팅 창의 오른쪽 상단에 메뉴 버튼을 표시합니다.",
+      "showTodayCostStats": "오늘의 비용 통계 표시",
+      "showTodayCostStatsTooltip": "워크플로우 제목 표시줄에 오늘 누적 비용을 표시하고 5초마다 자동으로 새로 고칩니다.",
       "startWordSelectionToolbarFailed": "AI 단어 선택 도구 모음 시작 실패: {error}",
       "stopWordSelectionToolbarFailed": "AI 단어 선택 도구 모음 중지 실패: {error}",
       "systemTheme": "시스템 테마 따름",

@@ -354,6 +354,8 @@
       "shortcutSettings": "快捷鍵設定",
       "showMenuButton": "顯示選單按鈕",
       "showMenuButtonTooltip": "在對話聊天視窗的右上角顯示選單按鈕",
+      "showTodayCostStats": "顯示當日消費統計",
+      "showTodayCostStatsTooltip": "在工作流程標題列中顯示當日累積消費金額，並每 5 秒自動刷新",
       "startWordSelectionToolbarFailed": "啟動 AI 劃詞工具列失敗：{error}",
       "stopWordSelectionToolbarFailed": "停止 AI 劃詞工具列失敗：{error}",
       "systemTheme": "跟隨系統",

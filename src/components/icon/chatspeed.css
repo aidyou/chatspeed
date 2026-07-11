@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-money:before {
+  content: "\e6d3";
+}
+
 .cs-clock:before {
   content: "\e819";
 }

@@ -539,9 +539,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const canClearContext = computed(() => {
     if (!currentWorkflow.value?.id) return false;
     const executionContext = normalizeExecutionContext(currentWorkflow.value?.executionContext);
-    if (!executionContext) return false;
-    const state = String(executionContext.state || '').toLowerCase();
-    const waitReasonValue = String(executionContext.waitReason || '').toLowerCase();
+    const state = String(
+      executionContext?.state || currentWorkflow.value?.status || WORKFLOW_STATUSES.PENDING
+    ).toLowerCase();
+    const waitReasonValue = String(
+      executionContext?.waitReason ?? currentWorkflow.value?.waitReason ?? waitReason.value ?? ''
+    ).toLowerCase();
     if (
       [
         WORKFLOW_WAIT_REASONS.APPROVAL,
@@ -556,6 +559,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       WORKFLOW_STATUSES.PENDING,
       WORKFLOW_STATUSES.COMPLETED,
       WORKFLOW_STATUSES.ERROR,
+      WORKFLOW_STATUSES.FAILED,
       WORKFLOW_STATUSES.CANCELLED
     ].includes(state);
   });
@@ -1481,11 +1485,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
 
     // 更新 Task Ledger
-    if (taskLedgerEnabled.value && incomingToolCallId) {
+    if (taskLedgerEnabled.value) {
       const status = message.metadata?.approval_status;
       const isError = message.isError || message.is_error || message.metadata?.is_error;
 
-      if (message.role === 'tool') {
+      if (message.role === 'tool' && incomingToolCallId) {
         const toolStatus = inferLedgerToolStatus(message);
         const toolName = message.metadata?.tool_name || message.metadata?.tool_call?.name;
 
@@ -1502,26 +1506,27 @@ export const useWorkflowStore = defineStore('workflow', () => {
             status || (toolStatus === 'pending' ? 'pending' : toolStatus === 'rejected' ? 'rejected' : 'approved')
         });
       } else if (message.role === 'assistant' && message.metadata?.tool_calls?.length) {
-        // 新的工具调用 - pending 状态
+        // 新的工具调用 - pending / auto-running 初始状态
         for (const call of message.metadata.tool_calls) {
           const toolCallId = call.id;
           if (!toolCallId) continue;
 
           const toolName = call.name || call.function?.name;
           const args = safeParseArguments(call.arguments || call.function?.arguments);
+          const autoExecute = isAutoExecuteWorkflowTool(toolName);
 
           upsertToolViewState({
             toolCallId,
             toolName,
-            status: isAutoExecuteWorkflowTool(toolName) ? 'approved_running' : 'pending',
+            status: autoExecute ? 'approved_running' : 'pending',
             title: message.metadata?.title || toolName,
             summary: getToolStatusSummary(
               toolName,
-              isAutoExecuteWorkflowTool(toolName) ? 'running' : 'pending',
-              isAutoExecuteWorkflowTool(toolName) ? 'Executing...' : 'Awaiting approval'
+              autoExecute ? 'running' : 'pending',
+              autoExecute ? 'Executing...' : 'Awaiting approval'
             ),
             arguments: args,
-            approvalStatus: isAutoExecuteWorkflowTool(toolName) ? 'approved' : 'pending'
+            approvalStatus: autoExecute ? 'approved' : 'pending'
           });
         }
       }
@@ -1559,6 +1564,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
         if (workflowIndex !== -1) {
           workflows.value[workflowIndex].status = status;
           workflows.value[workflowIndex].waitReason = waitReasonValue;
+
+          const executionContext =
+            normalizeExecutionContext(workflows.value[workflowIndex].executionContext) || {};
+          workflows.value[workflowIndex].executionContext = {
+            ...executionContext,
+            state: statusLower,
+            waitReason: waitReasonValue,
+            wait_reason: waitReasonValue
+          };
         }
 
         if (workflowId === currentWorkflowId.value) {

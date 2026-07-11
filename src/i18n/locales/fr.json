@@ -354,6 +354,8 @@
       "shortcutSettings": "Paramètres des raccourcis clavier",
       "showMenuButton": "Afficher le bouton de menu",
       "showMenuButtonTooltip": "Afficher le bouton de menu dans le coin supérieur droit de la fenêtre de conversation",
+      "showTodayCostStats": "Afficher les statistiques de coût du jour",
+      "showTodayCostStatsTooltip": "Afficher le coût cumulé du jour dans la barre de titre du workflow et l’actualiser automatiquement toutes les 5 secondes",
       "startWordSelectionToolbarFailed": "Échec du démarrage de la barre d'outils de sélection de mots par l'IA : {error}",
       "stopWordSelectionToolbarFailed": "Échec de l'arrêt de la barre d'outils de sélection de mots par l'IA : {error}",
       "systemTheme": "Thème système",

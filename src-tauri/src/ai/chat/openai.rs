@@ -161,6 +161,91 @@ fn extract_inline_reasoning_content(content: &str) -> (String, String) {
     state.consume(content)
 }
 
+#[derive(Debug, Default)]
+struct SanitizedReasoningChunk {
+    content: String,
+    removed_empty_comment: bool,
+}
+
+#[derive(Debug, Default)]
+struct EmptyHtmlCommentStreamState {
+    carry: String,
+}
+
+impl EmptyHtmlCommentStreamState {
+    fn consume(&mut self, chunk: &str) -> SanitizedReasoningChunk {
+        let mut input = std::mem::take(&mut self.carry);
+        input.push_str(chunk);
+        let mut content = String::new();
+        let mut removed_empty_comment = false;
+        let mut remaining = input.as_str();
+
+        loop {
+            let Some(comment_start) = remaining.find("<!--") else {
+                let opening_delimiter = "<!--";
+                let carry_len = (1..opening_delimiter.len())
+                    .filter(|&len| remaining.ends_with(&opening_delimiter[..len]))
+                    .max()
+                    .unwrap_or_default();
+                let split_at = remaining.len().saturating_sub(carry_len);
+                content.push_str(&remaining[..split_at]);
+                self.carry.push_str(&remaining[split_at..]);
+                break;
+            };
+
+            content.push_str(&remaining[..comment_start]);
+            let comment = &remaining[comment_start..];
+            let Some(comment_end) = comment.find("-->") else {
+                self.carry.push_str(comment);
+                break;
+            };
+
+            let end_index = comment_end + 3;
+            if !comment[4..comment_end].trim().is_empty() {
+                content.push_str(&comment[..end_index]);
+            } else {
+                removed_empty_comment = true;
+            }
+            remaining = &comment[end_index..];
+        }
+
+        SanitizedReasoningChunk {
+            content,
+            removed_empty_comment,
+        }
+    }
+
+    fn finish(&mut self) -> String {
+        std::mem::take(&mut self.carry)
+    }
+}
+
+/// Removes empty HTML comments emitted by some reasoning providers.
+fn sanitize_reasoning_content(content: &str) -> SanitizedReasoningChunk {
+    match regex::Regex::new(r"<!--\s*-->") {
+        Ok(pattern) => {
+            let sanitized = pattern.replace_all(content, "").into_owned();
+            let removed_empty_comment = sanitized.len() != content.len();
+            SanitizedReasoningChunk {
+                content: sanitized,
+                removed_empty_comment,
+            }
+        }
+        Err(_) => {
+            let sanitized = content.replace("<!-- -->", "").replace("<!---->", "");
+            let removed_empty_comment = sanitized.len() != content.len();
+            SanitizedReasoningChunk {
+                content: sanitized,
+                removed_empty_comment,
+            }
+        }
+    }
+}
+
+fn should_emit_reasoning_chunk(chunk: &SanitizedReasoningChunk) -> bool {
+    !chunk.removed_empty_comment || !chunk.content.trim().is_empty()
+}
+
 fn extract_reasoning_from_openai_message(message: &Value) -> String {
     if let Some(reasoning_content) = message
         .get("reasoning_content")
@@ -261,6 +346,8 @@ impl OpenAIChat {
         // Streaming response handling
         let mut full_response = String::new();
         let mut reasoning_content = String::new();
+        let mut structured_reasoning_comment_state = EmptyHtmlCommentStreamState::default();
+        let mut inline_reasoning_comment_state = EmptyHtmlCommentStreamState::default();
         let mut inline_think_state = InlineThinkStreamState::default();
         let mut token_usage = TokenUsage::default();
         let start_time = Instant::now();
@@ -327,12 +414,13 @@ impl OpenAIChat {
                         }
 
                         if let Some(content) = chunk.reasoning_content {
-                            if !content.is_empty() {
-                                reasoning_content.push_str(&content);
+                            let content = structured_reasoning_comment_state.consume(&content);
+                            if should_emit_reasoning_chunk(&content) {
+                                reasoning_content.push_str(&content.content);
 
                                 callback(ChatResponse::new_with_arc(
                                     chat_id.clone(),
-                                    content,
+                                    content.content,
                                     MessageType::Reasoning,
                                     metadata_option.as_ref().and_then(|m| m.to_value()),
                                     None,
@@ -364,12 +452,14 @@ impl OpenAIChat {
                                         (content, String::new())
                                     };
 
-                                if !inline_reasoning_chunk.is_empty() {
-                                    reasoning_content.push_str(&inline_reasoning_chunk);
+                                let inline_reasoning_chunk =
+                                    inline_reasoning_comment_state.consume(&inline_reasoning_chunk);
+                                if should_emit_reasoning_chunk(&inline_reasoning_chunk) {
+                                    reasoning_content.push_str(&inline_reasoning_chunk.content);
 
                                     callback(ChatResponse::new_with_arc(
                                         chat_id.clone(),
-                                        inline_reasoning_chunk,
+                                        inline_reasoning_chunk.content,
                                         MessageType::Reasoning,
                                         metadata_option.as_ref().and_then(|m| m.to_value()),
                                         None,
@@ -488,6 +578,25 @@ impl OpenAIChat {
             }
         }
 
+        for trailing_reasoning in [
+            structured_reasoning_comment_state.finish(),
+            inline_reasoning_comment_state.finish(),
+        ] {
+            let trailing_reasoning = sanitize_reasoning_content(&trailing_reasoning);
+            if !should_emit_reasoning_chunk(&trailing_reasoning) {
+                continue;
+            }
+
+            reasoning_content.push_str(&trailing_reasoning.content);
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
+                trailing_reasoning.content,
+                MessageType::Reasoning,
+                metadata_option.as_ref().and_then(|m| m.to_value()),
+                None,
+            ));
+        }
+
         #[cfg(debug_assertions)]
         {
             log::debug!(
@@ -555,11 +664,18 @@ impl OpenAIChat {
             .and_then(|choices| choices.first())
             .map(|choice| extract_reasoning_from_openai_message(&choice["message"]))
             .unwrap_or_default();
-        let reasoning_content = [structured_reasoning_content, inline_reasoning_content]
-            .into_iter()
-            .filter(|part| !part.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let reasoning_content = sanitize_reasoning_content(
+            &[structured_reasoning_content, inline_reasoning_content]
+                .into_iter()
+                .filter(|part| !part.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
+        let reasoning_content = if should_emit_reasoning_chunk(&reasoning_content) {
+            reasoning_content.content
+        } else {
+            String::new()
+        };
 
         // Extract token usage if available
         let token_usage = if let Some(usage) = parsed.get("usage") {
@@ -917,9 +1033,74 @@ impl OpenAIChat {
 mod tests {
     use super::{
         extract_inline_reasoning_content, extract_reasoning_from_openai_message,
+        sanitize_reasoning_content, should_emit_reasoning_chunk, EmptyHtmlCommentStreamState,
         InlineThinkStreamState,
     };
     use serde_json::json;
+
+    #[test]
+    fn sanitize_reasoning_content_removes_empty_html_comments() {
+        let sanitized = sanitize_reasoning_content("Before<!-- -->\n<!--\n\t-->After");
+        assert_eq!(sanitized.content, "Before\nAfter");
+        assert!(sanitized.removed_empty_comment);
+    }
+
+    #[test]
+    fn comment_only_whitespace_fragments_are_dropped_but_plain_whitespace_is_preserved() {
+        let comment_only = sanitize_reasoning_content("\n<!-- -->\n");
+        assert!(!should_emit_reasoning_chunk(&comment_only));
+
+        let plain_whitespace = sanitize_reasoning_content("\n\n");
+        assert!(should_emit_reasoning_chunk(&plain_whitespace));
+    }
+
+    #[test]
+    fn empty_html_comment_stream_state_removes_split_comments() {
+        let mut state = EmptyHtmlCommentStreamState::default();
+
+        let first = state.consume("Before<!--");
+        assert_eq!(first.content, "Before");
+        assert!(!first.removed_empty_comment);
+
+        let second = state.consume(" \n-->After");
+        assert_eq!(second.content, "After");
+        assert!(second.removed_empty_comment);
+        assert_eq!(state.finish(), "");
+    }
+
+    #[test]
+    fn empty_html_comment_stream_state_removes_comments_split_at_any_opener_prefix() {
+        for (first, second) in [
+            ("Before<", "!-- -->After"),
+            ("Before<!", "-- -->After"),
+            ("Before<!-", "- -->After"),
+            ("Before<!--", " -->After"),
+        ] {
+            let mut state = EmptyHtmlCommentStreamState::default();
+            let first_chunk = state.consume(first);
+            assert_eq!(first_chunk.content, "Before");
+            assert!(!first_chunk.removed_empty_comment);
+
+            let second_chunk = state.consume(second);
+            assert_eq!(second_chunk.content, "After");
+            assert!(second_chunk.removed_empty_comment);
+            assert_eq!(state.finish(), "");
+        }
+    }
+
+    #[test]
+    fn empty_html_comment_stream_state_preserves_nonempty_comments() {
+        let mut state = EmptyHtmlCommentStreamState::default();
+
+        let first = state.consume("Before<!-- note");
+        assert_eq!(first.content, "Before");
+        assert!(!first.removed_empty_comment);
+
+        let second = state.consume(" -->After");
+        assert_eq!(second.content, "<!-- note -->After");
+        assert!(!second.removed_empty_comment);
+        assert_eq!(state.finish(), "");
+    }
 
     #[test]
     fn extract_reasoning_prefers_reasoning_content() {

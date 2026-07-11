@@ -354,6 +354,8 @@
       "shortcutSettings": "ショートカットキー設定",
       "showMenuButton": "メニューボタンを表示",
       "showMenuButtonTooltip": "会話チャットウィンドウの右上隅にメニューボタンを表示します",
+      "showTodayCostStats": "当日の消費統計を表示",
+      "showTodayCostStatsTooltip": "ワークフローのタイトルバーに当日の累積消費額を表示し、5秒ごとに自動更新します",
       "startWordSelectionToolbarFailed": "AI単語選択ツールバーの起動に失敗しました：{error}",
       "stopWordSelectionToolbarFailed": "AI単語選択ツールバーの停止に失敗しました：{error}",
       "systemTheme": "システムに従う",

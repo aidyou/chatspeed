@@ -354,6 +354,8 @@
       "shortcutSettings": "Configuración de atajos de teclado",
       "showMenuButton": "Mostrar botón de menú",
       "showMenuButtonTooltip": "Mostrar el botón de menú en la esquina superior derecha de la ventana de chat.",
+      "showTodayCostStats": "Mostrar estadísticas de costo de hoy",
+      "showTodayCostStatsTooltip": "Mostrar el costo acumulado de hoy en la barra de título del flujo de trabajo y actualizarlo automáticamente cada 5 segundos",
       "startWordSelectionToolbarFailed": "Error al iniciar la barra de herramientas de selección de palabras de IA: {error}",
       "stopWordSelectionToolbarFailed": "Error al detener la barra de herramientas de selección de palabras de IA: {error}",
       "systemTheme": "Tema del sistema",

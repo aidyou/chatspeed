@@ -1061,9 +1061,13 @@ export function useWorkflowMessages(options = {}) {
               if (isInternalTodoTool(call.toolName)) return false
               if (call.toolName === 'sub_agent_run') return false
               if (toolMessageIds.has(call.id)) return false
-              const state = toolStates.get(call.id)
+              const callId = String(call.id || '').trim()
+              const state = toolStates.get(callId)
+              const ledgerState = ledgerStateById.get(callId)
               if (state?.isRejected) return true
-              return backendPendingToolIds.has(String(call.id || '').trim())
+              if (state?.isRunning) return true
+              if (ledgerState?.status === 'approved_running') return true
+              return backendPendingToolIds.has(callId)
             })
         }
 

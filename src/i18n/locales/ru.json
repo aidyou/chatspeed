@@ -354,6 +354,8 @@
       "shortcutSettings": "Настройки горячих клавиш",
       "showMenuButton": "Показывать кнопку меню",
       "showMenuButtonTooltip": "Отображать кнопку меню в правом верхнем углу окна чата",
+      "showTodayCostStats": "Показывать статистику расходов за сегодня",
+      "showTodayCostStatsTooltip": "Показывать накопленную сумму расходов за сегодня в заголовке workflow и автоматически обновлять каждые 5 секунд",
       "startWordSelectionToolbarFailed": "Ошибка при запуске панели инструментов выделения слов: {error}",
       "stopWordSelectionToolbarFailed": "Ошибка при остановке панели инструментов выделения слов: {error}",
       "systemTheme": "Системная тема",

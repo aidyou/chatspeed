@@ -99,6 +99,17 @@
           <el-switch v-model="settings.showMenuButton" @change="onShowMenuButtonChange" />
         </div>
       </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.showTodayCostStats') }}
+            <small class="tooltip">{{ $t('settings.general.showTodayCostStatsTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-switch v-model="settings.showTodayCostStats" @change="onShowTodayCostStatsChange" />
+        </div>
+      </div>
     </div>
   </div>
 
@@ -835,6 +846,10 @@ const onCodeDarkThemeChange = value => {
  */
 const onShowMenuButtonChange = value => {
   setSetting('showMenuButton', value || false)
+}
+
+const onShowTodayCostStatsChange = value => {
+  setSetting('showTodayCostStats', value || false)
 }
 
 // =================================================

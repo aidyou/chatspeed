@@ -354,6 +354,8 @@
       "shortcutSettings": "Configurações de atalho",
       "showMenuButton": "Mostrar botão de menu",
       "showMenuButtonTooltip": "Mostrar o botão de menu no canto superior direito da janela de bate-papo",
+      "showTodayCostStats": "Mostrar estatísticas de custo de hoje",
+      "showTodayCostStatsTooltip": "Mostrar o custo acumulado de hoje na barra de título do fluxo de trabalho e atualizá-lo automaticamente a cada 5 segundos",
       "startWordSelectionToolbarFailed": "Falha ao iniciar a barra de ferramentas de seleção de palavras com IA: {error}",
       "stopWordSelectionToolbarFailed": "Falha ao parar a barra de ferramentas de seleção de palavras com IA: {error}",
       "systemTheme": "Seguir o tema do sistema",

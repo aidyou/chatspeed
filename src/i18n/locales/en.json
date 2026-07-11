@@ -354,6 +354,8 @@
       "shortcutSettings": "Shortcut Settings",
       "showMenuButton": "Show Menu Button",
       "showMenuButtonTooltip": "Show the menu button in the upper right corner of the conversation chat window",
+      "showTodayCostStats": "Show Today's Cost Stats",
+      "showTodayCostStatsTooltip": "Show the cumulative cost for today in the workflow title bar and refresh it every 5 seconds",
       "startWordSelectionToolbarFailed": "Failed to start AI word selection toolbar: {error}",
       "stopWordSelectionToolbarFailed": "Failed to stop AI word selection toolbar: {error}",
       "systemTheme": "System Theme",
