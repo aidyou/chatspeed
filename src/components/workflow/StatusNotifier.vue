@@ -189,18 +189,18 @@ const displayState = computed(() => {
     }
   }
 
-  if (isWaitingForApproval.value) {
-    return {
-      text: t('workflow.awaitingApproval') || 'Awaiting approval',
-      tone: 'warning',
-      icon: 'warning',
-      spinning: false
-    }
-  }
-
   if (latestTool) {
     const title = sanitizePreviewText(latestTool.title || '')
     const summary = sanitizePreviewText(latestTool.summary || '')
+
+    if (latestTool.status === 'approved_running') {
+      return {
+        text: `${t('workflow.executing') || 'Executing...'} ${title || summary}`,
+        tone: 'info',
+        icon: 'loading',
+        spinning: true
+      }
+    }
 
     if (latestTool.status === 'pending') {
       return {
@@ -210,14 +210,14 @@ const displayState = computed(() => {
         spinning: false
       }
     }
+  }
 
-    if (latestTool.status === 'approved_running') {
-      return {
-        text: `${t('workflow.executing') || 'Executing...'} ${title || summary}`,
-        tone: 'info',
-        icon: 'loading',
-        spinning: true
-      }
+  if (isWaitingForApproval.value) {
+    return {
+      text: t('workflow.awaitingApproval') || 'Awaiting approval',
+      tone: 'warning',
+      icon: 'warning',
+      spinning: false
     }
   }
 

@@ -15,6 +15,8 @@ export function useWorkflowInput({
     onSendMessage: onSendMessageCallback,
     currentPaths,
     systemSkills = ref([]),
+    builtinCommands = ref([]),
+    onBuiltinCommandSelect = null,
     onImageFileSelect = null
 }) {
     const { t } = useI18n()
@@ -34,16 +36,6 @@ export function useWorkflowInput({
     // Make onSendMessage mutable so it can be updated after composable creation
     const onSendMessage = ref(onSendMessageCallback)
 
-    const builtinCommands = [
-        { name: 'settings', description: 'Open settings window', type: 'command', group: 'chatspeed' },
-        { name: 'models', description: 'Open model selection window', type: 'command', group: 'chatspeed' },
-        { name: 'skills-config', description: 'Open workflow skills settings', type: 'command', group: 'chatspeed' },
-        { name: 'mcp', description: 'Open MCP settings', type: 'command', group: 'chatspeed' },
-        { name: 'proxy', description: 'Open proxy settings', type: 'command', group: 'chatspeed' },
-        { name: 'agent', description: 'Open agent settings', type: 'command', group: 'chatspeed' },
-        { name: 'about', description: 'Open about page', type: 'command', group: 'chatspeed' }
-    ]
-
     const filteredSystemSkills = computed(() => {
         // Only search if starts with /
         if (!inputMessage.value.startsWith('/')) return []
@@ -56,7 +48,7 @@ export function useWorkflowInput({
             source: s.source,
             group: s.source === 'user' ? 'installed' : 'chatspeed'
         }))
-        const commands = builtinCommands
+        const commands = builtinCommands.value
 
         const matchedItems = [...commands, ...skills]
             .map((item) => {
@@ -244,12 +236,24 @@ export function useWorkflowInput({
     }
 
     const onSkillSelect = (skill) => {
+        if (skill.type === 'command' && typeof onBuiltinCommandSelect === 'function') {
+            inputMessage.value = ''
+            showSkillSuggestions.value = false
+            selectedSkillIndex.value = 0
+            onBuiltinCommandSelect(skill)
+            nextTick(() => {
+                if (inputRef.value) {
+                    inputRef.value.focus()
+                }
+            })
+            return
+        }
+
         // Replace the slash command with the full skill command
         inputMessage.value = '/' + skill.name + (skill.type === 'command' ? '' : ' ')
         showSkillSuggestions.value = false
         selectedSkillIndex.value = 0
 
-        // For commands (UI action), we focus immediately and let the caller decide to send
         // For skills (AI logic), we focus and let user add more details
         nextTick(() => {
             if (inputRef.value) {
@@ -275,7 +279,7 @@ export function useWorkflowInput({
 
         // Handle Slash Command Suggestions
         if (showSkillSuggestions.value) {
-            if (event.key === 'Enter' || event.key === 'Tab') {
+            if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
                 event.preventDefault()
                 if (filteredSystemSkills.value.length > 0) {
                     onSkillSelect(filteredSystemSkills.value[selectedSkillIndex.value])

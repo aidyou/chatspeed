@@ -243,7 +243,7 @@ fn sanitize_reasoning_content(content: &str) -> SanitizedReasoningChunk {
 }
 
 fn should_emit_reasoning_chunk(chunk: &SanitizedReasoningChunk) -> bool {
-    !chunk.removed_empty_comment || !chunk.content.trim().is_empty()
+    !chunk.removed_empty_comment || !chunk.content.is_empty()
 }
 
 fn extract_reasoning_from_openai_message(message: &Value) -> String {
@@ -1046,12 +1046,27 @@ mod tests {
     }
 
     #[test]
-    fn comment_only_whitespace_fragments_are_dropped_but_plain_whitespace_is_preserved() {
-        let comment_only = sanitize_reasoning_content("\n<!-- -->\n");
-        assert!(!should_emit_reasoning_chunk(&comment_only));
+    fn comment_adjacent_whitespace_is_preserved_but_empty_comment_is_dropped() {
+        let comment_with_newlines = sanitize_reasoning_content("\n<!-- -->\n");
+        assert_eq!(comment_with_newlines.content, "\n\n");
+        assert!(should_emit_reasoning_chunk(&comment_with_newlines));
+
+        let empty_comment = sanitize_reasoning_content("<!-- -->");
+        assert!(!should_emit_reasoning_chunk(&empty_comment));
 
         let plain_whitespace = sanitize_reasoning_content("\n\n");
         assert!(should_emit_reasoning_chunk(&plain_whitespace));
+    }
+
+    #[test]
+    fn empty_html_comment_stream_state_preserves_adjacent_newlines() {
+        let mut state = EmptyHtmlCommentStreamState::default();
+
+        let chunk = state.consume("\n<!-- -->\n");
+        assert_eq!(chunk.content, "\n\n");
+        assert!(chunk.removed_empty_comment);
+        assert!(should_emit_reasoning_chunk(&chunk));
+        assert_eq!(state.finish(), "");
     }
 
     #[test]

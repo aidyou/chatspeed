@@ -496,7 +496,7 @@ const settingStore = useSettingStore()
 const modelStore = useModelStore()
 const proxyGroupStore = useProxyGroupStore()
 
-const activeTab = ref('stats')
+const activeTab = ref('servers')
 // const chatCompletionProxyPort = ref(settingStore.settings.chatCompletionProxyPort || 11434)
 // const chatCompletionProxyLogToFile = ref(settingStore.settings.chatCompletionProxyLogToFile || false)
 const { settings, env } = storeToRefs(settingStore)

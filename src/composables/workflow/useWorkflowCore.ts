@@ -83,24 +83,12 @@ export function useWorkflowCore({
         }
 
         const actModel = reviewer.actModel
-        if (!actModel?.model || actModel.id === '' || actModel.id === null || actModel.id === undefined) {
-            return false
-        }
-
-        const providerId = typeof actModel.id === 'string' ? Number.parseInt(actModel.id, 10) : actModel.id
-        if (!Number.isInteger(providerId)) {
-            return false
-        }
-
-        const provider = modelStore.getModelProviderById(providerId)
-        if (!provider || provider.disabled) {
-            return false
-        }
-
-        return Array.isArray(provider.models)
-            && provider.models.some(model => model.id === actModel.model)
+        return !!actModel?.model
+            && actModel.id !== ''
+            && actModel.id !== null
+            && actModel.id !== undefined
     })
-    const canToggleFinalAuditMode = computed(() => finalAuditMode.value === 'on' || isFinalReviewerConfigured.value)
+    const canToggleFinalAuditMode = computed(() => isFinalReviewerConfigured.value)
 
     const isAwaitingApproval = computed(() => {
         return canApprovePlan.value

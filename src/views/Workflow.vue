@@ -253,14 +253,14 @@
           @continue="onContinue"
           @stop="onStop"
           @approve-plan="onApprovePlan"
-          @toggle-planning-mode="onTogglePlanningMode"
-          @toggle-final-audit-mode="toggleFinalAuditMode"
-          @toggle-auto-compress="autoCompressEnabled = !autoCompressEnabled"
+          @toggle-planning-mode="togglePlanningModeWithFeedback"
+          @toggle-final-audit-mode="toggleFinalAuditModeWithFeedback"
+          @toggle-auto-compress="toggleAutoCompressWithFeedback"
           @update-approval-level="approvalLevel = $event"
           @update-selected-agent="onSelectedAgentChange"
           @clear-context-frame="onClearContextFrame"
           @create-new-workflow="createNewWorkflow"
-          @open-image-dialog="openImageAttachmentDialog"
+          @open-image-dialog="openImageAttachmentDialogWithFeedback"
           @open-model-selector="openModelSelector"
           @remove-attachment="removeImageAttachment"
           @open-skills-selector="openSkillsSelector" />
@@ -345,7 +345,6 @@ import { useWorkflowApproval } from '@/composables/workflow/useWorkflowApproval'
 import { useWorkflowPaths } from '@/composables/workflow/useWorkflowPaths'
 import { useWorkflowInput } from '@/composables/workflow/useWorkflowInput'
 import { useWorkflowCore } from '@/composables/workflow/useWorkflowCore'
-import { TERMINAL_STATUSES } from '@/composables/workflow/signalTypes'
 
 const IMAGE_FILE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'])
 
@@ -565,12 +564,116 @@ const {
   automationItemCount: computed(() => workflowAutomationStore.automations.length)
 })
 
+const builtinCommands = computed(() => {
+  const commands = [
+    {
+      name: 'settings',
+      description: t('workflow.commandSettingsDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    },
+    {
+      name: 'models',
+      description: t('workflow.commandModelsDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    },
+    {
+      name: 'skills-config',
+      description: t('workflow.commandSkillsConfigDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    },
+    {
+      name: 'mcp',
+      description: t('workflow.commandMcpDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    },
+    {
+      name: 'proxy',
+      description: t('workflow.commandProxyDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    },
+    {
+      name: 'agent',
+      description: t('workflow.commandAgentDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    },
+    {
+      name: 'about',
+      description: t('workflow.commandAboutDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    },
+    {
+      name: 'new',
+      description: t('workflow.commandNewDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    },
+    {
+      name: 'audit',
+      description: t('workflow.commandFinalAuditDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    },
+    {
+      name: 'compress',
+      description: t('workflow.commandAutoCompressDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    }
+  ]
+
+  if (workflowStore.canClearContext) {
+    commands.push({
+      name: 'clear',
+      description: t('workflow.commandClearDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    })
+  }
+
+  if (canTogglePlanningMode.value) {
+    commands.push({
+      name: 'plan',
+      description: t('workflow.commandPlanningDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    })
+  }
+
+  if (canUseImageAttachments.value) {
+    commands.push({
+      name: 'attach',
+      description: t('workflow.commandAttachDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    })
+  }
+
+  return commands
+})
+
 // Input composable - needs currentPaths, systemSkills
 const inputComposable = useWorkflowInput({
   inputRef: computed(() => inputAreaRef.value?.inputRef),
   onSendMessage: null, // Will be set after core composable is initialized
   currentPaths: computed(() => currentPaths.value),
   systemSkills: computed(() => workflowInputSkills.value),
+  builtinCommands,
+  onBuiltinCommandSelect: skill => {
+    void (async () => {
+      const command = `/${skill.name}`
+      const handled = await handleWorkflowSlashCommand(command)
+      if (!handled) {
+        await handleBuiltinCommand(command)
+      }
+    })()
+  },
   onImageFileSelect: async file =>
     (await addImageAttachmentFromPath(file.path, file.relative_path)) ? 'handled' : 'blocked'
 })
@@ -1186,6 +1289,11 @@ inputComposable.onSendMessage.value = async () => {
   }
   isPreparingImageSend.value = false
 
+  const handledWorkflowCommand = await handleWorkflowSlashCommand(rawMessage)
+  if (handledWorkflowCommand) {
+    return true
+  }
+
   const wasCommand = await coreOnSendMessage(rawMessage, {
     attachedContext,
     metadata
@@ -1213,6 +1321,89 @@ const createNewWorkflow = async () => {
   await coreCreateNewWorkflow()
   clearInput()
   clearImageAttachments()
+}
+
+const togglePlanningModeWithFeedback = () => {
+  if (!canTogglePlanningMode.value) {
+    return false
+  }
+
+  onTogglePlanningMode()
+  showMessage(
+    planningMode.value ? t('workflow.planningModeEnabled') : t('workflow.planningModeDisabled'),
+    'success'
+  )
+  return true
+}
+
+const toggleFinalAuditModeWithFeedback = () => {
+  if (!canToggleFinalAuditMode.value) {
+    return false
+  }
+
+  toggleFinalAuditMode()
+  showMessage(
+    finalAuditMode.value === 'on'
+      ? t('workflow.finalAuditEnabled')
+      : t('workflow.finalAuditDisabled'),
+    'success'
+  )
+  return true
+}
+
+const toggleAutoCompressWithFeedback = () => {
+  autoCompressEnabled.value = !autoCompressEnabled.value
+  showMessage(
+    autoCompressEnabled.value
+      ? t('workflow.autoCompressEnabledMessage')
+      : t('workflow.autoCompressDisabledMessage'),
+    'success'
+  )
+  return true
+}
+
+const openImageAttachmentDialogWithFeedback = async () => {
+  if (!canUseImageAttachments.value) {
+    return false
+  }
+
+  await openImageAttachmentDialog()
+  return true
+}
+
+const handleWorkflowSlashCommand = async command => {
+  const cmd = command.trim().toLowerCase()
+
+  if (cmd === '/clear') {
+    if (!workflowStore.canClearContext) {
+      return false
+    }
+    await onClearContextFrame()
+    return true
+  }
+
+  if (cmd === '/new') {
+    await createNewWorkflow()
+    return true
+  }
+
+  if (cmd === '/plan') {
+    return togglePlanningModeWithFeedback()
+  }
+
+  if (cmd === '/audit') {
+    return toggleFinalAuditModeWithFeedback()
+  }
+
+  if (cmd === '/compress') {
+    return toggleAutoCompressWithFeedback()
+  }
+
+  if (cmd === '/attach') {
+    return await openImageAttachmentDialogWithFeedback()
+  }
+
+  return false
 }
 
 const onClearContextFrame = async () => {
@@ -1271,11 +1462,6 @@ const onClearContextFrame = async () => {
 // Wrapper for skill select that properly handles send
 const onSkillSelect = skill => {
   originalOnSkillSelect(skill)
-  // If it was a command (UI action), the input now contains the command
-  // We need to trigger send manually since originalOnSkillSelect doesn't have access to onSendMessage
-  if (skill.type === 'command') {
-    onSendMessage()
-  }
 }
 
 const openSkillsSelector = async () => {

@@ -1099,8 +1099,13 @@ impl LlmProcessor {
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            stable_system_parts
-                .push(CHILD_AGENT_DIRECTORY_PROMPT.replace("{{child_agents}}", &child_agent_lines));
+            let child_agent_selection_guidance = r#"Choose child agents intelligently according to the current task and the value each delegation adds.
+Use the child agent whose description best matches the specific sub-task when delegation provides clear value, such as meaningful independent investigation, useful parallel work, specialized expertise, or isolation of a substantial context burden.
+Avoid redundant or ceremonial delegation. Do not use a child agent when the same step can be completed directly with comparable quality and less time or token cost."#;
+            stable_system_parts.push(CHILD_AGENT_DIRECTORY_PROMPT.replace(
+                "{{child_agents}}",
+                &format!("{child_agent_lines}\n\n{child_agent_selection_guidance}"),
+            ));
         }
 
         if self.agent_config.role.as_deref() == Some("child") {

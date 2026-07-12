@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-yolo:before {
+  content: "\e7ec";
+}
+
 .cs-money:before {
   content: "\e6d3";
 }

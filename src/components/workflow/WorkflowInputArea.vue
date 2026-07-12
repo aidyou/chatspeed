@@ -143,9 +143,11 @@
                     <span class="dropdown-content">
                       <span class="dropdown-main">
                         <span class="dropdown-text">{{ $t('settings.agent.finalAudit') }}</span>
-                        <span v-if="finalAuditMode !== 'off'" class="dropdown-state">{{
-                          finalAuditMode.toUpperCase()
-                        }}</span>
+                        <cs
+                          v-if="finalAuditMode !== 'off'"
+                          name="check"
+                          size="14px"
+                          class="dropdown-check" />
                       </span>
                       <span class="dropdown-note">{{ $t('workflow.finalAuditTooltip') }}</span>
                     </span>
@@ -1019,15 +1021,9 @@ defineExpose({
   white-space: normal;
 }
 
-.dropdown-check,
-.dropdown-state {
+.dropdown-check {
   margin-left: auto;
   flex-shrink: 0;
-}
-
-.dropdown-state {
-  font-size: 11px;
-  color: var(--cs-text-secondary);
 }
 
 @keyframes workflow-attachment-spin {
