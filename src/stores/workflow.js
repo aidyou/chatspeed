@@ -56,6 +56,33 @@ export const useWorkflowStore = defineStore('workflow', () => {
       }
     }
 
+    if (normalized.metadata && typeof normalized.metadata === 'object') {
+      normalized.metadata = {
+        ...normalized.metadata,
+        ui_visibility:
+          normalized.metadata.ui_visibility ?? normalized.metadata.uiVisibility,
+        message_kind:
+          normalized.metadata.message_kind ?? normalized.metadata.messageKind,
+        error_type:
+          normalized.metadata.error_type ?? normalized.metadata.errorType,
+      };
+    }
+
+    if (normalized.messageKind === 'message' && normalized.metadata?.type === 'summary') {
+      normalized.messageKind = 'summary';
+    }
+    if (!normalized.messageSubtype && typeof normalized.metadata?.subtype === 'string') {
+      normalized.messageSubtype = normalized.metadata.subtype;
+    }
+    if (
+      normalized.role === 'system' &&
+      String(normalized.message || '').trim() === 'MANUAL_CLEAR_CONTEXT'
+    ) {
+      normalized.messageKind = 'summary';
+      normalized.messageSubtype = 'manual_clear_context';
+      normalized.message = '';
+    }
+
     if (normalized.is_error !== undefined && normalized.isError === undefined) {
       normalized.isError = normalized.is_error;
     }

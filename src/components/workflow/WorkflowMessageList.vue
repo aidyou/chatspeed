@@ -992,32 +992,24 @@ const revealEarlierTaskGroup = () => {
 }
 
 const isHiddenSystemObservation = message => {
-  const uiVisibility = message?.metadata?.ui_visibility || message?.metadata?.uiVisibility
+  const uiVisibility = message?.metadata?.ui_visibility
   if (uiVisibility === 'hide') return true
-  if (
-    message?.metadata?.message_kind === 'runtime_observation' ||
-    message?.metadata?.messageKind === 'runtime_observation'
-  ) {
+  if (message?.metadata?.message_kind === 'runtime_observation') {
     return false
   }
   if (message?.metadata?.error_type === 'SubAgentInterrupted') return true
-  if (message?.metadata?.errorType === 'SubAgentInterrupted') return true
   if (message?.role !== 'user') return false
   if ((message.stepType || '').toLowerCase() !== 'observe') return false
   if (getAskUserResponseItems(message).length > 0) return false
   return props.removeSystemReminder(message.message || '').trim() === ''
 }
 
-const getWorkflowMessageKind = message => message?.messageKind || message?.metadata?.message_kind
-const getWorkflowMessageSubtype = message =>
-  message?.messageSubtype || message?.metadata?.message_subtype || message?.metadata?.subtype
-const isLegacyManualClearContextMessage = message =>
-  message?.role === 'system' && props.removeSystemReminder(message?.message || '').trim() === 'MANUAL_CLEAR_CONTEXT'
+const getWorkflowMessageKind = message => message?.messageKind
+const getWorkflowMessageSubtype = message => message?.messageSubtype
 const isManualClearContextMessage = message =>
   message?.role === 'system' &&
-  ((getWorkflowMessageKind(message) === 'summary' &&
-    getWorkflowMessageSubtype(message) === 'manual_clear_context') ||
-    isLegacyManualClearContextMessage(message))
+  getWorkflowMessageKind(message) === 'summary' &&
+  getWorkflowMessageSubtype(message) === 'manual_clear_context'
 const isContextSnapshotMessage = message =>
   message?.role === 'system' &&
   getWorkflowMessageKind(message) === 'summary' &&
@@ -1348,9 +1340,7 @@ const collapseRepeatedFinishTaskErrors = messages => {
 }
 
 const isCompletionReportMessage = message =>
-  message?.role === 'assistant' &&
-  (message?.metadata?.message_kind === 'completion_report' ||
-    message?.metadata?.messageKind === 'completion_report')
+  message?.role === 'assistant' && message?.metadata?.message_kind === 'completion_report'
 
 const isThinkOnlyAssistantMessage = message => {
   if (message?.role !== 'assistant') return false
@@ -1904,9 +1894,7 @@ const getErrorAlertTitle = message => {
     return 'Critical Error'
   }
 
-  const rawType = String(
-    message?.metadata?.error_type || message?.metadata?.errorType || message?.errorType || ''
-  ).trim()
+  const rawType = String(message?.metadata?.error_type || message?.errorType || '').trim()
   if (rawType) {
     return rawType.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
   }

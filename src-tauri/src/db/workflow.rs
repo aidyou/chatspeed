@@ -258,6 +258,39 @@ impl From<&Row<'_>> for Workflow {
     }
 }
 
+impl WorkflowMessage {
+    pub(crate) fn normalize_classification(mut self) -> Self {
+        if self.message_kind == "message"
+            && self
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("type"))
+                .and_then(Value::as_str)
+                == Some("summary")
+        {
+            self.message_kind = "summary".to_string();
+        }
+
+        if self.message_subtype.is_none() {
+            self.message_subtype = self
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("subtype"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string);
+        }
+
+        if self.role == "system" && self.message.trim() == "MANUAL_CLEAR_CONTEXT" {
+            self.message_kind = "summary".to_string();
+            self.message_subtype = Some("manual_clear_context".to_string());
+            self.message.clear();
+        }
+
+        self
+    }
+}
+
 impl From<&Row<'_>> for WorkflowMessage {
     fn from(row: &Row<'_>) -> Self {
         let metadata_str: Option<String> = row.get("metadata").ok();
@@ -286,6 +319,7 @@ impl From<&Row<'_>> for WorkflowMessage {
             error_type: row.get("error_type").ok(),
             created_at: row.get("created_at").ok(),
         }
+        .normalize_classification()
     }
 }
 
@@ -368,13 +402,7 @@ fn is_pending_submit_plan_message(message: &WorkflowMessage) -> bool {
 fn is_manual_clear_context_message(message: &WorkflowMessage) -> bool {
     message.role == "system"
         && message.message_kind == "summary"
-        && message.message_subtype.as_deref().or_else(|| {
-            message
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("subtype"))
-                .and_then(Value::as_str)
-        }) == Some("manual_clear_context")
+        && message.message_subtype.as_deref() == Some("manual_clear_context")
 }
 
 fn is_user_input_wait_event(event: &WorkflowEventRecord) -> bool {
@@ -445,13 +473,7 @@ fn latest_approved_plan_summary_message(messages: &[WorkflowMessage]) -> Option<
         message.id.is_some()
             && message.role == "system"
             && message.message_kind == "summary"
-            && message.message_subtype.as_deref().or_else(|| {
-                message
-                    .metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.get("subtype"))
-                    .and_then(Value::as_str)
-            }) == Some("approved_plan")
+            && message.message_subtype.as_deref() == Some("approved_plan")
     })
 }
 
@@ -2449,6 +2471,75 @@ mod tests {
             ],
         )
         .expect("failed to seed agent");
+    }
+
+    #[test]
+    fn test_normalize_legacy_message_classification_from_metadata() {
+        let message = WorkflowMessage {
+            id: Some(1),
+            session_id: "legacy-session".to_string(),
+            role: "system".to_string(),
+            message: String::new(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(serde_json::json!({
+                "type": "summary",
+                "subtype": "manual_clear_context"
+            })),
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        }
+        .normalize_classification();
+
+        assert_eq!(message.message_kind, "summary");
+        assert_eq!(
+            message.message_subtype.as_deref(),
+            Some("manual_clear_context")
+        );
+    }
+
+    #[test]
+    fn test_snapshot_hydrates_legacy_manual_clear_context_text() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-main");
+        store
+            .create_workflow("legacy-session", "Legacy query", "agent-main", None, None)
+            .expect("failed to create legacy workflow");
+
+        let conn = store
+            .conn
+            .lock()
+            .expect("failed to lock db connection for legacy message seed");
+        conn.execute(
+            "INSERT INTO workflow_messages
+             (session_id, role, message, message_kind, segment_id, step_index, is_error)
+             VALUES (?1, 'system', 'MANUAL_CLEAR_CONTEXT', 'message', 1, 0, 0)",
+            params!["legacy-session"],
+        )
+        .expect("failed to insert legacy manual clear-context message");
+        drop(conn);
+
+        let snapshot = store
+            .get_workflow_snapshot("legacy-session")
+            .expect("failed to hydrate legacy workflow snapshot");
+        let message = snapshot
+            .messages
+            .first()
+            .expect("legacy message should be present");
+
+        assert_eq!(message.message_kind, "summary");
+        assert_eq!(
+            message.message_subtype.as_deref(),
+            Some("manual_clear_context")
+        );
+        assert!(message.message.is_empty());
     }
 
     #[test]

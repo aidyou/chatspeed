@@ -27,36 +27,6 @@ pub struct ContextManager {
 }
 
 impl ContextManager {
-    fn metadata_message_kind(metadata: Option<&serde_json::Value>) -> Option<&str> {
-        metadata
-            .and_then(|meta| meta.get("type"))
-            .and_then(|value| value.as_str())
-            .filter(|value| *value == "summary")
-            .filter(|value| !value.trim().is_empty())
-    }
-
-    fn metadata_message_subtype(metadata: Option<&serde_json::Value>) -> Option<&str> {
-        metadata
-            .and_then(|meta| meta.get("subtype"))
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.trim().is_empty())
-    }
-
-    fn effective_message_kind(message: &WorkflowMessage) -> &str {
-        if message.message_kind != "message" {
-            &message.message_kind
-        } else {
-            Self::metadata_message_kind(message.metadata.as_ref()).unwrap_or("message")
-        }
-    }
-
-    fn effective_message_subtype(message: &WorkflowMessage) -> Option<&str> {
-        message
-            .message_subtype
-            .as_deref()
-            .or_else(|| Self::metadata_message_subtype(message.metadata.as_ref()))
-    }
-
     pub(crate) fn sanitize_reasoning_content(reasoning: Option<String>) -> Option<String> {
         let reasoning = reasoning?;
         let trimmed = reasoning.trim();
@@ -84,7 +54,7 @@ impl ContextManager {
     }
 
     fn is_summary_message(message: &WorkflowMessage) -> bool {
-        Self::effective_message_kind(message) == "summary"
+        message.message_kind == "summary"
     }
 
     pub(crate) fn is_compression_summary_message(message: &WorkflowMessage) -> bool {
@@ -92,14 +62,14 @@ impl ContextManager {
             return false;
         };
 
-        Self::effective_message_kind(message) == "summary"
-            && Self::effective_message_subtype(message) == Some("compression")
+        message.message_kind == "summary"
+            && message.message_subtype.as_deref() == Some("compression")
             && meta.get("compressed_until_message_id").is_some()
     }
 
     pub(crate) fn is_manual_clear_context_message(message: &WorkflowMessage) -> bool {
-        Self::effective_message_kind(message) == "summary"
-            && Self::effective_message_subtype(message) == Some("manual_clear_context")
+        message.message_kind == "summary"
+            && message.message_subtype.as_deref() == Some("manual_clear_context")
     }
 
     fn metadata_marks_successful_completion(
@@ -727,8 +697,7 @@ impl ContextManager {
                 .and_then(|value| value.parse().ok());
 
             let merged_content = Self::content_for_context_projection(message);
-            let final_content = if Self::effective_message_subtype(message) == Some("approved_plan")
-            {
+            let final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
                 let plan = message
                     .metadata
                     .as_ref()
@@ -763,8 +732,8 @@ impl ContextManager {
                 role: message.role.clone(),
                 message: final_content,
                 reasoning: message.reasoning.clone(),
-                message_kind: Self::effective_message_kind(message).to_string(),
-                message_subtype: Self::effective_message_subtype(message).map(str::to_string),
+                message_kind: message.message_kind.clone(),
+                message_subtype: message.message_subtype.clone(),
                 metadata: message.metadata.clone(),
                 source_message_id: message.id,
                 created_at: None,
@@ -952,7 +921,7 @@ impl ContextManager {
             .messages_since_last_completion()
             .into_iter()
             .rev()
-            .find(|message| Self::effective_message_subtype(message) == Some("approved_plan"))
+            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
             .ok_or_else(|| {
                 WorkflowEngineError::General(
                     "Cannot start execution segment without an approved plan anchor".to_string(),
@@ -969,8 +938,8 @@ impl ContextManager {
                 Self::content_for_context_projection(&initial_user)
             ),
             reasoning: initial_user.reasoning.clone(),
-            message_kind: Self::effective_message_kind(&initial_user).to_string(),
-            message_subtype: Self::effective_message_subtype(&initial_user).map(str::to_string),
+            message_kind: initial_user.message_kind.clone(),
+            message_subtype: initial_user.message_subtype.clone(),
             metadata: initial_user.metadata.clone(),
             source_message_id: initial_user.id,
             created_at: None,
@@ -999,8 +968,8 @@ impl ContextManager {
                 )
             },
             reasoning: approved_plan.reasoning.clone(),
-            message_kind: Self::effective_message_kind(&approved_plan).to_string(),
-            message_subtype: Self::effective_message_subtype(&approved_plan).map(str::to_string),
+            message_kind: approved_plan.message_kind.clone(),
+            message_subtype: approved_plan.message_subtype.clone(),
             metadata: approved_plan.metadata.clone(),
             source_message_id: approved_plan.id,
             created_at: None,
@@ -1054,19 +1023,14 @@ impl ContextManager {
                 .generate_u64()
                 .map_err(|e| WorkflowEngineError::General(e))?;
             let reasoning = Self::sanitize_reasoning_content(reasoning);
-            let message_kind = Self::metadata_message_kind(metadata.as_ref())
-                .unwrap_or("message")
-                .to_string();
-            let message_subtype =
-                Self::metadata_message_subtype(metadata.as_ref()).map(str::to_string);
             let msg = WorkflowMessage {
                 id: Some(msg_id as i64),
                 session_id: self.session_id.clone(),
                 role: role.clone(),
                 message: content,
                 reasoning,
-                message_kind,
-                message_subtype,
+                message_kind: "message".to_string(),
+                message_subtype: None,
                 segment_id: self.current_segment_id,
                 source_event_type: None,
                 metadata,
@@ -1076,7 +1040,8 @@ impl ContextManager {
                 is_error,
                 error_type,
                 created_at: None,
-            };
+            }
+            .normalize_classification();
 
             let store = self.main_store.read().map_err(|e| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
@@ -1211,7 +1176,7 @@ impl ContextManager {
     pub fn current_approved_plan_since_last_completion(&self) -> Option<String> {
         self.messages_since_last_completion()
             .into_iter()
-            .find(|message| Self::effective_message_subtype(message) == Some("approved_plan"))
+            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
             .and_then(|message| {
                 message
                     .metadata
