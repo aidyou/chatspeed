@@ -94,6 +94,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const workflows = ref([]);
   const currentWorkflowId = ref(null);
   const messages = ref([]);
+  const messageWindowBeforeId = ref(null);
+  const hiddenCompletedTaskCount = ref(0);
   const todoList = ref([]);
   const messageQueue = ref([]);
   const isRunning = ref(false);
@@ -113,6 +115,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const subAgentProgress = ref(new Map()); // sub_agent_id -> lightweight parent UI projection
   const approvalSubmissions = ref(new Map()); // sessionId -> Set<toolCallId>
   const taskCompletionRevision = ref(0);
+  let messageLoadRevision = 0;
   const lastTaskCompletion = ref(null);
 
   // ==================== Task Ledger State ====================
@@ -1228,6 +1231,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const selectWorkflow = async (workflowId) => {
     console.log('workflowStore: selecting workflow', workflowId);
+    const requestRevision = ++messageLoadRevision;
 
     // 清理前一个会话的临时状态
     if (currentWorkflowId.value && currentWorkflowId.value !== workflowId) {
@@ -1238,6 +1242,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     // message grouper uses synchronous watchers, so exposing old messages under a
     // new id can initialize the new session with the previous session's groups.
     messages.value = [];
+    messageWindowBeforeId.value = null;
+    hiddenCompletedTaskCount.value = 0;
     currentWorkflowId.value = workflowId;
     lastTaskCompletion.value = null;
     messageQueue.value = [];
@@ -1252,7 +1258,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
       // A slower request for a previously selected workflow must not overwrite
       // the projection of the workflow that is currently active.
-      if (currentWorkflowId.value !== workflowId) {
+      if (currentWorkflowId.value !== workflowId || messageLoadRevision !== requestRevision) {
         return;
       }
 
@@ -1276,6 +1282,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       );
 
       messages.value = parsedMessages;
+      messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
+      hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
       clearApprovalSubmissionsForSession(workflowId);
 
       // 重建 Task Ledger
@@ -1683,12 +1691,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const loadMessages = async (workflowId) => {
     console.log('workflowStore: loading messages for', workflowId);
+    const requestRevision = ++messageLoadRevision;
     error.value = null;
     try {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
+      if (currentWorkflowId.value !== workflowId || messageLoadRevision !== requestRevision) return;
+
       messages.value = (snapshot.messages || []).map(message =>
         normalizeWorkflowMessage(message, workflowId)
       );
+      messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
+      hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
 
       // 重建 Task Ledger
       if (taskLedgerEnabled.value) {
@@ -1697,6 +1710,33 @@ export const useWorkflowStore = defineStore('workflow', () => {
     } catch (err) {
       await _handleError(err);
     }
+  };
+
+  const loadEarlierTaskGroup = async () => {
+    const workflowId = currentWorkflowId.value;
+    const beforeMessageId = messageWindowBeforeId.value;
+    const requestRevision = messageLoadRevision;
+    if (!workflowId || !beforeMessageId || hiddenCompletedTaskCount.value <= 0) return false;
+
+    const window = await invokeWrapper('get_earlier_workflow_messages', {
+      sessionId: workflowId,
+      beforeMessageId
+    });
+    if (
+      currentWorkflowId.value !== workflowId ||
+      messageLoadRevision !== requestRevision ||
+      messageWindowBeforeId.value !== beforeMessageId
+    ) {
+      return false;
+    }
+
+    const earlierMessages = (window.messages || []).map(message =>
+      normalizeWorkflowMessage(message, workflowId)
+    );
+    messages.value = [...earlierMessages, ...messages.value];
+    messageWindowBeforeId.value = window.beforeMessageId ?? beforeMessageId;
+    hiddenCompletedTaskCount.value = Number(window.hiddenCompletedTaskCount) || 0;
+    return earlierMessages.length > 0;
   };
 
   const clearCurrentWorkflow = () => {
@@ -1708,6 +1748,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     lastTaskCompletion.value = null;
     persistLastSelectedWorkflowId('');
     messages.value = [];
+    messageWindowBeforeId.value = null;
+    hiddenCompletedTaskCount.value = 0;
     todoList.value = [];
     isRunning.value = false;
     waitReason.value = null;
@@ -1745,6 +1787,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     workflows,
     currentWorkflowId,
     messages,
+    messageWindowBeforeId,
+    hiddenCompletedTaskCount,
     todoList,
     messageQueue,
     isRunning,
@@ -1840,6 +1884,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     updateWorkflowFinalAudit,
     updateWorkflowTitleLocal,
     loadMessages,
+    loadEarlierTaskGroup,
     clearCurrentWorkflow,
     resetWorkflowUiProjection,
   };

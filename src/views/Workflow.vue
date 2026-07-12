@@ -199,7 +199,7 @@
             :is-approval-submitting="isApprovalSubmitting"
             @toggle-expand="toggleMessageExpand"
             @toggle-reasoning="toggleReasoningExpand"
-            @reveal-earlier-task-group="visibleCompletedTaskGroupCount += 1"
+            @reveal-earlier-task-group="revealEarlierTaskGroup"
             @submit-ask-user="submitAskUserResponse"
             @approve-tool="onApproveAction"
             @approve-all-tool="onApproveAllAction"
@@ -542,6 +542,17 @@ const {
 } = useWorkflowMessages({
   visibleCompletedTaskGroupCount
 })
+
+const revealEarlierTaskGroup = async done => {
+  try {
+    const loaded = await workflowStore.loadEarlierTaskGroup()
+    if (loaded) {
+      visibleCompletedTaskGroupCount.value += 1
+    }
+  } finally {
+    done?.()
+  }
+}
 
 // ============================================================
 // Composables that DEPEND on local state
@@ -1434,6 +1445,9 @@ const onClearContextFrame = async () => {
         sessionId: markerMessage.sessionId || currentWorkflowId.value
       })
     }
+
+    await workflowStore.loadMessages(currentWorkflowId.value)
+    visibleCompletedTaskGroupCount.value = 2
 
     if (workflowStore.currentWorkflow?.executionContext) {
       workflowStore.currentWorkflow.executionContext.currentSegmentId = result?.segmentId || null

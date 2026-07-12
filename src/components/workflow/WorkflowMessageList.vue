@@ -980,14 +980,14 @@ const revealEarlierTaskGroup = () => {
   const previousScrollTop = container?.scrollTop || 0
 
   isRevealingEarlierTaskGroup.value = true
-  emit('reveal-earlier-task-group')
-
-  nextTick(() => {
-    if (container) {
-      const nextScrollHeight = container.scrollHeight
-      container.scrollTop = previousScrollTop + (nextScrollHeight - previousScrollHeight)
-    }
-    isRevealingEarlierTaskGroup.value = false
+  emit('reveal-earlier-task-group', () => {
+    nextTick(() => {
+      if (container) {
+        const nextScrollHeight = container.scrollHeight
+        container.scrollTop = previousScrollTop + (nextScrollHeight - previousScrollHeight)
+      }
+      isRevealingEarlierTaskGroup.value = false
+    })
   })
 }
 

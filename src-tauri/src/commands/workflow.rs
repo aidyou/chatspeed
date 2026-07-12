@@ -1968,13 +1968,23 @@ pub async fn get_workflow_snapshot(
     session_id: String,
 ) -> Result<Value, String> {
     let main_store = state.inner().clone();
-    let mut snapshot = {
+    let (mut snapshot, message_window_before_id, hidden_completed_task_count) = {
         let store = main_store.read().map_err(|e| e.to_string())?;
-        let mut snapshot = store
-            .get_workflow_snapshot(&session_id)
+        let mut workflow = store
+            .get_workflow_for_ui(&session_id)
             .map_err(|e| e.to_string())?;
-        normalize_workflow_agent_config_in_memory(&store, &mut snapshot.workflow)?;
-        snapshot
+        let message_window = store
+            .get_workflow_message_window(&session_id, None, 2)
+            .map_err(|e| e.to_string())?;
+        normalize_workflow_agent_config_in_memory(&store, &mut workflow)?;
+        (
+            WorkflowSnapshot {
+                workflow,
+                messages: message_window.messages,
+            },
+            message_window.before_message_id,
+            message_window.hidden_completed_task_count,
+        )
     };
 
     // Phase 0-3 UI State Reconciliation: Add hasLiveSession field.
@@ -2011,6 +2021,14 @@ pub async fn get_workflow_snapshot(
     let mut snapshot_json = serde_json::to_value(&snapshot).map_err(|e| e.to_string())?;
     if let Some(obj) = snapshot_json.as_object_mut() {
         obj.insert("messages".to_string(), json!(merged_messages));
+        obj.insert(
+            "messageWindowBeforeId".to_string(),
+            json!(message_window_before_id),
+        );
+        obj.insert(
+            "hiddenCompletedTaskCount".to_string(),
+            json!(hidden_completed_task_count),
+        );
         obj.insert("hasLiveSession".to_string(), json!(has_live_session));
         obj.insert(
             "hasBlockingLiveSession".to_string(),
@@ -2028,6 +2046,34 @@ pub async fn get_workflow_snapshot(
     );
 
     Ok(snapshot_json)
+}
+
+#[tauri::command]
+pub async fn get_earlier_workflow_messages(
+    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    session_id: String,
+    before_message_id: i64,
+) -> Result<Value, String> {
+    let window = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store
+            .get_workflow_message_window(&session_id, Some(before_message_id), 1)
+            .map_err(|e| e.to_string())?
+    };
+    let merged_messages = merge_ui_workflow_messages(&window.messages);
+
+    log::debug!(
+        "[Workflow][session={}][command=get_earlier_workflow_messages] loaded_messages={} hidden_completed_tasks={}",
+        session_id,
+        merged_messages.len(),
+        window.hidden_completed_task_count
+    );
+
+    Ok(json!({
+        "messages": merged_messages,
+        "beforeMessageId": window.before_message_id,
+        "hiddenCompletedTaskCount": window.hidden_completed_task_count,
+    }))
 }
 
 #[tauri::command]

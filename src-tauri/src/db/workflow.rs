@@ -162,6 +162,14 @@ pub struct WorkflowSnapshot {
     pub messages: Vec<WorkflowMessage>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowMessageWindow {
+    pub messages: Vec<WorkflowMessage>,
+    pub before_message_id: Option<i64>,
+    pub hidden_completed_task_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowEfficiencyMetrics {
@@ -1487,7 +1495,144 @@ impl MainStore {
         Ok(true)
     }
 
-    pub fn get_workflow_snapshot(&self, id: &str) -> Result<WorkflowSnapshot, StoreError> {
+    pub fn get_workflow_message_window(
+        &self,
+        session_id: &str,
+        before_message_id: Option<i64>,
+        initial_visible_group_count: usize,
+    ) -> Result<WorkflowMessageWindow, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT * FROM workflow_messages
+             WHERE session_id = ?1 AND (?2 IS NULL OR id < ?2)
+             ORDER BY id DESC",
+        )?;
+        let message_rows = stmt.query_map(params![session_id, before_message_id], |row| {
+            Ok(WorkflowMessage::from(row))
+        })?;
+
+        let is_completed_task_boundary = |message: &WorkflowMessage| {
+            if message.role != "tool" || message.is_error {
+                return false;
+            }
+            let Some(metadata) = message.metadata.as_ref() else {
+                return false;
+            };
+            let tool_name = metadata
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    metadata
+                        .get("tool_call")
+                        .and_then(|tool_call| tool_call.get("name"))
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| {
+                    metadata
+                        .get("tool_call")
+                        .and_then(|tool_call| tool_call.get("function"))
+                        .and_then(|function| function.get("name"))
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or_default();
+            if tool_name != "complete_workflow_with_summary" {
+                return false;
+            }
+            let execution_status = metadata
+                .get("execution_status")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let approval_status = metadata
+                .get("approval_status")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let review_display_state = metadata
+                .get("review_display_state")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+
+            approval_status != "rejected"
+                && review_display_state != "final_review_rejected"
+                && (execution_status.is_empty() || execution_status == "completed")
+        };
+
+        let mut messages_desc = Vec::new();
+        let mut completion_count = 0usize;
+        let mut target_completion_count = if before_message_id.is_some() {
+            1
+        } else {
+            initial_visible_group_count.max(1)
+        };
+
+        for row in message_rows {
+            let message = row?;
+            if is_completed_task_boundary(&message) {
+                if completion_count >= target_completion_count {
+                    break;
+                }
+                if before_message_id.is_none() && completion_count == 0 && !messages_desc.is_empty()
+                {
+                    target_completion_count = initial_visible_group_count.saturating_sub(1).max(1);
+                }
+                completion_count += 1;
+            }
+            messages_desc.push(message);
+        }
+
+        messages_desc.reverse();
+        let before_message_id = messages_desc.first().and_then(|message| message.id);
+        let hidden_completed_task_count = if let Some(oldest_message_id) = before_message_id {
+            let mut count_stmt = conn.prepare(
+                "SELECT metadata, role, is_error FROM workflow_messages
+                 WHERE session_id = ?1 AND id < ?2
+                 ORDER BY id ASC",
+            )?;
+            let rows = count_stmt.query_map(params![session_id, oldest_message_id], |row| {
+                let metadata_text: Option<String> = row.get(0)?;
+                let role: String = row.get(1)?;
+                let is_error: bool = row.get(2)?;
+                Ok(WorkflowMessage {
+                    id: None,
+                    session_id: String::new(),
+                    role,
+                    message: String::new(),
+                    reasoning: None,
+                    message_kind: String::new(),
+                    message_subtype: None,
+                    segment_id: 0,
+                    source_event_type: None,
+                    metadata: metadata_text.and_then(|value| serde_json::from_str(&value).ok()),
+                    attached_context: None,
+                    step_type: None,
+                    step_index: 0,
+                    is_error,
+                    error_type: None,
+                    created_at: None,
+                })
+            })?;
+            let mut count = 0usize;
+            for row in rows {
+                if is_completed_task_boundary(&row?) {
+                    count += 1;
+                }
+            }
+            count
+        } else {
+            0
+        };
+
+        Ok(WorkflowMessageWindow {
+            messages: messages_desc,
+            before_message_id,
+            hidden_completed_task_count,
+        })
+    }
+
+    pub fn get_workflow_for_ui(&self, id: &str) -> Result<Workflow, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -1505,17 +1650,22 @@ impl MainStore {
             params![id],
             |row| Ok(Workflow::from(row)),
         )?;
-
-        // Get wait_reason from workflow_snapshots table
-        let wait_reason: Option<String> = conn
+        workflow.wait_reason = conn
             .query_row(
                 "SELECT wait_reason FROM workflow_snapshots WHERE session_id = ?1",
                 params![id],
                 |row| row.get(0),
             )
             .ok();
-        workflow.wait_reason = wait_reason;
+        Ok(workflow)
+    }
 
+    pub fn get_workflow_snapshot(&self, id: &str) -> Result<WorkflowSnapshot, StoreError> {
+        let workflow = self.get_workflow_for_ui(id)?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let mut stmt =
             conn.prepare("SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC")?;
         let messages_iter = stmt.query_map(params![id], |row| Ok(WorkflowMessage::from(row)))?;
@@ -2471,6 +2621,141 @@ mod tests {
             ],
         )
         .expect("failed to seed agent");
+    }
+
+    fn add_window_test_message(
+        store: &MainStore,
+        session_id: &str,
+        message: &str,
+        completed: bool,
+    ) -> i64 {
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: if completed { "tool" } else { "user" }.to_string(),
+                message: message.to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: completed.then(|| {
+                    json!({
+                        "tool_name": "complete_workflow_with_summary",
+                        "execution_status": "completed"
+                    })
+                }),
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add window test message")
+    }
+
+    #[test]
+    fn test_workflow_message_window_loads_recent_and_earlier_complete_tasks() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-window");
+        store
+            .create_workflow("window-session", "Window query", "agent-window", None, None)
+            .expect("failed to create workflow");
+
+        for task in 1..=3 {
+            add_window_test_message(
+                &store,
+                "window-session",
+                &format!("task-{task}-input"),
+                false,
+            );
+            add_window_test_message(
+                &store,
+                "window-session",
+                &format!("task-{task}-completed"),
+                true,
+            );
+        }
+        add_window_test_message(&store, "window-session", "active-task", false);
+
+        let recent = store
+            .get_workflow_message_window("window-session", None, 2)
+            .expect("failed to load recent window");
+        assert_eq!(
+            recent
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-3-input", "task-3-completed", "active-task"]
+        );
+        assert_eq!(recent.hidden_completed_task_count, 2);
+
+        let earlier = store
+            .get_workflow_message_window("window-session", recent.before_message_id, 2)
+            .expect("failed to load earlier window");
+        assert_eq!(
+            earlier
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-2-input", "task-2-completed"]
+        );
+        assert_eq!(earlier.hidden_completed_task_count, 1);
+
+        let oldest = store
+            .get_workflow_message_window("window-session", earlier.before_message_id, 1)
+            .expect("failed to load oldest window");
+        assert_eq!(
+            oldest
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-1-input", "task-1-completed"]
+        );
+        assert_eq!(oldest.hidden_completed_task_count, 0);
+
+        let loaded_ids = recent
+            .messages
+            .iter()
+            .chain(earlier.messages.iter())
+            .chain(oldest.messages.iter())
+            .filter_map(|message| message.id)
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(loaded_ids.len(), 7, "paged windows must not overlap");
+
+        store
+            .create_workflow(
+                "completed-window",
+                "Completed query",
+                "agent-window",
+                None,
+                None,
+            )
+            .expect("failed to create completed workflow");
+        for task in 1..=2 {
+            add_window_test_message(
+                &store,
+                "completed-window",
+                &format!("completed-{task}-input"),
+                false,
+            );
+            add_window_test_message(
+                &store,
+                "completed-window",
+                &format!("completed-{task}-done"),
+                true,
+            );
+        }
+        let completed_window = store
+            .get_workflow_message_window("completed-window", None, 2)
+            .expect("failed to load completed-only window");
+        assert_eq!(completed_window.messages.len(), 4);
+        assert_eq!(completed_window.hidden_completed_task_count, 0);
     }
 
     #[test]

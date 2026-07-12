@@ -416,6 +416,11 @@ export function useWorkflowMessages(options = {}) {
           return
         }
 
+        if (relocatedBoundaryIndex !== lastCompletionIndex) {
+          initializeTaskWindow(messages)
+          return
+        }
+
         lastCompletionIndex = relocatedBoundaryIndex
         lastCompletionId = getMessageIdentity(messages[relocatedBoundaryIndex], relocatedBoundaryIndex)
         lastCompletionToolCallId = getMessageToolCallId(messages[relocatedBoundaryIndex])
@@ -493,13 +498,9 @@ export function useWorkflowMessages(options = {}) {
     }
   })
 
-  const hiddenCompletedTaskGroupCount = computed(() => {
-    const completedLimit = Math.max(
-      0,
-      visibleCompletedTaskGroupCount.value - (taskWindowState.value.activeMessages.length ? 1 : 0)
-    )
-    return Math.max(0, taskWindowState.value.completedGroups.length - completedLimit)
-  })
+  const hiddenCompletedTaskGroupCount = computed(
+    () => workflowStore.hiddenCompletedTaskCount || 0
+  )
 
   const enhanceRawMessages = rawMsgs => {
     if (!rawMsgs.length) return []
