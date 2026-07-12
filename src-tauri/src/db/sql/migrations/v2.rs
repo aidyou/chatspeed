@@ -1,4 +1,4 @@
-use super::MigrationDefinition;
+use super::common::MigrationDefinition;
 
 /// Version 2 migration SQL statements
 pub const MIGRATION_SQL: &[(&str, &str)] = &[

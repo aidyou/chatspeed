@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::{collections::HashMap, path::Path, sync::Mutex};
 
 use super::{
+    api_key_crypto::decrypt_api_key,
     mcp::Mcp,
     sql::migrations::manager,
     types::{Config, ModelConfig},
@@ -394,23 +395,28 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub(crate) fn get_all_config(conn: &Connection) -> Result<HashMap<String, Value>, StoreError> {
-        let mut stmt = conn.prepare("SELECT key, value FROM config").map_err(|e| {
-            error!("Failed to prepare statement for getting all config: {}", e);
-            StoreError::from(e)
-        })?;
+        let mut stmt = conn
+            .prepare("SELECT key, value FROM config WHERE key != ?1")
+            .map_err(|e| {
+                error!("Failed to prepare statement for getting all config: {}", e);
+                StoreError::from(e)
+            })?;
         let rows = stmt
-            .query_map([], |row| {
-                let key: String = row.get("key")?;
-                let value_str: String = row.get("value")?;
-                let value: Value = serde_json::from_str(&value_str).unwrap_or_else(|e| {
-                    error!(
-                        "Failed to parse JSON for config key '{}': {}. Value: '{}'",
-                        key, e, value_str
-                    );
-                    Value::Null
-                });
-                Ok((key, value))
-            })
+            .query_map(
+                [crate::db::api_key_crypto::API_KEY_ENCRYPTION_CONFIG_KEY],
+                |row| {
+                    let key: String = row.get("key")?;
+                    let value_str: String = row.get("value")?;
+                    let value: Value = serde_json::from_str(&value_str).unwrap_or_else(|e| {
+                        error!(
+                            "Failed to parse JSON for config key '{}': {}. Value: '{}'",
+                            key, e, value_str
+                        );
+                        Value::Null
+                    });
+                    Ok((key, value))
+                },
+            )
             .map_err(|e| {
                 error!("Failed to query rows for all config: {}", e);
                 StoreError::from(e)
@@ -489,7 +495,8 @@ impl MainStore {
                     default_model: row.get("default_model").unwrap_or_default(),
                     api_protocol: row.get("api_protocol").unwrap_or_default(),
                     base_url: row.get("base_url").unwrap_or_default(),
-                    api_key: row.get("api_key").unwrap_or_default(),
+                    api_key: decrypt_api_key(conn, &row.get::<_, String>("api_key")?)
+                        .map_err(rusqlite::Error::from)?,
                     max_tokens: row.get("max_tokens").unwrap_or(0),
                     temperature: row.get("temperature").unwrap_or(0.0),
                     top_p: row.get("top_p").unwrap_or(0.0),

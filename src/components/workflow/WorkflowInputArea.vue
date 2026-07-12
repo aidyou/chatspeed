@@ -213,7 +213,7 @@
                     command="full"
                     class="danger-option"
                     :class="{ active: approvalLevel === 'full' }">
-                    <cs name="warning" size="14px" class="dropdown-icon" />
+                    <cs name="yolo" size="14px" class="dropdown-icon" />
                     <span class="dropdown-text">{{ $t('settings.agent.approvalLevelFull') }}</span>
                     <cs
                       v-if="approvalLevel === 'full'"

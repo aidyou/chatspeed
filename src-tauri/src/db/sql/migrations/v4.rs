@@ -1,4 +1,4 @@
-use super::MigrationDefinition;
+use super::common::MigrationDefinition;
 
 /// Version 4 migration SQL statements
 /// Adds Proxy Stats table for tracking proxy requests and token usage.

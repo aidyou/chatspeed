@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod api_key_crypto;
 pub mod automation;
 pub mod backup;
 pub mod backup_crypto;

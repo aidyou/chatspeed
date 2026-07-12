@@ -1,4 +1,4 @@
-use super::{column_exists, MigrationDefinition};
+use super::common::{column_exists, MigrationDefinition};
 use crate::db::StoreError;
 use rusqlite::Connection;
 use serde_json::Value;

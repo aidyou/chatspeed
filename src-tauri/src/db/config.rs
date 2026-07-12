@@ -1,5 +1,6 @@
 use super::types::{AiSkill, ModelConfig};
 use crate::constants::{CFG_WINDOW_POSITION, HTTP_SERVER_DIR};
+use crate::db::api_key_crypto::{encrypt_api_key, API_KEY_ENCRYPTION_CONFIG_KEY};
 use crate::db::error::StoreError;
 use crate::db::main_store::MainStore;
 use crate::window::WindowSize;
@@ -25,6 +26,12 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn set_config(&mut self, key: &str, value: &Value) -> Result<(), StoreError> {
+        if key == API_KEY_ENCRYPTION_CONFIG_KEY {
+            return Err(StoreError::InvalidData(
+                "The API key encryption key cannot be updated".to_string(),
+            ));
+        }
+
         let conn = self
             .conn
             .lock()
@@ -45,6 +52,12 @@ impl MainStore {
     /// # Arguments
     /// * `key` - The key of the configuration item to delete.
     pub fn delete_config(&mut self, key: &str) -> Result<(), StoreError> {
+        if key == API_KEY_ENCRYPTION_CONFIG_KEY {
+            return Err(StoreError::InvalidData(
+                "The API key encryption key cannot be deleted".to_string(),
+            ));
+        }
+
         let conn = self
             .conn
             .lock()
@@ -109,6 +122,7 @@ impl MainStore {
             })?;
 
         let new_sort_index = max_sort_index + 1;
+        let encrypted_api_key = encrypt_api_key(&conn, &api_key)?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -135,7 +149,7 @@ impl MainStore {
                 default_model,
                 api_protocol,
                 base_url,
-                api_key,
+                encrypted_api_key,
                 max_tokens,
                 temperature,
                 top_p,
@@ -190,6 +204,7 @@ impl MainStore {
             .conn
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
+        let encrypted_api_key = encrypt_api_key(&conn, &api_key)?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -214,7 +229,7 @@ impl MainStore {
                 default_model,
                 api_protocol,
                 base_url,
-                api_key,
+                encrypted_api_key,
                 max_tokens,
                 temperature,
                 top_p,
