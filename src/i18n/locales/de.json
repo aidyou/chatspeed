@@ -912,7 +912,8 @@
       },
       "weekdays": "Weekdays"
     },
-    "autoCompressTooltip": "Automatische Rollup-Komprimierung: Komprimiert ältere abgeschlossene Aufgaben beim Start einer neuen Aufgabe automatisch",
+    "autoCompressShort": "Automatische Rollup-Komprimierung",
+    "autoCompressTooltip": "Komprimiert ältere abgeschlossene Aufgaben beim Start einer neuen Aufgabe automatisch",
     "awaitingApproval": "Warte auf Genehmigung",
     "awaitingUser": "Wartet auf Eingabe",
     "chatspeedSkillsGroup": "ChatSpeed",
@@ -973,7 +974,7 @@
       },
       "writeVerb": "Write"
     },
-    "finalAuditTooltip": "Abschlussprüfungsmodus: Qualitätsprüfung durch KI vor Aufgabenabschluss",
+    "finalAuditTooltip": "Qualitätsprüfung durch KI vor Aufgabenabschluss",
     "finalReviewPending": "Abschlussprüfung läuft",
     "finishTask": "Aufgabe abschließen",
     "historyTab": "Sitzung",

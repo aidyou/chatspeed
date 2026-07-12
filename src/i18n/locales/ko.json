@@ -912,7 +912,8 @@
       },
       "weekdays": "Weekdays"
     },
-    "autoCompressTooltip": "자동 롤업 압축: 새 작업 시작 시 이전 완료 작업을 자동으로 압축합니다",
+    "autoCompressShort": "자동 롤업 압축",
+    "autoCompressTooltip": "새 작업 시작 시 이전 완료 작업을 자동으로 압축합니다",
     "awaitingApproval": "사용자 승인 대기 중",
     "awaitingUser": "사용자 입력 대기",
     "chatspeedSkillsGroup": "ChatSpeed",
@@ -973,7 +974,7 @@
       },
       "writeVerb": "Write"
     },
-    "finalAuditTooltip": "최종 감사 모드: 작업 완료 전 AI 가 자동으로 품질 검토를 수행합니다",
+    "finalAuditTooltip": "작업 완료 전 AI 가 자동으로 품질 검토를 수행합니다",
     "finalReviewPending": "최종 검토 중",
     "finishTask": "작업 완료",
     "historyTab": "대화",

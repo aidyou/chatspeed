@@ -912,7 +912,8 @@
       },
       "weekdays": "Weekdays"
     },
-    "autoCompressTooltip": "Compactação automática por rollup: compacta automaticamente tarefas concluídas antigas ao iniciar uma nova tarefa",
+    "autoCompressShort": "Compactação automática por rollup",
+    "autoCompressTooltip": "Compacta automaticamente tarefas concluídas antigas ao iniciar uma nova tarefa",
     "awaitingApproval": "Aguardando aprovação",
     "awaitingUser": "Aguardando usuário",
     "chatspeedSkillsGroup": "ChatSpeed",
@@ -973,7 +974,7 @@
       },
       "writeVerb": "Write"
     },
-    "finalAuditTooltip": "Modo de auditoria final: A IA realiza automaticamente uma revisão de qualidade antes de concluir a tarefa",
+    "finalAuditTooltip": "A IA realiza automaticamente uma revisão de qualidade antes de concluir a tarefa",
     "finalReviewPending": "Revisão final em andamento",
     "finishTask": "Concluir tarefa",
     "historyTab": "Conversa",

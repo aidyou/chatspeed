@@ -912,7 +912,8 @@
       },
       "weekdays": "Weekdays"
     },
-    "autoCompressTooltip": "Автосжатие rollup: автоматически сжимает старые завершённые задачи при запуске новой задачи",
+    "autoCompressShort": "Автосжатие rollup",
+    "autoCompressTooltip": "Автоматически сжимает старые завершённые задачи при запуске новой задачи",
     "awaitingApproval": "Ожидает подтверждения",
     "awaitingUser": "Ожидание ввода",
     "chatspeedSkillsGroup": "ChatSpeed",
@@ -973,7 +974,7 @@
       },
       "writeVerb": "Write"
     },
-    "finalAuditTooltip": "Режим финального аудита: ИИ автоматически выполняет проверку качества перед завершением задачи",
+    "finalAuditTooltip": "ИИ автоматически выполняет проверку качества перед завершением задачи",
     "finalReviewPending": "Идет финальная проверка",
     "finishTask": "Завершить задачу",
     "historyTab": "Разговор",

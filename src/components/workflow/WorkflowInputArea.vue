@@ -96,15 +96,11 @@
 
       <div class="input-footer">
         <div class="footer-left">
-          <div class="selector-wrap" :class="{ disabled: !canEditAgent }">
+          <div v-if="canEditAgent" class="selector-wrap">
             <AgentSelector
               :model-value="selectedAgent"
-              :agent="
-                currentWorkflow?.agentId && !canEditAgent
-                  ? agents.find(a => a.id === currentWorkflow.agentId)
-                  : null
-              "
-              :disabled="!canEditAgent"
+              :agent="null"
+              :disabled="false"
               @update:model-value="$emit('update-selected-agent', $event)" />
           </div>
           <div class="selector-wrap model-selector-trigger" @click="$emit('open-model-selector')">
@@ -113,60 +109,64 @@
           </div>
 
           <div class="icons">
-            <el-tooltip
-              v-if="canAttachImages"
-              placement="top"
-              :content="$t('chat.addAttachment')"
-              :hide-after="0"
-              :enterable="false">
-              <label class="icon-btn upperLayer" @click="$emit('open-image-dialog')">
-                <cs name="attachment" class="small" />
+            <el-dropdown trigger="click" @command="handleQuickActionCommand">
+              <label class="icon-btn upperLayer">
+                <cs name="add" class="small" />
               </label>
-            </el-tooltip>
-
-            <el-tooltip
-              v-if="showPlanningModeToggle"
-              placement="top"
-              :content="$t('workflow.planningModeTooltip')"
-              :hide-after="0"
-              :enterable="false">
-              <label
-                class="icon-btn upperLayer"
-                :class="{ active: planningMode, disabled: !canTogglePlanningMode }"
-                @click="canTogglePlanningMode && $emit('toggle-planning-mode')">
-                <cs name="skill-plan" class="small" />
-              </label>
-            </el-tooltip>
-
-            <!-- Final Audit Toggle -->
-            <el-tooltip
-              placement="top"
-              :content="$t('workflow.finalAuditTooltip')"
-              :hide-after="0"
-              :enterable="false">
-              <label
-                class="final-audit-toggle icon-btn upperLayer"
-                :class="{ [finalAuditMode]: true, disabled: !canToggleFinalAuditMode }"
-                @click="canToggleFinalAuditMode && $emit('toggle-final-audit-mode')">
-                <cs name="check-circle" class="small" />
-                <span class="audit-label" v-if="finalAuditMode !== 'off'">{{
-                  finalAuditMode.toUpperCase()
-                }}</span>
-              </label>
-            </el-tooltip>
-
-            <el-tooltip
-              placement="top"
-              :content="$t('workflow.autoCompressTooltip')"
-              :hide-after="0"
-              :enterable="false">
-              <label
-                class="icon-btn upperLayer"
-                :class="{ active: autoCompressEnabled }"
-                @click="$emit('toggle-auto-compress')">
-                <cs name="compress" class="small" />
-              </label>
-            </el-tooltip>
+              <template #dropdown>
+                <el-dropdown-menu class="workflow-quick-actions-dropdown">
+                  <el-dropdown-item v-if="canAttachImages" command="attachment">
+                    <cs name="attachment" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-text">{{ $t('chat.addAttachment') }}</span>
+                    </span>
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="showPlanningModeToggle"
+                    command="planning"
+                    :disabled="!canTogglePlanningMode"
+                    :class="{ active: planningMode }">
+                    <cs name="skill-plan" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-main">
+                        <span class="dropdown-text">{{ $t('settings.agent.planningMode') }}</span>
+                        <cs v-if="planningMode" name="check" size="14px" class="dropdown-check" />
+                      </span>
+                      <span class="dropdown-note">{{ $t('workflow.planningModeTooltip') }}</span>
+                    </span>
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    command="finalAudit"
+                    :disabled="!canToggleFinalAuditMode"
+                    :class="{ active: finalAuditMode !== 'off' }">
+                    <cs name="check-circle" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-main">
+                        <span class="dropdown-text">{{ $t('settings.agent.finalAudit') }}</span>
+                        <span v-if="finalAuditMode !== 'off'" class="dropdown-state">{{
+                          finalAuditMode.toUpperCase()
+                        }}</span>
+                      </span>
+                      <span class="dropdown-note">{{ $t('workflow.finalAuditTooltip') }}</span>
+                    </span>
+                  </el-dropdown-item>
+                  <el-dropdown-item command="autoCompress" :class="{ active: autoCompressEnabled }">
+                    <cs name="compress" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-main">
+                        <span class="dropdown-text">{{ autoCompressMenuLabel }}</span>
+                        <cs
+                          v-if="autoCompressEnabled"
+                          name="check"
+                          size="14px"
+                          class="dropdown-check" />
+                      </span>
+                      <span class="dropdown-note">{{ $t('workflow.autoCompressTooltip') }}</span>
+                    </span>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
 
             <!-- Approval Level Dropdown -->
             <el-dropdown trigger="click" @command="$emit('update-approval-level', $event)">
@@ -564,7 +564,7 @@ const props = defineProps({
   }
 })
 
-defineEmits([
+const emit = defineEmits([
   'send-message',
   'continue',
   'stop',
@@ -787,6 +787,33 @@ const inputRef = ref(null)
 
 const inputMessage = defineModel('inputMessage', { type: String, default: '' })
 
+const autoCompressMenuLabel = computed(() => t('workflow.autoCompressShort'))
+
+const handleQuickActionCommand = command => {
+  if (command === 'attachment') {
+    emit('open-image-dialog')
+    return
+  }
+
+  if (command === 'planning') {
+    if (props.showPlanningModeToggle && props.canTogglePlanningMode) {
+      emit('toggle-planning-mode')
+    }
+    return
+  }
+
+  if (command === 'finalAudit') {
+    if (props.canToggleFinalAuditMode) {
+      emit('toggle-final-audit-mode')
+    }
+    return
+  }
+
+  if (command === 'autoCompress') {
+    emit('toggle-auto-compress')
+  }
+}
+
 const canSendMessage = computed(
   () =>
     (inputMessage.value.trim() !== '' || props.attachments.length > 0) &&
@@ -952,9 +979,55 @@ defineExpose({
   cursor: not-allowed;
 }
 
-.final-audit-toggle.disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
+.workflow-quick-actions-dropdown :deep(.el-dropdown-menu__item) {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: var(--cs-space-xs);
+}
+
+.dropdown-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.dropdown-content {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.dropdown-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dropdown-text {
+  min-width: 0;
+  line-height: 1.4;
+  color: var(--cs-text-color);
+}
+
+.dropdown-note {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--cs-text-secondary);
+  white-space: normal;
+}
+
+.dropdown-check,
+.dropdown-state {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.dropdown-state {
+  font-size: 11px;
+  color: var(--cs-text-secondary);
 }
 
 @keyframes workflow-attachment-spin {

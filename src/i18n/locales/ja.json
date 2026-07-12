@@ -912,7 +912,8 @@
       },
       "weekdays": "Weekdays"
     },
-    "autoCompressTooltip": "自動ロールアップ圧縮: 新しいタスク開始時に古い完了タスクを自動圧縮します",
+    "autoCompressShort": "自動ロールアップ圧縮",
+    "autoCompressTooltip": "新しいタスク開始時に古い完了タスクを自動圧縮します",
     "awaitingApproval": "ユーザーの承認待ち",
     "awaitingUser": "ユーザー入力待ち",
     "chatspeedSkillsGroup": "ChatSpeed",
@@ -973,7 +974,7 @@
       },
       "writeVerb": "Write"
     },
-    "finalAuditTooltip": "最終監査モード：タスク完了前に AI が自動的に品質レビューを実行します",
+    "finalAuditTooltip": "タスク完了前に AI が自動的に品質レビューを実行します",
     "finalReviewPending": "最終レビュー中",
     "finishTask": "タスクを完了",
     "historyTab": "会話",

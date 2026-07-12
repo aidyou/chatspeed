@@ -912,7 +912,8 @@
       },
       "weekdays": "周几执行"
     },
-    "autoCompressTooltip": "自動滾動壓縮：開始新任務時自動壓縮較早的已完成任務",
+    "autoCompressShort": "自動滾動壓縮",
+    "autoCompressTooltip": "開始新任務時自動壓縮較早的已完成任務",
     "awaitingApproval": "等待使用者審批",
     "awaitingUser": "等待使用者輸入",
     "chatspeedSkillsGroup": "ChatSpeed",
@@ -973,7 +974,7 @@
       },
       "writeVerb": "Write"
     },
-    "finalAuditTooltip": "最終審核模式：AI 在任務完成前自動執行品質審查",
+    "finalAuditTooltip": "AI 在任務完成前自動執行品質審查",
     "finalReviewPending": "終審中",
     "finishTask": "完成任務",
     "historyTab": "對話",

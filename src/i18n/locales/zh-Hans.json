@@ -912,7 +912,8 @@
       },
       "weekdays": "周几执行"
     },
-    "autoCompressTooltip": "自动滚动压缩：开启新任务时自动压缩较早的已完成任务",
+    "autoCompressShort": "自动滚动压缩",
+    "autoCompressTooltip": "开启新任务时自动压缩较早的已完成任务",
     "awaitingApproval": "等待用户审批",
     "awaitingUser": "等待用户输入",
     "chatspeedSkillsGroup": "ChatSpeed",
@@ -973,7 +974,7 @@
       },
       "writeVerb": "Write"
     },
-    "finalAuditTooltip": "终审模式：任务结束前由 AI 自动进行质量审核",
+    "finalAuditTooltip": "任务结束前由 AI 自动进行质量审核",
     "finalReviewPending": "终审中",
     "finishTask": "完成任务",
     "historyTab": "会话",

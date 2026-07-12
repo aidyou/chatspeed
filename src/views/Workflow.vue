@@ -225,7 +225,7 @@
           :selected-agent="selectedAgent"
           :can-edit-agent="canEditCurrentWorkflowAgent"
           :show-planning-mode-toggle="showPlanningModeToggle"
-          :can-toggle-planning-mode="canEditCurrentWorkflowAgent"
+          :can-toggle-planning-mode="canTogglePlanningMode"
           :active-model-name="activeModelName"
           :planning-mode="planningMode"
           :approval-level="approvalLevel"
@@ -447,15 +447,7 @@ const startTodayCostRefresh = () => {
   }, 5000)
 }
 
-const showPlanningModeToggle = computed(() => {
-  const workflow = workflowStore.currentWorkflow
-  if (!workflow) return true
-
-  const hasStartedContent =
-    Boolean(String(workflow.userQuery || '').trim()) || (workflow.messagesCount || 0) > 0
-  const status = String(workflow.status || '').toLowerCase()
-  return !workflowStore.hasLiveSession && (!hasStartedContent || TERMINAL_STATUSES.includes(status))
-})
+const showPlanningModeToggle = computed(() => true)
 
 // System skills
 const systemSkills = ref([])
@@ -1653,8 +1645,24 @@ const canEditCurrentWorkflowAgent = computed(() => {
   return !hasLiveSession.value && !hasQuery && !hasMessages
 })
 
+const canTogglePlanningMode = computed(() => {
+  if (!currentWorkflowId.value || !currentWorkflow.value) {
+    return true
+  }
+
+  if (hasLiveSession.value) {
+    return false
+  }
+
+  if (canEditCurrentWorkflowAgent.value) {
+    return true
+  }
+
+  return workflowStore.canClearContext
+})
+
 const onTogglePlanningMode = () => {
-  if (!canEditCurrentWorkflowAgent.value) return
+  if (!canTogglePlanningMode.value) return
   planningMode.value = !planningMode.value
 }
 
