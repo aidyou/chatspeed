@@ -2,6 +2,32 @@
 
 # Release Notes
 
+## [2.0.5]
+
+### 🪄 Improvements
+
+- **Workflow slash commands and toggle feedback**:
+  - Added built-in slash commands including `/clear`, `/new`, `/plan`, `/audit`, `/compress`, and `/attach` to speed up common Workflow actions.
+  - Added clearer in-session feedback for planning, audit, and auto-compress toggles, and polished the completed final-audit state indicator.
+- **Workflow message history loading and folded action UX**:
+  - Earlier message groups in Workflow now load on demand, reducing the amount of history rendered upfront while keeping older context accessible.
+  - Refined folded quick actions around the input area so common actions stay easier to discover and use in compact states.
+- **Workflow status feedback polish**:
+  - Improved the status notifier so the default thinking state shows a continuous loading animation, making active processing easier to recognize.
+- **Provider API key protection**:
+  - Provider API keys are now stored with encryption in the local database, improving protection for saved credentials in settings.
+
+### 🐞 Bug Fixes
+
+- **Workflow legacy message normalization and context markers**:
+  - Normalized legacy Workflow message classification during database read and store hydration, reducing fallback handling across the UI and runtime.
+  - Improved compatibility for older clear-context markers and related metadata so historical sessions recover more consistently.
+- **Workflow reasoning/status rendering edge cases**:
+  - Fixed an edge case in reasoning chunk handling when empty HTML comments contain newlines, avoiding malformed intermediate display states.
+  - Adjusted Workflow status priority handling so visible execution and waiting states are surfaced more consistently.
+
+---
+
 ## [2.0.4]
 
 ### 🪄 Improvements

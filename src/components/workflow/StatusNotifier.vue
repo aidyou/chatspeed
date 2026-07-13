@@ -252,7 +252,7 @@ const displayState = computed(() => {
     text: t('workflow.thinking') || 'Thinking...',
     tone: 'info',
     icon: 'reasoning',
-    spinning: false
+    spinning: true
   }
 })
 
