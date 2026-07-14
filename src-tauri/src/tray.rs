@@ -3,13 +3,6 @@ use tauri::Manager;
 
 use crate::{
     commands::window::quit_window,
-    constants::{
-        CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
-        CFG_NOTE_WINDOW_VISIBLE_SHORTCUT, CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
-        CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT, DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
-        DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT, DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT,
-        DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT, DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
-    },
     db::MainStore,
 };
 
@@ -29,44 +22,106 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
             return Err("MainStore not initialized".to_string());
         }
     };
-    let mut main_window_visible_shortcut = DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string();
-    let mut assistant_window_visible_shortcut =
-        DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string();
-    let mut note_window_visible_shortcut = DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string();
-    let mut proxy_switcher_window_visible_shortcut =
-        DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string();
-    let mut workflow_window_visible_shortcut = DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string();
-    // Get shortcut config
-    if let Ok(c) = main_store.read() {
-        // Main window shortcut
-        main_window_visible_shortcut = c.get_config(
-            CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
-            DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string(),
-        );
-        assistant_window_visible_shortcut = c.get_config(
-            CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
-            DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string(),
-        );
-        note_window_visible_shortcut = c.get_config(
-            CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
-            DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
-        );
-        proxy_switcher_window_visible_shortcut = c.get_config(
-            CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
-            DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
-        );
-        workflow_window_visible_shortcut = c.get_config(
-            CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
-            DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
-        );
-    }
+    let (
+        main_window_visible_shortcut,
+        assistant_window_visible_shortcut,
+        note_window_visible_shortcut,
+        proxy_switcher_window_visible_shortcut,
+        workflow_window_visible_shortcut,
+    ) = if let Ok(c) = main_store.read() {
+        (
+            c.config
+                .get_setting(crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT)
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| {
+                    crate::shortcut::get_default_shortcut(
+                        crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
+                    )
+                    .unwrap_or_default()
+                    .to_string()
+                }),
+            c.config
+                .get_setting(crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT)
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| {
+                    crate::shortcut::get_default_shortcut(
+                        crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
+                    )
+                    .unwrap_or_default()
+                    .to_string()
+                }),
+            c.config
+                .get_setting(crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT)
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| {
+                    crate::shortcut::get_default_shortcut(
+                        crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
+                    )
+                    .unwrap_or_default()
+                    .to_string()
+                }),
+            c.config
+                .get_setting(crate::constants::CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT)
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| {
+                    crate::shortcut::get_default_shortcut(
+                        crate::constants::CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
+                    )
+                    .unwrap_or_default()
+                    .to_string()
+                }),
+            c.config
+                .get_setting(crate::constants::CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT)
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| {
+                    crate::shortcut::get_default_shortcut(
+                        crate::constants::CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
+                    )
+                    .unwrap_or_default()
+                    .to_string()
+                }),
+        )
+    } else {
+        (
+            crate::shortcut::get_default_shortcut(crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT)
+                .unwrap_or_default()
+                .to_string(),
+            crate::shortcut::get_default_shortcut(
+                crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
+            )
+            .unwrap_or_default()
+            .to_string(),
+            crate::shortcut::get_default_shortcut(crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT)
+                .unwrap_or_default()
+                .to_string(),
+            crate::shortcut::get_default_shortcut(
+                crate::constants::CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
+            )
+            .unwrap_or_default()
+            .to_string(),
+            crate::shortcut::get_default_shortcut(
+                crate::constants::CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
+            )
+            .unwrap_or_default()
+            .to_string(),
+        )
+    };
 
     let main_window_menu_item = tauri::menu::MenuItem::with_id(
         app,
         "main",
         &rust_i18n::t!("tray.chat"),
         true,
-        Some(main_window_visible_shortcut),
+        if main_window_visible_shortcut.is_empty() {
+            None
+        } else {
+            Some(main_window_visible_shortcut)
+        },
     )
     .map_err(|e| e.to_string())?;
 
@@ -75,7 +130,11 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         "assistant",
         &rust_i18n::t!("tray.assistant"),
         true,
-        Some(assistant_window_visible_shortcut),
+        if assistant_window_visible_shortcut.is_empty() {
+            None
+        } else {
+            Some(assistant_window_visible_shortcut)
+        },
     )
     .map_err(|e| e.to_string())?;
 
@@ -84,7 +143,11 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         "workflow",
         &rust_i18n::t!("tray.workflow"),
         true,
-        Some(workflow_window_visible_shortcut),
+        if workflow_window_visible_shortcut.is_empty() {
+            None
+        } else {
+            Some(workflow_window_visible_shortcut)
+        },
     )
     .map_err(|e| e.to_string())?;
 
@@ -93,7 +156,11 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         "note",
         &rust_i18n::t!("tray.note"),
         true,
-        Some(note_window_visible_shortcut),
+        if note_window_visible_shortcut.is_empty() {
+            None
+        } else {
+            Some(note_window_visible_shortcut)
+        },
     )
     .map_err(|e| e.to_string())?;
 
@@ -142,7 +209,11 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         "proxy_switcher",
         &rust_i18n::t!("tray.proxy_switcher"),
         true,
-        Some(proxy_switcher_window_visible_shortcut),
+        if proxy_switcher_window_visible_shortcut.is_empty() {
+            None
+        } else {
+            Some(proxy_switcher_window_visible_shortcut)
+        },
     )
     .map_err(|e| e.to_string())?;
 
@@ -237,7 +308,6 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
 
 /// Handle system tray events
 async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
-    dbg!(&event);
     let menu_id = event.id().as_ref().to_string();
     match menu_id.as_str() {
         "main" | "assistant" | "workflow" => {

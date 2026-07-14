@@ -124,6 +124,7 @@
     "copyMarkdown": "Markdown 복사",
     "delete": "삭제",
     "deleteSuccess": "성공적으로 삭제되었습니다",
+    "default": "기본값",
     "detail": "세부정보",
     "diagram": "플로우차트",
     "error": "오류",

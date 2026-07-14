@@ -19,9 +19,8 @@ use tauri_plugin_global_shortcut::Shortcut;
 use crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
 use crate::constants::DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
 use crate::db::MainStore;
-use crate::open_note_window;
 use crate::window::toggle_window_activate;
-use crate::window::{activate_window, toggle_assistant_window, toggle_proxy_switcher_window};
+use crate::window::{activate_window, toggle_assistant_window};
 use crate::{
     constants::*, CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT, CFG_CENTER_WINDOW_SHORTCUT,
     CFG_MAIN_WINDOW_VISIBLE_SHORTCUT, CFG_MOVE_WINDOW_LEFT_SHORTCUT,
@@ -37,129 +36,64 @@ use crate::{
 /// * `config_store` - Reference to the configuration store containing shortcut settings
 ///
 /// # Returns
-/// Returns a HashMap containing shortcut types as keys and their corresponding shortcut strings as values.
-/// If a shortcut is not set in the configuration, it will use the default value.
+/// Returns a HashMap containing effective shortcut values used for registration.
+/// Missing configuration falls back to defaults, while empty strings remain empty to indicate disabled shortcuts.
 fn get_shortcuts(config_store: Arc<std::sync::RwLock<MainStore>>) -> HashMap<String, String> {
     let mut shortcuts = HashMap::new();
 
-    if let Ok(c) = config_store.read() {
-        // Main window shortcut
+    for shortcut_key in SHORTCUT_KEYS {
         shortcuts.insert(
-            CFG_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            c.get_config(
-                CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
-                DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            ),
-        );
-
-        // Assistant window shortcut
-        shortcuts.insert(
-            CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            c.get_config(
-                CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
-                DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            ),
-        );
-
-        shortcuts.insert(
-            CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT.to_string(),
-            c.get_config(
-                CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT,
-                DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT.to_string(),
-            ),
-        );
-
-        // Note window shortcut
-        shortcuts.insert(
-            CFG_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            c.get_config(
-                CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
-                DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            ),
-        );
-
-        shortcuts.insert(
-            CFG_MOVE_WINDOW_LEFT_SHORTCUT.to_string(),
-            c.get_config(
-                CFG_MOVE_WINDOW_LEFT_SHORTCUT,
-                DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT.to_string(),
-            ),
-        );
-
-        shortcuts.insert(
-            CFG_MOVE_WINDOW_RIGHT_SHORTCUT.to_string(),
-            c.get_config(
-                CFG_MOVE_WINDOW_RIGHT_SHORTCUT,
-                DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT.to_string(),
-            ),
-        );
-
-        shortcuts.insert(
-            CFG_CENTER_WINDOW_SHORTCUT.to_string(),
-            c.get_config(
-                CFG_CENTER_WINDOW_SHORTCUT,
-                DEFAULT_CENTER_WINDOW_SHORTCUT.to_string(),
-            ),
-        );
-
-        shortcuts.insert(
-            CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            c.get_config(
-                CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
-                DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            ),
-        );
-
-        shortcuts.insert(
-            CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            c.get_config(
-                CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
-                DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            ),
-        );
-
-        // Add new shortcuts here if needed
-        // shortcuts.insert("new_window_shortcut".to_string(), c.get_config("new_window_shortcut", "default_value".to_string()));
-    } else {
-        shortcuts.insert(
-            CFG_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string(),
-        );
-        shortcuts.insert(
-            CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string(),
-        );
-        shortcuts.insert(
-            CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT.to_string(),
-            DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT.to_string(),
-        );
-        shortcuts.insert(
-            CFG_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
-        );
-        shortcuts.insert(
-            CFG_MOVE_WINDOW_LEFT_SHORTCUT.to_string(),
-            DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT.to_string(),
-        );
-        shortcuts.insert(
-            CFG_MOVE_WINDOW_RIGHT_SHORTCUT.to_string(),
-            DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT.to_string(),
-        );
-        shortcuts.insert(
-            CFG_CENTER_WINDOW_SHORTCUT.to_string(),
-            DEFAULT_CENTER_WINDOW_SHORTCUT.to_string(),
-        );
-        shortcuts.insert(
-            CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
-        );
-        shortcuts.insert(
-            CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
+            shortcut_key.to_string(),
+            get_effective_shortcut(config_store.clone(), shortcut_key),
         );
     }
 
     shortcuts
+}
+
+const SHORTCUT_KEYS: [&str; 9] = [
+    CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
+    CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
+    CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT,
+    CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
+    CFG_MOVE_WINDOW_LEFT_SHORTCUT,
+    CFG_MOVE_WINDOW_RIGHT_SHORTCUT,
+    CFG_CENTER_WINDOW_SHORTCUT,
+    CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
+    CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
+];
+
+pub fn is_shortcut_key(key: &str) -> bool {
+    SHORTCUT_KEYS.contains(&key)
+}
+
+pub fn get_default_shortcut(key: &str) -> Option<&'static str> {
+    match key {
+        CFG_MAIN_WINDOW_VISIBLE_SHORTCUT => Some(DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT),
+        CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT => Some(DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT),
+        CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT => {
+            Some(DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT)
+        }
+        CFG_NOTE_WINDOW_VISIBLE_SHORTCUT => Some(DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT),
+        CFG_MOVE_WINDOW_LEFT_SHORTCUT => Some(DEFAULT_MOVE_WINDOW_LEFT_SHORTCUT),
+        CFG_MOVE_WINDOW_RIGHT_SHORTCUT => Some(DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT),
+        CFG_CENTER_WINDOW_SHORTCUT => Some(DEFAULT_CENTER_WINDOW_SHORTCUT),
+        CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT => Some(DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT),
+        CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT => {
+            Some(DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT)
+        }
+        _ => None,
+    }
+}
+
+fn get_effective_shortcut(config_store: Arc<std::sync::RwLock<MainStore>>, key: &str) -> String {
+    if let Ok(c) = config_store.read() {
+        if let Some(value) = c.config.get_setting(key).and_then(|value| value.as_str()) {
+            return value.to_string();
+        }
+    }
+
+    get_default_shortcut(key).unwrap_or("").to_string()
 }
 
 lazy_static! {
@@ -196,7 +130,7 @@ fn handle_shortcut(app: &AppHandle, shortcut_key: &str) {
     log::debug!("handle_shortcut: {}", shortcut_key);
     match shortcut_key {
         CFG_MAIN_WINDOW_VISIBLE_SHORTCUT => {
-            toggle_window_activate(app, "main", true);
+            activate_window(app, "main");
         }
         CFG_MOVE_WINDOW_LEFT_SHORTCUT => {
             if let Err(e) =
@@ -239,7 +173,7 @@ fn handle_shortcut(app: &AppHandle, shortcut_key: &str) {
         CFG_NOTE_WINDOW_VISIBLE_SHORTCUT => {
             let app_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = open_note_window(app_handle).await {
+                if let Err(e) = crate::window::create_or_focus_note_window(app_handle).await {
                     log::error!("Failed to open note window: {}", e);
                 }
             });
@@ -248,7 +182,7 @@ fn handle_shortcut(app: &AppHandle, shortcut_key: &str) {
             toggle_window_activate(app, "workflow", true);
         }
         CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT => {
-            toggle_proxy_switcher_window(app);
+            crate::window::toggle_proxy_switcher_window(app);
         }
         _ => {}
     }
@@ -350,7 +284,6 @@ pub fn update_shortcut(
     let config_store = app.state::<Arc<RwLock<MainStore>>>();
     let shortcuts = get_shortcuts(config_store.inner().clone());
     let shortcut_manager = app.global_shortcut();
-    dbg!(&shortcuts);
 
     // unregister old shortcut
     if let Some(old_shortcut) = shortcuts.get(shortcut_type) {

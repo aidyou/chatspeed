@@ -37,6 +37,7 @@ use std::time::Instant;
 
 use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::Manager;
+use tauri::PhysicalSize;
 
 // use commands::toolbar::*;
 use crate::error::AppError;
@@ -937,6 +938,33 @@ fn save_window_position<F, G>(
     if old_pos.map_or(true, |p| {
         screen_name != p.screen_name || current_position.x != p.x || current_position.y != p.y
     }) {
+        let current_window_size = match window.outer_size() {
+            Ok(size) => size,
+            Err(e) => {
+                warn!(
+                    "Failed to get outer size when saving window '{}' position: {}. Skipping save.",
+                    window.label(),
+                    e
+                );
+                return;
+            }
+        };
+
+        if !window::is_position_on_any_screen(
+            window.app_handle(),
+            current_position.x,
+            current_position.y,
+            PhysicalSize::new(current_window_size.width, current_window_size.height),
+        ) {
+            warn!(
+                "Skipping save for window '{}' position ({}, {}) because it is invalid for current monitors.",
+                window.label(),
+                current_position.x,
+                current_position.y
+            );
+            return;
+        }
+
         let pos = MainWindowPosition {
             screen_name,
             x: current_position.x,

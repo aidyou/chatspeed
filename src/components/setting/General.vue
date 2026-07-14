@@ -366,13 +366,16 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.mainWindowVisibleShortcut') }}</div>
         <div class="value">
-          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+          <el-tooltip :content="getShortcutPlaceholder('mainWindowVisibleShortcut')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input v-model="settings.mainWindowVisibleShortcut" readonly
-              :placeholder="$t('settings.general.pressKeysToSet')"
+            <el-input :model-value="getShortcutDisplayValue('mainWindowVisibleShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('mainWindowVisibleShortcut')"
               @keydown.prevent="e => captureShortcut(e, 'mainWindowVisibleShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
+                <el-button @click="restoreDefaultShortcut('mainWindowVisibleShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
                 <el-button @click="clearShortcut('mainWindowVisibleShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
@@ -384,13 +387,16 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.noteWindowVisibleShortcut') }}</div>
         <div class="value">
-          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+          <el-tooltip :content="getShortcutPlaceholder('noteWindowVisibleShortcut')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input v-model="settings.noteWindowVisibleShortcut" readonly
-              :placeholder="$t('settings.general.pressKeysToSet')"
+            <el-input :model-value="getShortcutDisplayValue('noteWindowVisibleShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('noteWindowVisibleShortcut')"
               @keydown.prevent="e => captureShortcut(e, 'noteWindowVisibleShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
+                <el-button @click="restoreDefaultShortcut('noteWindowVisibleShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
                 <el-button @click="clearShortcut('noteWindowVisibleShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
@@ -402,13 +408,16 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.workflowWindowVisibleShortcut') }}</div>
         <div class="value">
-          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+          <el-tooltip :content="getShortcutPlaceholder('workflowWindowVisibleShortcut')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input v-model="settings.workflowWindowVisibleShortcut" readonly
-              :placeholder="$t('settings.general.pressKeysToSet')"
+            <el-input :model-value="getShortcutDisplayValue('workflowWindowVisibleShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('workflowWindowVisibleShortcut')"
               @keydown.prevent="e => captureShortcut(e, 'workflowWindowVisibleShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
+                <el-button @click="restoreDefaultShortcut('workflowWindowVisibleShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
                 <el-button @click="clearShortcut('workflowWindowVisibleShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
@@ -420,13 +429,16 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.assistantWindowVisibleShortcut') }}</div>
         <div class="value">
-          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+          <el-tooltip :content="getShortcutPlaceholder('assistantWindowVisibleShortcut')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input v-model="settings.assistantWindowVisibleShortcut" readonly
-              :placeholder="$t('settings.general.pressKeysToSet')"
+            <el-input :model-value="getShortcutDisplayValue('assistantWindowVisibleShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('assistantWindowVisibleShortcut')"
               @keydown.prevent="e => captureShortcut(e, 'assistantWindowVisibleShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
+                <el-button @click="restoreDefaultShortcut('assistantWindowVisibleShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
                 <el-button @click="clearShortcut('assistantWindowVisibleShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
@@ -438,13 +450,16 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.assistantWindowVisibleAndPasteShortcut') }}</div>
         <div class="value">
-          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+          <el-tooltip :content="getShortcutPlaceholder('assistantWindowVisibleAndPasteShortcut')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input v-model="settings.assistantWindowVisibleAndPasteShortcut" readonly
-              :placeholder="$t('settings.general.pressKeysToSet')"
+            <el-input :model-value="getShortcutDisplayValue('assistantWindowVisibleAndPasteShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('assistantWindowVisibleAndPasteShortcut')"
               @keydown.prevent="e => captureShortcut(e, 'assistantWindowVisibleAndPasteShortcut')"
               @focus="isCapturing = true" @blur="isCapturing = false">
               <template #append>
+                <el-button @click="restoreDefaultShortcut('assistantWindowVisibleAndPasteShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
                 <el-button @click="clearShortcut('assistantWindowVisibleAndPasteShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
@@ -456,13 +471,16 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.proxySwitcherWindowVisibleShortcut') }}</div>
         <div class="value">
-          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+          <el-tooltip :content="getShortcutPlaceholder('proxySwitcherWindowVisibleShortcut')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input v-model="settings.proxySwitcherWindowVisibleShortcut" readonly
-              :placeholder="$t('settings.general.pressKeysToSet')"
+            <el-input :model-value="getShortcutDisplayValue('proxySwitcherWindowVisibleShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('proxySwitcherWindowVisibleShortcut')"
               @keydown.prevent="e => captureShortcut(e, 'proxySwitcherWindowVisibleShortcut')"
               @focus="isCapturing = true" @blur="isCapturing = false">
               <template #append>
+                <el-button @click="restoreDefaultShortcut('proxySwitcherWindowVisibleShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
                 <el-button @click="clearShortcut('proxySwitcherWindowVisibleShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
@@ -474,13 +492,16 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.moveWindowLeftShortcut') }}</div>
         <div class="value">
-          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+          <el-tooltip :content="getShortcutPlaceholder('moveWindowLeftShortcut')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input v-model="settings.moveWindowLeftShortcut" readonly
-              :placeholder="$t('settings.general.pressKeysToSet')"
+            <el-input :model-value="getShortcutDisplayValue('moveWindowLeftShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('moveWindowLeftShortcut')"
               @keydown.prevent="e => captureShortcut(e, 'moveWindowLeftShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
+                <el-button @click="restoreDefaultShortcut('moveWindowLeftShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
                 <el-button @click="clearShortcut('moveWindowLeftShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
@@ -492,13 +513,16 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.moveWindowRightShortcut') }}</div>
         <div class="value">
-          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+          <el-tooltip :content="getShortcutPlaceholder('moveWindowRightShortcut')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input v-model="settings.moveWindowRightShortcut" readonly
-              :placeholder="$t('settings.general.pressKeysToSet')"
+            <el-input :model-value="getShortcutDisplayValue('moveWindowRightShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('moveWindowRightShortcut')"
               @keydown.prevent="e => captureShortcut(e, 'moveWindowRightShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
+                <el-button @click="restoreDefaultShortcut('moveWindowRightShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
                 <el-button @click="clearShortcut('moveWindowRightShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
@@ -510,13 +534,16 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.centerWindowShortcut') }}</div>
         <div class="value">
-          <el-tooltip :content="$t('settings.general.pressKeysToSet')" placement="top" :hide-after="0"
+          <el-tooltip :content="getShortcutPlaceholder('centerWindowShortcut')" placement="top" :hide-after="0"
             :enterable="false">
-            <el-input v-model="settings.centerWindowShortcut" readonly
-              :placeholder="$t('settings.general.pressKeysToSet')"
+            <el-input :model-value="getShortcutDisplayValue('centerWindowShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('centerWindowShortcut')"
               @keydown.prevent="e => captureShortcut(e, 'centerWindowShortcut')" @focus="isCapturing = true"
               @blur="isCapturing = false">
               <template #append>
+                <el-button @click="restoreDefaultShortcut('centerWindowShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
                 <el-button @click="clearShortcut('centerWindowShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
@@ -732,6 +759,29 @@ const searchEngines = computed(() => {
 })
 
 const defaultBackupDir = ref('')
+const defaultShortcutMap = {
+  mainWindowVisibleShortcut: 'F2',
+  noteWindowVisibleShortcut: 'Alt+N',
+  workflowWindowVisibleShortcut: 'Alt+W',
+  assistantWindowVisibleShortcut: 'Alt+Z',
+  assistantWindowVisibleAndPasteShortcut: 'Alt+S',
+  proxySwitcherWindowVisibleShortcut: 'Alt+Shift+P',
+  moveWindowLeftShortcut: 'Alt+Shift+Left',
+  moveWindowRightShortcut: 'Alt+Shift+Right',
+  centerWindowShortcut: 'Alt+Shift+C'
+}
+
+const getShortcutPlaceholder = shortcutKey => {
+  const defaultShortcut = defaultShortcutMap[shortcutKey]
+  return defaultShortcut
+    ? `${t('settings.general.pressKeysToSet')} (${t('common.default')}: ${defaultShortcut})`
+    : t('settings.general.pressKeysToSet')
+}
+
+const getShortcutDisplayValue = shortcutKey => {
+  const value = settings.value[shortcutKey]
+  return value ?? ''
+}
 
 import codeThemes from '@/config/highlight.js/themes.json'
 const themes = computed(() => ({
@@ -961,6 +1011,10 @@ const captureShortcut = (event, shortcutKey) => {
  */
 const clearShortcut = shortcutKey => {
   setSetting(shortcutKey, '')
+}
+
+const restoreDefaultShortcut = shortcutKey => {
+  setSetting(shortcutKey, null)
 }
 
 // =================================================

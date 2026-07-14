@@ -116,6 +116,97 @@ impl Rect {
     }
 }
 
+/// Converts a monitor to a rectangle in physical coordinates.
+fn monitor_rect(monitor: &tauri::Monitor) -> Rect {
+    let position = monitor.position();
+    let size = monitor.size();
+
+    Rect {
+        x: position.x,
+        y: position.y,
+        width: size.width as i32,
+        height: size.height as i32,
+    }
+}
+
+/// Builds the window rectangle in physical coordinates.
+fn window_rect(position_x: i32, position_y: i32, window_size: PhysicalSize<u32>) -> Rect {
+    Rect {
+        x: position_x,
+        y: position_y,
+        width: window_size.width as i32,
+        height: window_size.height as i32,
+    }
+}
+
+/// Returns the monitor that contains the saved window position.
+fn find_monitor_for_position<'a>(
+    monitors: &'a [tauri::Monitor],
+    position_x: i32,
+    position_y: i32,
+    window_size: PhysicalSize<u32>,
+) -> Option<&'a tauri::Monitor> {
+    let target_window_rect = window_rect(position_x, position_y, window_size);
+
+    monitors.iter().find(|monitor| {
+        let rect = monitor_rect(monitor);
+        target_window_rect.intersects(&rect)
+    })
+}
+
+/// Checks if the saved position is still valid for the current monitor layout.
+fn validate_window_position<'a>(
+    monitors: &'a [tauri::Monitor],
+    saved_pos: &MainWindowPosition,
+    window_size: PhysicalSize<u32>,
+) -> Option<&'a tauri::Monitor> {
+    if monitors.is_empty() {
+        warn!("No monitors available to validate window position.");
+        return None;
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        log::debug!(
+            "validate_window_position: Checking position ({}, {}) with window_size {}x{} and screen {:?}",
+            saved_pos.x,
+            saved_pos.y,
+            window_size.width,
+            window_size.height,
+            saved_pos.screen_name
+        );
+
+        for (i, monitor) in monitors.iter().enumerate() {
+            log::debug!(
+                "  Monitor {}: Name: {:?}, Position: {:?}, Size: {:?}, ScaleFactor: {}",
+                i,
+                monitor.name(),
+                monitor.position(),
+                monitor.size(),
+                monitor.scale_factor()
+            );
+        }
+    }
+
+    let matched_monitor = find_monitor_for_position(monitors, saved_pos.x, saved_pos.y, window_size)?;
+
+    if let Some(saved_screen_name) = saved_pos.screen_name.as_deref() {
+        let current_screen_name = matched_monitor.name();
+        if current_screen_name.map(|name| name.as_str()) != Some(saved_screen_name) {
+            warn!(
+                "Saved window position ({}, {}) expected screen {:?}, but matched {:?}. Ignoring saved position.",
+                saved_pos.x,
+                saved_pos.y,
+                saved_pos.screen_name,
+                current_screen_name
+            );
+            return None;
+        }
+    }
+
+    Some(matched_monitor)
+}
+
 /// Checks if a given window position and size would be on any available screen.
 ///
 /// # Arguments
@@ -126,89 +217,34 @@ impl Rect {
 ///
 /// # Returns
 /// `true` if the window would be at least partially on a screen, `false` otherwise.
-fn is_position_on_any_screen<R: tauri::Runtime>(
+pub fn is_position_on_any_screen<R: tauri::Runtime>(
     app_handle: &tauri::AppHandle<R>,
     position_x: i32,
     position_y: i32,
     window_size: PhysicalSize<u32>,
 ) -> bool {
+    let saved_pos = MainWindowPosition {
+        screen_name: None,
+        x: position_x,
+        y: position_y,
+    };
+
     match app_handle.available_monitors() {
         Ok(monitors) => {
-            if monitors.is_empty() {
-                warn!("No monitors available to check window position against.");
-                return false; // Or true, depending on desired behavior if no monitors
-            }
+            let is_on_screen = validate_window_position(&monitors, &saved_pos, window_size).is_some();
 
-            #[cfg(debug_assertions)]
-            {
-                log::debug!(
-                    "is_position_on_any_screen: Checking position ({}, {}) with window_size {}x{}",
-                    position_x,
-                    position_y,
-                    window_size.width,
-                    window_size.height
+            if !is_on_screen {
+                warn!(
+                    "Window position ({}, {}) with size {}x{} is off-screen.",
+                    position_x, position_y, window_size.width, window_size.height
                 );
-                log::debug!("Available monitors for position check (is_position_on_any_screen):");
-
-                for (i, monitor) in monitors.iter().enumerate() {
-                    log::debug!(
-                        "  Monitor {}: Name: {:?}, Position: {:?}, Size: {:?}, ScaleFactor: {}",
-                        i,
-                        monitor.name(),
-                        monitor.position(),
-                        monitor.size(),
-                        monitor.scale_factor()
-                    );
-                }
             }
 
-            let window_rect = Rect {
-                x: position_x,
-                y: position_y,
-                width: window_size.width as i32,
-                height: window_size.height as i32,
-            };
-
-            #[cfg(debug_assertions)]
-            log::debug!(
-                "Window rect for check (is_position_on_any_screen): {:?}",
-                window_rect
-            );
-
-            for monitor in monitors {
-                let monitor_pos = monitor.position();
-                let monitor_size = monitor.size();
-                let monitor_rect = Rect {
-                    x: monitor_pos.x,
-                    y: monitor_pos.y,
-                    width: monitor_size.width as i32,
-                    height: monitor_size.height as i32,
-                };
-
-                #[cfg(debug_assertions)]
-                log::debug!(
-                    "  Checking against monitor_rect (is_position_on_any_screen): {:?}",
-                    monitor_rect
-                );
-                if window_rect.intersects(&monitor_rect) {
-                    #[cfg(debug_assertions)]
-                    log::debug!(
-                        "  Intersection FOUND with monitor {:?} ({:?}) (is_position_on_any_screen)",
-                        monitor.name(),
-                        monitor_pos
-                    );
-                    return true;
-                }
-            }
-            warn!(
-                "Window position ({}, {}) with size {}x{} is off-screen.",
-                position_x, position_y, window_size.width, window_size.height
-            );
-            false
+            is_on_screen
         }
         Err(e) => {
             error!("Failed to get available monitors: {}", e);
-            false // Conservatively assume off-screen if monitor info is unavailable
+            false
         }
     }
 }
@@ -304,17 +340,11 @@ pub fn toggle_assistant_window(app: &tauri::AppHandle) {
 
 /// Toggles the visibility of the proxy switcher window.
 pub fn toggle_proxy_switcher_window(app: &tauri::AppHandle) {
-    let window_label = "proxy_switcher";
-    if let Some(window) = ensure_window(app, window_label, false) {
-        match (window.is_visible(), window.is_focused()) {
-            (Ok(true), Ok(true)) => {
-                let _ = window.hide();
-            }
-            _ => {
-                show_and_focus_window(app, window_label);
-            }
-        }
-    }
+    show_and_focus_window(app, "proxy_switcher");
+    let _ = app.emit(
+        "cs://proxy_switcher-focus-input",
+        json!({ "windowLabel": "proxy_switcher" }),
+    );
 }
 
 /// Toggles the visibility of a window using the robust helper function.
@@ -742,71 +772,48 @@ pub fn restore_window_config(
         if saved_pos.x != 0 || saved_pos.y != 0 {
             let mut position_is_considered_safe = false;
 
-            // Validate the saved position before applying it
-            if is_position_on_any_screen(
-                window.app_handle(),
-                saved_pos.x,
-                saved_pos.y,
-                current_window_size, // Use the (potentially updated) physical size
-            ) {
-                // Position is on *some* screen according to `is_position_on_any_screen`.
-                // Now, apply heuristics to check if it's a potentially problematic (e.g., large virtual) screen
-                // that might cause issues with lower-level OS calls (`-[NSWindow screen]`).
-                position_is_considered_safe = true; // Assume safe initially
+            if let Ok(monitors) = window.app_handle().available_monitors() {
+                if let Some(matched_monitor) =
+                    validate_window_position(&monitors, &saved_pos, current_window_size)
+                {
+                    let matched_monitor_name = matched_monitor.name().cloned();
+                    position_is_considered_safe = true;
 
-                // Heuristic: Define a threshold for what might be an excessively large virtual monitor width
-                const SUSPICIOUSLY_LARGE_WIDTH: u32 = 6500; // e.g., wider than a Pro Display XDR
+                    // Heuristic: Define a threshold for what might be an excessively large virtual monitor width
+                    const SUSPICIOUSLY_LARGE_WIDTH: u32 = 6500; // e.g., wider than a Pro Display XDR
 
-                if let Ok(monitors) = window.app_handle().available_monitors() {
                     if let Ok(primary_monitor_opt) = window.app_handle().primary_monitor() {
-                        let primary_monitor_name =
-                            primary_monitor_opt.as_ref().and_then(|m| m.name());
+                        let primary_monitor_name = primary_monitor_opt
+                            .as_ref()
+                            .and_then(|m| m.name())
+                            .map(|name| name.as_str());
 
                         #[cfg(debug_assertions)]
                         log::debug!(
-                            "Performing suspicious screen check. Primary monitor: {:?}",
-                            primary_monitor_name
+                            "Performing suspicious screen check. Primary monitor: {:?}, matched monitor: {:?}",
+                            primary_monitor_name,
+                            matched_monitor_name
                         );
 
-                        for monitor in monitors {
-                            let monitor_rect = Rect {
-                                x: monitor.position().x,
-                                y: monitor.position().y,
-                                width: monitor.size().width as i32,
-                                height: monitor.size().height as i32,
-                            };
-                            let window_rect_to_check = Rect {
-                                x: saved_pos.x,
-                                y: saved_pos.y,
-                                width: current_window_size.width as i32,
-                                height: current_window_size.height as i32,
-                            };
-
-                            if window_rect_to_check.intersects(&monitor_rect) {
-                                let is_primary = primary_monitor_name == monitor.name();
-                                if monitor.size().width > SUSPICIOUSLY_LARGE_WIDTH && !is_primary {
-                                    // This log should remain a `warn` as it indicates a significant deviation from normal restoration.
-                                    warn!(
-                                        "Window at ({},{}) intersects with a non-primary, suspiciously large screen: {:?} (Size: {}x{}). Considering position unsafe.",
-                                        saved_pos.x, saved_pos.y, monitor.name(), monitor.size().width, monitor.size().height
-                                    );
-                                    position_is_considered_safe = false;
-                                    break; // Found a suspicious screen, no need to check others
-                                }
-                            }
+                        let is_primary =
+                            primary_monitor_name == matched_monitor_name.as_deref();
+                        if matched_monitor.size().width > SUSPICIOUSLY_LARGE_WIDTH && !is_primary {
+                            warn!(
+                                "Window at ({},{}) intersects with a non-primary, suspiciously large screen: {:?} (Size: {}x{}). Considering position unsafe.",
+                                saved_pos.x,
+                                saved_pos.y,
+                                matched_monitor_name,
+                                matched_monitor.size().width,
+                                matched_monitor.size().height
+                            );
+                            position_is_considered_safe = false;
                         }
                     } else {
                         warn!("Could not get primary monitor information for safety check.");
-                        // If we can't get primary monitor info, it's harder to apply the "non-primary" part of the heuristic.
-                        // For now, if is_position_on_any_screen was true, we might still consider it safe,
-                        // or one could choose to be more conservative here and set position_is_considered_safe = false.
-                        // Current logic: relies on the initial `is_position_on_any_screen` if this fails.
                     }
-                } else {
-                    warn!("Could not get available monitors for safety check.");
-                    // If we can't get monitor list, we can't perform the suspicious screen check.
-                    // Rely on the initial is_position_on_any_screen result.
-                } // End of suspicious screen check
+                }
+            } else {
+                warn!("Could not get available monitors for safety check.");
             }
 
             if position_is_considered_safe {
@@ -838,7 +845,7 @@ pub fn restore_window_config(
                 }
             } else {
                 warn!(
-                        "Saved window position ({}, {}) for '{}' is off-screen or on a suspicious virtual screen. Centering window instead.",
+                        "Saved window position ({}, {}) for '{}' is invalid for current monitors. Centering window instead.",
                         saved_pos.x,
                         saved_pos.y,
                         window.label(),

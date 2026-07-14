@@ -31,15 +31,15 @@ const defaultSettings = {
   conversationTitleGenModel: { id: '', model: '' },
   sendMessageKey: 'Enter',
   // shortcut settings
-  mainWindowVisibleShortcut: 'F2',
-  noteWindowVisibleShortcut: 'ALT+N',
-  assistantWindowVisibleShortcut: 'ALT+Z',
-  assistantWindowVisibleAndPasteShortcut: 'ALT+S',
-  proxySwitcherWindowVisibleShortcut: 'Alt+Shift+P',
-  workflowWindowVisibleShortcut: 'Alt+W',
-  moveWindowLeftShortcut: 'Alt+Shift+ArrowLeft',
-  moveWindowRightShortcut: 'Alt+Shift+ArrowRight',
-  centerWindowShortcut: 'Alt+Shift+C',
+  mainWindowVisibleShortcut: null,
+  noteWindowVisibleShortcut: null,
+  assistantWindowVisibleShortcut: null,
+  assistantWindowVisibleAndPasteShortcut: null,
+  proxySwitcherWindowVisibleShortcut: null,
+  workflowWindowVisibleShortcut: null,
+  moveWindowLeftShortcut: null,
+  moveWindowRightShortcut: null,
+  centerWindowShortcut: null,
   // network settings
   proxyType: 'none', // none, http, system
   proxyServer: '',
@@ -162,7 +162,9 @@ export const useSettingStore = defineStore('setting', () => {
         ...settings.value,
         [key]: value
       }
-      sendSyncState('setting_changed', windowLabel, { [key]: value })
+      sendSyncState('setting_changed', windowLabel, {
+        [key]: value === undefined ? null : value
+      })
     }).catch(error => {
       if (error instanceof FrontendAppError) {
         console.error(`Failed to set config: ${error.toFormattedString()}`, error.originalError);

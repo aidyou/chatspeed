@@ -94,61 +94,6 @@ pub fn get_all_config(state: State<Arc<RwLock<MainStore>>>) -> Result<HashMap<St
         Value::String(get_static_var(&HTTP_SERVER)),
     );
 
-    // show main window shortcut
-    if config_store
-        .config
-        .get_setting(CFG_MAIN_WINDOW_VISIBLE_SHORTCUT)
-        .is_none()
-    {
-        settings.insert(
-            CFG_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            Value::String(DEFAULT_MAIN_WINDOW_VISIBLE_SHORTCUT.to_string()),
-        );
-    }
-    // toggle assistant window visible shortcut
-    if config_store
-        .config
-        .get_setting(CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT)
-        .is_none()
-    {
-        settings.insert(
-            CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            Value::String(DEFAULT_ASSISTANT_WINDOW_VISIBLE_SHORTCUT.to_string()),
-        );
-    }
-    // toggle note window visible shortcut
-    if config_store
-        .config
-        .get_setting(CFG_NOTE_WINDOW_VISIBLE_SHORTCUT)
-        .is_none()
-    {
-        settings.insert(
-            CFG_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            Value::String(DEFAULT_NOTE_WINDOW_VISIBLE_SHORTCUT.to_string()),
-        );
-    }
-    // toggle proxy switcher window visible shortcut
-    if config_store
-        .config
-        .get_setting(CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT)
-        .is_none()
-    {
-        settings.insert(
-            CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            Value::String(DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT.to_string()),
-        );
-    }
-    // toggle workflow window visible shortcut
-    if config_store
-        .config
-        .get_setting(CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT)
-        .is_none()
-    {
-        settings.insert(
-            CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string(),
-            Value::String(DEFAULT_WORKFLOW_WINDOW_VISIBLE_SHORTCUT.to_string()),
-        );
-    }
     Ok(settings)
 }
 
@@ -173,29 +118,43 @@ pub fn get_all_config(state: State<Arc<RwLock<MainStore>>>) -> Result<HashMap<St
 /// await invoke('set_config', { key: 'theme', value: 'dark' });
 /// ```
 #[command]
-pub fn set_config(state: State<Arc<RwLock<MainStore>>>, key: &str, value: Value) -> Result<()> {
-    let mut config_store = state.write()?;
+pub fn set_config(
+    app: tauri::AppHandle,
+    state: State<Arc<RwLock<MainStore>>>,
+    key: &str,
+    value: Value,
+) -> Result<()> {
+    let should_refresh_tray = crate::shortcut::is_shortcut_key(key);
 
-    // Get previous value
-    // let prev_value = config_store.get_config(key, Value::Null);
+    {
+        let mut config_store = state.write()?;
 
-    // Set the configuration value
-    match config_store.set_config(key, &value).map_err(AppError::Db) {
-        Ok(_) => {
-            match key {
+        let result = if value.is_null() {
+            config_store.delete_config(key).map_err(AppError::Db)
+        } else {
+            config_store.set_config(key, &value).map_err(AppError::Db)
+        };
+
+        match result {
+            Ok(_) => match key {
                 CFG_INTERFACE_LANGUAGE => {
-                    let lang =
-                        config_store.get_config::<String>(CFG_INTERFACE_LANGUAGE, "en".to_string());
+                    let lang = config_store
+                        .get_config::<String>(CFG_INTERFACE_LANGUAGE, "en".to_string());
                     set_locale(&lang);
                     #[cfg(debug_assertions)]
                     log::debug!("Language set to: {}", lang);
                 }
                 _ => {}
-            }
-            Ok(())
+            },
+            Err(e) => return Err(e),
         }
-        Err(e) => Err(e),
     }
+
+    if should_refresh_tray {
+        let _ = create_tray(&app, Some(TRAY_ID.to_string()));
+    }
+
+    Ok(())
 }
 
 /// Reload the configuration from the database
@@ -660,13 +619,20 @@ pub fn delete_ai_skill(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<
 ///
 /// Updates the shortcut for the main window or assistant window.
 #[tauri::command]
-pub async fn update_shortcut(app: tauri::AppHandle, key: &str, value: &str) -> Result<()> {
-    crate::shortcut::update_shortcut(&app, value, key).map_err(|e| AppError::General {
+pub async fn update_shortcut(
+    app: tauri::AppHandle,
+    key: &str,
+    value: Option<String>,
+) -> Result<()> {
+    let shortcut_value = value.unwrap_or_else(|| {
+        crate::shortcut::get_default_shortcut(key)
+            .unwrap_or_default()
+            .to_string()
+    });
+
+    crate::shortcut::update_shortcut(&app, &shortcut_value, key).map_err(|e| AppError::General {
         message: t!("setting.failed_to_update_shortcut", error = e.to_string()).to_string(),
     })?;
-
-    // Refresh tray menu to show new shortcuts
-    let _ = create_tray(&app, Some(TRAY_ID.to_string()));
 
     Ok(())
 }
