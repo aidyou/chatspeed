@@ -1178,7 +1178,28 @@ export function useWorkflowMessages(options = {}) {
     })
   })
 
-  const enhancedMessages = computed(() => rawEnhancedMessages.value)
+  const enhancedMessages = computed(() => {
+    const messages = rawEnhancedMessages.value
+    const displayIdCounts = new Map()
+
+    for (const message of messages) {
+      const displayId = String(message?.displayId || '')
+      displayIdCounts.set(displayId, (displayIdCounts.get(displayId) || 0) + 1)
+    }
+
+    const displayIdOccurrences = new Map()
+    return messages.map(message => {
+      const displayId = String(message?.displayId || '')
+      if ((displayIdCounts.get(displayId) || 0) <= 1) return message
+
+      const occurrence = (displayIdOccurrences.get(displayId) || 0) + 1
+      displayIdOccurrences.set(displayId, occurrence)
+      return {
+        ...message,
+        displayId: `${displayId}:instance:${occurrence}`
+      }
+    })
+  })
 
   const lastAssistantMessage = computed(() => {
     for (let index = enhancedMessages.value.length - 1; index >= 0; index -= 1) {
