@@ -17,11 +17,12 @@ export const useUpdateStore = defineStore('update', () => {
   const downloadProgress = ref(0)
   const downloadError = ref('')
   const isUpdateReady = ref(false)
+  const isCheckingForUpdates = ref(false)
   const ignoredVersion = ref(csGetStorage(csStorageKey.ignoreVersion))
   const appWindow = getCurrentWindow()
 
   // Event handlers for update process
-  const handleUpdateAvailable = (payload) => {
+  const handleUpdateAvailable = payload => {
     // If the user chose to ignore this version, do nothing.
     if (ignoredVersion.value === payload.version) {
       console.log(`Update available for ignored version: ${payload.version}`)
@@ -30,9 +31,11 @@ export const useUpdateStore = defineStore('update', () => {
     console.log(`Update available: ${payload.version}. Download will start in the background.`)
     versionInfo.value = payload
     isUpdateReady.value = false // Reset ready state for the new update
+    downloadProgress.value = 0
+    downloadError.value = ''
   }
 
-  const handleDownloadProgress = (payload) => {
+  const handleDownloadProgress = payload => {
     // The backend now sends a structured object.
     if (typeof payload === 'object' && payload.progress !== undefined) {
       // payload: { progress: 0.5, current: 1024, total: 2048 }
@@ -43,13 +46,45 @@ export const useUpdateStore = defineStore('update', () => {
     console.log('Download progress:', `${downloadProgress.value}%`)
   }
 
+  const handleDownloadFailed = payload => {
+    downloadError.value = typeof payload === 'string' ? payload : String(payload || '')
+    downloadProgress.value = 0
+    isCheckingForUpdates.value = false
+    console.error('Update download failed:', downloadError.value)
+  }
+
   const handleUpdateReady = () => {
     console.log('Update downloaded and ready to be installed.')
     isUpdateReady.value = true
+    isCheckingForUpdates.value = false
     downloadProgress.value = 100 // Ensure progress is at 100%
+    downloadError.value = ''
     // Clear ignored version when update is ready
     ignoredVersion.value = null
     csRemoveStorage(csStorageKey.ignoreVersion)
+  }
+
+  const checkForUpdates = async () => {
+    if (isCheckingForUpdates.value) {
+      return { status: 'in_progress' }
+    }
+
+    isCheckingForUpdates.value = true
+    downloadError.value = ''
+
+    try {
+      const result = await invokeWrapper('check_for_updates')
+      const status = result?.status || 'no_update'
+
+      if (status === 'no_update' || status === 'in_progress' || status === 'ready_to_install') {
+        isCheckingForUpdates.value = false
+      }
+
+      return result
+    } catch (error) {
+      isCheckingForUpdates.value = false
+      throw error
+    }
   }
 
   const restartApp = async () => {
@@ -59,8 +94,8 @@ export const useUpdateStore = defineStore('update', () => {
       // The backend will restart the app, so no need to call relaunch()
     } catch (error) {
       if (error instanceof FrontendAppError) {
-        console.error(`Failed to restart application: ${error.toFormattedString()}`, error.originalError);
-        ElMessage.error(`${error.toFormattedString()}`);
+        console.error(`Failed to restart application: ${error.toFormattedString()}`, error.originalError)
+        ElMessage.error(`${error.toFormattedString()}`)
       } else {
         console.error('Failed to restart application:', error)
         ElMessage.error(`${error.message || 'Unknown error'}`)
@@ -80,13 +115,16 @@ export const useUpdateStore = defineStore('update', () => {
     }
   }
 
-
   appWindow.listen('update://available', ({ payload }) => {
     handleUpdateAvailable(payload)
   })
 
   appWindow.listen('update://download-progress', ({ payload }) => {
     handleDownloadProgress(payload)
+  })
+
+  appWindow.listen('update://download-failed', ({ payload }) => {
+    handleDownloadFailed(payload)
   })
 
   appWindow.listen('update://ready', () => {
@@ -99,12 +137,15 @@ export const useUpdateStore = defineStore('update', () => {
     downloadProgress,
     downloadError,
     isUpdateReady,
+    isCheckingForUpdates,
     ignoredVersion,
 
     // Actions
     handleUpdateAvailable,
     handleDownloadProgress,
+    handleDownloadFailed,
     handleUpdateReady,
+    checkForUpdates,
     restartApp,
     skipCurrentUpdate
   }

@@ -19,6 +19,14 @@ const EVENT_UPDATE_PROGRESS: &str = "update://download-progress";
 const EVENT_UPDATE_READY: &str = "update://ready";
 const EVENT_UPDATE_AVAILABLE: &str = "update://available";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateCheckOutcome {
+    NoUpdate,
+    Started,
+    InProgress,
+    ReadyToInstall,
+}
+
 #[derive(Clone)]
 struct UpdateState {
     update: Update,
@@ -29,6 +37,7 @@ struct UpdateState {
 pub struct UpdateManager {
     app: AppHandle,
     latest_update: Arc<Mutex<Option<UpdateState>>>,
+    check_in_progress: Arc<Mutex<bool>>,
 }
 
 impl UpdateManager {
@@ -37,40 +46,65 @@ impl UpdateManager {
         Self {
             app,
             latest_update: Arc::new(Mutex::new(None)),
+            check_in_progress: Arc::new(Mutex::new(false)),
         }
     }
 
     /// Checks for available updates and automatically downloads them in the background.
-    pub async fn check_and_download_update(&self) -> Result<()> {
-        let updater = self
-            .build_updater()
-            .map_err(|e| UpdateError::ConfigError(e.to_string()))?;
-
-        if let Ok(Some(update)) = updater.check().await {
-            info!("New version available: {}", update.version);
-            let version_info = VersionInfo {
-                version: update.version.to_string(),
-                notes: update.body.clone().unwrap_or_default(),
-            };
-
-            if self.should_install(&version_info)? {
-                self.notify_update_available(&version_info);
-
-                let app_clone = self.app.clone();
-                let latest_update_clone = self.latest_update.clone();
-                spawn(async move {
-                    if let Err(e) =
-                        download_update_to_file(app_clone.clone(), latest_update_clone, update)
-                            .await
-                    {
-                        warn!("Background download failed: {}", e);
-                        let _ = app_clone.emit("update://download-failed", e.to_string());
-                    }
-                });
-            }
+    pub async fn check_and_download_update(&self) -> Result<UpdateCheckOutcome> {
+        if self.has_ready_update()? {
+            return Ok(UpdateCheckOutcome::ReadyToInstall);
         }
 
-        Ok(())
+        if !self.try_mark_check_started()? {
+            return Ok(UpdateCheckOutcome::InProgress);
+        }
+
+        let result = async {
+            let updater = self
+                .build_updater()
+                .map_err(|e| UpdateError::ConfigError(e.to_string()))?;
+
+            if let Ok(Some(update)) = updater.check().await {
+                info!("New version available: {}", update.version);
+                let version_info = VersionInfo {
+                    version: update.version.to_string(),
+                    notes: update.body.clone().unwrap_or_default(),
+                };
+
+                if self.should_install(&version_info)? {
+                    self.notify_update_available(&version_info);
+
+                    let app_clone = self.app.clone();
+                    let latest_update_clone = self.latest_update.clone();
+                    let check_in_progress_clone = self.check_in_progress.clone();
+                    spawn(async move {
+                        if let Err(e) = download_update_to_file(
+                            app_clone.clone(),
+                            latest_update_clone,
+                            check_in_progress_clone.clone(),
+                            update,
+                        )
+                        .await
+                        {
+                            warn!("Background download failed: {}", e);
+                            let _ = app_clone.emit("update://download-failed", e.to_string());
+                            set_check_in_progress(&check_in_progress_clone, false);
+                        }
+                    });
+                    return Ok(UpdateCheckOutcome::Started);
+                }
+            }
+
+            Ok(UpdateCheckOutcome::NoUpdate)
+        }
+        .await;
+
+        if !matches!(result, Ok(UpdateCheckOutcome::Started)) {
+            self.set_check_in_progress(false)?;
+        }
+
+        result
     }
 
     fn build_updater(&self) -> Result<tauri_plugin_updater::Updater> {
@@ -162,11 +196,47 @@ impl UpdateManager {
 
         Ok(new_version > current_version)
     }
+
+    fn has_ready_update(&self) -> Result<bool> {
+        let latest_update = self
+            .latest_update
+            .lock()
+            .map_err(|_| UpdateError::LockError("Failed to lock latest_update mutex".to_string()))?;
+        Ok(latest_update.is_some())
+    }
+
+    fn try_mark_check_started(&self) -> Result<bool> {
+        let mut check_in_progress = self.check_in_progress.lock().map_err(|_| {
+            UpdateError::LockError("Failed to lock check_in_progress mutex".to_string())
+        })?;
+
+        if *check_in_progress {
+            return Ok(false);
+        }
+
+        *check_in_progress = true;
+        Ok(true)
+    }
+
+    fn set_check_in_progress(&self, value: bool) -> Result<()> {
+        let mut check_in_progress = self.check_in_progress.lock().map_err(|_| {
+            UpdateError::LockError("Failed to lock check_in_progress mutex".to_string())
+        })?;
+        *check_in_progress = value;
+        Ok(())
+    }
+}
+
+fn set_check_in_progress(check_in_progress: &Arc<Mutex<bool>>, value: bool) {
+    if let Ok(mut state) = check_in_progress.lock() {
+        *state = value;
+    }
 }
 
 async fn download_update_to_file(
     app: AppHandle,
     latest_update: Arc<Mutex<Option<UpdateState>>>,
+    check_in_progress: Arc<Mutex<bool>>,
     update: Update,
 ) -> Result<()> {
     info!(
@@ -174,13 +244,25 @@ async fn download_update_to_file(
         update.version
     );
 
-    let on_chunk = |chunk_size, total| {
+    let downloaded_bytes = Arc::new(Mutex::new(0_u64));
+    let downloaded_bytes_clone = downloaded_bytes.clone();
+    let progress_app = app.clone();
+    let on_chunk = move |chunk_size, total| {
         let progress = if let Some(total) = total {
-            (chunk_size as f64 / total as f64) * 100.0
+            if let Ok(mut downloaded) = downloaded_bytes_clone.lock() {
+                *downloaded = (*downloaded + chunk_size as u64).min(total);
+                if total == 0 {
+                    0.0
+                } else {
+                    ((*downloaded as f64 / total as f64) * 99.0).min(99.0)
+                }
+            } else {
+                0.0
+            }
         } else {
             0.0
         };
-        let _ = app.emit(
+        let _ = progress_app.emit(
             EVENT_UPDATE_PROGRESS,
             serde_json::json!({ "progress": progress }),
         );
@@ -215,6 +297,7 @@ async fn download_update_to_file(
     *lu = Some(UpdateState { update, tmp_path });
 
     let _ = app.emit(EVENT_UPDATE_READY, ());
+    set_check_in_progress(&check_in_progress, false);
 
     Ok(())
 }

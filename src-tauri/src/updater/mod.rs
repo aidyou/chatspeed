@@ -9,4 +9,4 @@ mod manager;
 mod types;
 
 pub use error::*;
-pub use manager::UpdateManager;
+pub use manager::{UpdateCheckOutcome, UpdateManager};

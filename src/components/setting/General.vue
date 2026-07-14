@@ -579,6 +579,26 @@
           <el-switch v-model="settings.autoUpdate" @change="onAutoUpdateChange" />
         </div>
       </div>
+      <div class="item update-item">
+        <div class="label">
+          <div class="update-meta">
+            <div class="update-version">
+              {{ $t('settings.general.currentVersion') }}: {{ currentVersion || '--' }}
+            </div>
+            <div class="update-status">{{ manualUpdateStatus }}</div>
+          </div>
+        </div>
+        <div class="value">
+          <el-button
+            type="primary"
+            plain
+            :loading="isCheckingForUpdates"
+            :disabled="isManualUpdateDownloading"
+            @click="onManualUpdateClick">
+            {{ manualUpdateButtonText }}
+          </el-button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -713,6 +733,7 @@ import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 
 import { appDataDir } from '@tauri-apps/api/path'
+import { getVersion } from '@tauri-apps/api/app'
 import { enable, disable } from '@tauri-apps/plugin-autostart'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -727,18 +748,56 @@ import {
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri'
 import { showMessage, openUrl } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
-
-const { t } = useI18n()
 import { useSettingStore } from '@/stores/setting'
 import { useSensitiveStore } from '@/stores/sensitiveStore'
 import { useModelStore } from '@/stores/model'
+import { useUpdateStore } from '@/stores/update'
+
+const { t } = useI18n()
 const modelStore = useModelStore()
 const settingStore = useSettingStore()
 const sensitiveStore = useSensitiveStore()
+const updateStore = useUpdateStore()
 // import { useSkillStore } from '@/stores/skill'
 // const skillStore = useSkillStore()
 
 const { settings } = storeToRefs(settingStore)
+const { versionInfo, downloadProgress, downloadError, isUpdateReady, isCheckingForUpdates } =
+  storeToRefs(updateStore)
+
+const currentVersion = ref('')
+const manualUpdateStatus = computed(() => {
+  if (downloadError.value) {
+    return t('settings.general.manualUpdateFailed', { error: downloadError.value })
+  }
+  if (isUpdateReady.value && versionInfo.value?.version) {
+    return t('settings.general.manualUpdateReady', { version: versionInfo.value.version })
+  }
+  if (versionInfo.value?.version) {
+    return t('settings.general.manualUpdateDownloading', {
+      version: versionInfo.value.version,
+      progress: downloadProgress.value
+    })
+  }
+  return t('settings.general.manualUpdateHint')
+})
+
+const isManualUpdateDownloading = computed(
+  () => !!versionInfo.value?.version && !isUpdateReady.value && !downloadError.value
+)
+
+const manualUpdateButtonText = computed(() => {
+  if (isUpdateReady.value) {
+    return t('settings.general.manualUpdateRestart')
+  }
+  if (downloadError.value) {
+    return t('settings.general.manualUpdateRetry')
+  }
+  if (isManualUpdateDownloading.value) {
+    return t('settings.general.manualUpdateChecking')
+  }
+  return t('settings.general.manualUpdateCheck')
+})
 
 const backups = ref([])
 const restoreDir = ref('')
@@ -830,6 +889,7 @@ onMounted(async () => {
   getAllBackups()
   await sensitiveStore.fetchConfig()
   await sensitiveStore.fetchSupportedFilters()
+  currentVersion.value = await getVersion()
 
   // listen sync state event
   unlistenSyncState.value = await listen('cs://sync-state', event => {
@@ -1167,6 +1227,44 @@ const onAutoUpdateChange = value => {
   setSetting('autoUpdate', value || false)
 }
 
+const onManualUpdateClick = async () => {
+  if (isUpdateReady.value) {
+    await updateStore.restartApp()
+    return
+  }
+
+  if (isManualUpdateDownloading.value || isCheckingForUpdates.value) {
+    return
+  }
+
+  try {
+    const result = await updateStore.checkForUpdates()
+    const status = result?.status || 'no_update'
+
+    if (status === 'no_update') {
+      showMessage(t('settings.general.manualUpdateNoUpdate'), 'success')
+    } else if (status === 'in_progress') {
+      showMessage(t('settings.general.manualUpdateInProgress'), 'info')
+    } else if (status === 'ready_to_install') {
+      await updateStore.restartApp()
+    }
+  } catch (error) {
+    if (error instanceof FrontendAppError) {
+      showMessage(
+        t('settings.general.manualUpdateCheckFailed', { error: error.toFormattedString() }),
+        'error'
+      )
+      console.error('Failed to check for updates:', error.originalError)
+    } else {
+      showMessage(
+        t('settings.general.manualUpdateCheckFailed', { error: error?.message || String(error) }),
+        'error'
+      )
+      console.error('Failed to check for updates:', error)
+    }
+  }
+}
+
 /**
  * Handles the change of auto start
  * @param {boolean} value - The value of auto start
@@ -1372,6 +1470,26 @@ const getAllBackups = () => {
 
   .el-input__inner {
     width: 100%;
+  }
+}
+
+.update-item {
+  align-items: center;
+
+  .update-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .update-version {
+    font-weight: 500;
+  }
+
+  .update-status {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    line-height: 1.4;
   }
 }
 

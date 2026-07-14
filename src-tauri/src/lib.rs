@@ -55,7 +55,7 @@ use commands::note::*;
 use commands::proxy_group::*;
 use commands::sensitive::*;
 use commands::setting::*;
-use commands::updater::install_and_restart;
+use commands::updater::{check_for_updates, install_and_restart};
 use commands::window::*;
 use commands::workflow::*;
 use commands::workflow_automation::*;
@@ -369,6 +369,7 @@ pub async fn run() -> crate::error::Result<()> {
             // dev tools
             test_scrape,
             // updater
+            check_for_updates,
             install_and_restart,
         ])
         .plugin(tauri_plugin_opener::init())
