@@ -1968,24 +1968,29 @@ pub async fn get_workflow_snapshot(
     session_id: String,
 ) -> Result<Value, String> {
     let main_store = state.inner().clone();
-    let (mut snapshot, message_window_before_id, hidden_completed_task_count) = {
-        let store = main_store.read().map_err(|e| e.to_string())?;
-        let mut workflow = store
-            .get_workflow_for_ui(&session_id)
-            .map_err(|e| e.to_string())?;
-        let message_window = store
-            .get_workflow_message_window(&session_id, None, 2)
-            .map_err(|e| e.to_string())?;
-        normalize_workflow_agent_config_in_memory(&store, &mut workflow)?;
-        (
-            WorkflowSnapshot {
-                workflow,
-                messages: message_window.messages,
-            },
-            message_window.before_message_id,
-            message_window.hidden_completed_task_count,
-        )
-    };
+    let snapshot_store = main_store.clone();
+    let snapshot_session_id = session_id.clone();
+    let (mut snapshot, message_window_before_id, hidden_completed_task_count) =
+        tokio::task::spawn_blocking(move || -> Result<_, String> {
+            let store = snapshot_store.read().map_err(|e| e.to_string())?;
+            let mut workflow = store
+                .get_workflow_for_ui(&snapshot_session_id)
+                .map_err(|e| e.to_string())?;
+            let message_window = store
+                .get_workflow_message_window(&snapshot_session_id, None, 2)
+                .map_err(|e| e.to_string())?;
+            normalize_workflow_agent_config_in_memory(&store, &mut workflow)?;
+            Ok((
+                WorkflowSnapshot {
+                    workflow,
+                    messages: message_window.messages,
+                },
+                message_window.before_message_id,
+                message_window.hidden_completed_task_count,
+            ))
+        })
+        .await
+        .map_err(|e| format!("Failed to join workflow snapshot query: {e}"))??;
 
     // Phase 0-3 UI State Reconciliation: Add hasLiveSession field.
     // Reconcile terminal executors first so the frontend does not keep seeing
@@ -1998,23 +2003,34 @@ pub async fn get_workflow_snapshot(
     } else {
         false
     };
-    {
-        let store = main_store.read().map_err(|e| e.to_string())?;
-        normalize_snapshot_after_live_reconciliation(
-            &store,
-            &session_id,
-            &mut snapshot,
-            has_live_session,
-        )?;
-    }
+    let reconciliation_store = main_store.clone();
+    let reconciliation_session_id = session_id.clone();
+    let (snapshot, execution_context, tail_rewind_kind) =
+        tokio::task::spawn_blocking(move || -> Result<_, String> {
+            {
+                let store = reconciliation_store.read().map_err(|e| e.to_string())?;
+                normalize_snapshot_after_live_reconciliation(
+                    &store,
+                    &reconciliation_session_id,
+                    &mut snapshot,
+                    has_live_session,
+                )?;
+            }
+            let execution_context = restore_context_for_signal(
+                reconciliation_store.clone(),
+                &reconciliation_session_id,
+            );
+            let tail_rewind_kind = {
+                let store = reconciliation_store.read().map_err(|e| e.to_string())?;
+                store
+                    .get_tail_rewind_kind(&reconciliation_session_id)
+                    .map_err(|e| e.to_string())?
+            };
+            Ok((snapshot, execution_context, tail_rewind_kind))
+        })
+        .await
+        .map_err(|e| format!("Failed to join workflow snapshot reconciliation: {e}"))??;
     let merged_messages = merge_ui_workflow_messages(&snapshot.messages);
-    let execution_context = restore_context_for_signal(main_store.clone(), &session_id);
-    let tail_rewind_kind = {
-        let store = main_store.read().map_err(|e| e.to_string())?;
-        store
-            .get_tail_rewind_kind(&session_id)
-            .map_err(|e| e.to_string())?
-    };
     let can_rewind_tail = !has_blocking_live_session && tail_rewind_kind.is_some();
 
     // Convert snapshot to JSON and inject hasLiveSession

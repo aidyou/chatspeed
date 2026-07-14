@@ -1256,7 +1256,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
     try {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
-      console.log('workflowStore: snapshot loaded', snapshot);
+      console.debug('workflowStore: snapshot loaded', {
+        workflowId,
+        messageCount: snapshot?.messages?.length || 0,
+        hasLiveSession: snapshot?.hasLiveSession === true
+      });
 
       // A slower request for a previously selected workflow must not overwrite
       // the projection of the workflow that is currently active.

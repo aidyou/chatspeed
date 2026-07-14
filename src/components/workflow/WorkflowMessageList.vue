@@ -960,6 +960,15 @@ const isRevealingEarlierTaskGroup = ref(false)
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
 let userMessageResizeObserver = null
+let scrollFrameId = null
+let scrollCorrectionFrameId = null
+let observedMessageListWidth = 0
+let scrollScheduled = false
+let componentUnmounted = false
+let pendingScrollForce = false
+let pendingScrollFrameBudget = 0
+let userMessageMeasureScheduled = false
+let userMessageMeasureFrameId = null
 
 const isNearBottom = el => {
   if (!el) return true
@@ -2146,14 +2155,26 @@ const measureUserMessageOverflow = () => {
 }
 
 const scheduleMeasureUserMessageOverflow = () => {
+  if (componentUnmounted || userMessageMeasureScheduled) return
+  userMessageMeasureScheduled = true
+
   nextTick(() => {
+    if (componentUnmounted) {
+      userMessageMeasureScheduled = false
+      return
+    }
     if (typeof requestAnimationFrame === 'undefined') {
+      userMessageMeasureScheduled = false
       measureUserMessageOverflow()
       return
     }
 
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
+    userMessageMeasureFrameId = requestAnimationFrame(() => {
+      if (componentUnmounted) return
+      userMessageMeasureFrameId = requestAnimationFrame(() => {
+        userMessageMeasureScheduled = false
+        userMessageMeasureFrameId = null
+        if (componentUnmounted) return
         measureUserMessageOverflow()
       })
     })
@@ -2452,22 +2473,47 @@ const submitAskUserResponse = message => {
 }
 
 const performScrollToBottom = (force = false, frameBudget = 3) => {
+  if (componentUnmounted) return
   const el = messagesRef.value
   if (!el) return
   if (!force && !shouldAutoScroll.value && !isNearBottom(el)) return
 
+  pendingScrollForce = pendingScrollForce || force
+  pendingScrollFrameBudget = Math.max(pendingScrollFrameBudget, frameBudget)
+  if (scrollScheduled) return
+  scrollScheduled = true
+
   nextTick(() => {
-    requestAnimationFrame(() => {
-      const target = el.scrollHeight - el.clientHeight
-      el.scrollTop = Math.max(0, target)
+    if (componentUnmounted) {
+      scrollScheduled = false
+      return
+    }
+    scrollFrameId = requestAnimationFrame(() => {
+      scrollScheduled = false
+      scrollFrameId = null
+      if (componentUnmounted) return
+
+      const currentEl = messagesRef.value
+      const currentForce = pendingScrollForce
+      const currentFrameBudget = pendingScrollFrameBudget
+      pendingScrollForce = false
+      pendingScrollFrameBudget = 0
+
+      if (!currentEl) return
+      if (!currentForce && !shouldAutoScroll.value && !isNearBottom(currentEl)) return
+
+      const target = currentEl.scrollHeight - currentEl.clientHeight
+      currentEl.scrollTop = Math.max(0, target)
       shouldAutoScroll.value = true
 
-      if (frameBudget <= 1) return
+      if (currentFrameBudget <= 1) return
 
-      requestAnimationFrame(() => {
-        const remaining = el.scrollHeight - el.scrollTop - el.clientHeight
+      scrollCorrectionFrameId = requestAnimationFrame(() => {
+        scrollCorrectionFrameId = null
+        if (componentUnmounted) return
+        const remaining = currentEl.scrollHeight - currentEl.scrollTop - currentEl.clientHeight
         if (remaining > 2) {
-          performScrollToBottom(true, frameBudget - 1)
+          performScrollToBottom(true, currentFrameBudget - 1)
         }
       })
     })
@@ -2478,40 +2524,22 @@ const scrollToBottom = (force = false) => {
   performScrollToBottom(force)
 }
 
-const visibleMessagesSignature = computed(() =>
-  visibleMessages.value
-    .map(message => {
-      const toolCallsCount = Array.isArray(message?.pendingToolCalls)
-        ? message.pendingToolCalls.length
-        : 0
-      return [
-        message?.displayId || message?.id || '',
-        message?.message || '',
-        message?.reasoning || '',
-        message?.metadata?.execution_status || '',
-        message?.metadata?.approval_status || '',
-        toolCallsCount
-      ].join('::')
-    })
-    .join('||')
-)
-
-const streamingSignature = computed(() =>
-  [
-    props.isChatting ? '1' : '0',
-    props.chatState?.content || '',
-    props.chatState?.reasoning || '',
-    Array.isArray(props.chatState?.blocks)
-      ? props.chatState.blocks.map(block => block?.content || '').join('\u0001')
-      : '',
+const streamingLayoutState = computed(() => {
+  const blocks = Array.isArray(props.chatState?.blocks) ? props.chatState.blocks : []
+  const lastBlock = blocks[blocks.length - 1]
+  return [
+    props.isChatting ? 1 : 0,
+    props.chatState?.content?.length || 0,
+    props.chatState?.reasoning?.length || 0,
+    blocks.length,
+    lastBlock?.content?.length || 0,
     props.chatState?.retryInfo?.nextRetryIn ?? ''
-  ].join('\u0002')
-)
+  ]
+})
 
 watch(
-  visibleMessagesSignature,
-  (next, prev) => {
-    if (next === prev) return
+  visibleMessages,
+  () => {
     performScrollToBottom()
     scheduleMeasureUserMessageOverflow()
   },
@@ -2519,9 +2547,8 @@ watch(
 )
 
 watch(
-  streamingSignature,
-  (next, prev) => {
-    if (next === prev) return
+  streamingLayoutState,
+  () => {
     performScrollToBottom()
   },
   { flush: 'post' }
@@ -2539,24 +2566,46 @@ watch(
 )
 
 onMounted(() => {
+  componentUnmounted = false
   if (typeof ResizeObserver !== 'undefined') {
-    userMessageResizeObserver = new ResizeObserver(() => {
-      measureUserMessageOverflow()
+    userMessageResizeObserver = new ResizeObserver(entries => {
+      const nextWidth = entries[0]?.contentRect?.width || messagesRef.value?.clientWidth || 0
+      if (nextWidth === observedMessageListWidth) return
+      observedMessageListWidth = nextWidth
+      scheduleMeasureUserMessageOverflow()
     })
-    if (messagesRef.value) userMessageResizeObserver.observe(messagesRef.value)
+    if (messagesRef.value) {
+      observedMessageListWidth = messagesRef.value.clientWidth
+      userMessageResizeObserver.observe(messagesRef.value)
+    }
   } else if (typeof window !== 'undefined') {
-    window.addEventListener('resize', measureUserMessageOverflow)
+    window.addEventListener('resize', scheduleMeasureUserMessageOverflow)
   }
 
   scheduleMeasureUserMessageOverflow()
 })
 
 onBeforeUnmount(() => {
+  componentUnmounted = true
+  scrollScheduled = false
+  userMessageMeasureScheduled = false
   if (userMessageResizeObserver) {
     userMessageResizeObserver.disconnect()
     userMessageResizeObserver = null
   } else if (typeof window !== 'undefined') {
-    window.removeEventListener('resize', measureUserMessageOverflow)
+    window.removeEventListener('resize', scheduleMeasureUserMessageOverflow)
+  }
+  if (scrollFrameId !== null) {
+    cancelAnimationFrame(scrollFrameId)
+    scrollFrameId = null
+  }
+  if (scrollCorrectionFrameId !== null) {
+    cancelAnimationFrame(scrollCorrectionFrameId)
+    scrollCorrectionFrameId = null
+  }
+  if (userMessageMeasureFrameId !== null) {
+    cancelAnimationFrame(userMessageMeasureFrameId)
+    userMessageMeasureFrameId = null
   }
 })
 

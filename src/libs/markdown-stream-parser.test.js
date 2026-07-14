@@ -3,6 +3,8 @@
  * Verifies the fix for nested code blocks issue
  */
 
+import assert from 'node:assert/strict'
+import { performance } from 'node:perf_hooks'
 import { MarkdownStreamParser } from './markdown-stream-parser.js'
 
 // Test case 1: Code block with ``` inside (the reported bug)
@@ -93,4 +95,44 @@ result3.forEach((block, i) => {
   console.log('')
 })
 
-console.log('All tests completed!')
+console.log('All visual examples completed!')
+
+const incrementalParser = new MarkdownStreamParser()
+let incrementalResult = []
+for (const chunk of ['prefix\n\n`', '``js\nconst x = 1\n`', '``\n\n$', '$\nx = 1\n$', '$\ntail']) {
+  incrementalResult = incrementalParser.process(chunk)
+}
+assert.deepEqual(incrementalResult, [
+  { type: 'paragraph', content: 'prefix' },
+  { type: 'code', content: '```js\nconst x = 1\n```' },
+  { type: 'math', content: '$$\nx = 1\n$$' },
+  { type: 'paragraph', content: 'tail' }
+])
+
+const extendedOpeningFenceParser = new MarkdownStreamParser()
+extendedOpeningFenceParser.process('```')
+const extendedOpeningFenceResult = extendedOpeningFenceParser.process('`\ncode\n````\n')
+assert.deepEqual(extendedOpeningFenceResult, [
+  { type: 'code', content: '````\ncode\n````' },
+  { type: 'paragraph', content: '' }
+])
+
+const extendedClosingFenceParser = new MarkdownStreamParser()
+extendedClosingFenceParser.process('```\ncode\n```')
+extendedClosingFenceParser.process('`\nstill code\n```')
+const extendedClosingFenceResult = extendedClosingFenceParser.process('\ntail')
+assert.deepEqual(extendedClosingFenceResult, [
+  { type: 'code', content: '```\ncode\n````\nstill code\n```' },
+  { type: 'paragraph', content: 'tail' }
+])
+
+const longTextParser = new MarkdownStreamParser()
+const longText = 'a'.repeat(200_000)
+const startedAt = performance.now()
+for (let offset = 0; offset < longText.length; offset += 100) {
+  longTextParser.process(longText.slice(offset, offset + 100))
+}
+const durationMs = performance.now() - startedAt
+assert.ok(durationMs < 500, `incremental parsing took ${durationMs.toFixed(1)}ms`)
+
+console.log(`Incremental assertions passed in ${durationMs.toFixed(1)}ms`)

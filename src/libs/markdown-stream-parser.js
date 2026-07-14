@@ -9,6 +9,7 @@ export class MarkdownStreamParser {
     this.blocks = []
     this.state = 'normal' // 'normal', 'in_code_block', 'in_math_block'
     this.fenceLength = 0 // Track the length of opening fence (for code blocks)
+    this.scanOffset = 0
   }
 
   reset() {
@@ -16,6 +17,7 @@ export class MarkdownStreamParser {
     this.blocks.length = 0
     this.state = 'normal'
     this.fenceLength = 0
+    this.scanOffset = 0
   }
 
   /**
@@ -68,10 +70,13 @@ export class MarkdownStreamParser {
   // Internal parsing methods
 
   parseNormal() {
+    const scanStart = Math.max(0, this.scanOffset - 2)
+
     // Find code block fence (3 or more backticks)
     let codeIdx = -1
     let codeLen = 0
-    for (let i = 0; i <= this.buffer.length - 3; i++) {
+    let deferredCodeIdx = -1
+    for (let i = scanStart; i <= this.buffer.length - 3; i++) {
       if (this.buffer[i] === '`' && this.buffer[i + 1] === '`' && this.buffer[i + 2] === '`') {
         // Count the number of backticks
         let len = 3
@@ -81,6 +86,10 @@ export class MarkdownStreamParser {
         // Check if at line start
         const isAtLineStart = i === 0 || this.buffer[i - 1] === '\n'
         if (isAtLineStart) {
+          if (i + len === this.buffer.length) {
+            deferredCodeIdx = i
+            break
+          }
           codeIdx = i
           codeLen = len
           break
@@ -90,7 +99,7 @@ export class MarkdownStreamParser {
 
     // Find math block fence (2 dollar signs)
     let mathIdx = -1
-    for (let i = 0; i <= this.buffer.length - 2; i++) {
+    for (let i = scanStart; i <= this.buffer.length - 2; i++) {
       if (this.buffer[i] === '$' && this.buffer[i + 1] === '$') {
         const isAtLineStart = i === 0 || this.buffer[i - 1] === '\n'
         if (isAtLineStart) {
@@ -100,7 +109,7 @@ export class MarkdownStreamParser {
       }
     }
 
-    const paraIdx = this.buffer.indexOf('\n\n')
+    const paraIdx = this.buffer.indexOf('\n\n', scanStart)
 
     // Find the first occurrence among potential markers
     const found = [
@@ -109,7 +118,10 @@ export class MarkdownStreamParser {
       { idx: paraIdx, type: 'para', len: 2 }
     ].filter(f => f.idx !== -1).sort((a, b) => a.idx - b.idx)
 
-    if (found.length === 0) return false
+    if (found.length === 0) {
+      this.scanOffset = deferredCodeIdx >= 0 ? deferredCodeIdx + 2 : this.buffer.length
+      return false
+    }
 
     const first = found[0]
 
@@ -119,6 +131,7 @@ export class MarkdownStreamParser {
       this.blocks.push({ type: 'paragraph', content: contentBefore })
     }
     this.buffer = this.buffer.substring(first.idx)
+    this.scanOffset = 0
 
     if (first.type === 'para') {
       this.buffer = this.buffer.substring(2) // Skip the \n\n
@@ -135,11 +148,11 @@ export class MarkdownStreamParser {
   }
 
   parseCodeBlock() {
-    // Search for closing fence with the SAME length as opening fence
-    // Start searching after the opening fence
-    const startIdx = this.fenceLength
+    // Search for closing fence with the SAME length as opening fence.
+    const startIdx = Math.max(this.fenceLength, this.scanOffset - this.fenceLength)
 
     let idx = -1
+    let deferredIdx = -1
     for (let i = startIdx; i <= this.buffer.length - this.fenceLength; i++) {
       // Check if we found enough backticks
       let match = true
@@ -160,13 +173,20 @@ export class MarkdownStreamParser {
         // Check if at line start
         const isAtLineStart = i === 0 || this.buffer[i - 1] === '\n'
         if (isAtLineStart) {
+          if (i + this.fenceLength === this.buffer.length) {
+            deferredIdx = i
+            break
+          }
           idx = i
           break
         }
       }
     }
 
-    if (idx === -1) return false
+    if (idx === -1) {
+      this.scanOffset = deferredIdx >= 0 ? deferredIdx + this.fenceLength - 1 : this.buffer.length
+      return false
+    }
 
     const blockEnd = idx + this.fenceLength
     const codeContent = this.buffer.substring(0, blockEnd)
@@ -178,15 +198,19 @@ export class MarkdownStreamParser {
     }
     this.state = 'normal'
     this.fenceLength = 0
+    this.scanOffset = 0
     return true
   }
 
   parseMathBlock() {
-    // Search for closing $$ starting from index 2
-    let idx = this.buffer.indexOf('$$', 2)
-    if (idx === -1) return false
+    // Search for closing $$ starting after the opening fence.
+    let idx = this.buffer.indexOf('$$', Math.max(2, this.scanOffset - 1))
+    if (idx === -1) {
+      this.scanOffset = this.buffer.length
+      return false
+    }
 
-    // CRITICAL FIX: Keep searching until we find a valid closing fence
+    // Keep searching until we find a valid closing fence.
     // A valid closing fence MUST be at the start of a line (after \n or at index 0)
     while (idx !== -1) {
       const isAtLineStart = idx === 0 || this.buffer[idx - 1] === '\n'
@@ -199,7 +223,10 @@ export class MarkdownStreamParser {
     }
 
     // No valid closing fence found
-    if (idx === -1) return false
+    if (idx === -1) {
+      this.scanOffset = this.buffer.length
+      return false
+    }
 
     const blockEnd = idx + 2
     const mathContent = this.buffer.substring(0, blockEnd)
@@ -210,6 +237,7 @@ export class MarkdownStreamParser {
       this.buffer = this.buffer.substring(1)
     }
     this.state = 'normal'
+    this.scanOffset = 0
     return true
   }
 }
