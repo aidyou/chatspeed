@@ -494,6 +494,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
 
     const currentId = currentWorkflowId.value;
+    const submittedToolIds = approvalSubmissions.value.get(currentId) || new Set();
     const workflowTitle =
       currentWorkflow.value?.title || currentWorkflow.value?.userQuery || 'Untitled Workflow';
     const order = [];
@@ -522,6 +523,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
     return order
       .map((toolCallId) => {
+        if (submittedToolIds.has(toolCallId)) return null;
         const latest = latestById.get(toolCallId);
         if (latest?.state !== 'pending') return null;
         const meta = latest.meta || {};

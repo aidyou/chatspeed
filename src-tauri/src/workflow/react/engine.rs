@@ -3292,6 +3292,10 @@ impl WorkflowExecutor {
                             });
 
                         self.persist_approved_plan_anchor(&plan).await?;
+                        self.context
+                            .begin_execution_segment_from_approved_plan()
+                            .await?;
+                        self.save_snapshot().await?;
 
                         // B. Policy & State Reset
                         let mut new_policy = ExecutionPolicy::implementation();
