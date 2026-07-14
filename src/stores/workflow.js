@@ -14,6 +14,7 @@ import {
 import { deriveToolViewState } from '@/composables/workflow/useToolStateMapper';
 import { isAutoExecuteWorkflowTool } from '@/composables/workflow/toolApproval';
 import { getToolStatusSummary } from '@/composables/workflow/toolDisplay';
+import { inferWorkflowToolExecutionStatus } from '@/composables/workflow/messageProjectionRules';
 
 /**
  * Task Ledger - 统一任务账本模型
@@ -823,20 +824,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return next;
   };
 
-  const inferFinalExecutionStatus = (message, existingMeta = {}) => {
-    const isError = message.isError || message.is_error || message.metadata?.is_error;
-    const approvalStatus = message.metadata?.approval_status;
-
-    if (approvalStatus === 'rejected') return 'rejected';
-    if (isError) return 'failed';
-    if (approvalStatus === 'pending') return 'pending_approval';
-
-    // Incoming tool messages from backend are final observations.
-    // The only non-final "approved" state is the optimistic frontend patch,
-    // which does not go through addMessage.
-    return 'completed';
-  };
-
   const inferLedgerToolStatus = (message) => {
     const meta = message.metadata || {};
     const executionStatus = meta.execution_status;
@@ -1487,7 +1474,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const visibleContent = String(message.message || '').trim();
       message.metadata = {
         ...message.metadata,
-        execution_status: inferFinalExecutionStatus(message, message.metadata),
+        // Keep explicit backend non-terminal statuses such as final-review
+        // waiting. Rewriting them to `completed` breaks completed-task window
+        // rotation and hides the reviewer child-session lifecycle.
+        execution_status: inferWorkflowToolExecutionStatus(message, message.metadata),
         hide_approval_details:
           message.metadata?.approval_status === 'approved' && !visibleContent
       };

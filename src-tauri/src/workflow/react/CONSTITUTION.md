@@ -544,6 +544,16 @@ windows. Snapshot and legacy recovery may reconstruct the same boundary from the
 durable successful completion tool observation, but live UI code must not independently
 reimplement completion approval rules.
 
+In particular, frontend projection must not coerce an explicit backend
+non-terminal `execution_status` such as `waiting`, `running`, or
+`approval_submitted` into `completed`.
+
+When final review is pending, the completion-tool observation may carry
+`review_display_state = final_review_pending` together with a child-session
+identifier. Frontend delegated-task rendering must preserve that reviewer
+sub-session visibility even though the originating tool message is not a literal
+`sub_agent_run` row.
+
 ### 10.10 Manual clear-context rendering is projection-only
 
 The frontend may render a visible divider for each manual clear-context marker in the transcript.

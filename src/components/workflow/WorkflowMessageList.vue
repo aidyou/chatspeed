@@ -823,6 +823,7 @@
 import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
+import { shouldRenderSubAgentCard } from '@/composables/workflow/messageProjectionRules'
 import ApprovalDialog from './ApprovalDialog.vue'
 import FilePreviewDiff from './FilePreviewDiff.vue'
 import MarkdownSimple from './MarkdownSimple.vue'
@@ -2209,9 +2210,11 @@ const getMessageSubAgentId = message => {
 const getChoiceGroups = message =>
   props.parseChoiceContent(props.removeSystemReminder(message.message || '')).groups || []
 
-const isSubAgentRunMessage = message =>
-  String(message?.metadata?.tool_name || '').toLowerCase() === 'sub_agent_run' &&
-  !!message?.subAgentCard
+// Keep delegated-task rendering aligned with the centralized projection rule.
+// Final review pending is persisted on the completion-tool observation rather
+// than a literal `sub_agent_run` row, so card visibility must not be narrowed
+// locally during future template refactors.
+const isSubAgentRunMessage = message => shouldRenderSubAgentCard(message)
 
 const getSubAgentStatusLabel = message => {
   const status = String(message?.subAgentCard?.status || 'running').toLowerCase()
