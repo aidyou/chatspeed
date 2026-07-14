@@ -5,7 +5,7 @@
         <div class="workflow-titlebar-left-actions">
           <el-tooltip
             :content="$t(`chat.${sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar'}`)"
-            placement="right"
+            placement="bottom"
             :hide-after="0"
             :enterable="false">
             <div class="icon-btn upperLayer" @click="onToggleSidebar">

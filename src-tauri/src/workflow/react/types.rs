@@ -61,6 +61,8 @@ pub enum GatewayPayload {
     Confirm {
         id: String,
         action: String,
+        tool_name: String,
+        arguments: serde_json::Value,
         details: serde_json::Value,
         #[serde(skip_serializing_if = "Option::is_none")]
         display_type: Option<String>,
@@ -518,6 +520,24 @@ mod tests {
         assert_eq!(serialized["type"], "task_completed");
         assert_eq!(serialized["tool_call_id"], "call_complete_123");
         assert_eq!(serialized["segment_id"], 7);
+    }
+
+    #[test]
+    fn test_confirm_gateway_payload_serialization() {
+        let payload = GatewayPayload::Confirm {
+            id: "call_confirm_123".to_string(),
+            action: "bash".to_string(),
+            tool_name: "bash".to_string(),
+            arguments: serde_json::json!({"command": "pwd"}),
+            details: serde_json::json!({"command": "pwd"}),
+            display_type: Some("text".to_string()),
+        };
+        let serialized = serde_json::to_value(payload).unwrap();
+        assert_eq!(serialized["type"], "confirm");
+        assert_eq!(serialized["id"], "call_confirm_123");
+        assert_eq!(serialized["tool_name"], "bash");
+        assert_eq!(serialized["arguments"]["command"], "pwd");
+        assert_eq!(serialized["display_type"], "text");
     }
 
     #[test]

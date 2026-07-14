@@ -57,7 +57,7 @@
 }
 
 :root.light {
-    --cs-text-color-primary: rgba(0, 0, 0, 0.85);
+    --cs-text-color-primary:  rgba(0, 0, 0, 0.95);
     --cs-text-color-secondary: #999;
     --cs-text-color-tertiary: #ccc;
     --cs-text-color-placeholder: var(--cs-text-color-tertiary);
@@ -105,7 +105,7 @@
 }
 
 :root.dark {
-    --cs-text-color-primary: rgba(255, 255, 255, 0.85);
+    --cs-text-color-primary: rgb(255, 255, 255, 0.85);
     --cs-text-color-secondary: rgba(132, 133, 134, 0.9);
     --cs-text-color-tertiary: rgb(65, 65, 65, 0.9);
     --cs-text-color-placeholder: var(--cs-text-color-tertiary);

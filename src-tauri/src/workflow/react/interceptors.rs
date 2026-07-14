@@ -1477,6 +1477,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 GatewayPayload::Confirm {
                     id: id.to_string(),
                     action: name.to_string(),
+                    tool_name: name.to_string(),
+                    arguments: args.clone(),
                     details: details_value,
                     display_type: Some(display_type.clone()),
                 },

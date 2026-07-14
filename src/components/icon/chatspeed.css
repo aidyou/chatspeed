@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-switch-line:before {
+  content: "\e68b";
+}
+
 .cs-yolo:before {
   content: "\e7ec";
 }

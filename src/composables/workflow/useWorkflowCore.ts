@@ -579,7 +579,7 @@ export function useWorkflowCore({
             id: toolCallId,
             function: {
                 name: toolName,
-                arguments: argumentsValue ?? {}
+                arguments: argumentsValue ?? null
             }
         },
         details: details ?? null,
@@ -588,6 +588,40 @@ export function useWorkflowCore({
         approval_status: 'pending',
         execution_status: 'pending_approval'
     })
+
+    const upsertPendingApprovalMessage = (sessionId, payload = {}) => {
+        const toolCallId = String(
+            payload.toolCallId || payload.tool_call_id || payload.id || ''
+        ).trim()
+        if (!sessionId || !toolCallId) return
+        if (hasResolvedToolObservation(sessionId, toolCallId)) return
+
+        const toolName =
+            payload.toolName ||
+            payload.tool_name ||
+            payload.action ||
+            t('workflow.awaitingApproval')
+        const argumentsValue = payload.arguments ?? null
+        const details = payload.details ?? null
+        const displayType = payload.displayType || payload.display_type || ''
+
+        workflowStore.addMessage({
+            sessionId,
+            role: 'tool',
+            message: stringifyWorkflowMessageContent(details),
+            stepType: 'Observe',
+            stepIndex: workflowStore.messages.length,
+            isError: false,
+            errorType: null,
+            metadata: buildPendingToolMetadata(
+                toolCallId,
+                toolName,
+                argumentsValue,
+                details,
+                displayType
+            )
+        })
+    }
 
     const hasResolvedToolObservation = (sessionId, toolCallId) => {
         if (!sessionId || !toolCallId) return false
@@ -940,9 +974,9 @@ export function useWorkflowCore({
                     scrollToBottom()
                 } else if (payload.type === 'confirm') {
                     markSessionLiveFromNonTerminalEvent()
-                    // Current-session approvals are rendered inline in tool messages.
                     workflowStore.clearApprovalSubmission(sessionId, payload.id)
                     upsertPendingApprovalEntry(sessionId, payload)
+                    upsertPendingApprovalMessage(sessionId, payload)
                     playApprovalNotificationSound()
                 } else if (payload.type === 'approval_resolved') {
                     markSessionLiveFromNonTerminalEvent()
@@ -1186,21 +1220,12 @@ export function useWorkflowCore({
                         if (!toolCallId) continue
                         if (hasResolvedToolObservation(id, toolCallId)) continue
 
-                        workflowStore.addMessage({
-                            sessionId: id,
-                            role: 'tool',
-                            message: stringifyWorkflowMessageContent(details),
-                            stepType: 'Observe',
-                            stepIndex: workflowStore.messages.length,
-                            isError: false,
-                            errorType: null,
-                            metadata: buildPendingToolMetadata(
-                                toolCallId,
-                                toolName,
-                                argumentsValue,
-                                details,
-                                displayType
-                            )
+                        upsertPendingApprovalMessage(id, {
+                            toolCallId,
+                            toolName,
+                            arguments: argumentsValue,
+                            details,
+                            displayType
                         })
                     }
                 } else if (pendingApprovalRequest && !workflowStore.pendingApprovalMessage) {
@@ -1208,21 +1233,12 @@ export function useWorkflowCore({
                         id: pendingApprovalRequest.toolCallId || 'awaiting_approval',
                         action: pendingApprovalRequest.toolName || t('workflow.awaitingApproval')
                     })
-                    workflowStore.addMessage({
-                        sessionId: id,
-                        role: 'tool',
-                        message: stringifyWorkflowMessageContent(pendingApprovalRequest.details),
-                        stepType: 'Observe',
-                        stepIndex: workflowStore.messages.length,
-                        isError: false,
-                        errorType: null,
-                        metadata: buildPendingToolMetadata(
-                            pendingApprovalRequest.toolCallId || '',
-                            pendingApprovalRequest.toolName || '',
-                            pendingApprovalRequest.arguments ?? null,
-                            pendingApprovalRequest.details,
-                            pendingApprovalRequest.displayType || ''
-                        )
+                    upsertPendingApprovalMessage(id, {
+                        toolCallId: pendingApprovalRequest.toolCallId || '',
+                        toolName: pendingApprovalRequest.toolName || '',
+                        arguments: pendingApprovalRequest.arguments ?? null,
+                        details: pendingApprovalRequest.details,
+                        displayType: pendingApprovalRequest.displayType || ''
                     })
                 }
             } else if (status !== WORKFLOW_STATUSES.AWAITING_APPROVAL) {

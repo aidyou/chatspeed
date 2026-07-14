@@ -1367,6 +1367,8 @@ impl WorkflowExecutor {
                                     .dispatch_ui_payload(GatewayPayload::Confirm {
                                         id: tool.tool_call_id.clone(),
                                         action: tool.tool_name.clone(),
+                                        tool_name: tool.tool_name.clone(),
+                                        arguments: tool.arguments.clone(),
                                         details: details_value,
                                         display_type: tool.display_type.clone(),
                                     })
@@ -2235,6 +2237,14 @@ impl WorkflowExecutor {
                                                     .as_str()
                                                     .unwrap_or("unknown")
                                                     .to_string(),
+                                                tool_name: info["name"]
+                                                    .as_str()
+                                                    .unwrap_or("unknown")
+                                                    .to_string(),
+                                                arguments: info
+                                                    .get("arguments")
+                                                    .cloned()
+                                                    .unwrap_or(serde_json::Value::Null),
                                                 details: details_value,
                                                 display_type: info
                                                     .get("display_type")
@@ -2788,6 +2798,14 @@ impl WorkflowExecutor {
                                             .as_str()
                                             .unwrap_or("unknown")
                                             .to_string(),
+                                        tool_name: info["name"]
+                                            .as_str()
+                                            .unwrap_or("unknown")
+                                            .to_string(),
+                                        arguments: info
+                                            .get("arguments")
+                                            .cloned()
+                                            .unwrap_or(serde_json::Value::Null),
                                         details: details_value,
                                         display_type: info
                                             .get("display_type")

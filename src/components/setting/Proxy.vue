@@ -292,9 +292,9 @@
           </div>
         </div>
       </el-tab-pane>
-      <el-tab-pane :label="$t('settings.proxy.tabs.stats')" name="stats">
+      <!-- <el-tab-pane :label="$t('settings.proxy.tabs.stats')" name="stats">
         <ProxyStats />
-      </el-tab-pane>
+      </el-tab-pane> -->
     </el-tabs>
 
     <!-- Dialogs and other elements from the original component -->
@@ -488,7 +488,7 @@ import {
 } from 'element-plus'
 import { showMessage, isEmpty } from '@/libs/util'
 import ProxyGroup from './ProxyGroup.vue'
-import ProxyStats from './ProxyStats.vue'
+// import ProxyStats from './ProxyStats.vue'
 // import Avatar from '@/components/common/Avatar.vue'
 
 const { t } = useI18n()

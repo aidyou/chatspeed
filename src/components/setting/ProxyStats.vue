@@ -134,59 +134,39 @@
                 :label="$t('settings.proxy.stats.provider')"
                 width="100"
                 show-overflow-tooltip />
-              <el-table-column
-                prop="clientModel"
-                :label="$t('settings.proxy.stats.clientModel')"
-                min-width="150"
-                show-overflow-tooltip
-                sortable>
+              <el-table-column min-width="200" show-overflow-tooltip>
+                <template #header>
+                  <span
+                    style="cursor: pointer; user-select: none"
+                    @click="toggleModelColumn"
+                    :title="
+                      modelColumnMode === 'backend'
+                        ? $t('settings.proxy.stats.clientModel')
+                        : $t('settings.proxy.stats.backendModel')
+                    ">
+                    {{
+                      modelColumnMode === 'backend'
+                        ? $t('settings.proxy.stats.backendModel')
+                        : $t('settings.proxy.stats.clientModel')
+                    }}
+                  </span>
+                  <cs name="switch-line" size="var(--cs-font-size-sm)" />
+                </template>
                 <template #default="scope">
                   <span style="color: var(--cs-color-primary); font-weight: bold">{{
-                    scope.row.clientModel
+                    modelColumnMode === 'backend' ? scope.row.backendModel : scope.row.clientModel
                   }}</span>
                 </template>
               </el-table-column>
               <el-table-column
-                prop="backendModel"
-                :label="$t('settings.proxy.stats.backendModel')"
-                min-width="200"
-                show-overflow-tooltip
-                sortable />
-              <el-table-column
-                prop="protocol"
-                :label="$t('settings.proxy.stats.protocol')"
-                width="90">
+                :label="$t('settings.proxy.stats.estimatedCost')"
+                width="130"
+                sortable
+                sort-by="estimatedCost">
                 <template #default="scope">
-                  <el-tag
-                    size="small"
-                    :color="getProtocolColor(scope.row.protocol)"
-                    :style="{
-                      color: getProtocolTextColor(scope.row.protocol),
-                      borderColor: getProtocolTextColor(scope.row.protocol) + '50'
-                    }">
-                    {{ scope.row.protocol }}
-                  </el-tag>
+                  {{ formatCurrency(scope.row.estimatedCost) }}
                 </template>
               </el-table-column>
-              <el-table-column
-                :label="$t('settings.proxy.stats.toolCompat')"
-                width="90"
-                align="center">
-                <template #default="scope">
-                  <el-tag :type="scope.row.toolCompatMode === 1 ? 'warning' : 'info'" size="small">
-                    {{
-                      scope.row.toolCompatMode === 1
-                        ? $t('settings.proxy.stats.yes')
-                        : $t('settings.proxy.stats.no')
-                    }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column
-                prop="requestCount"
-                :label="$t('settings.proxy.stats.requests')"
-                width="100"
-                sortable />
               <el-table-column
                 :label="$t('settings.proxy.stats.inputTokens')"
                 width="90"
@@ -228,14 +208,10 @@
                 </template>
               </el-table-column>
               <el-table-column
-                :label="$t('settings.proxy.stats.estimatedCost')"
-                width="130"
-                sortable
-                sort-by="estimatedCost">
-                <template #default="scope">
-                  {{ formatCurrency(scope.row.estimatedCost) }}
-                </template>
-              </el-table-column>
+                prop="requestCount"
+                :label="$t('settings.proxy.stats.requests')"
+                width="100"
+                sortable />
               <el-table-column
                 :label="$t('settings.proxy.stats.errors')"
                 width="100"
@@ -253,12 +229,42 @@
                   <span v-else>0</span>
                 </template>
               </el-table-column>
+              <el-table-column
+                prop="protocol"
+                :label="$t('settings.proxy.stats.protocol')"
+                width="90">
+                <template #default="scope">
+                  <el-tag
+                    size="small"
+                    :color="getProtocolColor(scope.row.protocol)"
+                    :style="{
+                      color: getProtocolTextColor(scope.row.protocol),
+                      borderColor: getProtocolTextColor(scope.row.protocol) + '50'
+                    }">
+                    {{ scope.row.protocol }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column
+                :label="$t('settings.proxy.stats.toolCompat')"
+                width="90"
+                align="center">
+                <template #default="scope">
+                  <el-tag :type="scope.row.toolCompatMode === 1 ? 'warning' : 'info'" size="small">
+                    {{
+                      scope.row.toolCompatMode === 1
+                        ? $t('settings.proxy.stats.yes')
+                        : $t('settings.proxy.stats.no')
+                    }}
+                  </el-tag>
+                </template>
+              </el-table-column>
             </el-table>
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="date" :label="$t('settings.proxy.stats.date')" width="110" />
-      <el-table-column
+      <el-table-column prop="date" :label="$t('settings.proxy.stats.date')" min-width="110" />
+      <!-- <el-table-column
         prop="providerCount"
         :label="$t('settings.proxy.stats.providers')"
         width="90"
@@ -267,21 +273,26 @@
         prop="topProvider"
         :label="$t('settings.proxy.stats.topProvider')"
         min-width="180"
-        show-overflow-tooltip />
+        show-overflow-tooltip /> -->
+      <el-table-column :label="$t('settings.proxy.stats.estimatedCost')" min-width="130">
+        <template #default="scope">
+          {{ formatCurrency(scope.row.estimatedCost) }}
+        </template>
+      </el-table-column>
       <el-table-column
         prop="totalRequestCount"
         :label="$t('settings.proxy.stats.requests')"
         width="100" />
-      <el-table-column :label="$t('settings.proxy.stats.inputTokens')" width="100">
+      <el-table-column :label="$t('settings.proxy.stats.inputTokens')" min-width="100">
         <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
       </el-table-column>
-      <el-table-column :label="$t('settings.proxy.stats.outputTokens')" width="100">
+      <el-table-column :label="$t('settings.proxy.stats.outputTokens')" min-width="100">
         <template #default="scope">{{ formatTokens(scope.row.totalOutputTokens) }}</template>
       </el-table-column>
-      <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" width="100">
+      <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" min-width="100">
         <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
       </el-table-column>
-      <el-table-column :label="$t('settings.proxy.stats.cacheHitRate')" width="110">
+      <el-table-column :label="$t('settings.proxy.stats.cacheHitRate')" min-width="110">
         <template #default="scope">
           {{
             formatPercent(
@@ -290,12 +301,7 @@
           }}
         </template>
       </el-table-column>
-      <el-table-column :label="$t('settings.proxy.stats.estimatedCost')" width="130">
-        <template #default="scope">
-          {{ formatCurrency(scope.row.estimatedCost) }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="errorCount" :label="$t('settings.proxy.stats.errors')" width="100" />
+      <!-- <el-table-column prop="errorCount" :label="$t('settings.proxy.stats.errors')" width="100" /> -->
     </el-table>
 
     <div class="charts-section">
@@ -436,6 +442,11 @@ const providerStatsRaw = ref({})
 const providerLoading = ref({})
 const expandedDates = ref(new Set())
 const pricingMaps = ref(buildPricingMaps(modelStore.providers))
+
+const modelColumnMode = ref('backend') // 'backend' | 'client'
+const toggleModelColumn = () => {
+  modelColumnMode.value = modelColumnMode.value === 'backend' ? 'client' : 'backend'
+}
 
 const errorDialogVisible = ref(false)
 const errorLoading = ref(false)
