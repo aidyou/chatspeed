@@ -181,7 +181,7 @@
                       ? 'setting'
                       : approvalLevel === 'smart'
                         ? 'brain'
-                        : 'warning'
+                        : 'yolo'
                   "
                   class="small" />
               </label>
@@ -367,11 +367,16 @@
 
             <el-tooltip
               v-if="currentWorkflowId"
-              :content="$t('workflow.clearContextFrame')"
+              :content="
+                canClearContext
+                  ? $t('workflow.clearContextFrame')
+                  : $t('workflow.clearContextFrameNotStopped')
+              "
               :hide-after="0"
               :enterable="false"
               placement="top">
               <label
+                class="clear-context-action"
                 :class="{ disabled: !canClearContext }"
                 @click="canClearContext && $emit('clear-context-frame')">
                 <cs name="clear-context" class="small" />
@@ -979,6 +984,12 @@ defineExpose({
 .section-footer-action:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.clear-context-action.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .workflow-quick-actions-dropdown :deep(.el-dropdown-menu__item) {

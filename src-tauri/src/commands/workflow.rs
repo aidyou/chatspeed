@@ -2723,6 +2723,13 @@ fn can_resume_user_message_from_recovery(
         || (ctx.is_none() && compat_is_resumable_snapshot_status_for_user_message(snapshot_status))
 }
 
+fn should_reinject_user_message_after_recovery(effective_wait_reason: Option<&WaitReason>) -> bool {
+    matches!(
+        effective_wait_reason,
+        Some(WaitReason::UserInput | WaitReason::Approval)
+    )
+}
+
 fn signal_json_content(signal: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(signal)
         .ok()
@@ -3549,15 +3556,17 @@ pub async fn workflow_signal(
                 signal_type_enum,
                 Some(SignalType::UserMessage | SignalType::LegacyUserInput)
             ) {
-                let can_queue_during_approval = effective_wait_reason == Some(WaitReason::Approval)
-                    || (recovery_context.is_none()
-                        && matches!(
-                            compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
-                            Some(
-                                WorkflowState::AwaitingApproval
-                                    | WorkflowState::AwaitingAutoApproval
-                            )
-                        ));
+                let should_reinject_after_recovery =
+                    should_reinject_user_message_after_recovery(effective_wait_reason.as_ref())
+                        || (recovery_context.is_none()
+                            && matches!(
+                                compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
+                                Some(
+                                    WorkflowState::AwaitingUser
+                                        | WorkflowState::AwaitingApproval
+                                        | WorkflowState::AwaitingAutoApproval
+                                )
+                            ));
 
                 // When recovery_context is None (for example a brand-new workflow with no
                 // persisted execution history yet), fall back to the durable workflow status.
@@ -3598,7 +3607,7 @@ pub async fn workflow_signal(
                     workflow_manager,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
-                    if can_queue_during_approval {
+                    if should_reinject_after_recovery {
                         None
                     } else {
                         val["content"].as_str().map(|content| content.to_string())
@@ -3609,7 +3618,7 @@ pub async fn workflow_signal(
                 )
                 .await?;
 
-                if can_queue_during_approval {
+                if should_reinject_after_recovery {
                     let mut retries = 5;
                     let mut last_error = None;
                     while retries > 0 {
@@ -3617,7 +3626,7 @@ pub async fn workflow_signal(
                         match gateway_arc.inject_input(&session_id, signal.clone()).await {
                             Ok(_) => {
                                 log::info!(
-                                    "[Workflow] user_message injected successfully after approval-wait recovery"
+                                    "[Workflow] user_message injected successfully after recovery wait"
                                 );
                                 break;
                             }
@@ -3625,7 +3634,7 @@ pub async fn workflow_signal(
                                 last_error = Some(e);
                                 retries -= 1;
                                 log::info!(
-                                    "[Workflow] Failed to inject user_message during approval-wait recovery, retries left: {}",
+                                    "[Workflow] Failed to inject user_message during recovery wait, retries left: {}",
                                     retries
                                 );
                             }
@@ -3641,7 +3650,7 @@ pub async fn workflow_signal(
                         ));
                     }
 
-                    return Ok("Workflow resumed and user message queued".to_string());
+                    return Ok("Workflow resumed and user message reinjected".to_string());
                 }
 
                 return Ok("Workflow resumed with input".to_string());
@@ -4941,6 +4950,20 @@ mod tests {
             Some(WaitReason::SubAgent)
         );
         assert_eq!(compat_wait_reason_from_snapshot_status("thinking"), None);
+    }
+
+    #[test]
+    fn test_should_reinject_user_message_after_recovery() {
+        assert!(should_reinject_user_message_after_recovery(Some(
+            &WaitReason::UserInput
+        )));
+        assert!(should_reinject_user_message_after_recovery(Some(
+            &WaitReason::Approval
+        )));
+        assert!(!should_reinject_user_message_after_recovery(Some(
+            &WaitReason::Confirmation
+        )));
+        assert!(!should_reinject_user_message_after_recovery(None));
     }
 
     #[test]

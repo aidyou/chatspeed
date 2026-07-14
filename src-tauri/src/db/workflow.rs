@@ -861,6 +861,25 @@ fn execution_context_to_workflow_status(context: &ExecutionContext) -> String {
     }
 }
 
+fn sanitize_wait_reason_for_runtime_state(
+    session_id: &str,
+    state: &RuntimeState,
+    wait_reason: &mut Option<WaitReason>,
+) -> bool {
+    if wait_reason.is_some() && *state != RuntimeState::Waiting {
+        log::warn!(
+            "[Workflow][session={}] snapshot.sanitize - clearing stale wait_reason={:?} for non-waiting state={:?}",
+            session_id,
+            wait_reason,
+            state
+        );
+        *wait_reason = None;
+        return true;
+    }
+
+    false
+}
+
 fn update_agent_config_phase(
     agent_config: Option<&str>,
     phase: RewindPhase,
@@ -1650,13 +1669,20 @@ impl MainStore {
             params![id],
             |row| Ok(Workflow::from(row)),
         )?;
-        workflow.wait_reason = conn
+        let snapshot_state_and_wait_reason: Option<(Option<String>, Option<String>)> = conn
             .query_row(
-                "SELECT wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                "SELECT state, wait_reason FROM workflow_snapshots WHERE session_id = ?1",
                 params![id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok();
+        workflow.wait_reason = snapshot_state_and_wait_reason.and_then(|(state, wait_reason)| {
+            if state.as_deref() == Some("waiting") {
+                wait_reason
+            } else {
+                None
+            }
+        });
         Ok(workflow)
     }
 
@@ -2019,7 +2045,12 @@ impl MainStore {
 
         match result {
             Some(context_json) => {
-                let ctx: ExecutionContext = serde_json::from_str(&context_json)?;
+                let mut ctx: ExecutionContext = serde_json::from_str(&context_json)?;
+                let _ = sanitize_wait_reason_for_runtime_state(
+                    session_id,
+                    &ctx.state,
+                    &mut ctx.wait_reason,
+                );
                 log::info!(
                     "[Workflow][session={}] snapshot.read - state={:?}, wait_reason={:?}, pending_tools={}",
                     session_id,
@@ -2604,6 +2635,54 @@ mod tests {
         MainStore::new(db_path).expect("failed to create MainStore")
     }
 
+    #[test]
+    fn get_execution_context_clears_stale_wait_reason_for_non_waiting_state() {
+        let store = create_test_store();
+        let session_id = "snapshot-stale-wait-reason";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        context.wait_reason = Some(WaitReason::UserInput);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist execution context");
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load execution context")
+            .expect("expected execution context");
+
+        assert_eq!(restored.state, RuntimeState::Running);
+        assert_eq!(restored.wait_reason, None);
+    }
+
+    #[test]
+    fn get_workflow_for_ui_ignores_stale_wait_reason_for_non_waiting_snapshot() {
+        let store = create_test_store();
+        let session_id = "workflow-ui-stale-wait-reason";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        context.wait_reason = Some(WaitReason::UserInput);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist execution context");
+
+        let workflow = store
+            .get_workflow_for_ui(session_id)
+            .expect("failed to load workflow");
+
+        assert_eq!(workflow.wait_reason, None);
+    }
+
     fn seed_agent(store: &MainStore, agent_id: &str) {
         let conn = store
             .conn
@@ -2628,7 +2707,7 @@ mod tests {
         session_id: &str,
         message: &str,
         completed: bool,
-    ) -> i64 {
+    ) -> WorkflowMessage {
         store
             .add_workflow_message(&WorkflowMessage {
                 id: None,
@@ -3934,6 +4013,12 @@ mod tests {
                 created_at: None,
             })
             .expect("failed to add ask_user message");
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started");
         let wait_event_id = store
             .append_workflow_event(&WorkflowEvent::wait_entered(
                 session_id.to_string(),
@@ -5168,7 +5253,7 @@ mod tests {
             .expect("failed to add preserved ai context message");
 
         let mut context = ExecutionContext::new(session_id.to_string());
-        context.state = RuntimeState::Running;
+        context.state = RuntimeState::Waiting;
         context.wait_reason = Some(WaitReason::Approval);
         context.current_segment_id = 2;
         context.current_step = 7;
@@ -5180,7 +5265,7 @@ mod tests {
         context.sub_agent_sessions = vec!["sub-agent-1".to_string(), "sub-agent-2".to_string()];
         store
             .upsert_execution_context(&context)
-            .expect("failed to persist running snapshot");
+            .expect("failed to persist waiting snapshot");
 
         assert!(store
             .delete_last_message(session_id)
@@ -5203,7 +5288,7 @@ mod tests {
             .get_execution_context(session_id)
             .expect("failed to load rebuilt snapshot")
             .expect("manual clear-context deletion should restore a snapshot");
-        assert_eq!(rebuilt.state, RuntimeState::Running);
+        assert_eq!(rebuilt.state, RuntimeState::Waiting);
         assert_eq!(rebuilt.wait_reason, Some(WaitReason::Approval));
         assert_eq!(rebuilt.current_segment_id, 1);
         assert_eq!(rebuilt.current_context_tokens, Some(17753));

@@ -201,11 +201,7 @@ impl EmptyHtmlCommentStreamState {
             };
 
             let end_index = comment_end + 3;
-            if !comment[4..comment_end].trim().is_empty() {
-                content.push_str(&comment[..end_index]);
-            } else {
-                removed_empty_comment = true;
-            }
+            removed_empty_comment = true;
             remaining = &comment[end_index..];
         }
 
@@ -220,9 +216,9 @@ impl EmptyHtmlCommentStreamState {
     }
 }
 
-/// Removes empty HTML comments emitted by some reasoning providers.
+/// Removes HTML comments emitted by some reasoning providers while preserving surrounding text.
 fn sanitize_reasoning_content(content: &str) -> SanitizedReasoningChunk {
-    match regex::Regex::new(r"<!--\s*-->") {
+    match regex::Regex::new(r"<!--[\s\S]*?-->") {
         Ok(pattern) => {
             let sanitized = pattern.replace_all(content, "").into_owned();
             let removed_empty_comment = sanitized.len() != content.len();
@@ -231,14 +227,7 @@ fn sanitize_reasoning_content(content: &str) -> SanitizedReasoningChunk {
                 removed_empty_comment,
             }
         }
-        Err(_) => {
-            let sanitized = content.replace("<!-- -->", "").replace("<!---->", "");
-            let removed_empty_comment = sanitized.len() != content.len();
-            SanitizedReasoningChunk {
-                content: sanitized,
-                removed_empty_comment,
-            }
-        }
+        Err(_) => EmptyHtmlCommentStreamState::default().consume(content),
     }
 }
 
@@ -1039,9 +1028,10 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn sanitize_reasoning_content_removes_empty_html_comments() {
-        let sanitized = sanitize_reasoning_content("Before<!-- -->\n<!--\n\t-->After");
-        assert_eq!(sanitized.content, "Before\nAfter");
+    fn sanitize_reasoning_content_removes_html_comments_only() {
+        let sanitized =
+            sanitize_reasoning_content("Before<!-- -->\n<!--\n\t-->After<!-- note -->End");
+        assert_eq!(sanitized.content, "Before\nAfterEnd");
         assert!(sanitized.removed_empty_comment);
     }
 
@@ -1104,7 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_html_comment_stream_state_preserves_nonempty_comments() {
+    fn empty_html_comment_stream_state_removes_nonempty_comments() {
         let mut state = EmptyHtmlCommentStreamState::default();
 
         let first = state.consume("Before<!-- note");
@@ -1112,8 +1102,8 @@ mod tests {
         assert!(!first.removed_empty_comment);
 
         let second = state.consume(" -->After");
-        assert_eq!(second.content, "<!-- note -->After");
-        assert!(!second.removed_empty_comment);
+        assert_eq!(second.content, "After");
+        assert!(second.removed_empty_comment);
         assert_eq!(state.finish(), "");
     }
 
