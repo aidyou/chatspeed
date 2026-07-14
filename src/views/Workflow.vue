@@ -35,8 +35,9 @@
           </div>
           <div
             v-if="shouldShowTodayCostStats"
-            class="workflow-titlebar-today-cost"
-            :title="todayCostTitle">
+            class="workflow-titlebar-today-cost upperLayer"
+            :title="todayCostTitle"
+            @click="openProxyStats">
             <cs name="money" />
             <span>{{ todayCostTitle }}</span>
           </div>
@@ -386,6 +387,7 @@ const todayCostRefreshTimer = ref(null)
 const pricingMaps = computed(() => buildPricingMaps(modelStore.providers))
 const shouldShowTodayCostStats = computed(() => Boolean(settingStore.settings.showTodayCostStats))
 const todayCostTitle = computed(() => formatCurrencyCompact(todayCostAmount.value))
+const PROXY_SWITCHER_TARGET_TAB_KEY = 'proxy_switcher_target_tab'
 
 const getLocalDateString = date => {
   const year = date.getFullYear()
@@ -423,6 +425,21 @@ const refreshTodayCost = async () => {
     todayCostAmount.value = calculateTodayCost((rows || []).filter(row => row.date === today))
   } catch (error) {
     console.error('Failed to refresh workflow today cost stats:', error)
+  }
+}
+
+const openProxyStats = async () => {
+  try {
+    localStorage.setItem(
+      PROXY_SWITCHER_TARGET_TAB_KEY,
+      JSON.stringify({
+        tab: 'stats',
+        requested_at: Date.now()
+      })
+    )
+    await invokeWrapper('open_proxy_switcher_window')
+  } catch (error) {
+    console.error('Failed to open proxy stats window:', error)
   }
 }
 
@@ -2179,10 +2196,23 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--cs-success-color);
   white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.workflow-titlebar-today-cost:hover {
+  color: var(--cs-color-primary);
+  opacity: 0.9;
 }
 
 .workflow-titlebar-today-cost .cs {
   color: var(--cs-success-color);
+}
+
+.workflow-titlebar-today-cost:hover .cs {
+  color: var(--cs-color-primary);
 }
 
 .update-ready-btn {

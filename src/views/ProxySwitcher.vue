@@ -373,6 +373,7 @@
 import { onMounted, computed, onUnmounted, ref, nextTick, watch } from 'vue'
 import { Line } from '@antv/g2plot'
 import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { useSettingStore } from '@/stores/setting'
@@ -391,10 +392,13 @@ import Avatar from '@/components/common/Avatar.vue'
 import ProxyStats from '@/components/setting/ProxyStats.vue'
 
 const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
 const proxyGroupStore = useProxyGroupStore()
 const settingStore = useSettingStore()
 const modelStore = useModelStore()
 const appWindow = getCurrentWebviewWindow()
+const PROXY_SWITCHER_TARGET_TAB_KEY = 'proxy_switcher_target_tab'
 
 const windowRef = ref(null)
 const listRef = ref(null)
@@ -429,6 +433,41 @@ const trendProviderOptions = ref([])
 const pricingMaps = ref(buildPricingMaps(modelStore.providers))
 let trendChart = null
 const TREND_CHART_ID = 'proxy-switcher-trend-chart'
+
+const normalizeProxySwitcherTab = value =>
+  ['servers', 'groups', 'stats'].includes(value) ? value : 'servers'
+
+const applyRequestedTab = value => {
+  const nextTab = normalizeProxySwitcherTab(value)
+  if (activeTab.value !== nextTab) {
+    activeTab.value = nextTab
+  }
+}
+
+const consumeStoredTargetTab = () => {
+  try {
+    const raw = localStorage.getItem(PROXY_SWITCHER_TARGET_TAB_KEY)
+    if (!raw) return false
+    const payload = JSON.parse(raw)
+    if (!payload?.tab) return false
+    applyRequestedTab(payload.tab)
+    localStorage.removeItem(PROXY_SWITCHER_TARGET_TAB_KEY)
+    return true
+  } catch (error) {
+    console.error('Failed to consume proxy switcher target tab:', error)
+    return false
+  }
+}
+
+const handleTargetTabStorage = event => {
+  if (event.key !== PROXY_SWITCHER_TARGET_TAB_KEY || !event.newValue) return
+  try {
+    const payload = JSON.parse(event.newValue)
+    applyRequestedTab(payload?.tab)
+  } catch (error) {
+    console.error('Failed to parse proxy switcher target tab event:', error)
+  }
+}
 
 const sortedProxyGroupList = computed(() => {
   return [...proxyGroupStore.list].sort((a, b) => {
@@ -1082,6 +1121,27 @@ const handleToggleToolCompatMode = async group => {
 }
 
 watch(
+  () => route.query.tab,
+  tab => {
+    if (typeof tab === 'string' && tab) {
+      applyRequestedTab(tab)
+    }
+  },
+  { immediate: true }
+)
+
+watch(activeTab, tab => {
+  const normalizedTab = normalizeProxySwitcherTab(tab)
+  if (route.query.tab === normalizedTab) return
+  router.replace({
+    query: {
+      ...route.query,
+      tab: normalizedTab
+    }
+  })
+})
+
+watch(
   () => sortedProxyServerGroups.value,
   groups => {
     if (!expandedServerGroup.value && groups.length > 0) {
@@ -1117,10 +1177,13 @@ watch(
 onUnmounted(() => {
   if (saveTimer.value) clearTimeout(saveTimer.value)
   if (serverStatsTimer.value) clearInterval(serverStatsTimer.value)
+  window.removeEventListener('storage', handleTargetTabStorage)
   destroyTrendChart()
 })
 
 onMounted(async () => {
+  consumeStoredTargetTab()
+  window.addEventListener('storage', handleTargetTabStorage)
   await proxyGroupStore.getList()
   settingStore.updateSettingStore()
   if (isEmpty(modelStore.providers)) {

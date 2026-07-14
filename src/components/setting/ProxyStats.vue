@@ -134,7 +134,7 @@
                 :label="$t('settings.proxy.stats.provider')"
                 width="100"
                 show-overflow-tooltip />
-              <el-table-column min-width="200" show-overflow-tooltip>
+              <el-table-column min-width="160" show-overflow-tooltip>
                 <template #header>
                   <span
                     style="cursor: pointer; user-select: none"
@@ -160,7 +160,7 @@
               </el-table-column>
               <el-table-column
                 :label="$t('settings.proxy.stats.estimatedCost')"
-                width="130"
+                width="100"
                 sortable
                 sort-by="estimatedCost">
                 <template #default="scope">
@@ -222,7 +222,11 @@
                     v-if="scope.row.errorCount > 0"
                     type="danger"
                     @click="
-                      showErrorDetail(props.row.date, scope.row.clientModel, scope.row.backendModel)
+                      showErrorDetail(
+                        props.row.date,
+                        scope.row.errorFilterClientModel,
+                        scope.row.errorFilterBackendModel
+                      )
                     ">
                     {{ scope.row.errorCount }}
                   </el-link>
@@ -263,7 +267,7 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="date" :label="$t('settings.proxy.stats.date')" min-width="110" />
+      <el-table-column prop="date" :label="$t('settings.proxy.stats.date')" min-width="120" />
       <!-- <el-table-column
         prop="providerCount"
         :label="$t('settings.proxy.stats.providers')"
@@ -274,7 +278,7 @@
         :label="$t('settings.proxy.stats.topProvider')"
         min-width="180"
         show-overflow-tooltip /> -->
-      <el-table-column :label="$t('settings.proxy.stats.estimatedCost')" min-width="130">
+      <el-table-column :label="$t('settings.proxy.stats.estimatedCost')" min-width="100">
         <template #default="scope">
           {{ formatCurrency(scope.row.estimatedCost) }}
         </template>
@@ -282,7 +286,7 @@
       <el-table-column
         prop="totalRequestCount"
         :label="$t('settings.proxy.stats.requests')"
-        width="100" />
+        width="120" />
       <el-table-column :label="$t('settings.proxy.stats.inputTokens')" min-width="100">
         <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
       </el-table-column>
@@ -650,6 +654,60 @@ const enrichProviderRows = rows =>
     ...row,
     estimatedCost: estimateRowCost(row)
   }))
+
+const buildProviderAggregationKey = row => {
+  const activeModel =
+    modelColumnMode.value === 'backend'
+      ? row.backendModel || '-'
+      : row.clientModel || '-'
+
+  return [
+    row.providerId ?? '',
+    row.provider || '-',
+    activeModel,
+    row.protocol || '-',
+    row.toolCompatMode ?? 0
+  ].join('::')
+}
+
+const regroupProviderRows = rows => {
+  const grouped = new Map()
+
+  for (const row of enrichProviderRows(rows || [])) {
+    const key = buildProviderAggregationKey(row)
+    const existing = grouped.get(key)
+
+    if (!existing) {
+      grouped.set(key, {
+        ...row,
+        requestCount: Number(row.requestCount || 0),
+        totalInputTokens: Number(row.totalInputTokens || 0),
+        totalOutputTokens: Number(row.totalOutputTokens || 0),
+        totalCacheTokens: Number(row.totalCacheTokens || 0),
+        errorCount: Number(row.errorCount || 0),
+        estimatedCost: Number(row.estimatedCost || 0),
+        errorFilterClientModel: modelColumnMode.value === 'client' ? row.clientModel : null,
+        errorFilterBackendModel: modelColumnMode.value === 'backend' ? row.backendModel : null
+      })
+      continue
+    }
+
+    existing.requestCount += Number(row.requestCount || 0)
+    existing.totalInputTokens += Number(row.totalInputTokens || 0)
+    existing.totalOutputTokens += Number(row.totalOutputTokens || 0)
+    existing.totalCacheTokens += Number(row.totalCacheTokens || 0)
+    existing.errorCount += Number(row.errorCount || 0)
+    existing.estimatedCost += Number(row.estimatedCost || 0)
+  }
+
+  return Array.from(grouped.values()).sort((left, right) => right.requestCount - left.requestCount)
+}
+
+const rebuildProviderStats = () => {
+  providerStats.value = Object.fromEntries(
+    Object.entries(providerStatsRaw.value).map(([date, rows]) => [date, regroupProviderRows(rows)])
+  )
+}
 
 const syncDailyStatsWithCosts = () => {
   const groupedByDate = groupedStatsRaw.value.reduce((map, row) => {
@@ -1264,7 +1322,7 @@ const fetchProviderStats = async (date, force = false) => {
     providerStatsRaw.value = { ...providerStatsRaw.value, [date]: stats || [] }
     providerStats.value = {
       ...providerStats.value,
-      [date]: enrichProviderRows(stats || [])
+      [date]: regroupProviderRows(stats || [])
     }
   } catch (error) {
     console.error('Failed to fetch provider stats:', error)
@@ -1341,13 +1399,18 @@ watch(autoRefreshEnabled, val => {
 })
 
 watch(
+  modelColumnMode,
+  () => {
+    rebuildProviderStats()
+  }
+)
+
+watch(
   () => modelStore.providers,
   () => {
     pricingMaps.value = buildPricingMaps(modelStore.providers)
     syncDailyStatsWithCosts()
-    providerStats.value = Object.fromEntries(
-      Object.entries(providerStatsRaw.value).map(([date, rows]) => [date, enrichProviderRows(rows)])
-    )
+    rebuildProviderStats()
     if (dailyStats.value.length) {
       updateCharts()
     }
