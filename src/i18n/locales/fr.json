@@ -642,6 +642,7 @@
         "cacheHitRate": "Cache Hit Rate",
         "clientModel": "Alias de modèle",
         "count": "Nombre",
+        "costPerMillionTokens": "Coût / M",
         "dailyCostTitle": "Tendance quotidienne du coût estimé",
         "dailyRequestsTitle": "Tendance quotidienne des requêtes et du taux d'erreur",
         "dailyTokensTitle": "Tendance d'utilisation quotidienne des tokens",

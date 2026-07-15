@@ -642,6 +642,7 @@
         "cacheHitRate": "Cache Hit Rate",
         "clientModel": "Псевдоним модели",
         "count": "Кол-во",
+        "costPerMillionTokens": "Стоимость / M",
         "dailyCostTitle": "Ежедневная динамика расчетной стоимости",
         "dailyRequestsTitle": "Дневной тренд запросов и ошибок",
         "dailyTokensTitle": "Ежедневный тренд токенов",

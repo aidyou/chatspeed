@@ -642,6 +642,7 @@
         "cacheHitRate": "緩存命中率",
         "clientModel": "模型別名",
         "count": "次數",
+        "costPerMillionTokens": "成本/M",
         "dailyCostTitle": "每日預估費用趨勢",
         "dailyRequestsTitle": "每日請求量與錯誤率趨勢",
         "dailyTokensTitle": "每日 Token 消耗趨勢",

@@ -642,6 +642,7 @@
         "cacheHitRate": "Cache Hit Rate",
         "clientModel": "モデルエイリアス",
         "count": "回数",
+        "costPerMillionTokens": "コスト / M",
         "dailyCostTitle": "日次推定コスト推移",
         "dailyRequestsTitle": "1 日のリクエストとエラー率の傾向",
         "dailyTokensTitle": "日次トークン使用量トレンド",

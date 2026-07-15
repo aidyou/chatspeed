@@ -642,6 +642,7 @@
         "cacheHitRate": "Cache Hit Rate",
         "clientModel": "Modellalias",
         "count": "Anzahl",
+        "costPerMillionTokens": "Kosten / M",
         "dailyCostTitle": "Täglicher Trend der geschätzten Kosten",
         "dailyRequestsTitle": "Tägliche Anfragen und Fehlerrate",
         "dailyTokensTitle": "Täglicher Token-Verbrauch",

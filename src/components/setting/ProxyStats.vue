@@ -132,7 +132,7 @@
               <el-table-column
                 prop="provider"
                 :label="$t('settings.proxy.stats.provider')"
-                width="100"
+                width="110"
                 show-overflow-tooltip />
               <el-table-column min-width="160" show-overflow-tooltip>
                 <template #header>
@@ -160,7 +160,7 @@
               </el-table-column>
               <el-table-column
                 :label="$t('settings.proxy.stats.estimatedCost')"
-                width="100"
+                width="140"
                 sortable
                 sort-by="estimatedCost">
                 <template #default="scope">
@@ -169,14 +169,14 @@
               </el-table-column>
               <el-table-column
                 :label="$t('settings.proxy.stats.inputTokens')"
-                width="90"
+                width="120"
                 sortable
                 sort-by="totalInputTokens">
                 <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
               </el-table-column>
               <el-table-column
                 :label="$t('settings.proxy.stats.outputTokens')"
-                width="90"
+                width="140"
                 sortable
                 sort-by="totalOutputTokens">
                 <template #default="scope">{{
@@ -185,14 +185,14 @@
               </el-table-column>
               <el-table-column
                 :label="$t('settings.proxy.stats.cacheTokens')"
-                width="90"
+                width="140"
                 sortable
                 sort-by="totalCacheTokens">
                 <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
               </el-table-column>
               <el-table-column
                 :label="$t('settings.proxy.stats.cacheHitRate')"
-                width="110"
+                width="140"
                 sortable
                 :sort-method="
                   (a, b) =>
@@ -208,13 +208,24 @@
                 </template>
               </el-table-column>
               <el-table-column
+                :label="$t('settings.proxy.stats.costPerMillionTokens')"
+                width="120"
+                sortable
+                :sort-method="
+                  (a, b) => getCostPerMillionTokens(a) - getCostPerMillionTokens(b)
+                ">
+                <template #default="scope">
+                  {{ formatCostPerMillionTokens(scope.row) }}
+                </template>
+              </el-table-column>
+              <el-table-column
                 prop="requestCount"
                 :label="$t('settings.proxy.stats.requests')"
-                width="100"
+                width="120"
                 sortable />
               <el-table-column
                 :label="$t('settings.proxy.stats.errors')"
-                width="100"
+                width="120"
                 sortable
                 sort-by="errorCount">
                 <template #default="scope">
@@ -236,7 +247,7 @@
               <el-table-column
                 prop="protocol"
                 :label="$t('settings.proxy.stats.protocol')"
-                width="90">
+                width="110">
                 <template #default="scope">
                   <el-tag
                     size="small"
@@ -251,7 +262,7 @@
               </el-table-column>
               <el-table-column
                 :label="$t('settings.proxy.stats.toolCompat')"
-                width="90"
+                width="150"
                 align="center">
                 <template #default="scope">
                   <el-tag :type="scope.row.toolCompatMode === 1 ? 'warning' : 'info'" size="small">
@@ -278,7 +289,7 @@
         :label="$t('settings.proxy.stats.topProvider')"
         min-width="180"
         show-overflow-tooltip /> -->
-      <el-table-column :label="$t('settings.proxy.stats.estimatedCost')" min-width="100">
+      <el-table-column :label="$t('settings.proxy.stats.estimatedCost')" min-width="120">
         <template #default="scope">
           {{ formatCurrency(scope.row.estimatedCost) }}
         </template>
@@ -287,10 +298,10 @@
         prop="totalRequestCount"
         :label="$t('settings.proxy.stats.requests')"
         width="120" />
-      <el-table-column :label="$t('settings.proxy.stats.inputTokens')" min-width="100">
+      <el-table-column :label="$t('settings.proxy.stats.inputTokens')" min-width="120">
         <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
       </el-table-column>
-      <el-table-column :label="$t('settings.proxy.stats.outputTokens')" min-width="100">
+      <el-table-column :label="$t('settings.proxy.stats.outputTokens')" min-width="130">
         <template #default="scope">{{ formatTokens(scope.row.totalOutputTokens) }}</template>
       </el-table-column>
       <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" min-width="100">
@@ -549,6 +560,17 @@ const estimateRowCost = row => {
     },
     pricing
   )
+}
+
+const getCostPerMillionTokens = row => {
+  const totalTokens = Number(row.totalInputTokens || 0) + Number(row.totalOutputTokens || 0)
+  if (totalTokens <= 0) return 0
+  return (Number(row.estimatedCost || 0) / totalTokens) * 1000000
+}
+
+const formatCostPerMillionTokens = row => {
+  const totalTokens = Number(row.totalInputTokens || 0) + Number(row.totalOutputTokens || 0)
+  return totalTokens > 0 ? formatCurrency(getCostPerMillionTokens(row)) : '-'
 }
 
 const getCacheHitRateValue = (cacheTokens, inputTokens) => {

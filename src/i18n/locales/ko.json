@@ -642,6 +642,7 @@
         "cacheTokens": "캐시",
         "clientModel": "모델 별칭",
         "count": "횟수",
+        "costPerMillionTokens": "비용 / M",
         "dailyCostTitle": "일일 예상 비용 추세",
         "dailyRequestsTitle": "일일 요청 및 오류율 추세",
         "dailyTokensTitle": "일일 토큰 사용 트렌드",
