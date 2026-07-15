@@ -1059,7 +1059,7 @@
     "stop": "중지",
     "stopping": "중지 중",
     "thinking": "사고 중...",
-    "thinkingExpanded": "사고 중 (펼침)",
+    "thinkingExpanded": "사고 과정",
     "thoughtCompleted": "사고 완료",
     "todo": {
       "create": "할 일 생성",

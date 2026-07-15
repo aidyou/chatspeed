@@ -1059,7 +1059,7 @@
     "stop": "停止",
     "stopping": "停止中",
     "thinking": "思考中…",
-    "thinkingExpanded": "思考中（展開済み）",
+    "thinkingExpanded": "思考過程",
     "thoughtCompleted": "思考完了",
     "todo": {
       "create": "TODO を作成",

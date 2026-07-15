@@ -256,6 +256,19 @@
                 white-space: normal;
               }
 
+              &.title-wrap--bash {
+                align-items: center;
+                flex-wrap: nowrap;
+
+                .tool-name--bash {
+                  flex: 1 1 0;
+                  min-width: 0;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  white-space: nowrap;
+                }
+              }
+
               .tool-target {
                 flex: 0 1 auto;
                 color: var(--cs-text-color-secondary);
@@ -444,6 +457,26 @@
               padding: 0;
               max-height: 300px;
               overflow: auto;
+            }
+
+            .bash-command {
+              margin: 0 0 12px;
+              padding: 8px 12px;
+              overflow: auto;
+              border-radius: var(--cs-border-radius);
+              background: var(--cs-bg-color);
+              color: var(--cs-text-color-regular);
+              font-size: 12px;
+              line-height: 1.6;
+              white-space: pre-wrap;
+              word-break: break-word;
+
+              code {
+                display: block;
+                padding: 0;
+                background: transparent;
+                font-family: inherit;
+              }
             }
 
             .tool-stream-output {

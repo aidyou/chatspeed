@@ -118,14 +118,21 @@
                 ]">
                 <div
                   class="tool-line title-wrap expandable"
-                  :class="{ 'tool-rejected': tool.isRejected }"
+                  :class="{
+                    'tool-rejected': tool.isRejected,
+                    'title-wrap--bash': isBashToolCall(tool)
+                  }"
                   @click="$emit('toggle-expand', tool.displayId)">
                   <cs
                     :name="tool.toolDisplay?.icon || 'tool'"
                     size="15px"
                     class="tool-type-icon" />
-                  <span class="tool-name">{{ tool.toolDisplay?.action }}</span>
-                  <span class="tool-target">{{ tool.toolDisplay?.target }}</span>
+                  <span class="tool-name" :class="{ 'tool-name--bash': isBashToolCall(tool) }">{{
+                    tool.toolDisplay?.action
+                  }}</span>
+                  <span v-if="getToolTitleTarget(tool)" class="tool-target">{{
+                    getToolTitleTarget(tool)
+                  }}</span>
                   <cs v-if="tool.isApproved" name="check" size="14px" class="approved-icon" />
                 </div>
                 <div
@@ -137,6 +144,10 @@
                   <span class="expand-hint">(click to expand)</span>
                 </div>
                 <div v-if="isMessageExpanded(tool)" class="tool-detail">
+                  <pre
+                    v-if="isBashToolCall(tool)"
+                    class="bash-command"
+                    aria-label="Bash command"><code class="hljs" v-html="getHighlightedBashCommand(tool)"></code></pre>
                   <div
                     v-if="
                       tool.metadata?.tool_call_id &&
@@ -266,6 +277,7 @@
                   :class="[tool.toolType || 'tool-system']">
                   <div
                     class="tool-line title-wrap expandable"
+                    :class="{ 'title-wrap--bash': isBashToolCall(tool) }"
                     @click="
                       $emit(
                         'toggle-expand',
@@ -276,8 +288,12 @@
                       :name="tool.icon || 'tool'"
                       size="14px"
                       class="tool-type-icon" />
-                    <span class="tool-name">{{ tool.action }}</span>
-                    <span class="tool-target">{{ tool.target }}</span>
+                    <span class="tool-name" :class="{ 'tool-name--bash': isBashToolCall(tool) }">{{
+                      tool.action
+                    }}</span>
+                    <span v-if="getToolTitleTarget(tool)" class="tool-target">{{
+                      getToolTitleTarget(tool)
+                    }}</span>
                   </div>
                   <div
                     v-if="
@@ -297,6 +313,12 @@
                   <div
                     v-if="isExplorationToolExpanded(message, groupIndex, toolIndex)"
                     class="tool-detail">
+                    <pre
+                      v-if="isBashToolCall(tool)"
+                      class="bash-command"
+                      aria-label="Bash command"><code
+                        class="hljs"
+                        v-html="getHighlightedBashCommand(tool)"></code></pre>
                     <MarkdownSimple
                       v-if="
                         shouldShowExplorationToolRawContent(tool) && tool.displayType === 'diff'
@@ -432,11 +454,18 @@
             <template v-else>
               <div
                 class="tool-line title-wrap expandable"
-                :class="{ 'tool-rejected': message.isRejected }"
+                :class="{
+                  'tool-rejected': message.isRejected,
+                  'title-wrap--bash': isBashToolCall(message)
+                }"
                 @click="$emit('toggle-expand', message.displayId)">
                 <cs :name="message.toolDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
-                <span class="tool-name">{{ message.toolDisplay.action }}</span>
-                <span class="tool-target">{{ message.toolDisplay.target }}</span>
+                <span class="tool-name" :class="{ 'tool-name--bash': isBashToolCall(message) }">{{
+                  message.toolDisplay.action
+                }}</span>
+                <span v-if="getToolTitleTarget(message)" class="tool-target">{{
+                  getToolTitleTarget(message)
+                }}</span>
                 <cs v-if="message.isApproved" name="check" size="14px" class="approved-icon" />
               </div>
               <!-- Hide summary when expanded -->
@@ -449,6 +478,12 @@
                 <span class="expand-hint">(click to expand)</span>
               </div>
               <div v-if="isMessageExpanded(message)" class="tool-detail">
+                <pre
+                  v-if="isBashToolCall(message)"
+                  class="bash-command"
+                  aria-label="Bash command"><code
+                    class="hljs"
+                    v-html="getHighlightedBashCommand(message)"></code></pre>
                 <!-- Tool Stream Output (for bash commands) -->
                 <div
                   v-if="
@@ -823,6 +858,7 @@
 import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
+import hljs from 'highlight.js'
 import { shouldRenderSubAgentCard } from '@/composables/workflow/messageProjectionRules'
 import { normalizeShellCommandForDisplay } from '@/composables/workflow/toolDisplay'
 import ApprovalDialog from './ApprovalDialog.vue'
@@ -1197,6 +1233,30 @@ const getToolCallArguments = message => {
     }
   }
   return typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : null
+}
+
+const isBashToolCall = message =>
+  String(message?.name || getMessageToolName(message)).toLowerCase() === 'bash'
+
+const getBashCommand = message => {
+  const args = message?.args || getToolCallArguments(message) || {}
+  return String(args.command || message?.toolDisplay?.target || message?.target || '').trim()
+}
+
+const getToolTitleTarget = message => message?.toolDisplay?.target || message?.target || ''
+
+const getHighlightedBashCommand = message => {
+  const command = getBashCommand(message)
+  if (!command) return ''
+
+  try {
+    return hljs.highlight(command, { language: 'bash' }).value
+  } catch {
+    return command.replace(/[&<>"']/g, char => {
+      const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+      return entities[char]
+    })
+  }
 }
 
 const decodeCompatJsonPayload = value => {

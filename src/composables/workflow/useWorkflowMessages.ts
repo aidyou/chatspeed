@@ -628,6 +628,8 @@ export function useWorkflowMessages(options = {}) {
                         : ''
                   return {
                     id: `${message.id || message.stepIndex || 'exploration'}:${toolIndex}`,
+                    name,
+                    args,
                     icon,
                     toolType,
                     action,
@@ -1398,7 +1400,7 @@ export function useWorkflowMessages(options = {}) {
         return {
           icon: resolveWorkflowToolIcon(name, 'terminal'),
           toolType: 'tool-bash',
-          action: `Run ${cmd}`,
+          action: cmd ? `Run ${cmd}` : 'Run',
           target: ''
         }
       },
