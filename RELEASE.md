@@ -2,6 +2,30 @@
 
 # Release Notes
 
+## [2.0.6]
+
+### 🪄 Improvements
+
+- **Workflow approval details and streaming performance**:
+  - Approval prompts in Workflow now include clearer tool names and argument details, making pending confirmations easier to understand before approving.
+  - Improved streaming render performance and memory handling during long-running Workflow sessions for smoother incremental output.
+- **Proxy stats interaction polish**:
+  - Refined the proxy stats table layout and model display controls for quicker comparison and better readability.
+
+### 🐞 Bug Fixes
+
+- **Workflow streaming, rewind, and pending-state stability**:
+  - Fixed several Workflow edge cases around stream rewinds, duplicate display IDs, approved plan state syncing, and final review pending projection.
+  - Improved consistency when recovering and rendering in-progress Workflow messages during long sessions.
+- **Manual update flow and progress feedback**:
+  - Refined the manual update flow so update progress and related status transitions behave more consistently.
+- **Settings, shortcuts, and window activation**:
+  - Fixed issues in shortcut configuration and related window activation behavior in settings.
+- **Proxy stats model switching and entry navigation**:
+  - Fixed synchronization issues between proxy stats model switching and related entry navigation paths.
+
+---
+
 ## [2.0.5]
 
 ### 🪄 Improvements

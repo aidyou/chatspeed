@@ -309,7 +309,52 @@
     </el-table>
 
     <div class="charts-section">
-      <!-- 1. Trend charts in Tabs (Token first) -->
+      <!-- 1. Distribution charts in Tabs -->
+      <div class="charts-row">
+        <div class="chart-card tab-chart">
+          <el-tabs v-model="activeDistributionTab" type="border-card">
+            <el-tab-pane
+              :label="$t('settings.proxy.stats.modelCostUsageTitle')"
+              name="modelCostUsage">
+              <div class="tab-chart-content">
+                <div
+                  v-show="activeDistributionTab === 'modelCostUsage'"
+                  id="model-cost-usage-bar"></div>
+              </div>
+            </el-tab-pane>
+            <el-tab-pane
+              :label="$t('settings.proxy.stats.modelTokenUsageTitle')"
+              name="modelTokenUsage">
+              <div class="tab-chart-content">
+                <div
+                  v-show="activeDistributionTab === 'modelTokenUsage'"
+                  id="model-token-usage-bar"></div>
+              </div>
+            </el-tab-pane>
+            <el-tab-pane :label="$t('settings.proxy.stats.modelUsageTitle')" name="modelUsage">
+              <div class="tab-chart-content">
+                <div v-show="activeDistributionTab === 'modelUsage'" id="model-usage-bar"></div>
+              </div>
+            </el-tab-pane>
+            <el-tab-pane
+              :label="$t('settings.proxy.stats.providerTokenUsageTitle')"
+              name="providerTokenUsage">
+              <div class="tab-chart-content">
+                <div
+                  v-show="activeDistributionTab === 'providerTokenUsage'"
+                  id="provider-token-usage-bar"></div>
+              </div>
+            </el-tab-pane>
+            <el-tab-pane :label="$t('settings.proxy.stats.errorDistTitle')" name="errorDist">
+              <div class="tab-chart-content">
+                <div v-show="activeDistributionTab === 'errorDist'" id="error-dist-bar"></div>
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+        </div>
+      </div>
+
+      <!-- 2. Trend charts in Tabs (Token first) -->
       <div class="charts-row">
         <div class="chart-card tab-chart">
           <el-tabs v-model="activeTrendTab" type="border-card">
@@ -330,51 +375,6 @@
                 <div
                   v-show="activeTrendTab === 'dailyRequests'"
                   id="daily-requests-dual-axis"></div>
-              </div>
-            </el-tab-pane>
-          </el-tabs>
-        </div>
-      </div>
-
-      <!-- 2. Distribution charts in Tabs -->
-      <div class="charts-row">
-        <div class="chart-card tab-chart">
-          <el-tabs v-model="activeDistributionTab" type="border-card">
-            <el-tab-pane
-              :label="$t('settings.proxy.stats.modelTokenUsageTitle')"
-              name="modelTokenUsage">
-              <div class="tab-chart-content">
-                <div
-                  v-show="activeDistributionTab === 'modelTokenUsage'"
-                  id="model-token-usage-bar"></div>
-              </div>
-            </el-tab-pane>
-            <el-tab-pane
-              :label="$t('settings.proxy.stats.modelCostUsageTitle')"
-              name="modelCostUsage">
-              <div class="tab-chart-content">
-                <div
-                  v-show="activeDistributionTab === 'modelCostUsage'"
-                  id="model-cost-usage-bar"></div>
-              </div>
-            </el-tab-pane>
-            <el-tab-pane :label="$t('settings.proxy.stats.modelUsageTitle')" name="modelUsage">
-              <div class="tab-chart-content">
-                <div v-show="activeDistributionTab === 'modelUsage'" id="model-usage-bar"></div>
-              </div>
-            </el-tab-pane>
-            <el-tab-pane
-              :label="$t('settings.proxy.stats.providerTokenUsageTitle')"
-              name="providerTokenUsage">
-              <div class="tab-chart-content">
-                <div
-                  v-show="activeDistributionTab === 'providerTokenUsage'"
-                  id="provider-token-usage-bar"></div>
-              </div>
-            </el-tab-pane>
-            <el-tab-pane :label="$t('settings.proxy.stats.errorDistTitle')" name="errorDist">
-              <div class="tab-chart-content">
-                <div v-show="activeDistributionTab === 'errorDist'" id="error-dist-bar"></div>
               </div>
             </el-tab-pane>
           </el-tabs>
@@ -470,7 +470,7 @@ const kpiData = ref({
 const activeTrendTab = ref('dailyTokens')
 
 // Active tab for distribution charts
-const activeDistributionTab = ref('modelTokenUsage')
+const activeDistributionTab = ref('modelCostUsage')
 
 let modelBarChart = null
 let modelCostBarChart = null
@@ -608,6 +608,16 @@ const getCommonAxisConfig = () => {
   }
 }
 
+const getBarLabelConfig = formatter => ({
+  position: 'middle',
+  layout: [{ type: 'interval-adjust-position' }, { type: 'interval-hide-overlap' }],
+  style: {
+    fill: '#fff',
+    fontWeight: 500
+  },
+  formatter
+})
+
 // Calculate KPI data from daily stats and model usage stats
 const calculateKPI = (modelUsage = []) => {
   if (!dailyStats.value || dailyStats.value.length === 0) {
@@ -657,9 +667,7 @@ const enrichProviderRows = rows =>
 
 const buildProviderAggregationKey = row => {
   const activeModel =
-    modelColumnMode.value === 'backend'
-      ? row.backendModel || '-'
-      : row.clientModel || '-'
+    modelColumnMode.value === 'backend' ? row.backendModel || '-' : row.clientModel || '-'
 
   return [
     row.providerId ?? '',
@@ -849,13 +857,10 @@ const updateCharts = async () => {
               {
                 geometry: 'column',
                 color: getCssVar('--cs-info-color') || '#409eff',
-                label: {
-                  position: 'middle',
-                  formatter: datum => {
-                    const dayCount = dailyStats.value?.length || 0
-                    return dayCount <= 5 ? formatNumber(datum.value) : ''
-                  }
-                }
+                label: getBarLabelConfig(datum => {
+                  const dayCount = dailyStats.value?.length || 0
+                  return dayCount <= 5 ? formatNumber(datum.value) : ''
+                })
               },
               {
                 geometry: 'line',
@@ -953,14 +958,10 @@ const updateCharts = async () => {
                   getCssVar('--cs-info-color') || '#409eff',
                   getCssVar('--cs-warning-color') || '#e6a23c'
                 ],
-                label: {
-                  position: 'middle',
-                  layout: [{ type: 'interval-adjust-position' }, { type: 'interval-hide-overlap' }],
-                  formatter: datum => {
-                    const dayCount = dailyStats.value?.length || 0
-                    return dayCount <= 5 ? formatTokens(datum.value) : ''
-                  }
-                }
+                label: getBarLabelConfig(datum => {
+                  const dayCount = dailyStats.value?.length || 0
+                  return dayCount <= 5 ? formatTokens(datum.value) : ''
+                })
               },
               {
                 geometry: 'line',
@@ -1095,10 +1096,7 @@ const updateCharts = async () => {
             yAxis: {
               ...getCommonAxisConfig()
             },
-            label: {
-              position: 'right',
-              formatter: datum => formatNumber(datum.value)
-            },
+            label: getBarLabelConfig(datum => formatNumber(datum.value)),
             tooltip: {
               formatter: datum => {
                 return { name: datum.type, value: formatNumber(datum.value) }
@@ -1121,6 +1119,7 @@ const updateCharts = async () => {
       }, new Map())
     )
       .map(([type, value]) => ({ type, value: Number(value) }))
+      .filter(item => item.value !== 0)
       .sort((a, b) => b.value - a.value)
       .slice(0, 10)
 
@@ -1143,10 +1142,7 @@ const updateCharts = async () => {
             yAxis: {
               ...getCommonAxisConfig()
             },
-            label: {
-              position: 'right',
-              formatter: datum => formatCurrency(datum.value)
-            },
+            label: getBarLabelConfig(datum => formatCurrency(datum.value)),
             tooltip: {
               formatter: datum => {
                 return { name: datum.type, value: formatCurrency(datum.value) }
@@ -1196,10 +1192,7 @@ const updateCharts = async () => {
             yAxis: {
               ...getCommonAxisConfig()
             },
-            label: {
-              position: 'right',
-              formatter: datum => formatTokens(datum.value)
-            },
+            label: getBarLabelConfig(datum => formatTokens(datum.value)),
             tooltip: {
               formatter: datum => {
                 return { name: datum.type, value: formatTokens(datum.value) }
@@ -1248,10 +1241,7 @@ const updateCharts = async () => {
             yAxis: {
               ...getCommonAxisConfig()
             },
-            label: {
-              position: 'right',
-              formatter: datum => formatTokens(datum.value)
-            },
+            label: getBarLabelConfig(datum => formatTokens(datum.value)),
             tooltip: {
               formatter: datum => {
                 return { name: datum.type, value: formatTokens(datum.value) }
@@ -1290,10 +1280,7 @@ const updateCharts = async () => {
             yAxis: {
               ...getCommonAxisConfig()
             },
-            label: {
-              position: 'right',
-              formatter: datum => formatNumber(datum.value)
-            },
+            label: getBarLabelConfig(datum => formatNumber(datum.value)),
             tooltip: {
               formatter: datum => {
                 return { name: datum.type, value: formatNumber(datum.value) }
@@ -1398,12 +1385,9 @@ watch(autoRefreshEnabled, val => {
   }
 })
 
-watch(
-  modelColumnMode,
-  () => {
-    rebuildProviderStats()
-  }
-)
+watch(modelColumnMode, () => {
+  rebuildProviderStats()
+})
 
 watch(
   () => modelStore.providers,
