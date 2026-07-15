@@ -1398,7 +1398,7 @@ export function useWorkflowMessages(options = {}) {
         return {
           icon: resolveWorkflowToolIcon(name, 'terminal'),
           toolType: 'tool-bash',
-          action: `Bash: ${cmd}`,
+          action: `Run ${cmd}`,
           target: ''
         }
       },
@@ -1576,9 +1576,7 @@ export function useWorkflowMessages(options = {}) {
     // 2. Format using standard rules
     const formatted = formatToolTitle(name, args)
 
-    // 3. Robust Priority:
-    // If backend provided a title explicitly, use it as the main action.
-    // This is crucial for results (observations) where original tool_call might be obscured.
+    // 3. Use backend titles when available, except Bash which always keeps the normalized command label.
     let finalAction = formatted.action
     let finalTarget = formatted.target
     let finalIcon = formatted.icon
@@ -1587,7 +1585,7 @@ export function useWorkflowMessages(options = {}) {
     if (name === 'complete_workflow_with_summary') {
       finalAction = t('workflow.finishTask')
       finalTarget = ''
-    } else if (typeof meta.title === 'string' && meta.title.trim()) {
+    } else if (name !== 'bash' && typeof meta.title === 'string' && meta.title.trim()) {
       finalAction = normalizeToolDisplayText(removeSystemReminder(meta.title), displayRoots())
       const normalizedFormattedAction = normalizeToolDisplayText(formatted.action || '', displayRoots())
       const normalizedFinalAction = normalizeToolDisplayText(finalAction || '', displayRoots())

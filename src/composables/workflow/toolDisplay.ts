@@ -2,24 +2,29 @@ import i18n from '@/i18n'
 
 const normalizeSlash = (value: string) => value.replace(/\\/g, '/')
 
-const stripTrailingSlash = (value: string) => value.replace(/\/+$/, '')
+const stripTrailingSlash = (value: string) => {
+  const stripped = value.replace(/\/+$/, '')
+  return stripped || '/'
+}
 
-const getPrimaryRoot = (roots?: string[]) => {
-  const root = (roots || []).find(candidate => typeof candidate === 'string' && candidate.trim())
-  return root ? stripTrailingSlash(normalizeSlash(root.trim())) : ''
+const getMatchingRoot = (path: string, roots?: string[]) => {
+  return (roots || [])
+    .filter(candidate => typeof candidate === 'string' && candidate.trim())
+    .map(candidate => stripTrailingSlash(normalizeSlash(candidate.trim())))
+    .filter(root => root === '/' || path === root || path.startsWith(`${root}/`))
+    .sort((left, right) => right.length - left.length)[0]
 }
 
 export const formatDisplayPath = (path: string, roots?: string[]) => {
   if (!path || typeof path !== 'string') return path
   const normalized = normalizeSlash(path.trim())
-  const primaryRoot = getPrimaryRoot(roots)
+  const matchingRoot = getMatchingRoot(normalized, roots)
 
-  if (primaryRoot) {
-    if (normalized === primaryRoot) return '.'
-    if (normalized.startsWith(`${primaryRoot}/`)) {
-      return normalized.slice(primaryRoot.length + 1) || '.'
-    }
-    return normalized
+  if (matchingRoot) {
+    if (normalized === matchingRoot) return '.'
+    return matchingRoot === '/'
+      ? normalized.slice(1) || '.'
+      : normalized.slice(matchingRoot.length + 1) || '.'
   }
 
   if (!normalized.startsWith('/')) return normalized

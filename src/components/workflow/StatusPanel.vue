@@ -502,7 +502,10 @@ import { useModelStore } from '@/stores/model'
 import { useSettingStore } from '@/stores/setting'
 import { useSubAgentSummaries } from '@/composables/workflow/useSubAgentSummaries'
 import { resolveWorkflowToolIcon } from '@/composables/workflow/toolIcons'
-import { normalizeToolDisplayText } from '@/composables/workflow/toolDisplay'
+import {
+  normalizeShellCommandForDisplay,
+  normalizeToolDisplayText
+} from '@/composables/workflow/toolDisplay'
 import { invokeWrapper } from '@/libs/tauri'
 
 const { t } = useI18n()
@@ -612,8 +615,12 @@ const getModelDisplayName = modelConfig => {
 
 const workflowModels = computed(() => currentWorkflow.value?.agentConfig?.models || {})
 const displayRoots = computed(() => {
-  const paths = currentWorkflow.value?.agentConfig?.allowedPaths
-  return Array.isArray(paths) ? paths.filter(path => typeof path === 'string' && path.trim()) : []
+  const workflow = currentWorkflow.value
+  const paths = [
+    ...(Array.isArray(workflow?.allowedPaths) ? workflow.allowedPaths : []),
+    ...(Array.isArray(workflow?.agentConfig?.allowedPaths) ? workflow.agentConfig.allowedPaths : [])
+  ]
+  return [...new Set(paths.filter(path => typeof path === 'string' && path.trim()))]
 })
 const workflowPhase = computed(() =>
   String(currentWorkflow.value?.agentConfig?.phase || '').toLowerCase() === 'planning'
@@ -826,7 +833,24 @@ const removeSystemReminder = content => {
   return content.replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '').trim()
 }
 
+const getBashCommand = metadata => {
+  const toolCall = metadata.tool_call || {}
+  const rawArguments =
+    metadata.arguments || toolCall.function?.arguments || toolCall.arguments || {}
+
+  if (typeof rawArguments === 'string') {
+    try {
+      return JSON.parse(rawArguments)?.command || ''
+    } catch {
+      return ''
+    }
+  }
+
+  return rawArguments?.command || ''
+}
+
 const getToolInfo = (name, metadata = {}, roots = []) => {
+  const toolName = String(name || '').toLowerCase()
   const iconMap = {
     read_file: { icon: resolveWorkflowToolIcon('read_file', 'file'), toolType: 'tool-file' },
     write_file: { icon: resolveWorkflowToolIcon('write_file', 'file'), toolType: 'tool-file' },
@@ -848,14 +872,19 @@ const getToolInfo = (name, metadata = {}, roots = []) => {
     complete_workflow_with_summary: { icon: 'check-circle', toolType: 'tool-todo' }
   }
 
-  const info = iconMap[name] || {
-    icon: resolveWorkflowToolIcon(name, 'tool'),
+  const info = iconMap[toolName] || {
+    icon: resolveWorkflowToolIcon(toolName, 'tool'),
     toolType: 'tool-system'
   }
 
+  const shortName =
+    toolName === 'bash'
+      ? `Run ${normalizeShellCommandForDisplay(getBashCommand(metadata), roots)}`
+      : normalizeToolDisplayText(metadata.title || toolName.replace(/_/g, ' '), roots)
+
   return {
     ...info,
-    shortName: normalizeToolDisplayText(metadata.title || name.replace(/_/g, ' '), roots)
+    shortName
   }
 }
 
@@ -884,7 +913,8 @@ const recentOperations = computed(() => {
       .map(tool => {
         const meta = {
           title: tool.title,
-          summary: tool.summary
+          summary: tool.summary,
+          arguments: tool.arguments
         }
         const { icon, toolType, shortName } = getToolInfo(
           tool.toolName || 'Tool',

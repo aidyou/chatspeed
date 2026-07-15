@@ -824,6 +824,7 @@ import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
 import { shouldRenderSubAgentCard } from '@/composables/workflow/messageProjectionRules'
+import { normalizeShellCommandForDisplay } from '@/composables/workflow/toolDisplay'
 import ApprovalDialog from './ApprovalDialog.vue'
 import FilePreviewDiff from './FilePreviewDiff.vue'
 import MarkdownSimple from './MarkdownSimple.vue'
@@ -1577,11 +1578,20 @@ const getTodoToolStatusText = message => {
   )
 }
 
+const getWorkflowDisplayRoots = () => {
+  const workflow = workflowStore.currentWorkflow
+  const roots = [
+    ...(Array.isArray(workflow?.allowedPaths) ? workflow.allowedPaths : []),
+    ...(Array.isArray(workflow?.agentConfig?.allowedPaths) ? workflow.agentConfig.allowedPaths : [])
+  ]
+  return [...new Set(roots.filter(Boolean))]
+}
+
 const getBashCommandPreview = message => {
   const args = getToolCallArguments(message) || {}
   const command =
     args.command || message?.toolDisplay?.target || message?.toolDisplay?.summary || ''
-  return truncateToolGroupText(command, 60)
+  return truncateToolGroupText(normalizeShellCommandForDisplay(command, getWorkflowDisplayRoots()), 60)
 }
 
 const getMutationToolPreviewData = message => {

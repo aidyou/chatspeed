@@ -187,10 +187,21 @@ const getToolPath = tool => {
   return rawPath ? formatDisplayPath(String(rawPath)) : ''
 }
 
+const getWorkflowDisplayRoots = () => {
+  const workflow = workflowStore.currentWorkflow
+  const roots = [
+    ...(Array.isArray(workflow?.allowedPaths) ? workflow.allowedPaths : []),
+    ...(Array.isArray(workflow?.agentConfig?.allowedPaths) ? workflow.agentConfig.allowedPaths : [])
+  ]
+  return [...new Set(roots.filter(Boolean))]
+}
+
 const getToolCommand = tool => {
   const args = tool?.arguments || {}
   const command = args.command || ''
-  return command ? normalizeShellCommandForDisplay(String(command)) : ''
+  return command
+    ? `Run ${normalizeShellCommandForDisplay(String(command), getWorkflowDisplayRoots())}`
+    : ''
 }
 
 const getToolLabel = tool => truncateText(tool?.title || tool?.summary || '', 72)

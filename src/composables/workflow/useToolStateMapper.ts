@@ -220,7 +220,7 @@ function generateTitle(toolName: string, args?: Record<string, any>): string {
       const path = formatDisplayPath(a.path || '')
       return path ? `Grep "${a.pattern || a.query || ''}" in ${path}` : `Grep "${a.pattern || a.query || ''}"`
     },
-    bash: a => `Bash: ${normalizeShellCommandForDisplay(a.command || '')}`,
+    bash: a => `Run ${normalizeShellCommandForDisplay(a.command || '')}`,
     web_fetch: a => `Fetch ${a.url || ''}`,
     web_search: a => `Search "${a.query || ''}"`,
     todo_create: () => 'Create Todo',
@@ -320,7 +320,9 @@ export function deriveToolViewState(
 
     // Update only when new status priority >= existing priority
     if (!existing || newPriority >= existingPriority) {
-      const title = normalizeToolDisplayText(meta.title || generateTitle(toolName, args))
+      const title = normalizeToolDisplayText(
+        toolName === 'bash' ? generateTitle(toolName, args) : meta.title || generateTitle(toolName, args)
+      )
       const summary = getToolStatusSummary(
         toolName,
         status === 'pending'
