@@ -1252,7 +1252,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                             reason
                         ),
                         llm_content: None,
-                        title: format!("Bash({})", command_str),
+                        title: format!("Run({})", command_str),
                         summary: "Blocked".to_string(),
                         is_error: true,
                         error_type: Some("Security".to_string()),

@@ -8,6 +8,7 @@
 
 - **Workflow approval details and streaming performance**:
   - Approval prompts in Workflow now include clearer tool names and argument details, making pending confirmations easier to understand before approving.
+  - The status notifier now identifies pending approvals, file creation/editing, command execution, generic tool execution, and completed tools with contextual text and matching icons.
   - Improved streaming render performance and memory handling during long-running Workflow sessions for smoother incremental output.
 - **Proxy stats interaction polish**:
   - Refined the proxy stats table layout and model display controls for quicker comparison and better readability.

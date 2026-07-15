@@ -500,7 +500,7 @@ impl ObservationReinforcer {
             }
             TOOL_BASH => {
                 let cmd = args["command"].as_str().unwrap_or("");
-                format!("Bash {}", cmd)
+                format!("Run {}", cmd)
             }
             TOOL_TODO_CREATE => {
                 if let Some(tasks) = args["tasks"].as_array() {

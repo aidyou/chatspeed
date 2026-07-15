@@ -282,7 +282,7 @@ export function deriveToolViewState(
                 status: autoExecute ? 'approved_running' : 'pending',
                 title: generateTitle(toolName, args),
                 summary: pendingSummary,
-                arguments: args,
+                ...(args ? { arguments: args } : {}),
                 approvalStatus: autoExecute ? 'approved' : 'pending',
                 createdAt: message.createdAt || now,
               updatedAt: now,
