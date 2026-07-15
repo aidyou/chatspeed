@@ -143,12 +143,12 @@
     "save": "Save",
     "saveSuccess": "Save Successful",
     "search": "Search",
-    "stop": "Stop",
-    "to": "to",
     "unpin": "Unpin",
     "updateButtonText": "Update",
     "uploadFailed": "File upload failed",
-    "warning": "Warning"
+    "warning": "Warning",
+    "saveFailed": "Failed to save",
+    "operationFailed": "Operation failed: {error}"
   },
   "menu": {
     "about": "About",
@@ -192,7 +192,6 @@
       "authorizedPathsAdd": "Add Directory",
       "authorizedPathsTip": "The agent will only be able to read and write files in these directories (and their subdirectories).",
       "autoApprove": "Auto Approve Tools",
-      "autonomousMode": "Autonomous Mode",
       "availableTools": "Available Tools",
       "basicInfo": "Basic Info",
       "copy": "Copy Agent",
@@ -237,7 +236,6 @@
       "selectAvailableTools": "Select Available Tools",
       "selectDirectory": "Select Directory",
       "selectedSkills": "Enabled Skills",
-      "selectSkills": "Select Skills",
       "shellDecisionAllow": "Allow",
       "shellDecisionDeny": "Deny",
       "shellDecisionReview": "Review",
@@ -378,16 +376,6 @@
       "visionModel": "Vision Model",
       "visionModelRequired": "Please configure a vision model in settings first to support image analysis.",
       "visionModelTooltip": "Select a vision model for image analysis. When sending images in chat, this model will be used to analyze the image content.",
-      "websearchModel": "Web Search Model",
-      "websearchModelTooltip": "Used to generate search keywords from your conversations. Please do not use inference models, otherwise it will be very slow!",
-      "wordSelectionToolbar": "AI Word Selection Toolbar",
-      "workflow": {
-        "general": "General Model",
-        "generalTooltip": "Used for simple tasks in the workflow, such as text summarization, information extraction, etc.",
-        "reasoning": "Reasoning Model",
-        "reasoningTooltip": "Mainly used for complex tasks in the workflow, including planning, summarizing analysis results, etc."
-      },
-      "workflowSettings": "Workflow Settings",
       "workflowWindowVisibleShortcut": "Workflow Window"
     },
     "mcp": {
@@ -439,9 +427,6 @@
       "restartFailed": "Failed to restart MCP server \"{name}\": {error}",
       "restartSuccess": "MCP server \"{name}\" has been restarted.",
       "statusError": "Startup error: {error}",
-      "statusRunning": "Running",
-      "statusStarting": "Starting",
-      "statusStopped": "Not started",
       "statusUnknown": "Unknown",
       "title": "MCP Server Management",
       "updateFailed": "Failed to update MCP server: {error}",
@@ -459,7 +444,10 @@
         "typeRequired": "Server type cannot be empty.",
         "urlPlaceholder": "URL contains placeholders: {placeholders}",
         "urlRequired": "SSE type requires a URL."
-      }
+      },
+      "statusStarting": "Starting",
+      "statusRunning": "Running",
+      "statusStopped": "Not started"
     },
     "model": {
       "add": "Add Model",
@@ -491,12 +479,10 @@
       "deleteTitle": "Delete Model",
       "disable": "Disable",
       "disabled": "Disabled",
-      "disableFailed": "Failed to disable model \"{name}\": {error}",
       "disableSuccess": "Model \"{name}\" has been disabled.",
       "documentation": "Documentation",
       "edit": "Edit Model",
       "enable": "Enable",
-      "enableFailed": "Failed to enable model \"{name}\": {error}",
       "enableSuccess": "Model \"{name}\" has been enabled.",
       "frequencyPenalty": "Frequency Penalty",
       "frequencyPenaltyPlaceholder": "Adjusts the frequency of the model repeating the same words. A higher value results in less repetition. Set to 0 or leave blank to disable.",
@@ -550,14 +536,15 @@
       "supportsResponsesApi": "Supports Responses API",
       "temperature": "Temperature",
       "temperaturePlaceholder": "Controls the randomness of the model's output. A higher value results in more random output.",
-      "thinkingBudgetTokens": "Thinking Budget",
       "thinkingLevel": "Thinking Level",
       "topK": "Top K",
       "topKPlaceholder": "Controls the model's selection from the K most likely words. A smaller value results in more deterministic output. Set to 0 or leave blank to disable. OpenAi compatible interfaces do not support this.",
       "topP": "Top P",
       "topPPlaceholder": "Controls the model's selection from the P most likely words. A smaller value results in more deterministic output. Set to 0 or leave blank to disable.",
       "ungrouped": "Ungrouped",
-      "updateSuccess": "Model updated"
+      "updateSuccess": "Model updated",
+      "enableFailed": "Failed to enable model \"{name}\": {error}",
+      "disableFailed": "Failed to disable model \"{name}\": {error}"
     },
     "proxy": {
       "addNow": "Add Now",
@@ -648,7 +635,6 @@
         "title": "Proxy Settings"
       },
       "stats": {
-        "activeModels": "Active Models",
         "allTime": "All Time",
         "autoRefresh": "Auto Refresh",
         "backendModel": "Backend Model",
@@ -686,14 +672,12 @@
         "outputTokens": "Output Tokens",
         "protocol": "Protocol",
         "provider": "Provider",
-        "providers": "Providers",
         "providerTokenUsageTitle": "Provider Token Usage Distribution",
         "requests": "Requests",
         "statusCode": "Status Code",
         "title": "Proxy Statistics",
         "today": "Today",
         "toolCompat": "Compat Mode",
-        "topProvider": "Top Provider",
         "totalRequests": "Total Requests",
         "totalTokens": "Total Tokens",
         "yes": "Yes"
@@ -701,8 +685,7 @@
       "tabs": {
         "groups": "Proxy Groups",
         "servers": "Proxy Services",
-        "settings": "Proxy Settings",
-        "stats": "Statistics"
+        "settings": "Proxy Settings"
       },
       "title": "Proxy Server Config",
       "updateSuccess": "Proxy config updated successfully!",
@@ -799,7 +782,6 @@
       "importFailed": "Failed to import skill: {error}",
       "importSuccess": "Skill imported",
       "loadPresetError": "Failed to load preset skill",
-      "logo": "Skill Logo",
       "manualAdd": "Add Manually",
       "manualAddDesc": "Customize personalized skills",
       "name": "Skill Name",
@@ -850,9 +832,6 @@
   "workflow": {
     "allowedShellCommands": "Allowed Shell Commands",
     "approval": {
-      "backgroundMessage": "\"{workflow}\" is waiting for approval: {action}",
-      "backgroundTitle": "Background Approval Needed",
-      "queueButton": "Approval",
       "rejectionMessageLabel": "Rejection Note",
       "rejectionMessagePlaceholder": "If you do not want this action to run, you can optionally explain why."
     },
@@ -860,8 +839,6 @@
     "approvePlan": "Approve Plan",
     "askUser": {
       "answerLabel": "Answer:",
-      "backgroundMessage": "\"{workflow}\" is waiting for your input",
-      "backgroundTitle": "Background Input Needed",
       "customLabel": "Custom input",
       "customPlaceholder": "I want to type...",
       "responseTitle": "Submitted response",
@@ -892,13 +869,11 @@
       "executionDate": "Execution date",
       "executionTime": "Execution time",
       "frequency": "Frequency",
-      "history": "Run history",
       "interval": "Interval",
       "intervalMinutes": "Interval minutes",
       "model": "Model",
       "once": "Once",
       "prompt": "Prompt",
-      "promptFile": "Prompt file",
       "promptFileHint": "When a prompt file is selected, its content overrides the prompt at runtime.",
       "promptFileLabel": "Prompt file",
       "runNow": "Run now",
@@ -986,7 +961,6 @@
     "exploration": {
       "reads": "{count} reads",
       "searches": "{count} searches",
-      "thought": "Thought",
       "thoughts": "{count} thoughts",
       "title": "Code Exploration"
     },
@@ -1020,26 +994,20 @@
     "finalAuditTooltip": "AI automatically performs quality review before task completion",
     "finalAuditDisabled": "Final audit mode disabled",
     "finalAuditEnabled": "Final audit mode enabled",
-    "finalReviewPending": "Final review",
     "finishTask": "Finish task",
     "historyTab": "Conversation",
     "installedSkillsGroup": "Installed Skills",
-    "muteApprovalNotifications": "Mute approval sound",
-    "muteCompletionNotifications": "Mute completion sound",
     "newWorkflow": "New Workflow",
     "noAgentError": "No agent available. Please create an agent in Settings first.",
     "noAutoApprovedItems": "No auto-approved items",
     "notificationSound": "Sound notifications",
-    "pause": "Pause",
     "planningModeTooltip": "Planning Mode: AI research and strategy before execution",
     "planningModeDisabled": "Planning mode disabled",
     "planningModeEnabled": "Planning mode enabled",
     "rejected": "Rejected",
     "retrying": "Request too fast, retrying (attempt {attempt}/{total}), waiting {seconds} seconds...",
-    "selectAgentFirst": "Please select an agent first",
     "sessionLost": "Session lost. Please restart or refresh the page.",
     "shellPolicyClickRemove": "Click × to remove items",
-    "shellPolicyNote": "Configured in Agent settings",
     "skillsConfigTitle": "Workflow Skills",
     "skillsSearchEmpty": "No matching skills.",
     "skillsSearchPlaceholder": "Search by skill name",
@@ -1047,7 +1015,6 @@
     "statusPanel": {
       "active": "Active",
       "childAgents": "Child Agents",
-      "childRunning": "Running",
       "contextUsage": "Context Usage",
       "direct": "Direct",
       "convergenceScore": "Convergence",
@@ -1086,12 +1053,11 @@
       "utilityModel": "Utility",
       "verificationCalls": "Verify",
       "workFallback": "Work Fallback",
-      "workModel": "Work"
+      "workModel": "Work",
+      "latestDynamic": "Latest"
     },
-    "stepBudgetExhaustedTitle": "Step Budget Exhausted",
     "stop": "Stop",
     "stopping": "Stopping",
-    "submit_plan": "Submit plan",
     "thinking": "Thinking...",
     "thinkingExpanded": "Thinking (expanded)",
     "thoughtCompleted": "Thought completed",
@@ -1109,11 +1075,33 @@
       "next": "Next",
       "title": "To-do List"
     },
-    "tools": "Tools",
-    "unmuteApprovalNotifications": "Enable approval sound",
-    "unmuteCompletionNotifications": "Enable completion sound",
     "untitled": "Untitled",
     "workflowTitle": "Workflow Title",
-    "written": "Written"
+    "written": "Written",
+    "taskLedger": {
+      "status": {
+        "pending": "Pending",
+        "running": "Running",
+        "error": "Error",
+        "rejected": "Rejected",
+        "success": "Success"
+      },
+      "title": "Task Ledger",
+      "loading": "Loading tasks...",
+      "running": "Running",
+      "tryDifferentFilter": "Try a different filter",
+      "output": "Output",
+      "empty": "No tasks yet",
+      "error": "Error",
+      "pending": "Pending",
+      "result": "Result",
+      "completed": "Completed",
+      "arguments": "Arguments",
+      "locateInChat": "Locate in Chat",
+      "execution": "Execution",
+      "all": "All",
+      "failed": "Failed"
+    },
+    "waitingForUser": "Waiting for user"
   }
 }

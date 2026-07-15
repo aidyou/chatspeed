@@ -19,7 +19,6 @@ chat:
   failed_to_write_file: 'Failed to write file: %{error}'
   invalid_api_protocol: 'Invalid API protocol: %{protocol}'
   note_already_exists: This note already exists, no need to add again
-  search_not_found: Specified search session not found
 command:
   clipboard:
     failed_to_initialize: 'Failed to initialize clipboard: %{error}'
@@ -139,7 +138,6 @@ main:
     failed_to_unregister_existing: 'Failed to unregister existing shortcut: %{error}'
     failed_to_unregister_old: 'Failed to unregister old shortcut: %{error}'
     invalid_format: 'Invalid shortcut format: %{shortcut}'
-  window_not_ready: Window not ready yet
 mcp:
   client:
     config_error_for_server: 'MCP server ''%{server_name}'' configuration error: %{error}'
@@ -149,9 +147,6 @@ mcp:
     http_url_cant_be_empty: MCP HTTP client URL parameter cannot be empty
     list_tools_timeout: Timeout getting tool list for %{name}
     no_running: MCP client '%{client}' not running, please check configuration and restart service
-    sse_service_start_failed: 'Failed to start SSE service (URL: %{url}), reason: %{error}'
-    sse_transport_start_failed: 'Failed to start SSE transport (URL: %{url}), reason: %{error}'
-    sse_url_cant_be_empty: SSE client URL parameter cannot be empty
     stdio_args_cant_be_empty: Stdio client args parameter cannot be empty
     stdio_command_cant_be_empty: Stdio client 'Startup Command' parameter cannot be empty
     stdio_command_not_found_no_help: 'Failed to start MCP service: command "%{command}" not found (original error: %{original_error}).
@@ -166,7 +161,6 @@ mcp:
   config:
     name_must_be_non_empty: MCP config name cannot be empty, please enter a valid config name
     sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
-    sse_url_must_be_non_empty: MCP config SSE URL cannot be empty
     stdio_args_must_be_non_empty: MCP config 'Startup Arguments' cannot be empty
     stdio_command_must_be_non_empty: MCP config 'Startup Command' cannot be empty
   error:
@@ -265,7 +259,6 @@ tools:
     state_change_failed: State change failed
     store: Store error
     timeout: Timeout
-  failed_to_get_model: Failed to get %{model_type} model
   function_not_found: 'Tool function not found in workflow: %{name}'
   keyword_must_be_non_empty: Keyword (query) parameter must be non-empty string or non-empty array
   max_retries_exceeded: 'Maximum retry count exceeded: %{item}'
@@ -315,7 +308,6 @@ workflow:
   cannot_access_path: 'Cannot access path: %{path}, because value is not object/array'
   circular_dependency: 'Circular dependency exists between nodes: %{nodes}'
   compression_in_progress: Compressing context...
-  continue: Continue
   dependency_not_found: Node '%{node_id}' depends on node '%{id}' which does not exist
   duplicate_node_id: 'Duplicate node ID: %{id}'
   edge_reference_missing: 'Edge reference does not exist: %{from} -> %{to}'
@@ -331,8 +323,8 @@ workflow:
     other: Other error
     serialization: Serialization error
     store: Store error
+  executing: Executing...
   incomplete_execution: 'Workflow execution incomplete, missing nodes: %{missing}'
-  interrupted_by_restart: Interrupted by application restart
   invalid_array_index: 'Invalid array index: %{index}'
   invalid_graph: 'Invalid graph: %{reason}'
   invalid_loop_input: 'Loop node input must be array or object, but received: %{input}'
@@ -354,8 +346,6 @@ workflow:
   right_value_not_number: Right value is not number type
   self_dependency: Node '%{node_id}' cannot depend on itself
   state_notification_error: Workflow state notification failed
-  stepBudgetExhausted: Current steps exhausted (%{current}/%{max}), but the task is not yet complete. Do you want to continue?
-  stop: Stop
   string_not_supported: 'String type does not support this operation: %{operator}'
   summary:
     edit_file: Edited

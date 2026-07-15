@@ -143,12 +143,12 @@
     "save": "저장",
     "saveSuccess": "저장됨",
     "search": "검색",
-    "stop": "중지",
-    "to": "까지",
     "unpin": "고정 해제",
     "updateButtonText": "업데이트",
     "uploadFailed": "파일 업로드 실패",
-    "warning": "경고"
+    "warning": "경고",
+    "saveFailed": "저장 실패",
+    "operationFailed": "작업 실패: {error}"
   },
   "menu": {
     "about": "정보",
@@ -192,7 +192,6 @@
       "authorizedPathsAdd": "디렉토리 추가",
       "authorizedPathsTip": "에이전트는 이 디렉토리 (및 하위 디렉토리) 의 파일만 읽고 쓸 수 있습니다.",
       "autoApprove": "자동 승인 도구",
-      "autonomousMode": "자율 모드",
       "availableTools": "사용 가능한 도구",
       "basicInfo": "기본 정보",
       "copy": "에이전트 복사",
@@ -237,7 +236,6 @@
       "selectAvailableTools": "사용 가능한 도구 선택",
       "selectDirectory": "디렉토리 선택",
       "selectedSkills": "활성 Skills",
-      "selectSkills": "Skills 선택",
       "shellDecisionAllow": "허용",
       "shellDecisionDeny": "거부",
       "shellDecisionReview": "검토",
@@ -378,16 +376,6 @@
       "visionModel": "비전 모델",
       "visionModelRequired": "이미지 분석을 지원하려면 먼저 설정에서 비전 모델을 구성하십시오.",
       "visionModelTooltip": "이미지 분석용 비전 모델을 선택합니다. 채팅에서 이미지를 보낼 때 이 모델을 사용하여 이미지 내용을 분석합니다.",
-      "websearchModel": "웹 검색 모델",
-      "websearchModelTooltip": "대화 내용을 검색 키워드로 생성하는 데 사용됩니다. 추론 모델을 사용하지 마세요. 속도가 매우 느립니다!",
-      "wordSelectionToolbar": "AI 단어 선택 도구 모음",
-      "workflow": {
-        "general": "일반 모델",
-        "generalTooltip": "텍스트 요약, 정보 추출 등 워크플로우의 간단한 작업에 사용됩니다.",
-        "reasoning": "추론 모델",
-        "reasoningTooltip": "계획, 분석 결과 요약 등 워크플로우의 복잡한 작업에 주로 사용됩니다."
-      },
-      "workflowSettings": "워크플로우 설정",
       "workflowWindowVisibleShortcut": "워크플로우 창"
     },
     "mcp": {
@@ -439,9 +427,6 @@
       "restartFailed": "MCP 서버 \"{name}\"을(를) 다시 시작하지 못했습니다: {error}",
       "restartSuccess": "MCP 서버 \"{name}\"이(가) 다시 시작되었습니다.",
       "statusError": "시작 오류: {error}",
-      "statusRunning": "실행 중",
-      "statusStarting": "시작 중",
-      "statusStopped": "시작되지 않음",
       "statusUnknown": "알 수 없음",
       "title": "MCP 서버 관리",
       "updateFailed": "MCP 서버 업데이트 실패: {error}",
@@ -459,7 +444,10 @@
         "typeRequired": "서버 유형은 비워 둘 수 없습니다.",
         "urlPlaceholder": "URL에 플레이스홀더가 포함되어 있습니다: {placeholders}",
         "urlRequired": "SSE 유형에는 URL이 필요합니다."
-      }
+      },
+      "statusStarting": "시작 중",
+      "statusRunning": "실행 중",
+      "statusStopped": "시작되지 않음"
     },
     "model": {
       "add": "모델 추가",
@@ -490,12 +478,10 @@
       "deleteTitle": "모델 삭제",
       "disable": "비활성화",
       "disabled": "사용 안 함",
-      "disableFailed": "모델 \"{name}\" 비활성화에 실패했습니다: {error}",
       "disableSuccess": "모델 \"{name}\"이(가) 비활성화되었습니다.",
       "documentation": "문서",
       "edit": "모델 수정",
       "enable": "활성화",
-      "enableFailed": "모델 \"{name}\" 활성화에 실패했습니다: {error}",
       "enableSuccess": "모델 \"{name}\"이(가) 활성화되었습니다.",
       "frequencyPenalty": "빈도 패널티",
       "frequencyPenaltyPlaceholder": "모델이 동일한 단어를 반복하는 빈도를 조정합니다. 값이 높을수록 반복이 줄어듭니다. 비활성화하려면 0으로 설정하거나 비워 둡니다.",
@@ -550,14 +536,15 @@
       "supportsResponsesApi": "Responses API 지원",
       "temperature": "온도",
       "temperaturePlaceholder": "모델 출력의 무작위성을 제어합니다. 값이 높을수록 출력이 더 무작위적입니다.",
-      "thinkingBudgetTokens": "사고 예산",
       "thinkingLevel": "사고 강도",
       "topK": "Top K",
       "topKPlaceholder": "모델이 가장 가능성이 높은 K개의 단어 중에서 선택하도록 제어합니다. 값이 작을수록 출력이 더 결정적입니다. 비활성화하려면 0으로 설정하거나 비워 둡니다. OpenAi 호환 인터페이스는 이를 지원하지 않습니다.",
       "topP": "Top P",
       "topPPlaceholder": "모델이 가장 가능성이 높은 P개의 단어 중에서 선택하도록 제어합니다. 값이 작을수록 출력이 더 결정적입니다. 비활성화하려면 0으로 설정하거나 비워 둡니다.",
       "ungrouped": "분류되지 않음",
-      "updateSuccess": "모델 업데이트 완료"
+      "updateSuccess": "모델 업데이트 완료",
+      "enableFailed": "모델 \"{name}\" 활성화에 실패했습니다: {error}",
+      "disableFailed": "모델 \"{name}\" 비활성화에 실패했습니다: {error}"
     },
     "proxy": {
       "addNow": "지금 추가",
@@ -648,7 +635,6 @@
         "title": "프록시 설정"
       },
       "stats": {
-        "activeModels": "활성 모델",
         "allTime": "전체",
         "autoRefresh": "자동 새로고침",
         "backendModel": "백엔드 모델",
@@ -686,14 +672,12 @@
         "outputTokens": "출력",
         "protocol": "프로토콜",
         "provider": "제공자",
-        "providers": "제공자",
         "providerTokenUsageTitle": "공급자 토큰 사용량",
         "requests": "요청 횟수",
         "statusCode": "상태 코드",
         "title": "프록시 통계 정보",
         "today": "오늘",
         "toolCompat": "호환 모드",
-        "topProvider": "인기 모델",
         "totalRequests": "총 요청 수",
         "totalTokens": "총 토큰 수",
         "yes": "예"
@@ -701,8 +685,7 @@
       "tabs": {
         "groups": "프록시 그룹",
         "servers": "프록시 서비스",
-        "settings": "프록시 설정",
-        "stats": "통계 정보"
+        "settings": "프록시 설정"
       },
       "title": "프록시 서버 구성",
       "updateSuccess": "프록시 구성이 성공적으로 업데이트되었습니다!",
@@ -799,7 +782,6 @@
       "importFailed": "스킬 가져오기 실패: {error}",
       "importSuccess": "스킬이 가져와졌습니다.",
       "loadPresetError": "프리셋 스킬 로드 실패",
-      "logo": "스킬 이미지",
       "manualAdd": "직접 추가",
       "manualAddDesc": "개인 설정 스킬 추가",
       "name": "스킬 이름",
@@ -850,9 +832,6 @@
   "workflow": {
     "allowedShellCommands": "허용된 Shell 명령",
     "approval": {
-      "backgroundMessage": "\"{workflow}\" 승인 필요: {action}",
-      "backgroundTitle": "백그라운드 워크플로 승인 대기",
-      "queueButton": "승인",
       "rejectionMessageLabel": "거부 사유",
       "rejectionMessagePlaceholder": "이 작업을 원하지 않으면 이유를 입력하세요."
     },
@@ -860,8 +839,6 @@
     "approvePlan": "계획 승인",
     "askUser": {
       "answerLabel": "답변:",
-      "backgroundMessage": "\"{workflow}\"가 입력을 기다리고 있습니다",
-      "backgroundTitle": "백그라운드 워크플로 입력 대기",
       "customLabel": "직접 입력",
       "customPlaceholder": "직접 입력...",
       "responseTitle": "제출한 선택",
@@ -892,13 +869,11 @@
       "executionDate": "실행일",
       "executionTime": "실행 시간",
       "frequency": "실행 빈도",
-      "history": "실행 기록",
       "interval": "간격",
       "intervalMinutes": "간격(분)",
       "model": "모델",
       "once": "한 번",
       "prompt": "프롬프트",
-      "promptFile": "프롬프트 파일",
       "promptFileHint": "프롬프트 파일을 선택하면 실행 시 파일 내용이 현재 프롬프트를 덮어씁니다.",
       "promptFileLabel": "프롬프트 파일",
       "runNow": "지금 실행",
@@ -986,7 +961,6 @@
     "exploration": {
       "reads": "읽기 {count}회",
       "searches": "검색 {count}회",
-      "thought": "생각",
       "thoughts": "생각 {count}회",
       "title": "코드 탐색"
     },
@@ -1020,26 +994,20 @@
     "finalAuditTooltip": "작업 완료 전 AI 가 자동으로 품질 검토를 수행합니다",
     "finalAuditDisabled": "최종 감사 모드를 껐습니다",
     "finalAuditEnabled": "최종 감사 모드를 켰습니다",
-    "finalReviewPending": "최종 검토 중",
     "finishTask": "작업 완료",
     "historyTab": "대화",
     "installedSkillsGroup": "설치된 Skills",
-    "muteApprovalNotifications": "승인 알림음 끄기",
-    "muteCompletionNotifications": "완료 알림음 끄기",
     "newWorkflow": "새 워크플로우",
     "noAgentError": "사용 가능한 에이전트가 없습니다. 먼저 설정에서 에이전트를 만드세요.",
     "noAutoApprovedItems": "자동 승인 항목이 없습니다",
     "notificationSound": "알림 소리",
-    "pause": "일시정지",
     "planningModeTooltip": "계획 모드: 실행 전 AI 연구 및 전략",
     "planningModeDisabled": "계획 모드를 껐습니다",
     "planningModeEnabled": "계획 모드를 켰습니다",
     "rejected": "거부됨",
     "retrying": "요청이 너무 빈번합니다, 재시도 중 ({attempt}/{total}번째 시도), {seconds}초 대기 중...",
-    "selectAgentFirst": "먼저 에이전트를 선택해주세요",
     "sessionLost": "세션이 끊어졌습니다. 다시 시작하거나 페이지를 새로고침하세요.",
     "shellPolicyClickRemove": "× 를 눌러 제거",
-    "shellPolicyNote": "Agent 설정에서 구성",
     "skillsConfigTitle": "Workflow Skills 설정",
     "skillsSearchEmpty": "일치하는 Skills가 없습니다.",
     "skillsSearchPlaceholder": "Skills 이름으로 검색",
@@ -1047,7 +1015,6 @@
     "statusPanel": {
       "active": "현재",
       "childAgents": "하위 에이전트",
-      "childRunning": "실행 중",
       "contextUsage": "컨텍스트 사용량",
       "direct": "직접",
       "convergenceScore": "수렴",
@@ -1086,12 +1053,11 @@
       "utilityModel": "보조",
       "verificationCalls": "검증",
       "workFallback": "작업 대체",
-      "workModel": "작업"
+      "workModel": "작업",
+      "latestDynamic": "최신"
     },
-    "stepBudgetExhaustedTitle": "단계 소진",
     "stop": "중지",
     "stopping": "중지 중",
-    "submit_plan": "계획 제출",
     "thinking": "사고 중...",
     "thinkingExpanded": "사고 중 (펼침)",
     "thoughtCompleted": "사고 완료",
@@ -1109,11 +1075,33 @@
       "next": "다음",
       "title": "할 일 목록"
     },
-    "tools": "도구",
-    "unmuteApprovalNotifications": "승인 알림음 켜기",
-    "unmuteCompletionNotifications": "완료 알림음 켜기",
     "untitled": "제목 없는 워크플로",
     "workflowTitle": "워크플로우 제목",
-    "written": "작성됨"
+    "written": "작성됨",
+    "taskLedger": {
+      "status": {
+        "pending": "대기 중",
+        "running": "실행 중",
+        "error": "오류",
+        "rejected": "거부됨",
+        "success": "성공"
+      },
+      "title": "작업 목록",
+      "loading": "작업을 불러오는 중...",
+      "running": "실행 중",
+      "tryDifferentFilter": "다른 필터를 사용해 보세요",
+      "output": "출력",
+      "empty": "아직 작업이 없습니다",
+      "error": "오류",
+      "pending": "대기 중",
+      "result": "결과",
+      "completed": "완료됨",
+      "arguments": "인수",
+      "locateInChat": "채팅에서 찾기",
+      "execution": "실행",
+      "all": "전체",
+      "failed": "실패"
+    },
+    "waitingForUser": "사용자 입력 대기 중"
   }
 }

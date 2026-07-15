@@ -21,7 +21,6 @@ chat:
   failed_to_write_file: 'Datei konnte nicht geschrieben werden: %{error}'
   invalid_api_protocol: 'Ungültiges API-Protokoll: %{protocol}'
   note_already_exists: Diese Notiz ist bereits vorhanden und muss nicht erneut hinzugefügt werden
-  search_not_found: Angegebene Suchsitzung nicht gefunden
 command:
   clipboard:
     failed_to_initialize: 'Initialisierung des Clipboards fehlgeschlagen: %{error}'
@@ -143,7 +142,6 @@ main:
     failed_to_unregister_existing: 'Abmeldung des vorhandenen Tastenkürzels fehlgeschlagen: %{error}'
     failed_to_unregister_old: 'Abmeldung des alten Tastenkürzels fehlgeschlagen: %{error}'
     invalid_format: 'Ungültiges Tastenkürzelformat: %{shortcut}'
-  window_not_ready: Fenster ist noch nicht bereit
 mcp:
   client:
     config_error_for_server: 'Konfigurationsfehler für MCP-Server ''%{server_name}'': %{error}'
@@ -153,9 +151,6 @@ mcp:
     http_url_cant_be_empty: URL-Parameter des MCP HTTP-Clients darf nicht leer sein
     list_tools_timeout: Timeout beim Abrufen der Werkzeugliste für %{name}
     no_running: MCP-Client '%{client}' nicht gestartet. Bitte Konfiguration überprüfen und Dienst neu starten.
-    sse_service_start_failed: 'Start des SSE-Dienstes fehlgeschlagen (URL: %{url}), Grund: %{error}'
-    sse_transport_start_failed: 'Start des SSE-Transports fehlgeschlagen (URL: %{url}), Grund: %{error}'
-    sse_url_cant_be_empty: URL-Parameter des SSE-Clients darf nicht leer sein
     stdio_args_cant_be_empty: Args-Parameter des Stdio-Clients dürfen nicht leer sein
     stdio_command_cant_be_empty: Command-Parameter Startbefehl des Stdio-Clients darf nicht leer sein
     stdio_command_not_found_no_help: 'MCP-Dienst konnte nicht gestartet werden: Befehl "%{command}" nicht gefunden (Originalfehler:
@@ -173,7 +168,6 @@ mcp:
   config:
     name_must_be_non_empty: Der MCP-Konfigurationsname darf nicht leer sein. Bitte geben Sie einen gültigen Namen ein.
     sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
-    sse_url_must_be_non_empty: Die SSE-URL der MCP-Konfiguration darf nicht leer sein
     stdio_args_must_be_non_empty: Startparameter der MCP-Konfiguration dürfen nicht leer sein
     stdio_command_must_be_non_empty: Startbefehl der MCP-Konfiguration darf nicht leer sein
   error:
@@ -275,7 +269,6 @@ tools:
     state_change_failed: Statusänderung fehlgeschlagen
     store: Speicherfehler
     timeout: Zeitüberschreitung
-  failed_to_get_model: Abrufen des %{model_type}-Modells fehlgeschlagen
   function_not_found: 'Werkzeugfunktion im Workflow nicht gefunden: %{name}'
   keyword_must_be_non_empty: Keyword(query)-Parameter muss ein nicht leerer String oder ein nicht leeres Array sein
   max_retries_exceeded: 'Maximale Anzahl an Wiederholungsversuchen überschritten: %{item}'
@@ -325,7 +318,6 @@ workflow:
   cannot_access_path: Zugriff auf Pfad %{path} nicht möglich, da Wert kein Objekt/Array ist
   circular_dependency: 'Zirkuläre Abhängigkeit zwischen Knoten: %{nodes}'
   compression_in_progress: Kontext wird komprimiert...
-  continue: Weiter
   dependency_not_found: Von Knoten '%{node_id}' abhängiger Knoten '%{id}' nicht vorhanden
   duplicate_node_id: 'Doppelte Knoten-ID: %{id}'
   edge_reference_missing: 'Kantenreferenz nicht vorhanden: %{from} -> %{to}'
@@ -341,8 +333,8 @@ workflow:
     other: Anderer Fehler
     serialization: Serialisierungsfehler
     store: Speicherfehler
+  executing: Wird ausgeführt...
   incomplete_execution: 'Workflow-Ausführung unvollständig, fehlende Knoten: %{missing}'
-  interrupted_by_restart: Durch Neustart der Anwendung unterbrochen
   invalid_array_index: 'Ungültiger Array-Index: %{index}'
   invalid_graph: 'Ungültiger Graph: %{reason}'
   invalid_loop_input: 'Schleifenknoteneingabe muss Array oder Objekt sein, empfangen: %{input}'
@@ -364,9 +356,6 @@ workflow:
   right_value_not_number: Rechter Wert ist kein numerischer Typ
   self_dependency: Knoten '%{node_id}' kann nicht von sich selbst abhängen
   state_notification_error: Workflow-Statusbenachrichtigung fehlgeschlagen
-  stepBudgetExhausted: Die aktuellen Schritte sind erschöpft (%{current}/%{max}), aber die Aufgabe ist noch nicht abgeschlossen.
-    Möchtest du fortfahren?
-  stop: Stopp
   string_not_supported: 'String-Typ unterstützt diese Operation nicht: %{operator}'
   summary:
     edit_file: Bearbeitet

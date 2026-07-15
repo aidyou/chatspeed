@@ -19,7 +19,6 @@ chat:
   failed_to_write_file: 無法寫入檔案：%{error}
   invalid_api_protocol: 無效的 API 協定：%{protocol}
   note_already_exists: 該筆記已存在，無需重複新增
-  search_not_found: 未找到指定的搜尋會話
 command:
   clipboard:
     failed_to_initialize: 初始化剪貼簿失敗：%{error}
@@ -137,7 +136,6 @@ main:
     failed_to_unregister_existing: 註銷已存在快捷鍵失敗：%{error}
     failed_to_unregister_old: 註銷舊快捷鍵失敗：%{error}
     invalid_format: 無效的快捷鍵格式：%{shortcut}
-  window_not_ready: 視窗尚未準備好
 mcp:
   client:
     config_error_for_server: MCP 伺服器 '%{server_name}' 配置錯誤：%{error}
@@ -147,9 +145,6 @@ mcp:
     http_url_cant_be_empty: MCP HTTP 用戶端 URL 參數不可為空
     list_tools_timeout: 獲取 %{name} 工具清單逾時
     no_running: MCP 用戶端 '%{client}' 未啟動，請檢查配置並重新啟動服務
-    sse_service_start_failed: '啟動 SSE 服務失敗 (URL: %{url})，原因：%{error}'
-    sse_transport_start_failed: '啟動 SSE 傳輸失敗 (URL: %{url})，原因：%{error}'
-    sse_url_cant_be_empty: sse 用戶端的 url 參數不可為空
     stdio_args_cant_be_empty: stdio 用戶端的 args 參數不可為空
     stdio_command_cant_be_empty: stdio 用戶端的啟動指令參數 command 不可為空
     stdio_command_not_found_no_help: 無法啟動 MCP 服務：指令「%{command}」未找到 (原始錯誤：%{original_error})。請確保該指令已安裝並在系統的 PATH 環境變數中。
@@ -161,7 +156,6 @@ mcp:
   config:
     name_must_be_non_empty: MCP 配置名稱不可為空，請輸入一個有效的配置名稱
     sse_removed_in_rmcp_v1: MCP SSE 傳輸已不再受支援。請將該伺服器遷移到 Streamable HTTP。
-    sse_url_must_be_non_empty: MCP 配置的 SSE URL 不可為空
     stdio_args_must_be_non_empty: MCP 配置的啟動參數不可為空
     stdio_command_must_be_non_empty: MCP 配置的啟動指令不可為空
   error:
@@ -259,7 +253,6 @@ tools:
     state_change_failed: 狀態變更失敗
     store: 儲存錯誤
     timeout: 超時
-  failed_to_get_model: 獲取 %{model_type} 模型失敗
   function_not_found: 工作流中未找到工具函數：%{name}
   keyword_must_be_non_empty: 關鍵詞 (query) 參數必須是非空字串或非空陣列
   max_retries_exceeded: 超過最大重試次數：%{item}
@@ -308,7 +301,6 @@ workflow:
   cannot_access_path: 無法存取路徑：%{path}，因為值不是物件/陣列
   circular_dependency: 節點之間存在循環相依：%{nodes}
   compression_in_progress: 上下文壓縮中，請稍後...
-  continue: 繼續
   dependency_not_found: 節點 '%{node_id}' 相依的節點 '%{id}' 不存在
   duplicate_node_id: '重複的節點 ID: %{id}'
   edge_reference_missing: 邊參考不存在：%{from} -> %{to}
@@ -324,8 +316,8 @@ workflow:
     other: 其他錯誤
     serialization: 序列化錯誤
     store: 儲存錯誤
+  executing: 執行中...
   incomplete_execution: 工作流程執行不完整，缺少節點：%{missing}
-  interrupted_by_restart: 已因應用程式重啟中斷
   invalid_array_index: 無效的陣列索引：%{index}
   invalid_graph: 無效的圖：%{reason}
   invalid_loop_input: 循環節點輸入必須是陣列或物件，但收到了：%{input}
@@ -345,8 +337,6 @@ workflow:
   right_value_not_number: 右值不是數字類型
   self_dependency: 節點 '%{node_id}' 不能相依於自身
   state_notification_error: 工作流程狀態通知失敗
-  stepBudgetExhausted: 目前步數已耗盡 (%{current}/%{max})，但任務尚未完成。是否繼續？
-  stop: 停止
   string_not_supported: 字串類型不支援此操作：%{operator}
   summary:
     edit_file: 已編輯

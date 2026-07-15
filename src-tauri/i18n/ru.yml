@@ -20,7 +20,6 @@ chat:
   failed_to_write_file: 'Не удалось записать в файл: %{error}'
   invalid_api_protocol: 'Недопустимый протокол API: %{protocol}'
   note_already_exists: Эта заметка уже существует, нет необходимости добавлять ее снова
-  search_not_found: Указанная сессия поиска не найдена
 command:
   clipboard:
     failed_to_initialize: 'Не удалось инициализировать буфер обмена: %{error}'
@@ -141,7 +140,6 @@ main:
     failed_to_unregister_existing: 'Не удалось отменить регистрацию существующего сочетания клавиш: %{error}'
     failed_to_unregister_old: 'Не удалось отменить регистрацию старого сочетания клавиш: %{error}'
     invalid_format: 'Недопустимый формат сочетания клавиш: %{shortcut}'
-  window_not_ready: Окно еще не готово
 mcp:
   client:
     config_error_for_server: 'Ошибка конфигурации сервера MCP ''%{server_name}'': %{error}'
@@ -151,9 +149,6 @@ mcp:
     http_url_cant_be_empty: Параметр URL клиента MCP HTTP не может быть пустым
     list_tools_timeout: Время ожидания получения списка инструментов для %{name} истекло
     no_running: Клиент MCP '%{client}' не запущен, проверьте конфигурацию и перезапустите службу
-    sse_service_start_failed: 'Не удалось запустить службу SSE (URL: %{url}), причина: %{error}'
-    sse_transport_start_failed: 'Не удалось запустить транспорт SSE (URL: %{url}), причина: %{error}'
-    sse_url_cant_be_empty: Параметр URL клиента SSE не может быть пустым
     stdio_args_cant_be_empty: Параметр args клиента stdio не может быть пустым
     stdio_command_cant_be_empty: Параметр command Команда запуска клиента stdio не может быть пустым
     stdio_command_not_found_no_help: 'Не удалось запустить службу MCP: команда "%{command}" не найдена (исходная ошибка: %{original_error}).
@@ -169,7 +164,6 @@ mcp:
   config:
     name_must_be_non_empty: Имя конфигурации MCP не может быть пустым, введите допустимое имя конфигурации
     sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
-    sse_url_must_be_non_empty: URL-адрес SSE конфигурации MCP не может быть пустым
     stdio_args_must_be_non_empty: Параметры запуска конфигурации MCP не могут быть пустыми
     stdio_command_must_be_non_empty: Команда запуска конфигурации MCP не может быть пустой
   error:
@@ -269,7 +263,6 @@ tools:
     state_change_failed: Сбой изменения состояния
     store: Ошибка хранилища
     timeout: Тайм-аут
-  failed_to_get_model: Не удалось получить модель %{model_type}
   function_not_found: 'Инструментальная функция не найдена в рабочем процессе: %{name}'
   keyword_must_be_non_empty: Параметр ключевое слово (query) должен быть непустой строкой или непустым массивом
   max_retries_exceeded: 'Превышено максимальное количество попыток для: %{item}'
@@ -319,7 +312,6 @@ workflow:
   cannot_access_path: 'Не удается получить доступ к пути: %{path}, так как значение не является объектом/массивом'
   circular_dependency: 'Обнаружена циклическая зависимость между узлами: %{nodes}'
   compression_in_progress: Сжатие контекста...
-  continue: Продолжить
   dependency_not_found: Узел '%{node_id}' зависит от узла '%{id}', который не существует
   duplicate_node_id: 'Дублирующийся ID узла: %{id}'
   edge_reference_missing: 'Отсутствует ссылка на ребро: %{from} -> %{to}'
@@ -335,8 +327,8 @@ workflow:
     other: Другая ошибка
     serialization: Ошибка сериализации
     store: Ошибка хранилища
+  executing: Выполняется...
   incomplete_execution: 'Неполное выполнение рабочего процесса, отсутствуют узлы: %{missing}'
-  interrupted_by_restart: Прервано перезапуском приложения
   invalid_array_index: 'Недопустимый индекс массива: %{index}'
   invalid_graph: 'Недопустимый граф: %{reason}'
   invalid_loop_input: 'Входные данные узла цикла должны быть массивом или объектом, но получено: %{input}'
@@ -358,8 +350,6 @@ workflow:
   right_value_not_number: Правое значение не является числом
   self_dependency: Узел '%{node_id}' не может зависеть от самого себя
   state_notification_error: Ошибка уведомления о состоянии рабочего процесса
-  stepBudgetExhausted: Текущие шаги исчерпаны (%{current}/%{max}), но задача ещё не завершена. Продолжить?
-  stop: Стоп
   string_not_supported: 'Строковый тип не поддерживает эту операцию: %{operator}'
   summary:
     edit_file: Изменено

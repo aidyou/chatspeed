@@ -143,12 +143,12 @@
     "save": "Speichern",
     "saveSuccess": "Gespeichert",
     "search": "Suchen",
-    "stop": "Stopp",
-    "to": "zu",
     "unpin": "Loslösen",
     "updateButtonText": "Aktualisieren",
     "uploadFailed": "Datei-Upload fehlgeschlagen",
-    "warning": "Warnung"
+    "warning": "Warnung",
+    "saveFailed": "Speichern fehlgeschlagen",
+    "operationFailed": "Vorgang fehlgeschlagen: {error}"
   },
   "menu": {
     "about": "Über",
@@ -192,7 +192,6 @@
       "authorizedPathsAdd": "Verzeichnis hinzufügen",
       "authorizedPathsTip": "Der Agent kann nur Dateien in diesen Verzeichnissen (und deren Unterverzeichnissen) lesen und schreiben. Wenn nicht konfiguriert, funktionieren einige Dateiverwaltungstools möglicherweise nicht.",
       "autoApprove": "Tools automatisch genehmigen",
-      "autonomousMode": "Autonomer Modus",
       "availableTools": "Verfügbare Tools",
       "basicInfo": "Grundlegende Informationen",
       "copy": "Agent kopieren",
@@ -237,7 +236,6 @@
       "selectAvailableTools": "Verfügbare Tools auswählen",
       "selectDirectory": "Verzeichnis auswählen",
       "selectedSkills": "Aktive Skills",
-      "selectSkills": "Skills auswählen",
       "shellDecisionAllow": "Erlauben (Allow)",
       "shellDecisionDeny": "Ablehnen (Deny)",
       "shellDecisionReview": "Überprüfung erforderlich (Review)",
@@ -378,16 +376,6 @@
       "visionModel": "Vision-Modell",
       "visionModelRequired": "Bitte konfigurieren Sie zuerst ein Vision-Modell in den Einstellungen, um die Bildanalyse zu unterstützen",
       "visionModelTooltip": "Wählen Sie ein Vision-Modell für die Bildanalyse aus. Wenn Sie Bilder im Chat senden, analysiert dieses Modell den Bildinhalt.",
-      "websearchModel": "Websuche Modell",
-      "websearchModelTooltip": "Wird verwendet, um Suchbegriffe aus deinem Dialog zu generieren. Verwende kein Inferenzmodell, da dies sehr langsam ist!",
-      "wordSelectionToolbar": "KI-Textauswahl-Symbolleiste",
-      "workflow": {
-        "general": "Allgemeines Modell",
-        "generalTooltip": "Wird für einfache Aufgaben im Workflow verwendet, z. B. Textzusammenfassung, Informationsentnahme usw.",
-        "reasoning": "Inferenzmodell",
-        "reasoningTooltip": "Wird hauptsächlich für komplexe Aufgaben im Workflow verwendet, einschließlich Planung, Zusammenfassung von Analyseergebnissen usw."
-      },
-      "workflowSettings": "Workflow-Einstellungen",
       "workflowWindowVisibleShortcut": "Workflow-Fenster"
     },
     "mcp": {
@@ -439,9 +427,6 @@
       "restartFailed": "Neustart des MCP-Servers \"{name}\" fehlgeschlagen: {error}",
       "restartSuccess": "MCP-Server \"{name}\" wurde neu gestartet.",
       "statusError": "Startfehler: {error}",
-      "statusRunning": "Wird ausgeführt",
-      "statusStarting": "Wird gestartet",
-      "statusStopped": "Nicht gestartet",
       "statusUnknown": "Unbekannt",
       "title": "MCP-Serververwaltung",
       "updateFailed": "MCP-Server-Update fehlgeschlagen: {error}",
@@ -459,7 +444,10 @@
         "typeRequired": "Servertyp darf nicht leer sein.",
         "urlPlaceholder": "URL enthält Platzhalter: {placeholders}",
         "urlRequired": "SSE-Typ erfordert eine URL."
-      }
+      },
+      "statusStarting": "Wird gestartet",
+      "statusRunning": "Wird ausgeführt",
+      "statusStopped": "Nicht gestartet"
     },
     "model": {
       "add": "Modell hinzufügen",
@@ -490,12 +478,10 @@
       "deleteTitle": "Modell löschen",
       "disable": "Deaktivieren",
       "disabled": "Deaktiviert?",
-      "disableFailed": "Deaktivierung des Modells \"{name}\" fehlgeschlagen: {error}",
       "disableSuccess": "Modell \"{name}\" wurde deaktiviert.",
       "documentation": "Dokumentation",
       "edit": "Modell bearbeiten",
       "enable": "Aktivieren",
-      "enableFailed": "Aktivierung des Modells \"{name}\" fehlgeschlagen: {error}",
       "enableSuccess": "Modell \"{name}\" wurde aktiviert.",
       "frequencyPenalty": "Frequenzstrafe",
       "frequencyPenaltyPlaceholder": "Passt die Häufigkeit an, mit der das Modell dieselben Wörter wiederholt. Ein höherer Wert führt zu weniger Wiederholungen. Bei 0 oder leer wird es nicht verwendet.",
@@ -550,14 +536,15 @@
       "supportsResponsesApi": "Unterstützt Responses API",
       "temperature": "Temperatur",
       "temperaturePlaceholder": "Steuert die Zufälligkeit der Modellausgabe. Ein höherer Wert führt zu einer zufälligeren Ausgabe.",
-      "thinkingBudgetTokens": "Thinking-Budget",
       "thinkingLevel": "Denkintensität",
       "topK": "Top K",
       "topKPlaceholder": "Steuert die Auswahl des Modells aus den K wahrscheinlichsten Wörtern. Ein kleinerer Wert führt zu einer deterministischeren Ausgabe. Bei 0 oder leer wird es nicht verwendet. OpenAi-kompatible Schnittstellen unterstützen dies nicht.",
       "topP": "Top P",
       "topPPlaceholder": "Steuert die Auswahl des Modells aus den P wahrscheinlichsten Wörtern. Ein kleinerer Wert führt zu einer deterministischeren Ausgabe. Bei 0 oder leer wird es nicht verwendet.",
       "ungrouped": "Nicht gruppiert",
-      "updateSuccess": "Modell aktualisiert"
+      "updateSuccess": "Modell aktualisiert",
+      "enableFailed": "Aktivierung des Modells \"{name}\" fehlgeschlagen: {error}",
+      "disableFailed": "Deaktivierung des Modells \"{name}\" fehlgeschlagen: {error}"
     },
     "proxy": {
       "addNow": "Jetzt hinzufügen",
@@ -648,7 +635,6 @@
         "title": "Proxy-Einstellungen"
       },
       "stats": {
-        "activeModels": "Aktive Modelle",
         "allTime": "Gesamte Zeit",
         "autoRefresh": "Autom. Aktualisierung",
         "backendModel": "Backend-Modell",
@@ -686,14 +672,12 @@
         "outputTokens": "Ausgabe",
         "protocol": "Protokoll",
         "provider": "Anbieter",
-        "providers": "Anbieter",
         "providerTokenUsageTitle": "Anbieter Token-Verbrauch Verteilung",
         "requests": "Anfragen",
         "statusCode": "Statuscode",
         "title": "Proxy-Statistiken",
         "today": "Heute",
         "toolCompat": "Kompatibilitätsmodus",
-        "topProvider": "Top-Modell",
         "totalRequests": "Gesamtanfragen",
         "totalTokens": "Gesamt-Token",
         "yes": "Ja"
@@ -701,8 +685,7 @@
       "tabs": {
         "groups": "Proxy-Gruppen",
         "servers": "Proxy-Dienste",
-        "settings": "Proxy-Einstellungen",
-        "stats": "Statistiken"
+        "settings": "Proxy-Einstellungen"
       },
       "title": "Proxy-Server-Konfiguration",
       "updateSuccess": "Proxy-Konfiguration erfolgreich aktualisiert!",
@@ -799,7 +782,6 @@
       "importFailed": "Fehler beim Importieren der Fähigkeit: {error}",
       "importSuccess": "Fähigkeit importiert",
       "loadPresetError": "Fehler beim Laden der voreingestellten Fähigkeit",
-      "logo": "Kleines Fähigkeitsbild",
       "manualAdd": "Manuell hinzufügen",
       "manualAddDesc": "Benutzerdefinierte, personalisierte Fähigkeit",
       "name": "Fähigkeitsname",
@@ -850,9 +832,6 @@
   "workflow": {
     "allowedShellCommands": "Erlaubte Shell-Befehle",
     "approval": {
-      "backgroundMessage": "„{workflow}“ wartet auf Freigabe: {action}",
-      "backgroundTitle": "Hintergrund-Workflow wartet",
-      "queueButton": "Freigabe",
       "rejectionMessageLabel": "Ablehnungsgrund",
       "rejectionMessagePlaceholder": "Wenn du diesen Vorgang nicht ausführen möchtest, gib bitte einen Grund ein."
     },
@@ -860,8 +839,6 @@
     "approvePlan": "Plan genehmigen",
     "askUser": {
       "answerLabel": "Antwort:",
-      "backgroundMessage": "„{workflow}“ wartet auf deine Eingabe",
-      "backgroundTitle": "Hintergrund-Workflow wartet",
       "customLabel": "Eigene Eingabe",
       "customPlaceholder": "Ich möchte eingeben...",
       "responseTitle": "Übermittelte Auswahl",
@@ -892,13 +869,11 @@
       "executionDate": "Ausführungsdatum",
       "executionTime": "Ausführungszeit",
       "frequency": "Häufigkeit",
-      "history": "Ausführungsverlauf",
       "interval": "Intervall",
       "intervalMinutes": "Intervall in Minuten",
       "model": "Modell",
       "once": "Einmalig",
       "prompt": "Prompt",
-      "promptFile": "Prompt-Datei",
       "promptFileHint": "Ist eine Prompt-Datei ausgewählt, überschreibt ihr Inhalt den Prompt zur Laufzeit.",
       "promptFileLabel": "Prompt-Datei",
       "runNow": "Jetzt ausführen",
@@ -986,7 +961,6 @@
     "exploration": {
       "reads": "{count} Lesevorgänge",
       "searches": "{count} Suchen",
-      "thought": "Gedanke",
       "thoughts": "{count} Denkzyklen",
       "title": "Code-Erkundung"
     },
@@ -1020,26 +994,20 @@
     "finalAuditTooltip": "Qualitätsprüfung durch KI vor Aufgabenabschluss",
     "finalAuditDisabled": "Abschlussprüfungsmodus deaktiviert",
     "finalAuditEnabled": "Abschlussprüfungsmodus aktiviert",
-    "finalReviewPending": "Abschlussprüfung läuft",
     "finishTask": "Aufgabe abschließen",
     "historyTab": "Sitzung",
     "installedSkillsGroup": "Installierte Skills",
-    "muteApprovalNotifications": "Freigabeton stumm",
-    "muteCompletionNotifications": "Abschlusston stumm",
     "newWorkflow": "Neuer Workflow",
     "noAgentError": "Keine Agenten verfügbar. Bitte zuerst in den Einstellungen einen Agenten anlegen.",
     "noAutoApprovedItems": "Keine Auto-Freigaben",
     "notificationSound": "Tonbenachrichtigungen",
-    "pause": "Pause",
     "planningModeTooltip": "Planungsmodus: KI-Recherche und Strategien vor der Ausführung",
     "planningModeDisabled": "Planungsmodus deaktiviert",
     "planningModeEnabled": "Planungsmodus aktiviert",
     "rejected": "Abgelehnt",
     "retrying": "Anfrage zu häufig, wird wiederholt (Versuch {attempt}/{total}), warte {seconds} Sekunden...",
-    "selectAgentFirst": "Bitte wählen Sie zuerst einen Agenten aus",
     "sessionLost": "Sitzung getrennt. Bitte neu starten oder die Seite aktualisieren.",
     "shellPolicyClickRemove": "Zum Entfernen × klicken",
-    "shellPolicyNote": "Im Agenten-Setup konfigurieren",
     "skillsConfigTitle": "Workflow-Skills",
     "skillsSearchEmpty": "Keine passenden Skills.",
     "skillsSearchPlaceholder": "Skills nach Namen suchen",
@@ -1047,7 +1015,6 @@
     "statusPanel": {
       "active": "Aktuell",
       "childAgents": "Unter-Agenten",
-      "childRunning": "Läuft",
       "contextUsage": "Kontextnutzung",
       "direct": "Direkt",
       "convergenceScore": "Konvergenz",
@@ -1086,12 +1053,11 @@
       "verificationCalls": "Prüfen",
       "visionModel": "Vision",
       "workFallback": "Arbeits-Fallback",
-      "workModel": "Arbeits"
+      "workModel": "Arbeits",
+      "latestDynamic": "Neueste"
     },
-    "stepBudgetExhaustedTitle": "Schritte verbraucht",
     "stop": "Stopp",
     "stopping": "Wird gestoppt",
-    "submit_plan": "Plan einreichen",
     "thinking": "Denke nach...",
     "thinkingExpanded": "Denkprozess",
     "thoughtCompleted": "Gedanke abgeschlossen",
@@ -1109,11 +1075,33 @@
       "next": "Nächster Schritt",
       "title": "To-do-Liste"
     },
-    "tools": "Tools",
-    "unmuteApprovalNotifications": "Freigabeton an",
-    "unmuteCompletionNotifications": "Abschlusston an",
     "untitled": "Unbenannter Workflow",
     "workflowTitle": "Workflow-Titel",
-    "written": "Geschrieben"
+    "written": "Geschrieben",
+    "taskLedger": {
+      "status": {
+        "pending": "Ausstehend",
+        "running": "Läuft",
+        "error": "Fehler",
+        "rejected": "Abgelehnt",
+        "success": "Erfolgreich"
+      },
+      "title": "Aufgabenliste",
+      "loading": "Aufgaben werden geladen...",
+      "running": "Läuft",
+      "tryDifferentFilter": "Versuchen Sie einen anderen Filter",
+      "output": "Ausgabe",
+      "empty": "Noch keine Aufgaben",
+      "error": "Fehler",
+      "pending": "Ausstehend",
+      "result": "Ergebnis",
+      "completed": "Abgeschlossen",
+      "arguments": "Argumente",
+      "locateInChat": "Im Chat anzeigen",
+      "execution": "Ausführung",
+      "all": "Alle",
+      "failed": "Fehlgeschlagen"
+    },
+    "waitingForUser": "Warten auf Benutzereingabe"
   }
 }

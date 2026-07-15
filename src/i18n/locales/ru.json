@@ -143,12 +143,12 @@
     "save": "Сохранить",
     "saveSuccess": "Сохранено",
     "search": "Поиск",
-    "stop": "Стоп",
-    "to": "к",
     "unpin": "Открепить",
     "updateButtonText": "Обновить",
     "uploadFailed": "Ошибка при загрузке файла",
-    "warning": "Внимание"
+    "warning": "Внимание",
+    "saveFailed": "Не удалось сохранить",
+    "operationFailed": "Операция не удалась: {error}"
   },
   "menu": {
     "about": "О программе",
@@ -192,7 +192,6 @@
       "authorizedPathsAdd": "Добавить директорию",
       "authorizedPathsTip": "Агент сможет читать и записывать файлы только в этих директориях (и их поддиректориях).",
       "autoApprove": "Инструменты с авто-одобрением",
-      "autonomousMode": "Автономный режим",
       "availableTools": "Доступные инструменты",
       "basicInfo": "Основная информация",
       "copy": "Копировать агента",
@@ -237,7 +236,6 @@
       "selectAvailableTools": "Выбрать доступные инструменты",
       "selectDirectory": "Выбрать директорию",
       "selectedSkills": "Включенные skills",
-      "selectSkills": "Выбрать skills",
       "shellDecisionAllow": "Разрешить",
       "shellDecisionDeny": "Отклонить",
       "shellDecisionReview": "Проверить",
@@ -378,16 +376,6 @@
       "visionModel": "Модель зрения",
       "visionModelRequired": "Пожалуйста, сначала настройте модель зрения в настройках, чтобы поддерживать анализ изображений.",
       "visionModelTooltip": "Выберите модель зрения для анализа изображений. При отправке изображений в чате эта модель будет использоваться для анализа содержимого изображения.",
-      "websearchModel": "Модель для веб-поиска",
-      "websearchModelTooltip": "Используется для генерации поисковых запросов из ваших диалогов. Не используйте модели рассуждения, это замедлит процесс!",
-      "wordSelectionToolbar": "Панель инструментов выделения слов",
-      "workflow": {
-        "general": "Универсальная модель",
-        "generalTooltip": "Используется для простых задач в рабочих процессах, таких как суммирование текста, извлечение информации и т. д.",
-        "reasoning": "Модель рассуждений",
-        "reasoningTooltip": "В основном используется для сложных задач в рабочих процессах, включая планирование, обобщение результатов анализа и т. д."
-      },
-      "workflowSettings": "Настройки рабочих процессов",
       "workflowWindowVisibleShortcut": "Окно рабочего процесса"
     },
     "mcp": {
@@ -439,9 +427,6 @@
       "restartFailed": "Не удалось перезапустить MCP-сервер \"{name}\": {error}",
       "restartSuccess": "MCP-сервер \"{name}\" перезапущен.",
       "statusError": "Ошибка запуска: {error}",
-      "statusRunning": "Работает",
-      "statusStarting": "Запуск",
-      "statusStopped": "Не запущен",
       "statusUnknown": "Неизвестно",
       "title": "Управление MCP-серверами",
       "updateFailed": "Не удалось обновить MCP-сервер: {error}",
@@ -459,7 +444,10 @@
         "typeRequired": "Тип сервера не может быть пустым.",
         "urlPlaceholder": "URL содержит заполнители: {placeholders}",
         "urlRequired": "Для типа SSE требуется URL."
-      }
+      },
+      "statusStarting": "Запуск",
+      "statusRunning": "Работает",
+      "statusStopped": "Не запущен"
     },
     "model": {
       "add": "Добавить модель",
@@ -490,12 +478,10 @@
       "deleteTitle": "Удалить модель",
       "disable": "Отключить",
       "disabled": "Отключено",
-      "disableFailed": "Не удалось отключить модель \"{name}\": {error}",
       "disableSuccess": "Модель \"{name}\" отключена.",
       "documentation": "Документация",
       "edit": "Редактировать модель",
       "enable": "Включить",
-      "enableFailed": "Не удалось включить модель \"{name}\": {error}",
       "enableSuccess": "Модель \"{name}\" включена.",
       "frequencyPenalty": "Штраф за частоту",
       "frequencyPenaltyPlaceholder": "Регулирует частоту повторения моделью одних и тех же слов. Чем выше значение, тем меньше повторений. Установите 0 или оставьте пустым, чтобы отключить.",
@@ -550,14 +536,15 @@
       "supportsResponsesApi": "Поддерживает Responses API",
       "temperature": "Температура",
       "temperaturePlaceholder": "Контролирует случайность вывода модели. Чем выше значение, тем более случайным будет вывод.",
-      "thinkingBudgetTokens": "Бюджет рассуждений",
       "thinkingLevel": "Уровень рассуждений",
       "topK": "Top K",
       "topKPlaceholder": "Контролирует выбор модели из K наиболее вероятных слов. Чем меньше значение, тем более детерминированным будет вывод. Установите 0 или оставьте пустым, чтобы отключить. Интерфейсы, совместимые с OpenAi, не поддерживают это.",
       "topP": "Top P",
       "topPPlaceholder": "Контролирует выбор модели из P наиболее вероятных слов. Чем меньше значение, тем более детерминированным будет вывод. Установите 0 или оставьте пустым, чтобы отключить.",
       "ungrouped": "Без группы",
-      "updateSuccess": "Модель обновлена"
+      "updateSuccess": "Модель обновлена",
+      "enableFailed": "Не удалось включить модель \"{name}\": {error}",
+      "disableFailed": "Не удалось отключить модель \"{name}\": {error}"
     },
     "proxy": {
       "addNow": "Добавить сейчас",
@@ -648,7 +635,6 @@
         "title": "Настройки прокси"
       },
       "stats": {
-        "activeModels": "Активные модели",
         "allTime": "За все время",
         "autoRefresh": "Автообновление",
         "backendModel": "Модель бэкенда",
@@ -686,14 +672,12 @@
         "outputTokens": "Вывод",
         "protocol": "Протокол",
         "provider": "Провайдер",
-        "providers": "Провайдеры",
         "providerTokenUsageTitle": "Использование токенов провайдером",
         "requests": "Запросы",
         "statusCode": "Код состояния",
         "title": "Статистика прокси",
         "today": "Сегодня",
         "toolCompat": "Режим совместимости",
-        "topProvider": "Популярная модель",
         "totalRequests": "Всего запросов",
         "totalTokens": "Всего токенов",
         "yes": "Да"
@@ -701,8 +685,7 @@
       "tabs": {
         "groups": "Группы прокси",
         "servers": "Службы прокси",
-        "settings": "Настройки прокси",
-        "stats": "Статистика"
+        "settings": "Настройки прокси"
       },
       "title": "Конфигурация прокси-сервера",
       "updateSuccess": "Конфигурация прокси успешно обновлена!",
@@ -799,7 +782,6 @@
       "importFailed": "Ошибка при импорте навыка: {error}",
       "importSuccess": "Навык импортирован",
       "loadPresetError": "Ошибка при загрузке предустановленного навыка",
-      "logo": "Миниатюра навыка",
       "manualAdd": "Добавить вручную",
       "manualAddDesc": "Настройте персональный навык",
       "name": "Название навыка",
@@ -850,9 +832,6 @@
   "workflow": {
     "allowedShellCommands": "Разрешённые Shell-команды",
     "approval": {
-      "backgroundMessage": "«{workflow}» ждёт одобрения: {action}",
-      "backgroundTitle": "Фоновый workflow ждёт",
-      "queueButton": "Одобрить",
       "rejectionMessageLabel": "Причина отказа",
       "rejectionMessagePlaceholder": "Если вы не хотите выполнять это действие, укажите причину."
     },
@@ -860,8 +839,6 @@
     "approvePlan": "Утвердить план",
     "askUser": {
       "answerLabel": "Ответ:",
-      "backgroundMessage": "«{workflow}» ждёт вашего ответа",
-      "backgroundTitle": "Фоновый workflow ждёт ответа",
       "customLabel": "Свой ввод",
       "customPlaceholder": "Хочу ввести...",
       "responseTitle": "Отправленный выбор",
@@ -892,13 +869,11 @@
       "executionDate": "Дата выполнения",
       "executionTime": "Время выполнения",
       "frequency": "Частота",
-      "history": "История запусков",
       "interval": "Интервал",
       "intervalMinutes": "Интервал в минутах",
       "model": "Модель",
       "once": "Один раз",
       "prompt": "Промпт",
-      "promptFile": "Файл промпта",
       "promptFileHint": "При выборе файла промпта его содержимое заменяет промпт во время выполнения.",
       "promptFileLabel": "Файл промпта",
       "runNow": "Запустить сейчас",
@@ -986,7 +961,6 @@
     "exploration": {
       "reads": "Чтений: {count}",
       "searches": "Поисков: {count}",
-      "thought": "Размышление",
       "thoughts": "Размышлений: {count}",
       "title": "Исследование кода"
     },
@@ -1020,26 +994,20 @@
     "finalAuditTooltip": "ИИ автоматически выполняет проверку качества перед завершением задачи",
     "finalAuditDisabled": "Режим финального аудита выключен",
     "finalAuditEnabled": "Режим финального аудита включён",
-    "finalReviewPending": "Идет финальная проверка",
     "finishTask": "Завершить задачу",
     "historyTab": "Разговор",
     "installedSkillsGroup": "Установленные Skills",
-    "muteApprovalNotifications": "Без звука при одобрении",
-    "muteCompletionNotifications": "Без звука при завершении",
     "newWorkflow": "Новый рабочий процесс",
     "noAgentError": "Нет доступных агентов. Сначала создайте агента в настройках.",
     "noAutoApprovedItems": "Нет автоодобряемых элементов",
     "notificationSound": "Звуковые уведомления",
-    "pause": "Пауза",
     "planningModeTooltip": "Режим планирования: Исследование и стратегия ИИ перед выполнением",
     "planningModeDisabled": "Режим планирования выключен",
     "planningModeEnabled": "Режим планирования включён",
     "rejected": "Отклонено",
     "retrying": "Слишком частые запросы, повторная попытка (попытка {attempt}/{total}), ожидание {seconds} секунд...",
-    "selectAgentFirst": "Пожалуйста, сначала выберите агента",
     "sessionLost": "Сеанс потерян. Перезапустите приложение или обновите страницу.",
     "shellPolicyClickRemove": "Нажмите ×, чтобы удалить",
-    "shellPolicyNote": "Настраивается в Agent",
     "skillsConfigTitle": "Skills workflow",
     "skillsSearchEmpty": "Подходящие Skills не найдены.",
     "skillsSearchPlaceholder": "Поиск по имени",
@@ -1047,7 +1015,6 @@
     "statusPanel": {
       "active": "Текущий",
       "childAgents": "Субагенты",
-      "childRunning": "В работе",
       "contextUsage": "Использование контекста",
       "direct": "Напрямую",
       "convergenceScore": "Сходимость",
@@ -1086,12 +1053,11 @@
       "verificationCalls": "Проверка",
       "visionModel": "Зрение",
       "workFallback": "Резерв раб.",
-      "workModel": "Работа"
+      "workModel": "Работа",
+      "latestDynamic": "Последнее"
     },
-    "stepBudgetExhaustedTitle": "Шаги исчерпаны",
     "stop": "Стоп",
     "stopping": "Остановка",
-    "submit_plan": "Отправить план",
     "thinking": "Думаю...",
     "thinkingExpanded": "Думаю (развернуто)",
     "thoughtCompleted": "Мысль завершена",
@@ -1109,11 +1075,33 @@
       "next": "Далее",
       "title": "Список задач"
     },
-    "tools": "Инструменты",
-    "unmuteApprovalNotifications": "Включить звук одобрения",
-    "unmuteCompletionNotifications": "Включить звук завершения",
     "untitled": "Безымянный workflow",
     "workflowTitle": "Название рабочего процесса",
-    "written": "Записано"
+    "written": "Записано",
+    "taskLedger": {
+      "status": {
+        "pending": "Ожидает",
+        "running": "Выполняется",
+        "error": "Ошибка",
+        "rejected": "Отклонено",
+        "success": "Успешно"
+      },
+      "title": "Список задач",
+      "loading": "Загрузка задач...",
+      "running": "Выполняется",
+      "tryDifferentFilter": "Попробуйте другой фильтр",
+      "output": "Вывод",
+      "empty": "Задач пока нет",
+      "error": "Ошибка",
+      "pending": "Ожидает",
+      "result": "Результат",
+      "completed": "Завершено",
+      "arguments": "Аргументы",
+      "locateInChat": "Найти в чате",
+      "execution": "Выполнение",
+      "all": "Все",
+      "failed": "Ошибка"
+    },
+    "waitingForUser": "Ожидание ввода пользователя"
   }
 }

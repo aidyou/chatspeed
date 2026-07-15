@@ -22,7 +22,6 @@ chat:
   failed_to_write_file: 'Error al escribir en el archivo: %{error}'
   invalid_api_protocol: 'Protocolo de API no válido: %{protocol}'
   note_already_exists: Esta nota ya existe, no es necesario agregarla de nuevo
-  search_not_found: No se encontró la sesión de búsqueda especificada
 command:
   clipboard:
     failed_to_initialize: 'Error al inicializar el portapapeles: %{error}'
@@ -144,7 +143,6 @@ main:
     failed_to_unregister_existing: 'Error al anular el registro del acceso directo existente: %{error}'
     failed_to_unregister_old: 'Error al anular el registro del acceso directo antiguo: %{error}'
     invalid_format: 'Formato de acceso directo no válido: %{shortcut}'
-  window_not_ready: La ventana aún no está lista
 mcp:
   client:
     config_error_for_server: 'Error de configuración del servidor MCP ''%{server_name}'': %{error}'
@@ -155,9 +153,6 @@ mcp:
     http_url_cant_be_empty: El parámetro de URL del cliente MCP HTTP no puede estar vacío
     list_tools_timeout: Tiempo de espera agotado al obtener la lista de herramientas para %{name}
     no_running: El cliente MCP '%{client}' no se está ejecutando. Compruebe la configuración y reinicie el servicio.
-    sse_service_start_failed: 'Error al iniciar el servicio SSE (URL: %{url}), motivo: %{error}'
-    sse_transport_start_failed: 'Error al iniciar el transporte SSE (URL: %{url}), motivo: %{error}'
-    sse_url_cant_be_empty: El parámetro de URL del cliente SSE no puede estar vacío
     stdio_args_cant_be_empty: El parámetro de argumentos del cliente stdio no puede estar vacío
     stdio_command_cant_be_empty: El parámetro de comando Comando de inicio del cliente stdio no puede estar vacío
     stdio_command_not_found_no_help: 'No se pudo iniciar el servicio MCP: no se encontró el comando "%{command}" (error original:
@@ -174,7 +169,6 @@ mcp:
     name_must_be_non_empty: El nombre de la configuración de MCP no puede estar vacío. Introduzca un nombre de configuración
       válido.
     sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
-    sse_url_must_be_non_empty: La URL de SSE de la configuración de MCP no puede estar vacía
     stdio_args_must_be_non_empty: Los Argumentos de inicio de la configuración de MCP no pueden estar vacíos
     stdio_command_must_be_non_empty: El Comando de inicio de la configuración de MCP no puede estar vacío
   error:
@@ -275,7 +269,6 @@ tools:
     state_change_failed: Fallo en el cambio de estado
     store: Error de almacenamiento
     timeout: Tiempo de espera agotado
-  failed_to_get_model: Error al obtener el modelo %{model_type}
   function_not_found: 'No se encontró la función de la herramienta en el flujo de trabajo: %{name}'
   keyword_must_be_non_empty: El parámetro de palabra clave (query) debe ser una cadena no vacía o una matriz no vacía
   max_retries_exceeded: 'Se superó el número máximo de reintentos: %{item}'
@@ -325,7 +318,6 @@ workflow:
   cannot_access_path: 'No se puede acceder a la ruta: %{path}, porque el valor no es un objeto/matriz'
   circular_dependency: 'Existe una dependencia circular entre los nodos: %{nodes}'
   compression_in_progress: Comprimiendo contexto...
-  continue: Continuar
   dependency_not_found: El nodo '%{node_id}' depende del nodo '%{id}', que no existe
   duplicate_node_id: 'ID de nodo duplicado: %{id}'
   edge_reference_missing: 'No existe la referencia de borde: %{from} -> %{to}'
@@ -341,8 +333,8 @@ workflow:
     other: Otro error
     serialization: Error de serialización
     store: Error de almacenamiento
+  executing: Ejecutando...
   incomplete_execution: 'Ejecución incompleta del flujo de trabajo, faltan nodos: %{missing}'
-  interrupted_by_restart: Interrumpido por reinicio de la aplicación
   invalid_array_index: 'Índice de matriz no válido: %{index}'
   invalid_graph: 'Gráfico no válido: %{reason}'
   invalid_loop_input: 'La entrada del nodo de bucle debe ser una matriz o un objeto, pero se recibió: %{input}'
@@ -365,8 +357,6 @@ workflow:
   right_value_not_number: El valor de la derecha no es un tipo de número
   self_dependency: El nodo '%{node_id}' no puede depender de sí mismo
   state_notification_error: Error en la notificación de estado del flujo de trabajo
-  stepBudgetExhausted: Se agotaron los pasos actuales (%{current}/%{max}), pero la tarea aún no está completa. ¿Quieres continuar?
-  stop: Detener
   string_not_supported: 'El tipo de cadena no admite esta operación: %{operator}'
   summary:
     edit_file: Editado

@@ -19,7 +19,6 @@ chat:
   failed_to_write_file: '无法写入文件: %{error}'
   invalid_api_protocol: '无效的API协议: %{protocol}'
   note_already_exists: 该笔记已存在，无需重复添加
-  search_not_found: 未找到指定的搜索会话
 command:
   clipboard:
     failed_to_initialize: '初始化剪贴板失败: %{error}'
@@ -137,7 +136,6 @@ main:
     failed_to_unregister_existing: '注销已存在快捷键失败: %{error}'
     failed_to_unregister_old: '注销旧快捷键失败: %{error}'
     invalid_format: '无效的快捷键格式: %{shortcut}'
-  window_not_ready: 窗口尚未准备好
 mcp:
   client:
     config_error_for_server: 'MCP服务器 ''%{server_name}'' 配置错误: %{error}'
@@ -147,9 +145,6 @@ mcp:
     http_url_cant_be_empty: MCP HTTP 客户端 URL 参数不能为空
     list_tools_timeout: 获取 %{name} 工具列表超时
     no_running: MCP 客户端 '%{client}' 未启动，请检查配置并重新启动服务
-    sse_service_start_failed: '启动 SSE 服务失败 (URL: %{url})，原因: %{error}'
-    sse_transport_start_failed: '启动 SSE 传输失败 (URL: %{url})，原因: %{error}'
-    sse_url_cant_be_empty: sse客户端的url参数不能为空
     stdio_args_cant_be_empty: stdio客户端的args参数不能为空
     stdio_command_cant_be_empty: stdio客户端的「启动命令」参数command不能为空
     stdio_command_not_found_no_help: '无法启动 MCP 服务：命令 "%{command}" 未找到 (原始错误: %{original_error})。请确保该命令已安装并在系统的 PATH 环境变量中。'
@@ -161,7 +156,6 @@ mcp:
   config:
     name_must_be_non_empty: MCP 配置名称不能为空，请输入一个有效的配置名称
     sse_removed_in_rmcp_v1: MCP SSE 传输已不再受支持。请将该服务器迁移到 Streamable HTTP。
-    sse_url_must_be_non_empty: MCP配置的 SSE URL 不能为空
     stdio_args_must_be_non_empty: MCP配置的「启动参数」不能为空
     stdio_command_must_be_non_empty: MCP配置的「启动命令」不能为空
   error:
@@ -259,7 +253,6 @@ tools:
     state_change_failed: 状态变更失败
     store: 存储错误
     timeout: 超时
-  failed_to_get_model: 获取 %{model_type} 模型失败
   function_not_found: '工作流中未找到工具函数: %{name}'
   keyword_must_be_non_empty: 关键词(query)参数必须是非空字符串或非空数组
   max_retries_exceeded: '超过最大重试次数: %{item}'
@@ -308,7 +301,6 @@ workflow:
   cannot_access_path: '无法访问路径: %{path}，因为值不是对象/数组'
   circular_dependency: '节点之间存在循环依赖: %{nodes}'
   compression_in_progress: 上下文压缩中，请稍后...
-  continue: 继续
   dependency_not_found: 节点 '%{node_id}' 依赖的节点 '%{id}' 不存在
   duplicate_node_id: '重复的节点ID: %{id}'
   edge_reference_missing: '边引用不存在: %{from} -> %{to}'
@@ -324,8 +316,8 @@ workflow:
     other: 其他错误
     serialization: 序列化错误
     store: 存储错误
+  executing: 执行中...
   incomplete_execution: '工作流执行不完整，缺少节点: %{missing}'
-  interrupted_by_restart: 已因应用重启中断
   invalid_array_index: '无效的数组索引: %{index}'
   invalid_graph: 无效的图：%{reason}
   invalid_loop_input: '循环节点输入必须是数组或对象，但收到了: %{input}'
@@ -345,8 +337,6 @@ workflow:
   right_value_not_number: 右值不是数字类型
   self_dependency: 节点 '%{node_id}' 不能依赖自身
   state_notification_error: 工作流状态通知失败
-  stepBudgetExhausted: 当前步数已耗尽 (%{current}/%{max})，但任务尚未完成。是否继续？
-  stop: 停止
   string_not_supported: '字符串类型不支持此操作: %{operator}'
   summary:
     edit_file: 已编辑

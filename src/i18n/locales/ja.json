@@ -143,12 +143,12 @@
     "save": "保存",
     "saveSuccess": "保存しました",
     "search": "検索",
-    "stop": "停止",
-    "to": "〜",
     "unpin": "ピン留め解除",
     "updateButtonText": "更新",
     "uploadFailed": "ファイルのアップロードに失敗しました",
-    "warning": "警告"
+    "warning": "警告",
+    "saveFailed": "保存に失敗しました",
+    "operationFailed": "操作に失敗しました：{error}"
   },
   "menu": {
     "about": "バージョン情報",
@@ -192,7 +192,6 @@
       "authorizedPathsAdd": "ディレクトリを追加",
       "authorizedPathsTip": "エージェントはこれらのディレクトリ（およびサブディレクトリ）内のファイルのみを読み書きできます。",
       "autoApprove": "自動承認ツール",
-      "autonomousMode": "自律モード",
       "availableTools": "利用可能なツール",
       "basicInfo": "基本情報",
       "copy": "エージェントをコピー",
@@ -237,7 +236,6 @@
       "selectAvailableTools": "利用可能なツールを選択",
       "selectDirectory": "ディレクトリを選択",
       "selectedSkills": "有効な Skills",
-      "selectSkills": "Skills を選択",
       "shellDecisionAllow": "許可",
       "shellDecisionDeny": "拒否",
       "shellDecisionReview": "レビュー",
@@ -378,16 +376,6 @@
       "visionModel": "ビジョンモデル",
       "visionModelRequired": "画像分析をサポートするには、まず設定でビジョンモデルを構成してください",
       "visionModelTooltip": "画像分析用のビジョンモデルを選択します。チャットで画像を送信すると、このモデルが画像内容を分析します。",
-      "websearchModel": "ウェブ検索モデル",
-      "websearchModelTooltip": "会話から検索キーワードを生成するために使用します。推論モデルを使用しないでください。遅くなります！",
-      "wordSelectionToolbar": "AI単語選択ツールバー",
-      "workflow": {
-        "general": "汎用モデル",
-        "generalTooltip": "テキスト要約、情報抽出など、ワークフローの簡単なタスクに使用します",
-        "reasoning": "推論モデル",
-        "reasoningTooltip": "計画、集計分析結果など、ワークフローの複雑なタスクに主に使用します"
-      },
-      "workflowSettings": "ワークフロー設定",
       "workflowWindowVisibleShortcut": "ワークフローウィンドウ"
     },
     "mcp": {
@@ -439,9 +427,6 @@
       "restartFailed": "MCPサーバー「{name}」の再起動に失敗しました：{error}",
       "restartSuccess": "MCPサーバー「{name}」が再起動しました。",
       "statusError": "起動エラー：{error}",
-      "statusRunning": "実行中",
-      "statusStarting": "起動中",
-      "statusStopped": "未起動",
       "statusUnknown": "不明",
       "title": "MCPサーバー管理",
       "updateFailed": "MCPサーバーの更新に失敗しました：{error}",
@@ -459,7 +444,10 @@
         "typeRequired": "サーバータイプは空にできません。",
         "urlPlaceholder": "URLにプレースホルダーが含まれています：{placeholders}",
         "urlRequired": "SSEタイプにはURLが必要です。"
-      }
+      },
+      "statusStarting": "起動中",
+      "statusRunning": "実行中",
+      "statusStopped": "未起動"
     },
     "model": {
       "add": "モデルを追加",
@@ -490,12 +478,10 @@
       "deleteTitle": "モデルを削除",
       "disable": "無効化",
       "disabled": "無効にする",
-      "disableFailed": "モデル「{name}」の無効化に失敗しました：{error}",
       "disableSuccess": "モデル「{name}」が無効になりました。",
       "documentation": "ドキュメント",
       "edit": "モデルを編集",
       "enable": "有効化",
-      "enableFailed": "モデル「{name}」の有効化に失敗しました：{error}",
       "enableSuccess": "モデル「{name}」が有効になりました。",
       "frequencyPenalty": "頻度ペナルティ",
       "frequencyPenaltyPlaceholder": "モデルが同じ単語を繰り返す頻度を調整します。値が大きいほど、繰り返しが少なくなります。0に設定するか、空白のままにすると無効になります。",
@@ -550,14 +536,15 @@
       "supportsResponsesApi": "Responses API対応",
       "temperature": "温度",
       "temperaturePlaceholder": "モデルの出力のランダム性を制御します。値が大きいほど、出力はよりランダムになります。",
-      "thinkingBudgetTokens": "思考予算",
       "thinkingLevel": "思考強度",
       "topK": "Top K",
       "topKPlaceholder": "モデルが最も可能性の高いK個の単語から選択するように制御します。値が小さいほど、出力はより確定的になります。0に設定するか、空白のままにすると無効になります。OpenAi互換インターフェースはこれをサポートしていません。",
       "topP": "Top P",
       "topPPlaceholder": "モデルが最も可能性の高いP個の単語から選択するように制御します。値が小さいほど、出力はより確定的になります。0に設定するか、空白のままにすると無効になります。",
       "ungrouped": "未分類",
-      "updateSuccess": "モデルが更新されました"
+      "updateSuccess": "モデルが更新されました",
+      "enableFailed": "モデル「{name}」の有効化に失敗しました：{error}",
+      "disableFailed": "モデル「{name}」の無効化に失敗しました：{error}"
     },
     "proxy": {
       "addNow": "今すぐ追加",
@@ -648,7 +635,6 @@
         "title": "プロキシ設定"
       },
       "stats": {
-        "activeModels": "アクティブモデル",
         "allTime": "すべて",
         "autoRefresh": "自動更新",
         "backendModel": "バックエンドモデル",
@@ -686,14 +672,12 @@
         "outputTokens": "出力",
         "protocol": "プロトコル",
         "provider": "プロバイダー",
-        "providers": "プロバイダー",
         "providerTokenUsageTitle": "プロバイダートークン使用量",
         "requests": "リクエスト回数",
         "statusCode": "ステータスコード",
         "title": "プロキシ統計情報",
         "today": "今日",
         "toolCompat": "互換モード",
-        "topProvider": "人気モデル",
         "totalRequests": "総リクエスト数",
         "totalTokens": "総トークン数",
         "yes": "はい"
@@ -701,8 +685,7 @@
       "tabs": {
         "groups": "プロキシグループ",
         "servers": "プロキシサービス",
-        "settings": "プロキシ設定",
-        "stats": "統計情報"
+        "settings": "プロキシ設定"
       },
       "title": "プロキシサーバー設定",
       "updateSuccess": "プロキシ設定が正常に更新されました！",
@@ -799,7 +782,6 @@
       "importFailed": "スキルのインポートに失敗しました：{error}",
       "importSuccess": "スキルをインポートしました",
       "loadPresetError": "プリセットスキルのロードに失敗しました",
-      "logo": "スキル小画像",
       "manualAdd": "手動で追加",
       "manualAddDesc": "カスタムのパーソナライズされたスキル",
       "name": "スキル名",
@@ -850,9 +832,6 @@
   "workflow": {
     "allowedShellCommands": "許可された Shell コマンド",
     "approval": {
-      "backgroundMessage": "「{workflow}」は承認待ちです：{action}",
-      "backgroundTitle": "バックグラウンドのワークフローが承認待ち",
-      "queueButton": "承認",
       "rejectionMessageLabel": "拒否理由",
       "rejectionMessagePlaceholder": "この操作を実行したくない場合は理由を入力してください。"
     },
@@ -860,8 +839,6 @@
     "approvePlan": "計画を承認",
     "askUser": {
       "answerLabel": "回答：",
-      "backgroundMessage": "「{workflow}」はあなたの入力を待っています",
-      "backgroundTitle": "バックグラウンドのワークフローが入力待ち",
       "customLabel": "カスタム入力",
       "customPlaceholder": "入力したい内容...",
       "responseTitle": "送信済みの選択",
@@ -892,13 +869,11 @@
       "executionDate": "実行日",
       "executionTime": "実行時刻",
       "frequency": "実行頻度",
-      "history": "実行履歴",
       "interval": "間隔",
       "intervalMinutes": "間隔（分）",
       "model": "モデル",
       "once": "一回",
       "prompt": "プロンプト",
-      "promptFile": "プロンプトファイル",
       "promptFileHint": "プロンプトファイルを選択すると、実行時にその内容が現在のプロンプトを上書きします。",
       "promptFileLabel": "プロンプトファイル",
       "runNow": "今すぐ実行",
@@ -986,7 +961,6 @@
     "exploration": {
       "reads": "読取 {count} 回",
       "searches": "検索 {count} 回",
-      "thought": "思考",
       "thoughts": "思考 {count} 回",
       "title": "コード探索"
     },
@@ -1020,26 +994,20 @@
     "finalAuditTooltip": "タスク完了前に AI が自動的に品質レビューを実行します",
     "finalAuditDisabled": "最終監査モードをオフにしました",
     "finalAuditEnabled": "最終監査モードをオンにしました",
-    "finalReviewPending": "最終レビュー中",
     "finishTask": "タスクを完了",
     "historyTab": "会話",
     "installedSkillsGroup": "インストール済み Skills",
-    "muteApprovalNotifications": "承認音をミュート",
-    "muteCompletionNotifications": "完了音をミュート",
     "newWorkflow": "新しいワークフロー",
     "noAgentError": "利用可能なエージェントがありません。先に設定で作成してください。",
     "noAutoApprovedItems": "自動承認項目はありません",
     "notificationSound": "通知音",
-    "pause": "一時停止",
     "planningModeTooltip": "計画モード：実行前に AI の研究と戦略を立てます",
     "planningModeDisabled": "計画モードをオフにしました",
     "planningModeEnabled": "計画モードをオンにしました",
     "rejected": "拒否済み",
     "retrying": "リクエストが多すぎます、再試行中（{attempt}/{total}回目）、{seconds}秒待ち...",
-    "selectAgentFirst": "まずエージェントを選択してください",
     "sessionLost": "セッションが切断されました。再起動するかページを更新してください。",
     "shellPolicyClickRemove": "× をクリックして削除",
-    "shellPolicyNote": "Agent 設定で構成",
     "skillsConfigTitle": "Workflow Skills 設定",
     "skillsSearchEmpty": "一致する Skills はありません。",
     "skillsSearchPlaceholder": "Skills 名で検索",
@@ -1047,7 +1015,6 @@
     "statusPanel": {
       "active": "現在",
       "childAgents": "子エージェント",
-      "childRunning": "実行中",
       "contextUsage": "コンテキスト使用量",
       "direct": "直結",
       "convergenceScore": "収束",
@@ -1086,12 +1053,11 @@
       "utilityModel": "補助",
       "verificationCalls": "検証",
       "workFallback": "作業フォールバック",
-      "workModel": "作業"
+      "workModel": "作業",
+      "latestDynamic": "最新"
     },
-    "stepBudgetExhaustedTitle": "ステップ上限",
     "stop": "停止",
     "stopping": "停止中",
-    "submit_plan": "計画を提出",
     "thinking": "思考中…",
     "thinkingExpanded": "思考中（展開済み）",
     "thoughtCompleted": "思考完了",
@@ -1109,11 +1075,33 @@
       "next": "次へ",
       "title": "TODOリスト"
     },
-    "tools": "ツール",
-    "unmuteApprovalNotifications": "承認音を有効化",
-    "unmuteCompletionNotifications": "完了音を有効化",
     "untitled": "無題のワークフロー",
     "workflowTitle": "ワークフロータイトル",
-    "written": "書込済み"
+    "written": "書込済み",
+    "taskLedger": {
+      "status": {
+        "pending": "保留中",
+        "running": "実行中",
+        "error": "エラー",
+        "rejected": "拒否済み",
+        "success": "成功"
+      },
+      "title": "タスク一覧",
+      "loading": "タスクを読み込み中...",
+      "running": "実行中",
+      "tryDifferentFilter": "別のフィルターを試してください",
+      "output": "出力",
+      "empty": "タスクはまだありません",
+      "error": "エラー",
+      "pending": "保留中",
+      "result": "結果",
+      "completed": "完了",
+      "arguments": "引数",
+      "locateInChat": "チャット内で表示",
+      "execution": "実行",
+      "all": "すべて",
+      "failed": "失敗"
+    },
+    "waitingForUser": "ユーザー入力を待機中"
   }
 }

@@ -19,7 +19,6 @@ chat:
   failed_to_write_file: ファイルへの書き込みに失敗しました：%{error}
   invalid_api_protocol: 無効な API プロトコル：%{protocol}
   note_already_exists: このノートは既に存在するため、再度追加する必要はありません
-  search_not_found: 指定された検索セッションが見つかりません
 command:
   clipboard:
     failed_to_initialize: クリップボードの初期化に失敗しました：%{error}
@@ -137,7 +136,6 @@ main:
     failed_to_unregister_existing: 既存のショートカットキーの登録解除に失敗しました：%{error}
     failed_to_unregister_old: 古いショートカットキーの登録解除に失敗しました：%{error}
     invalid_format: 無効なショートカットキー形式：%{shortcut}
-  window_not_ready: ウィンドウの準備ができていません
 mcp:
   client:
     config_error_for_server: MCP サーバー '%{server_name}' の設定エラー：%{error}
@@ -147,9 +145,6 @@ mcp:
     http_url_cant_be_empty: MCP HTTP クライアントの URL パラメータは空にできません
     list_tools_timeout: '%{name} のツールリスト取得がタイムアウトしました'
     no_running: MCP クライアント '%{client}' が実行されていません。設定を確認してサービスを再起動してください
-    sse_service_start_failed: 'SSE サービスの起動に失敗しました (URL: %{url}), 原因：%{error}'
-    sse_transport_start_failed: 'SSE トランスポートの起動に失敗しました (URL: %{url}), 原因：%{error}'
-    sse_url_cant_be_empty: SSE クライアントの URL パラメータは空にできません
     stdio_args_cant_be_empty: stdio クライアントの args パラメータは空にできません
     stdio_command_cant_be_empty: stdio クライアントの起動コマンドパラメータ command は空にできません
     stdio_command_not_found_no_help: MCP サービスの起動に失敗しました：コマンド "%{command}" が見つかりません (元のエラー：%{original_error})。コマンドがインストールされ、システムの
@@ -163,7 +158,6 @@ mcp:
   config:
     name_must_be_non_empty: MCP 設定名は空にできません。有効な設定名を入力してください
     sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
-    sse_url_must_be_non_empty: MCP 設定の SSE URL は空にできません
     stdio_args_must_be_non_empty: MCP 設定の「起動パラメータ」は空にできません
     stdio_command_must_be_non_empty: MCP 設定の「起動コマンド」は空にできません
   error:
@@ -261,7 +255,6 @@ tools:
     state_change_failed: 状態変更失敗
     store: ストアエラー
     timeout: タイムアウト
-  failed_to_get_model: '%{model_type} モデルの取得に失敗しました'
   function_not_found: ワークフローにツール関数が見つかりません：%{name}
   keyword_must_be_non_empty: キーワード (query) パラメータは空でない文字列または空でない配列である必要があります
   max_retries_exceeded: 最大リトライ回数を超えました：%{item}
@@ -310,7 +303,6 @@ workflow:
   cannot_access_path: パスにアクセスできません：%{path}, 値がオブジェクト/配列ではありません
   circular_dependency: ノード間に循環依存があります：%{nodes}
   compression_in_progress: コンテキストを圧縮しています...
-  continue: 続行
   dependency_not_found: ノード '%{node_id}' が依存するノード '%{id}' が存在しません
   duplicate_node_id: '重複するノード ID: %{id}'
   edge_reference_missing: エッジ参照が存在しません：%{from} -> %{to}
@@ -326,8 +318,8 @@ workflow:
     other: その他のエラー
     serialization: シリアル化エラー
     store: ストアエラー
+  executing: 実行中...
   incomplete_execution: ワークフローの実行が不完全です、不足しているノード：%{missing}
-  interrupted_by_restart: アプリケーションの再起動により中断されました
   invalid_array_index: 無効な配列インデックス：%{index}
   invalid_graph: 無効なグラフ：%{reason}
   invalid_loop_input: ループノードの入力は配列またはオブジェクトである必要がありますが、受信したのは：%{input}
@@ -347,8 +339,6 @@ workflow:
   right_value_not_number: 右辺値は数値型ではありません
   self_dependency: ノード '%{node_id}' は自身に依存できません
   state_notification_error: ワークフロー状態通知に失敗しました
-  stepBudgetExhausted: 現在のステップ数が上限に達しました (%{current}/%{max})。ただしタスクはまだ完了していません。続行しますか？
-  stop: 停止
   string_not_supported: 文字列型はこの操作をサポートしていません：%{operator}
   summary:
     edit_file: 編集済み

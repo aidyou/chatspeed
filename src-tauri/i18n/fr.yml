@@ -22,7 +22,6 @@ chat:
   failed_to_write_file: 'Échec de l''écriture dans le fichier : %{error}'
   invalid_api_protocol: 'Protocole API non valide : %{protocol}'
   note_already_exists: Cette note existe déjà, il n'est pas nécessaire de l'ajouter à nouveau
-  search_not_found: Session de recherche spécifiée non trouvée
 command:
   clipboard:
     failed_to_initialize: 'Échec de l''initialisation du presse-papiers : %{error}'
@@ -145,7 +144,6 @@ main:
     failed_to_unregister_existing: 'Échec de la désinscription du raccourci existant : %{error}'
     failed_to_unregister_old: 'Échec de la désinscription de l''ancien raccourci : %{error}'
     invalid_format: 'Format de raccourci non valide : %{shortcut}'
-  window_not_ready: La fenêtre n'est pas encore prête
 mcp:
   client:
     config_error_for_server: 'Erreur de configuration du serveur MCP ''%{server_name}'' : %{error}'
@@ -156,9 +154,6 @@ mcp:
     list_tools_timeout: Délai d'attente pour l'obtention de la liste d'outils pour %{name}
     no_running: Le client MCP '%{client}' n'est pas en cours d'exécution, veuillez vérifier la configuration et redémarrer
       le service
-    sse_service_start_failed: 'Échec du démarrage du service SSE (URL : %{url}), raison : %{error}'
-    sse_transport_start_failed: 'Échec du démarrage du transport SSE (URL : %{url}), raison : %{error}'
-    sse_url_cant_be_empty: Le paramètre d'URL du client SSE ne peut pas être vide
     stdio_args_cant_be_empty: Le paramètre d'arguments du client stdio ne peut pas être vide
     stdio_command_cant_be_empty: Le paramètre de commande Commande de démarrage du client stdio ne peut pas être vide
     stdio_command_not_found_no_help: 'Échec du démarrage du service MCP : commande "%{command}" non trouvée (erreur d''origine
@@ -177,7 +172,6 @@ mcp:
     name_must_be_non_empty: Le nom de la configuration MCP ne peut pas être vide, veuillez saisir un nom de configuration
       valide
     sse_removed_in_rmcp_v1: MCP SSE transport is no longer supported. Please migrate this server to Streamable HTTP.
-    sse_url_must_be_non_empty: L'URL SSE de la configuration MCP ne peut pas être vide
     stdio_args_must_be_non_empty: Les Arguments de démarrage de la configuration MCP ne peuvent pas être vides
     stdio_command_must_be_non_empty: La Commande de démarrage de la configuration MCP ne peut pas être vide
   error:
@@ -279,7 +273,6 @@ tools:
     state_change_failed: Échec du changement d'état
     store: Erreur de stockage
     timeout: Délai d'attente dépassé
-  failed_to_get_model: Échec de l'obtention du modèle %{model_type}
   function_not_found: 'Fonction d''outil non trouvée dans le flux de travail : %{name}'
   keyword_must_be_non_empty: Le paramètre de mot-clé (query) doit être une chaîne non vide ou un tableau non vide
   max_retries_exceeded: 'Nombre maximal de tentatives dépassé : %{item}'
@@ -329,7 +322,6 @@ workflow:
   cannot_access_path: 'Impossible d''accéder au chemin : %{path}, car la valeur n''est pas un objet/tableau'
   circular_dependency: 'Une dépendance circulaire existe entre les nœuds : %{nodes}'
   compression_in_progress: Compression du contexte en cours...
-  continue: Continuer
   dependency_not_found: Le nœud '%{node_id}' dépend du nœud '%{id}' qui n'existe pas
   duplicate_node_id: 'ID de nœud en double : %{id}'
   edge_reference_missing: 'La référence d''arête n''existe pas : %{from} -> %{to}'
@@ -345,8 +337,8 @@ workflow:
     other: Autre erreur
     serialization: Erreur de sérialisation
     store: Erreur de stockage
+  executing: Exécution en cours...
   incomplete_execution: 'Exécution incomplète du flux de travail, nœuds manquants : %{missing}'
-  interrupted_by_restart: Interrompu par le redémarrage de l'application
   invalid_array_index: 'Indice de tableau non valide : %{index}'
   invalid_graph: 'Graphe non valide : %{reason}'
   invalid_loop_input: 'L''entrée du nœud de boucle doit être un tableau ou un objet, mais a reçu : %{input}'
@@ -369,9 +361,6 @@ workflow:
   right_value_not_number: La valeur de droite n'est pas un type de nombre
   self_dependency: Le nœud '%{node_id}' ne peut pas dépendre de lui-même
   state_notification_error: Échec de la notification d'état du flux de travail
-  stepBudgetExhausted: Le nombre d’étapes actuel est épuisé (%{current}/%{max}), mais la tâche n’est pas encore terminée.
-    Voulez-vous continuer ?
-  stop: Arrêter
   string_not_supported: 'Le type de chaîne ne prend pas en charge cette opération : %{operator}'
   summary:
     edit_file: Modifié

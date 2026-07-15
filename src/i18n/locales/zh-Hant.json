@@ -143,12 +143,12 @@
     "save": "儲存",
     "saveSuccess": "儲存成功",
     "search": "搜尋",
-    "stop": "停止",
-    "to": "到",
     "unpin": "取消置頂",
     "updateButtonText": "更新",
     "uploadFailed": "檔案上傳失敗",
-    "warning": "警告"
+    "warning": "警告",
+    "saveFailed": "儲存失敗",
+    "operationFailed": "操作失敗：{error}"
   },
   "menu": {
     "about": "關於",
@@ -192,7 +192,6 @@
       "authorizedPathsAdd": "新增目錄",
       "authorizedPathsTip": "智能體將只能讀寫這些目錄（及其子目錄）下的檔案。如果不配置，部分檔案操作工具可能無法使用。",
       "autoApprove": "自動批准工具",
-      "autonomousMode": "自主模式",
       "availableTools": "可用工具",
       "basicInfo": "基本資訊",
       "copy": "複製智能體",
@@ -237,7 +236,6 @@
       "selectAvailableTools": "選擇可用工具",
       "selectDirectory": "選擇目錄",
       "selectedSkills": "已啟用 Skills",
-      "selectSkills": "選擇 Skills",
       "shellDecisionAllow": "允許 (Allow)",
       "shellDecisionDeny": "拒絕 (Deny)",
       "shellDecisionReview": "需審核 (Review)",
@@ -378,16 +376,6 @@
       "visionModel": "視覺模型",
       "visionModelRequired": "請先在設定中配置視覺模型以支援圖片分析",
       "visionModelTooltip": "選擇用於圖片分析的視覺模型。在聊天中發送圖片時，將使用此模型分析圖片內容。",
-      "websearchModel": "網路搜尋模型",
-      "websearchModelTooltip": "用於將你的對話產生搜尋關鍵詞，請不要用推理模型，否則會很慢！",
-      "wordSelectionToolbar": "AI 劃詞工具列",
-      "workflow": {
-        "general": "通用模型",
-        "generalTooltip": "用於工作流程中簡單的任務，如文字摘要、資訊提取等",
-        "reasoning": "推理模型",
-        "reasoningTooltip": "主要用於工作流程中複雜的任務，包括計劃、彙總分析結果等"
-      },
-      "workflowSettings": "工作流程設定",
       "workflowWindowVisibleShortcut": "工作流程視窗"
     },
     "mcp": {
@@ -439,9 +427,6 @@
       "restartFailed": "重新啟動 MCP 伺服器「{name}」失敗：{error}",
       "restartSuccess": "MCP 伺服器「{name}」已重新啟動。",
       "statusError": "啟動錯誤：{error}",
-      "statusRunning": "執行中",
-      "statusStarting": "啟動中",
-      "statusStopped": "未啟動",
       "statusUnknown": "未知",
       "title": "MCP 伺服器管理",
       "updateFailed": "MCP 伺服器更新失敗：{error}",
@@ -459,7 +444,10 @@
         "typeRequired": "伺服器類型不可為空。",
         "urlPlaceholder": "URL 包含佔位符：{placeholders}",
         "urlRequired": "SSE 類型需要 URL。"
-      }
+      },
+      "statusStarting": "啟動中",
+      "statusRunning": "執行中",
+      "statusStopped": "未啟動"
     },
     "model": {
       "add": "新增模型",
@@ -490,12 +478,10 @@
       "deleteTitle": "刪除模型",
       "disable": "停用",
       "disabled": "是否停用",
-      "disableFailed": "停用模型「{name}」失敗：{error}",
       "disableSuccess": "模型「{name}」已停用。",
       "documentation": "文件",
       "edit": "編輯模型",
       "enable": "啟用",
-      "enableFailed": "啟用模型「{name}」失敗：{error}",
       "enableSuccess": "模型「{name}」已啟用。",
       "frequencyPenalty": "頻率懲罰",
       "frequencyPenaltyPlaceholder": "調整模型重複生成相同詞語的頻率。值越大，重複越少。設為0或留空則不啟用。",
@@ -550,14 +536,15 @@
       "supportsResponsesApi": "支援 Responses 介面",
       "temperature": "溫度",
       "temperaturePlaceholder": "控制模型輸出的隨機性。值越大，輸出越隨機。",
-      "thinkingBudgetTokens": "思考預算",
       "thinkingLevel": "思考強度",
       "topK": "Top K",
       "topKPlaceholder": "控制模型從機率最高的 K 個詞中選擇。值越小，輸出越確定。設為 0 或留空則不啟用。OpenAi 相容介面不支援。",
       "topP": "Top P",
       "topPPlaceholder": "控制模型從機率最高的 P 個詞中選擇。值越小，輸出越確定。設為 0 或留空則不啟用。",
       "ungrouped": "未分組",
-      "updateSuccess": "模型已更新"
+      "updateSuccess": "模型已更新",
+      "enableFailed": "啟用模型「{name}」失敗：{error}",
+      "disableFailed": "停用模型「{name}」失敗：{error}"
     },
     "proxy": {
       "addNow": "立即新增",
@@ -648,7 +635,6 @@
         "title": "代理設定"
       },
       "stats": {
-        "activeModels": "活躍模型",
         "allTime": "全部",
         "autoRefresh": "自動刷新",
         "backendModel": "後端模型",
@@ -686,14 +672,12 @@
         "outputTokens": "輸出",
         "protocol": "協議",
         "provider": "供應商",
-        "providers": "供應商",
         "providerTokenUsageTitle": "供應商 Token 消耗分佈",
         "requests": "請求次數",
         "statusCode": "狀態碼",
         "title": "代理統計資訊",
         "today": "今天",
         "toolCompat": "相容模式",
-        "topProvider": "熱門模型",
         "totalRequests": "總請求數",
         "totalTokens": "總 Token 數",
         "yes": "是"
@@ -701,8 +685,7 @@
       "tabs": {
         "groups": "代理分組",
         "servers": "代理服務",
-        "settings": "代理設定",
-        "stats": "統計資訊"
+        "settings": "代理設定"
       },
       "title": "代理伺服器設定",
       "updateSuccess": "代理設定更新成功！",
@@ -799,7 +782,6 @@
       "importFailed": "匯入技能失敗:{error}",
       "importSuccess": "技能已匯入",
       "loadPresetError": "載入預設技能失敗",
-      "logo": "技能小圖",
       "manualAdd": "手動新增",
       "manualAddDesc": "自訂個人化技能",
       "name": "技能名稱",
@@ -850,9 +832,6 @@
   "workflow": {
     "allowedShellCommands": "允許的 Shell 指令",
     "approval": {
-      "backgroundMessage": "「{workflow}」需要審批：{action}",
-      "backgroundTitle": "背景工作流等待審批",
-      "queueButton": "審批",
       "rejectionMessageLabel": "拒絕說明",
       "rejectionMessagePlaceholder": "如果你不希望執行這個操作，可以輸入原因。"
     },
@@ -860,8 +839,6 @@
     "approvePlan": "批准計劃",
     "askUser": {
       "answerLabel": "回答：",
-      "backgroundMessage": "「{workflow}」正在等待你的輸入",
-      "backgroundTitle": "背景工作流等待輸入",
       "customLabel": "自訂輸入",
       "customPlaceholder": "我想輸入...",
       "responseTitle": "已提交的選擇",
@@ -892,13 +869,11 @@
       "executionDate": "執行日期",
       "executionTime": "執行時間",
       "frequency": "執行頻率",
-      "history": "執行歷史",
       "interval": "按間隔",
       "intervalMinutes": "間隔分鐘數",
       "model": "模型",
       "once": "單次",
       "prompt": "提示詞",
-      "promptFile": "選擇提示詞檔案",
       "promptFileHint": "選擇提示詞檔案後，執行時會優先使用檔案內容覆蓋目前提示詞。",
       "promptFileLabel": "提示詞檔案",
       "runNow": "立即執行",
@@ -986,7 +961,6 @@
     "exploration": {
       "reads": "讀取 {count} 次",
       "searches": "搜尋 {count} 次",
-      "thought": "思考",
       "thoughts": "思考 {count} 次",
       "title": "程式碼探索"
     },
@@ -1020,26 +994,20 @@
     "finalAuditTooltip": "AI 在任務完成前自動執行品質審查",
     "finalAuditDisabled": "已關閉終審模式",
     "finalAuditEnabled": "已開啟終審模式",
-    "finalReviewPending": "終審中",
     "finishTask": "完成任務",
     "historyTab": "對話",
     "installedSkillsGroup": "已安裝 Skills",
-    "muteApprovalNotifications": "靜音審批提示音",
-    "muteCompletionNotifications": "靜音完成提示音",
     "newWorkflow": "新增工作流程",
     "noAgentError": "沒有可用的代理。請先在設定中建立代理。",
     "noAutoApprovedItems": "沒有自動審批項目",
     "notificationSound": "聲音通知",
-    "pause": "暫停",
     "planningModeTooltip": "規劃模式：執行前 AI 研究與策略",
     "planningModeDisabled": "已關閉規劃模式",
     "planningModeEnabled": "已開啟規劃模式",
     "rejected": "已拒絕",
     "retrying": "請求頻率過快，正在重試 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
-    "selectAgentFirst": "請先選擇一個智能體",
     "sessionLost": "工作階段已中斷，請重新啟動或重新整理頁面。",
     "shellPolicyClickRemove": "點擊 × 移除項目",
-    "shellPolicyNote": "在 Agent 設定中配置",
     "skillsConfigTitle": "Workflow Skills 設定",
     "skillsSearchEmpty": "沒有符合的 Skills。",
     "skillsSearchPlaceholder": "按 Skills 名稱搜尋",
@@ -1047,7 +1015,6 @@
     "statusPanel": {
       "active": "目前",
       "childAgents": "子代理",
-      "childRunning": "執行中",
       "contextUsage": "上下文使用量",
       "direct": "直連",
       "convergenceScore": "收斂分",
@@ -1086,12 +1053,11 @@
       "utilityModel": "輔助",
       "verificationCalls": "驗證",
       "workFallback": "工作回退",
-      "workModel": "工作"
+      "workModel": "工作",
+      "latestDynamic": "最新動態"
     },
-    "stepBudgetExhaustedTitle": "步數耗盡",
     "stop": "停止",
     "stopping": "停止中",
-    "submit_plan": "提交計劃",
     "thinking": "思考中...",
     "thinkingExpanded": "思考中（已展開）",
     "thoughtCompleted": "思考完成",
@@ -1109,11 +1075,33 @@
       "next": "下一個",
       "title": "待辦事項"
     },
-    "tools": "工具",
-    "unmuteApprovalNotifications": "開啟審批提示音",
-    "unmuteCompletionNotifications": "開啟完成提示音",
     "untitled": "未命名工作流",
     "workflowTitle": "工作流程標題",
-    "written": "已寫入"
+    "written": "已寫入",
+    "taskLedger": {
+      "status": {
+        "pending": "待處理",
+        "running": "執行中",
+        "error": "錯誤",
+        "rejected": "已拒絕",
+        "success": "成功"
+      },
+      "title": "任務清單",
+      "loading": "正在載入任務...",
+      "running": "執行中",
+      "tryDifferentFilter": "請嘗試其他篩選條件",
+      "output": "輸出",
+      "empty": "暫無任務",
+      "error": "錯誤",
+      "pending": "待處理",
+      "result": "結果",
+      "completed": "已完成",
+      "arguments": "參數",
+      "locateInChat": "在對話中定位",
+      "execution": "執行",
+      "all": "全部",
+      "failed": "失敗"
+    },
+    "waitingForUser": "等待使用者輸入"
   }
 }

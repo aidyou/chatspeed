@@ -66,6 +66,12 @@ function collectExpression(source, fileName, lineOffset = 0) {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       keyLiterals.add(node.text);
     }
+    if (ts.isTemplateExpression(node)) {
+      const pattern = dynamicPattern(node);
+      if (pattern && /^(common|settings|workflow|menu|chat)\./.test(pattern.prefix)) {
+        dynamicPatterns.push(pattern);
+      }
+    }
     if (ts.isCallExpression(node) && isTranslationCall(node.expression) && node.arguments.length) {
       const values = staticValues(node.arguments[0]);
       if (values.length) values.forEach(value => keys.add(value));

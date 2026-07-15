@@ -143,12 +143,12 @@
     "save": "Enregistrer",
     "saveSuccess": "Enregistré",
     "search": "Rechercher",
-    "stop": "Arrêter",
-    "to": "à",
     "unpin": "Désépingler",
     "updateButtonText": "Mettre à jour",
     "uploadFailed": "Échec du téléchargement du fichier",
-    "warning": "Avertissement"
+    "warning": "Avertissement",
+    "saveFailed": "Échec de l’enregistrement",
+    "operationFailed": "Opération échouée : {error}"
   },
   "menu": {
     "about": "À propos",
@@ -192,7 +192,6 @@
       "authorizedPathsAdd": "Ajouter un répertoire",
       "authorizedPathsTip": "L'agent ne pourra lire et écrire des fichiers que dans ces répertoires (et leurs sous-répertoires).",
       "autoApprove": "Outils à approbation automatique",
-      "autonomousMode": "Mode autonome",
       "availableTools": "Outils disponibles",
       "basicInfo": "Informations de base",
       "copy": "Copier l'agent",
@@ -237,7 +236,6 @@
       "selectAvailableTools": "Sélectionner les outils disponibles",
       "selectDirectory": "Sélectionner un répertoire",
       "selectedSkills": "Skills activées",
-      "selectSkills": "Sélectionner des skills",
       "shellDecisionAllow": "Autoriser",
       "shellDecisionDeny": "Refuser",
       "shellDecisionReview": "Examiner",
@@ -378,16 +376,6 @@
       "visionModel": "Modèle de vision",
       "visionModelRequired": "Veuillez d'abord configurer un modèle de vision dans les paramètres pour prendre en charge l'analyse d'images.",
       "visionModelTooltip": "Sélectionnez un modèle de vision pour l'analyse des images. Lors de l'envoi d'images dans le chat, ce modèle sera utilisé pour analyser le contenu de l'image.",
-      "websearchModel": "Modèle de recherche web",
-      "websearchModelTooltip": "Utilisé pour générer des mots-clés de recherche à partir de votre conversation. Veuillez ne pas utiliser de modèle d'inférence, sinon cela sera très lent !",
-      "wordSelectionToolbar": "Barre d'outils de sélection de mots par l'IA",
-      "workflow": {
-        "general": "Modèle général",
-        "generalTooltip": "Utilisé pour les tâches simples dans le workflow, telles que le résumé de texte, l'extraction d'informations, etc.",
-        "reasoning": "Modèle de raisonnement",
-        "reasoningTooltip": "Principalement utilisé pour les tâches complexes dans le workflow, y compris la planification, le résumé des résultats d'analyse, etc."
-      },
-      "workflowSettings": "Paramètres du workflow",
       "workflowWindowVisibleShortcut": "Fenêtre de flux de travail"
     },
     "mcp": {
@@ -439,9 +427,6 @@
       "restartFailed": "Échec du redémarrage du serveur MCP \"{name}\" : {error}",
       "restartSuccess": "Le serveur MCP \"{name}\" a été redémarré.",
       "statusError": "Erreur de démarrage : {error}",
-      "statusRunning": "En cours d'exécution",
-      "statusStarting": "Démarrage en cours",
-      "statusStopped": "Non démarré",
       "statusUnknown": "Inconnu",
       "title": "Gestion des serveurs MCP",
       "updateFailed": "Échec de la mise à jour du serveur MCP : {error}",
@@ -459,7 +444,10 @@
         "typeRequired": "Le type de serveur ne peut pas être vide.",
         "urlPlaceholder": "L'URL contient des espaces réservés : {placeholders}",
         "urlRequired": "Le type SSE nécessite une URL."
-      }
+      },
+      "statusStarting": "Démarrage en cours",
+      "statusRunning": "En cours d'exécution",
+      "statusStopped": "Non démarré"
     },
     "model": {
       "add": "Ajouter un modèle",
@@ -490,12 +478,10 @@
       "deleteTitle": "Supprimer le modèle",
       "disable": "Désactiver",
       "disabled": "Désactivé",
-      "disableFailed": "Échec de la désactivation du modèle \"{name}\" : {error}",
       "disableSuccess": "Le modèle \"{name}\" a été désactivé.",
       "documentation": "Documentation",
       "edit": "Modifier le modèle",
       "enable": "Activer",
-      "enableFailed": "Échec de l'activation du modèle \"{name}\" : {error}",
       "enableSuccess": "Le modèle \"{name}\" a été activé.",
       "frequencyPenalty": "Pénalité de fréquence",
       "frequencyPenaltyPlaceholder": "Ajuste la fréquence à laquelle le modèle répète les mêmes mots. Une valeur plus élevée entraîne moins de répétitions. Mettre à 0 ou laisser vide pour désactiver.",
@@ -550,14 +536,15 @@
       "supportsResponsesApi": "Prend en charge l'API Responses",
       "temperature": "Température",
       "temperaturePlaceholder": "Contrôle le caractère aléatoire de la sortie du modèle. Une valeur plus élevée donne une sortie plus aléatoire.",
-      "thinkingBudgetTokens": "Budget de raisonnement",
       "thinkingLevel": "Niveau de réflexion",
       "topK": "Top K",
       "topKPlaceholder": "Contrôle la sélection du modèle parmi les K mots les plus probables. Une valeur plus petite donne une sortie plus déterministe. Mettre à 0 ou laisser vide pour désactiver. Les interfaces compatibles OpenAi ne le prennent pas en charge.",
       "topP": "Top P",
       "topPPlaceholder": "Contrôle la sélection du modèle parmi les P mots les plus probables. Une valeur plus petite donne une sortie plus déterministe. Mettre à 0 ou laisser vide pour désactiver.",
       "ungrouped": "Non groupé",
-      "updateSuccess": "Modèle mis à jour"
+      "updateSuccess": "Modèle mis à jour",
+      "enableFailed": "Échec de l'activation du modèle \"{name}\" : {error}",
+      "disableFailed": "Échec de la désactivation du modèle \"{name}\" : {error}"
     },
     "proxy": {
       "addNow": "Ajouter maintenant",
@@ -648,7 +635,6 @@
         "title": "Paramètres du proxy"
       },
       "stats": {
-        "activeModels": "Modèles actifs",
         "allTime": "Tout le temps",
         "autoRefresh": "Rafraîchissement auto",
         "backendModel": "Modèle backend",
@@ -686,14 +672,12 @@
         "outputTokens": "Sortie",
         "protocol": "Protocole",
         "provider": "Fournisseur",
-        "providers": "Fournisseurs",
         "providerTokenUsageTitle": "Utilisation des tokens par fournisseur",
         "requests": "Requêtes",
         "statusCode": "Code de statut",
         "title": "Statistiques du proxy",
         "today": "Aujourd'hui",
         "toolCompat": "Mode de compatibilité",
-        "topProvider": "Modèle populaire",
         "totalRequests": "Total des requêtes",
         "totalTokens": "Total des tokens",
         "yes": "Oui"
@@ -701,8 +685,7 @@
       "tabs": {
         "groups": "Groupes de proxy",
         "servers": "Services de proxy",
-        "settings": "Paramètres du proxy",
-        "stats": "Statistiques"
+        "settings": "Paramètres du proxy"
       },
       "title": "Configuration du serveur proxy",
       "updateSuccess": "Configuration de proxy mise à jour avec succès !",
@@ -799,7 +782,6 @@
       "importFailed": "Échec de l'importation de la compétence : {error}",
       "importSuccess": "Compétence importée",
       "loadPresetError": "Échec du chargement des compétences prédéfinies",
-      "logo": "Logo de la compétence",
       "manualAdd": "Ajouter manuellement",
       "manualAddDesc": "Personnaliser les compétences individuelles",
       "name": "Nom de la compétence",
@@ -850,9 +832,6 @@
   "workflow": {
     "allowedShellCommands": "Commandes Shell autorisées",
     "approval": {
-      "backgroundMessage": "« {workflow} » attend une approbation : {action}",
-      "backgroundTitle": "Workflow en arrière-plan en attente",
-      "queueButton": "Approuver",
       "rejectionMessageLabel": "Motif du refus",
       "rejectionMessagePlaceholder": "Si vous ne souhaitez pas exécuter cette action, indiquez la raison."
     },
@@ -860,8 +839,6 @@
     "approvePlan": "Approuver le plan",
     "askUser": {
       "answerLabel": "Réponse :",
-      "backgroundMessage": "« {workflow} » attend votre réponse",
-      "backgroundTitle": "Workflow en arrière-plan en attente",
       "customLabel": "Entrée personnalisée",
       "customPlaceholder": "Je veux saisir...",
       "responseTitle": "Choix envoyé",
@@ -892,13 +869,11 @@
       "executionDate": "Date d’exécution",
       "executionTime": "Heure d’exécution",
       "frequency": "Fréquence",
-      "history": "Historique des exécutions",
       "interval": "Intervalle",
       "intervalMinutes": "Intervalle en minutes",
       "model": "Modèle",
       "once": "Une fois",
       "prompt": "Invite",
-      "promptFile": "Fichier d’invite",
       "promptFileHint": "Lorsqu’un fichier d’invite est sélectionné, son contenu remplace l’invite à l’exécution.",
       "promptFileLabel": "Fichier d’invite",
       "runNow": "Exécuter maintenant",
@@ -986,7 +961,6 @@
     "exploration": {
       "reads": "{count} lectures",
       "searches": "{count} recherches",
-      "thought": "Réflexion",
       "thoughts": "{count} réflexions",
       "title": "Exploration du code"
     },
@@ -1020,26 +994,20 @@
     "finalAuditTooltip": "L'IA effectue automatiquement une révision de la qualité avant de terminer la tâche",
     "finalAuditDisabled": "Mode d’audit final désactivé",
     "finalAuditEnabled": "Mode d’audit final activé",
-    "finalReviewPending": "Revue finale en cours",
     "finishTask": "Terminer la tâche",
     "historyTab": "Conversation",
     "installedSkillsGroup": "Skills installés",
-    "muteApprovalNotifications": "Couper le son d’approbation",
-    "muteCompletionNotifications": "Couper le son de fin",
     "newWorkflow": "Nouveau flux de travail",
     "noAgentError": "Aucun agent disponible. Veuillez d’abord en créer un dans les réglages.",
     "noAutoApprovedItems": "Aucun élément auto-approuvé",
     "notificationSound": "Notifications sonores",
-    "pause": "Pause",
     "planningModeTooltip": "Mode de planification : Recherche et stratégie IA avant exécution",
     "planningModeDisabled": "Mode de planification désactivé",
     "planningModeEnabled": "Mode de planification activé",
     "rejected": "Refusé",
     "retrying": "Requête trop fréquente, nouvelle tentative (tentative {attempt}/{total}), attente de {seconds} secondes...",
-    "selectAgentFirst": "Veuillez d'abord sélectionner un agent",
     "sessionLost": "Session perdue. Redémarrez ou actualisez la page.",
     "shellPolicyClickRemove": "Cliquez sur × pour supprimer",
-    "shellPolicyNote": "À configurer dans Agent",
     "skillsConfigTitle": "Skills du workflow",
     "skillsSearchEmpty": "Aucun Skill correspondant.",
     "skillsSearchPlaceholder": "Rechercher par nom",
@@ -1047,7 +1015,6 @@
     "statusPanel": {
       "active": "Actif",
       "childAgents": "Sous-agents",
-      "childRunning": "En cours",
       "contextUsage": "Utilisation du contexte",
       "direct": "Direct",
       "convergenceScore": "Convergence",
@@ -1086,12 +1053,11 @@
       "utilityModel": "Utilitaire",
       "verificationCalls": "Vérifier",
       "workFallback": "Secours travail",
-      "workModel": "Travail"
+      "workModel": "Travail",
+      "latestDynamic": "Dernier"
     },
-    "stepBudgetExhaustedTitle": "Étapes épuisées",
     "stop": "Arrêter",
     "stopping": "Arrêt...",
-    "submit_plan": "Soumettre le plan",
     "thinking": "Réflexion en cours...",
     "thinkingExpanded": "Réflexion (déployée)",
     "thoughtCompleted": "Réflexion terminée",
@@ -1109,11 +1075,33 @@
       "next": "Suivant",
       "title": "Liste des tâches"
     },
-    "tools": "Outils",
-    "unmuteApprovalNotifications": "Activer le son d’approbation",
-    "unmuteCompletionNotifications": "Activer le son de fin",
     "untitled": "Workflow sans titre",
     "workflowTitle": "Titre du flux de travail",
-    "written": "Écrit"
+    "written": "Écrit",
+    "taskLedger": {
+      "status": {
+        "pending": "En attente",
+        "running": "En cours",
+        "error": "Erreur",
+        "rejected": "Refusé",
+        "success": "Réussi"
+      },
+      "title": "Liste des tâches",
+      "loading": "Chargement des tâches...",
+      "running": "En cours",
+      "tryDifferentFilter": "Essayez un autre filtre",
+      "output": "Sortie",
+      "empty": "Aucune tâche pour le moment",
+      "error": "Erreur",
+      "pending": "En attente",
+      "result": "Résultat",
+      "completed": "Terminé",
+      "arguments": "Arguments",
+      "locateInChat": "Afficher dans la conversation",
+      "execution": "Exécution",
+      "all": "Tout",
+      "failed": "Échoué"
+    },
+    "waitingForUser": "En attente de la saisie utilisateur"
   }
 }

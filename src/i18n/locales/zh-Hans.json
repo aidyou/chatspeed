@@ -143,12 +143,12 @@
     "save": "保存",
     "saveSuccess": "保存成功",
     "search": "搜索",
-    "stop": "停止",
-    "to": "到",
     "unpin": "取消置顶",
     "updateButtonText": "更新",
     "uploadFailed": "文件上传失败",
-    "warning": "警告"
+    "warning": "警告",
+    "saveFailed": "保存失败",
+    "operationFailed": "操作失败：{error}"
   },
   "menu": {
     "about": "关于",
@@ -192,7 +192,6 @@
       "authorizedPathsAdd": "添加目录",
       "authorizedPathsTip": "智能体将只能读写这些目录（及其子目录）下的文件。如果不配置，部分文件操作工具可能无法使用。",
       "autoApprove": "自动批准工具",
-      "autonomousMode": "自主模式",
       "availableTools": "可用工具",
       "basicInfo": "基本信息",
       "copy": "复制智能体",
@@ -237,7 +236,6 @@
       "selectAvailableTools": "选择可用工具",
       "selectDirectory": "选择目录",
       "selectedSkills": "已启用 Skills",
-      "selectSkills": "选择 Skills",
       "shellDecisionAllow": "允许 (Allow)",
       "shellDecisionDeny": "拒绝 (Deny)",
       "shellDecisionReview": "需审核 (Review)",
@@ -378,16 +376,6 @@
       "visionModel": "视觉模型",
       "visionModelRequired": "请先在设置中配置视觉模型以支持图片分析",
       "visionModelTooltip": "选择用于图片分析的视觉模型。在聊天中发送图片时，将使用此模型分析图片内容。",
-      "websearchModel": "网络搜索模型",
-      "websearchModelTooltip": "用于将你的对话生成搜索关键词，请不要用推理模型，否则会很慢！",
-      "wordSelectionToolbar": "AI划词工具栏",
-      "workflow": {
-        "general": "通用模型",
-        "generalTooltip": "用于工作流中简单的任务，如文本摘要、信息提取等",
-        "reasoning": "推理模型",
-        "reasoningTooltip": "主要用于工作流中复杂的任务，包括计划、汇总分析结果等"
-      },
-      "workflowSettings": "工作流设置",
       "workflowWindowVisibleShortcut": "工作流窗口"
     },
     "mcp": {
@@ -439,9 +427,6 @@
       "restartFailed": "重启 MCP 服务器 “{name}” 失败: {error}",
       "restartSuccess": "MCP 服务器 “{name}” 已重启。",
       "statusError": "启动错误: {error}",
-      "statusRunning": "运行中",
-      "statusStarting": "启动中",
-      "statusStopped": "未启动",
       "statusUnknown": "未知",
       "title": "MCP 服务器管理",
       "updateFailed": "MCP 服务器更新失败: {error}",
@@ -459,7 +444,10 @@
         "typeRequired": "服务器类型不能为空。",
         "urlPlaceholder": "URL 包含占位符：{placeholders}",
         "urlRequired": "SSE 类型需要 URL。"
-      }
+      },
+      "statusStarting": "启动中",
+      "statusRunning": "运行中",
+      "statusStopped": "未启动"
     },
     "model": {
       "add": "添加模型",
@@ -491,12 +479,10 @@
       "deleteTitle": "删除模型",
       "disable": "禁用",
       "disabled": "是否禁用",
-      "disableFailed": "禁用模型 “{name}” 失败: {error}",
       "disableSuccess": "模型 “{name}” 已禁用。",
       "documentation": "文档",
       "edit": "编辑模型",
       "enable": "启用",
-      "enableFailed": "启用模型 “{name}” 失败: {error}",
       "enableSuccess": "模型 “{name}” 已启用。",
       "frequencyPenalty": "频率惩罚",
       "frequencyPenaltyPlaceholder": "调整模型重复生成相同词语的频率。值越大，重复越少。设为0或留空则不启用。",
@@ -550,14 +536,15 @@
       "supportsResponsesApi": "支持 Responses 接口",
       "temperature": "温度",
       "temperaturePlaceholder": "控制模型输出的随机性。值越大，输出越随机。",
-      "thinkingBudgetTokens": "思考预算",
       "thinkingLevel": "思考强度",
       "topK": "Top K",
       "topKPlaceholder": "控制模型从概率最高的K个词中选择。值越小，输出越确定。设为0或留空则不启用。OpenAi兼容接口不支持。",
       "topP": "Top P",
       "topPPlaceholder": "控制模型从概率最高的P个词中选择。值越小，输出越确定。设为0或留空则不启用。",
       "ungrouped": "未分组",
-      "updateSuccess": "模型已更新"
+      "updateSuccess": "模型已更新",
+      "enableFailed": "启用模型 “{name}” 失败: {error}",
+      "disableFailed": "禁用模型 “{name}” 失败: {error}"
     },
     "proxy": {
       "addNow": "立即添加",
@@ -648,7 +635,6 @@
         "title": "代理设置"
       },
       "stats": {
-        "activeModels": "活跃模型",
         "allTime": "全部",
         "autoRefresh": "自动刷新",
         "backendModel": "后端模型",
@@ -686,14 +672,12 @@
         "outputTokens": "输出",
         "protocol": "协议",
         "provider": "供应商",
-        "providers": "供应商",
         "providerTokenUsageTitle": "供应商 Token 消耗分布",
         "requests": "请求次数",
         "statusCode": "状态码",
         "title": "代理统计信息",
         "today": "今天",
         "toolCompat": "兼容模式",
-        "topProvider": "热门模型",
         "totalRequests": "总请求数",
         "totalTokens": "总 Token 数",
         "yes": "是"
@@ -701,8 +685,7 @@
       "tabs": {
         "groups": "代理分组",
         "servers": "代理服务",
-        "settings": "代理设置",
-        "stats": "统计信息"
+        "settings": "代理设置"
       },
       "title": "代理服务器配置",
       "updateSuccess": "代理配置更新成功！",
@@ -799,7 +782,6 @@
       "importFailed": "导入技能失败:{error}",
       "importSuccess": "技能已导入",
       "loadPresetError": "加载预设技能失败",
-      "logo": "技能小图",
       "manualAdd": "手动添加",
       "manualAddDesc": "自定义个性化技能",
       "name": "技能名称",
@@ -850,9 +832,6 @@
   "workflow": {
     "allowedShellCommands": "允许的 Shell 命令",
     "approval": {
-      "backgroundMessage": "“{workflow}” 需要审批：{action}",
-      "backgroundTitle": "后台工作流等待审批",
-      "queueButton": "Approval",
       "rejectionMessageLabel": "拒绝说明",
       "rejectionMessagePlaceholder": "如果你不希望执行这个操作，可以输入原因。"
     },
@@ -860,8 +839,6 @@
     "approvePlan": "批准计划",
     "askUser": {
       "answerLabel": "回答：",
-      "backgroundMessage": "“{workflow}” 正在等待你的输入",
-      "backgroundTitle": "后台工作流等待输入",
       "customLabel": "自定义输入",
       "customPlaceholder": "我想输入...",
       "responseTitle": "已提交的选择",
@@ -892,13 +869,11 @@
       "executionDate": "执行日期",
       "executionTime": "执行时间",
       "frequency": "执行频率",
-      "history": "执行历史",
       "interval": "按间隔",
       "intervalMinutes": "间隔分钟数",
       "model": "模型",
       "once": "单次",
       "prompt": "提示词",
-      "promptFile": "选择提示词文件",
       "promptFileHint": "选择提示词文件后，运行时将优先使用文件内容覆盖当前提示词。",
       "promptFileLabel": "提示词文件",
       "runNow": "立即运行",
@@ -986,7 +961,6 @@
     "exploration": {
       "reads": "读取 {count} 次",
       "searches": "搜索 {count} 次",
-      "thought": "思考",
       "thoughts": "思考 {count} 次",
       "title": "代码探索"
     },
@@ -1020,26 +994,20 @@
     "finalAuditTooltip": "任务结束前由 AI 自动进行质量审核",
     "finalAuditDisabled": "已关闭终审模式",
     "finalAuditEnabled": "已开启终审模式",
-    "finalReviewPending": "终审中",
     "finishTask": "完成任务",
     "historyTab": "会话",
     "installedSkillsGroup": "已安装 Skills",
-    "muteApprovalNotifications": "静音审批提示音",
-    "muteCompletionNotifications": "静音完成提示音",
     "newWorkflow": "新建工作流",
     "noAgentError": "没有可用的代理。请先在设置中创建代理。",
     "noAutoApprovedItems": "没有自动审批的项目",
     "notificationSound": "声音通知",
-    "pause": "暂停",
     "planningModeTooltip": "计划模式：在执行前进行 AI 调研和方案设计",
     "planningModeDisabled": "已关闭计划模式",
     "planningModeEnabled": "已开启计划模式",
     "rejected": "已拒绝",
     "retrying": "请求频率过快，正在重试 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
-    "selectAgentFirst": "请先选择一个智能体",
     "sessionLost": "会话已断开，请重启或刷新页面。",
     "shellPolicyClickRemove": "点击 × 移除项目",
-    "shellPolicyNote": "在 Agent 设置中配置",
     "skillsConfigTitle": "Workflow Skills 配置",
     "skillsSearchEmpty": "没有匹配的 Skills。",
     "skillsSearchPlaceholder": "按 Skills 名称搜索",
@@ -1047,7 +1015,6 @@
     "statusPanel": {
       "active": "当前",
       "childAgents": "子代理",
-      "childRunning": "运行中",
       "contextUsage": "上下文使用率",
       "direct": "直连",
       "convergenceScore": "收敛分",
@@ -1086,12 +1053,11 @@
       "utilityModel": "辅助",
       "verificationCalls": "验证",
       "workFallback": "工作回退",
-      "workModel": "工作"
+      "workModel": "工作",
+      "latestDynamic": "最新动态"
     },
-    "stepBudgetExhaustedTitle": "步数耗尽",
     "stop": "停止",
     "stopping": "停止中",
-    "submit_plan": "提交计划",
     "thinking": "思考中...",
     "thinkingExpanded": "思考过程",
     "thoughtCompleted": "已思考",
@@ -1109,11 +1075,33 @@
       "next": "下一步",
       "title": "待办事项"
     },
-    "tools": "工具",
-    "unmuteApprovalNotifications": "开启审批提示音",
-    "unmuteCompletionNotifications": "开启完成提示音",
     "untitled": "未命名工作流",
     "workflowTitle": "工作流标题",
-    "written": "已写入"
+    "written": "已写入",
+    "taskLedger": {
+      "status": {
+        "pending": "待处理",
+        "running": "运行中",
+        "error": "错误",
+        "rejected": "已拒绝",
+        "success": "成功"
+      },
+      "title": "任务清单",
+      "loading": "正在加载任务...",
+      "running": "运行中",
+      "tryDifferentFilter": "请尝试其他筛选条件",
+      "output": "输出",
+      "empty": "暂无任务",
+      "error": "错误",
+      "pending": "待处理",
+      "result": "结果",
+      "completed": "已完成",
+      "arguments": "参数",
+      "locateInChat": "在对话中定位",
+      "execution": "执行",
+      "all": "全部",
+      "failed": "失败"
+    },
+    "waitingForUser": "等待用户输入"
   }
 }
