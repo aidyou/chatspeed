@@ -12,12 +12,15 @@
   - Improved streaming render performance and memory handling during long-running Workflow sessions for smoother incremental output.
 - **Proxy stats interaction polish**:
   - Refined the proxy stats table layout and model display controls for quicker comparison and better readability.
+  - Added per-million-token cost statistics to make model pricing easier to compare.
 
 ### 🐞 Bug Fixes
 
 - **Workflow streaming, rewind, and pending-state stability**:
   - Fixed several Workflow edge cases around stream rewinds, duplicate display IDs, approved plan state syncing, and final review pending projection.
   - Improved consistency when recovering and rendering in-progress Workflow messages during long sessions.
+- **Workflow Bash tool output and status display**:
+  - Unified in-progress and completed Bash tool status presentation, and fixed output rendering and collapsing in the message list.
 - **Manual update flow and progress feedback**:
   - Refined the manual update flow so update progress and related status transitions behave more consistently.
 - **Settings, shortcuts, and window activation**:
