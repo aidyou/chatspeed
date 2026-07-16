@@ -5,6 +5,44 @@
  * UI refactors do not silently reintroduce transcript projection regressions.
  */
 
+export const collectSubAgentCompletions = (visibleGroups = [], progressValues = []) => {
+  const completions = new Map()
+
+  for (const group of visibleGroups) {
+    for (const message of group?.messages || []) {
+      const meta = message?.metadata || {}
+      const completionId = meta.sub_agent_id || meta.data?.sub_agent_id
+      if (meta.observation_type !== 'sub_agent_completion' || !completionId) continue
+
+      completions.set(completionId, {
+        summary: meta.summary || '',
+        execution_status: meta.execution_status || '',
+        result: meta.result || {},
+        sub_agent_name: meta.sub_agent_name || '',
+        sub_agent_task: meta.sub_agent_task || '',
+        data: meta.data || {}
+      })
+    }
+  }
+
+  for (const progress of progressValues) {
+    const completionId = progress?.subAgentId || progress?.sub_agent_id || ''
+    const result = progress?.result
+    if (!completionId || !result || typeof result !== 'object') continue
+
+    completions.set(completionId, {
+      summary: progress.summary || result.summary || '',
+      execution_status: progress.status || result.status || '',
+      result,
+      sub_agent_name: progress.agentName || progress.agent_name || '',
+      sub_agent_task: progress.task || '',
+      data: {}
+    })
+  }
+
+  return completions
+}
+
 /**
  * Preserve explicit backend execution statuses for tool messages.
  *

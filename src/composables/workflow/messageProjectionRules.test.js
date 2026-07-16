@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
 import {
+  collectSubAgentCompletions,
   inferWorkflowToolExecutionStatus,
   shouldRenderSubAgentCard
 } from './messageProjectionRules.js'
@@ -52,6 +53,37 @@ assert.equal(
   ),
   'pending_approval',
   'pending approvals without an explicit execution status should still map to pending_approval'
+)
+
+const visibleCompletion = collectSubAgentCompletions(
+  [
+    {
+      messages: [
+        {
+          metadata: {
+            observation_type: 'sub_agent_completion',
+            sub_agent_id: 'visible_background',
+            execution_status: 'completed',
+            result: { result: 'visible result' }
+          }
+        }
+      ]
+    }
+  ],
+  [
+    {
+      subAgentId: 'live_background',
+      status: 'completed',
+      result: { status: 'completed', result: 'live result' }
+    }
+  ]
+)
+assert.equal(visibleCompletion.get('visible_background').result.result, 'visible result')
+assert.equal(visibleCompletion.get('live_background').result.result, 'live result')
+assert.equal(
+  visibleCompletion.has('hidden_history'),
+  false,
+  'completion projection must not scan messages outside visible task groups'
 )
 
 console.log('messageProjectionRules tests passed')

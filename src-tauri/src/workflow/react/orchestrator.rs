@@ -9,7 +9,11 @@ use crate::workflow::react::engine::ReActExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::gateway::Gateway;
-use crate::workflow::react::types::{ExecutionContext, RuntimeState, SubAgentCompletion};
+use crate::workflow::react::runtime_observation::{
+    runtime_observation_metadata_with_visibility, RuntimeObservationLlmVisibility,
+    RuntimeObservationType, RuntimeObservationUiVisibility,
+};
+use crate::workflow::react::types::{ExecutionContext, RuntimeState, StepType, SubAgentCompletion};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -230,6 +234,69 @@ fn persist_sub_agent_completion(
     context.pending_sub_agent_completions.push(completion);
     store
         .upsert_execution_context(&context)
+        .map_err(WorkflowEngineError::Db)?;
+    Ok(())
+}
+
+fn persist_background_completion_projection(
+    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    parent_session_id: &str,
+    sub_agent_id: &str,
+    result: &Value,
+) -> Result<(), WorkflowEngineError> {
+    let store = main_store
+        .read()
+        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    let segment_id = store
+        .get_execution_context(parent_session_id)
+        .map_err(WorkflowEngineError::Db)?
+        .map(|context| context.current_segment_id)
+        .unwrap_or(1);
+    let status = result
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("completed");
+    let summary = result
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mut metadata = runtime_observation_metadata_with_visibility(
+        RuntimeObservationType::SubAgentCompletion,
+        RuntimeObservationLlmVisibility::Hide,
+        RuntimeObservationUiVisibility::Hide,
+        json!({
+            "sub_agent_id": sub_agent_id,
+            "execution_mode": "background",
+            "result": result,
+            "summary": summary,
+            "execution_status": status,
+        }),
+    );
+    metadata["sub_agent_id"] = json!(sub_agent_id);
+    metadata["execution_mode"] = json!("background");
+    metadata["result"] = result.clone();
+    metadata["summary"] = json!(summary);
+    metadata["execution_status"] = json!(status);
+
+    store
+        .add_workflow_message(&WorkflowMessage {
+            id: None,
+            session_id: parent_session_id.to_string(),
+            role: "user".to_string(),
+            message: String::new(),
+            reasoning: None,
+            message_kind: "runtime_observation".to_string(),
+            message_subtype: Some("sub_agent_completion".to_string()),
+            segment_id,
+            source_event_type: Some("sub_agent_completed".to_string()),
+            metadata: Some(metadata),
+            attached_context: None,
+            step_type: Some(StepType::Observe.to_string()),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        })
         .map_err(WorkflowEngineError::Db)?;
     Ok(())
 }
@@ -1070,6 +1137,8 @@ impl ToolDefinition for TaskTool {
         }
 
         if execution_mode == "background" {
+            let child_agent_name = child_agent.name.clone();
+            let delegated_task = prompt.to_string();
             if let Some(parent_session_id) = self.parent_session_id.as_ref() {
                 if let Err(e) = append_sub_agent_event(
                     &self.main_store,
@@ -1131,6 +1200,77 @@ impl ToolDefinition for TaskTool {
                     if let Err(e) = persist_sub_agent_completion(&main_store, completion) {
                         log::warn!(
                             "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist background sub-agent completion: {}",
+                            task_id_clone,
+                            parent_session_id,
+                            e
+                        );
+                    }
+                    if let Err(e) = persist_background_completion_projection(
+                        &main_store,
+                        &parent_session_id,
+                        &task_id_clone,
+                        &completion_result,
+                    ) {
+                        log::warn!(
+                            "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist background completion projection: {}",
+                            task_id_clone,
+                            parent_session_id,
+                            e
+                        );
+                    }
+                    let terminal_status = completion_result
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("completed");
+                    let (runtime_state, workflow_state, is_error) = match terminal_status {
+                        "failed" => (
+                            RuntimeState::Failed,
+                            crate::workflow::react::types::WorkflowState::Error,
+                            true,
+                        ),
+                        "cancelled" | "interrupted" => (
+                            RuntimeState::Cancelled,
+                            crate::workflow::react::types::WorkflowState::Cancelled,
+                            true,
+                        ),
+                        _ => (
+                            RuntimeState::Completed,
+                            crate::workflow::react::types::WorkflowState::Completed,
+                            false,
+                        ),
+                    };
+                    if let Err(e) = gateway
+                        .send(
+                            &parent_session_id,
+                            crate::workflow::react::types::GatewayPayload::SubAgentProgress {
+                                sub_agent_id: task_id_clone.clone(),
+                                parent_session_id: parent_session_id.clone(),
+                                status: runtime_state,
+                                workflow_state,
+                                wait_reason: None,
+                                agent_name: Some(child_agent_name.clone()),
+                                task: Some(delegated_task.clone()),
+                                title: Some(child_agent_name.clone()),
+                                summary: completion_result
+                                    .get("summary")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string),
+                                result: Some(completion_result.clone()),
+                                tool_calls_count: completion_result
+                                    .get("tool_calls_count")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0)
+                                    as usize,
+                                current_context_tokens: None,
+                                max_context_tokens: None,
+                                is_error,
+                                updated_at_ms: chrono::Utc::now().timestamp_millis(),
+                            },
+                        )
+                        .await
+                    {
+                        log::warn!(
+                            "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to send background completion progress: {}",
                             task_id_clone,
                             parent_session_id,
                             e
@@ -1618,9 +1758,9 @@ impl ToolDefinition for TaskStopTool {
 #[cfg(test)]
 mod tests {
     use super::{
-        remember_completed_task, stop_background_task, BackgroundTask, CompletedTaskSnapshot,
-        DefaultSubAgentFactory, SubAgentFactory, TaskOutputTool, TaskTool, BACKGROUND_TASKS,
-        COMPLETED_BACKGROUND_TASKS,
+        persist_background_completion_projection, remember_completed_task, stop_background_task,
+        BackgroundTask, CompletedTaskSnapshot, DefaultSubAgentFactory, SubAgentFactory,
+        TaskOutputTool, TaskTool, BACKGROUND_TASKS, COMPLETED_BACKGROUND_TASKS,
     };
     use crate::ai::interaction::chat_completion::ChatState;
     use crate::db::{AgentConfig, MainStore, WorkflowMessage};
@@ -1800,6 +1940,67 @@ mod tests {
             .parent()
             .expect("src-tauri should have a parent repo directory")
             .to_path_buf()
+    }
+
+    #[test]
+    fn background_completion_projection_is_hidden_and_structured() {
+        let (_dir, store) = test_store();
+        let agent = crate::db::Agent::new(
+            "projection-agent".to_string(),
+            "Projection Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "Projection test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        {
+            let store_guard = store.read().expect("store lock");
+            store_guard.add_agent(&agent).expect("failed to add agent");
+            store_guard
+                .create_workflow("projection-parent", "test", &agent.id, None, None)
+                .expect("failed to create workflow");
+        }
+
+        persist_background_completion_projection(
+            &store,
+            "projection-parent",
+            "subagent_projection_1",
+            &json!({
+                "status": "completed",
+                "result": "projected result",
+                "summary": "projected summary"
+            }),
+        )
+        .expect("failed to persist background completion projection");
+
+        let messages = store
+            .read()
+            .expect("store lock")
+            .get_workflow_snapshot("projection-parent")
+            .expect("failed to load snapshot")
+            .messages;
+        let projection = messages.last().expect("expected projection message");
+        let metadata = projection.metadata.as_ref().expect("expected metadata");
+        assert_eq!(metadata["observation_type"], "sub_agent_completion");
+        assert_eq!(metadata["llm_visibility"], "hide");
+        assert_eq!(metadata["ui_visibility"], "hide");
+        assert_eq!(metadata["execution_mode"], "background");
+        assert_eq!(metadata["result"]["result"], "projected result");
     }
 
     #[tokio::test]

@@ -1,5 +1,6 @@
 import { ref, computed, watch } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
+import { collectSubAgentCompletions } from './messageProjectionRules'
 import { useSubAgentSummaries } from './useSubAgentSummaries'
 import { resolveWorkflowToolIcon } from './toolIcons'
 import { isAutoExecuteWorkflowTool } from './toolApproval'
@@ -502,13 +503,25 @@ export function useWorkflowMessages(options = {}) {
     () => workflowStore.hiddenCompletedTaskCount || 0
   )
 
-  const enhanceRawMessages = rawMsgs => {
+  const subAgentCompletionsById = computed(() =>
+    collectSubAgentCompletions(
+      visibleTaskGroupsState.value.groups,
+      Array.from((workflowStore.subAgentProgress || new Map()).values())
+    )
+  )
+
+  const subAgentCompletionsRevision = computed(() =>
+    Array.from(subAgentCompletionsById.value.entries())
+      .map(([id, completion]) => `${id}:${completion.execution_status}:${completion.summary}`)
+      .join('|')
+  )
+
+  const enhanceRawMessages = (rawMsgs, subAgentCompletions) => {
     if (!rawMsgs.length) return []
 
     const toolStates = new Map() // tool_call_id -> { isFinal: bool, isRejected: bool, hasError: bool, isRunning: bool }
     const toolHasWaitingMsg = new Set() // tool_call_id that has an 'Awaiting' message
     const toolMessageIds = new Set() // tool_call_id with dedicated tool/user-observe messages
-    const subAgentCompletions = new Map()
     const rejectedUserMessageIds = new Set()
     const ledgerStateById = new Map((workflowStore.toolList || []).map(tool => [tool.toolCallId, tool]))
     const subAgentProgressById = workflowStore.subAgentProgress || new Map()
@@ -687,25 +700,14 @@ export function useWorkflowMessages(options = {}) {
     const parseSubAgentRunPayload = message => {
       const meta = message?.metadata || {}
       const observationData = meta.data || {}
-      const taskId =
-        meta.sub_agent_id || meta.subAgentId || observationData.sub_agent_id || observationData.subAgentId || ''
-      const mode = meta.sub_agent_mode || meta.subAgentMode || observationData.sub_agent_mode || observationData.subAgentMode || ''
-      const task =
-        meta.sub_agent_task ||
-        meta.subAgentTask ||
-        observationData.sub_agent_task ||
-        observationData.subAgentTask ||
-        ''
+      const taskId = meta.sub_agent_id || observationData.sub_agent_id || ''
+      const mode = meta.execution_mode || observationData.execution_mode || ''
+      const task = meta.sub_agent_task || observationData.sub_agent_task || ''
       return {
         taskId,
         mode,
         task,
-        agent:
-          meta.sub_agent_name ||
-          meta.subAgentName ||
-          observationData.sub_agent_name ||
-          observationData.subAgentName ||
-          ''
+        agent: meta.sub_agent_name || observationData.sub_agent_name || ''
       }
     }
 
@@ -713,8 +715,7 @@ export function useWorkflowMessages(options = {}) {
       const meta = message?.metadata || {}
       const observationData = meta.data || {}
       const toolName = String(meta.tool_name || '').toLowerCase()
-      const directTaskId =
-        meta.sub_agent_id || meta.subAgentId || meta.data?.sub_agent_id || meta.data?.subAgentId || ''
+      const directTaskId = meta.sub_agent_id || meta.data?.sub_agent_id || ''
       if (toolName !== 'sub_agent_run' && !directTaskId) return null
 
       const payload =
@@ -722,19 +723,9 @@ export function useWorkflowMessages(options = {}) {
           ? parseSubAgentRunPayload(message)
           : {
               taskId: directTaskId,
-              mode: meta.sub_agent_mode || meta.subAgentMode || 'call',
-              task:
-                meta.sub_agent_task ||
-                meta.subAgentTask ||
-                meta.data?.sub_agent_task ||
-                meta.data?.subAgentTask ||
-                '',
-              agent:
-                meta.sub_agent_name ||
-                meta.subAgentName ||
-                meta.data?.sub_agent_name ||
-                meta.data?.subAgentName ||
-                ''
+              mode: meta.execution_mode || meta.data?.execution_mode || '',
+              task: meta.sub_agent_task || meta.data?.sub_agent_task || '',
+              agent: meta.sub_agent_name || meta.data?.sub_agent_name || ''
             }
       const childWorkflow = payload.taskId
         ? workflowStore.workflows?.find?.(workflow => workflow?.id === payload.taskId) || null
@@ -928,19 +919,6 @@ export function useWorkflowMessages(options = {}) {
           const isError = m.isError || m.is_error || meta.is_error || false
           toolStates.set(id, { isFinal: true, isRejected: false, hasError: isError })
         }
-      }
-
-      const completionId =
-        meta?.sub_agent_id || meta?.subAgentId || meta?.data?.sub_agent_id || meta?.data?.subAgentId
-      if (meta?.observation_type === 'sub_agent_completion' && completionId) {
-        subAgentCompletions.set(completionId, {
-          summary: meta.summary || '',
-          execution_status: meta.execution_status || '',
-          result: meta.result || {},
-          sub_agent_name: meta.sub_agent_name || meta.subAgentName || '',
-          sub_agent_task: meta.sub_agent_task || meta.subAgentTask || '',
-          data: meta.data || {}
-        })
       }
 
       return { ...m, metadata: meta } // Cache parsed meta for Pass 2
@@ -1148,6 +1126,7 @@ export function useWorkflowMessages(options = {}) {
   const rawEnhancedMessages = computed(() => {
     void childAgentSummaryById.value
     void childAgentSummariesRevision.value
+    void subAgentCompletionsRevision.value
     const { groups, activeGroupId } = visibleTaskGroupsState.value
     if (!groups.length) return []
 
@@ -1163,16 +1142,19 @@ export function useWorkflowMessages(options = {}) {
       const cachedEntry = taskGroupCache.get(group.id)
 
       if (group.isCompleted && group.id !== activeGroupId && cachedEntry?.signature === signature) {
-        const summarySignature = childAgentSummariesRevision.value
-        if (cachedEntry.summarySignature === summarySignature) {
+        const projectionRevision = `${childAgentSummariesRevision.value}|${subAgentCompletionsRevision.value}`
+        if (cachedEntry.summarySignature === projectionRevision) {
           return cachedEntry.messages
         }
       }
 
-      const enhanced = reuseUnchangedEnhancedMessages(cachedEntry, enhanceRawMessages(group.messages))
+      const enhanced = reuseUnchangedEnhancedMessages(
+        cachedEntry,
+        enhanceRawMessages(group.messages, subAgentCompletionsById.value)
+      )
       taskGroupCache.set(group.id, {
         signature,
-        summarySignature: childAgentSummariesRevision.value,
+        summarySignature: `${childAgentSummariesRevision.value}|${subAgentCompletionsRevision.value}`,
         messages: enhanced.messages,
         messageSignatures: enhanced.messageSignatures
       })

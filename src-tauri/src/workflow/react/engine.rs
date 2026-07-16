@@ -1176,6 +1176,7 @@ impl WorkflowExecutor {
             task: (!delegated_task.is_empty()).then_some(delegated_task),
             title: self.subagent_type.clone(),
             summary: latest_summary,
+            result: None,
             tool_calls_count,
             current_context_tokens: Some(self.context.current_token_estimate()),
             max_context_tokens: Some(self.context.max_tokens),
@@ -3677,6 +3678,30 @@ impl WorkflowExecutor {
                             metadata["review_display_state"] =
                                 serde_json::json!("final_review_pending");
                         }
+                        if tool_name == crate::tools::TOOL_SUB_AGENT_RUN {
+                            let execution_mode = original_call
+                                .get("arguments")
+                                .or_else(|| {
+                                    original_call
+                                        .get("function")
+                                        .and_then(|value| value.get("arguments"))
+                                })
+                                .map(|arguments| {
+                                    Self::normalize_tool_arguments_value(arguments.clone())
+                                })
+                                .and_then(|arguments| {
+                                    arguments
+                                        .get("execution_mode")
+                                        .and_then(|value| value.as_str())
+                                        .map(str::to_string)
+                                })
+                                .unwrap_or_else(|| "call".to_string());
+                            let is_call_mode = execution_mode == "call";
+                            metadata["execution_mode"] = serde_json::json!(execution_mode);
+                            if is_call_mode && execution_status == "completed" {
+                                execution_status = "waiting".to_string();
+                            }
+                        }
                         if let Ok(task_result) =
                             serde_json::from_str::<serde_json::Value>(&reinforced.content)
                         {
@@ -3697,12 +3722,6 @@ impl WorkflowExecutor {
                             {
                                 metadata["sub_agent_status"] = serde_json::json!(status);
                                 if status == "waiting" {
-                                    execution_status = "waiting".to_string();
-                                }
-                            }
-                            if let Some(mode) = task_result.get("mode").and_then(|v| v.as_str()) {
-                                metadata["sub_agent_mode"] = serde_json::json!(mode);
-                                if mode == "call" && execution_status == "completed" {
                                     execution_status = "waiting".to_string();
                                 }
                             }

@@ -145,6 +145,8 @@ pub enum GatewayPayload {
         title: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<serde_json::Value>,
         tool_calls_count: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         current_context_tokens: Option<usize>,

@@ -1096,7 +1096,11 @@ export function useWorkflowCore({
                         payload.max_context_tokens
                     )
                 } else if (payload.type === 'sub_agent_progress') {
-                    markSessionLiveFromNonTerminalEvent()
+                    const status = String(payload.status || payload.workflow_state || '').toLowerCase()
+                    const isTerminal = ['completed', 'failed', 'cancelled'].includes(status)
+                    if (!isTerminal) {
+                        markSessionLiveFromNonTerminalEvent()
+                    }
                     workflowStore.upsertSubAgentProgress(payload)
                 } else if (payload.type === 'notification') {
                     markSessionLiveFromNonTerminalEvent()
