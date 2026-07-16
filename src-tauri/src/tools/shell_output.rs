@@ -1,3 +1,4 @@
+use crate::tools::helper::reduce_with_command_reducers;
 use crate::tools::ToolCallResult;
 use serde_json::json;
 
@@ -115,6 +116,11 @@ fn reduce_shell_output_for_llm(
 ) -> String {
     let normalized_command = normalize_command(command_str);
 
+    if let Some(reduced) = reduce_with_command_reducers(&normalized_command, exit_code, raw_content)
+    {
+        return reduced;
+    }
+
     if is_plain_cargo_check(&normalized_command)
         || is_plain_cargo_build(&normalized_command)
         || is_plain_cargo_clippy(&normalized_command)
@@ -126,10 +132,7 @@ fn reduce_shell_output_for_llm(
         return reduce_build_like_output(raw_content, TEST_LLM_TAIL_LINES);
     }
 
-    if is_plain_go_build(&normalized_command)
-        || is_plain_node_build(&normalized_command)
-        || is_plain_frontend_build(&normalized_command)
-    {
+    if is_plain_go_build(&normalized_command) {
         return reduce_build_like_output(raw_content, BUILD_LLM_TAIL_LINES);
     }
 
@@ -187,14 +190,6 @@ fn is_plain_cargo_clippy(command: &str) -> bool {
 
 fn is_plain_cargo_test(command: &str) -> bool {
     command.ends_with("cargo test")
-}
-
-fn is_plain_node_build(command: &str) -> bool {
-    command.ends_with("npm run build") || command.ends_with("yarn build")
-}
-
-fn is_plain_frontend_build(command: &str) -> bool {
-    command.ends_with("pnpm build") || command.ends_with("pnpm tauri build")
 }
 
 fn is_ksp_command(command: &str) -> bool {
@@ -456,6 +451,62 @@ mod tests {
             "go build ./...",
             "some actual error"
         ));
+    }
+
+    #[test]
+    fn frontend_build_llm_content_keeps_results_without_asset_list_or_chunk_warning() {
+        let stdout = "vite v6.0.0 building for production...\ndist/assets/index.js 3,303.40 kB\n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Use dynamic import() to code-split the application\n✓ built in 15.99s\n";
+        for command in [
+            "pnpm build",
+            "npm build",
+            "yarn build",
+            "pnpm tauri build",
+            "pnpm run tauri build",
+            "npm tauri build",
+            "npm run tauri build",
+            "yarn tauri build",
+            "yarn run tauri build",
+            "yarm tauri build",
+        ] {
+            let result = build_shell_tool_result(command, 0, stdout, "");
+            let structured = result
+                .structured_content
+                .expect("structured content missing");
+            let llm_content = structured["llm_content"]
+                .as_str()
+                .expect("llm_content should be a string");
+
+            assert_eq!(
+                llm_content, "Exit code: 0\n\nBuild result:\n✓ built in 15.99s",
+                "unexpected LLM output for {command}"
+            );
+            assert!(!llm_content.contains("dist/assets/index.js"));
+            assert!(!llm_content.contains("Some chunks are larger"));
+        }
+    }
+
+    #[test]
+    fn failed_frontend_build_llm_content_keeps_diagnostic_tail() {
+        let stdout = (1..=35)
+            .map(|line| format!("build output {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = build_shell_tool_result(
+            "yarn run tauri build",
+            1,
+            &stdout,
+            "error: failed to bundle application\n",
+        );
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm_content should be a string");
+
+        assert!(llm_content.starts_with("[truncated previous output]"));
+        assert!(llm_content.contains("error: failed to bundle application"));
+        assert!(!llm_content.contains("build output 1\n"));
     }
 
     #[test]
