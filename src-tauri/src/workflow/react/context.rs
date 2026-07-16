@@ -269,8 +269,84 @@ impl ContextManager {
         ))
     }
 
+    fn estimate_workflow_message_tokens(message: &WorkflowMessage) -> f64 {
+        let mut total = crate::ccproxy::utils::token_estimator::estimate_tokens(
+            &Self::content_for_context_projection(message),
+        );
+
+        if let Some(reasoning) = message.reasoning.as_deref() {
+            total += crate::ccproxy::utils::token_estimator::estimate_tokens(reasoning);
+        }
+
+        total
+    }
+
+    fn is_safe_pressure_compression_boundary(message: &WorkflowMessage) -> bool {
+        if message.role == "tool" {
+            let metadata = message.metadata.as_ref();
+            let approval_status = metadata
+                .and_then(|metadata| metadata.get("approval_status"))
+                .and_then(|status| status.as_str());
+            let execution_status = metadata
+                .and_then(|metadata| metadata.get("execution_status"))
+                .and_then(|status| status.as_str());
+
+            return approval_status != Some("pending")
+                && matches!(
+                    execution_status,
+                    None | Some("completed" | "failed" | "rejected" | "interrupted")
+                );
+        }
+
+        message.role == "assistant"
+            && !message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_calls"))
+                .is_some_and(|tool_calls| {
+                    tool_calls.is_array() && !tool_calls.as_array().is_some_and(Vec::is_empty)
+                })
+    }
+
+    fn build_active_task_pressure_compression_candidate(
+        &self,
+    ) -> Option<(Vec<WorkflowMessage>, i64)> {
+        let latest_completion_idx = Self::latest_successful_completion_index(&self.messages);
+        if latest_completion_idx.is_some_and(|index| index + 1 == self.messages.len()) {
+            return None;
+        }
+
+        let start_idx = Self::latest_summary_index(&self.messages).unwrap_or(0);
+        let retained_token_budget =
+            self.max_tokens as f64 * (1.0 - CONTEXT_PRESSURE_COMPRESSION_THRESHOLD);
+        let mut retained_tokens = 0.0;
+        let mut candidate_boundary_idx = None;
+        let mut fallback_boundary_idx = None;
+
+        for index in (start_idx + 1..self.messages.len()).rev() {
+            retained_tokens += Self::estimate_workflow_message_tokens(&self.messages[index]);
+            let boundary_idx = index.saturating_sub(1);
+            if boundary_idx >= start_idx
+                && Self::is_safe_pressure_compression_boundary(&self.messages[boundary_idx])
+            {
+                fallback_boundary_idx.get_or_insert(boundary_idx);
+                if retained_tokens <= retained_token_budget {
+                    candidate_boundary_idx = Some(boundary_idx);
+                }
+            }
+        }
+
+        let boundary_idx = candidate_boundary_idx.or(fallback_boundary_idx)?;
+        let compressed_until_id = self.messages[boundary_idx].id?;
+        Some((
+            self.messages[start_idx..=boundary_idx].to_vec(),
+            compressed_until_id,
+        ))
+    }
+
     pub fn build_pressure_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
         self.build_compression_candidate_preserving_latest_completion(2)
+            .or_else(|| self.build_active_task_pressure_compression_candidate())
     }
 
     pub fn build_task_boundary_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
@@ -2226,6 +2302,101 @@ mod tests {
                 .id
                 .expect("completion message id missing")
         );
+    }
+
+    #[tokio::test]
+    async fn pressure_candidate_compresses_active_task_at_safe_tool_boundary() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-active-pressure-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 128, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Investigate the active task".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add task");
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Calling a tool".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                1,
+                false,
+                None,
+                Some(json!({ "tool_calls": [{ "id": "tool-1", "function": { "name": "read_file" } }] })),
+            )
+            .await
+            .expect("failed to add tool call");
+        let tool_result = context
+            .add_message(
+                "tool".to_string(),
+                "tool result".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                1,
+                false,
+                None,
+                Some(json!({ "tool_call_id": "tool-1", "tool_name": "read_file", "execution_status": "completed" })),
+            )
+            .await
+            .expect("failed to add tool result")
+            .0;
+        let _ = context
+            .add_message(
+                "assistant".to_string(),
+                "Recent active context ".repeat(100),
+                None,
+                None,
+                Some(StepType::Think),
+                2,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add active context");
+
+        let (_, compressed_until_id) = context
+            .build_pressure_compression_candidate()
+            .expect("pressure compression should summarize earlier active-task context");
+        assert_eq!(
+            compressed_until_id,
+            tool_result.id.expect("tool result id missing")
+        );
+
+        for execution_status in ["approval_submitted", "running"] {
+            let mut unresolved_context = context.messages.clone();
+            let unresolved_tool = unresolved_context
+                .iter_mut()
+                .find(|message| message.id == tool_result.id)
+                .expect("tool result should remain in context");
+            unresolved_tool.metadata = Some(json!({
+                "tool_call_id": "tool-1",
+                "tool_name": "read_file",
+                "execution_status": execution_status
+            }));
+            context.messages = unresolved_context;
+            assert!(
+                context.build_pressure_compression_candidate().is_none(),
+                "pressure compression must not cut an {execution_status} tool exchange"
+            );
+        }
     }
 
     #[tokio::test]

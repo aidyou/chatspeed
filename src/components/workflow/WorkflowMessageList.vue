@@ -205,9 +205,13 @@
                       shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'markdown'
                     "
                     :content="removeSystemReminder(tool.message)" />
-                  <pre v-else-if="shouldShowToolRawContent(tool)" class="raw-content">{{
-                    removeSystemReminder(tool.message)
-                  }}</pre>
+                  <pre
+                    v-else-if="
+                      shouldShowToolRawContent(tool) && !isDuplicateBashCommandContent(tool)
+                    "
+                    class="raw-content"
+                    >{{ removeSystemReminder(tool.message) }}</pre
+                  >
                 </div>
               </div>
             </div>
@@ -330,7 +334,10 @@
                       "
                       :content="removeSystemReminder(tool.message)" />
                     <pre
-                      v-else-if="shouldShowExplorationToolRawContent(tool)"
+                      v-else-if="
+                        shouldShowExplorationToolRawContent(tool) &&
+                        !isDuplicateBashCommandContent(tool)
+                      "
                       class="raw-content"
                       >{{ removeSystemReminder(tool.message) }}</pre
                     >
@@ -587,7 +594,11 @@
                   "
                   :content="removeSystemReminder(message.message)" />
                 <pre
-                  v-else-if="!isApprovalPending(message) && shouldShowToolRawContent(message)"
+                  v-else-if="
+                    !isApprovalPending(message) &&
+                    shouldShowToolRawContent(message) &&
+                    !isDuplicateBashCommandContent(message)
+                  "
                   class="raw-content"
                   >{{ removeSystemReminder(message.message) }}</pre
                 >
@@ -1241,6 +1252,16 @@ const isBashToolCall = message =>
 const getBashCommand = message => {
   const args = message?.args || getToolCallArguments(message) || {}
   return String(args.command || message?.toolDisplay?.target || message?.target || '').trim()
+}
+
+const isDuplicateBashCommandContent = message => {
+  if (!isBashToolCall(message)) return false
+
+  const command = getBashCommand(message).replace(/\r\n/g, '\n').trim()
+  const rawContent = String(props.removeSystemReminder(message?.message || ''))
+    .replace(/\r\n/g, '\n')
+    .trim()
+  return !!command && rawContent === command
 }
 
 const getToolTitleTarget = message => message?.toolDisplay?.target || message?.target || ''
