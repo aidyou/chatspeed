@@ -957,6 +957,7 @@ export function useWorkflowCore({
                     // ReAct engine sends incremental messages or chunks
                     workflowStore.addMessage({
                         sessionId: sessionId,
+                        persistedMessageId: payload.message_id,
                         role: payload.role,
                         message: payload.content,
                         reasoning: payload.reasoning,

@@ -1625,7 +1625,7 @@ watch(
     gap: 8px;
 
     .drag-icon {
-      color: var(--cs-text-color-placeholder);
+      color: var(--cs-text-color-secondary);
       cursor: grab;
     }
 
@@ -1793,7 +1793,7 @@ watch(
     .section-meta {
       margin-left: auto;
       font-size: 10px;
-      color: var(--cs-text-color-placeholder);
+      color: var(--cs-text-color-secondary);
       text-transform: none;
       letter-spacing: 0;
     }
@@ -1922,7 +1922,7 @@ watch(
   margin-bottom: 10px;
   font-size: 10px;
   line-height: 1.5;
-  color: var(--cs-text-color-placeholder);
+  color: var(--cs-text-color-secondary);
 }
 
 .metric-grid {
@@ -1946,7 +1946,7 @@ watch(
 
 .metric-name {
   font-size: 10px;
-  color: var(--cs-text-color-placeholder);
+  color: var(--cs-text-color-secondary);
   text-transform: uppercase;
 }
 
@@ -2086,7 +2086,7 @@ watch(
     .child-metric-label {
       flex-shrink: 0;
       font-size: 10px;
-      color: var(--cs-text-color-placeholder);
+      color: var(--cs-text-color-secondary);
       text-transform: uppercase;
     }
 
@@ -2191,7 +2191,7 @@ watch(
 
   .usage-details {
     font-size: 10px;
-    color: var(--cs-text-color-placeholder);
+    color: var(--cs-text-color-secondary);
     margin-top: 4px;
     text-align: right;
     font-family: var(--cs-font-family-mono, monospace);
@@ -2280,7 +2280,7 @@ watch(
 
     .todo-icon {
       flex-shrink: 0;
-      color: var(--cs-text-color-placeholder);
+      color: var(--cs-text-color-secondary);
     }
 
     .todo-text {
@@ -2332,7 +2332,7 @@ watch(
 .more-indicator {
   text-align: center;
   font-size: var(--cs-font-size-xs);
-  color: var(--cs-text-color-placeholder);
+  color: var(--cs-text-color-secondary);
   padding-top: 4px;
   font-style: italic;
 
@@ -2458,7 +2458,7 @@ watch(
   align-items: center;
   justify-content: center;
   padding: 24px 12px;
-  color: var(--cs-text-color-placeholder);
+  color: var(--cs-text-color-secondary);
   gap: 8px;
 
   span {
@@ -2564,7 +2564,7 @@ watch(
 }
 
 .panel-body::-webkit-scrollbar-thumb:hover {
-  background: var(--cs-text-color-placeholder);
+  background: var(--cs-text-color-secondary);
 }
 
 @keyframes spin {

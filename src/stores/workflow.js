@@ -44,6 +44,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const normalizeWorkflowMessage = (message, fallbackSessionId = null) => {
     const normalized = {
       ...message,
+      id: message?.id ?? message?.persistedMessageId ?? message?.message_id ?? null,
       sessionId: message?.sessionId || message?.session_id || fallbackSessionId || null,
       messageKind: message?.messageKind || message?.message_kind || 'message',
       messageSubtype: message?.messageSubtype || message?.message_subtype || null,
@@ -89,6 +90,29 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
 
     return normalized;
+  };
+
+  const getPersistedMessageId = (message) => {
+    const value = message?.id;
+    if (value === null || value === undefined || value === '') return null;
+    const normalized = String(value).trim();
+    return /^\d+$/.test(normalized) ? normalized : null;
+  };
+
+  const comparePersistedMessageOrder = (left, right) => {
+    const leftId = getPersistedMessageId(left);
+    const rightId = getPersistedMessageId(right);
+    if (!leftId && !rightId) return 0;
+    if (!leftId) return 1;
+    if (!rightId) return -1;
+
+    try {
+      const leftOrder = BigInt(leftId);
+      const rightOrder = BigInt(rightId);
+      return leftOrder < rightOrder ? -1 : leftOrder > rightOrder ? 1 : 0;
+    } catch {
+      return 0;
+    }
   };
 
   // ==================== Core State ====================
@@ -1514,6 +1538,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     } else {
       messages.value.push(message);
     }
+
+    messages.value = [...messages.value].sort(comparePersistedMessageOrder);
 
     // 更新 Task Ledger
     if (taskLedgerEnabled.value) {

@@ -561,6 +561,7 @@ impl LlmProcessor {
                                                 let _ = gateway.send(
                                                     &self.session_id,
                                                     GatewayPayload::Message {
+                                                        message_id: None,
                                                         role: "user".to_string(),
                                                         content,
                                                         reasoning: None,
@@ -682,6 +683,7 @@ impl LlmProcessor {
                                             let _ = gateway.send(
                                                 &self.session_id,
                                                 GatewayPayload::Message {
+                                                    message_id: None,
                                                     role: "user".to_string(),
                                                     content,
                                                     reasoning: None,

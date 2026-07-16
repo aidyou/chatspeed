@@ -5505,6 +5505,7 @@ impl WorkflowExecutor {
             .await?;
 
         self.dispatch_ui_payload(GatewayPayload::Message {
+            message_id: msg.id.map(|id| id.to_string()),
             role: role.clone(),
             content: content.clone(),
             reasoning,
@@ -6304,6 +6305,7 @@ impl WorkflowExecutor {
 
         // Immediate frontend ack: show user message instantly with queued status.
         self.dispatch_ui_payload(GatewayPayload::Message {
+            message_id: None,
             role: "user".to_string(),
             content,
             reasoning: None,

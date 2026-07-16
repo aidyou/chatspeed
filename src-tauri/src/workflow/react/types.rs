@@ -42,6 +42,7 @@ pub enum GatewayPayload {
     },
     /// Full message update
     Message {
+        message_id: Option<String>,
         role: String,
         content: String,
         reasoning: Option<String>,
@@ -578,6 +579,25 @@ mod tests {
         let deserialized: ExecutionContext = serde_json::from_str(&json).unwrap();
 
         assert_eq!(ctx, deserialized);
+    }
+
+    #[test]
+    fn test_gateway_message_serializes_persisted_id() {
+        let payload = GatewayPayload::Message {
+            message_id: Some("9007199254740993".to_string()),
+            role: "assistant".to_string(),
+            content: "done".to_string(),
+            reasoning: None,
+            step_type: Some(StepType::Think),
+            step_index: 2,
+            is_error: false,
+            error_type: None,
+            metadata: None,
+        };
+
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(value["type"], "message");
+        assert_eq!(value["message_id"], "9007199254740993");
     }
 
     #[test]

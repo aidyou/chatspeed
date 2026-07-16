@@ -2456,6 +2456,7 @@ async fn try_resume_completed_live_session(
                 .send(
                     &session_id_for_spawn,
                     crate::workflow::react::types::GatewayPayload::Message {
+                        message_id: None,
                         role: "assistant".to_string(),
                         content: format!(
                             "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
@@ -3201,6 +3202,7 @@ pub async fn workflow_start(
                 .send(
                     &session_id_for_spawn,
                     crate::workflow::react::types::GatewayPayload::Message {
+                        message_id: None,
                         role: "assistant".to_string(),
                         content: format!(
                             "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
