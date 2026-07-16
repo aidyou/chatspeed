@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use rust_i18n::t;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::time::{sleep, Duration};
@@ -11,7 +11,7 @@ use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::ccproxy::ChatProtocol;
-use crate::db::{Agent, MainStore, MemoryCandidateUpsert, ModelConfig, WorkflowMessage};
+use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
     helper::generate_shell_approval_patterns as shared_generate_shell_approval_patterns,
     ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
@@ -33,8 +33,6 @@ use crate::workflow::react::{
     intelligence::IntelligenceManager,
     llm::LlmProcessor,
     loop_detector::LoopDetector,
-    memory::{MemoryManager, MemoryScope},
-    memory_analyzer::MemoryAnalyzer,
     observation::{ObservationKind, ObservationReinforcer, ReinforcedResult},
     orchestrator::SubAgentFactory,
     policy::{ExecutionPhase, ExecutionPolicy},
@@ -119,8 +117,6 @@ pub struct WorkflowExecutor {
     pub auto_compress_enabled: bool,
     /// Rules and permissions for this ReAct session.
     pub policy: ExecutionPolicy,
-    /// Memory manager for reading/writing memory files
-    pub memory_manager: Arc<MemoryManager>,
     /// Detects repetitive tool calls within a sliding window.
     pub(crate) loop_detector: LoopDetector,
     /// Memory cache for tools awaiting user approval.
@@ -1005,11 +1001,6 @@ impl WorkflowExecutor {
                 initial_model_name.clone(),
                 false,  // Temporary, will be updated below
                 vec![], // MCP tool summaries will be set in init_internal
-                // Memory manager and project root
-                {
-                    let project_root = allowed_paths.first().cloned();
-                    Arc::new(MemoryManager::new(project_root))
-                },
                 allowed_paths.first().cloned(),
             ),
             intelligence_manager: IntelligenceManager::new(
@@ -1038,10 +1029,6 @@ impl WorkflowExecutor {
             background_compression_retry_state: HashMap::new(),
             auto_compress_enabled,
             policy,
-            memory_manager: {
-                let project_root = allowed_paths.first().cloned();
-                Arc::new(MemoryManager::new(project_root))
-            },
             loop_detector: LoopDetector::new(),
             pending_approvals: Arc::new(dashmap::DashMap::new()),
             pending_approval_queue: VecDeque::new(),
@@ -3929,27 +3916,7 @@ impl WorkflowExecutor {
                 sleep(Duration::from_millis(50)).await;
             }
 
-            // === Memory Analysis After Workflow Completion ===
-            // Run only for successful completion to avoid extra model calls after stop/cancel.
             if self.state == WorkflowState::Completed {
-                log::info!(
-                    "[Workflow][session={}][phase=memory] Starting post-completion memory analysis",
-                    self.session_id
-                );
-                if let Err(e) = self.analyze_and_update_memories().await {
-                    log::warn!(
-                        "[Workflow][session={}][phase=memory] Memory analysis failed: {}",
-                        self.session_id,
-                        e
-                    );
-                    // Don't fail the workflow if memory analysis fails
-                } else {
-                    log::info!(
-                        "[Workflow][session={}][phase=memory] Post-completion memory analysis finished",
-                        self.session_id
-                    );
-                }
-
                 // Drain any tail-end signals that arrived after the final observe flush but before
                 // completed-session cleanup. If a queued user message exists, reuse this hot
                 // executor instead of forcing a cold recovery path.
@@ -3969,12 +3936,6 @@ impl WorkflowExecutor {
                     self.update_state(WorkflowState::Thinking).await?;
                     continue;
                 }
-            } else {
-                log::info!(
-                    "[Workflow][session={}][phase=memory] Skip memory analysis for terminal state={}",
-                    self.session_id,
-                    self.state
-                );
             }
 
             break;
@@ -3982,299 +3943,6 @@ impl WorkflowExecutor {
 
         self.signal_rx = Some(signal_rx);
         Ok(())
-    }
-
-    /// Analyzes user inputs and updates memory files.
-    async fn analyze_and_update_memories(&self) -> Result<(), WorkflowEngineError> {
-        // 1. Collect user inputs (filter out observe type)
-        let user_inputs: Vec<String> = self
-            .context
-            .messages
-            .iter()
-            .filter(|m| m.role == "user" && m.step_type.as_ref().map_or(true, |st| st != "observe"))
-            .map(|m| Self::sanitize_user_input_for_memory_analysis(&m.message))
-            .filter(|value| !value.trim().is_empty())
-            .collect();
-
-        // Skip if no user inputs
-        if user_inputs.is_empty() {
-            log::info!(
-                "[Workflow][session={}][phase=memory] Skip memory analysis because there are no user inputs",
-                self.session_id
-            );
-            return Ok(());
-        }
-
-        log::info!(
-            "[Workflow][session={}][phase=memory] Analyzing {} user input(s) for memory updates",
-            self.session_id,
-            user_inputs.len()
-        );
-
-        // 2. Read current memories (using Arc directly, no lock needed)
-        let current_global = self.memory_manager.read(MemoryScope::Global).ok().flatten();
-        let current_project = self
-            .memory_manager
-            .read(MemoryScope::Project)
-            .ok()
-            .flatten();
-
-        // 3. Call memory analyzer
-        let analysis = MemoryAnalyzer::analyze(
-            user_inputs,
-            current_global.clone(),
-            current_project.clone(),
-            self.chat_state.clone(),
-            &self.session_id,
-            Self::utility_runtime_model(&self.agent_config, &self.policy.phase)
-                .map(|model| model.id)
-                .unwrap_or(self.llm_processor.active_provider_id),
-            Self::utility_runtime_model(&self.agent_config, &self.policy.phase)
-                .map(|model| model.model.as_str())
-                .unwrap_or(&self.llm_processor.active_model_name),
-        )
-        .await
-        .map_err(|e| WorkflowEngineError::General(format!("Memory analysis failed: {}", e)))?;
-
-        let mut updated_global = false;
-        let mut updated_project = false;
-
-        let project_key = self
-            .memory_manager
-            .project_key()
-            .map(str::to_string)
-            .unwrap_or_default();
-        let project_root = self
-            .memory_manager
-            .project_root()
-            .map(|root| root.to_string_lossy().to_string());
-
-        let store = self.context.main_store.read().map_err(|e| {
-            WorkflowEngineError::General(format!("Failed to lock MainStore: {}", e))
-        })?;
-
-        let mut promoted_global_entries: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut promoted_project_entries: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-        for candidate in analysis.global_candidates {
-            let stored = store
-                .upsert_memory_candidate(&MemoryCandidateUpsert {
-                    scope: "global".to_string(),
-                    category: candidate.category.clone(),
-                    content: candidate.content.clone(),
-                    project_key: String::new(),
-                    project_root: None,
-                    source_session_id: self.session_id.clone(),
-                    confidence: candidate.confidence,
-                    explicitness: candidate.explicitness,
-                })
-                .map_err(|e| {
-                    WorkflowEngineError::General(format!(
-                        "Failed to upsert global memory candidate: {}",
-                        e
-                    ))
-                })?;
-            if Self::should_promote_memory_candidate(stored.explicitness, stored.occurrence_count) {
-                if let Some(id) = stored.id {
-                    store
-                        .update_memory_candidate_status(id, "promoted")
-                        .map_err(|e| {
-                            WorkflowEngineError::General(format!(
-                                "Failed to promote global memory candidate: {}",
-                                e
-                            ))
-                        })?;
-                }
-                promoted_global_entries
-                    .entry(stored.category)
-                    .or_default()
-                    .push(stored.content);
-            }
-        }
-
-        for candidate in analysis.project_candidates {
-            let stored = store
-                .upsert_memory_candidate(&MemoryCandidateUpsert {
-                    scope: "project".to_string(),
-                    category: candidate.category.clone(),
-                    content: candidate.content.clone(),
-                    project_key: project_key.clone(),
-                    project_root: project_root.clone(),
-                    source_session_id: self.session_id.clone(),
-                    confidence: candidate.confidence,
-                    explicitness: candidate.explicitness,
-                })
-                .map_err(|e| {
-                    WorkflowEngineError::General(format!(
-                        "Failed to upsert project memory candidate: {}",
-                        e
-                    ))
-                })?;
-            if Self::should_promote_memory_candidate(stored.explicitness, stored.occurrence_count) {
-                if let Some(id) = stored.id {
-                    store
-                        .update_memory_candidate_status(id, "promoted")
-                        .map_err(|e| {
-                            WorkflowEngineError::General(format!(
-                                "Failed to promote project memory candidate: {}",
-                                e
-                            ))
-                        })?;
-                }
-                promoted_project_entries
-                    .entry(stored.category)
-                    .or_default()
-                    .push(stored.content);
-            }
-        }
-
-        let promoted_global = store
-            .list_memory_candidates(Some("global"), None, Some("promoted"), 200)
-            .map_err(|e| {
-                WorkflowEngineError::General(format!(
-                    "Failed to load promoted global memories: {}",
-                    e
-                ))
-            })?;
-        for candidate in promoted_global {
-            promoted_global_entries
-                .entry(candidate.category)
-                .or_default()
-                .push(candidate.content);
-        }
-
-        if self.memory_manager.has_project_memory() {
-            let promoted_project = store
-                .list_memory_candidates(
-                    Some("project"),
-                    Some(project_key.as_str()),
-                    Some("promoted"),
-                    200,
-                )
-                .map_err(|e| {
-                    WorkflowEngineError::General(format!(
-                        "Failed to load promoted project memories: {}",
-                        e
-                    ))
-                })?;
-            for candidate in promoted_project {
-                promoted_project_entries
-                    .entry(candidate.category)
-                    .or_default()
-                    .push(candidate.content);
-            }
-        }
-
-        drop(store);
-
-        if !promoted_global_entries.is_empty() {
-            updated_global = self
-                .memory_manager
-                .merge_entries(MemoryScope::Global, &promoted_global_entries)?
-                .is_some();
-            if updated_global {
-                log::info!(
-                    "[Workflow][session={}][phase=memory] Global memory updated from promoted candidates",
-                    self.session_id
-                );
-            }
-        }
-
-        if self.memory_manager.has_project_memory() && !promoted_project_entries.is_empty() {
-            updated_project = self
-                .memory_manager
-                .merge_entries(MemoryScope::Project, &promoted_project_entries)?
-                .is_some();
-            if updated_project {
-                log::info!(
-                    "[Workflow][session={}][phase=memory] Project memory updated from promoted candidates",
-                    self.session_id
-                );
-            }
-        }
-
-        if let Some(new_global) = analysis.global_memory {
-            let old_global = current_global.unwrap_or_default();
-            if new_global.trim() != old_global.trim() {
-                self.memory_manager
-                    .write(MemoryScope::Global, &new_global)?;
-                updated_global = true;
-            }
-        }
-
-        if let Some(new_project) = analysis.project_memory {
-            let old_project = current_project.unwrap_or_default();
-            if new_project.trim() != old_project.trim() && self.memory_manager.has_project_memory()
-            {
-                self.memory_manager
-                    .write(MemoryScope::Project, &new_project)?;
-                updated_project = true;
-            }
-        }
-
-        if !updated_global && !updated_project {
-            log::info!(
-                "[Workflow][session={}][phase=memory] Memory analysis completed with no memory changes",
-                self.session_id
-            );
-        }
-
-        Ok(())
-    }
-
-    fn should_promote_memory_candidate(explicitness: i32, occurrence_count: i32) -> bool {
-        explicitness >= 3 || occurrence_count >= 2
-    }
-
-    fn sanitize_user_input_for_memory_analysis(content: &str) -> String {
-        let without_reminders = Self::strip_system_reminders(content);
-        let without_wrapper = Self::unwrap_tag_block(&without_reminders, "user_query");
-        let mut normalized = String::with_capacity(without_wrapper.len());
-        let mut newline_run = 0usize;
-
-        for ch in without_wrapper.trim().chars() {
-            if ch == '\n' {
-                newline_run += 1;
-                if newline_run <= 2 {
-                    normalized.push(ch);
-                }
-            } else {
-                newline_run = 0;
-                normalized.push(ch);
-            }
-        }
-
-        normalized.trim().to_string()
-    }
-
-    fn strip_system_reminders(content: &str) -> String {
-        let mut sanitized = content.to_string();
-
-        loop {
-            let Some(start) = sanitized.find("<SYSTEM_REMINDER>") else {
-                break;
-            };
-            let Some(end) = sanitized[start..].find("</SYSTEM_REMINDER>") else {
-                sanitized.truncate(start);
-                break;
-            };
-            let end_idx = start + end + "</SYSTEM_REMINDER>".len();
-            sanitized.replace_range(start..end_idx, "");
-        }
-
-        sanitized
-    }
-
-    fn unwrap_tag_block(content: &str, tag_name: &str) -> String {
-        let open_tag = format!("<{}>", tag_name);
-        let close_tag = format!("</{}>", tag_name);
-        let trimmed = content.trim();
-
-        if trimmed.starts_with(&open_tag) && trimmed.ends_with(&close_tag) {
-            return trimmed[open_tag.len()..trimmed.len() - close_tag.len()].to_string();
-        }
-
-        content.to_string()
     }
 
     fn normalize_tool_arguments_value(value: serde_json::Value) -> serde_json::Value {
@@ -7150,25 +6818,6 @@ mod recovery_tests {
 
         let task_id = WorkflowExecutor::extract_call_mode_sub_agent_task_id(&args, &result);
         assert_eq!(task_id.as_deref(), Some("subagent_content_only"));
-    }
-
-    #[test]
-    fn test_sanitize_user_input_for_memory_analysis_removes_user_query_wrapper() {
-        let sanitized = WorkflowExecutor::sanitize_user_input_for_memory_analysis(
-            "<user_query>\nKeep code comments in English\n</user_query>",
-        );
-        assert_eq!(sanitized, "Keep code comments in English");
-    }
-
-    #[test]
-    fn test_sanitize_user_input_for_memory_analysis_removes_multiple_system_reminders() {
-        let sanitized = WorkflowExecutor::sanitize_user_input_for_memory_analysis(
-            "<user_query>\nCheck whether dev_data is tracked\n\n<SYSTEM_REMINDER>Reminder A</SYSTEM_REMINDER>\nActual constraint\n<SYSTEM_REMINDER>Reminder B</SYSTEM_REMINDER>\n</user_query>",
-        );
-        assert_eq!(
-            sanitized,
-            "Check whether dev_data is tracked\n\nActual constraint"
-        );
     }
 
     #[test]

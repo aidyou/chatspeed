@@ -2,8 +2,8 @@ use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::db::{
-    Agent, AgentConfig, MainStore, MemoryCandidate, Workflow, WorkflowEfficiencyReport,
-    WorkflowMessage, WorkflowSnapshot,
+    Agent, AgentConfig, MainStore, Workflow, WorkflowEfficiencyReport, WorkflowMessage,
+    WorkflowSnapshot,
 };
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::child_tasks::get_sub_agent_registry;
@@ -13,7 +13,6 @@ use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
-use crate::workflow::react::memory::MemoryManager;
 use crate::workflow::react::orchestrator::{
     list_background_task_ids_for_owner, stop_background_task, BackgroundTask, SubAgentFactory,
     BACKGROUND_TASKS,
@@ -40,16 +39,6 @@ use tauri::{AppHandle, Manager, State};
 
 #[cfg(test)]
 use rusqlite::params;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkflowMemoryDiagnostics {
-    pub global_memory: Option<String>,
-    pub project_memory: Option<String>,
-    pub project_key: Option<String>,
-    pub global_candidates: Vec<MemoryCandidate>,
-    pub project_candidates: Vec<MemoryCandidate>,
-}
 
 // ==========================================
 // 0. Helper Functions for @mentions
@@ -4798,47 +4787,6 @@ pub async fn get_workflow_efficiency_report(
     store
         .get_workflow_efficiency_report(&session_id)
         .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn get_workflow_memory_diagnostics(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    session_id: String,
-) -> Result<WorkflowMemoryDiagnostics, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    let snapshot = store
-        .get_workflow_snapshot(&session_id)
-        .map_err(|e| e.to_string())?;
-
-    let project_root = snapshot
-        .workflow
-        .agent_config
-        .as_deref()
-        .and_then(AgentConfig::from_json)
-        .and_then(|config| config.allowed_paths)
-        .and_then(|paths| paths.first().cloned())
-        .map(PathBuf::from);
-
-    let memory_manager = MemoryManager::new(project_root);
-    let project_key = memory_manager.project_key().map(str::to_string);
-    let global_candidates = store
-        .list_memory_candidates(Some("global"), None, None, 100)
-        .map_err(|e| e.to_string())?;
-    let project_candidates = store
-        .list_memory_candidates(Some("project"), project_key.as_deref(), None, 100)
-        .map_err(|e| e.to_string())?;
-
-    Ok(WorkflowMemoryDiagnostics {
-        global_memory: memory_manager
-            .read(crate::workflow::react::memory::MemoryScope::Global)
-            .map_err(|e| e.to_string())?,
-        project_memory: memory_manager
-            .read(crate::workflow::react::memory::MemoryScope::Project)
-            .map_err(|e| e.to_string())?,
-        project_key,
-        global_candidates,
-        project_candidates,
-    })
 }
 
 #[cfg(test)]

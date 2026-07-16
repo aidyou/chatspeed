@@ -6,7 +6,6 @@ use crate::workflow::react::agents_md::AgentsMdScanner;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
-use crate::workflow::react::memory::{MemoryManager, MemoryScope};
 use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::runtime_observation::{
     render_runtime_observation_for_llm, RuntimeObservationPlacement,
@@ -46,8 +45,6 @@ pub struct LlmProcessor {
     cached_project_agents_path: Option<PathBuf>,
     cached_global_agents: Option<String>,
     cached_project_agents: Option<String>,
-    cached_global_memory: Option<String>,
-    cached_project_memory: Option<String>,
 }
 
 impl LlmProcessor {
@@ -207,8 +204,6 @@ impl LlmProcessor {
         active_model_name: String,
         reasoning: bool,
         mcp_tool_summaries: Vec<MCPToolDeclaration>,
-        // New parameters
-        memory_manager: Arc<MemoryManager>,
         project_root: Option<PathBuf>,
     ) -> Self {
         let (cached_global_agents, cached_project_agents) =
@@ -218,14 +213,6 @@ impl LlmProcessor {
             .as_deref()
             .map(AgentsMdScanner::project_path)
             .filter(|path| path.exists());
-        let cached_global_memory = memory_manager
-            .read_last_n_lines(MemoryScope::Global, 300)
-            .ok()
-            .flatten();
-        let cached_project_memory = memory_manager
-            .read_last_n_lines(MemoryScope::Project, 300)
-            .ok()
-            .flatten();
 
         Self {
             session_id,
@@ -241,8 +228,6 @@ impl LlmProcessor {
             cached_project_agents_path,
             cached_global_agents,
             cached_project_agents,
-            cached_global_memory,
-            cached_project_memory,
         }
     }
 
@@ -1158,7 +1143,7 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
         }
 
         // Environment details are part of the stable execution boundary, so keep them
-        // before tool catalogs and memory while leaving drift-prone facts in the tail.
+        // before tool catalogs while leaving drift-prone facts in the tail.
         let reminders = self.build_environment_context(current_step, max_steps);
         stable_system_parts.push(format!(
             "<ENVIRONMENT_CONTEXT>\n{}\n</ENVIRONMENT_CONTEXT>",
@@ -1171,32 +1156,6 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
             stable_system_parts.push(format!(
                 "<EXTEND_TOOLS_CONTEXT>\n{}\n</EXTEND_TOOLS_CONTEXT>",
                 extend_tools
-            ));
-        }
-
-        if let Some(content) = self.cached_global_memory.as_deref() {
-            stable_system_parts.push(format!(
-                "<GLOBAL_MEMORY>\n{}\n\
-                <SYSTEM_REMINDER>\n\
-                These memories may or may not relate to the current project. \
-                Please evaluate them carefully. For those relevant to the context, \
-                adhere to the user's documented preferences.\n\
-                </SYSTEM_REMINDER>\n\
-                </GLOBAL_MEMORY>",
-                content
-            ));
-        }
-
-        if let Some(content) = self.cached_project_memory.as_deref() {
-            stable_system_parts.push(format!(
-                "<PROJECT_MEMORY>\n{}\n\
-                <SYSTEM_REMINDER>\n\
-                These memories are specific to the current project. \
-                If a conflict exists between project-level memory and global memory, \
-                project-level instructions MUST take precedence.\n\
-                </SYSTEM_REMINDER>\n\
-                </PROJECT_MEMORY>",
-                content
             ));
         }
 
@@ -1528,8 +1487,6 @@ mod tests {
             cached_project_agents_path: None,
             cached_global_agents: None,
             cached_project_agents: None,
-            cached_global_memory: None,
-            cached_project_memory: None,
         }
     }
 
@@ -1662,8 +1619,6 @@ mod tests {
         processor.cached_project_agents_path = Some(PathBuf::from("/tmp/project/AGENTS.md"));
         processor.cached_global_agents = Some("global agent".into());
         processor.cached_project_agents = Some("project agent".into());
-        processor.cached_global_memory = Some("global memory".into());
-        processor.cached_project_memory = Some("project memory".into());
 
         let history = vec![json!({ "role": "user", "content": "Do work" })];
         let final_history = processor.inject_prompts(
