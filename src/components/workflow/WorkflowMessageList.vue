@@ -479,7 +479,7 @@
               </div>
               <div v-if="isMessageExpanded(message)" class="tool-detail">
                 <pre
-                  v-if="isBashToolCall(message)"
+                  v-if="isBashToolCall(message) && !isApprovalPending(message)"
                   class="bash-command"
                   aria-label="Bash command"><code
                     class="hljs"

@@ -5,13 +5,12 @@ use tauri::{command, AppHandle, State, Wry};
 
 use crate::{
     ai::interaction::chat_completion::ChatState,
-    constants::DEFAULT_WEB_SEARCH_TOOL,
     error::{AppError, Result},
     scraper::{
         engine::run as run_scraper,
         types::{ContentOptions, ScrapeRequest},
     },
-    tools::TOOL_WEB_FETCH,
+    tools::{TOOL_WEB_FETCH, TOOL_WEB_SEARCH},
 };
 
 #[command]
@@ -125,7 +124,7 @@ pub async fn test_scrape(
                 .inner()
                 .tool_manager
                 .tool_call(
-                    DEFAULT_WEB_SEARCH_TOOL,
+                    TOOL_WEB_SEARCH,
                     serde_json::json!({
                         "provider": provider,
                         "query": query,

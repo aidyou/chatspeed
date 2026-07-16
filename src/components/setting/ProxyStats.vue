@@ -371,12 +371,12 @@
           <el-tabs v-model="activeTrendTab" type="border-card">
             <el-tab-pane :label="$t('settings.proxy.stats.dailyTokensTitle')" name="dailyTokens">
               <div class="tab-chart-content">
-                <div v-show="activeTrendTab === 'dailyTokens'" id="daily-tokens-column"></div>
+                <div v-if="activeTrendTab === 'dailyTokens'" id="daily-tokens-column"></div>
               </div>
             </el-tab-pane>
             <el-tab-pane :label="$t('settings.proxy.stats.dailyCostTitle')" name="dailyCost">
               <div class="tab-chart-content">
-                <div v-show="activeTrendTab === 'dailyCost'" id="daily-cost-line"></div>
+                <div v-if="activeTrendTab === 'dailyCost'" id="daily-cost-line"></div>
               </div>
             </el-tab-pane>
             <el-tab-pane
@@ -384,7 +384,7 @@
               name="dailyRequests">
               <div class="tab-chart-content">
                 <div
-                  v-show="activeTrendTab === 'dailyRequests'"
+                  v-if="activeTrendTab === 'dailyRequests'"
                   id="daily-requests-dual-axis"></div>
               </div>
             </el-tab-pane>
@@ -424,7 +424,7 @@
 
 <script setup>
 import { markRaw, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { Bar, DualAxes, Line } from '@antv/g2plot'
+import { Bar, DualAxes, Line, Pie } from '@antv/g2plot'
 import { invokeWrapper } from '@/libs/tauri'
 import { useI18n } from 'vue-i18n'
 import { Refresh, Delete } from '@element-plus/icons-vue'
@@ -487,12 +487,49 @@ let modelBarChart = null
 let modelCostBarChart = null
 let modelTokenBarChart = null
 let providerTokenBarChart = null
-let errorBarChart = null
+let errorPieChart = null
 let tokenBarChart = null
 let costLineChart = null
 let requestsDualAxisChart = null
 let refreshTimer = null
 let isRefreshing = false
+
+const syncVisibleTrendChartSize = async tabName => {
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+
+  const chartByTab = {
+    dailyTokens: tokenBarChart,
+    dailyCost: costLineChart,
+    dailyRequests: requestsDualAxisChart
+  }
+  const containerByTab = {
+    dailyTokens: 'daily-tokens-column',
+    dailyCost: 'daily-cost-line',
+    dailyRequests: 'daily-requests-dual-axis'
+  }
+  const chart = chartByTab[tabName]
+  const container = document.getElementById(containerByTab[tabName])
+
+  if (chart && container?.clientWidth && container?.clientHeight) {
+    chart.changeSize(container.clientWidth, container.clientHeight)
+  }
+}
+
+const destroyTrendChart = tabName => {
+  if (tabName === 'dailyTokens' && tokenBarChart) {
+    tokenBarChart.destroy()
+    tokenBarChart = null
+  }
+  if (tabName === 'dailyCost' && costLineChart) {
+    costLineChart.destroy()
+    costLineChart = null
+  }
+  if (tabName === 'dailyRequests' && requestsDualAxisChart) {
+    requestsDualAxisChart.destroy()
+    requestsDualAxisChart = null
+  }
+}
 
 const scheduleNextRefresh = () => {
   if (!autoRefreshEnabled.value) {
@@ -825,6 +862,7 @@ const updateCharts = async () => {
     const errorRateData = []
     const tokenBarData = []
     const tokenLineData = []
+    const tokenStatsByDate = new Map()
     const costLineData = []
 
     ;(dailyStats.value || [])
@@ -834,6 +872,9 @@ const updateCharts = async () => {
         const totalRequests = Number(day.totalRequestCount || 0)
         const errorCount = Number(day.errorCount || 0)
         const errorRate = totalRequests > 0 ? (errorCount / totalRequests) * 100 : 0
+        const inputTokens = Number(day.totalInputTokens || 0)
+        const outputTokens = Number(day.totalOutputTokens || 0)
+        const cacheTokens = Number(day.totalCacheTokens || 0)
 
         requestsData.push({
           date: day.date,
@@ -846,20 +887,21 @@ const updateCharts = async () => {
           type: t('settings.proxy.stats.errorRate')
         })
 
+        tokenStatsByDate.set(day.date, { inputTokens, outputTokens, cacheTokens })
         tokenBarData.push({
           date: day.date,
           type: t('settings.proxy.stats.inputTokens'),
-          value: Number(day.totalInputTokens || 0)
+          value: inputTokens
         })
         tokenBarData.push({
           date: day.date,
           type: t('settings.proxy.stats.outputTokens'),
-          value: Number(day.totalOutputTokens || 0)
+          value: outputTokens
         })
         tokenLineData.push({
           date: day.date,
           type: t('settings.proxy.stats.cacheTokens'),
-          value: Number(day.totalCacheTokens || 0)
+          value: cacheTokens
         })
         costLineData.push({
           date: day.date,
@@ -963,89 +1005,98 @@ const updateCharts = async () => {
       })
     }
 
-    if (!tokenBarChart) {
-      const container = document.getElementById('daily-tokens-column')
-      if (container) {
-        tokenBarChart = markRaw(
-          new DualAxes('daily-tokens-column', {
-            data: [tokenBarData, tokenLineData],
-            xField: 'date',
-            yField: ['value', 'value'],
-            geometryOptions: [
-              {
-                geometry: 'column',
-                isStack: true,
-                seriesField: 'type',
-                color: [
-                  getCssVar('--cs-info-color') || '#409eff',
-                  getCssVar('--cs-warning-color') || '#e6a23c'
-                ],
-                label: getBarLabelConfig(datum => {
-                  const dayCount = dailyStats.value?.length || 0
-                  return dayCount <= 5 ? formatTokens(datum.value) : ''
-                })
-              },
-              {
-                geometry: 'line',
-                seriesField: 'type',
-                color: getCssVar('--cs-success-color') || '#67c23a',
-                lineStyle: { lineWidth: 3 },
-                point: { size: 4, shape: 'circle' }
-              }
-            ],
-            xAxis: {
+    if (tokenBarChart) {
+      tokenBarChart.destroy()
+      tokenBarChart = null
+    }
+
+    const tokenDates = Array.from(tokenStatsByDate.keys())
+    const container = document.getElementById('daily-tokens-column')
+    if (container) {
+      tokenBarChart = markRaw(
+        new DualAxes('daily-tokens-column', {
+          data: [tokenBarData, tokenLineData],
+          xField: 'date',
+          yField: ['value', 'value'],
+          meta: {
+            date: { values: tokenDates }
+          },
+          geometryOptions: [
+            {
+              geometry: 'column',
+              isStack: true,
+              seriesField: 'type',
+              color: [
+                getCssVar('--cs-info-color') || '#409eff',
+                getCssVar('--cs-warning-color') || '#e6a23c'
+              ],
+              label: getBarLabelConfig(datum => {
+                const dayCount = dailyStats.value?.length || 0
+                return dayCount <= 5 ? formatTokens(datum.value) : ''
+              })
+            },
+            {
+              geometry: 'line',
+              seriesField: 'type',
+              color: getCssVar('--cs-success-color') || '#67c23a',
+              lineStyle: { lineWidth: 3 },
+              point: { size: 4, shape: 'circle' }
+            }
+          ],
+          xAxis: {
+            ...getCommonAxisConfig(),
+            grid: null
+          },
+          yAxis: [
+            {
               ...getCommonAxisConfig(),
-              grid: null
-            },
-            yAxis: [
-              {
-                ...getCommonAxisConfig(),
-                label: {
-                  formatter: val => formatAxisValue(val)
-                }
-              },
-              {
-                ...getCommonAxisConfig(),
-                label: {
-                  formatter: val => formatAxisValue(val)
-                }
-              }
-            ],
-            legend: {
-              position: 'bottom'
-            },
-            tooltip: {
-              shared: true,
-              showMarkers: true,
-              customContent: (title, items) => {
-                if (!items || items.length === 0) return ''
-                let html = `<div style="padding: 8px 12px;"><div style="font-weight: 500; margin-bottom: 8px;">${title}</div>`
-                items.forEach(item => {
-                  const color = item.color || '#999'
-                  const name = item.name || t('settings.proxy.stats.cacheTokens')
-                  const value = item.value !== undefined ? item.value : ''
-                  html += `<div style="display: flex; align-items: center; margin-bottom: 4px;">
-                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${color}; margin-right: 8px;"></span>
-                    <span style="flex: 1;">${name}:</span>
-                    <span style="font-weight: 500; margin-left: 12px;">${formatTokens(value)}</span>
-                  </div>`
-                })
-                html += '</div>'
-                return html
+              label: {
+                formatter: val => formatAxisValue(val)
               }
             },
-            slider: (dailyStats.value?.length || 0) > 10 ? { start: 0, end: 1 } : null
-          })
-        )
-        tokenBarChart.render()
-      }
-    } else {
-      tokenBarChart.update({ data: [tokenBarData, tokenLineData] })
-      // Update slider visibility based on data points
-      const dayCount = dailyStats.value?.length || 0
-      tokenBarChart.update({
-        slider: dayCount > 10 ? { start: 0, end: 1 } : null
-      })
+            {
+              ...getCommonAxisConfig(),
+              label: {
+                formatter: val => formatAxisValue(val)
+              }
+            }
+          ],
+          legend: {
+            position: 'bottom'
+          },
+          tooltip: {
+            shared: true,
+            showMarkers: true,
+            customContent: (title, items) => {
+              const stats = tokenStatsByDate.get(title)
+              if (!stats || !items || items.length === 0) return ''
+
+              const colors = items.reduce((map, item) => {
+                map.set(item.name, item.color || '#999')
+                return map
+              }, new Map())
+              const values = [
+                [t('settings.proxy.stats.inputTokens'), stats.inputTokens],
+                [t('settings.proxy.stats.outputTokens'), stats.outputTokens],
+                [t('settings.proxy.stats.cacheTokens'), stats.cacheTokens]
+              ]
+              let html = `<div style="padding: 8px 12px;"><div style="font-weight: 500; margin-bottom: 8px;">${title}</div>`
+              values.forEach(([name, value]) => {
+                const color = colors.get(name) || '#999'
+                html += `<div style="display: flex; align-items: center; margin-bottom: 4px;">
+                  <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${color}; margin-right: 8px;"></span>
+                  <span style="flex: 1;">${name}:</span>
+                  <span style="font-weight: 500; margin-left: 12px;">${formatTokens(value)}</span>
+                </div>`
+              })
+              html += '</div>'
+              return html
+            }
+          },
+          slider: tokenDates.length > 10 ? { start: 0, end: 1 } : null
+        })
+      )
+      tokenBarChart.render()
     }
 
     if (!costLineChart) {
@@ -1282,27 +1333,19 @@ const updateCharts = async () => {
       .map(item => ({ ...item, value: Number(item.value) }))
       .sort((a, b) => b.value - a.value)
 
-    if (!errorBarChart) {
+    if (!errorPieChart) {
       const container = document.getElementById('error-dist-bar')
       if (container) {
-        errorBarChart = markRaw(
-          new Bar('error-dist-bar', {
+        errorPieChart = markRaw(
+          new Pie('error-dist-bar', {
             data: sortedErrorDist,
-            xField: 'value',
-            yField: 'type',
-            seriesField: 'type',
-            legend: false,
-            color: getCssVar('--cs-error-color') || '#f56c6c',
-            xAxis: {
-              ...getCommonAxisConfig(),
-              label: {
-                formatter: val => formatAxisValue(val)
-              }
+            angleField: 'value',
+            colorField: 'type',
+            radius: 0.8,
+            label: {
+              type: 'outer',
+              formatter: datum => `${datum.type}: ${formatNumber(datum.value)}`
             },
-            yAxis: {
-              ...getCommonAxisConfig()
-            },
-            label: getBarLabelConfig(datum => formatNumber(datum.value)),
             tooltip: {
               formatter: datum => {
                 return { name: datum.type, value: formatNumber(datum.value) }
@@ -1310,11 +1353,11 @@ const updateCharts = async () => {
             }
           })
         )
-        errorBarChart.render()
+        errorPieChart.render()
       }
     } else {
-      errorBarChart.changeData(sortedErrorDist)
-      errorBarChart.render()
+      errorPieChart.changeData(sortedErrorDist)
+      errorPieChart.render()
     }
   } catch (error) {
     console.error('Failed to update charts:', error)
@@ -1411,6 +1454,13 @@ watch(modelColumnMode, () => {
   rebuildProviderStats()
 })
 
+watch(activeTrendTab, async (tabName, previousTabName) => {
+  destroyTrendChart(previousTabName)
+  await nextTick()
+  await updateCharts()
+  syncVisibleTrendChartSize(tabName)
+})
+
 watch(
   () => modelStore.providers,
   () => {
@@ -1434,7 +1484,7 @@ onUnmounted(() => {
   if (modelCostBarChart) modelCostBarChart.destroy()
   if (modelTokenBarChart) modelTokenBarChart.destroy()
   if (providerTokenBarChart) providerTokenBarChart.destroy()
-  if (errorBarChart) errorBarChart.destroy()
+  if (errorPieChart) errorPieChart.destroy()
   if (tokenBarChart) tokenBarChart.destroy()
   if (costLineChart) costLineChart.destroy()
   if (requestsDualAxisChart) requestsDualAxisChart.destroy()

@@ -390,7 +390,9 @@ const displayState = computed(() => {
     }
   }
 
-  if (latestToolDisplay) {
+  const latestToolSucceeded = latestTool?.status === 'final_success'
+
+  if (latestToolDisplay && !(latestToolSucceeded && chatHasStreamingOutput.value)) {
     return latestToolDisplay
   }
 
