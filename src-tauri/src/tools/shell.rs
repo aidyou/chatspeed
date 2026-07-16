@@ -1,9 +1,11 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::tools::helper::is_frontend_build_command;
 use crate::tools::helper::{
     classify_shell_stage, shell_tokens, split_shell_command_segments, ShellStage,
 };
-use crate::tools::shell_output::build_shell_tool_result;
-use crate::tools::shell_output::should_render_stderr_line_as_stdout;
+use crate::tools::shell_output::{
+    build_shell_tool_result, should_collect_stderr_line_as_stdout, AnsiOutputSanitizer,
+};
 use crate::tools::{NativeToolResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
@@ -735,6 +737,28 @@ impl ToolDefinition for ShellExecute {
     }
 }
 
+fn format_tool_stream_output(
+    last_stream_name: Option<&str>,
+    stream_name: &'static str,
+    line: &str,
+) -> String {
+    if last_stream_name == Some(stream_name)
+        || (last_stream_name.is_none() && stream_name == "stdout")
+    {
+        return line.to_string();
+    }
+
+    format!("\n{stream_name}:\n{line}")
+}
+
+fn frontend_build_stderr_stream_name(exit_code: i32) -> &'static str {
+    if exit_code == 0 {
+        "stdout"
+    } else {
+        "stderr"
+    }
+}
+
 impl ShellExecute {
     fn default_working_dir(&self) -> Option<std::path::PathBuf> {
         self.policy_engine
@@ -811,6 +835,11 @@ impl ShellExecute {
 
         let mut full_stdout = String::new();
         let mut full_stderr = String::new();
+        let mut pending_frontend_build_stderr = String::new();
+        let mut stdout_sanitizer = AnsiOutputSanitizer::default();
+        let mut stderr_sanitizer = AnsiOutputSanitizer::default();
+        let buffers_frontend_stderr =
+            is_frontend_build_command(&crate::tools::shell_output::normalize_command(command_str));
         let mut stdout_eof = false;
         let mut stderr_eof = false;
         let mut last_stream_name: Option<&'static str> = None;
@@ -835,6 +864,28 @@ impl ShellExecute {
                     Ok(Some(status)) => {
                         // Process has exited
                         let exit_code = status.code().unwrap_or(-1);
+                        if !pending_frontend_build_stderr.is_empty() {
+                            let stream_name = frontend_build_stderr_stream_name(exit_code);
+                            let _ = gateway
+                                .send(
+                                    session_id,
+                                    GatewayPayload::ToolStream {
+                                        tool_id: tool_id.clone(),
+                                        output: format_tool_stream_output(
+                                            last_stream_name,
+                                            stream_name,
+                                            pending_frontend_build_stderr.trim_end(),
+                                        ),
+                                        timestamp: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis()
+                                            as u64,
+                                    },
+                                )
+                                .await;
+                            last_stream_name = Some(stream_name);
+                        }
                         let _ = gateway
                             .send(
                                 session_id,
@@ -882,19 +933,22 @@ impl ShellExecute {
                 line = stdout_reader.next_line(), if !stdout_eof => {
                     match line {
                         Ok(Some(l)) => {
+                            let l = stdout_sanitizer.sanitize(&format!("{l}\n"));
+                            if l.is_empty() {
+                                continue;
+                            }
                             full_stdout.push_str(&l);
-                            full_stdout.push('\n');
 
                             // Send real-time streaming output to frontend
                             let _ = gateway.send(
                                 session_id,
                                 GatewayPayload::ToolStream {
                                     tool_id: tool_id.clone(),
-                                    output: if last_stream_name == Some("stderr") {
-                                        format!("\nstdout:\n{}", l)
-                                    } else {
-                                        l.clone()
-                                    },
+                                    output: format_tool_stream_output(
+                                        last_stream_name,
+                                        "stdout",
+                                        l.trim_end_matches('\n'),
+                                    ),
                                     timestamp: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap_or_default()
@@ -916,45 +970,54 @@ impl ShellExecute {
                 line = stderr_reader.next_line(), if !stderr_eof => {
                     match line {
                         Ok(Some(l)) => {
+                            let l = stderr_sanitizer.sanitize(&format!("{l}\n"));
+                            if l.is_empty() {
+                                continue;
+                            }
                             let timestamp = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_millis() as u64;
 
-                            if should_render_stderr_line_as_stdout(command_str, &l) {
+                            let collect_as_stdout =
+                                should_collect_stderr_line_as_stdout(command_str, &l);
+
+                            if collect_as_stdout {
                                 full_stdout.push_str(&l);
-                                full_stdout.push('\n');
 
                                 let _ = gateway.send(
                                     session_id,
                                     GatewayPayload::ToolStream {
                                         tool_id: tool_id.clone(),
-                                        output: if last_stream_name == Some("stderr") {
-                                            format!("\nstdout:\n{}", l)
-                                        } else {
-                                            l.clone()
-                                        },
+                                        output: format_tool_stream_output(
+                                            last_stream_name,
+                                            "stdout",
+                                            l.trim_end_matches('\n'),
+                                        ),
                                         timestamp,
                                     },
                                 ).await;
                                 last_stream_name = Some("stdout");
                             } else {
                                 full_stderr.push_str(&l);
-                                full_stderr.push('\n');
 
-                                let _ = gateway.send(
-                                    session_id,
-                                    GatewayPayload::ToolStream {
-                                        tool_id: tool_id.clone(),
-                                        output: if last_stream_name == Some("stderr") {
-                                            l.clone()
-                                        } else {
-                                            format!("\nstderr:\n{}", l)
+                                if buffers_frontend_stderr {
+                                    pending_frontend_build_stderr.push_str(&l);
+                                } else {
+                                    let _ = gateway.send(
+                                        session_id,
+                                        GatewayPayload::ToolStream {
+                                            tool_id: tool_id.clone(),
+                                            output: format_tool_stream_output(
+                                                last_stream_name,
+                                                "stderr",
+                                                l.trim_end_matches('\n'),
+                                            ),
+                                            timestamp,
                                         },
-                                        timestamp,
-                                    },
-                                ).await;
-                                last_stream_name = Some("stderr");
+                                    ).await;
+                                    last_stream_name = Some("stderr");
+                                }
                             }
                             got_output = true;
                         }
@@ -981,6 +1044,28 @@ impl ShellExecute {
                                 full_stderr.push_str("\n[Truncated]");
                             }
                             let exit_code = status.code().unwrap_or(-1);
+                            if !pending_frontend_build_stderr.is_empty() {
+                                let stream_name = frontend_build_stderr_stream_name(exit_code);
+                                let _ = gateway
+                                    .send(
+                                        session_id,
+                                        GatewayPayload::ToolStream {
+                                            tool_id: tool_id.clone(),
+                                            output: format_tool_stream_output(
+                                                last_stream_name,
+                                                stream_name,
+                                                pending_frontend_build_stderr.trim_end(),
+                                            ),
+                                            timestamp: std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_millis()
+                                                as u64,
+                                        },
+                                    )
+                                    .await;
+                                last_stream_name = Some(stream_name);
+                            }
                             let _ = gateway
                                 .send(
                                     session_id,
@@ -1030,6 +1115,7 @@ impl ShellExecute {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::shell_output::{strip_ansi_escape_sequences, AnsiOutputSanitizer};
     use crate::workflow::react::security::PathGuard;
     use tempfile::tempdir;
 
@@ -1047,6 +1133,85 @@ mod tests {
             vec![],
         )));
         (root, root_path, guard)
+    }
+
+    #[test]
+    fn streaming_sanitizers_remove_cross_line_ansi_strings() {
+        let mut stdout_sanitizer = AnsiOutputSanitizer::default();
+        assert_eq!(stdout_sanitizer.sanitize("\u{1b}]0;secret\n"), "");
+        assert_eq!(
+            stdout_sanitizer.sanitize("payload\u{1b}\\visible\n"),
+            "visible\n"
+        );
+
+        let mut stderr_sanitizer = AnsiOutputSanitizer::default();
+        assert_eq!(stderr_sanitizer.sanitize("\u{0090}secret\u{7}\n"), "");
+        assert_eq!(
+            stderr_sanitizer.sanitize("payload\u{009C}visible\n"),
+            "visible\n"
+        );
+
+        let mut c1_osc_sanitizer = AnsiOutputSanitizer::default();
+        assert_eq!(c1_osc_sanitizer.sanitize("\u{009D}secret\n"), "");
+        assert_eq!(
+            c1_osc_sanitizer.sanitize("payload\u{009C}visible\n"),
+            "visible\n"
+        );
+    }
+
+    #[test]
+    fn streaming_payload_preserves_text_after_c1_ansi_terminator() {
+        let output = strip_ansi_escape_sequences("\u{009D}title\u{009C}visible");
+
+        assert_eq!(
+            format_tool_stream_output(None, "stdout", &output),
+            "visible"
+        );
+    }
+
+    #[test]
+    fn frontend_build_command_detection_supports_shell_segments_and_environment_assignments() {
+        assert!(is_frontend_build_command(
+            &crate::tools::shell_output::normalize_command("cd app; pnpm build")
+        ));
+        assert!(is_frontend_build_command(
+            &crate::tools::shell_output::normalize_command("CI=1 pnpm build")
+        ));
+        assert!(is_frontend_build_command(
+            &crate::tools::shell_output::normalize_command(
+                "BUILD_LABEL=\"release candidate\" pnpm build"
+            )
+        ));
+        assert!(is_frontend_build_command(
+            &crate::tools::shell_output::normalize_command(
+                "cd app; BUILD_LABEL=\"release candidate\" pnpm build"
+            )
+        ));
+    }
+
+    #[test]
+    fn frontend_build_stderr_stream_name_depends_on_exit_code() {
+        assert_eq!(frontend_build_stderr_stream_name(0), "stdout");
+        assert_eq!(frontend_build_stderr_stream_name(1), "stderr");
+        assert_eq!(
+            format_tool_stream_output(
+                Some("stdout"),
+                frontend_build_stderr_stream_name(1),
+                "error: failed to build"
+            ),
+            "\nstderr:\nerror: failed to build"
+        );
+    }
+
+    #[test]
+    fn frontend_build_stderr_stream_payload_uses_stdout_label() {
+        let warning = "(!) Some chunks are larger than 500 kB after minification.";
+
+        assert_eq!(
+            format_tool_stream_output(Some("stderr"), "stdout", warning),
+            format!("\nstdout:\n{warning}")
+        );
+        assert_eq!(format_tool_stream_output(None, "stdout", warning), warning);
     }
 
     #[test]
@@ -1103,11 +1268,11 @@ mod tests {
             ShellDecision::Deny(_)
         ));
 
-        // 4. NORMAL FILE removal inside root should NOT be hard-denied (it should be Review)
+        // 4. Workspace file deletion is blocked by PathGuard.
         let cmd_file = format!("rm {}", root_path.join("file.txt").display());
         assert!(matches!(
             engine.check(&cmd_file, false),
-            ShellDecision::Review(_)
+            ShellDecision::Deny(_)
         ));
     }
 

@@ -1,4 +1,4 @@
-use crate::tools::helper::reduce_with_command_reducers;
+use crate::tools::helper::{is_frontend_build_command, reduce_with_command_reducers};
 use crate::tools::ToolCallResult;
 use serde_json::json;
 
@@ -43,12 +43,13 @@ pub(crate) fn build_shell_tool_result(
 }
 
 pub(crate) fn should_render_stderr_line_as_stdout(command_str: &str, line: &str) -> bool {
-    let normalized_command = normalize_command(command_str);
-    if !(is_plain_go_build(&normalized_command) || is_plain_go_test(&normalized_command)) {
-        return false;
-    }
+    should_collect_stderr_line_as_stdout(command_str, line)
+}
 
-    line.starts_with("go: downloading ")
+pub(crate) fn should_collect_stderr_line_as_stdout(command_str: &str, line: &str) -> bool {
+    let normalized_command = normalize_command(command_str);
+    (is_plain_go_build(&normalized_command) || is_plain_go_test(&normalized_command))
+        && line.starts_with("go: downloading ")
 }
 
 pub(crate) fn normalize_shell_output_streams(
@@ -57,8 +58,16 @@ pub(crate) fn normalize_shell_output_streams(
     stdout: &str,
     stderr: &str,
 ) -> (String, String) {
+    let stdout = strip_ansi_escape_sequences(stdout);
+    let stderr = strip_ansi_escape_sequences(stderr);
+
     if exit_code != 0 || stderr.trim().is_empty() {
-        return (stdout.to_string(), stderr.to_string());
+        return (stdout, stderr);
+    }
+
+    let normalized_command = normalize_command(command_str);
+    if is_frontend_build_command(&normalized_command) {
+        return (append_output(stdout, &stderr), String::new());
     }
 
     let mut moved_stderr_lines = Vec::new();
@@ -73,10 +82,10 @@ pub(crate) fn normalize_shell_output_streams(
     }
 
     if moved_stderr_lines.is_empty() {
-        return (stdout.to_string(), stderr.to_string());
+        return (stdout, stderr);
     }
 
-    let mut normalized_stdout = stdout.to_string();
+    let mut normalized_stdout = stdout;
     for line in moved_stderr_lines {
         if !normalized_stdout.is_empty() && !normalized_stdout.ends_with('\n') {
             normalized_stdout.push('\n');
@@ -92,6 +101,104 @@ pub(crate) fn normalize_shell_output_streams(
     };
 
     (normalized_stdout, normalized_stderr)
+}
+
+fn append_output(mut stdout: String, stderr: &str) -> String {
+    if !stdout.is_empty() && !stdout.ends_with('\n') {
+        stdout.push('\n');
+    }
+    stdout.push_str(stderr);
+    stdout
+}
+
+#[derive(Default)]
+pub(crate) struct AnsiOutputSanitizer {
+    state: AnsiOutputSanitizerState,
+}
+
+#[derive(Default)]
+enum AnsiOutputSanitizerState {
+    #[default]
+    Text,
+    Escape,
+    Csi,
+    EscSequence,
+    Osc,
+    OscEscape,
+    String,
+    StringEscape,
+}
+
+impl AnsiOutputSanitizer {
+    pub(crate) fn sanitize(&mut self, content: &str) -> String {
+        let mut output = String::with_capacity(content.len());
+
+        for character in content.chars() {
+            match self.state {
+                AnsiOutputSanitizerState::Text => match character {
+                    '\u{1b}' => self.state = AnsiOutputSanitizerState::Escape,
+                    '\u{009B}' => self.state = AnsiOutputSanitizerState::Csi,
+                    '\u{009D}' => self.state = AnsiOutputSanitizerState::Osc,
+                    '\u{0090}' | '\u{0098}' | '\u{009E}' | '\u{009F}' => {
+                        self.state = AnsiOutputSanitizerState::String
+                    }
+                    '\u{0080}'..='\u{009C}' => {}
+                    _ => output.push(character),
+                },
+                AnsiOutputSanitizerState::Escape => match character {
+                    '[' => self.state = AnsiOutputSanitizerState::Csi,
+                    ']' => self.state = AnsiOutputSanitizerState::Osc,
+                    'P' | 'X' | '^' | '_' => self.state = AnsiOutputSanitizerState::String,
+                    '\u{20}'..='\u{2F}' => self.state = AnsiOutputSanitizerState::EscSequence,
+                    _ => self.state = AnsiOutputSanitizerState::Text,
+                },
+                AnsiOutputSanitizerState::Csi => {
+                    if ('@'..='~').contains(&character) {
+                        self.state = AnsiOutputSanitizerState::Text;
+                    }
+                }
+                AnsiOutputSanitizerState::EscSequence => {
+                    if ('\u{30}'..='\u{7E}').contains(&character) {
+                        self.state = AnsiOutputSanitizerState::Text;
+                    }
+                }
+                AnsiOutputSanitizerState::Osc => match character {
+                    '\u{7}' | '\u{009C}' => self.state = AnsiOutputSanitizerState::Text,
+                    '\u{1b}' => self.state = AnsiOutputSanitizerState::OscEscape,
+                    _ => {}
+                },
+                AnsiOutputSanitizerState::OscEscape => {
+                    self.state = if character == '\\' {
+                        AnsiOutputSanitizerState::Text
+                    } else if character == '\u{1b}' {
+                        AnsiOutputSanitizerState::OscEscape
+                    } else {
+                        AnsiOutputSanitizerState::Osc
+                    };
+                }
+                AnsiOutputSanitizerState::String => match character {
+                    '\u{009C}' => self.state = AnsiOutputSanitizerState::Text,
+                    '\u{1b}' => self.state = AnsiOutputSanitizerState::StringEscape,
+                    _ => {}
+                },
+                AnsiOutputSanitizerState::StringEscape => {
+                    self.state = if character == '\\' {
+                        AnsiOutputSanitizerState::Text
+                    } else if character == '\u{1b}' {
+                        AnsiOutputSanitizerState::StringEscape
+                    } else {
+                        AnsiOutputSanitizerState::String
+                    };
+                }
+            }
+        }
+
+        output
+    }
+}
+
+pub(crate) fn strip_ansi_escape_sequences(content: &str) -> String {
+    AnsiOutputSanitizer::default().sanitize(content)
 }
 
 fn format_shell_output(exit_code: i32, stdout: &str, stderr: &str) -> String {
@@ -160,7 +267,7 @@ fn reduce_shell_output_for_llm(
     raw_content.to_string()
 }
 
-fn normalize_command(command: &str) -> String {
+pub(crate) fn normalize_command(command: &str) -> String {
     command
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -355,7 +462,7 @@ fn truncate_with_marker(content: &str, max_len: usize) -> String {
 mod tests {
     use super::{
         build_shell_tool_result, normalize_shell_output_streams,
-        should_render_stderr_line_as_stdout,
+        should_render_stderr_line_as_stdout, strip_ansi_escape_sequences,
     };
 
     #[test]
@@ -415,6 +522,83 @@ mod tests {
     }
 
     #[test]
+    fn ansi_escape_sequences_are_removed_from_all_output_streams() {
+        let (stdout, stderr) = normalize_shell_output_streams(
+            "cargo check",
+            1,
+            "\u{1b}[32mcheck succeeded\u{1b}[0m\n",
+            "\u{1b}]8;;https://example.com\u{1b}\\error\u{1b}]8;;\u{1b}\\\n",
+        );
+
+        assert_eq!(stdout, "check succeeded\n");
+        assert_eq!(stderr, "error\n");
+        for sequence in [
+            "\u{1b}]8;;https://example.com\u{1b}\\",
+            "\u{1b}P1;2|payload\u{1b}\\",
+            "\u{1b}Xsos\u{1b}\\",
+            "\u{1b}^pm\u{1b}\\",
+            "\u{1b}_apc\u{1b}\\",
+            "\u{1b}(0",
+            "\u{1b}#8",
+            "\u{009D}title\u{009C}",
+            "\u{0090}payload\u{009C}",
+            "\u{0098}sos\u{009C}",
+            "\u{009E}pm\u{009C}",
+            "\u{009F}apc\u{009C}",
+        ] {
+            assert_eq!(
+                strip_ansi_escape_sequences(&format!("before{sequence}after")),
+                "beforeafter"
+            );
+        }
+        assert_eq!(
+            strip_ansi_escape_sequences("\u{009B}31mplain\u{009B}0m"),
+            "plain"
+        );
+        assert_eq!(
+            strip_ansi_escape_sequences("\u{0090}secret\u{7}payload\u{009C}visible"),
+            "visible"
+        );
+    }
+
+    #[test]
+    fn successful_frontend_build_moves_stderr_to_stdout() {
+        let stdout = "✓ built in 16.02s\n";
+        let stderr = "(!) Some chunks are larger than 500 kB after minification. Consider:\n- Using dynamic import() to code-split the application\n";
+        let (normalized_stdout, normalized_stderr) =
+            normalize_shell_output_streams("pnpm build", 0, stdout, stderr);
+
+        assert_eq!(normalized_stdout, format!("{stdout}{stderr}"),);
+        assert!(normalized_stderr.is_empty());
+
+        let result = build_shell_tool_result("pnpm build", 0, stdout, stderr);
+        let expected_content = format!("Exit code: 0\n\nstdout:\n{stdout}{stderr}");
+        assert_eq!(result.content.as_deref(), Some(expected_content.as_str()));
+        let llm_content = result
+            .structured_content
+            .as_ref()
+            .and_then(|content| content["llm_content"].as_str())
+            .expect("llm_content should be a string");
+        assert_eq!(
+            llm_content,
+            "Exit code: 0\n\nBuild result:\n✓ built in 16.02s"
+        );
+    }
+
+    #[test]
+    fn failed_frontend_build_keeps_stderr_for_diagnostics() {
+        let (stdout, stderr) = normalize_shell_output_streams(
+            "pnpm build",
+            1,
+            "building...\n",
+            "error: build failed\n",
+        );
+
+        assert_eq!(stdout, "building...\n");
+        assert_eq!(stderr, "error: build failed\n");
+    }
+
+    #[test]
     fn go_build_download_progress_is_normalized_to_stdout_on_success() {
         let (stdout, stderr) = normalize_shell_output_streams(
             "go build ./...",
@@ -439,6 +623,18 @@ mod tests {
         assert!(stdout.is_empty());
         assert!(stderr.contains("go: downloading github.com/foo/bar v1.0.0"));
         assert!(stderr.contains("build failed"));
+    }
+
+    #[test]
+    fn frontend_build_stderr_waits_for_exit_code_before_stream_classification() {
+        assert!(!should_render_stderr_line_as_stdout(
+            "pnpm build",
+            "(!) Some chunks are larger than 500 kB after minification. Consider:"
+        ));
+        assert!(!should_render_stderr_line_as_stdout(
+            "cd app && pnpm build",
+            "error: failed to build"
+        ));
     }
 
     #[test]

@@ -265,6 +265,18 @@ Default tool usage:
 - `sub_agent_run`: only when work is clearly separable or parallelizable
 - `sub_agent_output` / `sub_agent_stop`: only for exact task IDs from the current workflow
 
+## Sub-agent Delegation
+
+Use sub-agents when they provide materially better coverage, independence, or parallelism than direct work. Optimize for high confidence per unit of time and avoid ceremonial delegation.
+
+When the following sub-agents are available:
+
+- **Code Explorer**: Handle simple, localized, or strongly anchored tasks through direct exploration first. Delegate only when the investigation is genuinely broad, cross-cutting, uncertain, or independently separable. Give the explorer concrete hypotheses, paths, symbols, and a specific deliverable; do not delegate routine file lookup or context that the parent can obtain just as reliably.
+
+- **Final Code Reviewer**: Treat final review as a release gate, not an iterative bug-finding loop. Before invoking it, the parent must complete the implementation, inspect the changed execution paths, reason through relevant success, failure, boundary, and state-transition cases, and run the narrowest meaningful verification. Provide the reviewer with the original acceptance criteria, exact changed files, verification evidence, and known risk areas.
+
+For non-trivial behavior changes, normally perform one final review after the parent has completed its own implementation and verification. If review finds a defect, address the root cause and proactively check adjacent cases in the same behavior class before requesting one focused re-review. Do not repeatedly invoke final review after isolated patches without first expanding the parent-side analysis and tests. Skip final-review delegation when the task is a trivial, immediately verifiable local change and independent review would not improve confidence proportionally.
+
 ## Edit Efficiency
 
 - Use `edit_file` for existing files.

@@ -1,3 +1,5 @@
+use super::{shell_tokens, split_shell_command_segments};
+
 pub(crate) trait ShellOutputReducer {
     fn matches(&self, normalized_command: &str) -> bool;
 
@@ -11,9 +13,7 @@ pub(crate) struct FrontendBuildOutputReducer;
 
 impl ShellOutputReducer for FrontendBuildOutputReducer {
     fn matches(&self, normalized_command: &str) -> bool {
-        normalized_command
-            .split(" && ")
-            .any(is_frontend_build_command)
+        is_frontend_build_command(normalized_command)
     }
 
     fn reduce(&self, exit_code: i32, raw_content: &str) -> String {
@@ -50,8 +50,21 @@ pub(crate) fn reduce_with_command_reducers(
         .map(|reducer| reducer.reduce(exit_code, raw_content))
 }
 
-fn is_frontend_build_command(command: &str) -> bool {
-    let tokens = command.split_whitespace().collect::<Vec<_>>();
+pub(crate) fn is_frontend_build_command(normalized_command: &str) -> bool {
+    split_shell_command_segments(normalized_command)
+        .iter()
+        .any(|segment| is_frontend_build_command_segment(segment))
+}
+
+fn is_frontend_build_command_segment(command: &str) -> bool {
+    let Some(tokens) = shell_tokens(command) else {
+        return false;
+    };
+    let tokens = tokens
+        .iter()
+        .map(String::as_str)
+        .skip_while(|token| is_environment_assignment(token))
+        .collect::<Vec<_>>();
     matches!(
         tokens.as_slice(),
         ["pnpm", "build", ..]
@@ -67,6 +80,15 @@ fn is_frontend_build_command(command: &str) -> bool {
             | ["yarm", "tauri", "build", ..]
             | ["yarm", "run", "tauri", "build", ..]
     )
+}
+
+fn is_environment_assignment(token: &&str) -> bool {
+    token.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    })
 }
 
 fn is_build_result_line(line: &str) -> bool {
@@ -111,6 +133,10 @@ mod tests {
             "yarm tauri build",
             "yarm run tauri build",
             "cd app && pnpm build --mode production",
+            "cd app; pnpm build --mode production",
+            "CI=1 pnpm build",
+            "BUILD_LABEL=\"release candidate\" pnpm build",
+            "cd app; BUILD_LABEL=\"release candidate\" pnpm build",
         ] {
             assert!(reducer.matches(command), "expected to match {command}");
         }
