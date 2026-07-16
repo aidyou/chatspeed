@@ -1574,6 +1574,10 @@ impl WorkflowExecutor {
                 tm.register_tool(Arc::new(GitDiff::new(path_guard.clone())))
                     .await?;
             }
+            if self.agent_config.role.as_deref() == Some("child") && is_allowed(TOOL_GIT_INSPECT) {
+                tm.register_tool(Arc::new(GitInspect::new(path_guard.clone())))
+                    .await?;
+            }
             if self.policy.allows_planning_note_tools() {
                 if is_allowed(crate::tools::TOOL_PLAN_READ_NOTE) {
                     tm.register_tool(Arc::new(crate::tools::PlanReadNote::new(

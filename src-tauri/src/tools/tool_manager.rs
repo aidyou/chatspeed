@@ -210,8 +210,6 @@ impl ToolManager {
             .await?;
         self.register_tool(Arc::new(crate::tools::Grep::default()))
             .await?;
-        self.register_tool(Arc::new(crate::tools::GitDiff::default()))
-            .await?;
 
         // =================================================
         // System & Workflow tools

@@ -577,6 +577,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 | crate::tools::TOOL_LIST_DIR
                 | crate::tools::TOOL_GLOB
                 | crate::tools::TOOL_GREP
+                | crate::tools::TOOL_GIT_DIFF
+                | crate::tools::TOOL_GIT_INSPECT
                 | crate::tools::TOOL_WEB_SEARCH
                 | crate::tools::TOOL_WEB_FETCH
         )
@@ -1607,6 +1609,17 @@ mod tests {
             ),
             SmartApprovalDecision::AutoApprove
         );
+    }
+
+    #[test]
+    fn smart_mode_auto_approves_read_only_git_inspection_tools() {
+        for tool in [crate::tools::TOOL_GIT_DIFF, crate::tools::TOOL_GIT_INSPECT] {
+            assert_eq!(
+                WorkflowExecutor::smart_mode_approval_decision(tool, &json!({})),
+                SmartApprovalDecision::AutoApprove,
+                "{tool} should be auto-approved as a fixed read-only Git tool"
+            );
+        }
     }
 
     #[test]

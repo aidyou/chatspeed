@@ -23,13 +23,19 @@ fn filter_tool_list_json(raw: Option<String>, blocked_tool: &str) -> Option<Stri
     Some(serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string()))
 }
 
-fn filter_git_diff_for_role(raw: Option<String>, role: Option<&str>) -> Option<String> {
+fn filter_git_inspection_tools_for_role(raw: Option<String>, role: Option<&str>) -> Option<String> {
     let tools = raw
         .as_deref()
         .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
         .unwrap_or_default()
         .into_iter()
-        .filter(|tool| role == Some("child") || tool != crate::tools::TOOL_GIT_DIFF)
+        .filter(|tool| {
+            role == Some("child")
+                || !matches!(
+                    tool.as_str(),
+                    crate::tools::TOOL_GIT_DIFF | crate::tools::TOOL_GIT_INSPECT
+                )
+        })
         .collect::<Vec<_>>();
     Some(serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string()))
 }
@@ -50,8 +56,9 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) {
     }
 
     let role = agent.role.as_deref();
-    agent.available_tools = filter_git_diff_for_role(agent.available_tools.clone(), role);
-    agent.auto_approve = filter_git_diff_for_role(agent.auto_approve.clone(), role);
+    agent.available_tools =
+        filter_git_inspection_tools_for_role(agent.available_tools.clone(), role);
+    agent.auto_approve = filter_git_inspection_tools_for_role(agent.auto_approve.clone(), role);
 
     if role != Some("child") {
         return;

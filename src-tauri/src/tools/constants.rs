@@ -12,6 +12,7 @@ pub const TOOL_LIST_DIR: &str = "list_dir";
 pub const TOOL_GLOB: &str = "glob";
 pub const TOOL_GREP: &str = "grep";
 pub const TOOL_GIT_DIFF: &str = "git_diff";
+pub const TOOL_GIT_INSPECT: &str = "git_inspect";
 pub const TOOL_WEB_SEARCH: &str = "web_search";
 pub const TOOL_WEB_FETCH: &str = "web_fetch";
 
@@ -115,6 +116,7 @@ mod tests {
             TOOL_GLOB,
             TOOL_GREP,
             TOOL_GIT_DIFF,
+            TOOL_GIT_INSPECT,
             TOOL_WEB_SEARCH,
             TOOL_WEB_FETCH,
         ] {

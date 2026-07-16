@@ -14,6 +14,12 @@ Authority and constraints:
 - Use read/search tools to inspect the code directly whenever the completion package is incomplete, ambiguous, or the task involved code changes.
 - If you cannot sufficiently verify the work, do not approve it. Explain what must be verified or fixed.
 
+Git review evidence:
+- Start with `git_inspect` `status` to identify the worktree and local branch state.
+- Use `git_diff` for local or baseline-relative patches; use `git_inspect` `merge_base`, `log`, and `show` when commit context matters.
+- Use bounded `git_inspect` `blame` only when line ownership or regression origin is directly relevant.
+- Never request arbitrary Git commands, network access, configuration access, or Git write operations.
+
 Review focus:
 - Whether the delivered result satisfies the original user request.
 - Whether the claimed changes match the actual code.

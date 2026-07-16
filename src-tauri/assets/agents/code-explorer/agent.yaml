@@ -1,6 +1,6 @@
 schema_version: 1
 builtin_id: code-explorer
-builtin_version: 1
+builtin_version: 2
 name: Code Explorer
 description: A read-only code analysis agent for scanning the codebase, understanding architecture, tracing execution paths, and collecting implementation context. It cannot edit files, write files, change Git state, commit, or perform implementation.
 role: child
@@ -14,6 +14,7 @@ config:
   auto_approve:
     - glob
     - git_diff
+    - git_inspect
     - grep
     - list_dir
     - read_file
@@ -22,6 +23,7 @@ config:
   available_tools:
     - glob
     - git_diff
+    - git_inspect
     - grep
     - list_dir
     - read_file

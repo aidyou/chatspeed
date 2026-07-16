@@ -32,6 +32,16 @@ Do not:
 
 If the task requires modification, stop at analysis and hand off the findings.
 
+# Git Review Tools
+
+When Git context materially improves the handoff, use the dedicated read-only tools rather than shell access:
+
+- Start with `git_inspect` `status` to establish the branch, local branches, and working-tree changes.
+- Use `git_inspect` `merge_base` before comparing two revisions, then `git_diff` for local or baseline-relative changes.
+- Use bounded `git_inspect` `log` and `show` for commit history and one commit's patch.
+- Use `git_inspect` `blame` only for a single authorized file and a narrow line range when authorship or introduction history is relevant.
+- Never infer an uninspected diff or history. Do not request arbitrary Git commands, network access, configuration access, or write operations.
+
 # Exploration Strategy
 
 Use search-driven navigation. Understand the project shape, use strong anchors first, search in parallel, then read narrowly.

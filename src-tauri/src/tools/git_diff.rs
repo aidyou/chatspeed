@@ -5,20 +5,28 @@ use crate::workflow::react::security::PathGuard;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, RwLock};
+use std::thread;
+
+const MAX_GIT_OUTPUT_BYTES: usize = 512 * 1024;
+const MAX_UNTRACKED_FILE_BYTES: usize = 256 * 1024;
+const MAX_GIT_BRANCHES: usize = 100;
+const GIT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn primary_directory(path_guard: Option<&Arc<RwLock<PathGuard>>>) -> Result<PathBuf, ToolError> {
     path_guard
         .and_then(|guard| guard.read().ok())
         .and_then(|guard| guard.get_primary_root().map(PathBuf::from))
-        .or_else(|| std::env::current_dir().ok())
-        .ok_or_else(|| ToolError::ExecutionFailed("No workspace root is configured".to_string()))
+        .ok_or_else(|| {
+            ToolError::ExecutionFailed("No authorized workspace root is configured".to_string())
+        })
 }
 
-fn workspace_directories(
+pub(crate) fn workspace_directories(
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> Result<Vec<PathBuf>, ToolError> {
     if let Some(guard) = path_guard.and_then(|guard| guard.read().ok()) {
@@ -28,21 +36,20 @@ fn workspace_directories(
         }
     }
 
-    std::env::current_dir()
-        .map(|dir| vec![dir])
-        .map_err(|_| ToolError::ExecutionFailed("No workspace root is configured".to_string()))
+    Err(ToolError::ExecutionFailed(
+        "No authorized workspace roots are configured".to_string(),
+    ))
 }
 
-fn display_path_for_tool_output(
+pub(crate) fn display_path_for_tool_output(
     path: &Path,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> String {
     let Some(primary_dir) = path_guard
         .and_then(|guard| guard.read().ok())
         .and_then(|guard| guard.get_primary_root().map(PathBuf::from))
-        .or_else(|| std::env::current_dir().ok())
     else {
-        return path.to_string_lossy().to_string();
+        return "[authorized workspace]".to_string();
     };
 
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -76,7 +83,7 @@ fn validate_path(
         .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
 }
 
-fn resolve_requested_paths(
+pub(crate) fn resolve_requested_paths(
     requested_paths: &[String],
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> Result<BTreeMap<PathBuf, BTreeSet<String>>, ToolError> {
@@ -190,25 +197,183 @@ fn resolve_requested_paths(
     Ok(grouped)
 }
 
-fn run_git_command(
+pub(crate) fn parse_status_porcelain_z(output: &str) -> Result<Vec<(String, String)>, ToolError> {
+    let mut records = output.split('\0');
+    let mut entries = Vec::new();
+    while let Some(record) = records.next() {
+        if record.is_empty() {
+            continue;
+        }
+        let bytes = record.as_bytes();
+        if bytes.len() < 4 || bytes[2] != b' ' {
+            return Err(ToolError::ExecutionFailed(
+                "git status returned malformed porcelain data".to_string(),
+            ));
+        }
+        let status = record[..2].to_string();
+        let path = record[3..].to_string();
+        if status.contains('R') || status.contains('C') {
+            records.next().ok_or_else(|| {
+                ToolError::ExecutionFailed(
+                    "git status returned an incomplete rename or copy record".to_string(),
+                )
+            })?;
+        }
+        entries.push((status, path));
+    }
+    Ok(entries)
+}
+
+pub(crate) fn run_git_command(
     workspace_root: &Path,
     args: &[String],
 ) -> Result<(i32, String, String), ToolError> {
-    let output = Command::new("git")
+    let mut child = Command::new("git")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .arg("-c")
+        .arg("maintenance.auto=false")
         .arg("-C")
         .arg(workspace_root)
         .args(args)
-        .output()
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_PAGER", "cat")
+        .env("GIT_EXTERNAL_DIFF", "")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_CONFIG_COUNT")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {}", e)))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture git stdout".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture git stderr".to_string()))?;
+    let stdout_reader = thread::spawn(move || read_git_stream(stdout));
+    let stderr_reader = thread::spawn(move || read_git_stream(stderr));
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < GIT_COMMAND_TIMEOUT => {
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                child.wait().map_err(|e| {
+                    ToolError::ExecutionFailed(format!(
+                        "Failed to stop timed out git command: {}",
+                        e
+                    ))
+                })?;
+                return Err(ToolError::ExecutionFailed(
+                    "Git command exceeded the 10 second inspection limit".to_string(),
+                ));
+            }
+            Err(e) => {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Failed to wait for git command: {}",
+                    e
+                )))
+            }
+        }
+    };
+    let (stdout, stdout_truncated) = stdout_reader
+        .join()
+        .map_err(|_| ToolError::ExecutionFailed("Git stdout reader panicked".to_string()))?
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read git stdout: {}", e)))?;
+    let (stderr, stderr_truncated) = stderr_reader
+        .join()
+        .map_err(|_| ToolError::ExecutionFailed("Git stderr reader panicked".to_string()))?
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read git stderr: {}", e)))?;
+    if stdout_truncated || stderr_truncated {
+        return Err(ToolError::ExecutionFailed(format!(
+            "Git command output exceeded the {} KiB inspection limit",
+            MAX_GIT_OUTPUT_BYTES / 1024
+        )));
+    }
+    let stdout = String::from_utf8(stdout).map_err(|_| {
+        ToolError::ExecutionFailed(
+            "Git stdout contains non-UTF-8 data and was rejected".to_string(),
+        )
+    })?;
+    let stderr = String::from_utf8(stderr).map_err(|_| {
+        ToolError::ExecutionFailed(
+            "Git stderr contains non-UTF-8 data and was rejected".to_string(),
+        )
+    })?;
 
-    Ok((
-        output.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&output.stdout).to_string(),
-        String::from_utf8_lossy(&output.stderr).to_string(),
-    ))
+    Ok((status.code().unwrap_or(-1), stdout, stderr))
 }
 
-fn ensure_git_repository(workspace_root: &Path) -> Result<(), ToolError> {
+fn read_git_stream(mut stream: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut output = Vec::new();
+    let mut buffer = [0_u8; 8 * 1024];
+    let mut truncated = false;
+    loop {
+        let read = stream.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let remaining = MAX_GIT_OUTPUT_BYTES.saturating_sub(output.len());
+        let retained = read.min(remaining);
+        output.extend_from_slice(&buffer[..retained]);
+        truncated |= retained != read;
+    }
+    Ok((output, truncated))
+}
+
+pub(crate) fn resolve_commit_revision(
+    workspace_root: &Path,
+    revision: &str,
+) -> Result<String, ToolError> {
+    let revision = revision.trim();
+    if revision.is_empty() || revision.starts_with('-') || revision.contains('\0') {
+        return Err(ToolError::ExecutionFailed(
+            "Git revision must be a non-empty revision name, not an option".to_string(),
+        ));
+    }
+
+    let (code, stdout, stderr) = run_git_command(
+        workspace_root,
+        &[
+            "rev-parse".to_string(),
+            "--verify".to_string(),
+            "--end-of-options".to_string(),
+            format!("{}^{{commit}}", revision),
+        ],
+    )?;
+    if code != 0 {
+        return Err(ToolError::ExecutionFailed(format!(
+            "Failed to resolve Git revision '{}': {}",
+            revision,
+            stderr.trim()
+        )));
+    }
+
+    let commit = stdout.trim();
+    if commit.len() != 40
+        || !commit
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(ToolError::ExecutionFailed(format!(
+            "Git revision '{}' did not resolve to a commit",
+            revision
+        )));
+    }
+
+    Ok(commit.to_string())
+}
+
+pub(crate) fn ensure_git_repository(workspace_root: &Path) -> Result<(), ToolError> {
     let (code, stdout, stderr) = run_git_command(
         workspace_root,
         &["rev-parse".to_string(), "--is-inside-work-tree".to_string()],
@@ -276,6 +441,7 @@ fn git_branches(workspace_root: &Path) -> Result<Vec<String>, ToolError> {
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
+        .take(MAX_GIT_BRANCHES)
         .map(str::to_string)
         .collect())
 }
@@ -305,8 +471,22 @@ fn build_untracked_patch(
     abs_path: &Path,
     relative_path: &str,
     max_lines: usize,
-) -> (String, usize) {
-    let content = fs::read_to_string(abs_path).unwrap_or_default();
+) -> Result<(String, usize), ToolError> {
+    let mut content = Vec::new();
+    File::open(abs_path)
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read untracked file: {}", e)))?
+        .take((MAX_UNTRACKED_FILE_BYTES + 1) as u64)
+        .read_to_end(&mut content)
+        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read untracked file: {}", e)))?;
+    let truncated_by_bytes = content.len() > MAX_UNTRACKED_FILE_BYTES;
+    if truncated_by_bytes {
+        content.truncate(MAX_UNTRACKED_FILE_BYTES);
+    }
+    let content = String::from_utf8(content).map_err(|_| {
+        ToolError::ExecutionFailed(
+            "Untracked file contains non-UTF-8 data and was excluded from the patch".to_string(),
+        )
+    })?;
     let mut patch = String::new();
     patch.push_str(&format!(
         "diff --git a/{} b/{}\n",
@@ -322,7 +502,10 @@ fn build_untracked_patch(
         patch.push_str(line);
         patch.push('\n');
     }
-    (truncate_patch(&patch, max_lines), line_count)
+    if truncated_by_bytes {
+        patch.push_str("[untracked file content truncated by byte limit]\n");
+    }
+    Ok((truncate_patch(&patch, max_lines), line_count))
 }
 
 #[derive(Clone, Default)]
@@ -432,7 +615,8 @@ impl ToolDefinition for GitDiff {
             let branches = git_branches(&workspace_root)?;
             let mut status_args = vec![
                 "status".to_string(),
-                "--porcelain".to_string(),
+                "--porcelain=v1".to_string(),
+                "-z".to_string(),
                 "--untracked-files=all".to_string(),
                 "--".to_string(),
             ];
@@ -446,25 +630,23 @@ impl ToolDefinition for GitDiff {
                 )));
             }
 
+            let status_entries = parse_status_porcelain_z(&status_stdout)?;
             let mut repo_files = Vec::new();
             let mut repo_patch_sections = Vec::new();
-            for line in status_stdout.lines().take(max_files) {
-                if line.len() < 3 {
-                    continue;
+            let mut resolved_base: Option<String> = None;
+            for (status_code, relative_path) in status_entries.into_iter().take(max_files) {
+                let requested_path = workspace_root.join(&relative_path);
+                let abs_path = validate_path(&requested_path, self.path_guard.as_ref())?;
+                if !abs_path.starts_with(&workspace_root) {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "Git status path '{}' resolves outside its workspace root",
+                        relative_path
+                    )));
                 }
-                let status_code = line[..2].trim().to_string();
-                let path_text = line[3..].trim();
-                let relative_path = path_text
-                    .split(" -> ")
-                    .last()
-                    .unwrap_or(path_text)
-                    .trim()
-                    .to_string();
-                let abs_path = workspace_root.join(&relative_path);
 
                 if status_code == "??" {
                     let (patch, added) =
-                        build_untracked_patch(&abs_path, &relative_path, max_lines_per_file);
+                        build_untracked_patch(&abs_path, &relative_path, max_lines_per_file)?;
                     let file = json!({
                         "workspace_root": display_path_for_tool_output(&workspace_root, self.path_guard.as_ref()),
                         "path": relative_path,
@@ -482,15 +664,24 @@ impl ToolDefinition for GitDiff {
                     continue;
                 }
 
+                let base_revision = match resolved_base.as_ref() {
+                    Some(base_revision) => base_revision.clone(),
+                    None => {
+                        let base_revision = resolve_commit_revision(&workspace_root, base)?;
+                        resolved_base = Some(base_revision.clone());
+                        base_revision
+                    }
+                };
                 let mut diff_args = vec![
                     "diff".to_string(),
                     "--no-ext-diff".to_string(),
+                    "--no-textconv".to_string(),
                     "--unified=3".to_string(),
                 ];
                 if staged {
                     diff_args.push("--cached".to_string());
                 }
-                diff_args.push(base.to_string());
+                diff_args.push(base_revision.clone());
                 diff_args.push("--".to_string());
                 diff_args.push(relative_path.clone());
                 let (diff_code, diff_stdout, diff_stderr) =
@@ -503,11 +694,16 @@ impl ToolDefinition for GitDiff {
                     )));
                 }
 
-                let mut numstat_args = vec!["diff".to_string(), "--numstat".to_string()];
+                let mut numstat_args = vec![
+                    "diff".to_string(),
+                    "--no-ext-diff".to_string(),
+                    "--no-textconv".to_string(),
+                    "--numstat".to_string(),
+                ];
                 if staged {
                     numstat_args.push("--cached".to_string());
                 }
-                numstat_args.push(base.to_string());
+                numstat_args.push(base_revision);
                 numstat_args.push("--".to_string());
                 numstat_args.push(relative_path.clone());
                 let (_, numstat_stdout, _) = run_git_command(&workspace_root, &numstat_args)?;
@@ -612,7 +808,7 @@ impl ToolDefinition for GitDiff {
 
 #[cfg(test)]
 mod tests {
-    use super::GitDiff;
+    use super::{parse_status_porcelain_z, GitDiff};
     use crate::tools::ToolDefinition;
     use crate::workflow::react::security::PathGuard;
     use serde_json::json;
@@ -644,6 +840,23 @@ mod tests {
             .expect("git config name");
         assert!(status.success());
         dir
+    }
+
+    #[test]
+    fn status_porcelain_z_preserves_special_paths_and_renames() {
+        let output = "?? line\nname\0 M tab\tname\0R  renamed\0original\0 R worktree-renamed\0worktree-original\0C  copied\0copy-source\0 C worktree-copied\0worktree-copy-source\0";
+        let entries = parse_status_porcelain_z(output).expect("parse porcelain");
+        assert_eq!(
+            entries,
+            vec![
+                ("??".to_string(), "line\nname".to_string()),
+                (" M".to_string(), "tab\tname".to_string()),
+                ("R ".to_string(), "renamed".to_string()),
+                (" R".to_string(), "worktree-renamed".to_string()),
+                ("C ".to_string(), "copied".to_string()),
+                (" C".to_string(), "worktree-copied".to_string()),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -680,6 +893,63 @@ mod tests {
         let patch = result.content.unwrap_or_default();
         assert!(patch.contains("diff --git"));
         assert!(patch.contains("+world"));
+    }
+
+    #[tokio::test]
+    async fn git_diff_rejects_option_like_base_revision() {
+        let dir = init_repo();
+        let file = dir.path().join("src.txt");
+        fs::write(&file, "hello\n").expect("write seed");
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["add", "src.txt"])
+            .status()
+            .expect("git add")
+            .success());
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["commit", "-m", "init"])
+            .status()
+            .expect("git commit")
+            .success());
+        fs::write(&file, "hello\nworld\n").expect("write modified");
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![dir.path().to_path_buf()],
+            vec![],
+            vec![],
+        )));
+        let tool = GitDiff::new(Some(guard));
+        let err = tool
+            .call(json!({ "path": "src.txt", "base": "--help" }))
+            .await
+            .expect_err("option-like revision must be rejected");
+        assert!(err.to_string().contains("not an option"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn git_diff_rejects_untracked_symlink_to_external_file() {
+        let dir = init_repo();
+        let outside = tempdir().expect("outside tempdir");
+        let secret_path = outside.path().join("secret.txt");
+        fs::write(&secret_path, "external-secret").expect("write external file");
+        std::os::unix::fs::symlink(&secret_path, dir.path().join("leak.txt"))
+            .expect("create symlink");
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![dir.path().to_path_buf()],
+            vec![],
+            vec![],
+        )));
+        let tool = GitDiff::new(Some(guard));
+        let err = tool
+            .call(json!({}))
+            .await
+            .expect_err("external symlink must be rejected");
+        assert!(!err.to_string().contains("external-secret"));
     }
 
     #[tokio::test]
