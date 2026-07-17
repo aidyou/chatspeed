@@ -138,8 +138,8 @@ pub fn set_config(
         match result {
             Ok(_) => match key {
                 CFG_INTERFACE_LANGUAGE => {
-                    let lang = config_store
-                        .get_config::<String>(CFG_INTERFACE_LANGUAGE, "en".to_string());
+                    let lang =
+                        config_store.get_config::<String>(CFG_INTERFACE_LANGUAGE, "en".to_string());
                     set_locale(&lang);
                     #[cfg(debug_assertions)]
                     log::debug!("Language set to: {}", lang);
@@ -630,8 +630,10 @@ pub async fn update_shortcut(
             .to_string()
     });
 
-    crate::shortcut::update_shortcut(&app, &shortcut_value, key).map_err(|e| AppError::General {
-        message: t!("setting.failed_to_update_shortcut", error = e.to_string()).to_string(),
+    crate::shortcut::update_shortcut(&app, &shortcut_value, key).map_err(|e| {
+        AppError::General {
+            message: t!("setting.failed_to_update_shortcut", error = e.to_string()).to_string(),
+        }
     })?;
 
     Ok(())

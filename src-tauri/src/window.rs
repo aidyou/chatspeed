@@ -188,7 +188,8 @@ fn validate_window_position<'a>(
         }
     }
 
-    let matched_monitor = find_monitor_for_position(monitors, saved_pos.x, saved_pos.y, window_size)?;
+    let matched_monitor =
+        find_monitor_for_position(monitors, saved_pos.x, saved_pos.y, window_size)?;
 
     if let Some(saved_screen_name) = saved_pos.screen_name.as_deref() {
         let current_screen_name = matched_monitor.name();
@@ -231,7 +232,8 @@ pub fn is_position_on_any_screen<R: tauri::Runtime>(
 
     match app_handle.available_monitors() {
         Ok(monitors) => {
-            let is_on_screen = validate_window_position(&monitors, &saved_pos, window_size).is_some();
+            let is_on_screen =
+                validate_window_position(&monitors, &saved_pos, window_size).is_some();
 
             if !is_on_screen {
                 warn!(
@@ -795,8 +797,7 @@ pub fn restore_window_config(
                             matched_monitor_name
                         );
 
-                        let is_primary =
-                            primary_monitor_name == matched_monitor_name.as_deref();
+                        let is_primary = primary_monitor_name == matched_monitor_name.as_deref();
                         if matched_monitor.size().width > SUSPICIOUSLY_LARGE_WIDTH && !is_primary {
                             warn!(
                                 "Window at ({},{}) intersects with a non-primary, suspiciously large screen: {:?} (Size: {}x{}). Considering position unsafe.",

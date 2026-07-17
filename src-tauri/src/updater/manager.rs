@@ -198,10 +198,9 @@ impl UpdateManager {
     }
 
     fn has_ready_update(&self) -> Result<bool> {
-        let latest_update = self
-            .latest_update
-            .lock()
-            .map_err(|_| UpdateError::LockError("Failed to lock latest_update mutex".to_string()))?;
+        let latest_update = self.latest_update.lock().map_err(|_| {
+            UpdateError::LockError("Failed to lock latest_update mutex".to_string())
+        })?;
         Ok(latest_update.is_some())
     }
 

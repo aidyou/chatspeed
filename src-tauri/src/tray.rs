@@ -1,10 +1,7 @@
 use std::sync::{Arc, RwLock};
 use tauri::Manager;
 
-use crate::{
-    commands::window::quit_window,
-    db::MainStore,
-};
+use crate::{commands::window::quit_window, db::MainStore};
 
 /// Create system tray menu
 ///
@@ -88,17 +85,21 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         )
     } else {
         (
-            crate::shortcut::get_default_shortcut(crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT)
-                .unwrap_or_default()
-                .to_string(),
+            crate::shortcut::get_default_shortcut(
+                crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
+            )
+            .unwrap_or_default()
+            .to_string(),
             crate::shortcut::get_default_shortcut(
                 crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
             )
             .unwrap_or_default()
             .to_string(),
-            crate::shortcut::get_default_shortcut(crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT)
-                .unwrap_or_default()
-                .to_string(),
+            crate::shortcut::get_default_shortcut(
+                crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
+            )
+            .unwrap_or_default()
+            .to_string(),
             crate::shortcut::get_default_shortcut(
                 crate::constants::CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
             )
