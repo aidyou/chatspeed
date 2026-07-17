@@ -601,7 +601,7 @@ const modelRoles = computed(() => {
 })
 
 const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
-const CHILD_ONLY_TOOL_IDS = ['git_diff']
+const CHILD_ONLY_TOOL_IDS = ['git_diff', 'git_inspect']
 const HIDDEN_AGENT_TOOL_IDS = ['bash']
 const CORE_MANAGEMENT_TOOLS = [
   'sub_agent_run',

@@ -347,6 +347,18 @@ fn sync_single_builtin_agent(
             updated.system_prompt = desired.system_prompt;
             updated.planning_prompt = desired.planning_prompt;
             updated.image_recognition_prompt = desired.image_recognition_prompt;
+            updated.available_tools = desired.available_tools;
+            updated.auto_approve = desired.auto_approve;
+            updated.models = desired.models;
+            updated.shell_policy = desired.shell_policy;
+            updated.allowed_paths = desired.allowed_paths;
+            updated.final_audit = desired.final_audit;
+            updated.approval_level = desired.approval_level;
+            updated.skill_enabled = desired.skill_enabled;
+            updated.selected_skills = desired.selected_skills;
+            updated.phase = desired.phase;
+            updated.disabled = desired.disabled;
+            updated.max_contexts = desired.max_contexts;
             updated.is_system = Some(true);
             updated.version = Some(definition.manifest.builtin_version);
             store.update_agent(&updated).map_err(|e| e.to_string())?;
@@ -354,6 +366,100 @@ fn sync_single_builtin_agent(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        builtin_agent_db_id, sync_single_builtin_agent, BuiltinAgentConfig, BuiltinAgentDefinition,
+        BuiltinAgentManifest, BuiltinAgentPrompts, BuiltinAgentRole,
+    };
+    use crate::db::{Agent, MainStore};
+
+    #[test]
+    fn builtin_upgrade_syncs_git_review_tool_configuration() {
+        let store = MainStore::new(":memory:").expect("in-memory store");
+        let mut existing = Agent::new(
+            builtin_agent_db_id("test-child"),
+            "Test Child".to_string(),
+            None,
+            Some("child".to_string()),
+            None,
+            "old prompt".to_string(),
+            None,
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            Some(false),
+            Some("default".to_string()),
+            Some(false),
+            Some("[]".to_string()),
+            Some("standard".to_string()),
+            Some(true),
+            Some(true),
+            None,
+        );
+        existing.version = Some(2);
+        store.add_agent(&existing).expect("seed builtin agent");
+
+        let definition = BuiltinAgentDefinition {
+            manifest: BuiltinAgentManifest {
+                schema_version: 1,
+                builtin_id: "test-child".to_string(),
+                builtin_version: 3,
+                name: "Test Child".to_string(),
+                description: "test".to_string(),
+                role: BuiltinAgentRole::Child,
+                parent_builtin_id: None,
+                prompts: BuiltinAgentPrompts {
+                    system: "system.md".to_string(),
+                    planning: None,
+                    image_recognition: None,
+                },
+                config: BuiltinAgentConfig {
+                    available_tools: Some(vec![
+                        crate::tools::TOOL_GIT_DIFF.to_string(),
+                        crate::tools::TOOL_GIT_INSPECT.to_string(),
+                    ]),
+                    auto_approve: Some(vec![
+                        crate::tools::TOOL_GIT_DIFF.to_string(),
+                        crate::tools::TOOL_GIT_INSPECT.to_string(),
+                    ]),
+                    ..Default::default()
+                },
+                disabled: true,
+            },
+            system_prompt: "new prompt".to_string(),
+            planning_prompt: None,
+            image_recognition_prompt: None,
+        };
+
+        sync_single_builtin_agent(&store, &definition, None).expect("sync builtin agent");
+        let updated = store
+            .get_agent(&builtin_agent_db_id("test-child"))
+            .expect("load agent")
+            .expect("agent exists");
+        assert_eq!(updated.version, Some(3));
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&updated.available_tools.expect("tools"))
+                .expect("tools json"),
+            vec![
+                crate::tools::TOOL_GIT_DIFF.to_string(),
+                crate::tools::TOOL_GIT_INSPECT.to_string(),
+            ]
+        );
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&updated.auto_approve.expect("auto approve"))
+                .expect("auto approve json"),
+            vec![
+                crate::tools::TOOL_GIT_DIFF.to_string(),
+                crate::tools::TOOL_GIT_INSPECT.to_string(),
+            ]
+        );
+    }
 }
 
 pub fn sync_builtin_agents_if_needed(

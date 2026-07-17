@@ -186,10 +186,108 @@ pub async fn update_agent_order(
     Ok(())
 }
 
+fn git_review_tool_metadata() -> Vec<Value> {
+    vec![
+        json!({
+            "id": crate::tools::TOOL_GIT_DIFF,
+            "name": crate::tools::TOOL_GIT_DIFF,
+            "category": "FileSystem",
+            "scope": "workflow",
+            "child_only": true
+        }),
+        json!({
+            "id": crate::tools::TOOL_GIT_INSPECT,
+            "name": crate::tools::TOOL_GIT_INSPECT,
+            "category": "FileSystem",
+            "scope": "workflow",
+            "child_only": true
+        }),
+    ]
+}
+
 #[tauri::command]
 pub async fn get_available_tools(chat_state: State<'_, Arc<ChatState>>) -> Result<Value, String> {
-    let native_meta = chat_state.tool_manager.get_all_native_tool_metadata().await;
+    let mut native_meta = chat_state.tool_manager.get_all_native_tool_metadata().await;
+    // Git review tools are instantiated with a session PathGuard only for child workflows.
+    // Expose metadata for agent configuration without globally registering executable instances.
+    native_meta.extend(git_review_tool_metadata());
+    native_meta.sort_by(|left, right| {
+        left["id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["id"].as_str().unwrap_or_default())
+    });
     Ok(json!(native_meta))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{git_review_tool_metadata, sanitize_agent_for_persistence};
+    use crate::db::Agent;
+
+    #[test]
+    fn git_review_metadata_is_child_only_and_unique() {
+        let metadata = git_review_tool_metadata();
+        assert_eq!(metadata.len(), 2);
+        for id in [crate::tools::TOOL_GIT_DIFF, crate::tools::TOOL_GIT_INSPECT] {
+            let matches = metadata
+                .iter()
+                .filter(|tool| tool["id"].as_str() == Some(id))
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1, "{id} metadata should appear once");
+            assert_eq!(matches[0]["child_only"].as_bool(), Some(true));
+            assert_eq!(matches[0]["scope"].as_str(), Some("workflow"));
+        }
+    }
+
+    #[test]
+    fn primary_agents_cannot_persist_git_review_tools() {
+        let mut agent = Agent::new(
+            "primary-test".to_string(),
+            "Primary Test".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            String::new(),
+            None,
+            None,
+            Some(
+                serde_json::json!([
+                    crate::tools::TOOL_GIT_DIFF,
+                    crate::tools::TOOL_GIT_INSPECT,
+                    crate::tools::TOOL_READ_FILE,
+                ])
+                .to_string(),
+            ),
+            Some(
+                serde_json::json!([crate::tools::TOOL_GIT_DIFF, crate::tools::TOOL_GIT_INSPECT,])
+                    .to_string(),
+            ),
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            Some(false),
+            Some("default".to_string()),
+            Some(true),
+            Some("[]".to_string()),
+            Some("standard".to_string()),
+            Some(false),
+            Some(true),
+            None,
+        );
+
+        sanitize_agent_for_persistence(&mut agent);
+        let available_tools = serde_json::from_str::<Vec<String>>(
+            agent.available_tools.as_deref().expect("available tools"),
+        )
+        .expect("available tools json");
+        let auto_approve = serde_json::from_str::<Vec<String>>(
+            agent.auto_approve.as_deref().expect("auto approve"),
+        )
+        .expect("auto approve json");
+        assert_eq!(available_tools, vec![crate::tools::TOOL_READ_FILE]);
+        assert!(auto_approve.is_empty());
+    }
 }
 
 #[tauri::command]
