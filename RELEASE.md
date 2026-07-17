@@ -2,6 +2,35 @@
 
 # Release Notes
 
+## [2.0.7]
+
+### 🚀 New Features
+
+- **Built-in Git review tools for child agents**:
+  - Code Explorer and Final Code Reviewer can now inspect Git status, diffs, commits, and file history through dedicated read-only tools.
+  - Child agents can use the review tools to provide more focused implementation exploration and final code-review feedback without changing the worktree.
+
+### 🪄 Improvements
+
+- **Workflow context and state handling**:
+  - Added message IDs to Workflow gateway messages so streamed updates can be matched and rendered more reliably.
+  - Added active-task pressure compression and Bash-content deduplication to keep long-running Workflow sessions more concise and manageable.
+  - Reduced verbose Shell tool output while preserving the information needed for subsequent work.
+- **Shell output presentation**:
+  - Improved Shell command output processing for clearer, more useful results in Workflow conversations.
+
+### 🐞 Bug Fixes
+
+- **Workflow runtime stability**:
+  - Fixed structured runtime-state preservation across Workflow execution and recovery.
+  - Removed persistent Workflow memory to prevent stale context from carrying into later runs.
+- **Workflow and proxy status feedback**:
+  - Refined Workflow and proxy status handling for more accurate state feedback.
+- **Dependency security**:
+  - Updated vulnerable Rust dependencies.
+
+---
+
 ## [2.0.6]
 
 ### 🪄 Improvements
