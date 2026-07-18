@@ -2,6 +2,20 @@
 
 # Release Notes
 
+## [2.0.8]
+
+### 🐞 Bug Fixes
+
+- **Reliable launch at system startup**:
+  - Reconciled the saved auto-start preference with the operating system registration during application startup, restoring missing registrations on macOS, Ubuntu, and Windows.
+  - Auto-start changes are now verified against the operating system and rolled back if registration or settings persistence fails, preventing the switch from showing an incorrect state.
+- **Linux package-aware automatic updates**:
+  - Fixed Ubuntu `.deb` installations downloading an AppImage update and failing with `invalid updater binary format`.
+  - Linux releases now publish signed, package-specific updater manifests for deb, rpm, and AppImage installations.
+  - Kept the legacy `latest.json` endpoint compatible with existing Ubuntu deb installations so older releases can upgrade directly to this fix release.
+
+---
+
 ## [2.0.7]
 
 ### 🚀 New Features

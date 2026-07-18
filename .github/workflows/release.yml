@@ -335,3 +335,78 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           args: --verbose --target ${{ matrix.target }} --bundles deb,rpm,appimage
           includeUpdaterJson: true
+
+      - name: Create package-specific Linux updater manifests
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle"
+          mkdir -p updater-manifests
+
+          for bundle_type in deb rpm appimage; do
+            case "$bundle_type" in
+              deb) artifact=$(find "$bundle_dir/deb" -maxdepth 1 -name '*.deb' -print -quit) ;;
+              rpm) artifact=$(find "$bundle_dir/rpm" -maxdepth 1 -name '*.rpm' -print -quit) ;;
+              appimage) artifact=$(find "$bundle_dir/appimage" -maxdepth 1 -name '*.AppImage' -print -quit) ;;
+            esac
+
+            if [ -z "$artifact" ]; then
+              echo "Missing $bundle_type artifact" >&2
+              exit 1
+            fi
+
+            if [ ! -f "$artifact.sig" ]; then
+              pnpm tauri signer sign "$artifact"
+            fi
+
+            filename=$(basename "$artifact")
+            version=$(jq -r '.version' src-tauri/tauri.conf.json)
+            jq -n \
+              --arg version "$version" \
+              --arg pub_date "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+              --arg url "https://github.com/${{ github.repository }}/releases/latest/download/$filename" \
+              --arg signature "$(cat "$artifact.sig")" \
+              '{version: $version, notes: "", pub_date: $pub_date, platforms: {"linux-x86_64": {url: $url, signature: $signature}}}' \
+              > "updater-manifests/latest-$bundle_type.json"
+          done
+
+      - name: Upload package-specific Linux updater manifests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" updater-manifests/latest-*.json --clobber
+
+  finalize-updater-manifest:
+    needs: [create-release, release-windows, release-macos, release-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download generated updater manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern 'latest.json' \
+            --pattern 'latest-deb.json' \
+            --dir updater-manifests \
+            --clobber
+
+      - name: Use deb for legacy Linux updater clients
+        run: |
+          jq \
+            --slurpfile deb updater-manifests/latest-deb.json \
+            '.platforms["linux-x86_64"] = $deb[0].platforms["linux-x86_64"]' \
+            updater-manifests/latest.json \
+            > updater-manifests/latest-final.json
+          mv updater-manifests/latest-final.json updater-manifests/latest.json
+
+      - name: Upload finalized legacy updater manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            updater-manifests/latest.json \
+            --clobber

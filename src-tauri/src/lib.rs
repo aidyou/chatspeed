@@ -38,6 +38,7 @@ use std::time::Instant;
 use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::Manager;
 use tauri::PhysicalSize;
+use tauri_plugin_autostart::ManagerExt;
 
 // use commands::toolbar::*;
 use crate::error::AppError;
@@ -665,13 +666,32 @@ pub async fn run() -> crate::error::Result<()> {
                 log::error!("Failed to synchronize built-in agents: {}", e);
             }
 
-            // Setup language
+            // Setup language and reconcile OS-managed settings with persisted preferences.
             if let Ok(c) = main_store.clone().read() {
                 let user_lang =
                     c.get_config(CFG_INTERFACE_LANGUAGE, libs::lang::get_system_locale());
                 if !user_lang.is_empty() {
                     set_locale(&user_lang);
                     log::info!("Set interace language to {}", user_lang);
+                }
+
+                let auto_start = c.get_config(CFG_AUTO_START, false);
+                let autolaunch = app.autolaunch();
+                match autolaunch.is_enabled() {
+                    Ok(is_enabled) if auto_start != is_enabled => {
+                        let result = if auto_start {
+                            autolaunch.enable()
+                        } else {
+                            autolaunch.disable()
+                        };
+                        if let Err(e) = result {
+                            log::error!("Failed to synchronize autostart registration: {}", e);
+                        } else {
+                            log::info!("Autostart registration synchronized: {}", auto_start);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::error!("Failed to read autostart registration: {}", e),
                 }
             }
 

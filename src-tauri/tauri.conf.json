@@ -147,6 +147,7 @@
     "updater": {
       "active": true,
       "endpoints": [
+        "https://github.com/aidyou/chatspeed/releases/latest/download/latest-{{bundle_type}}.json",
         "https://github.com/aidyou/chatspeed/releases/latest/download/latest.json",
         "https://cdn.jsdelivr.net/gh/aidyou/chatspeed@updater-meta/latest.json"
       ],

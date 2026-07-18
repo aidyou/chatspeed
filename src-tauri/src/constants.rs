@@ -14,7 +14,8 @@ pub const CFG_WORKFLOW_WINDOW_POSITION: &str = "workflow_window_position";
 
 pub const TRAY_ID: &str = "Chatspeed";
 
-// Auto update config
+// Startup and update config
+pub const CFG_AUTO_START: &str = "auto_start";
 pub const CFG_AUTO_UPDATE: &str = "auto_update";
 
 // =================================================

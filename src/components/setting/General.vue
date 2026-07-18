@@ -734,7 +734,7 @@ import { storeToRefs } from 'pinia'
 
 import { appDataDir } from '@tauri-apps/api/path'
 import { getVersion } from '@tauri-apps/api/app'
-import { enable, disable } from '@tauri-apps/plugin-autostart'
+import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -1276,9 +1276,24 @@ const onAutoStartChange = async value => {
     } else {
       await disable()
     }
-    // Only update the setting if the autostart operation succeeded
-    setSetting('autoStart', value)
+
+    const enabled = await isEnabled()
+    if (enabled !== value) {
+      throw new Error(`Autostart registration did not change to ${value}`)
+    }
+
+    await settingStore.setSetting('autoStart', value)
   } catch (error) {
+    try {
+      if (value) {
+        await disable()
+      } else {
+        await enable()
+      }
+    } catch (rollbackError) {
+      console.error('Failed to roll back autostart registration:', rollbackError)
+    }
+    settings.value.autoStart = !value
     if (error instanceof FrontendAppError) {
       console.error(
         `Failed to change autostart setting: ${error.toFormattedString()}`,
