@@ -1077,17 +1077,17 @@ impl MainStore {
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
         let tx = conn.transaction()?;
+        let workflow_tree_cte = "WITH RECURSIVE workflow_tree(id, depth) AS (
+            SELECT id, 0 FROM workflows WHERE id = ?1
+            UNION ALL
+            SELECT workflows.id, workflow_tree.depth + 1
+            FROM workflows
+            JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+        )";
         let workflow_ids = {
-            let mut stmt = tx.prepare(
-                "WITH RECURSIVE workflow_tree(id, depth) AS (
-                    SELECT id, 0 FROM workflows WHERE id = ?1
-                    UNION ALL
-                    SELECT workflows.id, workflow_tree.depth + 1
-                    FROM workflows
-                    JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
-                )
-                SELECT id FROM workflow_tree ORDER BY depth DESC",
-            )?;
+            let mut stmt = tx.prepare(&format!(
+                "{workflow_tree_cte} SELECT id FROM workflow_tree ORDER BY depth DESC"
+            ))?;
             let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
             let mut ids = Vec::new();
             for row in rows {
@@ -1096,39 +1096,37 @@ impl MainStore {
             ids
         };
 
-        for workflow_id in &workflow_ids {
+        for table in [
+            "workflow_context_messages",
+            "workflow_messages",
+            "workflow_snapshots",
+        ] {
             tx.execute(
-                "DELETE FROM workflow_context_messages WHERE session_id = ?1",
-                params![workflow_id],
+                &format!(
+                    "{workflow_tree_cte} DELETE FROM {table} WHERE session_id IN (SELECT id FROM workflow_tree)"
+                ),
+                params![id],
             )?;
+        }
 
-            tx.execute(
-                "DELETE FROM workflow_messages WHERE session_id = ?1",
-                params![workflow_id],
-            )?;
-
-            tx.execute(
-                "DELETE FROM workflow_snapshots WHERE session_id = ?1",
-                params![workflow_id],
-            )?;
-
-            // workflow_events is an audit/secondary table. If it is corrupted (e.g.,
-            // "database disk image is malformed"), do not block the workflow deletion.
-            // Log the error and continue so the primary workflow data still gets cleaned up.
-            if let Err(e) = tx.execute(
-                "DELETE FROM workflow_events WHERE session_id = ?1",
-                params![workflow_id],
-            ) {
-                log::error!(
-                    "[Workflow][session={}] Failed to delete workflow events (non-fatal, continuing): {}",
-                    workflow_id,
-                    e
-                );
-            }
+        // workflow_events is an audit/secondary table. If it is corrupted (e.g.,
+        // "database disk image is malformed"), do not block the workflow deletion.
+        // Log the error and continue so the primary workflow data still gets cleaned up.
+        if let Err(e) = tx.execute(
+            &format!(
+                "{workflow_tree_cte} DELETE FROM workflow_events WHERE session_id IN (SELECT id FROM workflow_tree)"
+            ),
+            params![id],
+        ) {
+            log::error!(
+                "[Workflow][session={}] Failed to delete workflow events (non-fatal, continuing): {}",
+                id,
+                e
+            );
         }
 
         // Delete child workflow rows before their parent to satisfy parent_session_id FK.
-        for workflow_id in &workflow_ids {
+        for workflow_id in workflow_ids {
             tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
         }
 
@@ -3024,6 +3022,37 @@ mod tests {
             )
             .expect("failed to create child workflow");
 
+        let conn = store
+            .conn
+            .lock()
+            .expect("failed to lock db connection for delete assertions");
+        for session_id in ["parent-session", "subagent-child"] {
+            conn.execute(
+                "INSERT INTO workflow_messages (session_id, role, message) VALUES (?1, 'user', 'message')",
+                params![session_id],
+            )
+            .expect("failed to insert workflow message");
+            conn.execute(
+                "INSERT INTO workflow_context_messages (session_id, segment_id, role, message, source_message_id)
+                 VALUES (?1, 1, 'user', 'context', last_insert_rowid())",
+                params![session_id],
+            )
+            .expect("failed to insert workflow context message");
+            conn.execute(
+                "INSERT INTO workflow_snapshots (session_id, context_json, version)
+                 VALUES (?1, '{}', '1')",
+                params![session_id],
+            )
+            .expect("failed to insert workflow snapshot");
+            conn.execute(
+                "INSERT INTO workflow_events (session_id, event_type, event_version, event_data)
+                 VALUES (?1, 'test', '1', '{}')",
+                params![session_id],
+            )
+            .expect("failed to insert workflow event");
+        }
+        drop(conn);
+
         store
             .delete_workflow("parent-session")
             .expect("failed to recursively delete workflow tree");
@@ -3031,18 +3060,31 @@ mod tests {
         let conn = store
             .conn
             .lock()
-            .expect("failed to lock db connection for delete assertion");
-        let count: i64 = conn
+            .expect("failed to lock db connection for delete assertions");
+        let workflow_count: i64 = conn
             .query_row(
                 "SELECT COUNT(1) FROM workflows WHERE id IN ('parent-session', 'subagent-child')",
                 [],
                 |row| row.get(0),
             )
             .expect("failed to count deleted workflows");
-        assert_eq!(
-            count, 0,
-            "parent and sub-agent workflow rows should be deleted"
-        );
+        assert_eq!(workflow_count, 0, "workflow records should be deleted");
+
+        for table in [
+            "workflow_messages",
+            "workflow_context_messages",
+            "workflow_snapshots",
+            "workflow_events",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(1) FROM {table} WHERE session_id IN ('parent-session', 'subagent-child')"),
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("failed to count deleted workflow records");
+            assert_eq!(count, 0, "{table} records should be deleted");
+        }
     }
 
     #[test]

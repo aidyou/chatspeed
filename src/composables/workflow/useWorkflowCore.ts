@@ -7,7 +7,7 @@ import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
 import { useModelStore } from '@/stores/model'
 import { useSettingStore } from '@/stores/setting'
-import { ElMessageBox } from 'element-plus'
+import { ElLoading, ElMessageBox } from 'element-plus'
 import notificationSoundUrl from '/sound/notification.mp3'
 import successSoundUrl from '/sound/success.mp3'
 import {
@@ -1810,6 +1810,12 @@ export function useWorkflowCore({
                 teleported: true
             }
         ).then(async () => {
+            const loadingInstance = ElLoading.service({
+                lock: true,
+                text: t('common.loading'),
+                background: 'var(--cs-bg-color-opacity)'
+            })
+
             try {
                 await invokeWrapper('delete_workflow', { sessionId: id })
 
@@ -1837,6 +1843,8 @@ export function useWorkflowCore({
             } catch (error) {
                 console.error('Failed to delete workflow:', error)
                 showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+            } finally {
+                loadingInstance.close()
             }
         })
     }
