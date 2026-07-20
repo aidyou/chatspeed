@@ -251,7 +251,7 @@
           :on-skill-select="onSkillSelect"
           :on-file-select="onFileSelect"
           @send-message="onSendMessage"
-          @continue="onContinue"
+          @continue="handleContinue"
           @stop="onStop"
           @approve-plan="onApprovePlan"
           @toggle-planning-mode="togglePlanningModeWithFeedback"
@@ -1188,13 +1188,16 @@ function buildImageAttachmentMetadata(attachments) {
   }
 }
 
-function clearImageAnalysisErrorMessages() {
-  workflowStore.removeCurrentWorkflowMessages(message => {
-    const errorType = String(
-      message?.metadata?.error_type || message?.metadata?.errorType || message?.errorType || ''
-    ).trim()
-    return errorType === 'image_analysis_error'
-  })
+function clearRecoverableWorkflowErrorMessages() {
+  workflowStore.removeCurrentWorkflowMessages(
+    message => message?.role !== 'tool' && Boolean(message?.isError || message?.is_error)
+  )
+}
+
+async function handleContinue() {
+  if (await onContinue()) {
+    clearRecoverableWorkflowErrorMessages()
+  }
 }
 
 function appendImageAnalysisErrorMessage(error, attachments = []) {
@@ -1269,8 +1272,6 @@ inputComposable.onSendMessage.value = async () => {
   let preparingQueueId = null
 
   try {
-    clearImageAnalysisErrorMessages()
-
     if (backupAttachments.length > 0) {
       preparingQueueId = `local_queue_prepare_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
       workflowStore.addMessageToQueue({
@@ -1322,15 +1323,17 @@ inputComposable.onSendMessage.value = async () => {
     return true
   }
 
-  const wasCommand = await coreOnSendMessage(rawMessage, {
+  const sendResult = await coreOnSendMessage(rawMessage, {
     attachedContext,
     metadata
   })
-  if (wasCommand === false) {
+  if (sendResult === false) {
     inputMessage.value = backupMessage
     imageAttachments.value = backupAttachments
+  } else if (sendResult === true) {
+    clearRecoverableWorkflowErrorMessages()
   }
-  return wasCommand
+  return sendResult
 }
 
 // ============================================================

@@ -340,8 +340,6 @@ fn sync_single_builtin_agent(
             }
 
             let mut updated = current;
-            updated.name = resolve_builtin_name(store, &updated.id, &desired.name)?;
-            updated.description = desired.description;
             updated.role = desired.role;
             updated.parent_agent_id = desired.parent_agent_id;
             updated.system_prompt = desired.system_prompt;
@@ -349,16 +347,6 @@ fn sync_single_builtin_agent(
             updated.image_recognition_prompt = desired.image_recognition_prompt;
             updated.available_tools = desired.available_tools;
             updated.auto_approve = desired.auto_approve;
-            updated.models = desired.models;
-            updated.shell_policy = desired.shell_policy;
-            updated.allowed_paths = desired.allowed_paths;
-            updated.final_audit = desired.final_audit;
-            updated.approval_level = desired.approval_level;
-            updated.skill_enabled = desired.skill_enabled;
-            updated.selected_skills = desired.selected_skills;
-            updated.phase = desired.phase;
-            updated.disabled = desired.disabled;
-            updated.max_contexts = desired.max_contexts;
             updated.is_system = Some(true);
             updated.version = Some(definition.manifest.builtin_version);
             store.update_agent(&updated).map_err(|e| e.to_string())?;
@@ -374,35 +362,56 @@ mod tests {
         builtin_agent_db_id, sync_single_builtin_agent, BuiltinAgentConfig, BuiltinAgentDefinition,
         BuiltinAgentManifest, BuiltinAgentPrompts, BuiltinAgentRole,
     };
+    use crate::db::agent::{AgentModels, ModelConfig};
     use crate::db::{Agent, MainStore};
 
     #[test]
-    fn builtin_upgrade_syncs_git_review_tool_configuration() {
+    fn builtin_upgrade_preserves_user_configuration_and_updates_core_definition() {
         let store = MainStore::new(":memory:").expect("in-memory store");
+        let configured_models = AgentModels {
+            plan: Some(ModelConfig {
+                id: 42,
+                model: "user-configured-model".to_string(),
+                temperature: Some(0.7),
+                thinking: None,
+                function_call: None,
+                context_size: None,
+                max_tokens: None,
+            }),
+            act: None,
+            vision: None,
+            utility: None,
+        };
         let mut existing = Agent::new(
             builtin_agent_db_id("test-child"),
-            "Test Child".to_string(),
-            None,
+            "User Child Name".to_string(),
+            Some("user description".to_string()),
             Some("child".to_string()),
             None,
             "old prompt".to_string(),
             None,
             None,
-            Some("[]".to_string()),
-            Some("[]".to_string()),
-            None,
-            Some("[]".to_string()),
-            Some("[]".to_string()),
-            Some(false),
-            Some("default".to_string()),
-            Some(false),
-            Some("[]".to_string()),
-            Some("standard".to_string()),
+            Some("[\"user-tool\"]".to_string()),
+            Some("[\"user-auto-approve\"]".to_string()),
+            Some(configured_models),
+            Some("[\"user-shell-policy\"]".to_string()),
+            Some("[\"/user/path\"]".to_string()),
             Some(true),
+            Some("full".to_string()),
             Some(true),
-            None,
+            Some("[\"user-skill\"]".to_string()),
+            Some("planning".to_string()),
+            Some(true),
+            Some(false),
+            Some(64000),
         );
         existing.version = Some(2);
+        let mut parent = existing.clone();
+        parent.id = builtin_agent_db_id("test-parent");
+        parent.name = "Test Parent".to_string();
+        parent.role = Some("primary".to_string());
+        parent.version = Some(3);
+        store.add_agent(&parent).expect("seed parent builtin agent");
         store.add_agent(&existing).expect("seed builtin agent");
 
         let definition = BuiltinAgentDefinition {
@@ -410,8 +419,98 @@ mod tests {
                 schema_version: 1,
                 builtin_id: "test-child".to_string(),
                 builtin_version: 3,
-                name: "Test Child".to_string(),
-                description: "test".to_string(),
+                name: "Updated Child".to_string(),
+                description: "updated description".to_string(),
+                role: BuiltinAgentRole::Child,
+                parent_builtin_id: Some("test-parent".to_string()),
+                prompts: BuiltinAgentPrompts {
+                    system: "system.md".to_string(),
+                    planning: Some("planning.md".to_string()),
+                    image_recognition: Some("image.md".to_string()),
+                },
+                config: BuiltinAgentConfig {
+                    allowed_paths: Some(vec!["/manifest/path".to_string()]),
+                    shell_policy: Some(super::BuiltinShellPolicyConfig::Mode("none".to_string())),
+                    approval_level: Some("default".to_string()),
+                    auto_approve: Some(vec![crate::tools::TOOL_GIT_DIFF.to_string()]),
+                    available_tools: Some(vec![crate::tools::TOOL_GIT_INSPECT.to_string()]),
+                    final_audit: Some(false),
+                    skill_enabled: Some(false),
+                    selected_skills: Some(vec!["manifest-skill".to_string()]),
+                    phase: Some("standard".to_string()),
+                    max_contexts: Some(128000),
+                    ..Default::default()
+                },
+                disabled: true,
+            },
+            system_prompt: "new prompt".to_string(),
+            planning_prompt: Some("new planning prompt".to_string()),
+            image_recognition_prompt: Some("new image prompt".to_string()),
+        };
+
+        sync_single_builtin_agent(&store, &definition, None).expect("sync builtin agent");
+        let updated = store
+            .get_agent(&builtin_agent_db_id("test-child"))
+            .expect("load agent")
+            .expect("agent exists");
+        assert_eq!(updated.version, Some(3));
+        assert_eq!(updated.name, "User Child Name");
+        assert_eq!(updated.description.as_deref(), Some("user description"));
+        assert_eq!(updated.role.as_deref(), Some("child"));
+        assert_eq!(
+            updated.parent_agent_id.as_deref(),
+            Some("builtin:test-parent")
+        );
+        assert_eq!(updated.system_prompt, "new prompt");
+        assert_eq!(
+            updated.planning_prompt.as_deref(),
+            Some("new planning prompt")
+        );
+        assert_eq!(
+            updated.image_recognition_prompt.as_deref(),
+            Some("new image prompt")
+        );
+        assert_eq!(updated.disabled, Some(false));
+        assert_eq!(updated.final_audit, Some(true));
+        assert_eq!(updated.approval_level.as_deref(), Some("full"));
+        assert_eq!(updated.skill_enabled, Some(true));
+        assert_eq!(updated.selected_skills.as_deref(), Some("[\"user-skill\"]"));
+        assert_eq!(updated.phase.as_deref(), Some("planning"));
+        assert_eq!(updated.max_contexts, Some(64000));
+        assert_eq!(
+            updated.shell_policy.as_deref(),
+            Some("[\"user-shell-policy\"]")
+        );
+        assert_eq!(updated.allowed_paths.as_deref(), Some("[\"/user/path\"]"));
+        assert_eq!(
+            updated
+                .models
+                .and_then(|models| models.plan)
+                .map(|model| model.model),
+            Some("user-configured-model".to_string())
+        );
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&updated.available_tools.expect("tools"))
+                .expect("tools json"),
+            vec![crate::tools::TOOL_GIT_INSPECT.to_string()]
+        );
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&updated.auto_approve.expect("auto approve"))
+                .expect("auto approve json"),
+            vec![crate::tools::TOOL_GIT_DIFF.to_string()]
+        );
+    }
+
+    #[test]
+    fn builtin_creation_uses_manifest_disabled_and_models_defaults() {
+        let store = MainStore::new(":memory:").expect("in-memory store");
+        let definition = BuiltinAgentDefinition {
+            manifest: BuiltinAgentManifest {
+                schema_version: 1,
+                builtin_id: "new-child".to_string(),
+                builtin_version: 1,
+                name: "New Child".to_string(),
+                description: String::new(),
                 role: BuiltinAgentRole::Child,
                 parent_builtin_id: None,
                 prompts: BuiltinAgentPrompts {
@@ -420,14 +519,20 @@ mod tests {
                     image_recognition: None,
                 },
                 config: BuiltinAgentConfig {
-                    available_tools: Some(vec![
-                        crate::tools::TOOL_GIT_DIFF.to_string(),
-                        crate::tools::TOOL_GIT_INSPECT.to_string(),
-                    ]),
-                    auto_approve: Some(vec![
-                        crate::tools::TOOL_GIT_DIFF.to_string(),
-                        crate::tools::TOOL_GIT_INSPECT.to_string(),
-                    ]),
+                    models: Some(AgentModels {
+                        plan: Some(ModelConfig {
+                            id: 7,
+                            model: "manifest-default-model".to_string(),
+                            temperature: None,
+                            thinking: None,
+                            function_call: None,
+                            context_size: None,
+                            max_tokens: None,
+                        }),
+                        act: None,
+                        vision: None,
+                        utility: None,
+                    }),
                     ..Default::default()
                 },
                 disabled: true,
@@ -437,27 +542,18 @@ mod tests {
             image_recognition_prompt: None,
         };
 
-        sync_single_builtin_agent(&store, &definition, None).expect("sync builtin agent");
-        let updated = store
-            .get_agent(&builtin_agent_db_id("test-child"))
+        sync_single_builtin_agent(&store, &definition, None).expect("create builtin agent");
+        let created = store
+            .get_agent(&builtin_agent_db_id("new-child"))
             .expect("load agent")
             .expect("agent exists");
-        assert_eq!(updated.version, Some(3));
+        assert_eq!(created.disabled, Some(true));
         assert_eq!(
-            serde_json::from_str::<Vec<String>>(&updated.available_tools.expect("tools"))
-                .expect("tools json"),
-            vec![
-                crate::tools::TOOL_GIT_DIFF.to_string(),
-                crate::tools::TOOL_GIT_INSPECT.to_string(),
-            ]
-        );
-        assert_eq!(
-            serde_json::from_str::<Vec<String>>(&updated.auto_approve.expect("auto approve"))
-                .expect("auto approve json"),
-            vec![
-                crate::tools::TOOL_GIT_DIFF.to_string(),
-                crate::tools::TOOL_GIT_INSPECT.to_string(),
-            ]
+            created
+                .models
+                .and_then(|models| models.plan)
+                .map(|model| model.model),
+            Some("manifest-default-model".to_string())
         );
     }
 }

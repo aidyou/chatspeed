@@ -1441,7 +1441,7 @@ export function useWorkflowCore({
         // Handle Builtin UI Commands (Exact match after trim)
         if (message.trim().startsWith('/')) {
             if (await handleBuiltinCommand(message)) {
-                return true // Indicate that command was handled
+                return 'handled_builtin_command'
             }
         }
 
@@ -1625,23 +1625,25 @@ export function useWorkflowCore({
     }
 
     const onContinue = async () => {
-        if (!currentWorkflowId.value || isRunning.value) return
+        if (!currentWorkflowId.value || isRunning.value) return false
 
         try {
             await invokeWrapper('workflow_start', {
                 sessionId: currentWorkflowId.value,
                 agentId: selectedAgent.value.id
             })
+            return true
         } catch (error) {
             if (String(error).includes('Session is stopping')) {
                 showMessage(
                     t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
                     'warning'
                 )
-                return
+                return false
             }
             console.error('Failed to continue workflow:', error)
             showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+            return false
         }
     }
 
