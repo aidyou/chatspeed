@@ -1238,6 +1238,10 @@ impl WorkflowExecutor {
         }
     }
 
+    fn should_generate_workflow_title(subagent_type: Option<&str>, title: Option<&str>) -> bool {
+        subagent_type.is_none() && title.map_or(true, |value| value.trim().is_empty())
+    }
+
     pub(crate) async fn init_internal(&mut self) -> Result<(), WorkflowEngineError> {
         self.context.load_history().await?;
         self.discovered_skills = self.skill_scanner.scan()?;
@@ -1400,19 +1404,22 @@ impl WorkflowExecutor {
             }
         }
 
-        // Generate title if current workflow has no title set
-        let should_generate_title = {
-            let store = self
-                .context
-                .main_store
-                .read()
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-            store
-                .get_workflow_snapshot(&self.session_id)
-                .ok()
-                .and_then(|snapshot| snapshot.workflow.title)
-                .map_or(true, |title| title.trim().is_empty())
-        };
+        // Child workflows are hidden from the workflow list and already have a descriptive
+        // agent label, so avoid spawning a redundant title request for every sub-agent.
+        let should_generate_title =
+            if !Self::should_generate_workflow_title(self.subagent_type.as_deref(), None) {
+                false
+            } else {
+                let title = self
+                    .context
+                    .main_store
+                    .read()
+                    .map_err(|e| WorkflowEngineError::General(e.to_string()))?
+                    .get_workflow_snapshot(&self.session_id)
+                    .ok()
+                    .and_then(|snapshot| snapshot.workflow.title);
+                Self::should_generate_workflow_title(None, title.as_deref())
+            };
 
         if should_generate_title {
             let user_query = self.context.get_initial_query();
@@ -5342,7 +5349,7 @@ impl WorkflowExecutor {
             let store_res = self
                 .context
                 .main_store
-                .write()
+                .read()
                 .map_err(|e| WorkflowEngineError::General(e.to_string()));
             if let Ok(store) = store_res {
                 let _ = store.update_workflow_status(&self.session_id, &new_state.to_string());
@@ -6632,6 +6639,27 @@ mod recovery_tests {
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
         Arc::new(std::sync::RwLock::new(store))
+    }
+
+    #[test]
+    fn test_sub_agents_skip_workflow_title_generation() {
+        assert!(!WorkflowExecutor::should_generate_workflow_title(
+            Some("Final Code Reviewer"),
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_primary_workflows_generate_only_missing_titles() {
+        assert!(WorkflowExecutor::should_generate_workflow_title(None, None));
+        assert!(WorkflowExecutor::should_generate_workflow_title(
+            None,
+            Some("  "),
+        ));
+        assert!(!WorkflowExecutor::should_generate_workflow_title(
+            None,
+            Some("Existing title"),
+        ));
     }
 
     #[test]
