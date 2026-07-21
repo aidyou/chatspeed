@@ -2,9 +2,8 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 
 use crate::tools::{
-    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH,
-    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_EDIT_FILE, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_WRITE_NOTE,
-    TOOL_SUBMIT_PLAN, TOOL_WRITE_FILE,
+    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_COMPLETE_WORKFLOW,
+    TOOL_EDIT_FILE, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::constants::TASK_FINISHED;
 use crate::workflow::react::engine::WorkflowExecutor;
@@ -27,36 +26,43 @@ pub(crate) enum SmartApprovalDecision {
     ReviewByUser,
 }
 
+enum CompletionReportSource {
+    AssistantMessage,
+    ToolArgument(String),
+}
+
 impl WorkflowExecutor {
     fn final_review_mode_enabled(&self) -> bool {
         self.agent_config.final_audit.unwrap_or(false)
     }
 
-    async fn persist_completion_report_if_needed(
+    async fn persist_completion_report(
         &mut self,
         text_part: &str,
-        argument_summary: Option<String>,
+        report_source: CompletionReportSource,
     ) -> Result<String, WorkflowEngineError> {
-        if Self::is_valid_finish_task_summary(text_part) {
-            return Ok(Self::normalized_finish_task_summary(text_part));
+        match report_source {
+            CompletionReportSource::AssistantMessage => {
+                Ok(Self::normalized_finish_task_summary(text_part))
+            }
+            CompletionReportSource::ToolArgument(summary) => {
+                self.add_message_and_notify_internal(
+                    "assistant".to_string(),
+                    summary.clone(),
+                    None,
+                    None,
+                    Some(StepType::Think),
+                    false,
+                    None,
+                    Some(json!({
+                        "message_kind": "completion_report",
+                        "source": "complete_workflow.tool_argument"
+                    })),
+                )
+                .await?;
+                Ok(summary)
+            }
         }
-
-        let summary = argument_summary.unwrap_or_default();
-        self.add_message_and_notify_internal(
-            "assistant".to_string(),
-            summary.clone(),
-            None,
-            None,
-            Some(StepType::Think),
-            false,
-            None,
-            Some(json!({
-                "message_kind": "completion_report",
-                "source": "complete_workflow_with_summary.summary"
-            })),
-        )
-        .await?;
-        Ok(summary)
     }
 
     fn review_payload_changed_files(&self) -> Vec<Value> {
@@ -520,8 +526,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 None,
                 Some(json!({
                     "tool_call_id": completion_tool_call_id.clone(),
-                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
-                    "title": "Complete Workflow with Summary",
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
+                    "title": "Complete Workflow",
                     "summary": pending.completion_summary,
                     "review_display_state": "final_review_approved",
                     "execution_status": "completed",
@@ -547,7 +553,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 content.push('\n');
             }
         }
-        content.push_str("\n<SYSTEM_REMINDER>Address the review findings above before calling `complete_workflow_with_summary` again. Update the implementation, verify the fixes, and then submit a new completion report.</SYSTEM_REMINDER>");
+        content.push_str("\n<SYSTEM_REMINDER>Address the review findings above before calling `complete_workflow` again. Update the implementation, verify the fixes, and then submit a new completion report.</SYSTEM_REMINDER>");
 
         self.add_message_and_notify_internal(
             "user".to_string(),
@@ -610,8 +616,20 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         SmartApprovalDecision::ReviewWithAi
     }
 
+    fn completion_report_text_without_reasoning(text_part: &str) -> String {
+        match regex::Regex::new(
+            r"(?is)<think>.*?</think>|<thought>.*?</thought>|<(?:think|thought)>.*\z",
+        ) {
+            Ok(pattern) => pattern.replace_all(text_part, "").into_owned(),
+            Err(error) => {
+                log::error!("Failed to compile completion-report reasoning pattern: {error}");
+                String::new()
+            }
+        }
+    }
+
     fn normalized_finish_task_summary(text_part: &str) -> String {
-        text_part
+        Self::completion_report_text_without_reasoning(text_part)
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty())
@@ -649,14 +667,48 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         meaningful_lines >= 2 || has_sentence_shape
     }
 
-    fn finish_task_summary_from_args(args: &serde_json::Value) -> Option<String> {
-        let summary = args
-            .get("summary")
+    fn finish_task_report_source_from_args(
+        args: &serde_json::Value,
+        text_part: &str,
+    ) -> Result<CompletionReportSource, &'static str> {
+        let report_source = args
+            .get("report_source")
             .and_then(|value| value.as_str())
-            .map(str::trim)
-            .unwrap_or_default();
+            .ok_or("report_source must be assistant_message or tool_argument")?;
+        let summary = args.get("summary");
+        let text_summary_valid = Self::is_valid_finish_task_summary(text_part);
 
-        Self::is_valid_finish_task_summary(summary).then(|| summary.to_string())
+        match report_source {
+            "assistant_message" => {
+                if summary.is_some() {
+                    return Err("summary must be omitted when report_source is assistant_message");
+                }
+                if !text_summary_valid {
+                    return Err(
+                        "report_source assistant_message requires a valid user-visible completion report immediately before this tool call",
+                    );
+                }
+                Ok(CompletionReportSource::AssistantMessage)
+            }
+            "tool_argument" => {
+                if text_summary_valid {
+                    return Err(
+                        "report_source tool_argument cannot be used when this assistant message already contains a completion report",
+                    );
+                }
+                let summary = summary
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| Self::is_valid_finish_task_summary(value))
+                    .ok_or(
+                        "report_source tool_argument requires a valid non-empty summary completion report",
+                    )?;
+                Ok(CompletionReportSource::ToolArgument(
+                    Self::normalized_finish_task_summary(summary),
+                ))
+            }
+            _ => Err("report_source must be assistant_message or tool_argument"),
+        }
     }
 
     fn is_read_only_shell_stage(stage: &str) -> bool {
@@ -1100,21 +1152,25 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         args: &serde_json::Value,
         todo_status_overrides: &HashMap<String, String>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        let text_summary_valid = Self::is_valid_finish_task_summary(text_part);
-        let argument_summary = Self::finish_task_summary_from_args(args);
-        if !text_summary_valid && argument_summary.is_none() {
-            return Ok(Some(ReinforcedResult {
-                content: "<SYSTEM_REMINDER>Error: You called 'complete_workflow_with_summary' without a valid user-visible completion report. Reasoning/thinking text does NOT count. Provide the report either as normal assistant content before the tool call or in the `summary` argument of complete_workflow_with_summary. Do NOT call sub_agent_output to retrieve call-mode sub-agent results; call-mode results are already delivered as sub-agent completion observations. First, provide a brief user-visible summary that explicitly covers: 1) what was completed, 2) what was verified, and 3) any important remaining notes or limitations. If a sub-agent produced findings, synthesize those findings into your own response instead of copying them as the final answer. After that valid report is present, call complete_workflow_with_summary again.</SYSTEM_REMINDER>".into(),
-                llm_content: None,
-                title: "FinishTask Error".to_string(),
-                summary: "Invalid completion report".to_string(),
-                is_error: true,
-                error_type: Some("InvalidFinishSummary".into()),
-                display_type: "text".to_string(),
-                approval_status: None,
-                observation_kind: None,
-            }));
-        }
+        let report_source = match Self::finish_task_report_source_from_args(args, text_part) {
+            Ok(report_source) => report_source,
+            Err(reason) => {
+                return Ok(Some(ReinforcedResult {
+                    content: format!(
+                        "<SYSTEM_REMINDER>Error: {}. A completion report must cover what was completed, what was verified, and any remaining notes or limitations. Reasoning/thinking text does not count. Use exactly one source: either write the report in this assistant message and call complete_workflow with {{\"report_source\":\"assistant_message\"}}, or do not write a visible report and call it with {{\"report_source\":\"tool_argument\",\"summary\":\"...\"}}. Do not provide both.</SYSTEM_REMINDER>",
+                        reason
+                    ),
+                    llm_content: None,
+                    title: "FinishTask Error".to_string(),
+                    summary: "Invalid completion report source".to_string(),
+                    is_error: true,
+                    error_type: Some("InvalidFinishSummary".into()),
+                    display_type: "text".to_string(),
+                    approval_status: None,
+                    observation_kind: None,
+                }));
+            }
+        };
 
         if let Ok(store) = self.context.main_store.read() {
             if let Ok(todos) = store.get_todo_list_for_workflow(&self.session_id) {
@@ -1145,7 +1201,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
 
                 if !active_tasks.is_empty() {
                     return Ok(Some(ReinforcedResult {
-                        content: format!("<SYSTEM_REMINDER>Block: You still have active tasks: {}. Do NOT retry complete_workflow_with_summary yet. Do NOT call sub_agent_output for call-mode sub-agents; their results are delivered directly as observations. You MUST either complete these todos, or mark them as 'failed' or 'data_missing' if they cannot be fulfilled, before calling complete_workflow_with_summary.</SYSTEM_REMINDER>", active_tasks.join(", ")),
+                        content: format!("<SYSTEM_REMINDER>Block: You still have active tasks: {}. Do NOT retry complete_workflow yet. Do NOT call sub_agent_output for call-mode sub-agents; their results are delivered directly as observations. You MUST either complete these todos, or mark them as 'failed' or 'data_missing' if they cannot be fulfilled, before calling complete_workflow.</SYSTEM_REMINDER>", active_tasks.join(", ")),
                         llm_content: None,
                         title: "Tasks Pending".to_string(),
                         summary: "Incomplete todos".to_string(),
@@ -1160,7 +1216,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }
 
         let completion_summary = self
-            .persist_completion_report_if_needed(text_part, argument_summary)
+            .persist_completion_report(text_part, report_source)
             .await?;
 
         if self.final_review_mode_enabled() {
@@ -1177,7 +1233,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         Ok(Some(ReinforcedResult {
             content: TASK_FINISHED.to_string(),
             llm_content: None,
-            title: "Complete Workflow with Summary".to_string(),
+            title: "Complete Workflow".to_string(),
             summary: completion_summary,
             is_error: false,
             error_type: None,
@@ -1548,7 +1604,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
 
 #[cfg(test)]
 mod tests {
-    use super::{SmartApprovalDecision, WorkflowExecutor};
+    use super::{CompletionReportSource, SmartApprovalDecision, WorkflowExecutor};
     use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_READ_FILE, TOOL_WRITE_FILE};
     use serde_json::json;
 
@@ -1569,24 +1625,110 @@ mod tests {
     }
 
     #[test]
-    fn finish_task_summary_accepts_meaningful_tool_argument() {
-        let args = json!({
-            "summary": "Committed the requested code and pushed it to origin/main.\nVerified the push completed without errors."
-        });
+    fn finish_task_summary_ignores_reasoning_blocks() {
+        let report = "Completed the workflow change and verified the targeted tests passed.\nNo known limitations remain.";
+        let long_reasoning = "This is a sufficiently long internal reasoning block. It must never be treated as a user-visible completion report.";
 
+        assert!(!WorkflowExecutor::is_valid_finish_task_summary(&format!(
+            "Progress update\n<think>{long_reasoning}</think>"
+        )));
+        assert!(!WorkflowExecutor::is_valid_finish_task_summary(&format!(
+            "<thought>\n{long_reasoning}\n</thought>"
+        )));
         assert_eq!(
-            WorkflowExecutor::finish_task_summary_from_args(&args).as_deref(),
-            Some(
-                "Committed the requested code and pushed it to origin/main.\nVerified the push completed without errors."
-            )
+            WorkflowExecutor::normalized_finish_task_summary(&format!(
+                "<think>{long_reasoning}</think>\n{report}\n<thought>{long_reasoning}</thought>"
+            )),
+            report
         );
     }
 
     #[test]
-    fn finish_task_summary_rejects_placeholder_tool_argument() {
-        let args = json!({ "summary": "done" });
+    fn finish_task_report_source_rejects_reasoning_as_both_sources() {
+        let reasoning = "<think>This is a sufficiently long internal reasoning block. It must never be treated as a user-visible completion report.</think>";
 
-        assert!(WorkflowExecutor::finish_task_summary_from_args(&args).is_none());
+        assert!(WorkflowExecutor::finish_task_report_source_from_args(
+            &json!({ "report_source": "assistant_message" }),
+            reasoning,
+        )
+        .is_err());
+        assert!(WorkflowExecutor::finish_task_report_source_from_args(
+            &json!({ "report_source": "tool_argument", "summary": reasoning }),
+            "",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn finish_task_report_source_accepts_visible_report_after_reasoning() {
+        let report = "Completed the workflow change and verified the targeted tests passed.\nNo known limitations remain.";
+        let text_part = format!(
+            "<thought>Internal analysis that must not be included in the report.</thought>\n{report}"
+        );
+
+        assert!(matches!(
+            WorkflowExecutor::finish_task_report_source_from_args(
+                &json!({ "report_source": "assistant_message" }),
+                &text_part,
+            ),
+            Ok(CompletionReportSource::AssistantMessage)
+        ));
+    }
+
+    #[test]
+    fn finish_task_report_source_accepts_exactly_one_valid_source() {
+        let report = "Committed the requested code and pushed it to origin/main.\nVerified the push completed without errors.";
+
+        assert!(matches!(
+            WorkflowExecutor::finish_task_report_source_from_args(
+                &json!({ "report_source": "assistant_message" }),
+                report,
+            ),
+            Ok(CompletionReportSource::AssistantMessage)
+        ));
+        assert!(matches!(
+            WorkflowExecutor::finish_task_report_source_from_args(
+                &json!({ "report_source": "tool_argument", "summary": report }),
+                "",
+            ),
+            Ok(CompletionReportSource::ToolArgument(summary)) if summary == report
+        ));
+        let tool_argument =
+            format!("<think>Internal analysis that must not be persisted.</think>\n{report}");
+        assert!(matches!(
+            WorkflowExecutor::finish_task_report_source_from_args(
+                &json!({ "report_source": "tool_argument", "summary": tool_argument }),
+                "",
+            ),
+            Ok(CompletionReportSource::ToolArgument(summary)) if summary == report
+        ));
+    }
+
+    #[test]
+    fn finish_task_report_source_rejects_missing_duplicate_and_invalid_reports() {
+        let report = "Committed the requested code and pushed it to origin/main.\nVerified the push completed without errors.";
+
+        for (args, text_part) in [
+            (json!({}), ""),
+            (json!({ "report_source": "assistant_message" }), ""),
+            (
+                json!({ "report_source": "assistant_message", "summary": report }),
+                report,
+            ),
+            (json!({ "report_source": "tool_argument" }), ""),
+            (
+                json!({ "report_source": "tool_argument", "summary": "done" }),
+                "",
+            ),
+            (
+                json!({ "report_source": "tool_argument", "summary": report }),
+                report,
+            ),
+        ] {
+            assert!(
+                WorkflowExecutor::finish_task_report_source_from_args(&args, text_part).is_err()
+            );
+        }
     }
 
     #[test]

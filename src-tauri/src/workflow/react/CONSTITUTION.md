@@ -528,7 +528,7 @@ The successful completion of one top-level task is represented by the canonical
 
 It may be emitted only after:
 
-- `complete_workflow_with_summary` passes runtime validation
+- `complete_workflow` passes runtime validation
 - the completion tool is not pending, rejected, or failed
 - any configured final review has approved the completion
 - the successful completion tool observation has been persisted

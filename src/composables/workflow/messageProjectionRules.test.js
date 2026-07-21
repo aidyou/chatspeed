@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   collectSubAgentCompletions,
   inferWorkflowToolExecutionStatus,
+  normalizeVisibleCompletionReport,
   shouldRenderSubAgentCard
 } from './messageProjectionRules.js'
 
@@ -32,7 +33,7 @@ assert.equal(
 assert.equal(
   shouldRenderSubAgentCard({
     metadata: {
-      tool_name: 'complete_workflow_with_summary'
+      tool_name: 'complete_workflow'
     },
     subAgentCard: null
   }),
@@ -84,6 +85,19 @@ assert.equal(
   visibleCompletion.has('hidden_history'),
   false,
   'completion projection must not scan messages outside visible task groups'
+)
+
+assert.equal(
+  normalizeVisibleCompletionReport(
+    '<THINK>Internal reasoning must not be rendered.</THINK>\nCompleted the requested change.\n<ThOuGhT>More internal reasoning.</ThOuGhT>\nVerified the targeted tests pass.'
+  ),
+  'Completed the requested change.\nVerified the targeted tests pass.',
+  'completion report projection must remove mixed-case reasoning blocks before rendering'
+)
+assert.equal(
+  normalizeVisibleCompletionReport('<thought>Reasoning only must not be rendered.</thought>'),
+  '',
+  'reasoning-only completion summaries must not render'
 )
 
 console.log('messageProjectionRules tests passed')

@@ -2,7 +2,7 @@ use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::{ChatMetadata, MessageType};
 use crate::db::WorkflowMessage;
-use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
+use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 
@@ -49,7 +49,7 @@ impl IntelligenceManager {
                         })
                         .and_then(|value| value.as_str())
                         .unwrap_or_default();
-                    if tool_name != TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY {
+                    if tool_name != TOOL_COMPLETE_WORKFLOW {
                         return None;
                     }
 

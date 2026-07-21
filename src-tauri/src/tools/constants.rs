@@ -31,7 +31,7 @@ pub const TOOL_TODO_GET: &str = "todo_get";
 pub const TOOL_SKILL: &str = "skill";
 
 pub const TOOL_ASK_USER: &str = "ask_user";
-pub const TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY: &str = "complete_workflow_with_summary";
+pub const TOOL_COMPLETE_WORKFLOW: &str = "complete_workflow";
 pub const TOOL_SUBMIT_RESULT: &str = "submit_result";
 pub const TOOL_SUBMIT_PLAN: &str = "submit_plan";
 pub const TOOL_MCP_TOOL_LOAD: &str = "mcp_tool_load";
@@ -55,7 +55,7 @@ pub fn is_core_workflow_builtin_tool(name: &str) -> bool {
             | TOOL_TODO_GET
             | TOOL_SKILL
             | TOOL_ASK_USER
-            | TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+            | TOOL_COMPLETE_WORKFLOW
             | TOOL_SUBMIT_RESULT
             | TOOL_SUBMIT_PLAN
     )
@@ -72,7 +72,7 @@ pub fn is_auto_execute_workflow_tool(name: &str) -> bool {
             | TOOL_TODO_UPDATE
             | TOOL_TODO_GET
             | TOOL_ASK_USER
-            | TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+            | TOOL_COMPLETE_WORKFLOW
             | TOOL_SUBMIT_RESULT
             | TOOL_SKILL
     )
@@ -88,7 +88,7 @@ mod tests {
             TOOL_ASK_USER,
             TOOL_SKILL,
             TOOL_SUBMIT_PLAN,
-            TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+            TOOL_COMPLETE_WORKFLOW,
             TOOL_SUBMIT_RESULT,
             TOOL_SUB_AGENT_RUN,
             TOOL_SUB_AGENT_OUTPUT,

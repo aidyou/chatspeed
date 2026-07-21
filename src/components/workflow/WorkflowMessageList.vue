@@ -444,7 +444,7 @@
               </div>
             </template>
 
-            <!-- complete_workflow_with_summary special display -->
+            <!-- complete_workflow special display -->
             <template v-else-if="isFinishTaskMessage(message)">
               <div class="tool-line finish-task-display">
                 <cs
@@ -738,7 +738,7 @@
                 </div>
                 <div
                   v-if="
-                    call.toolName === 'complete_workflow_with_summary' && call.completionSummary
+                    call.toolName === 'complete_workflow' && call.completionSummary
                   "
                   class="finish-task-summary markdown-body">
                   <MarkdownSimple :content="call.completionSummary" />
@@ -1373,7 +1373,7 @@ const isFinishTaskMessage = message => {
   const metaToolName = getMessageToolName(message)
   const action = message?.toolDisplay?.action || ''
   return (
-    metaToolName === 'complete_workflow_with_summary' ||
+    metaToolName === 'complete_workflow' ||
     action === t('workflow.finishTask') ||
     action.includes('Finish')
   )

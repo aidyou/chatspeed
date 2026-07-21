@@ -869,7 +869,7 @@ const getToolInfo = (name, metadata = {}, roots = []) => {
       icon: resolveWorkflowToolIcon('submit_plan', 'skill-plan'),
       toolType: 'tool-todo'
     },
-    complete_workflow_with_summary: { icon: 'check-circle', toolType: 'tool-todo' }
+    complete_workflow: { icon: 'check-circle', toolType: 'tool-todo' }
   }
 
   const info = iconMap[toolName] || {
@@ -892,7 +892,7 @@ const toolMessagesAll = computed(() => {
   return messages.value.filter(m => {
     if (m.role !== 'tool') return false
     const name = (m.metadata?.tool_name || m.metadata?.tool_call?.name || '').toLowerCase()
-    if (name === 'complete_workflow_with_summary' || name === 'answer_user') return false
+    if (name === 'complete_workflow' || name === 'answer_user') return false
     return true
   })
 })

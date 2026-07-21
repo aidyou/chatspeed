@@ -5,6 +5,20 @@
  * UI refactors do not silently reintroduce transcript projection regressions.
  */
 
+export const normalizeVisibleCompletionReport = value => {
+  const visible = String(value ?? '').replace(
+    /<think>[\s\S]*?<\/think>|<thought>[\s\S]*?<\/thought>|<(?:think|thought)>[\s\S]*$/gi,
+    ''
+  )
+
+  return visible
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => !['done', 'finished', 'complete', 'completed', 'task complete'].includes(line.toLowerCase()))
+    .join('\n')
+}
+
 export const collectSubAgentCompletions = (visibleGroups = [], progressValues = []) => {
   const completions = new Map()
 
@@ -46,7 +60,7 @@ export const collectSubAgentCompletions = (visibleGroups = [], progressValues = 
 /**
  * Preserve explicit backend execution statuses for tool messages.
  *
- * Final review starts by persisting a `complete_workflow_with_summary` tool
+ * Final review starts by persisting a `complete_workflow` tool
  * observation with `execution_status = "waiting"` and
  * `review_display_state = "final_review_pending"`. If frontend code rewrites
  * that non-terminal status to `completed`, the UI will rotate the task into the

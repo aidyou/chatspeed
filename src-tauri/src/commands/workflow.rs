@@ -191,7 +191,7 @@ fn is_successful_completion_tool_message(message: &WorkflowMessage) -> bool {
     let is_completion_tool = meta
         .get("tool_name")
         .and_then(|v| v.as_str())
-        .map(|tool_name| tool_name == crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
+        .map(|tool_name| tool_name == crate::tools::TOOL_COMPLETE_WORKFLOW)
         .unwrap_or(false);
     if !is_completion_tool {
         return false;
@@ -5083,13 +5083,13 @@ mod tests {
                 segment_id: 1,
                 source_event_type: None,
                 metadata: Some(json!({
-                    "tool_name": crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "tool_name": crate::tools::TOOL_COMPLETE_WORKFLOW,
                     "execution_status": "completed",
                     "approval_status": "approved",
                     "summary": "Structured completion summary",
                     "tool_call": {
                         "function": {
-                            "name": crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                            "name": crate::tools::TOOL_COMPLETE_WORKFLOW,
                             "arguments": "{\"summary\":\"Structured completion summary\"}"
                         }
                     }

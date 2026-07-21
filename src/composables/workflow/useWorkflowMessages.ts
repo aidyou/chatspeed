@@ -1,6 +1,9 @@
 import { ref, computed, watch } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
-import { collectSubAgentCompletions } from './messageProjectionRules'
+import {
+  collectSubAgentCompletions,
+  normalizeVisibleCompletionReport
+} from './messageProjectionRules'
 import { useSubAgentSummaries } from './useSubAgentSummaries'
 import { resolveWorkflowToolIcon } from './toolIcons'
 import { isAutoExecuteWorkflowTool } from './toolApproval'
@@ -66,7 +69,7 @@ export function useWorkflowMessages(options = {}) {
         message?.metadata?.tool_call?.function?.name ||
         ''
     ).toLowerCase()
-    return toolName === 'complete_workflow_with_summary'
+    return toolName === 'complete_workflow'
   }
 
   const getMessageToolCallId = message =>
@@ -1010,8 +1013,10 @@ export function useWorkflowMessages(options = {}) {
                 ledgerState?.status === 'rejected' || (!!state?.isFinal && !!state?.isRejected)
               const isRunning = ledgerState?.status === 'approved_running' || !!state?.isRunning
               const completionSummary =
-                name === 'complete_workflow_with_summary' && typeof args.summary === 'string'
-                  ? args.summary.trim()
+                name === 'complete_workflow' &&
+                args.report_source === 'tool_argument' &&
+                typeof args.summary === 'string'
+                  ? normalizeVisibleCompletionReport(args.summary)
                   : ''
               return {
                 id: call.id,
@@ -1474,7 +1479,7 @@ export function useWorkflowMessages(options = {}) {
         action: t('workflow.todo.view'),
         target: ''
       }),
-      complete_workflow_with_summary: () => ({
+      complete_workflow: () => ({
         icon: resolveWorkflowToolIcon(name, 'check-circle'),
         toolType: 'tool-todo',
         action: t('workflow.finishTask'),
@@ -1566,7 +1571,7 @@ export function useWorkflowMessages(options = {}) {
     let finalIcon = formatted.icon
     let finalToolType = formatted.toolType
 
-    if (name === 'complete_workflow_with_summary') {
+    if (name === 'complete_workflow') {
       finalAction = t('workflow.finishTask')
       finalTarget = ''
     } else if (name !== 'bash' && typeof meta.title === 'string' && meta.title.trim()) {
@@ -1637,7 +1642,7 @@ export function useWorkflowMessages(options = {}) {
     return {
       title: finalAction + (finalTarget ? ` ${finalTarget}` : ''),
       summary:
-        name === 'complete_workflow_with_summary'
+        name === 'complete_workflow'
           ? ''
           : getToolStatusSummary(name, summaryStatus, fallbackSummary),
       isError: isError,

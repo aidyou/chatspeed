@@ -14,8 +14,8 @@ use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
     helper::generate_shell_approval_patterns as shared_generate_shell_approval_patterns,
     ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
-    TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_MCP_TOOL_LOAD, TOOL_PLAN_EDIT_NOTE,
-    TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
+    TOOL_COMPLETE_WORKFLOW, TOOL_MCP_TOOL_LOAD, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
+    TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
@@ -1675,7 +1675,7 @@ impl WorkflowExecutor {
             if self.policy.phase != ExecutionPhase::Planning {
                 if self.is_child_agent_workflow() {
                     tm.register_tool(Arc::new(SubmitResult)).await?;
-                } else if is_allowed(TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY) {
+                } else if is_allowed(TOOL_COMPLETE_WORKFLOW) {
                     tm.register_tool(Arc::new(FinishTask)).await?;
                 }
             }
@@ -3581,7 +3581,9 @@ impl WorkflowExecutor {
                         };
 
                         if !calls_array.is_empty() {
-                            assistant_metadata["tool_calls"] = serde_json::json!(calls_array);
+                            assistant_metadata["tool_calls"] = serde_json::json!(
+                                Self::sanitize_completion_tool_calls_for_storage(calls_array)
+                            );
                         }
                     }
                 }
@@ -3596,6 +3598,18 @@ impl WorkflowExecutor {
                     break;
                 }
 
+                let is_completion_turn = Self::response_calls_completion_tool(&tool_calls_json);
+                let persisted_response = if is_completion_turn {
+                    Self::completion_response_without_reasoning(&full_response)
+                } else {
+                    full_response.clone()
+                };
+                let persisted_reasoning = if is_completion_turn {
+                    None
+                } else {
+                    Some(response_reasoning)
+                };
+
                 if !(full_response.trim().is_empty()
                     && tool_calls_json.is_empty()
                     && invalid_tool_call_error.is_some())
@@ -3603,9 +3617,9 @@ impl WorkflowExecutor {
                     let compressed_signal = self
                         .add_message_and_notify_internal(
                             "assistant".to_string(),
-                            full_response.clone(),
+                            persisted_response.clone(),
                             None,
-                            Some(response_reasoning),
+                            persisted_reasoning,
                             Some(StepType::Think),
                             false,
                             None,
@@ -3619,7 +3633,7 @@ impl WorkflowExecutor {
 
                 self.update_state(WorkflowState::Executing).await?;
                 let results_opt = match self
-                    .execute_tools(full_response.clone(), tool_calls_json, &mut signal_rx)
+                    .execute_tools(persisted_response, tool_calls_json, &mut signal_rx)
                     .await
                 {
                     Ok(results) => Some(results),
@@ -3670,10 +3684,12 @@ impl WorkflowExecutor {
                         "completed".to_string()
                     };
 
+                    let stored_original_call =
+                        Self::sanitize_completion_tool_call_for_storage(original_call.clone());
                     let mut metadata = serde_json::json!({
                         "tool_call_id": id,
                         "tool_name": tool_name, // CRITICAL: Added for LlmProcessor's recovery logic
-                        "tool_call": original_call,
+                        "tool_call": stored_original_call,
                         "title": reinforced.title,
                         "summary": reinforced.summary,
                         "execution_status": execution_status,
@@ -3733,10 +3749,10 @@ impl WorkflowExecutor {
                     }
                     Self::enrich_tool_observation_metadata(tool_name, &mut metadata, reinforced);
                     if tool_name == crate::tools::TOOL_SUB_AGENT_RUN
-                        || (tool_name == crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                        || (tool_name == crate::tools::TOOL_COMPLETE_WORKFLOW
                             && reinforced.approval_status.as_deref() == Some("pending"))
                     {
-                        if tool_name == crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY {
+                        if tool_name == crate::tools::TOOL_COMPLETE_WORKFLOW {
                             metadata["review_display_state"] =
                                 serde_json::json!("final_review_pending");
                         }
@@ -3852,7 +3868,7 @@ impl WorkflowExecutor {
                         let finish_tool = if self.is_child_agent_workflow() {
                             "submit_result"
                         } else {
-                            "complete_workflow_with_summary"
+                            "complete_workflow"
                         };
                         Some(format!(
                             "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. This workflow should now converge on a concrete next step. Convert your analysis into the smallest useful tool action, or if the task is already complete, call '{}' with a complete summary. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
@@ -3866,13 +3882,13 @@ impl WorkflowExecutor {
                         Some(if self.is_child_agent_workflow() {
                             "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Brief reasoning-only turns are allowed, but they should now resolve into one concrete tool action. Choose the smallest useful next tool, or call 'submit_result' if the delegated task is complete.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>This workflow is action-oriented. Brief reasoning-only turns are allowed, but they should now resolve into one concrete tool action. Choose the smallest useful next tool, or call 'complete_workflow_with_summary' if the task is complete.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>This workflow is action-oriented. Brief reasoning-only turns are allowed, but they should now resolve into one concrete tool action. Choose the smallest useful next tool, or call 'complete_workflow' if the task is complete.</SYSTEM_REMINDER>".to_string()
                         })
                     } else {
                         Some(if self.is_child_agent_workflow() {
                             "<SYSTEM_REMINDER>This delegated workflow advances through tool-mediated observations. If your analysis is sufficient, choose one concrete next tool now. If the delegated task is already complete, call 'submit_result'.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. If your analysis is sufficient, choose one concrete next tool now. If the task is already complete, call 'complete_workflow_with_summary'.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. If your analysis is sufficient, choose one concrete next tool now. If the task is already complete, call 'complete_workflow'.</SYSTEM_REMINDER>".to_string()
                         })
                     };
 
@@ -3925,7 +3941,7 @@ impl WorkflowExecutor {
                         let is_terminal_tool = if self.is_child_agent_workflow() {
                             tool_name == TOOL_SUBMIT_RESULT
                         } else {
-                            tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                            tool_name == TOOL_COMPLETE_WORKFLOW
                         };
                         is_terminal_tool
                             && reinforced.approval_status.as_deref() != Some("pending")
@@ -3945,7 +3961,7 @@ impl WorkflowExecutor {
                                 })
                                 .and_then(|value| value.as_str())
                                 .unwrap_or_default();
-                            tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY
+                            tool_name == TOOL_COMPLETE_WORKFLOW
                                 && reinforced.approval_status.as_deref() != Some("pending")
                                 && reinforced.approval_status.as_deref() != Some("rejected")
                         })
@@ -4018,6 +4034,104 @@ impl WorkflowExecutor {
 
         self.signal_rx = Some(signal_rx);
         Ok(())
+    }
+
+    fn sanitize_completion_tool_calls_for_storage(
+        calls: Vec<serde_json::Value>,
+    ) -> Vec<serde_json::Value> {
+        calls
+            .into_iter()
+            .map(Self::sanitize_completion_tool_call_for_storage)
+            .collect()
+    }
+
+    fn sanitize_completion_tool_call_for_storage(mut call: serde_json::Value) -> serde_json::Value {
+        let target = if call.get("function").is_some() {
+            call.get_mut("function")
+        } else {
+            Some(&mut call)
+        };
+        let Some(target) = target else {
+            return call;
+        };
+        let Some(target) = target.as_object_mut() else {
+            return call;
+        };
+        if target.get("name").and_then(|value| value.as_str()) != Some(TOOL_COMPLETE_WORKFLOW) {
+            return call;
+        }
+
+        for argument_key in ["arguments", "input"] {
+            let Some(raw_arguments) = target.get(argument_key).cloned() else {
+                continue;
+            };
+            let is_string = raw_arguments.is_string();
+            let mut normalized = Self::normalize_tool_arguments_value(raw_arguments);
+            if normalized
+                .get("report_source")
+                .and_then(|value| value.as_str())
+                != Some("tool_argument")
+            {
+                continue;
+            }
+            let Some(summary) = normalized.get("summary").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            normalized["summary"] =
+                serde_json::json!(Self::completion_response_without_reasoning(summary));
+            let sanitized = if is_string {
+                serde_json::to_string(&normalized)
+                    .map(serde_json::Value::String)
+                    .unwrap_or(normalized)
+            } else {
+                normalized
+            };
+            target.insert(argument_key.to_string(), sanitized);
+        }
+
+        call
+    }
+
+    fn response_calls_completion_tool(tool_calls_json: &str) -> bool {
+        let cleaned_json = crate::libs::util::format_json_str(tool_calls_json);
+        let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&cleaned_json) else {
+            return false;
+        };
+
+        let calls = if let Some(array) = json_value.as_array() {
+            array.clone()
+        } else if let Some(array) = json_value
+            .get("tool_calls")
+            .and_then(|value| value.as_array())
+        {
+            array.clone()
+        } else if let Some(tool) = json_value.get("tool") {
+            vec![tool.clone()]
+        } else if json_value.get("name").is_some() || json_value.get("function").is_some() {
+            vec![json_value]
+        } else {
+            Vec::new()
+        };
+
+        calls.iter().any(|call| {
+            call.get("function")
+                .unwrap_or(call)
+                .get("name")
+                .and_then(|value| value.as_str())
+                == Some(TOOL_COMPLETE_WORKFLOW)
+        })
+    }
+
+    fn completion_response_without_reasoning(response: &str) -> String {
+        match regex::Regex::new(
+            r"(?is)<think>.*?</think>|<thought>.*?</thought>|<(?:think|thought)>.*\z",
+        ) {
+            Ok(pattern) => pattern.replace_all(response, "").trim().to_string(),
+            Err(error) => {
+                log::error!("Failed to compile completion-response reasoning pattern: {error}");
+                String::new()
+            }
+        }
     }
 
     fn normalize_tool_arguments_value(value: serde_json::Value) -> serde_json::Value {
@@ -4792,7 +4906,7 @@ impl WorkflowExecutor {
         }
 
         // 1. Complete Workflow Early Return
-        if name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY {
+        if name == TOOL_COMPLETE_WORKFLOW {
             let default_summary = t!("workflow.task_finished").to_string();
             let summary = args
                 .get("summary")
@@ -4804,7 +4918,7 @@ impl WorkflowExecutor {
             return Ok(ReinforcedResult {
                 content: super::constants::TASK_FINISHED.to_string(),
                 llm_content: None,
-                title: "Complete Workflow with Summary".to_string(),
+                title: "Complete Workflow".to_string(),
                 summary,
                 is_error: false,
                 error_type: None,
@@ -4882,7 +4996,7 @@ impl WorkflowExecutor {
             TOOL_SUBMIT_PLAN => {
                 if self.policy.phase == ExecutionPhase::Implementation {
                     return Ok(Some(ReinforcedResult {
-                        content: "<SYSTEM_REMINDER>submit_plan is only available before an approved plan enters implementation. This workflow is already in implementation mode. Continue executing the approved plan with implementation tools, and use complete_workflow_with_summary when the work is finished.</SYSTEM_REMINDER>".to_string(),
+                        content: "<SYSTEM_REMINDER>submit_plan is only available before an approved plan enters implementation. This workflow is already in implementation mode. Continue executing the approved plan with implementation tools, and use complete_workflow when the work is finished.</SYSTEM_REMINDER>".to_string(),
                         llm_content: None,
                         title: "Tool unavailable: submit_plan".to_string(),
                         summary: "submit_plan unavailable during implementation".to_string(),
@@ -4908,7 +5022,7 @@ impl WorkflowExecutor {
                 }
                 return self.handle_submit_plan_intercept(id, args, text_part).await;
             }
-            TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => {
+            TOOL_COMPLETE_WORKFLOW => {
                 return self
                     .handle_finish_task_intercept(text_part, args, todo_status_overrides)
                     .await
@@ -6987,6 +7101,40 @@ mod recovery_tests {
         assert!(config.get("auto_approve").is_none());
         let stored = WorkflowExecutor::read_agent_config_auto_approve(&config);
         assert_eq!(stored, vec!["read_file".to_string(), "bash".to_string()]);
+    }
+
+    #[test]
+    fn test_completion_turn_response_removes_reasoning_before_persistence() {
+        let response = "<THINK>Internal reasoning must not persist.</THINK>\nCompleted the requested change.\n<ThOuGhT>More internal reasoning.</ThOuGhT>\nVerified the targeted tests pass.";
+
+        assert_eq!(
+            WorkflowExecutor::completion_response_without_reasoning(response),
+            "Completed the requested change.\n\nVerified the targeted tests pass."
+        );
+        assert!(WorkflowExecutor::response_calls_completion_tool(
+            r#"{"tool_calls":[{"function":{"name":"complete_workflow","arguments":"{\"report_source\":\"assistant_message\"}"}}]}"#
+        ));
+        assert!(!WorkflowExecutor::response_calls_completion_tool(
+            r#"{"tool_calls":[{"function":{"name":"read_file","arguments":"{}"}}]}"#
+        ));
+    }
+
+    #[test]
+    fn test_completion_tool_metadata_removes_reasoning_from_tool_argument_summary() {
+        let calls = vec![serde_json::json!({
+            "id": "completion_1",
+            "function": {
+                "name": "complete_workflow",
+                "arguments": "{\"report_source\":\"tool_argument\",\"summary\":\"<THINK>Internal reasoning.</THINK>\\nCompleted the requested change.\"}"
+            }
+        })];
+
+        let sanitized = WorkflowExecutor::sanitize_completion_tool_calls_for_storage(calls);
+        let arguments = sanitized[0]["function"]["arguments"]
+            .as_str()
+            .expect("sanitized arguments should remain a JSON string");
+        assert!(!arguments.contains("Internal reasoning"));
+        assert!(arguments.contains("Completed the requested change."));
     }
 
     #[test]

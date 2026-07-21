@@ -1,6 +1,6 @@
 use crate::db::{MainStore, WorkflowAiContextMessage, WorkflowMessage};
 use crate::libs::tsid::TsidGenerator;
-use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
+use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::runtime_observation::{
     is_runtime_observation, RuntimeObservationLlmVisibility,
@@ -87,7 +87,7 @@ impl ContextManager {
         let is_completion_tool = meta
             .get("tool_name")
             .and_then(|v| v.as_str())
-            .map(|tool_name| tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
+            .map(|tool_name| tool_name == TOOL_COMPLETE_WORKFLOW)
             .unwrap_or(false);
         if !is_completion_tool {
             return false;
@@ -1208,7 +1208,7 @@ impl ContextManager {
     }
 
     /// Returns all messages that belong to the current work segment after the last successful
-    /// complete_workflow_with_summary or the latest manual clear-context marker, whichever is later.
+    /// complete_workflow or the latest manual clear-context marker, whichever is later.
     pub fn messages_since_last_completion(&self) -> Vec<WorkflowMessage> {
         let completion_start = Self::latest_successful_completion_index(&self.messages)
             .map(|index| index + 1)
@@ -1220,7 +1220,7 @@ impl ContextManager {
         self.messages.iter().skip(start_index).cloned().collect()
     }
 
-    /// Returns the first user request after the last successful complete_workflow_with_summary.
+    /// Returns the first user request after the last successful complete_workflow.
     /// Falls back to the initial query if the current segment has no user message yet.
     pub fn current_user_request_since_last_completion(&self) -> String {
         self.messages_since_last_completion()
@@ -1273,7 +1273,7 @@ mod tests {
     use crate::db::WorkflowAiContextMessage;
     use crate::db::{Agent, MainStore, WorkflowMessage};
     use crate::libs::tsid::TsidGenerator;
-    use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
+    use crate::tools::TOOL_COMPLETE_WORKFLOW;
     use crate::workflow::react::constants::TASK_FINISHED;
     use crate::workflow::react::types::{ExecutionContext, StepType};
     use serde_json::json;
@@ -1398,7 +1398,7 @@ mod tests {
                 17,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add completion message")
@@ -1427,7 +1427,7 @@ mod tests {
                 19,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add follow-up completion");
@@ -1448,7 +1448,7 @@ mod tests {
 
         let (candidate_messages, compressed_until_id) = context
             .build_blocking_compression_candidate()
-            .expect("complete_workflow_with_summary should create a compressible segment");
+            .expect("complete_workflow should create a compressible segment");
 
         context
             .compress(
@@ -1707,7 +1707,7 @@ mod tests {
                 1,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add first completion message")
@@ -1719,7 +1719,7 @@ mod tests {
                 2,
                 completion_message_1
                     .id
-                    .expect("complete_workflow_with_summary should have id"),
+                    .expect("complete_workflow should have id"),
             )
             .await
             .expect("initial compression should succeed");
@@ -1748,7 +1748,7 @@ mod tests {
                 4,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add second completion message")
@@ -1777,7 +1777,7 @@ mod tests {
                 6,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add third completion message")
@@ -1806,7 +1806,7 @@ mod tests {
                 8,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add fourth completion message")
@@ -1895,7 +1895,7 @@ mod tests {
                 1,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add first finish task");
@@ -1924,7 +1924,7 @@ mod tests {
                 3,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add second completion message")
@@ -1959,7 +1959,7 @@ mod tests {
                 5,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add third completion message")
@@ -2042,7 +2042,7 @@ mod tests {
                 1,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add first completion message")
@@ -2083,7 +2083,7 @@ mod tests {
                 4,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add second finish task")
@@ -2118,7 +2118,7 @@ mod tests {
                 6,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add third completion message")
@@ -2167,7 +2167,7 @@ mod tests {
                 8,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add fourth completion message")
@@ -2232,7 +2232,7 @@ mod tests {
                 1,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add first completion message")
@@ -2267,7 +2267,7 @@ mod tests {
                 3,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add second completion message")
@@ -2433,7 +2433,7 @@ mod tests {
                 1,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add finish task");
@@ -2519,7 +2519,7 @@ mod tests {
                 false,
                 None,
                 Some(json!({
-                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
                     "execution_status": "rejected",
                     "approval_status": "rejected"
                 })),
@@ -2615,7 +2615,7 @@ mod tests {
                 2,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add finish task");
@@ -2699,7 +2699,7 @@ mod tests {
                 2,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add task one completion")
@@ -2743,7 +2743,7 @@ mod tests {
                 5,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add task two completion")
@@ -2787,7 +2787,7 @@ mod tests {
                 8,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add task three completion")
@@ -2975,7 +2975,7 @@ mod tests {
                 3,
                 false,
                 None,
-                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY })),
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
             )
             .await
             .expect("failed to add completion")
@@ -3235,7 +3235,7 @@ mod tests {
                         "id": "tool_finish",
                         "type": "function",
                         "function": {
-                            "name": "complete_workflow_with_summary",
+                            "name": "complete_workflow",
                             "arguments": "{}"
                         }
                     }]
@@ -3482,7 +3482,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compression_omits_unpaired_complete_workflow_summary_tool_response_from_llm_context() {
+    async fn compression_omits_unpaired_complete_workflow_tool_response_from_llm_context() {
         let (_dir, store) = setup_store();
         let session_id = "compress-tool-response-test";
         insert_workflow(&store, session_id);
@@ -3518,7 +3518,7 @@ mod tests {
                 None,
                 Some(json!({
                     "tool_call_id": "tool_complete_1",
-                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
                     "execution_status": "completed",
                     "approval_status": "approved"
                 })),
@@ -3554,7 +3554,7 @@ mod tests {
                 None,
                 Some(json!({
                     "tool_call_id": "tool_complete_2",
-                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
                     "execution_status": "completed",
                     "approval_status": "approved"
                 })),
@@ -3578,7 +3578,7 @@ mod tests {
             )
             .await
             .expect("add user");
-        // Simulate assistant calling complete_workflow_with_summary
+        // Simulate assistant calling complete_workflow
         let tool_call_id = "tool_complete_3";
         let _ = context
             .add_message(
@@ -3595,7 +3595,7 @@ mod tests {
                         "id": tool_call_id,
                         "type": "function",
                         "function": {
-                            "name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                            "name": TOOL_COMPLETE_WORKFLOW,
                             "arguments": "{\"summary\":\"done\"}"
                         }
                     }]
@@ -3615,7 +3615,7 @@ mod tests {
                 None,
                 Some(json!({
                     "tool_call_id": tool_call_id,
-                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
                     "execution_status": "completed",
                     "approval_status": "approved"
                 })),
@@ -3660,7 +3660,7 @@ mod tests {
             .expect("compression should succeed");
 
         // ===== THE KEY CHECK =====
-        // After compression, the latest task's complete_workflow_with_summary
+        // After compression, the latest task's complete_workflow
         // tool response may remain in ai_context_messages for transcript durability,
         // but it must not be replayed to the LLM without a paired assistant tool_call.
 
@@ -3674,7 +3674,7 @@ mod tests {
 
         assert!(
             tool_in_ai_ctx,
-            "complete_workflow_with_summary tool response should remain in ai_context_messages for durable transcript state"
+            "complete_workflow tool response should remain in ai_context_messages for durable transcript state"
         );
 
         // Also check that the assistant with tool_calls has its tool response right after
@@ -3922,7 +3922,7 @@ mod tests {
                         "id": "tool_complete_before_clear",
                         "type": "function",
                         "function": {
-                            "name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                            "name": TOOL_COMPLETE_WORKFLOW,
                             "arguments": "{\"summary\":\"done\"}"
                         }
                     }]
@@ -3942,7 +3942,7 @@ mod tests {
                 None,
                 Some(json!({
                     "tool_call_id": "tool_complete_before_clear",
-                    "tool_name": TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY,
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
                     "execution_status": "completed",
                     "approval_status": "approved"
                 })),

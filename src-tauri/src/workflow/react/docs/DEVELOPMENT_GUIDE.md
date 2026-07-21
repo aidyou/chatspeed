@@ -99,7 +99,7 @@ For completed-task message windows:
 
 - live rotation authority is the `task_completed` gateway payload
 - persisted `task_completed` events provide audit/replay traceability
-- durable successful `complete_workflow_with_summary` observations are the snapshot and legacy reconstruction adapter
+- durable successful `complete_workflow` observations are the snapshot and legacy reconstruction adapter
 - `workflow_completed` remains a session lifecycle event and must not be repurposed as a per-task boundary
 
 ## 7. Bugfix Checklist (Required)

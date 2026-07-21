@@ -1377,7 +1377,7 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
             if tool_name == crate::tools::TOOL_SUBMIT_RESULT {
                 "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Brief reasoning-only turns are allowed, but you should soon choose a concrete tool action. If the delegated task is finished, call 'submit_result' with both `result` and `summary`.</SYSTEM_REMINDER>".to_string()
             } else {
-                "<SYSTEM_REMINDER>This workflow is action-oriented. Brief reasoning-only turns are allowed, but you should soon choose a concrete tool action that advances the task. If the task is finished, call 'complete_workflow_with_summary' with a complete summary.</SYSTEM_REMINDER>".to_string()
+                "<SYSTEM_REMINDER>This workflow is action-oriented. Brief reasoning-only turns are allowed, but you should soon choose a concrete tool action that advances the task. If the task is finished, call 'complete_workflow' using exactly one completion-report source.</SYSTEM_REMINDER>".to_string()
             }
         }
         "Timeout" => {
@@ -1844,7 +1844,7 @@ mod tests {
                     "tool_calls": [{
                         "id": "tool_finish",
                         "type": "function",
-                        "function": { "name": "complete_workflow_with_summary", "arguments": "{}" }
+                        "function": { "name": "complete_workflow", "arguments": "{}" }
                     }]
                 })),
             ),

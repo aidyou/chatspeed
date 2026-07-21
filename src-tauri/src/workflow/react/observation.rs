@@ -1,9 +1,9 @@
 use crate::libs::tsid::TsidGenerator;
 use crate::tools::{
-    ToolError, TOOL_BASH, TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY, TOOL_EDIT_FILE, TOOL_GLOB,
-    TOOL_GREP, TOOL_LIST_DIR, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE,
-    TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_TODO_CREATE, TOOL_TODO_GET,
-    TOOL_TODO_LIST, TOOL_TODO_UPDATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+    ToolError, TOOL_BASH, TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_GLOB, TOOL_GREP,
+    TOOL_LIST_DIR, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_READ_FILE,
+    TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST,
+    TOOL_TODO_UPDATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::file_preview::{
     attach_display_context, merge_tool_result_into_preview_args,
@@ -185,7 +185,7 @@ impl ObservationReinforcer {
                                 )
                             });
                             if all_terminal && !todos.is_empty() {
-                                list_str.push_str("<SYSTEM_REMINDER>Todos are terminal. Call 'complete_workflow_with_summary' and mention any data gaps.</SYSTEM_REMINDER>\n");
+                                list_str.push_str("<SYSTEM_REMINDER>Todos are terminal. Call 'complete_workflow' and mention any data gaps.</SYSTEM_REMINDER>\n");
                             }
                         }
                         raw_res = list_str;
@@ -561,7 +561,7 @@ impl ObservationReinforcer {
             TOOL_TODO_LIST => t!("workflow.summary.todo_list").to_string(),
             TOOL_TODO_GET => t!("workflow.summary.todo_get").to_string(),
             TOOL_SUBMIT_PLAN => "Submit Plan".to_string(),
-            TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => "Complete Workflow with Summary".to_string(),
+            TOOL_COMPLETE_WORKFLOW => "Complete Workflow".to_string(),
             TOOL_SUBMIT_RESULT => "Submit Result".to_string(),
             crate::tools::TOOL_SUB_AGENT_OUTPUT => {
                 let task_id = args["task_id"].as_str().unwrap_or("").trim();
@@ -620,7 +620,7 @@ impl ObservationReinforcer {
     fn generate_summary(tool_name: &str, content: &str, _args: &Value) -> String {
         match tool_name {
             TOOL_SUBMIT_PLAN => t!("workflow.summary.submit_plan").to_string(),
-            TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY => t!("workflow.task_finished").to_string(),
+            TOOL_COMPLETE_WORKFLOW => t!("workflow.task_finished").to_string(),
             TOOL_SUBMIT_RESULT => {
                 if let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(content) {
                     obj.get("summary")

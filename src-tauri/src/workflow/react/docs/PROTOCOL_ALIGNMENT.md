@@ -58,7 +58,7 @@ Rule:
 
 | Purpose | Canonical wire name | Backend type | Notes |
 |---|---|---|---|
-| Accepted top-level task boundary | `task_completed` | `WorkflowEventType::TaskCompleted` / `GatewayPayload::TaskCompleted` | Emitted after `complete_workflow_with_summary` and any configured final review succeed. It is emitted even when queued input keeps the session running. |
+| Accepted top-level task boundary | `task_completed` | `WorkflowEventType::TaskCompleted` / `GatewayPayload::TaskCompleted` | Emitted after `complete_workflow` and any configured final review succeed. It is emitted even when queued input keeps the session running. |
 | Session terminal completion | `state` with `completed` | `GatewayPayload::State` / `WorkflowEventType::WorkflowCompleted` | Session lifecycle authority; not a per-task display boundary. |
 
 ## Notes

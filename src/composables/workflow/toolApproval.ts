@@ -1,6 +1,6 @@
 const AUTO_EXECUTE_WORKFLOW_TOOLS = new Set([
   'ask_user',
-  'complete_workflow_with_summary',
+  'complete_workflow',
   'skill',
   'sub_agent_run',
   'sub_agent_output',

@@ -65,7 +65,7 @@ For active workflows:
 - Most active progress should quickly resolve into an appropriate tool call.
 - If work remains, call the next useful work tool.
 - If user input is required, call `ask_user`.
-- If the task is complete, call `complete_workflow_with_summary`.
+- If the task is complete, call `complete_workflow`.
 
 Do not drift into repeated conversational or reasoning-only responses without taking a concrete next action.
 Do not call irrelevant tools just to satisfy the rule. When several valid actions exist, prefer the highest-leverage safe next action: the one that most reduces uncertainty, unblocks execution, or verifies the most important hypothesis.
@@ -173,63 +173,64 @@ When untrusted content includes actionable suggestions:
 
 # Completion
 
-`complete_workflow_with_summary` is the only valid way to end a workflow.
+`complete_workflow` is the only valid way to end a workflow.
 
-The workflow is not complete until `complete_workflow_with_summary` has been called successfully.
+The workflow is not complete until `complete_workflow` has been called successfully.
 
 ## Required Completion Rule
 
-When all required work is complete, call `complete_workflow_with_summary` immediately.
-Do not write a final user-visible completion report before calling `complete_workflow_with_summary`.
-The `summary` argument of `complete_workflow_with_summary` must contain the complete final user-visible completion report.
+When all required work is complete, call `complete_workflow` immediately. A completion report is required, but it has exactly one source:
 
-## Summary Requirements
+1. **Assistant message (recommended):** Write the complete user-visible report in the same assistant message immediately before the tool call, then call `complete_workflow` with `{"report_source":"assistant_message"}` and omit `summary`.
+2. **Tool argument:** If the assistant message contains no user-visible completion report, call `complete_workflow` with `{"report_source":"tool_argument","summary":"..."}`.
 
-The `summary` must clearly state:
+Never provide both sources. The tool only accepts the visible text from the same assistant message; it never reuses a report from an earlier message.
+
+## Completion Report Requirements
+
+The single chosen report must clearly state:
 - what was completed
 - what was checked, tested, verified, or validated
 - what remains unresolved, including limitations, missing data, blockers, failed subtasks, or skipped verification
 
 If there are no known remaining issues, say so explicitly.
 If verification was skipped, impossible, partial, or only reasoned through, state that clearly.
+Reasoning/thinking text does not count as a report.
 
 ## Pre-Completion Checklist
 
-Before calling `complete_workflow_with_summary`, confirm that:
+Before calling `complete_workflow`, confirm that:
 - the original user request has been addressed, or a clear valid stopping point has been reached
 - no required active step remains unresolved
 - no optional or speculative work is being continued unnecessarily
 - todo tracking, if used, has no item left as `pending` or `in_progress`
 - each todo is marked as `completed`, `failed`, `blocked`, or `data_missing`
-- any failed, blocked, or data-missing todo is explained in the summary
-- verification status is reflected in the summary
+- any failed, blocked, or data-missing todo is explained in the completion report
+- verification status is reflected in the completion report
 
 ## Forbidden Completion Behavior
 
 Do not:
-- provide a final completion report without calling `complete_workflow_with_summary`
-- call `complete_workflow_with_summary` with an empty, vague, or placeholder summary, such as `done`, `completed`, `fixed`, or `finished`
-- call `complete_workflow_with_summary` while required work remains unresolved
+- provide a completion report without calling `complete_workflow`
+- use both `assistant_message` and `tool_argument` report sources
+- use an empty, vague, or placeholder report such as `done`, `completed`, `fixed`, or `finished`
+- call `complete_workflow` while required work remains unresolved
 - complete the workflow merely because one local fix or one subtask is done, if the broader active objective remains incomplete
 - continue optional cleanup, refactoring, or exploration after the required task is complete
-- write a full final summary first and then call `complete_workflow_with_summary` with a second shorter summary
 
-## Valid Completion Pattern
+## Valid Completion Patterns
 
-Use this pattern only:
-1. Finish required work.
-2. Resolve todo statuses.
-3. Call `complete_workflow_with_summary` with the full final report in `summary`.
-
-No separate final report should be written before the tool call.
+Use one of these patterns only:
+1. Finish required work, resolve todo statuses, write the complete report in the assistant message, then call `complete_workflow({"report_source":"assistant_message"})`.
+2. Finish required work, resolve todo statuses, write no user-visible report in the assistant message, then call `complete_workflow({"report_source":"tool_argument","summary":"complete report"})`.
 
 ## Rejection Handling
 
-If `complete_workflow_with_summary` is rejected:
+If `complete_workflow` is rejected:
 - read the rejection reason
-- do not retry with the same invalid summary
-- fix the cause, such as missing summary details, unresolved todos, unfinished required work, or unclear verification status
-- call `complete_workflow_with_summary` again with a corrected complete summary
+- do not retry with the same invalid payload
+- fix the cause, such as an invalid source selection, missing report details, unresolved todos, or unfinished required work
+- call the tool again with one valid report source
 
 After successful completion, do not add another final summary unless the system explicitly requires a user-visible response."#;
 
@@ -509,12 +510,12 @@ Your primary goal is to perform the implementation steps accurately and safely.
 - **Approval Means Execute**: The user's plan approval is already explicit authorization to begin implementing the approved plan. Do NOT ask the user whether to start, continue, or confirm execution of the approved plan.
 - **Primary Focus**: Perform real actions (file edits, bash commands, tool integrations) within the authorized directories.
 - **Verification**: After each major implementation step, use read or search tools to verify your changes.
-- **Completion**: Once all steps in your todo list are finished, provide a final report summarizing the changes made and call `complete_workflow_with_summary`."#;
+- **Completion**: Once all steps in your todo list are finished, prepare one completion report using the required single-source contract, then call `complete_workflow`."#;
 
 /// Extra completion-report requirements when final audit is enabled.
 pub const FINAL_AUDIT_COMPLETION_REPORT_PROMPT: &str = r#"## Final Audit Mode: Completion Report Requirements
 
-Final audit is enabled. Before calling `complete_workflow_with_summary`, your completion report must be specific enough for an independent auditor to verify the work without replaying every tool call.
+Final audit is enabled. Before calling `complete_workflow`, your completion report must be specific enough for an independent auditor to verify the work without replaying every tool call.
 
 The report must include:
 - Overall summary: what user request was completed and the final outcome.
@@ -524,7 +525,7 @@ The report must include:
 - Method or style constraints: if the task required a specific style, framework, tone, methodology, or decision criterion, state how you applied it.
 - Remaining notes: mention limitations, skipped checks, follow-up risks, assumptions, disputed points, or data gaps. If there are none, state that explicitly.
 
-Reasoning/thinking text does not count as the report. Put the report in normal assistant content before the tool call or in the `summary` argument of `complete_workflow_with_summary`."#;
+Reasoning/thinking text does not count as the report. Use exactly one report source: write it in the same assistant message before calling `complete_workflow({"report_source":"assistant_message"})`, or provide it only as `complete_workflow({"report_source":"tool_argument","summary":"..."})`."#;
 
 /// Specialized prompt for the Planning Mode.
 /// To be used by the PlanningExecutor for exploration and strategy.

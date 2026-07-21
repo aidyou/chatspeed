@@ -628,7 +628,7 @@ const CORE_MANAGEMENT_TOOLS = [
   'todo_get',
   'skill',
   'ask_user',
-  'complete_workflow_with_summary',
+  'complete_workflow',
   'submit_plan'
 ]
 

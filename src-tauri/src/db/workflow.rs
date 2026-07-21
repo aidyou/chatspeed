@@ -1501,7 +1501,7 @@ impl MainStore {
                         .and_then(Value::as_str)
                 })
                 .unwrap_or_default();
-            if tool_name != "complete_workflow_with_summary" {
+            if tool_name != "complete_workflow" {
                 return false;
             }
             let execution_status = metadata
@@ -2172,7 +2172,7 @@ fn compute_efficiency_metrics(messages: &[WorkflowMessage]) -> WorkflowEfficienc
         let tool_name = extract_tool_name(message.metadata.as_ref());
         if matches!(
             tool_name.as_deref(),
-            Some("complete_workflow_with_summary" | "answer_user")
+            Some("complete_workflow" | "answer_user")
         ) {
             continue;
         }
@@ -2522,7 +2522,7 @@ mod tests {
                 source_event_type: None,
                 metadata: completed.then(|| {
                     json!({
-                        "tool_name": "complete_workflow_with_summary",
+                        "tool_name": "complete_workflow",
                         "execution_status": "completed"
                     })
                 }),

@@ -4,7 +4,7 @@ use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::ChatMetadata;
 use crate::db::WorkflowMessage;
 use crate::tools::TOOL_ASK_USER;
-use crate::tools::TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY;
+use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::intelligence::IntelligenceManager;
@@ -435,7 +435,7 @@ impl ContextCompressor {
         let is_completion_tool = meta
             .get("tool_name")
             .and_then(|value| value.as_str())
-            .map(|tool_name| tool_name == TOOL_COMPLETE_WORKFLOW_WITH_SUMMARY)
+            .map(|tool_name| tool_name == TOOL_COMPLETE_WORKFLOW)
             .unwrap_or(false);
         if !is_completion_tool {
             return false;
@@ -845,9 +845,7 @@ mod tests {
                 message_subtype: None,
                 segment_id: 1,
                 source_event_type: None,
-                metadata: Some(
-                    serde_json::json!({ "tool_name": "complete_workflow_with_summary" }),
-                ),
+                metadata: Some(serde_json::json!({ "tool_name": "complete_workflow" })),
                 attached_context: None,
                 step_type: Some("observe".to_string()),
                 step_index: 2,
@@ -901,9 +899,7 @@ mod tests {
                 message_subtype: None,
                 segment_id: 2,
                 source_event_type: None,
-                metadata: Some(
-                    serde_json::json!({ "tool_name": "complete_workflow_with_summary" }),
-                ),
+                metadata: Some(serde_json::json!({ "tool_name": "complete_workflow" })),
                 attached_context: None,
                 step_type: Some("observe".to_string()),
                 step_index: 5,
@@ -995,7 +991,7 @@ mod tests {
             segment_id: 1,
             source_event_type: None,
             metadata: Some(serde_json::json!({
-                "tool_name": "complete_workflow_with_summary",
+                "tool_name": "complete_workflow",
                 "execution_status": "completed",
                 "approval_status": "approved"
             })),

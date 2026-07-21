@@ -66,7 +66,7 @@ function isInternalTool(toolName: string): boolean {
   return [
     'answer_user',
     'ask_user',
-    'complete_workflow_with_summary',
+    'complete_workflow',
     'submit_plan',
     'sub_agent_run',
     'sub_agent_output',
@@ -228,7 +228,7 @@ function generateTitle(toolName: string, args?: Record<string, any>): string {
     sub_agent_run: () => 'Run Sub-agent',
     sub_agent_output: () => 'Get Sub-agent Output',
     sub_agent_stop: () => 'Stop Sub-agent',
-    complete_workflow_with_summary: () => 'Complete Workflow with Summary',
+    complete_workflow: () => 'Complete Workflow',
     ask_user: () => 'Ask User'
   }
 
