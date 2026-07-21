@@ -165,29 +165,6 @@ fn validate_window_position<'a>(
         return None;
     }
 
-    #[cfg(debug_assertions)]
-    {
-        log::debug!(
-            "validate_window_position: Checking position ({}, {}) with window_size {}x{} and screen {:?}",
-            saved_pos.x,
-            saved_pos.y,
-            window_size.width,
-            window_size.height,
-            saved_pos.screen_name
-        );
-
-        for (i, monitor) in monitors.iter().enumerate() {
-            log::debug!(
-                "  Monitor {}: Name: {:?}, Position: {:?}, Size: {:?}, ScaleFactor: {}",
-                i,
-                monitor.name(),
-                monitor.position(),
-                monitor.size(),
-                monitor.scale_factor()
-            );
-        }
-    }
-
     let matched_monitor =
         find_monitor_for_position(monitors, saved_pos.x, saved_pos.y, window_size)?;
 

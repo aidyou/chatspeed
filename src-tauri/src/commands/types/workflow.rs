@@ -21,6 +21,7 @@ pub struct AgentPayload {
     pub approval_level: Option<String>,
     pub skill_enabled: Option<bool>,
     pub selected_skills: Option<String>,
+    pub mcp_tool_exposure: Option<String>,
     pub phase: Option<String>,
     pub is_system: Option<bool>,
     pub disabled: Option<bool>,
@@ -29,7 +30,7 @@ pub struct AgentPayload {
 
 impl From<AgentPayload> for Agent {
     fn from(payload: AgentPayload) -> Self {
-        Agent::new(
+        let mut agent = Agent::new(
             payload.id.unwrap_or_default(),
             payload.name,
             payload.description,
@@ -51,6 +52,8 @@ impl From<AgentPayload> for Agent {
             payload.is_system,
             payload.disabled,
             payload.max_contexts,
-        )
+        );
+        agent.mcp_tool_exposure = payload.mcp_tool_exposure;
+        agent
     }
 }

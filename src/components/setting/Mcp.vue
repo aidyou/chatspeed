@@ -1056,11 +1056,18 @@ const arrayToString = arr => (arr || []).join(',')
 const parseEnvString = str => {
   if (!str || typeof str !== 'string') return []
   return str
-    .split('\n')
+    .split(/\r?\n/)
     .map(line => {
-      const parts = line.split(':')
-      if (parts.length >= 2) {
-        return [trimQuotes(parts[0].trim()), trimQuotes(parts.slice(1).join(':').trim())]
+      const equalsIndex = line.indexOf('=')
+      const colonIndex = line.indexOf(':')
+      const separatorIndex = [equalsIndex, colonIndex]
+        .filter(index => index >= 0)
+        .sort((a, b) => a - b)[0]
+      if (separatorIndex > 0) {
+        return [
+          trimQuotes(line.slice(0, separatorIndex).trim()),
+          trimQuotes(line.slice(separatorIndex + 1).trim())
+        ]
       }
       return null
     })

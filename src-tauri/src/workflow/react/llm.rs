@@ -40,6 +40,7 @@ pub struct LlmProcessor {
     pub active_model_name: String,
     pub reasoning: bool,
     pub mcp_tool_summaries: Vec<MCPToolDeclaration>,
+    pub mcp_tool_loader_available: bool,
     // Cached prompt inputs that should remain stable for the workflow lifetime.
     cached_global_agents_path: Option<PathBuf>,
     cached_project_agents_path: Option<PathBuf>,
@@ -224,6 +225,7 @@ impl LlmProcessor {
             active_model_name,
             reasoning,
             mcp_tool_summaries,
+            mcp_tool_loader_available: false,
             cached_global_agents_path,
             cached_project_agents_path,
             cached_global_agents,
@@ -1204,7 +1206,7 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
         let skills_enabled = self.agent_config.skill_enabled.unwrap_or(true);
 
         // MCP tools (before skills)
-        if !self.mcp_tool_summaries.is_empty() {
+        if self.mcp_tool_loader_available && !self.mcp_tool_summaries.is_empty() {
             reminders.push_str("## AVAILABLE MCP TOOLS:\n");
             let mut tools: Vec<_> = self.mcp_tool_summaries.iter().collect();
             tools.sort_by(|left, right| Self::stable_name_cmp(&left.name, &right.name));
@@ -1215,7 +1217,7 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
                     tool.description.replace("\n", " ")
                 ));
             }
-            reminders.push_str("<SYSTEM_REMINDER>Use `mcp_tool_load` tool to get detailed parameter schemas before calling MCP tools.</SYSTEM_REMINDER>\n\n");
+            reminders.push_str("<SYSTEM_REMINDER>The MCP tools listed above are folded. Use `mcp_tool_load` to get a listed tool's detailed parameter schema before calling it. MCP tools already present in the API tool list include their schemas and should be called directly.</SYSTEM_REMINDER>\n\n");
         }
 
         // Skills
@@ -1459,6 +1461,7 @@ mod tests {
             approval_level: None,
             skill_enabled: Some(true),
             selected_skills: None,
+            mcp_tool_exposure: None,
             phase: None,
             is_system: None,
             disabled: None,
@@ -1485,6 +1488,7 @@ mod tests {
             active_model_name: "test-model".to_string(),
             reasoning: true,
             mcp_tool_summaries: Vec::new(),
+            mcp_tool_loader_available: false,
             cached_global_agents_path: None,
             cached_project_agents_path: None,
             cached_global_agents: None,
@@ -1548,6 +1552,7 @@ mod tests {
     #[test]
     fn build_extend_tools_prompt_sorts_mcp_and_skills_stably() {
         let mut processor = test_llm_processor();
+        processor.mcp_tool_loader_available = true;
         processor.mcp_tool_summaries = vec![
             MCPToolDeclaration {
                 name: "zeta_tool".into(),
@@ -1603,6 +1608,25 @@ mod tests {
 
         assert!(alpha_mcp < zeta_mcp);
         assert!(alpha_skill < zeta_skill);
+        assert!(rendered.contains("The MCP tools listed above are folded."));
+        assert!(rendered.contains("should be called directly."));
+    }
+
+    #[test]
+    fn build_extend_tools_prompt_omits_folded_mcp_tools_without_loader() {
+        let mut processor = test_llm_processor();
+        processor.mcp_tool_summaries = vec![MCPToolDeclaration {
+            name: "folded_mcp_tool".into(),
+            description: "folded".into(),
+            input_schema: json!({}),
+            output_schema: None,
+            disabled: false,
+            scope: Some(ToolScope::Workflow),
+        }];
+
+        assert!(!processor
+            .build_extend_tools_prompt()
+            .contains("AVAILABLE MCP TOOLS"));
     }
 
     #[test]

@@ -438,6 +438,7 @@ pub async fn chat_completion(
                 .tool_manager
                 .register_tool(Arc::new(crate::tools::McpToolLoad {
                     tool_manager: chat_state.tool_manager.clone(),
+                    allowed_tools: None,
                 }))
                 .await?;
         }

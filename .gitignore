@@ -65,5 +65,6 @@ src-tauri/src/plugins
 .trae
 .crush
 .gemini-clipboard/*
+.codegraph
 
 test/

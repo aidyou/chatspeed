@@ -9,7 +9,6 @@ use tokio::time::{sleep, Duration};
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
-use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
@@ -461,6 +460,37 @@ impl WorkflowExecutor {
             })
             .map(|(name, skill)| (name.clone(), skill.clone()))
             .collect()
+    }
+
+    fn mcp_tool_exposure_set(&self) -> HashSet<String> {
+        self.agent_config
+            .mcp_tool_exposure
+            .as_deref()
+            .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    }
+
+    fn available_tools_allowlist(raw_tools: Option<&str>) -> Option<HashSet<String>> {
+        raw_tools.map(|tools| serde_json::from_str::<HashSet<String>>(tools).unwrap_or_default())
+    }
+
+    fn is_mcp_tool_allowed_by_config(
+        configured_tools: Option<&HashSet<String>>,
+        tool_name: &str,
+    ) -> bool {
+        configured_tools.map_or(true, |tools| tools.contains(tool_name))
+    }
+
+    fn is_mcp_tool_allowed(&self, tool_name: &str) -> bool {
+        let configured_tools =
+            Self::available_tools_allowlist(self.agent_config.available_tools.as_deref());
+        Self::is_mcp_tool_allowed_by_config(configured_tools.as_ref(), tool_name)
+    }
+
+    fn should_register_mcp_tool_loader(mcp_tool_count: usize, folded_tool_count: usize) -> bool {
+        mcp_tool_count > 0 && folded_tool_count > 0
     }
 
     fn sync_runtime_skills_from_agent_config(&mut self) {
@@ -1492,12 +1522,8 @@ impl WorkflowExecutor {
             .global_tool_manager
             .get_all_native_tool_metadata()
             .await;
-        let configured_tools = self
-            .agent_config
-            .available_tools
-            .as_deref()
-            .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())
-            .map(|tools| tools.into_iter().collect::<HashSet<_>>());
+        let configured_tools =
+            Self::available_tools_allowlist(self.agent_config.available_tools.as_deref());
         let is_sub_agent = self.subagent_type.is_some();
 
         // Helper to check if a tool is allowed in Workflow scope
@@ -1747,29 +1773,53 @@ impl WorkflowExecutor {
             }
         }
 
-        // 7. MCP Tool Loader (if MCP tools are available)
+        // 7. MCP tools. Configured tools are exposed directly with full schemas; all
+        // remaining MCP tools keep the existing folded discovery path.
         if self
             .policy
             .allowed_categories
             .contains(&ToolCategory::System)
             && self.policy.allowed_categories.contains(&ToolCategory::Mcp)
         {
-            // Check if there are any MCP tools
-            let has_mcp_tools = self
+            let exposed_mcp_tools = self.mcp_tool_exposure_set();
+            let mcp_specs = self
                 .global_tool_manager
-                .get_tool_calling_spec(None, None)
+                .get_tool_calling_spec(Some(ToolScope::Workflow), None)
                 .await
-                .map(|specs| specs.iter().any(|s| s.name.contains(MCP_TOOL_NAME_SPLIT)))
-                .unwrap_or(false);
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|tool| tool.name.contains(MCP_TOOL_NAME_SPLIT))
+                .collect::<Vec<_>>();
 
-            if has_mcp_tools && is_allowed(TOOL_MCP_TOOL_LOAD) {
+            let allowed_mcp_tools = mcp_specs
+                .iter()
+                .filter(|tool| is_allowed(&tool.name))
+                .collect::<Vec<_>>();
+            for tool in &allowed_mcp_tools {
+                if exposed_mcp_tools.contains(&tool.name) {
+                    if let Ok(mcp_tool) = self.global_tool_manager.get_tool(&tool.name).await {
+                        tm.register_tool(mcp_tool).await?;
+                    }
+                }
+            }
+
+            let folded_mcp_tools = allowed_mcp_tools
+                .iter()
+                .filter(|tool| !exposed_mcp_tools.contains(&tool.name))
+                .map(|tool| tool.name.clone())
+                .collect::<HashSet<_>>();
+            if Self::should_register_mcp_tool_loader(
+                allowed_mcp_tools.len(),
+                folded_mcp_tools.len(),
+            ) && is_allowed(TOOL_MCP_TOOL_LOAD)
+            {
                 tm.register_tool(Arc::new(McpToolLoad {
                     tool_manager: self.global_tool_manager.clone(),
+                    allowed_tools: Some(folded_mcp_tools),
                 }))
                 .await?;
             }
         }
-        //  MCP is loaded like skills, so we don't register it here.
         // if self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
         //     if let Ok(global_specs) = self
         //         .global_tool_manager
@@ -2525,9 +2575,16 @@ impl WorkflowExecutor {
                                     let result = if tool_name
                                         .contains(crate::tools::MCP_TOOL_NAME_SPLIT)
                                     {
-                                        self.global_tool_manager
-                                            .tool_call(&tool_name, enriched_args)
-                                            .await
+                                        if self.is_mcp_tool_allowed(&tool_name) {
+                                            self.global_tool_manager
+                                                .tool_call(&tool_name, enriched_args)
+                                                .await
+                                        } else {
+                                            Err(crate::tools::ToolError::Security(format!(
+                                                "MCP tool '{}' is not available in this workflow",
+                                                tool_name
+                                            )))
+                                        }
                                     } else {
                                         self.tool_manager.tool_call(&tool_name, enriched_args).await
                                     };
@@ -3009,9 +3066,16 @@ impl WorkflowExecutor {
                             .await;
 
                             let result = if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
-                                self.global_tool_manager
-                                    .tool_call(&tool_name, enriched_args)
-                                    .await
+                                if self.is_mcp_tool_allowed(&tool_name) {
+                                    self.global_tool_manager
+                                        .tool_call(&tool_name, enriched_args)
+                                        .await
+                                } else {
+                                    Err(crate::tools::ToolError::Security(format!(
+                                        "MCP tool '{}' is not available in this workflow",
+                                        tool_name
+                                    )))
+                                }
                             } else {
                                 self.tool_manager.tool_call(&tool_name, enriched_args).await
                             };
@@ -4576,6 +4640,7 @@ impl WorkflowExecutor {
                 self.append_tool_started_event(&id, &name, &args);
                 self.dispatch_tool_started_payload(&id, &name, &args).await;
 
+                let mcp_tool_allowed = self.is_mcp_tool_allowed(&name);
                 let tm_clone = tm.clone();
                 let gtm_clone = gtm.clone();
                 let semaphore_clone = semaphore.clone();
@@ -4587,8 +4652,14 @@ impl WorkflowExecutor {
                     let _permit = semaphore_clone.acquire().await.ok();
 
                     let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
-                        // MCP tools are managed globally
-                        gtm_clone.tool_call(&name, enriched_args).await
+                        if mcp_tool_allowed {
+                            gtm_clone.tool_call(&name, enriched_args).await
+                        } else {
+                            Err(crate::tools::ToolError::Security(format!(
+                                "MCP tool '{}' is not available in this workflow",
+                                name
+                            )))
+                        }
                     } else {
                         // Native tools are managed session-locally. No fallback.
                         tm_clone.tool_call(&name, enriched_args).await
@@ -4617,9 +4688,16 @@ impl WorkflowExecutor {
             let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
 
             let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
-                self.global_tool_manager
-                    .tool_call(&name, enriched_args)
-                    .await
+                if self.is_mcp_tool_allowed(&name) {
+                    self.global_tool_manager
+                        .tool_call(&name, enriched_args)
+                        .await
+                } else {
+                    Err(crate::tools::ToolError::Security(format!(
+                        "MCP tool '{}' is not available in this workflow",
+                        name
+                    )))
+                }
             } else {
                 self.tool_manager.tool_call(&name, enriched_args).await
             };
@@ -5662,50 +5740,87 @@ impl WorkflowExecutor {
     ) -> Result<(), WorkflowEngineError> {
         if !self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
             self.llm_processor.mcp_tool_summaries.clear();
+            self.llm_processor.mcp_tool_loader_available = false;
             return Ok(());
         }
 
-        let refreshed_summaries: Vec<MCPToolDeclaration> = self
+        let exposed_mcp_tools = self.mcp_tool_exposure_set();
+        let configured_mcp_tools =
+            Self::available_tools_allowlist(self.agent_config.available_tools.as_deref());
+        let available_mcp_tools = self
             .global_tool_manager
             .get_tool_calling_spec(Some(ToolScope::Workflow), None)
             .await
             .unwrap_or_default()
             .into_iter()
-            .filter(|tool| tool.name.contains(MCP_TOOL_NAME_SPLIT))
+            .filter(|tool| {
+                tool.name.contains(MCP_TOOL_NAME_SPLIT)
+                    && Self::is_mcp_tool_allowed_by_config(
+                        configured_mcp_tools.as_ref(),
+                        &tool.name,
+                    )
+            })
+            .collect::<Vec<_>>();
+        let refreshed_summaries = available_mcp_tools
+            .iter()
+            .filter(|tool| !exposed_mcp_tools.contains(&tool.name))
+            .cloned()
             .map(|mut tool| {
                 tool.input_schema = serde_json::json!({});
                 tool
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let expected_exposed_names = available_mcp_tools
+            .iter()
+            .filter(|tool| exposed_mcp_tools.contains(&tool.name))
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
+        let expected_folded_names = refreshed_summaries
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
 
+        let registered_mcp_names = self
+            .tool_manager
+            .get_tool_calling_spec(None, None)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|tool| tool.name.contains(MCP_TOOL_NAME_SPLIT))
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
         let had_loader = self.tool_manager.has_tool(TOOL_MCP_TOOL_LOAD).await;
-        let had_summary_names: Vec<String> = self
+        let had_summary_names = self
             .llm_processor
             .mcp_tool_summaries
             .iter()
             .map(|tool| tool.name.clone())
-            .collect();
-        let refreshed_summary_names: Vec<String> = refreshed_summaries
-            .iter()
-            .map(|tool| tool.name.clone())
-            .collect();
-        let summaries_changed = had_summary_names != refreshed_summary_names;
-        let has_global_mcp_tools = !refreshed_summaries.is_empty();
+            .collect::<Vec<_>>();
+        let summaries_changed = had_summary_names != expected_folded_names;
+        let should_have_loader = Self::should_register_mcp_tool_loader(
+            available_mcp_tools.len(),
+            expected_folded_names.len(),
+        );
+        let registrations_changed =
+            registered_mcp_names != expected_exposed_names || had_loader != should_have_loader;
 
         if summaries_changed {
             log::info!(
-                "WorkflowExecutor {}: Refreshing MCP tool summaries ({} -> {})",
+                "WorkflowExecutor {}: Refreshing folded MCP tool summaries ({} -> {})",
                 self.session_id,
                 had_summary_names.len(),
-                refreshed_summary_names.len()
+                expected_folded_names.len()
             );
         }
         self.llm_processor.mcp_tool_summaries = refreshed_summaries;
+        self.llm_processor.mcp_tool_loader_available = should_have_loader;
 
-        if rebuild_if_loader_missing && has_global_mcp_tools && !had_loader {
+        if rebuild_if_loader_missing && registrations_changed {
             log::info!(
-                "WorkflowExecutor {}: MCP tools became available after session start; rebuilding workflow foundation tools to register mcp_tool_load",
-                self.session_id
+                "WorkflowExecutor {}: Refreshing MCP tool registration (direct={}, folded={})",
+                self.session_id,
+                expected_exposed_names.len(),
+                expected_folded_names.len()
             );
             self.rebuild_foundation_tools_for_runtime_update().await?;
         }
@@ -6639,6 +6754,54 @@ mod recovery_tests {
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
         Arc::new(std::sync::RwLock::new(store))
+    }
+
+    #[test]
+    fn mcp_tool_exposure_respects_available_tools_authorization() {
+        let exposed = HashSet::from([
+            "server__MCP__direct".to_string(),
+            "server__MCP__unauthorized".to_string(),
+        ]);
+        let authorized = HashSet::from([
+            "server__MCP__direct".to_string(),
+            "server__MCP__folded".to_string(),
+        ]);
+        let candidates = [
+            "server__MCP__direct",
+            "server__MCP__folded",
+            "server__MCP__unauthorized",
+        ];
+
+        let authorized_tools = candidates
+            .into_iter()
+            .filter(|name| WorkflowExecutor::is_mcp_tool_allowed_by_config(Some(&authorized), name))
+            .collect::<Vec<_>>();
+        let direct_tools = authorized_tools
+            .iter()
+            .filter(|name| exposed.contains(**name))
+            .copied()
+            .collect::<Vec<_>>();
+        let folded_tools = authorized_tools
+            .iter()
+            .filter(|name| !exposed.contains(**name))
+            .copied()
+            .collect::<Vec<_>>();
+
+        assert_eq!(direct_tools, vec!["server__MCP__direct"]);
+        assert_eq!(folded_tools, vec!["server__MCP__folded"]);
+        assert!(!authorized_tools.contains(&"server__MCP__unauthorized"));
+        assert!(WorkflowExecutor::is_mcp_tool_allowed_by_config(
+            None,
+            "server__MCP__legacy_default"
+        ));
+        let malformed_allowlist = WorkflowExecutor::available_tools_allowlist(Some("not-json"));
+        assert!(!WorkflowExecutor::is_mcp_tool_allowed_by_config(
+            malformed_allowlist.as_ref(),
+            "server__MCP__direct"
+        ));
+        assert!(WorkflowExecutor::should_register_mcp_tool_loader(2, 1));
+        assert!(!WorkflowExecutor::should_register_mcp_tool_loader(2, 0));
+        assert!(!WorkflowExecutor::should_register_mcp_tool_loader(0, 0));
     }
 
     #[test]

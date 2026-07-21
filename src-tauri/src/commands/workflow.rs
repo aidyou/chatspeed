@@ -1149,6 +1149,10 @@ fn build_agent_config_from_agent(
         .to_string(),
     );
     config.skill_enabled = agent.skill_enabled;
+    config.mcp_tool_exposure = agent
+        .mcp_tool_exposure
+        .as_deref()
+        .and_then(|tools| serde_json::from_str(tools).ok());
     config.phase = agent.phase.clone();
 
     if let Some(approve_str) = &agent.auto_approve {
@@ -1288,6 +1292,10 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
     }
     if config.selected_skills.is_none() && defaults.selected_skills.is_some() {
         config.selected_skills = defaults.selected_skills;
+        changed = true;
+    }
+    if config.mcp_tool_exposure.is_none() && defaults.mcp_tool_exposure.is_some() {
+        config.mcp_tool_exposure = defaults.mcp_tool_exposure;
         changed = true;
     }
     if config.phase.is_none() && defaults.phase.is_some() {
@@ -5141,6 +5149,22 @@ mod tests {
             ManagedSessionStatus::Cancelled
         )));
         assert!(!managed_status_blocks_tail_rewind(None));
+    }
+
+    #[test]
+    fn inherited_mcp_tool_exposure_overrides_agent_defaults_including_empty_selection() {
+        let mut config = AgentConfig {
+            mcp_tool_exposure: Some(vec!["server__MCP__default_tool".to_string()]),
+            ..AgentConfig::default()
+        };
+        let inherited = AgentConfig {
+            mcp_tool_exposure: Some(Vec::new()),
+            ..AgentConfig::default()
+        };
+
+        config.apply_overrides(&inherited);
+
+        assert_eq!(config.mcp_tool_exposure, Some(Vec::new()));
     }
 
     #[test]

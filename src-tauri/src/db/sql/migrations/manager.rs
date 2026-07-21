@@ -1,4 +1,6 @@
-use crate::db::sql::migrations::{common::MigrationDefinition, v1, v2, v3, v4, v5, v6, v7, v8, v9};
+use crate::db::sql::migrations::{
+    common::MigrationDefinition, v1, v10, v2, v3, v4, v5, v6, v7, v8, v9,
+};
 use crate::db::StoreError;
 use rusqlite::Connection;
 
@@ -12,6 +14,7 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v7::MIGRATION,
     v8::MIGRATION,
     v9::MIGRATION,
+    v10::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -198,6 +201,7 @@ mod tests {
         assert!(table_exists(&conn, "workflow_events"));
         assert!(table_exists(&conn, "memory_candidates"));
         assert!(has_column(&conn, "ccproxy_stats", "provider_id"));
+        assert!(has_column(&conn, "agents", "mcp_tool_exposure"));
 
         let recorded_versions: i64 = conn
             .query_row("SELECT COUNT(1) FROM db_version", [], |row| row.get(0))

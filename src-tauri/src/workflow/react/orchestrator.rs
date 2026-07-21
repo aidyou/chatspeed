@@ -674,6 +674,10 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .selected_skills
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
+            mcp_tool_exposure: agent_config
+                .mcp_tool_exposure
+                .as_deref()
+                .and_then(|tools| serde_json::from_str(tools).ok()),
             phase: None,
             models: agent_config.models.clone(),
             max_contexts: agent_config.max_contexts,

@@ -452,6 +452,21 @@
                 :value="tool.id" />
             </el-select>
           </el-form-item>
+          <el-form-item :label="$t('settings.agent.mcpToolExposure')" prop="mcpToolExposure">
+            <el-select
+              v-model="agentForm.mcpToolExposure"
+              :placeholder="$t('settings.agent.selectMcpToolExposure')"
+              multiple
+              filterable>
+              <el-option
+                v-for="tool in availableMcpToolOptions"
+                :key="tool.id"
+                :label="tool.name"
+                :value="tool.id"
+                :title="tool.description" />
+            </el-select>
+            <div class="form-tip">{{ $t('settings.agent.mcpToolExposureTip') }}</div>
+          </el-form-item>
           <el-form-item :label="$t('settings.agent.autoApprove')" prop="autoApprove">
             <el-select
               v-model="agentForm.autoApprove"
@@ -661,6 +676,7 @@ const defaultFormData = {
   autoApprove: [],
   skillEnabled: true,
   selectedSkills: [],
+  mcpToolExposure: [],
   shellPolicy: [],
   allowedPaths: [],
   planModel: defaultAgentModelConfig(),
@@ -702,6 +718,13 @@ const autoApproveOptions = computed(() => {
   if (!agentForm.value || !agentForm.value.availableTools) return []
   return sortedAvailableTools.value.filter(
     t => agentForm.value.availableTools.includes(t.id) && t.id !== 'bash'
+  )
+})
+
+const availableMcpToolOptions = computed(() => {
+  const enabledToolIds = new Set(agentForm.value.availableTools || [])
+  return availableTools.value.filter(
+    tool => tool.category === 'MCP' && enabledToolIds.has(tool.id)
   )
 })
 
@@ -1045,6 +1068,10 @@ const agentRules = {
   ]
 }
 
+const loadAvailableMcpTools = async () => {
+  await agentStore.fetchAvailableTools()
+}
+
 const loadSystemSkills = async () => {
   try {
     const result = await invokeWrapper('get_system_skills')
@@ -1096,6 +1123,9 @@ const normalizeAgentFormForSave = form => {
     : []
   normalized.selectedSkills = Array.isArray(normalized.selectedSkills)
     ? sortSkillNamesByName(normalized.selectedSkills)
+    : []
+  normalized.mcpToolExposure = Array.isArray(normalized.mcpToolExposure)
+    ? [...new Set(normalized.mcpToolExposure)]
     : []
 
   if (normalized.role === AGENT_ROLE.CHILD) {
@@ -1233,7 +1263,7 @@ const parseModelField = (field, key) => {
 const editAgent = async id => {
   formRef.value?.resetFields()
   activeTab.value = 'basic'
-  await ensureDefaultShellPoliciesLoaded()
+  await Promise.all([ensureDefaultShellPoliciesLoaded(), loadAvailableMcpTools()])
 
   if (id) {
     try {
@@ -1588,6 +1618,7 @@ onMounted(() => {
   proxyGroupStore.getList()
   loadDefaultShellPolicies()
   loadSystemSkills()
+  loadAvailableMcpTools()
 })
 
 watch(
@@ -1636,6 +1667,17 @@ watch(
       agentForm.value.parentAgentId = primaryAgentOptions.value[0].id
     }
   }
+)
+
+watch(
+  () => agentForm.value.availableTools,
+  availableToolIds => {
+    const enabledToolIds = new Set(availableToolIds || [])
+    agentForm.value.mcpToolExposure = (agentForm.value.mcpToolExposure || []).filter(tool =>
+      enabledToolIds.has(tool)
+    )
+  },
+  { deep: true }
 )
 
 watch(

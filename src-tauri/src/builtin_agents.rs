@@ -301,6 +301,7 @@ fn definition_to_agent(
         approval_level: manifest.config.approval_level.clone(),
         skill_enabled: manifest.config.skill_enabled,
         selected_skills: serialize_json(&manifest.config.selected_skills),
+        mcp_tool_exposure: None,
         phase: manifest.config.phase.clone(),
         is_system: Some(true),
         disabled: Some(manifest.disabled),

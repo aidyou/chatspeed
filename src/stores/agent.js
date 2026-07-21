@@ -24,6 +24,7 @@ import { sendSyncState } from '@/libs/sync';
  * @property {Object} browsingModel - The model used for browsing tasks.
  * @property {string} models - Unified JSON string for all models.
  * @property {number} maxContexts - The maximum context length.
+ * @property {string[]} mcpToolExposure - MCP tool names exposed with full parameter schemas in workflows.
  * @property {string} approvalLevel - Approval level (default, smart, full).
  */
 
@@ -104,7 +105,8 @@ const _transformFromBackend = (backendAgent) => {
     skillEnabled: backendAgent.skill_enabled !== undefined
       ? Boolean(backendAgent.skill_enabled)
       : (backendAgent.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD,
-    selectedSkills: backendAgent.selected_skills ? JSON.parse(backendAgent.selected_skills) : null
+    selectedSkills: backendAgent.selected_skills ? JSON.parse(backendAgent.selected_skills) : null,
+    mcpToolExposure: backendAgent.mcp_tool_exposure ? JSON.parse(backendAgent.mcp_tool_exposure) : []
   };
 };
 
@@ -161,6 +163,7 @@ const _transformToBackend = (frontendAgent) => {
     selected_skills: frontendAgent.selectedSkills === null
       ? null
       : JSON.stringify(frontendAgent.selectedSkills || []),
+    mcp_tool_exposure: JSON.stringify(frontendAgent.mcpToolExposure || []),
     is_system: frontendAgent.isSystem ?? false,
     disabled: frontendAgent.disabled ?? false
   };

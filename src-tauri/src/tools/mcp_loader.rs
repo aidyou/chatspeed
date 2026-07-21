@@ -12,6 +12,7 @@ use crate::tools::tool_manager::ToolManager;
 use crate::tools::{
     NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError, ToolScope,
 };
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// MCP Tool Loader
@@ -20,6 +21,7 @@ use std::sync::Arc;
 /// This reduces context token usage by not including full schemas upfront.
 pub struct McpToolLoad {
     pub tool_manager: Arc<ToolManager>,
+    pub allowed_tools: Option<HashSet<String>>,
 }
 
 #[async_trait]
@@ -65,6 +67,17 @@ impl ToolDefinition for McpToolLoad {
             .as_str()
             .ok_or_else(|| ToolError::InvalidParams("tool_name is required".to_string()))?;
 
+        if self
+            .allowed_tools
+            .as_ref()
+            .is_some_and(|tools| !tools.contains(tool_name))
+        {
+            return Err(ToolError::Security(format!(
+                "MCP tool '{}' is not available in this workflow",
+                tool_name
+            )));
+        }
+
         let declaration = self
             .tool_manager
             .get_mcp_tool_declaration(tool_name)
@@ -74,5 +87,25 @@ impl ToolDefinition for McpToolLoad {
             Some(format!("Loaded MCP tool declaration for '{}'.", tool_name)),
             Some(serde_json::to_value(declaration).unwrap_or_default()),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rejects_mcp_tool_outside_allowed_list() {
+        let loader = McpToolLoad {
+            tool_manager: Arc::new(ToolManager::new()),
+            allowed_tools: Some(HashSet::from(["server__MCP__allowed".to_string()])),
+        };
+
+        let error = loader
+            .call(json!({ "tool_name": "server__MCP__blocked" }))
+            .await
+            .expect_err("blocked MCP tools must not expose their declaration");
+
+        assert!(matches!(error, ToolError::Security(_)));
     }
 }

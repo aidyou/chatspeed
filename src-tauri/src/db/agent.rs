@@ -25,6 +25,7 @@ pub struct AgentConfig {
     pub final_review_mode: Option<String>,
     pub skill_enabled: Option<bool>,
     pub selected_skills: Option<Vec<String>>,
+    pub mcp_tool_exposure: Option<Vec<String>>,
     pub phase: Option<String>,
     pub models: Option<AgentModels>,
     pub max_contexts: Option<i32>,
@@ -90,6 +91,9 @@ impl AgentConfig {
         }
         if other.selected_skills.is_some() {
             self.selected_skills = other.selected_skills.clone();
+        }
+        if other.mcp_tool_exposure.is_some() {
+            self.mcp_tool_exposure = other.mcp_tool_exposure.clone();
         }
         if other.phase.is_some() {
             self.phase = other.phase.clone();
@@ -168,6 +172,8 @@ pub struct Agent {
     pub skill_enabled: Option<bool>,
     /// JSON array of enabled skill names for this agent
     pub selected_skills: Option<String>,
+    /// JSON array of MCP tool names exposed with full parameter schemas in workflows
+    pub mcp_tool_exposure: Option<String>,
     /// Default workflow phase for this agent
     pub phase: Option<String>,
     /// Whether this agent is a built-in system agent
@@ -230,6 +236,7 @@ impl Agent {
             approval_level,
             skill_enabled,
             selected_skills,
+            mcp_tool_exposure: None,
             phase,
             is_system,
             disabled,
@@ -302,6 +309,11 @@ impl Agent {
                 self.selected_skills = serde_json::to_string(&skills).ok();
             }
 
+            // Merge mcp_tool_exposure (Vec<String> -> JSON string)
+            if let Some(tools) = config.mcp_tool_exposure {
+                self.mcp_tool_exposure = serde_json::to_string(&tools).ok();
+            }
+
             // Merge phase
             if config.phase.is_some() {
                 self.phase = config.phase;
@@ -348,6 +360,7 @@ impl From<&Row<'_>> for Agent {
             approval_level: row.get("approval_level").ok(),
             skill_enabled: row.get("skill_enabled").ok(),
             selected_skills: row.get("selected_skills").ok(),
+            mcp_tool_exposure: row.get("mcp_tool_exposure").ok(),
             phase: row.get("phase").ok(),
             is_system: row.get("is_system").ok(),
             disabled: row.get("disabled").ok(),
@@ -399,11 +412,12 @@ impl MainStore {
         let shell_policy_json = agent.shell_policy.as_ref().cloned();
         let allowed_paths_json = agent.allowed_paths.as_ref().cloned();
         let selected_skills_json = agent.selected_skills.as_ref().cloned();
+        let mcp_tool_exposure_json = agent.mcp_tool_exposure.as_ref().cloned();
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, phase, is_system, disabled, version, sort_index, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
             params![
                 agent.id,
                 agent.name,
@@ -422,6 +436,7 @@ impl MainStore {
                 agent.approval_level,
                 agent.skill_enabled,
                 selected_skills_json,
+                mcp_tool_exposure_json,
                 agent.phase,
                 agent.is_system,
                 agent.disabled,
@@ -483,6 +498,7 @@ impl MainStore {
         let shell_policy_json = agent.shell_policy.as_ref().cloned();
         let allowed_paths_json = agent.allowed_paths.as_ref().cloned();
         let selected_skills_json = agent.selected_skills.as_ref().cloned();
+        let mcp_tool_exposure_json = agent.mcp_tool_exposure.as_ref().cloned();
 
         // Update the agent
         tx.execute(
@@ -503,14 +519,15 @@ impl MainStore {
                 approval_level = ?14,
                 skill_enabled = ?15,
                 selected_skills = ?16,
-                phase = ?17,
-                is_system = ?18,
-                disabled = ?19,
-                version = ?20,
-                sort_index = ?21,
-                max_contexts = ?22,
+                mcp_tool_exposure = ?17,
+                phase = ?18,
+                is_system = ?19,
+                disabled = ?20,
+                version = ?21,
+                sort_index = ?22,
+                max_contexts = ?23,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?23",
+             WHERE id = ?24",
             params![
                 effective_name,
                 agent.description,
@@ -528,6 +545,7 @@ impl MainStore {
                 agent.approval_level,
                 agent.skill_enabled,
                 selected_skills_json,
+                mcp_tool_exposure_json,
                 agent.phase,
                 agent.is_system,
                 agent.disabled,
@@ -752,6 +770,7 @@ mod tests {
             approval_level: Some("default".to_string()),
             skill_enabled: Some(true),
             selected_skills: None,
+            mcp_tool_exposure: None,
             phase: Some("standard".to_string()),
             is_system: Some(false),
             disabled: Some(false),
@@ -780,6 +799,25 @@ mod tests {
             stored.version,
             Some(0),
             "custom agents should persist with version 0 when UI omits it"
+        );
+    }
+
+    #[test]
+    fn test_mcp_tool_exposure_persists_with_agent() {
+        let store = create_test_store();
+        let mut agent = make_agent("agent-mcp", "MCP Agent", None);
+        agent.mcp_tool_exposure =
+            Some(serde_json::json!(["server__MCP__important_tool"]).to_string());
+
+        store.add_agent(&agent).expect("failed to add agent");
+        let stored = store
+            .get_agent("agent-mcp")
+            .expect("failed to load agent")
+            .expect("agent should exist");
+
+        assert_eq!(
+            stored.mcp_tool_exposure,
+            Some(serde_json::json!(["server__MCP__important_tool"]).to_string())
         );
     }
 
