@@ -185,7 +185,7 @@ impl ObservationReinforcer {
                                 )
                             });
                             if all_terminal && !todos.is_empty() {
-                                list_str.push_str("<SYSTEM_REMINDER>Todos are terminal. Call 'complete_workflow' and mention any data gaps.</SYSTEM_REMINDER>\n");
+                                list_str.push_str("<SYSTEM_REMINDER>Todos are terminal. If the requested work is complete, your next response must atomically provide the completion report and call `complete_workflow`: write the full user-visible report immediately before `complete_workflow` with `report_source=\"assistant_message\"` (preferred), or emit no visible report and put the full report in `summary` with `report_source=\"tool_argument\"`. Do not send a completion report without the tool call. Mention any failed or data-missing todos; if required work remains, continue with the next concrete tool action instead.</SYSTEM_REMINDER>\n");
                             }
                         }
                         raw_res = list_str;
@@ -771,6 +771,42 @@ mod tests {
         assert!(reinforced
             .content
             .contains("Continue with read_file using offset=0"));
+    }
+
+    #[test]
+    fn reinforce_terminal_todos_requires_atomic_completion_submission() {
+        let tool_call = json!({
+            "function": {
+                "name": TOOL_TODO_UPDATE,
+                "arguments": {"todo_id":"1","status":"completed"}
+            }
+        });
+        let todos = json!([
+            {"id":"1","subject":"Implement fix","status":"completed"},
+            {"id":"2","subject":"Verify fix","status":"data_missing"}
+        ]);
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(json!({ "content": "Task updated" })),
+            Some(todos),
+            None,
+        );
+
+        assert!(reinforced.content.contains("Todos are terminal"));
+        assert!(reinforced
+            .content
+            .contains("your next response must atomically"));
+        assert!(reinforced
+            .content
+            .contains("report_source=\"assistant_message\""));
+        assert!(reinforced
+            .content
+            .contains("report_source=\"tool_argument\""));
+        assert!(reinforced
+            .content
+            .contains("Do not send a completion report without the tool call"));
+        assert!(reinforced.content.contains("failed or data-missing todos"));
     }
 
     #[test]

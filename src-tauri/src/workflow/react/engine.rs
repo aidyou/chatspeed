@@ -4747,7 +4747,7 @@ impl WorkflowExecutor {
                                 && args
                                     .get("wait_until_complete")
                                     .and_then(|value| value.as_bool())
-                                    .unwrap_or(false);
+                                    .unwrap_or(true);
 
                     // Safe to proceed to physical execution!
                     if name.starts_with("todo_")

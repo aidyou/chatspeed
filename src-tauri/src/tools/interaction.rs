@@ -172,6 +172,9 @@ impl ToolDefinition for FinishTask {
         - `summary` (required only for `tool_argument`): A user-visible completion report.\n\n\
         Strict usage rules:\n\
         - Call this only after the requested work is actually complete or you have reached a clear stopping point accepted by the user.\n\
+        - When completion is ready, submit the report and this tool call atomically in one assistant response. Never send the report first and defer the tool call to a later response.\n\
+        - Preferred path: write the full user-visible report immediately before this tool call and use `report_source=assistant_message`; omit `summary`.\n\
+        - Recovery/alternative path: if this assistant message contains no visible report, use `report_source=tool_argument` and put the full report in `summary`.\n\
         - Use exactly one source. Do not provide both a user-visible assistant report and `summary`; this avoids duplicate reports.\n\
         - A completion report must explicitly cover: 1) what was completed, 2) what was verified, and 3) any important remaining notes or limitations.\n\
         - Reasoning/thinking text does not count as a completion report.\n\

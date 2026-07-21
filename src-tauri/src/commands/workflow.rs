@@ -17,7 +17,9 @@ use crate::workflow::react::orchestrator::{
     list_background_task_ids_for_owner, stop_background_task, BackgroundTask, SubAgentFactory,
     BACKGROUND_TASKS,
 };
-use crate::workflow::react::replay::{restore_execution_context, RecoveryResult};
+use crate::workflow::react::replay::{
+    replay_events_to_execution_context, restore_execution_context, RecoveryResult,
+};
 use crate::workflow::react::runtime_observation::{
     runtime_observation_metadata, RuntimeObservationType,
 };
@@ -1566,14 +1568,75 @@ pub async fn list_workflows(
     Ok(list)
 }
 
+fn terminal_workflow_state(runtime_state: &RuntimeState) -> Option<WorkflowState> {
+    match runtime_state {
+        RuntimeState::Completed => Some(WorkflowState::Completed),
+        RuntimeState::Failed => Some(WorkflowState::Error),
+        RuntimeState::Cancelled => Some(WorkflowState::Cancelled),
+        _ => None,
+    }
+}
+
+fn durable_child_terminal_state(
+    store: &MainStore,
+    child_id: &str,
+) -> Result<Option<WorkflowState>, crate::db::StoreError> {
+    let snapshot_error = match store.get_execution_context(child_id) {
+        Ok(Some(context)) if context.version == ExecutionContext::CURRENT_VERSION => {
+            if let Some(terminal_state) = terminal_workflow_state(&context.state) {
+                return Ok(Some(terminal_state));
+            }
+            None
+        }
+        Ok(Some(context)) => Some(format!(
+            "Child workflow snapshot version mismatch: expected {}, got {}",
+            ExecutionContext::CURRENT_VERSION,
+            context.version
+        )),
+        Ok(None) => None,
+        Err(error) => Some(format!("Child workflow snapshot is unreadable: {error}")),
+    };
+
+    let events = store.list_workflow_events(child_id)?;
+    if events.is_empty() {
+        if let Some(error) = snapshot_error {
+            return Err(crate::db::StoreError::InvalidData(error));
+        }
+        return Ok(None);
+    }
+
+    let context = replay_events_to_execution_context(child_id, &events).map_err(|error| {
+        crate::db::StoreError::InvalidData(format!(
+            "Cannot safely reconcile child workflow {child_id}: {error}"
+        ))
+    })?;
+    Ok(terminal_workflow_state(&context.state))
+}
+
 fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate::db::StoreError> {
     let child_workflows = store.list_nonterminal_child_workflows()?;
+    let mut decisions = Vec::new();
+
     for child in child_workflows {
         let Some(child_id) = child.id.clone() else {
             continue;
         };
-
         if BACKGROUND_TASKS.contains_key(&child_id) {
+            continue;
+        }
+
+        let terminal_status = durable_child_terminal_state(store, &child_id)?;
+        decisions.push((child, child_id, terminal_status));
+    }
+
+    for (child, child_id, terminal_status) in decisions {
+        if let Some(terminal_status) = terminal_status {
+            log::info!(
+                "[Workflow][session={}][phase=reconcile][event=child_terminal_durable] Preserving durable terminal child state={:?}",
+                child_id,
+                terminal_status
+            );
+            store.update_workflow_status(&child_id, &terminal_status.to_string())?;
             continue;
         }
 
@@ -4942,6 +5005,285 @@ mod tests {
             ],
         )
         .expect("failed to seed agent");
+    }
+
+    #[test]
+    fn reconcile_interrupted_child_preserves_terminal_snapshot() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow("parent-session", "Parent task", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "subagent_completed_snapshot",
+                "Child task",
+                "agent-test",
+                None,
+                Some("parent-session"),
+            )
+            .expect("failed to create child workflow");
+
+        let mut context = ExecutionContext::new("subagent_completed_snapshot".to_string());
+        context.state = RuntimeState::Completed;
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist completed child snapshot");
+
+        reconcile_interrupted_child_workflows(&store).expect("failed to reconcile child workflows");
+
+        let child = store
+            .get_workflow("subagent_completed_snapshot")
+            .expect("failed to load child workflow")
+            .expect("child workflow should exist");
+        assert_eq!(child.status, "completed");
+
+        let parent = store
+            .get_execution_context("parent-session")
+            .expect("failed to load parent context");
+        assert!(parent.is_none());
+
+        let interrupted_events = store
+            .list_workflow_events("parent-session")
+            .expect("failed to load parent events")
+            .into_iter()
+            .filter(|event| event.event_type == "sub_agent_interrupted")
+            .count();
+        assert_eq!(interrupted_events, 0);
+    }
+
+    #[test]
+    fn reconcile_interrupted_child_preserves_terminal_event_replay() {
+        for (suffix, event, expected_status) in [
+            (
+                "completed",
+                WorkflowEvent::workflow_completed(
+                    "subagent_event_completed".to_string(),
+                    Some("done".to_string()),
+                ),
+                "completed",
+            ),
+            (
+                "failed",
+                WorkflowEvent::workflow_failed(
+                    "subagent_event_failed".to_string(),
+                    "failed".to_string(),
+                ),
+                "error",
+            ),
+            (
+                "cancelled",
+                WorkflowEvent::workflow_cancelled("subagent_event_cancelled".to_string()),
+                "cancelled",
+            ),
+        ] {
+            let store = create_test_store();
+            seed_agent(&store, "agent-test");
+            let parent_id = format!("parent-{suffix}");
+            let child_id = format!("subagent_event_{suffix}");
+            store
+                .create_workflow(&parent_id, "Parent task", "agent-test", None, None)
+                .expect("failed to create parent workflow");
+            store
+                .create_workflow(
+                    &child_id,
+                    "Child task",
+                    "agent-test",
+                    None,
+                    Some(&parent_id),
+                )
+                .expect("failed to create child workflow");
+            store
+                .append_workflow_event(&event)
+                .expect("failed to append terminal child event");
+
+            reconcile_interrupted_child_workflows(&store)
+                .expect("failed to reconcile child workflows");
+
+            let child = store
+                .get_workflow(&child_id)
+                .expect("failed to load child workflow")
+                .expect("child workflow should exist");
+            assert_eq!(child.status, expected_status);
+
+            let interrupted_events = store
+                .list_workflow_events(&parent_id)
+                .expect("failed to load parent events")
+                .into_iter()
+                .filter(|record| record.event_type == "sub_agent_interrupted")
+                .count();
+            assert_eq!(interrupted_events, 0);
+            let parent_messages = store
+                .get_workflow_snapshot(&parent_id)
+                .expect("failed to load parent snapshot")
+                .messages;
+            assert!(parent_messages.iter().all(|message| {
+                message.source_event_type.as_deref() != Some("sub_agent_interrupted")
+            }));
+        }
+    }
+
+    #[test]
+    fn reconcile_interrupted_child_replays_events_for_outdated_snapshot() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow("parent-outdated", "Parent task", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "subagent_outdated_snapshot",
+                "Child task",
+                "agent-test",
+                None,
+                Some("parent-outdated"),
+            )
+            .expect("failed to create child workflow");
+
+        let mut context = ExecutionContext::new("subagent_outdated_snapshot".to_string());
+        context.state = RuntimeState::Completed;
+        context.version = "0.0.1".to_string();
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist outdated child snapshot");
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_failed(
+                "subagent_outdated_snapshot".to_string(),
+                "terminal failure".to_string(),
+            ))
+            .expect("failed to append terminal child event");
+
+        reconcile_interrupted_child_workflows(&store).expect("failed to reconcile child workflows");
+
+        let child = store
+            .get_workflow("subagent_outdated_snapshot")
+            .expect("failed to load child workflow")
+            .expect("child workflow should exist");
+        assert_eq!(child.status, "error");
+        assert!(store
+            .list_workflow_events("parent-outdated")
+            .expect("failed to load parent events")
+            .iter()
+            .all(|event| event.event_type != "sub_agent_interrupted"));
+    }
+
+    #[test]
+    fn reconcile_interrupted_child_fails_safely_on_invalid_event_replay() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow("parent-invalid", "Parent task", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "subagent_invalid_replay",
+                "Child task",
+                "agent-test",
+                None,
+                Some("parent-invalid"),
+            )
+            .expect("failed to create child workflow");
+        store
+            .append_workflow_event(&WorkflowEvent::new(
+                crate::workflow::react::events::WorkflowEventType::StateChanged,
+                "subagent_invalid_replay".to_string(),
+                json!({}),
+            ))
+            .expect("failed to append malformed child event");
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_completed(
+                "subagent_invalid_replay".to_string(),
+                Some("done".to_string()),
+            ))
+            .expect("failed to append terminal child event");
+
+        let error = reconcile_interrupted_child_workflows(&store)
+            .expect_err("invalid event replay must fail safely");
+        assert!(error.to_string().contains("Cannot safely reconcile"));
+
+        let child = store
+            .get_workflow("subagent_invalid_replay")
+            .expect("failed to load child workflow")
+            .expect("child workflow should exist");
+        assert_eq!(child.status, "pending");
+        assert!(store
+            .list_workflow_events("parent-invalid")
+            .expect("failed to load parent events")
+            .iter()
+            .all(|event| event.event_type != "sub_agent_interrupted"));
+        let parent_messages = store
+            .get_workflow_snapshot("parent-invalid")
+            .expect("failed to load parent snapshot")
+            .messages;
+        assert!(parent_messages.iter().all(|message| {
+            message.source_event_type.as_deref() != Some("sub_agent_interrupted")
+        }));
+    }
+
+    #[test]
+    fn reconcile_interrupted_children_validate_all_before_writing() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        for parent_id in ["parent-stale-first", "parent-invalid-second"] {
+            store
+                .create_workflow(parent_id, "Parent task", "agent-test", None, None)
+                .expect("failed to create parent workflow");
+        }
+        store
+            .create_workflow(
+                "subagent_stale_first",
+                "Stale child",
+                "agent-test",
+                None,
+                Some("parent-stale-first"),
+            )
+            .expect("failed to create stale child workflow");
+        store
+            .create_workflow(
+                "subagent_invalid_second",
+                "Invalid child",
+                "agent-test",
+                None,
+                Some("parent-invalid-second"),
+            )
+            .expect("failed to create invalid child workflow");
+        store
+            .append_workflow_event(&WorkflowEvent::new(
+                crate::workflow::react::events::WorkflowEventType::StateChanged,
+                "subagent_invalid_second".to_string(),
+                json!({}),
+            ))
+            .expect("failed to append malformed child event");
+
+        let error = reconcile_interrupted_child_workflows(&store)
+            .expect_err("validation failure must abort before writes");
+        assert!(error.to_string().contains("Cannot safely reconcile"));
+
+        for child_id in ["subagent_stale_first", "subagent_invalid_second"] {
+            let child = store
+                .get_workflow(child_id)
+                .expect("failed to load child workflow")
+                .expect("child workflow should exist");
+            assert_eq!(child.status, "pending");
+            assert!(store
+                .get_execution_context(child_id)
+                .expect("failed to load child context")
+                .is_none());
+        }
+        for parent_id in ["parent-stale-first", "parent-invalid-second"] {
+            assert!(store
+                .list_workflow_events(parent_id)
+                .expect("failed to load parent events")
+                .iter()
+                .all(|event| event.event_type != "sub_agent_interrupted"));
+            let parent_messages = store
+                .get_workflow_snapshot(parent_id)
+                .expect("failed to load parent snapshot")
+                .messages;
+            assert!(parent_messages.iter().all(|message| {
+                message.source_event_type.as_deref() != Some("sub_agent_interrupted")
+            }));
+        }
     }
 
     #[test]
