@@ -1272,11 +1272,14 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
+        let sanitized_result = Self::completion_response_without_reasoning(result);
+        let sanitized_summary = Self::completion_response_without_reasoning(summary);
+
         Ok(Some(ReinforcedResult {
-            content: result.to_string(),
+            content: sanitized_result,
             llm_content: None,
             title: "Submit Result".to_string(),
-            summary: summary.to_string(),
+            summary: sanitized_summary,
             is_error: false,
             error_type: None,
             display_type: "text".to_string(),

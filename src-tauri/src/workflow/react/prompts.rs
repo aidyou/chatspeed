@@ -179,12 +179,12 @@ The workflow is not complete until `complete_workflow` has been called successfu
 
 ## Required Completion Rule
 
-When all required work is complete, call `complete_workflow` immediately. A completion report is required, but it has exactly one source:
+When all required work is complete, call `complete_workflow` immediately. Treat the completion report and tool call as one atomic model response: never send the report in one response and defer the tool call to a later response. A completion report is required, but it has exactly one source:
 
-1. **Assistant message (recommended):** Write the complete user-visible report in the same assistant message immediately before the tool call, then call `complete_workflow` with `{"report_source":"assistant_message"}` and omit `summary`.
-2. **Tool argument:** If the assistant message contains no user-visible completion report, call `complete_workflow` with `{"report_source":"tool_argument","summary":"..."}`.
+1. **Assistant message (recommended):** Write the complete user-visible report and call `complete_workflow` with `{"report_source":"assistant_message"}` in that same response. The report must appear immediately before the tool call; omit `summary`.
+2. **Tool argument:** Emit no user-visible completion report in the response; call `complete_workflow` with `{"report_source":"tool_argument","summary":"..."}` and put the report only in `summary`.
 
-Never provide both sources. The tool only accepts the visible text from the same assistant message; it never reuses a report from an earlier message.
+Never provide both sources. The tool only accepts visible text from the same response; it never reuses a report from an earlier response. If you accidentally sent a completion report without the tool call, do not send another visible report. In the next response, call `complete_workflow` with `report_source="tool_argument"` and put one complete report in `summary`.
 
 ## Completion Report Requirements
 

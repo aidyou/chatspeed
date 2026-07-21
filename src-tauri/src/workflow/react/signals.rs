@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::OnceLock;
 
 use serde_json::Value;
@@ -153,23 +153,62 @@ fn stashed_user_messages() -> &'static dashmap::DashMap<
     STASHED.get_or_init(dashmap::DashMap::new)
 }
 
+fn removed_stashed_user_message_ids() -> &'static dashmap::DashMap<String, HashSet<String>> {
+    static REMOVED: OnceLock<dashmap::DashMap<String, HashSet<String>>> = OnceLock::new();
+    REMOVED.get_or_init(dashmap::DashMap::new)
+}
+
 fn stashed_runtime_signals() -> &'static dashmap::DashMap<String, VecDeque<String>> {
     static STASHED: OnceLock<dashmap::DashMap<String, VecDeque<String>>> = OnceLock::new();
     STASHED.get_or_init(dashmap::DashMap::new)
 }
 
 /// Stores a user message that was observed in a temporary signal consumer (e.g. retry backoff).
+/// Returns whether this was a new queued ID for the session.
 pub fn stash_user_message(
     session_id: &str,
     queued_id: String,
     content: String,
     attached_context: Option<String>,
     metadata: Option<serde_json::Value>,
-) {
+) -> bool {
+    if removed_stashed_user_message_ids()
+        .get(session_id)
+        .is_some_and(|removed_ids| removed_ids.contains(&queued_id))
+    {
+        return false;
+    }
+
     let mut entry = stashed_user_messages()
         .entry(session_id.to_string())
         .or_default();
+    if entry.iter().any(|(id, _, _, _)| id == &queued_id) {
+        return false;
+    }
     entry.push_back((queued_id, content, attached_context, metadata));
+    true
+}
+
+/// Restores durable queue-removal tombstones before retry signal consumers become active.
+pub fn restore_stashed_user_message_tombstones(session_id: &str, queued_ids: &[String]) {
+    let mut removed_ids = removed_stashed_user_message_ids()
+        .entry(session_id.to_string())
+        .or_default();
+    removed_ids.extend(queued_ids.iter().cloned());
+}
+
+/// Removes a user message captured by a temporary signal consumer.
+pub fn remove_stashed_user_message(session_id: &str, queued_id: &str) -> bool {
+    removed_stashed_user_message_ids()
+        .entry(session_id.to_string())
+        .or_default()
+        .insert(queued_id.to_string());
+    let Some(mut entry) = stashed_user_messages().get_mut(session_id) else {
+        return false;
+    };
+    let before = entry.len();
+    entry.retain(|(id, _, _, _)| id != queued_id);
+    before != entry.len()
 }
 
 /// Stores a runtime signal that must be handled by the workflow engine loop.
@@ -204,4 +243,57 @@ pub fn take_stashed_runtime_signals(session_id: &str) -> Vec<String> {
         return drained;
     }
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        remove_stashed_user_message, restore_stashed_user_message_tombstones, stash_user_message,
+        take_stashed_user_messages,
+    };
+
+    #[test]
+    fn stashed_user_messages_are_deduplicated_and_removable() {
+        let session_id = "stashed-user-message-test";
+        let queued_id = "queue-1".to_string();
+        assert!(stash_user_message(
+            session_id,
+            queued_id.clone(),
+            "first delivery".to_string(),
+            None,
+            None,
+        ));
+        assert!(!stash_user_message(
+            session_id,
+            queued_id.clone(),
+            "duplicate delivery".to_string(),
+            None,
+            None,
+        ));
+        assert!(remove_stashed_user_message(session_id, &queued_id));
+        assert!(!stash_user_message(
+            session_id,
+            queued_id,
+            "redelivered after removal".to_string(),
+            None,
+            None,
+        ));
+        assert!(take_stashed_user_messages(session_id).is_empty());
+    }
+
+    #[test]
+    fn restored_tombstone_rejects_retry_redelivery() {
+        let session_id = "restored-stashed-user-message-test";
+        let queued_id = "queue-restored".to_string();
+        restore_stashed_user_message_tombstones(session_id, std::slice::from_ref(&queued_id));
+
+        assert!(!stash_user_message(
+            session_id,
+            queued_id,
+            "redelivered after executor rebuild".to_string(),
+            None,
+            None,
+        ));
+        assert!(take_stashed_user_messages(session_id).is_empty());
+    }
 }

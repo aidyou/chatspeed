@@ -226,6 +226,7 @@ fn persist_sub_agent_completion(
             sub_agent_sessions: vec![completion.sub_agent_id.clone()],
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
+            removed_queued_user_message_ids: Vec::new(),
         });
 
     context
@@ -2061,6 +2062,7 @@ mod tests {
                         consumed: false,
                     }],
                     pending_final_review: None,
+                    removed_queued_user_message_ids: Vec::new(),
                 })
                 .expect("failed to upsert execution context");
         }
@@ -2215,6 +2217,7 @@ mod tests {
                         consumed: false,
                     }],
                     pending_final_review: None,
+                    removed_queued_user_message_ids: Vec::new(),
                 })
                 .expect("failed to upsert execution context");
         }

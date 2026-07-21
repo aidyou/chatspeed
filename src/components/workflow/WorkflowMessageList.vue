@@ -368,6 +368,7 @@
                       <span>Delegated Task</span>
                     </div>
                     <div class="sub-agent-card__status" :class="subAgentStatusClass(message)">
+                      <cs name="loading" class="cs-spin" v-if="subagentIsRunning(message)" />
                       {{ getSubAgentStatusLabel(message) }}
                     </div>
                   </div>
@@ -2307,6 +2308,10 @@ const getSubAgentStatusLabel = message => {
   if (status === 'failed') return 'Failed'
   if (status === 'cancelled' || status === 'interrupted') return 'Stopped'
   return 'Running'
+}
+
+const subagentIsRunning=(message)=>{
+  return String(message?.subAgentCard?.status || '').toLowerCase() === 'running';
 }
 
 const getSubAgentLiveContext = message => {

@@ -69,9 +69,11 @@ impl LlmProcessor {
             .unwrap_or_else(|| "null".to_string())
     }
 
-    fn drain_stop_signal_for_retry_boundary(
+    async fn drain_stop_signal_for_retry_boundary(
         session_id: &str,
         signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        gateway: &Arc<dyn Gateway>,
+        current_step: usize,
     ) -> bool {
         let mut should_stop = false;
         while let Ok(signal) = signal_rx.try_recv() {
@@ -91,7 +93,45 @@ impl LlmProcessor {
                 } => {
                     let queued_id = queued_user_message_id
                         .unwrap_or_else(|| format!("queued_{}", crate::ccproxy::get_tool_id()));
-                    stash_user_message(session_id, queued_id, content, attached_context, metadata);
+                    let is_new = stash_user_message(
+                        session_id,
+                        queued_id.clone(),
+                        content.clone(),
+                        attached_context,
+                        metadata.clone(),
+                    );
+                    if !is_new {
+                        continue;
+                    }
+                    let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
+                    if !ui_metadata.is_object() {
+                        ui_metadata = serde_json::json!({});
+                    }
+                    ui_metadata["queued_user_message_id"] = serde_json::json!(queued_id);
+                    ui_metadata["queue_status"] = serde_json::json!("queued");
+                    if let Err(error) = gateway
+                        .send(
+                            session_id,
+                            GatewayPayload::Message {
+                                message_id: None,
+                                role: "user".to_string(),
+                                content,
+                                reasoning: None,
+                                step_type: None,
+                                step_index: current_step as i32,
+                                is_error: false,
+                                error_type: None,
+                                metadata: Some(ui_metadata),
+                            },
+                        )
+                        .await
+                    {
+                        log::warn!(
+                            "WorkflowExecutor {}: Failed to acknowledge queued retry message: {}",
+                            session_id,
+                            error
+                        );
+                    }
                 }
                 RuntimeSignal::Other { .. } => stash_runtime_signal(session_id, signal),
             }
@@ -469,7 +509,14 @@ impl LlmProcessor {
                         && tool_calls_json.trim().is_empty()
                         && !has_invalid_tool_call
                     {
-                        if Self::drain_stop_signal_for_retry_boundary(&self.session_id, signal_rx) {
+                        if Self::drain_stop_signal_for_retry_boundary(
+                            &self.session_id,
+                            signal_rx,
+                            &gateway,
+                            current_step,
+                        )
+                        .await
+                        {
                             return Err(WorkflowEngineError::Cancelled(
                                 "Stopped before empty-response retry notification".into(),
                             ));
@@ -547,13 +594,16 @@ impl LlmProcessor {
                                                 let queued_id = queued_user_message_id.unwrap_or_else(|| {
                                                     format!("queued_{}", crate::ccproxy::get_tool_id())
                                                 });
-                                                stash_user_message(
+                                                let is_new = stash_user_message(
                                                     &self.session_id,
                                                     queued_id.clone(),
                                                     content.clone(),
                                                     attached_context,
                                                     metadata.clone(),
                                                 );
+                                                if !is_new {
+                                                    continue;
+                                                }
                                                 let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
                                                 if !ui_metadata.is_object() {
                                                     ui_metadata = serde_json::json!({});
@@ -601,7 +651,14 @@ impl LlmProcessor {
                     return Ok((plain_text, tool_calls_json, full_reasoning, final_metadata));
                 }
                 Err(e) => {
-                    if Self::drain_stop_signal_for_retry_boundary(&self.session_id, signal_rx) {
+                    if Self::drain_stop_signal_for_retry_boundary(
+                        &self.session_id,
+                        signal_rx,
+                        &gateway,
+                        current_step,
+                    )
+                    .await
+                    {
                         return Err(WorkflowEngineError::Cancelled(
                             "Stopped before LLM error retry notification".into(),
                         ));
@@ -669,13 +726,16 @@ impl LlmProcessor {
                                             let queued_id = queued_user_message_id.unwrap_or_else(|| {
                                                 format!("queued_{}", crate::ccproxy::get_tool_id())
                                             });
-                                            stash_user_message(
+                                            let is_new = stash_user_message(
                                                 &self.session_id,
                                                 queued_id.clone(),
                                                 content.clone(),
                                                 attached_context,
                                                 metadata.clone(),
                                             );
+                                            if !is_new {
+                                                continue;
+                                            }
                                             let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
                                             if !ui_metadata.is_object() {
                                                 ui_metadata = serde_json::json!({});
@@ -1375,9 +1435,9 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
         }
         "NoToolCall" => {
             if tool_name == crate::tools::TOOL_SUBMIT_RESULT {
-                "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Brief reasoning-only turns are allowed, but you should soon choose a concrete tool action. If the delegated task is finished, call 'submit_result' with both `result` and `summary`.</SYSTEM_REMINDER>".to_string()
+                "<SYSTEM_REMINDER>This delegated workflow requires a concrete tool action. If the text you just sent was intended as the final result, do not repeat it visibly; call `submit_result` in the next response with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
             } else {
-                "<SYSTEM_REMINDER>This workflow is action-oriented. Brief reasoning-only turns are allowed, but you should soon choose a concrete tool action that advances the task. If the task is finished, call 'complete_workflow' using exactly one completion-report source.</SYSTEM_REMINDER>".to_string()
+                "<SYSTEM_REMINDER>This workflow requires a concrete tool action. If the text you just sent was intended as the completion report, do not repeat it visibly; call `complete_workflow` in the next response with `report_source=\"tool_argument\"` and put one complete report in `summary`.</SYSTEM_REMINDER>".to_string()
             }
         }
         "Timeout" => {

@@ -40,8 +40,8 @@ use crate::workflow::react::{
     },
     security::PathGuard,
     signals::{
-        parse_runtime_signal, take_stashed_runtime_signals, take_stashed_user_messages,
-        RuntimeSignal, SignalType,
+        parse_runtime_signal, remove_stashed_user_message, restore_stashed_user_message_tombstones,
+        take_stashed_runtime_signals, take_stashed_user_messages, RuntimeSignal, SignalType,
     },
     sinks::{DBSink, Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
@@ -136,6 +136,10 @@ pub struct WorkflowExecutor {
     pub dispatcher: Option<Arc<Dispatcher>>,
     /// Buffered user messages received during non-waiting execution stages.
     pub queued_user_messages: VecDeque<(String, String, Option<String>, Option<serde_json::Value>)>,
+    /// Queued message IDs already persisted in this executor lifetime.
+    pub applied_queued_user_message_ids: HashSet<String>,
+    /// Queue IDs explicitly removed by the user and therefore never eligible for re-enqueue.
+    pub removed_queued_user_message_ids: HashSet<String>,
     /// Phase 7: ID of sub-agent this session is waiting for (Call model)
     pub sub_agent_id: Option<String>,
     /// Phase 7: All sub-agent session IDs created by this parent session.
@@ -1068,6 +1072,8 @@ impl WorkflowExecutor {
             recovery_error: None,
             dispatcher: None,
             queued_user_messages: VecDeque::new(),
+            applied_queued_user_message_ids: HashSet::new(),
+            removed_queued_user_message_ids: HashSet::new(),
             sub_agent_id: None,
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
@@ -1311,6 +1317,15 @@ impl WorkflowExecutor {
                 self.sub_agent_sessions = context.sub_agent_sessions.clone();
                 self.pending_sub_agent_completions = context.pending_sub_agent_completions.clone();
                 self.pending_final_review = context.pending_final_review.clone();
+                self.removed_queued_user_message_ids = context
+                    .removed_queued_user_message_ids
+                    .iter()
+                    .cloned()
+                    .collect();
+                restore_stashed_user_message_tombstones(
+                    &self.session_id,
+                    &context.removed_queued_user_message_ids,
+                );
             }
         }
 
@@ -1362,6 +1377,15 @@ impl WorkflowExecutor {
                         self.pending_sub_agent_completions =
                             context.pending_sub_agent_completions.clone();
                         self.pending_final_review = context.pending_final_review.clone();
+                        self.removed_queued_user_message_ids = context
+                            .removed_queued_user_message_ids
+                            .iter()
+                            .cloned()
+                            .collect();
+                        restore_stashed_user_message_tombstones(
+                            &self.session_id,
+                            &context.removed_queued_user_message_ids,
+                        );
 
                         if self.state == WorkflowState::AwaitingApproval
                             && context.pending_tools.is_empty()
@@ -3865,30 +3889,34 @@ impl WorkflowExecutor {
                         ))
                     } else if self.consecutive_no_tool_calls >= NO_TOOL_STRONG_REMINDER_THRESHOLD {
                         let remaining = self.max_steps.saturating_sub(self.current_step);
-                        let finish_tool = if self.is_child_agent_workflow() {
-                            "submit_result"
+                        Some(if self.is_child_agent_workflow() {
+                            format!(
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. Do not repeat or rewrite a visible final result. Call `submit_result` now with the full result and summary in its arguments. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
+                                self.consecutive_no_tool_calls,
+                                self.current_step,
+                                self.max_steps,
+                                remaining
+                            )
                         } else {
-                            "complete_workflow"
-                        };
-                        Some(format!(
-                            "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. This workflow should now converge on a concrete next step. Convert your analysis into the smallest useful tool action, or if the task is already complete, call '{}' with a complete summary. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
-                            self.consecutive_no_tool_calls,
-                            finish_tool,
-                            self.current_step,
-                            self.max_steps,
-                            remaining
-                        ))
+                            format!(
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. Do not repeat or rewrite a visible completion report. Call `complete_workflow` now with `report_source=\"tool_argument\"` and put one complete report in `summary`. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
+                                self.consecutive_no_tool_calls,
+                                self.current_step,
+                                self.max_steps,
+                                remaining
+                            )
+                        })
                     } else if self.consecutive_no_tool_calls >= NO_TOOL_MEDIUM_REMINDER_THRESHOLD {
                         Some(if self.is_child_agent_workflow() {
-                            "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Brief reasoning-only turns are allowed, but they should now resolve into one concrete tool action. Choose the smallest useful next tool, or call 'submit_result' if the delegated task is complete.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Choose one concrete tool action now. If your previous response was intended as the final result, do not repeat it as visible text; call `submit_result` now with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>This workflow is action-oriented. Brief reasoning-only turns are allowed, but they should now resolve into one concrete tool action. Choose the smallest useful next tool, or call 'complete_workflow' if the task is complete.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>This workflow is action-oriented. Choose one concrete tool action now. If your previous response was intended as the completion report, do not repeat it as visible text; call `complete_workflow` now with `report_source=\"tool_argument\"` and put one complete report in `summary`.</SYSTEM_REMINDER>".to_string()
                         })
                     } else {
                         Some(if self.is_child_agent_workflow() {
-                            "<SYSTEM_REMINDER>This delegated workflow advances through tool-mediated observations. If your analysis is sufficient, choose one concrete next tool now. If the delegated task is already complete, call 'submit_result'.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>This delegated workflow advances through tool-mediated observations. Choose one concrete tool action now. If the text you just sent was intended as the final result, do not send another visible result; call `submit_result` in the next response with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. If your analysis is sufficient, choose one concrete next tool now. If the task is already complete, call 'complete_workflow'.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. Choose one concrete tool action now. If the text you just sent was intended as the completion report, do not send another visible report; call `complete_workflow` in the next response with `report_source=\"tool_argument\"` and put one complete report in `summary`.</SYSTEM_REMINDER>".to_string()
                         })
                     };
 
@@ -4057,7 +4085,14 @@ impl WorkflowExecutor {
         let Some(target) = target.as_object_mut() else {
             return call;
         };
-        if target.get("name").and_then(|value| value.as_str()) != Some(TOOL_COMPLETE_WORKFLOW) {
+        let Some(tool_name) = target
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+        else {
+            return call;
+        };
+        if !Self::is_terminal_completion_tool(&tool_name) {
             return call;
         }
 
@@ -4067,18 +4102,28 @@ impl WorkflowExecutor {
             };
             let is_string = raw_arguments.is_string();
             let mut normalized = Self::normalize_tool_arguments_value(raw_arguments);
-            if normalized
+            if tool_name == TOOL_SUBMIT_RESULT {
+                for field in ["result", "summary"] {
+                    let Some(value) = normalized.get(field).and_then(|value| value.as_str()) else {
+                        continue;
+                    };
+                    normalized[field] =
+                        serde_json::json!(Self::completion_response_without_reasoning(value));
+                }
+            } else if normalized
                 .get("report_source")
                 .and_then(|value| value.as_str())
-                != Some("tool_argument")
+                == Some("tool_argument")
             {
+                let Some(summary) = normalized.get("summary").and_then(|value| value.as_str())
+                else {
+                    continue;
+                };
+                normalized["summary"] =
+                    serde_json::json!(Self::completion_response_without_reasoning(summary));
+            } else {
                 continue;
             }
-            let Some(summary) = normalized.get("summary").and_then(|value| value.as_str()) else {
-                continue;
-            };
-            normalized["summary"] =
-                serde_json::json!(Self::completion_response_without_reasoning(summary));
             let sanitized = if is_string {
                 serde_json::to_string(&normalized)
                     .map(serde_json::Value::String)
@@ -4090,6 +4135,10 @@ impl WorkflowExecutor {
         }
 
         call
+    }
+
+    fn is_terminal_completion_tool(tool_name: &str) -> bool {
+        matches!(tool_name, TOOL_COMPLETE_WORKFLOW | TOOL_SUBMIT_RESULT)
     }
 
     fn response_calls_completion_tool(tool_calls_json: &str) -> bool {
@@ -4118,11 +4167,11 @@ impl WorkflowExecutor {
                 .unwrap_or(call)
                 .get("name")
                 .and_then(|value| value.as_str())
-                == Some(TOOL_COMPLETE_WORKFLOW)
+                .is_some_and(Self::is_terminal_completion_tool)
         })
     }
 
-    fn completion_response_without_reasoning(response: &str) -> String {
+    pub(crate) fn completion_response_without_reasoning(response: &str) -> String {
         match regex::Regex::new(
             r"(?is)<think>.*?</think>|<thought>.*?</thought>|<(?:think|thought)>.*\z",
         ) {
@@ -5429,6 +5478,21 @@ impl WorkflowExecutor {
             new_state
         );
 
+        // Persist the authoritative workflow status before mutating in-memory state or publishing
+        // events. The frontend refreshes the workflow list as soon as it receives a terminal
+        // state; publishing first can let that refresh restore the previous running status. A
+        // failed write must leave the transition unapplied and invisible to all observers.
+        {
+            let store = self
+                .context
+                .main_store
+                .read()
+                .map_err(|error| WorkflowEngineError::General(error.to_string()))?;
+            store
+                .update_workflow_status(&self.session_id, &new_state.to_string())
+                .map_err(WorkflowEngineError::Db)?;
+        }
+
         // Write StateChanged event if state actually changed
         if old_state != new_state {
             let event = WorkflowEvent::state_changed(
@@ -5536,17 +5600,6 @@ impl WorkflowExecutor {
         })
         .await?;
         self.dispatch_sub_agent_progress().await;
-
-        {
-            let store_res = self
-                .context
-                .main_store
-                .read()
-                .map_err(|e| WorkflowEngineError::General(e.to_string()));
-            if let Ok(store) = store_res {
-                let _ = store.update_workflow_status(&self.session_id, &new_state.to_string());
-            }
-        }
 
         // Save snapshot on waiting/terminal states
         if matches!(
@@ -6448,12 +6501,13 @@ impl WorkflowExecutor {
             }
         }
 
-        // Also drain user messages stashed by temporary signal consumers (e.g. LLM retry backoff).
+        // Also drain user messages stashed by temporary signal consumers (e.g. LLM retry backoff)
+        // through the canonical queue entrypoint so duplicate IDs remain idempotent.
         for (queued_id, content, attached_context, metadata) in
             take_stashed_user_messages(&self.session_id)
         {
-            self.queued_user_messages
-                .push_back((queued_id, content, attached_context, metadata));
+            self.enqueue_user_message(content, attached_context, metadata, Some(queued_id))
+                .await?;
         }
 
         Ok(false)
@@ -6516,6 +6570,29 @@ impl WorkflowExecutor {
         .await
     }
 
+    fn queued_user_message_was_persisted(
+        &self,
+        queued_user_message_id: &str,
+    ) -> Result<bool, WorkflowEngineError> {
+        let store = self
+            .context
+            .main_store
+            .read()
+            .map_err(|error| WorkflowEngineError::General(error.to_string()))?;
+        let snapshot = store
+            .get_workflow_snapshot(&self.session_id)
+            .map_err(WorkflowEngineError::Db)?;
+        Ok(snapshot.messages.iter().any(|message| {
+            message.role == "user"
+                && message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("queued_user_message_id"))
+                    .and_then(|value| value.as_str())
+                    == Some(queued_user_message_id)
+        }))
+    }
+
     async fn enqueue_user_message(
         &mut self,
         content: String,
@@ -6528,6 +6605,31 @@ impl WorkflowExecutor {
                 .generate()
                 .unwrap_or_else(|_| format!("queued_{}", crate::ccproxy::get_tool_id()))
         });
+
+        let already_queued = self
+            .queued_user_messages
+            .iter()
+            .any(|(existing_id, _, _, _)| existing_id == &queued_id);
+        let already_persisted = self.applied_queued_user_message_ids.contains(&queued_id)
+            || self.queued_user_message_was_persisted(&queued_id)?;
+        if self.removed_queued_user_message_ids.contains(&queued_id) || already_persisted {
+            self.applied_queued_user_message_ids
+                .insert(queued_id.clone());
+            log::info!(
+                "[Workflow][session={}][phase=queue] Ignoring duplicate queued user message queued_id={}",
+                self.session_id,
+                queued_id
+            );
+            return Ok(());
+        }
+        if already_queued {
+            log::info!(
+                "[Workflow][session={}][phase=queue] Ignoring duplicate in-memory queued user message queued_id={}",
+                self.session_id,
+                queued_id
+            );
+            return Ok(());
+        }
 
         self.queued_user_messages.push_back((
             queued_id.clone(),
@@ -6564,10 +6666,15 @@ impl WorkflowExecutor {
         &mut self,
         queued_user_message_id: &str,
     ) -> Result<bool, WorkflowEngineError> {
+        self.removed_queued_user_message_ids
+            .insert(queued_user_message_id.to_string());
+        self.save_snapshot().await?;
         let before = self.queued_user_messages.len();
         self.queued_user_messages
             .retain(|(queued_id, _, _, _)| queued_id != queued_user_message_id);
-        let removed = self.queued_user_messages.len() != before;
+        let removed_from_stash =
+            remove_stashed_user_message(&self.session_id, queued_user_message_id);
+        let removed = self.queued_user_messages.len() != before || removed_from_stash;
 
         if removed {
             self.dispatch_ui_payload(GatewayPayload::QueuedUserMessageRemoved {
@@ -6604,6 +6711,15 @@ impl WorkflowExecutor {
         while let Some((queued_id, user_content, attached_context, metadata)) =
             self.queued_user_messages.pop_front()
         {
+            if self.applied_queued_user_message_ids.contains(&queued_id) {
+                log::info!(
+                    "[Workflow][session={}][phase=queue] Skipping already-applied queued user message queued_id={}",
+                    self.session_id,
+                    queued_id
+                );
+                continue;
+            }
+
             let mut persisted_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
             if !persisted_metadata.is_object() {
                 persisted_metadata = serde_json::json!({});
@@ -6622,6 +6738,8 @@ impl WorkflowExecutor {
                 Some(persisted_metadata),
             )
             .await?;
+            self.applied_queued_user_message_ids
+                .insert(queued_id.clone());
             let event = WorkflowEvent::user_input_received(self.session_id.clone(), user_content);
             if let Err(e) = self.append_event(&event) {
                 log::error!(
@@ -6780,6 +6898,11 @@ impl WorkflowExecutor {
             sub_agent_sessions: self.sub_agent_sessions.clone(),
             pending_sub_agent_completions: self.pending_sub_agent_completions.clone(),
             pending_final_review: self.pending_final_review.clone(),
+            removed_queued_user_message_ids: self
+                .removed_queued_user_message_ids
+                .iter()
+                .cloned()
+                .collect(),
         }
     }
 
@@ -6859,15 +6982,365 @@ impl Drop for WorkflowExecutor {
 mod recovery_tests {
     use super::*;
     use crate::db::MainStore;
+    use crate::libs::window_channels::WindowChannels;
     use crate::workflow::react::replay::{RecoveryError, RecoveryResult};
-    use std::sync::Arc;
     use tempfile::tempdir;
+    use tokio::sync::{mpsc, Mutex};
+
+    struct TerminalStatusGateway {
+        store: Arc<std::sync::RwLock<MainStore>>,
+        observed_status_tx: mpsc::UnboundedSender<String>,
+    }
+
+    #[async_trait]
+    impl Gateway for TerminalStatusGateway {
+        async fn send(
+            &self,
+            session_id: &str,
+            payload: GatewayPayload,
+        ) -> Result<(), WorkflowEngineError> {
+            if matches!(
+                payload,
+                GatewayPayload::State {
+                    state: WorkflowState::Completed,
+                    ..
+                }
+            ) {
+                let status = self
+                    .store
+                    .read()
+                    .map_err(|error| WorkflowEngineError::General(error.to_string()))?
+                    .get_workflow(session_id)
+                    .map_err(WorkflowEngineError::Db)?
+                    .map(|workflow| workflow.status)
+                    .unwrap_or_default();
+                let _ = self.observed_status_tx.send(status);
+            }
+            Ok(())
+        }
+
+        async fn inject_input(
+            &self,
+            _session_id: &str,
+            _input: String,
+        ) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+    }
+
+    struct UnusedSubAgentFactory;
+
+    #[async_trait]
+    impl SubAgentFactory for UnusedSubAgentFactory {
+        async fn create_executor(
+            &self,
+            _agent_id: &str,
+            _session_id: &str,
+            _task: &str,
+            _subagent_type: &str,
+            _parent_session_id: Option<&str>,
+        ) -> Result<Arc<Mutex<dyn ReActExecutor>>, WorkflowEngineError> {
+            Err(WorkflowEngineError::General(
+                "sub-agent creation is not used in this test".to_string(),
+            ))
+        }
+    }
 
     fn create_test_store() -> Arc<std::sync::RwLock<MainStore>> {
         let dir = tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
         Arc::new(std::sync::RwLock::new(store))
+    }
+
+    #[tokio::test]
+    async fn queued_user_message_is_persisted_once_before_completion() {
+        let store = create_test_store();
+        let session_id = "queued-user-message-once";
+        let agent = Agent::new(
+            "queued-user-message-agent".to_string(),
+            "Queued User Message Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .add_agent(&agent)
+                .expect("failed to add test agent");
+            store_guard
+                .create_workflow(session_id, "test", &agent.id, None, None)
+                .expect("failed to create test workflow");
+        }
+
+        let (observed_status_tx, _observed_status_rx) = mpsc::unbounded_channel();
+        let gateway: Arc<dyn Gateway> = Arc::new(TerminalStatusGateway {
+            store: store.clone(),
+            observed_status_tx,
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(11).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Executing;
+
+        executor
+            .enqueue_user_message(
+                "queued once".to_string(),
+                None,
+                None,
+                Some("queued-message-1".to_string()),
+            )
+            .await
+            .expect("message should be queued");
+        executor
+            .enqueue_user_message(
+                "duplicate delivery".to_string(),
+                None,
+                None,
+                Some("queued-message-1".to_string()),
+            )
+            .await
+            .expect("duplicate message should be ignored");
+        assert_eq!(executor.queued_user_messages.len(), 1);
+        assert!(executor
+            .flush_queued_user_messages()
+            .await
+            .expect("queued message should flush"));
+
+        executor
+            .update_state(WorkflowState::Completed)
+            .await
+            .expect("completion should succeed");
+        assert!(!executor
+            .flush_queued_user_messages()
+            .await
+            .expect("empty queue should not flush again"));
+
+        let snapshot = store
+            .read()
+            .expect("store lock")
+            .get_workflow_snapshot(session_id)
+            .expect("failed to read workflow snapshot");
+        let queued_messages = snapshot
+            .messages
+            .iter()
+            .filter(|message| {
+                message.role == "user"
+                    && message
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("queued_user_message_id"))
+                        .and_then(|value| value.as_str())
+                        == Some("queued-message-1")
+            })
+            .count();
+        assert_eq!(queued_messages, 1);
+    }
+
+    #[tokio::test]
+    async fn terminal_state_is_persisted_before_completed_state_is_published() {
+        let store = create_test_store();
+        let session_id = "terminal-status-order";
+        let agent = Agent::new(
+            "terminal-status-agent".to_string(),
+            "Terminal Status Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .add_agent(&agent)
+                .expect("failed to add test agent");
+            store_guard
+                .create_workflow(session_id, "test", &agent.id, None, None)
+                .expect("failed to create test workflow");
+        }
+
+        let (observed_status_tx, mut observed_status_rx) = mpsc::unbounded_channel();
+        let gateway: Arc<dyn Gateway> = Arc::new(TerminalStatusGateway {
+            store: store.clone(),
+            observed_status_tx,
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store,
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(9).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        // Exercise the direct gateway/DB fallback path so the assertion observes the exact
+        // update_state publication boundary without dispatcher scheduling noise.
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Executing;
+
+        executor
+            .update_state(WorkflowState::Completed)
+            .await
+            .expect("completed transition should succeed");
+
+        let observed_status =
+            tokio::time::timeout(Duration::from_secs(2), observed_status_rx.recv())
+                .await
+                .expect("completed state should reach gateway")
+                .expect("gateway should report persisted status");
+        assert_eq!(observed_status, "completed");
+    }
+
+    #[tokio::test]
+    async fn terminal_state_is_not_published_when_status_persistence_fails() {
+        let store = create_test_store();
+        let session_id = "terminal-status-write-failure";
+        let agent = Agent::new(
+            "terminal-status-failure-agent".to_string(),
+            "Terminal Status Failure Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .add_agent(&agent)
+                .expect("failed to add test agent");
+            store_guard
+                .create_workflow(session_id, "test", &agent.id, None, None)
+                .expect("failed to create test workflow");
+        }
+
+        let (observed_status_tx, mut observed_status_rx) = mpsc::unbounded_channel();
+        let gateway: Arc<dyn Gateway> = Arc::new(TerminalStatusGateway {
+            store: store.clone(),
+            observed_status_tx,
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(10).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Executing;
+
+        {
+            let store_guard = store.read().expect("store lock");
+            let conn = store_guard.conn.lock().expect("database lock");
+            conn.execute_batch(
+                "CREATE TRIGGER fail_terminal_status_update
+                 BEFORE UPDATE OF status ON workflows
+                 WHEN NEW.id = 'terminal-status-write-failure'
+                 BEGIN
+                     SELECT RAISE(FAIL, 'injected status persistence failure');
+                 END;",
+            )
+            .expect("failed to install status failure trigger");
+        }
+
+        let result = executor.update_state(WorkflowState::Completed).await;
+
+        assert!(result.is_err());
+        assert_eq!(executor.state, WorkflowState::Executing);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), observed_status_rx.recv())
+                .await
+                .is_err(),
+            "completed state must not be published after persistence failure"
+        );
+        let events = store
+            .read()
+            .expect("store lock")
+            .list_workflow_events(session_id)
+            .expect("failed to read workflow events");
+        assert!(
+            events.is_empty(),
+            "failed transition must not emit state events"
+        );
     }
 
     #[test]
@@ -7114,6 +7587,9 @@ mod recovery_tests {
         assert!(WorkflowExecutor::response_calls_completion_tool(
             r#"{"tool_calls":[{"function":{"name":"complete_workflow","arguments":"{\"report_source\":\"assistant_message\"}"}}]}"#
         ));
+        assert!(WorkflowExecutor::response_calls_completion_tool(
+            r#"{"tool_calls":[{"function":{"name":"submit_result","arguments":"{}"}}]}"#
+        ));
         assert!(!WorkflowExecutor::response_calls_completion_tool(
             r#"{"tool_calls":[{"function":{"name":"read_file","arguments":"{}"}}]}"#
         ));
@@ -7135,6 +7611,25 @@ mod recovery_tests {
             .expect("sanitized arguments should remain a JSON string");
         assert!(!arguments.contains("Internal reasoning"));
         assert!(arguments.contains("Completed the requested change."));
+    }
+
+    #[test]
+    fn test_submit_result_metadata_removes_reasoning_from_result_and_summary() {
+        let calls = vec![serde_json::json!({
+            "id": "submit_result_1",
+            "function": {
+                "name": "submit_result",
+                "arguments": "{\"result\":\"<THINK>Internal result reasoning.</THINK>\\nChild task completed.\",\"summary\":\"<ThOuGhT>Internal summary reasoning.\"}"
+            }
+        })];
+
+        let sanitized = WorkflowExecutor::sanitize_completion_tool_calls_for_storage(calls);
+        let arguments = sanitized[0]["function"]["arguments"]
+            .as_str()
+            .expect("sanitized arguments should remain a JSON string");
+        assert!(!arguments.contains("Internal result reasoning"));
+        assert!(!arguments.contains("Internal summary reasoning"));
+        assert!(arguments.contains("Child task completed."));
     }
 
     #[test]

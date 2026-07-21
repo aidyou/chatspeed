@@ -45,6 +45,7 @@ locale_config    = "0.3.0"
 log              = "0.4.29"
 lru              = "0.18.0"
 memchr           = "2.8.0"
+md5              = "0.7"
 parking_lot      = "0.12.5"
 phf              = { version = "0.13.1", features = ["macros"] }
 regex            = "1.12.3"

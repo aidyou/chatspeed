@@ -831,6 +831,13 @@ pub async fn run() -> crate::error::Result<()> {
                 }
             });
 
+            // Search schemas are consumed by scraper commands, so replace them before exposing
+            // either application window to the frontend.
+            scraper::ensure_default_configs_exist(&app.handle())
+                .map_err(|error| AppError::General {
+                    message: format!("Failed to synchronize scraper schemas: {error}"),
+                })?;
+
             // IMPORTANT: Manual window creation sequence.
             // This is critical for Windows compatibility to resolve race conditions where the frontend
             // process might launch and invoke commands before the backend's `setup` hook has finished
@@ -859,9 +866,6 @@ pub async fn run() -> crate::error::Result<()> {
             window::setup_window_creation_handlers(app_handle_clone.clone());
 
             WINDOW_READY.store(true, Ordering::SeqCst);
-
-            // copy scrape resource
-            let _ = scraper::ensure_default_configs_exist(&app_handle_clone);
 
             Ok(())
         })

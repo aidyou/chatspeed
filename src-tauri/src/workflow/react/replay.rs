@@ -370,6 +370,7 @@ impl EventReducer {
             sub_agent_sessions: self.sub_agent_sessions,
             pending_sub_agent_completions: self.pending_sub_agent_completions,
             pending_final_review: self.pending_final_review,
+            removed_queued_user_message_ids: Vec::new(),
         }
     }
 }

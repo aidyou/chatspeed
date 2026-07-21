@@ -16,6 +16,29 @@ use zip::{write::FileOptions, ZipWriter};
 #[cfg(not(debug_assertions))]
 use tauri::Manager;
 
+fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type()?;
+
+        if file_type.is_dir() {
+            fs::create_dir(&destination_path)?;
+            copy_directory(&source_path, &destination_path)?;
+        } else {
+            let mut source_file = File::open(source_path)?;
+            let mut destination_file = File::options()
+                .write(true)
+                .create_new(true)
+                .open(destination_path)?;
+            std::io::copy(&mut source_file, &mut destination_file)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Configuration for database backup operations.
 pub struct BackupConfig {
     /// Directory path where backups will be stored
@@ -28,6 +51,7 @@ pub struct BackupConfig {
 pub struct DbBackup {
     main_db_path: PathBuf,
     backup_dir: PathBuf,
+    staging_backup_dir: PathBuf,
 }
 
 impl DbBackup {
@@ -64,24 +88,34 @@ impl DbBackup {
             Some(dir) => PathBuf::from(dir),
         };
 
-        // Only create directory for write operations (backup), not for read operations (restore)
-        if !config.read_only && !backup_dir.exists() {
-            fs::create_dir_all(&backup_dir).map_err(|e| {
-                error!("Failed to create backup directory: {}", e);
-                StoreError::IoError(
-                    t!(
-                        "db.backup.failed_to_create_backup_dir_at",
-                        path = backup_dir.display(),
-                        error = e.to_string()
-                    )
-                    .to_string(),
-                )
-            })?;
+        let staging_backup_dir = app_dir.join("backup").join(".staging");
+
+        // Only create directories for write operations (backup), not for read operations (restore).
+        // Backups are assembled under a non-listable application-local staging root before being
+        // moved to their normal destination. This avoids cloud filesystem limitations during
+        // archive creation and prevents incomplete backups from being restored.
+        if !config.read_only {
+            for directory in [&backup_dir, &staging_backup_dir] {
+                if !directory.exists() {
+                    fs::create_dir_all(directory).map_err(|e| {
+                        error!("Failed to create backup directory: {}", e);
+                        StoreError::IoError(
+                            t!(
+                                "db.backup.failed_to_create_backup_dir_at",
+                                path = directory.display(),
+                                error = e.to_string()
+                            )
+                            .to_string(),
+                        )
+                    })?;
+                }
+            }
         }
 
         Ok(Self {
             main_db_path: app_dir.join("chatspeed.db"),
             backup_dir,
+            staging_backup_dir,
         })
     }
 
@@ -125,6 +159,7 @@ impl DbBackup {
             encrypted_file.path(),
             backup_dir_name,
         )?;
+
         encrypted_file
             .persist_noclobber(&backup_path)
             .map_err(|error| {
@@ -343,43 +378,115 @@ impl DbBackup {
             .unwrap_or(false)
     }
 
-    /// Backs up databases and user files to a specified directory
-    ///
-    /// # Returns
-    ///  Returns a `StoreError` if any backup operation fails
-    pub fn backup_to_directory(&mut self) -> Result<(), StoreError> {
-        self.backup_dir = self
-            .backup_dir
-            .join(Local::now().format("%Y-%m-%d_%H-%M-%S").to_string());
-        fs::create_dir(&self.backup_dir).map_err(|e| {
-            error!("Failed to create backup directory: {}", e);
+    fn move_completed_backup(source_dir: &Path, destination_dir: &Path) -> Result<(), StoreError> {
+        // Custom destinations can be on a different volume (for example iCloud Drive), where
+        // rename fails with EXDEV. Reserve the destination with an exclusive directory create so
+        // another backup cannot race this copy and overwrite a completed archive.
+        fs::create_dir(destination_dir).map_err(|e| {
             StoreError::IoError(
                 t!(
                     "db.backup.failed_to_create_backup_dir_at",
-                    path = self.backup_dir.display(),
+                    path = destination_dir.display(),
                     error = e.to_string()
                 )
                 .to_string(),
             )
         })?;
-        // Backup databases
-        let _ = self.backup()?;
 
-        // Backup user files
-        let theme_dir = &*crate::HTTP_SERVER_THEME_DIR.read();
-        let upload_dir = &*crate::HTTP_SERVER_UPLOAD_DIR.read();
-        let mcp_sessions_dir = &*crate::STORE_DIR.read().join("mcp_sessions");
-        let schema_dir = &*crate::SCHEMA_DIR.read();
-        let shared_dir = &*crate::SHARED_DATA_DIR.read();
-        let static_dir = &*crate::HTTP_SERVER_DIR.read();
-        self.backup_user_files(
-            Path::new(&theme_dir),
-            Path::new(&upload_dir),
-            Path::new(&mcp_sessions_dir),
-            Path::new(&schema_dir),
-            Path::new(&shared_dir),
-            Path::new(&static_dir),
-        )?;
+        if let Err(e) = copy_directory(source_dir, destination_dir) {
+            error!("Failed to copy completed backup directory: {}", e);
+            if let Err(cleanup_error) = fs::remove_dir_all(destination_dir) {
+                error!(
+                    "Failed to remove incomplete copied backup directory {}: {}",
+                    destination_dir.display(),
+                    cleanup_error
+                );
+            }
+            return Err(StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_create_backup_dir_at",
+                    path = destination_dir.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
+            ));
+        }
+
+        fs::remove_dir_all(source_dir).map_err(|e| {
+            error!("Failed to remove copied staged backup directory: {}", e);
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_create_backup_dir_at",
+                    path = source_dir.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })
+    }
+
+    fn assemble_staged_backup(&self) -> Result<(), StoreError> {
+        let result = (|| {
+            // Assemble all archives locally before exposing a completed backup in a custom destination.
+            let _ = self.backup()?;
+
+            let theme_dir = &*crate::HTTP_SERVER_THEME_DIR.read();
+            let upload_dir = &*crate::HTTP_SERVER_UPLOAD_DIR.read();
+            let mcp_sessions_dir = &*crate::STORE_DIR.read().join("mcp_sessions");
+            let schema_dir = &*crate::SCHEMA_DIR.read();
+            let shared_dir = &*crate::SHARED_DATA_DIR.read();
+            let static_dir = &*crate::HTTP_SERVER_DIR.read();
+            self.backup_user_files(
+                Path::new(&theme_dir),
+                Path::new(&upload_dir),
+                Path::new(&mcp_sessions_dir),
+                Path::new(&schema_dir),
+                Path::new(&shared_dir),
+                Path::new(&static_dir),
+            )
+            .map(|_| ())
+        })();
+
+        if result.is_err() {
+            if let Err(error) = fs::remove_dir_all(&self.backup_dir) {
+                error!("Failed to remove incomplete staged backup: {}", error);
+            }
+        }
+
+        result
+    }
+
+    /// Backs up databases and user files to a specified directory
+    ///
+    /// # Returns
+    ///  Returns a `StoreError` if any backup operation fails
+    pub fn backup_to_directory(&mut self) -> Result<(), StoreError> {
+        let backup_name = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+        let destination_dir = self.backup_dir.join(&backup_name);
+        let staging_dir = self.staging_backup_dir.join(&backup_name);
+
+        fs::create_dir(&staging_dir).map_err(|e| {
+            error!("Failed to create backup directory: {}", e);
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_create_backup_dir_at",
+                    path = staging_dir.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+        let staged_backup = Self {
+            main_db_path: self.main_db_path.clone(),
+            backup_dir: staging_dir.clone(),
+            staging_backup_dir: self.staging_backup_dir.clone(),
+        };
+
+        staged_backup.assemble_staged_backup()?;
+
+        if destination_dir != staging_dir {
+            Self::move_completed_backup(&staging_dir, &destination_dir)?;
+        }
 
         Ok(())
     }
@@ -817,7 +924,7 @@ impl DbBackup {
 
 #[cfg(test)]
 mod tests {
-    use super::DbBackup;
+    use super::{copy_directory, DbBackup};
     use crate::db::backup_crypto::encrypt_database_streaming;
     use std::fs::{self, File};
 
@@ -828,6 +935,7 @@ mod tests {
         fs::create_dir_all(&backup_dir).unwrap();
         DbBackup {
             main_db_path: source_path,
+            staging_backup_dir: backup_dir.clone(),
             backup_dir,
         }
     }
@@ -936,5 +1044,105 @@ mod tests {
 
         assert_eq!(fs::read(&restored_path).unwrap(), contents);
         assert!(fs::metadata(&zip_path).unwrap().len() < contents.len() as u64);
+    }
+
+    #[test]
+    fn copy_directory_does_not_overwrite_existing_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_dir = temp_dir.path().join("source");
+        let destination_dir = temp_dir.path().join("destination");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::create_dir_all(&destination_dir).unwrap();
+        fs::write(source_dir.join("chatspeed.db.zip"), b"new archive").unwrap();
+        fs::write(
+            destination_dir.join("chatspeed.db.zip"),
+            b"existing archive",
+        )
+        .unwrap();
+
+        assert!(copy_directory(&source_dir, &destination_dir).is_err());
+        assert_eq!(
+            fs::read(destination_dir.join("chatspeed.db.zip")).unwrap(),
+            b"existing archive"
+        );
+    }
+
+    #[test]
+    fn completed_backup_directory_moves_all_archives() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_dir = temp_dir.path().join("staging").join("2026-07-21_12-00-04");
+        let destination_dir = temp_dir
+            .path()
+            .join("destination")
+            .join("2026-07-21_12-00-04");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::create_dir_all(destination_dir.parent().unwrap()).unwrap();
+        fs::write(source_dir.join("chatspeed.db.zip"), b"database archive").unwrap();
+        fs::write(source_dir.join("user_files.zip"), b"user files archive").unwrap();
+
+        DbBackup::move_completed_backup(&source_dir, &destination_dir).unwrap();
+
+        assert!(!source_dir.exists());
+        assert_eq!(
+            fs::read(destination_dir.join("chatspeed.db.zip")).unwrap(),
+            b"database archive"
+        );
+        assert_eq!(
+            fs::read(destination_dir.join("user_files.zip")).unwrap(),
+            b"user files archive"
+        );
+    }
+
+    #[test]
+    fn completed_backup_directory_does_not_overwrite_existing_destination() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_dir = temp_dir.path().join("staging").join("2026-07-21_12-00-05");
+        let destination_dir = temp_dir
+            .path()
+            .join("destination")
+            .join("2026-07-21_12-00-05");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::create_dir_all(&destination_dir).unwrap();
+        fs::write(source_dir.join("chatspeed.db.zip"), b"new database archive").unwrap();
+        fs::write(
+            destination_dir.join("chatspeed.db.zip"),
+            b"existing database archive",
+        )
+        .unwrap();
+
+        assert!(DbBackup::move_completed_backup(&source_dir, &destination_dir).is_err());
+        assert!(source_dir.exists());
+        assert_eq!(
+            fs::read(destination_dir.join("chatspeed.db.zip")).unwrap(),
+            b"existing database archive"
+        );
+    }
+
+    #[test]
+    fn incomplete_staged_backup_is_removed_after_assembly_failure() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let backup_dir = temp_dir.path().join("2026-07-21_12-00-06");
+        let missing_database_path = temp_dir.path().join("missing.db");
+        let backup = backup_with_dir(backup_dir.clone(), missing_database_path);
+
+        assert!(backup.assemble_staged_backup().is_err());
+        assert!(!backup_dir.exists());
+    }
+
+    #[test]
+    fn incomplete_staging_directories_are_excluded_from_backup_list() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let backup_root = temp_dir.path().join("backup");
+        let staging_dir = backup_root.join(".staging").join("2026-07-21_12-00-08");
+        let completed_dir = backup_root.join("2026-07-21_12-00-09");
+        fs::create_dir_all(&staging_dir).unwrap();
+        fs::create_dir_all(&completed_dir).unwrap();
+        let backup = DbBackup {
+            main_db_path: temp_dir.path().join("chatspeed.db"),
+            backup_dir: backup_root.clone(),
+            staging_backup_dir: backup_root.join(".staging"),
+        };
+
+        assert_eq!(backup.list_backups().unwrap(), vec![completed_dir]);
     }
 }

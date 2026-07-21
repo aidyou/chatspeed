@@ -56,6 +56,7 @@ fn restore_execution_context_from_manual_clear_marker(
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
+            removed_queued_user_message_ids: Vec::new(),
         });
 
     restored_context.session_id = session_id.to_string();

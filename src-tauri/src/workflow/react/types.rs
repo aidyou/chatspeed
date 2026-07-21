@@ -477,6 +477,8 @@ pub struct ExecutionContext {
     pub pending_sub_agent_completions: Vec<SubAgentCompletion>,
     #[serde(default)]
     pub pending_final_review: Option<PendingFinalReview>,
+    #[serde(default)]
+    pub removed_queued_user_message_ids: Vec<String>,
 }
 
 fn default_execution_context_segment_id() -> i32 {
@@ -505,6 +507,7 @@ impl ExecutionContext {
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
+            removed_queued_user_message_ids: Vec::new(),
         }
     }
 }
@@ -567,6 +570,7 @@ mod tests {
         ctx.current_segment_id = 3;
         ctx.current_step = 5;
         ctx.max_steps = 100;
+        ctx.removed_queued_user_message_ids = vec!["queue-removed".to_string()];
         ctx.pending_tools.push(PendingTool {
             tool_call_id: "call_123".to_string(),
             tool_name: "bash".to_string(),
