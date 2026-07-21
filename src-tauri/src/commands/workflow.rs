@@ -1686,7 +1686,7 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
             store.append_workflow_event(&event)?;
 
             let message = format!(
-                "<SYSTEM_REMINDER>\nSub-agent {} was interrupted by application restart and marked as cancelled. If you still need to continue that delegated work, call the sub-agent again with a fresh task.\n</SYSTEM_REMINDER>",
+                "<SYSTEM_REMINDER>\nSub-agent {} was interrupted by application restart and marked as cancelled.\n</SYSTEM_REMINDER>",
                 child_id
             );
             let parent_message = WorkflowMessage {

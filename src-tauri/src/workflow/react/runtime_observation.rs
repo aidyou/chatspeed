@@ -120,22 +120,25 @@ pub fn render_runtime_observation_for_llm(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| message.message.clone());
 
-    let placement = metadata
+    let observation_type = runtime_observation_type(metadata);
+    let visibility = metadata
         .and_then(|meta| meta.get("llm_visibility"))
         .and_then(|value| {
             serde_json::from_value::<RuntimeObservationLlmVisibility>(value.clone()).ok()
-        })
-        .map(llm_visibility_to_placement)
-        .unwrap_or_else(|| {
-            if runtime_observation_type(metadata)
-                == Some(RuntimeObservationType::SubAgentCompletion)
-                || is_legacy_sub_agent_completion_observation(message)
-            {
-                RuntimeObservationPlacement::Preserve
-            } else {
-                RuntimeObservationPlacement::Defer
-            }
         });
+    let placement = if observation_type == Some(RuntimeObservationType::SubAgentCompletion)
+        || is_legacy_sub_agent_completion_observation(message)
+    {
+        RuntimeObservationPlacement::Preserve
+    } else if observation_type == Some(RuntimeObservationType::SubAgentInterrupted)
+        && visibility == Some(RuntimeObservationLlmVisibility::Defer)
+    {
+        RuntimeObservationPlacement::Preserve
+    } else {
+        visibility
+            .map(llm_visibility_to_placement)
+            .unwrap_or(RuntimeObservationPlacement::Defer)
+    };
 
     Some(RenderedObservation { content, placement })
 }
@@ -160,6 +163,10 @@ fn default_visibility(
         RuntimeObservationType::SubAgentCompletion => (
             RuntimeObservationLlmVisibility::PreservePosition,
             RuntimeObservationUiVisibility::Card,
+        ),
+        RuntimeObservationType::SubAgentInterrupted => (
+            RuntimeObservationLlmVisibility::PreservePosition,
+            RuntimeObservationUiVisibility::Hide,
         ),
         RuntimeObservationType::AuditRejected
         | RuntimeObservationType::CompletionRejected
@@ -225,6 +232,82 @@ mod tests {
             metadata["data"]["sub_agent_id"].as_str(),
             Some("subagent_1")
         );
+    }
+
+    #[test]
+    fn sub_agent_interrupted_metadata_preserves_position_and_stays_hidden_in_ui() {
+        let metadata = runtime_observation_metadata(
+            RuntimeObservationType::SubAgentInterrupted,
+            json!({ "sub_agent_id": "subagent_1" }),
+        );
+
+        assert_eq!(
+            metadata["llm_visibility"].as_str(),
+            Some("preserve_position")
+        );
+        assert_eq!(metadata["ui_visibility"].as_str(), Some("hide"));
+    }
+
+    #[test]
+    fn sub_agent_interrupted_observation_preserves_position_for_legacy_defer_metadata() {
+        let mut metadata = runtime_observation_metadata(
+            RuntimeObservationType::SubAgentInterrupted,
+            json!({ "sub_agent_id": "subagent_1" }),
+        );
+        metadata["llm_visibility"] = json!("defer");
+        let message = WorkflowMessage {
+            id: None,
+            session_id: "session".to_string(),
+            role: "user".to_string(),
+            message: "<SYSTEM_REMINDER>Sub-agent interrupted.</SYSTEM_REMINDER>".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: Some("sub_agent_interrupted".to_string()),
+            metadata: Some(metadata),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 0,
+            is_error: true,
+            error_type: Some("SubAgentInterrupted".to_string()),
+            created_at: None,
+        };
+
+        let rendered = render_runtime_observation_for_llm(&message)
+            .expect("sub-agent interruption should render");
+        assert_eq!(rendered.placement, RuntimeObservationPlacement::Preserve);
+    }
+
+    #[test]
+    fn sub_agent_interrupted_observation_respects_explicit_hide_metadata() {
+        let mut metadata = runtime_observation_metadata(
+            RuntimeObservationType::SubAgentInterrupted,
+            json!({ "sub_agent_id": "subagent_1" }),
+        );
+        metadata["llm_visibility"] = json!("hide");
+        let message = WorkflowMessage {
+            id: None,
+            session_id: "session".to_string(),
+            role: "user".to_string(),
+            message: "<SYSTEM_REMINDER>Sub-agent interrupted.</SYSTEM_REMINDER>".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: Some("sub_agent_interrupted".to_string()),
+            metadata: Some(metadata),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 0,
+            is_error: true,
+            error_type: Some("SubAgentInterrupted".to_string()),
+            created_at: None,
+        };
+
+        let rendered = render_runtime_observation_for_llm(&message)
+            .expect("hidden sub-agent interruption should still normalize");
+        assert_eq!(rendered.placement, RuntimeObservationPlacement::Hide);
     }
 
     #[test]

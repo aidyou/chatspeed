@@ -1774,6 +1774,70 @@ mod tests {
     }
 
     #[test]
+    fn normalize_history_does_not_reappend_handled_sub_agent_interruption() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Investigate the issue", None, None),
+            message(
+                "user",
+                "<SYSTEM_REMINDER>Sub-agent interrupted by application restart.</SYSTEM_REMINDER>",
+                Some("observe"),
+                Some(json!({
+                    "message_kind": "runtime_observation",
+                    "observation_type": "sub_agent_interrupted",
+                    "llm_visibility": "defer",
+                    "ui_visibility": "hide"
+                })),
+            ),
+            message(
+                "assistant",
+                "The interrupted investigation is no longer needed.",
+                Some("think"),
+                None,
+            ),
+        ]);
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0]["role"], "user");
+        assert!(history[0]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Sub-agent interrupted"));
+        assert_eq!(history[1]["role"], "assistant");
+        assert_eq!(
+            history[1]["content"].as_str(),
+            Some("The interrupted investigation is no longer needed.")
+        );
+    }
+
+    #[test]
+    fn normalize_history_hides_explicitly_hidden_sub_agent_interruption() {
+        let history =
+            LlmProcessor::normalize_history_messages(vec![
+            message("user", "Investigate the issue", None, None),
+            message(
+                "user",
+                "<SYSTEM_REMINDER>Sub-agent interrupted by application restart.</SYSTEM_REMINDER>",
+                Some("observe"),
+                Some(json!({
+                    "message_kind": "runtime_observation",
+                    "observation_type": "sub_agent_interrupted",
+                    "llm_visibility": "hide",
+                    "ui_visibility": "hide"
+                })),
+            ),
+            message("assistant", "Continue with local evidence.", Some("think"), None),
+        ]);
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0]["role"], "user");
+        assert!(!history[0]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Sub-agent interrupted"));
+        assert_eq!(history[1]["role"], "assistant");
+    }
+
+    #[test]
     fn normalize_history_keeps_sub_agent_tool_result_in_original_order() {
         let history = LlmProcessor::normalize_history_messages(vec![
             message("user", "Investigate the issue", None, None),
