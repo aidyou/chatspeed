@@ -79,6 +79,7 @@ tauri-plugin-shell           = "2.3.5"
 tauri-plugin-single-instance = "2.4.2"
 tauri-plugin-updater         = "2.10.1"
 thiserror                    = "2.0.18"
+tempfile                     = "3.27.0"
 time                         = { version = "0.3.47", features = ["formatting"] }
 tokio                        = { version = "1.52.2", features = ["full"] }
 tokio-stream                 = "0.1.18"
@@ -113,7 +114,6 @@ vswhom = "0.1.0"
 
 [dev-dependencies]
 tauri      = { version = "2.11.0", features = ["test"] }
-tempfile   = "3.27.0"
 small_ctor = "0.1.2"
 # tauri-driver = "2.0.4"
 

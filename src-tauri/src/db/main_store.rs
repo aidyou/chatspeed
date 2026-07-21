@@ -332,16 +332,17 @@ impl MainStore {
         Ok(())
     }
 
-    /// Performs an atomic restoration of the database.
+    /// Performs a rollback-safe restoration of the database.
     /// It preserves machine-specific configurations from the current database,
     /// replaces the physical file, and reloads everything.
-    pub fn atomic_restore<P: AsRef<Path>>(
+    pub fn atomic_restore<P: AsRef<Path>, Q: AsRef<Path>>(
         &mut self,
         temp_db_path: P,
-        main_db_path: P,
+        main_db_path: Q,
         machine_specific_keys: &[&str],
     ) -> Result<(), StoreError> {
-        // 1. Backup current machine-specific configurations from memory/current DB
+        let temp_db_path = temp_db_path.as_ref();
+        let main_db_path = main_db_path.as_ref();
         let mut preserved_configs = HashMap::new();
         for &key in machine_specific_keys {
             if let Some(value) = self.config.get_setting(key) {
@@ -349,36 +350,94 @@ impl MainStore {
             }
         }
 
-        // 2. Close existing connection by swapping with an in-memory one
+        self.checkpoint()?;
+        let rollback_path = main_db_path
+            .with_extension(format!("restore-backup-{}", uuid::Uuid::new_v4().simple()));
+
         {
             let mut conn_guard = self
                 .conn
                 .lock()
                 .map_err(|e| StoreError::LockError(e.to_string()))?;
-            // Replace with a dummy connection to close the file handle
             *conn_guard = Connection::open_in_memory()?;
         }
+        super::DbBackup::cleanup_sqlite_temporaries(main_db_path);
 
-        // 3. Clean up WAL/SHM and replace the file
-        super::DbBackup::cleanup_sqlite_temporaries(main_db_path.as_ref());
-        std::fs::rename(&temp_db_path, &main_db_path)
-            .map_err(|e| StoreError::IoError(format!("Failed to replace database file: {}", e)))?;
-
-        // 4. Reopen the connection to the new file
-        self.reopen(&main_db_path)?;
-
-        // 5. Write preserved configs back
-        for &key in machine_specific_keys {
-            if let Some(value) = preserved_configs.get(key) {
-                self.set_config(key, value)?;
-            } else {
-                // If the key didn't exist before, ensure it doesn't exist in the restored DB either
-                let _ = self.delete_config(key);
+        let restore_original = |store: &mut Self| -> Result<(), StoreError> {
+            {
+                let mut conn_guard = store
+                    .conn
+                    .lock()
+                    .map_err(|e| StoreError::LockError(e.to_string()))?;
+                *conn_guard = Connection::open_in_memory()?;
             }
+            super::DbBackup::cleanup_sqlite_temporaries(main_db_path);
+            if main_db_path.exists() {
+                std::fs::remove_file(main_db_path).map_err(|e| {
+                    StoreError::IoError(format!("Failed to remove restored database: {}", e))
+                })?;
+            }
+            std::fs::rename(&rollback_path, main_db_path).map_err(|e| {
+                StoreError::IoError(format!("Failed to restore original database: {}", e))
+            })?;
+            store.reopen(main_db_path)?;
+            store.reload_config()
+        };
+
+        std::fs::rename(main_db_path, &rollback_path).map_err(|e| {
+            let reopen_error = self.reopen(main_db_path).err();
+            let message = match reopen_error {
+                Some(reopen_error) => format!(
+                    "Failed to stage original database: {}; failed to reopen it: {}",
+                    e, reopen_error
+                ),
+                None => format!("Failed to stage original database: {}", e),
+            };
+            StoreError::IoError(message)
+        })?;
+
+        if let Err(error) = std::fs::rename(temp_db_path, main_db_path) {
+            let rollback_error = restore_original(self).err();
+            let message = match rollback_error {
+                Some(rollback_error) => format!(
+                    "Failed to install restored database: {}; failed to restore original database: {}",
+                    error, rollback_error
+                ),
+                None => format!("Failed to install restored database: {}", error),
+            };
+            return Err(StoreError::IoError(message));
         }
 
-        // 6. Reload full configuration cache
-        self.reload_config()?;
+        let restore_result = (|| -> Result<(), StoreError> {
+            self.reopen(main_db_path)?;
+            for &key in machine_specific_keys {
+                if let Some(value) = preserved_configs.get(key) {
+                    self.set_config(key, value)?;
+                } else {
+                    self.delete_config(key)?;
+                }
+            }
+            self.reload_config()
+        })();
+
+        if let Err(error) = restore_result {
+            let rollback_error = restore_original(self).err();
+            let message = match rollback_error {
+                Some(rollback_error) => format!(
+                    "Failed to finalize restored database: {}; failed to restore original database: {}",
+                    error, rollback_error
+                ),
+                None => format!("Failed to finalize restored database: {}", error),
+            };
+            return Err(StoreError::IoError(message));
+        }
+
+        if let Err(error) = std::fs::remove_file(&rollback_path) {
+            log::warn!(
+                "Restored database but could not remove rollback file: {}",
+                error
+            );
+        }
 
         Ok(())
     }
@@ -583,5 +642,60 @@ impl MainStore {
             log::error!("Failed to initialize database: {}", e);
             e
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MainStore;
+    use serde_json::json;
+
+    #[test]
+    fn atomic_restore_replaces_an_existing_database() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let main_path = temp_dir.path().join("main.db");
+        let staged_path = temp_dir.path().join("staged.db");
+        let mut main_store = MainStore::new(&main_path).unwrap();
+        main_store
+            .set_config("restore_test", &json!("original"))
+            .unwrap();
+
+        let mut staged_store = MainStore::new(&staged_path).unwrap();
+        staged_store
+            .set_config("restore_test", &json!("restored"))
+            .unwrap();
+        drop(staged_store);
+
+        main_store
+            .atomic_restore(&staged_path, &main_path, &[])
+            .unwrap();
+
+        assert_eq!(
+            main_store.config.get_setting("restore_test"),
+            Some(&json!("restored"))
+        );
+        assert!(!staged_path.exists());
+    }
+
+    #[test]
+    fn atomic_restore_recovers_the_original_database_when_installation_fails() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let main_path = temp_dir.path().join("main.db");
+        let missing_staged_path = temp_dir.path().join("missing.db");
+        let mut main_store = MainStore::new(&main_path).unwrap();
+        main_store
+            .set_config("restore_test", &json!("original"))
+            .unwrap();
+
+        assert!(main_store
+            .atomic_restore(&missing_staged_path, &main_path, &[])
+            .is_err());
+        assert_eq!(
+            main_store.config.get_setting("restore_test"),
+            Some(&json!("original"))
+        );
+        main_store
+            .set_config("restore_test_after_failure", &json!(true))
+            .unwrap();
     }
 }

@@ -1,5 +1,9 @@
 <template>
-  <div class="messages" ref="messagesRef" @scroll.passive="handleScroll">
+  <div
+    class="messages"
+    ref="messagesRef"
+    :data-workflow-id="props.currentWorkflowId || null"
+    @scroll.passive="handleScroll">
     <a
       v-if="props.hiddenCompletedTaskGroupCount > 0"
       class="history-window-indicator"
@@ -1893,21 +1897,11 @@ const lastVisibleMessage = computed(
   () => visibleMessages.value[visibleMessages.value.length - 1] || null
 )
 const isReasoningExpandedForMessage = message => {
-  const messageId = String(message?.displayId || '')
-  if (messageId && props.isReasoningExpanded(messageId)) return true
-
-  return message === props.lastAssistantMessage && props.isReasoningExpanded(STREAMING_REASONING_ID)
+  const messageId = String(message?.displayId || message?.id || '')
+  return !!messageId && props.isReasoningExpanded(messageId)
 }
 const toggleReasoningForMessage = message => {
-  const messageId = String(message?.displayId || '')
-  const shouldUseStreamingState =
-    message === props.lastAssistantMessage && props.isReasoningExpanded(STREAMING_REASONING_ID)
-
-  if (shouldUseStreamingState) {
-    emit('toggle-reasoning', STREAMING_REASONING_ID)
-    return
-  }
-
+  const messageId = String(message?.displayId || message?.id || '')
   if (messageId) emit('toggle-reasoning', messageId)
 }
 const pendingApprovalIdSet = computed(() => {
@@ -2295,7 +2289,7 @@ const getUserMessageCollapsedStyle = message => {
 const getMessageSubAgentId = message => {
   const meta = message?.metadata || {}
   if (meta.sub_agent_id || meta.subAgentId) return meta.sub_agent_id || meta.subAgentId
-  return null
+  return meta.data?.sub_agent_id || meta.data?.subAgentId || null
 }
 
 const getChoiceGroups = message =>

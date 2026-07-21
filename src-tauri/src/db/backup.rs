@@ -104,29 +104,48 @@ impl DbBackup {
         Ok(backup_paths)
     }
 
-    /// Backs up a single database file with encryption
+    /// Backs up a single database file with ZIP compression before encryption.
     fn backup_single_db(&self, db_path: &Path, db_type: &str) -> Result<PathBuf, StoreError> {
-        let backup_path = self.backup_dir.join(format!("{}.db", db_type));
-
-        // Get backup directory name (time format)
+        let backup_path = self.backup_dir.join(format!("{}.db.zip", db_type));
         let backup_dir_name = self
             .backup_dir
             .file_name()
-            .and_then(|n| n.to_str())
+            .and_then(|name| name.to_str())
             .unwrap_or("unknown");
+        let compressed_file = tempfile::NamedTempFile::new_in(&self.backup_dir)?;
+        let encrypted_file = tempfile::NamedTempFile::new_in(&self.backup_dir)?;
 
-        // Use streaming encryption for database
-        encrypt_database_streaming(db_path, &backup_path, backup_dir_name)?;
+        Self::compress_file(
+            db_path,
+            compressed_file.as_file().try_clone()?,
+            &format!("{}.db", db_type),
+        )?;
+        encrypt_database_streaming(
+            compressed_file.path(),
+            encrypted_file.path(),
+            backup_dir_name,
+        )?;
+        encrypted_file
+            .persist_noclobber(&backup_path)
+            .map_err(|error| {
+                StoreError::IoError(
+                    t!(
+                        "db.backup.failed_to_create_encrypted_file",
+                        error = error.error.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
 
         Ok(backup_path)
     }
 
-    /// Decrypts a backup database to a temporary file.
+    /// Decrypts a backup database to a securely staged temporary file.
     pub fn decrypt_to_temp(
         &self,
         backup_path: &Path,
         target_path: &Path,
-    ) -> Result<PathBuf, StoreError> {
+    ) -> Result<tempfile::TempPath, StoreError> {
         if !backup_path.exists() {
             return Err(StoreError::NotFound(
                 t!("db.backup.file_not_found", path = backup_path.display()).to_string(),
@@ -138,10 +157,116 @@ impl DbBackup {
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
+        let target_dir = target_path.parent().unwrap_or_else(|| Path::new("."));
+        let temp_db_file = tempfile::NamedTempFile::new_in(target_dir)?;
 
-        let temp_file = target_path.with_extension("tmp");
-        decrypt_database_streaming(backup_path, &temp_file, backup_dir_name)?;
-        Ok(temp_file)
+        if backup_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("zip")
+        {
+            decrypt_database_streaming(backup_path, temp_db_file.path(), backup_dir_name)?;
+            return Ok(temp_db_file.into_temp_path());
+        }
+
+        let compressed_temp_file = tempfile::NamedTempFile::new_in(target_dir)?;
+        decrypt_database_streaming(backup_path, compressed_temp_file.path(), backup_dir_name)?;
+        Self::extract_file(
+            compressed_temp_file.path(),
+            "chatspeed.db",
+            temp_db_file.as_file().try_clone()?,
+        )?;
+
+        Ok(temp_db_file.into_temp_path())
+    }
+
+    fn compress_file(
+        source_path: &Path,
+        zip_file: File,
+        entry_name: &str,
+    ) -> Result<(), StoreError> {
+        let source_file = File::open(source_path).map_err(|e| {
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_open_file_for_zip",
+                    path = source_path.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+
+        let mut zip = ZipWriter::new(zip_file);
+        let options: zip::write::SimpleFileOptions = FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o600);
+        zip.start_file(entry_name, options).map_err(|e| {
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_add_file_to_zip",
+                    path = entry_name,
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+
+        let mut source_file = source_file;
+        std::io::copy(&mut source_file, &mut zip).map_err(|e| {
+            StoreError::IoError(
+                t!("db.backup.failed_to_write_to_zip", error = e.to_string()).to_string(),
+            )
+        })?;
+        zip.finish().map_err(|e| {
+            StoreError::IoError(
+                t!("db.backup.failed_to_finish_zip", error = e.to_string()).to_string(),
+            )
+        })?;
+
+        Ok(())
+    }
+
+    fn extract_file(
+        zip_path: &Path,
+        entry_name: &str,
+        mut target_file: File,
+    ) -> Result<(), StoreError> {
+        let zip_file = File::open(zip_path).map_err(|e| {
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_open_zip",
+                    path = zip_path.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+        let mut archive = ZipArchive::new(zip_file).map_err(|e| {
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_read_zip_archive",
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+        let mut entry = archive.by_name(entry_name).map_err(|e| {
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_read_zip_entry",
+                    index = 0,
+                    error = e.to_string()
+                )
+                .to_string(),
+            )
+        })?;
+        std::io::copy(&mut entry, &mut target_file).map_err(|e| {
+            StoreError::IoError(
+                t!("db.backup.failed_to_write_to_zip", error = e.to_string()).to_string(),
+            )
+        })?;
+
+        Ok(())
     }
 
     /// Cleans up SQLite temporary files (-wal, -shm) for a given database path.
@@ -226,19 +351,17 @@ impl DbBackup {
         self.backup_dir = self
             .backup_dir
             .join(Local::now().format("%Y-%m-%d_%H-%M-%S").to_string());
-        if !self.backup_dir.exists() {
-            fs::create_dir_all(&self.backup_dir).map_err(|e| {
-                error!("Failed to create backup directory: {}", e);
-                StoreError::IoError(
-                    t!(
-                        "db.backup.failed_to_create_backup_dir_at",
-                        path = self.backup_dir.display(),
-                        error = e.to_string()
-                    )
-                    .to_string(),
+        fs::create_dir(&self.backup_dir).map_err(|e| {
+            error!("Failed to create backup directory: {}", e);
+            StoreError::IoError(
+                t!(
+                    "db.backup.failed_to_create_backup_dir_at",
+                    path = self.backup_dir.display(),
+                    error = e.to_string()
                 )
-            })?;
-        }
+                .to_string(),
+            )
+        })?;
         // Backup databases
         let _ = self.backup()?;
 
@@ -689,5 +812,129 @@ impl DbBackup {
 
         info!("Created user files backup: {:?}", output_path.clone());
         Ok(output_path.to_path_buf())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DbBackup;
+    use crate::db::backup_crypto::encrypt_database_streaming;
+    use std::fs::{self, File};
+
+    fn backup_with_dir(
+        backup_dir: std::path::PathBuf,
+        source_path: std::path::PathBuf,
+    ) -> DbBackup {
+        fs::create_dir_all(&backup_dir).unwrap();
+        DbBackup {
+            main_db_path: source_path,
+            backup_dir,
+        }
+    }
+
+    #[test]
+    fn backup_does_not_overwrite_existing_archive() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("chatspeed.db");
+        let backup_dir = temp_dir.path().join("2026-07-21_12-00-02");
+        let existing_backup_path = backup_dir.join("chatspeed.db.zip");
+        let existing_contents = b"existing encrypted backup";
+        fs::write(&source_path, b"new database backup").unwrap();
+
+        let backup = backup_with_dir(backup_dir, source_path.clone());
+        fs::write(&existing_backup_path, existing_contents).unwrap();
+
+        assert!(backup.backup_single_db(&source_path, "chatspeed").is_err());
+        assert_eq!(fs::read(existing_backup_path).unwrap(), existing_contents);
+    }
+
+    #[test]
+    fn failed_legacy_decryption_cleans_up_temporary_database() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let backup_dir = temp_dir.path().join("2026-07-21_12-00-03");
+        let source_path = temp_dir.path().join("chatspeed.db");
+        let corrupt_backup_path = backup_dir.join("chatspeed.db");
+        let target_path = temp_dir.path().join("restored.db");
+        let backup = backup_with_dir(backup_dir, source_path);
+        fs::write(&corrupt_backup_path, b"corrupt encrypted backup").unwrap();
+
+        assert!(backup
+            .decrypt_to_temp(&corrupt_backup_path, &target_path)
+            .is_err());
+        assert!(fs::read_dir(temp_dir.path())
+            .unwrap()
+            .all(|entry| entry.unwrap().path() != target_path));
+    }
+
+    #[test]
+    fn compressed_encrypted_backup_round_trips_database_contents() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("chatspeed.db");
+        let backup_dir = temp_dir.path().join("2026-07-21_12-00-00");
+        let restored_path = temp_dir.path().join("restored.db");
+        let contents = vec![b'a'; 64 * 1024];
+        fs::write(&source_path, &contents).unwrap();
+
+        let backup = backup_with_dir(backup_dir.clone(), source_path.clone());
+        let backup_path = backup.backup_single_db(&source_path, "chatspeed").unwrap();
+        let temp_db_file = backup
+            .decrypt_to_temp(&backup_path, &restored_path)
+            .unwrap();
+
+        assert_eq!(backup_path.file_name().unwrap(), "chatspeed.db.zip");
+        assert_eq!(fs::read(&temp_db_file).unwrap(), contents);
+        assert!(fs::read_dir(&backup_dir)
+            .unwrap()
+            .all(|entry| entry.unwrap().path() == backup_path));
+    }
+
+    #[test]
+    fn legacy_encrypted_database_backup_still_restores() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("chatspeed.db");
+        let backup_dir = temp_dir.path().join("2026-07-21_12-00-01");
+        let legacy_backup_path = backup_dir.join("chatspeed.db");
+        let restored_path = temp_dir.path().join("restored.db");
+        let contents = b"legacy encrypted database backup";
+        fs::write(&source_path, contents).unwrap();
+
+        let backup = backup_with_dir(backup_dir.clone(), source_path);
+        encrypt_database_streaming(
+            &backup.main_db_path,
+            &legacy_backup_path,
+            "2026-07-21_12-00-01",
+        )
+        .unwrap();
+        let temp_db_file = backup
+            .decrypt_to_temp(&legacy_backup_path, &restored_path)
+            .unwrap();
+
+        assert_eq!(fs::read(&temp_db_file).unwrap(), contents);
+    }
+
+    #[test]
+    fn compress_file_round_trips_database_contents() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("chatspeed.db");
+        let zip_path = temp_dir.path().join("chatspeed.db.archive.tmp");
+        let restored_path = temp_dir.path().join("restored.db");
+        let contents = vec![b'a'; 64 * 1024];
+        fs::write(&source_path, &contents).unwrap();
+
+        DbBackup::compress_file(
+            &source_path,
+            File::create(&zip_path).unwrap(),
+            "chatspeed.db",
+        )
+        .unwrap();
+        DbBackup::extract_file(
+            &zip_path,
+            "chatspeed.db",
+            File::create(&restored_path).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&restored_path).unwrap(), contents);
+        assert!(fs::metadata(&zip_path).unwrap().len() < contents.len() as u64);
     }
 }

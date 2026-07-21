@@ -1060,11 +1060,15 @@ const escapeSelectorValue = value => {
 }
 
 const jumpToChildMessage = child => {
-  if (!child?.id) return
-  const selector = `[data-child-task-id="${escapeSelectorValue(child.id)}"]`
-  const matches = Array.from(document.querySelectorAll(selector))
+  if (!child?.id || !workflowStore.currentWorkflowId) return
+
+  const workflowSelector = `[data-workflow-id="${escapeSelectorValue(workflowStore.currentWorkflowId)}"]`
+  const messageSelector = `[data-child-task-id="${escapeSelectorValue(child.id)}"]`
+  const messageList = document.querySelector(workflowSelector)
+  const matches = messageList ? Array.from(messageList.querySelectorAll(messageSelector)) : []
   const target = matches[matches.length - 1]
   if (!target) return
+
   target.scrollIntoView({ behavior: 'smooth', block: 'center' })
   if (typeof target.animate === 'function') {
     target.animate(

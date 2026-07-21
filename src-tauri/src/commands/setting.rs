@@ -802,19 +802,26 @@ pub async fn restore_setting(
     )
     .map_err(AppError::Db)?;
 
-    // 3. Decrypt database to a temporary file FIRST
-    let backup_db_file = Path::new(&backup_dir).join("chatspeed.db");
-    let temp_db_path = db_backup
+    // 3. Decrypt database to a temporary file FIRST. Prefer compressed backups while
+    // retaining restore support for backups created before database ZIP compression.
+    let compressed_backup_db_file = Path::new(&backup_dir).join("chatspeed.db.zip");
+    let backup_db_file = if compressed_backup_db_file.exists() {
+        compressed_backup_db_file
+    } else {
+        Path::new(&backup_dir).join("chatspeed.db")
+    };
+    let temp_db_file = db_backup
         .decrypt_to_temp(&backup_db_file, &main_db_path)
         .map_err(AppError::Db)?;
 
-    // 4. Perform atomic database restoration
+    // 4. Perform atomic database restoration. The temporary file removes itself if
+    // restoration fails before ownership transfers to the destination database.
     {
         let mut config_store = state
             .write()
             .map_err(|e| AppError::Db(StoreError::LockError(e.to_string())))?;
         config_store
-            .atomic_restore(&temp_db_path, &main_db_path, &machine_specific_keys)
+            .atomic_restore(&temp_db_file, &main_db_path, &machine_specific_keys)
             .map_err(AppError::Db)?;
     }
 
