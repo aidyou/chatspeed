@@ -333,6 +333,30 @@ export function useWorkflowCore({
         phase: currentPhaseValue()
     })
 
+    const buildInheritedWorkflowConfig = (baseConfig = {}) => {
+        const config = mergeLocalUiOverrides(baseConfig)
+        const inheritedKeys = [
+            'allowedPaths',
+            'approvalLevel',
+            'autoApprove',
+            'autoCompress',
+            'finalAudit',
+            'finalReviewMode',
+            'models',
+            'phase',
+            'selectedSkills',
+            'shellPolicy',
+            'skillEnabled'
+        ]
+
+        return inheritedKeys.reduce((inherited, key) => {
+            if (config[key] !== undefined) {
+                inherited[key] = config[key]
+            }
+            return inherited
+        }, {})
+    }
+
     const persistCurrentWorkflowUiConfigBeforeStart = async () => {
         if (!currentWorkflowId.value) return
         const nextConfig = mergeLocalUiOverrides(getCurrentWorkflowAgentConfig())
@@ -1366,7 +1390,7 @@ export function useWorkflowCore({
             if (currentWorkflowId.value) {
                 try {
                     const baseConfig = getCurrentWorkflowAgentConfig()
-                    inheritedAgentConfig = JSON.stringify(mergeLocalUiOverrides(baseConfig || {}))
+                    inheritedAgentConfig = JSON.stringify(buildInheritedWorkflowConfig(baseConfig || {}))
                     inheritedAgentId = workflowStore.currentWorkflow?.agentId || null
                 } catch (error) {
                     console.warn('Failed to get previous workflow config:', error)
@@ -1875,7 +1899,7 @@ export function useWorkflowCore({
 
             if (workflowStore.currentWorkflow?.agentConfig) {
                 inheritedAgentConfig = JSON.stringify(
-                    mergeLocalUiOverrides(workflowStore.currentWorkflow.agentConfig)
+                    buildInheritedWorkflowConfig(workflowStore.currentWorkflow.agentConfig)
                 )
                 inheritedAgentId = workflowStore.currentWorkflow.agentId
                 // Inherit allowed paths from current workflow's agentConfig
@@ -1893,7 +1917,7 @@ export function useWorkflowCore({
                 }
             } else {
                 inheritedAgentConfig = JSON.stringify(
-                    mergeLocalUiOverrides({
+                    buildInheritedWorkflowConfig({
                         allowedPaths: pendingPaths.value.length > 0 ? [...pendingPaths.value] : undefined
                     })
                 )

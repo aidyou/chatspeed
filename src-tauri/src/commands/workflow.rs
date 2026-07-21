@@ -1206,6 +1206,129 @@ fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
     Some(inherited_config)
 }
 
+fn build_workflow_config_for_request(
+    agent: &Agent,
+    request: &CreateWorkflowRequest,
+) -> AgentConfig {
+    let mut config =
+        build_agent_config_from_agent(agent, request.allowed_paths.as_ref(), request.final_audit);
+
+    if let Some(inherited) = &request.inherited_agent_config {
+        if let Some(inherited_config) = validated_inherited_agent_config(inherited) {
+            config = merge_inherited_workflow_config(&config, &inherited_config);
+        }
+    }
+
+    fill_missing_agent_config_fields(&mut config, agent);
+    config
+}
+
+fn merge_unique_tools(tool_lists: impl IntoIterator<Item = Option<Vec<String>>>) -> Vec<String> {
+    let mut merged = Vec::new();
+    for tools in tool_lists.into_iter().flatten() {
+        for tool in tools {
+            if !merged.contains(&tool) {
+                merged.push(tool);
+            }
+        }
+    }
+    merged
+}
+
+fn merge_shell_allow_rules(
+    agent_rules: Option<Vec<crate::tools::ShellPolicyRule>>,
+    inherited_rules: Option<Vec<crate::tools::ShellPolicyRule>>,
+) -> Option<Vec<crate::tools::ShellPolicyRule>> {
+    let mut merged = agent_rules.unwrap_or_default();
+    let Some(inherited_rules) = inherited_rules else {
+        return Some(merged);
+    };
+
+    for rule in inherited_rules {
+        if !matches!(rule.decision, crate::tools::ShellDecision::Allow)
+            || merged
+                .iter()
+                .any(|existing| existing.pattern == rule.pattern)
+        {
+            continue;
+        }
+        merged.push(rule);
+    }
+
+    Some(merged)
+}
+
+fn merge_inherited_workflow_config(
+    agent_config: &AgentConfig,
+    inherited_config: &AgentConfig,
+) -> AgentConfig {
+    let mut merged = agent_config.clone();
+
+    // These are workflow preferences and may intentionally carry across sessions.
+    merged.allowed_paths = inherited_config
+        .allowed_paths
+        .clone()
+        .or(merged.allowed_paths);
+    merged.approval_level = inherited_config
+        .approval_level
+        .clone()
+        .or(merged.approval_level);
+    merged.auto_compress = inherited_config.auto_compress.or(merged.auto_compress);
+    merged.final_audit = inherited_config.final_audit.or(merged.final_audit);
+    merged.final_review_mode = inherited_config
+        .final_review_mode
+        .clone()
+        .or(merged.final_review_mode);
+    merged.skill_enabled = inherited_config.skill_enabled.or(merged.skill_enabled);
+    merged.selected_skills = inherited_config
+        .selected_skills
+        .clone()
+        .or(merged.selected_skills);
+    merged.phase = inherited_config.phase.clone().or(merged.phase);
+    merged.models = inherited_config.models.clone().or(merged.models);
+
+    // Tool availability and MCP schema exposure are Agent capabilities. A previous
+    // workflow cannot restore tools that the Agent removed or hide newly added tools.
+    let available_tools = agent_config.available_tools.clone();
+    merged.available_tools = available_tools.clone();
+    let is_tool_allowed = |tool: &str| {
+        available_tools.as_ref().map_or(true, |tools| {
+            tools.iter().any(|configured| configured == tool)
+        })
+    };
+
+    merged.mcp_tool_exposure = agent_config.mcp_tool_exposure.clone().map(|tools| {
+        tools
+            .into_iter()
+            .filter(|tool| is_tool_allowed(tool))
+            .collect()
+    });
+
+    merged.auto_approve = Some(
+        merge_unique_tools([
+            agent_config.auto_approve.clone(),
+            inherited_config.auto_approve.clone(),
+        ])
+        .into_iter()
+        .filter(|tool| tool != crate::tools::TOOL_BASH && is_tool_allowed(tool))
+        .collect(),
+    );
+
+    // Shell is an Agent capability. If bash is unavailable, do not inherit rules.
+    merged.shell_policy = if is_tool_allowed(crate::tools::TOOL_BASH) {
+        merge_shell_allow_rules(
+            agent_config.shell_policy.clone(),
+            inherited_config.shell_policy.clone(),
+        )
+    } else {
+        agent_config.shell_policy.clone()
+    };
+
+    merged.max_contexts = agent_config.max_contexts;
+    merged.sync_legacy_final_audit_flag();
+    merged
+}
+
 fn agent_shell_policy_value(agent: &Agent) -> Option<Value> {
     agent
         .shell_policy
@@ -1389,19 +1512,7 @@ pub async fn create_workflow(
         return Err("Child agents cannot be used as top-level workflow agents".to_string());
     }
 
-    // Build agent config from agent defaults.
-    let mut config =
-        build_agent_config_from_agent(&agent, request.allowed_paths.as_ref(), request.final_audit);
-
-    // Merge inherited config if provided.
-    // Workflow/session overrides take precedence over agent defaults here.
-    if let Some(inherited) = &request.inherited_agent_config {
-        if let Some(inherited_config) = validated_inherited_agent_config(inherited) {
-            config.apply_overrides(&inherited_config);
-        }
-    }
-
-    fill_missing_agent_config_fields(&mut config, &agent);
+    let config = build_workflow_config_for_request(&agent, &request);
 
     let agent_config_json = config.to_json();
 
@@ -5155,19 +5266,260 @@ mod tests {
     }
 
     #[test]
-    fn inherited_mcp_tool_exposure_overrides_agent_defaults_including_empty_selection() {
-        let mut config = AgentConfig {
-            mcp_tool_exposure: Some(vec!["server__MCP__default_tool".to_string()]),
+    fn inherited_workflow_config_keeps_current_agent_tool_capabilities() {
+        let agent_config = AgentConfig {
+            available_tools: Some(vec![
+                "read_file".to_string(),
+                "server__MCP__new_tool".to_string(),
+            ]),
+            mcp_tool_exposure: Some(vec![
+                "server__MCP__new_tool".to_string(),
+                "server__MCP__disabled_tool".to_string(),
+            ]),
+            auto_approve: Some(vec!["read_file".to_string()]),
+            max_contexts: Some(128_000),
             ..AgentConfig::default()
         };
-        let inherited = AgentConfig {
+        let inherited_config = AgentConfig {
+            available_tools: Some(vec![
+                "read_file".to_string(),
+                "server__MCP__removed_tool".to_string(),
+                crate::tools::TOOL_BASH.to_string(),
+            ]),
             mcp_tool_exposure: Some(Vec::new()),
+            auto_approve: Some(vec![
+                "server__MCP__new_tool".to_string(),
+                "server__MCP__removed_tool".to_string(),
+                crate::tools::TOOL_BASH.to_string(),
+            ]),
+            max_contexts: Some(32_000),
             ..AgentConfig::default()
         };
 
-        config.apply_overrides(&inherited);
+        let merged = merge_inherited_workflow_config(&agent_config, &inherited_config);
 
-        assert_eq!(config.mcp_tool_exposure, Some(Vec::new()));
+        assert_eq!(merged.available_tools, agent_config.available_tools);
+        assert_eq!(
+            merged.mcp_tool_exposure,
+            Some(vec!["server__MCP__new_tool".to_string()])
+        );
+        assert_eq!(
+            merged.auto_approve,
+            Some(vec![
+                "read_file".to_string(),
+                "server__MCP__new_tool".to_string(),
+            ])
+        );
+        assert_eq!(merged.max_contexts, Some(128_000));
+        assert!(merged.shell_policy.is_none());
+    }
+
+    #[test]
+    fn inherited_workflow_shell_allows_extend_agent_policy_without_overriding_it() {
+        let agent_rule = crate::tools::ShellPolicyRule {
+            pattern: "^git status$".to_string(),
+            decision: crate::tools::ShellDecision::Review("Agent review".to_string()),
+            description: None,
+        };
+        let agent_config = AgentConfig {
+            available_tools: Some(vec![crate::tools::TOOL_BASH.to_string()]),
+            shell_policy: Some(vec![agent_rule.clone()]),
+            ..AgentConfig::default()
+        };
+        let inherited_config = AgentConfig {
+            shell_policy: Some(vec![
+                crate::tools::ShellPolicyRule {
+                    pattern: "^git status$".to_string(),
+                    decision: crate::tools::ShellDecision::Allow,
+                    description: None,
+                },
+                crate::tools::ShellPolicyRule {
+                    pattern: "^git diff$".to_string(),
+                    decision: crate::tools::ShellDecision::Allow,
+                    description: None,
+                },
+                crate::tools::ShellPolicyRule {
+                    pattern: "^rm ".to_string(),
+                    decision: crate::tools::ShellDecision::Deny("Workflow deny".to_string()),
+                    description: None,
+                },
+            ]),
+            ..AgentConfig::default()
+        };
+
+        let merged = merge_inherited_workflow_config(&agent_config, &inherited_config);
+
+        let shell_policy = merged
+            .shell_policy
+            .expect("shell policy should be inherited");
+        assert_eq!(shell_policy.len(), 2);
+        assert_eq!(shell_policy[0].pattern, agent_rule.pattern);
+        assert!(matches!(
+            shell_policy[0].decision,
+            crate::tools::ShellDecision::Review(_)
+        ));
+        assert_eq!(shell_policy[1].pattern, "^git diff$");
+        assert!(matches!(
+            shell_policy[1].decision,
+            crate::tools::ShellDecision::Allow
+        ));
+    }
+
+    #[test]
+    fn inherited_workflow_config_preserves_none_and_empty_tool_allowlist_semantics() {
+        let inherited_config = AgentConfig {
+            auto_approve: Some(vec!["workflow_only".to_string()]),
+            ..AgentConfig::default()
+        };
+        let unrestricted_agent = AgentConfig {
+            available_tools: None,
+            mcp_tool_exposure: Some(vec!["server__MCP__tool".to_string()]),
+            auto_approve: Some(vec!["agent_only".to_string()]),
+            ..AgentConfig::default()
+        };
+        let empty_agent = AgentConfig {
+            available_tools: Some(Vec::new()),
+            mcp_tool_exposure: Some(vec!["server__MCP__tool".to_string()]),
+            auto_approve: Some(vec!["agent_only".to_string()]),
+            ..AgentConfig::default()
+        };
+
+        let unrestricted = merge_inherited_workflow_config(&unrestricted_agent, &inherited_config);
+        assert_eq!(
+            unrestricted.mcp_tool_exposure,
+            Some(vec!["server__MCP__tool".to_string()])
+        );
+        assert_eq!(
+            unrestricted.auto_approve,
+            Some(vec!["agent_only".to_string(), "workflow_only".to_string()])
+        );
+
+        let empty = merge_inherited_workflow_config(&empty_agent, &inherited_config);
+        assert_eq!(empty.mcp_tool_exposure, Some(Vec::new()));
+        assert_eq!(empty.auto_approve, Some(Vec::new()));
+    }
+
+    #[test]
+    fn inherited_workflow_shell_rules_are_ignored_when_agent_disables_bash() {
+        let agent_rule = crate::tools::ShellPolicyRule {
+            pattern: "^git status$".to_string(),
+            decision: crate::tools::ShellDecision::Review("Agent review".to_string()),
+            description: None,
+        };
+        let agent_config = AgentConfig {
+            available_tools: Some(vec!["read_file".to_string()]),
+            shell_policy: Some(vec![agent_rule]),
+            ..AgentConfig::default()
+        };
+        let inherited_config = AgentConfig {
+            shell_policy: Some(vec![crate::tools::ShellPolicyRule {
+                pattern: "^git diff$".to_string(),
+                decision: crate::tools::ShellDecision::Allow,
+                description: None,
+            }]),
+            ..AgentConfig::default()
+        };
+
+        let merged = merge_inherited_workflow_config(&agent_config, &inherited_config);
+        let shell_policy = merged
+            .shell_policy
+            .expect("agent shell policy should remain");
+        assert_eq!(shell_policy.len(), 1);
+        assert_eq!(shell_policy[0].pattern, "^git status$");
+    }
+
+    #[test]
+    fn workflow_creation_request_cannot_override_agent_tool_capabilities() {
+        let mut agent = Agent::new(
+            "agent-test".to_string(),
+            "Agent Test".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "You are a test agent.".to_string(),
+            None,
+            None,
+            Some(
+                serde_json::to_string(&vec![
+                    "read_file".to_string(),
+                    "server__MCP__new_tool".to_string(),
+                ])
+                .expect("serialize available tools"),
+            ),
+            Some(serde_json::to_string(&vec!["read_file"]).expect("serialize auto approve")),
+            None,
+            Some("[]".to_string()),
+            Some("[\"/agent\"]".to_string()),
+            Some(false),
+            Some("default".to_string()),
+            Some(true),
+            Some("[]".to_string()),
+            Some("standard".to_string()),
+            Some(false),
+            Some(false),
+            Some(128_000),
+        );
+        agent.mcp_tool_exposure = Some(
+            serde_json::to_string(&vec!["server__MCP__new_tool"]).expect("serialize MCP exposure"),
+        );
+
+        let request = CreateWorkflowRequest {
+            user_query: Some("test".to_string()),
+            agent_id: agent.id.clone(),
+            allowed_paths: Some(json!(["/workflow"])),
+            final_audit: Some(false),
+            inherited_agent_config: Some(
+                serde_json::to_string(&AgentConfig {
+                    available_tools: Some(vec![
+                        "server__MCP__removed_tool".to_string(),
+                        crate::tools::TOOL_BASH.to_string(),
+                    ]),
+                    mcp_tool_exposure: Some(Vec::new()),
+                    auto_approve: Some(vec![
+                        "server__MCP__new_tool".to_string(),
+                        "server__MCP__removed_tool".to_string(),
+                    ]),
+                    shell_policy: Some(vec![crate::tools::ShellPolicyRule {
+                        pattern: "^git diff$".to_string(),
+                        decision: crate::tools::ShellDecision::Allow,
+                        description: None,
+                    }]),
+                    allowed_paths: Some(vec!["/inherited".to_string()]),
+                    approval_level: Some("smart".to_string()),
+                    ..AgentConfig::default()
+                })
+                .expect("serialize inherited config"),
+            ),
+        };
+
+        let persisted =
+            AgentConfig::from_json(&build_workflow_config_for_request(&agent, &request).to_json())
+                .expect("persisted config should deserialize");
+
+        assert_eq!(
+            persisted.available_tools,
+            Some(vec![
+                "read_file".to_string(),
+                "server__MCP__new_tool".to_string(),
+            ])
+        );
+        assert_eq!(
+            persisted.mcp_tool_exposure,
+            Some(vec!["server__MCP__new_tool".to_string()])
+        );
+        assert_eq!(
+            persisted.auto_approve,
+            Some(vec![
+                "read_file".to_string(),
+                "server__MCP__new_tool".to_string()
+            ])
+        );
+        assert!(persisted.shell_policy.is_some_and(|rules| rules.is_empty()));
+        assert_eq!(
+            persisted.allowed_paths,
+            Some(vec!["/inherited".to_string()])
+        );
+        assert_eq!(persisted.approval_level, Some("smart".to_string()));
     }
 
     #[test]

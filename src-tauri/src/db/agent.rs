@@ -60,52 +60,6 @@ impl AgentConfig {
         self.final_audit = Some(mode == "sub_agent_review");
         self.final_review_mode = Some(mode);
     }
-
-    pub fn apply_overrides(&mut self, other: &AgentConfig) {
-        if other.allowed_paths.is_some() {
-            self.allowed_paths = other.allowed_paths.clone();
-        }
-        if other.shell_policy.is_some() {
-            self.shell_policy = other.shell_policy.clone();
-        }
-        if other.approval_level.is_some() {
-            self.approval_level = other.approval_level.clone();
-        }
-        if other.auto_approve.is_some() {
-            self.auto_approve = other.auto_approve.clone();
-        }
-        if other.auto_compress.is_some() {
-            self.auto_compress = other.auto_compress;
-        }
-        if other.available_tools.is_some() {
-            self.available_tools = other.available_tools.clone();
-        }
-        if other.final_audit.is_some() {
-            self.final_audit = other.final_audit;
-        }
-        if other.final_review_mode.is_some() {
-            self.final_review_mode = other.final_review_mode.clone();
-        }
-        if other.skill_enabled.is_some() {
-            self.skill_enabled = other.skill_enabled;
-        }
-        if other.selected_skills.is_some() {
-            self.selected_skills = other.selected_skills.clone();
-        }
-        if other.mcp_tool_exposure.is_some() {
-            self.mcp_tool_exposure = other.mcp_tool_exposure.clone();
-        }
-        if other.phase.is_some() {
-            self.phase = other.phase.clone();
-        }
-        if other.models.is_some() {
-            self.models = other.models.clone();
-        }
-        if other.max_contexts.is_some() {
-            self.max_contexts = other.max_contexts;
-        }
-        self.sync_legacy_final_audit_flag();
-    }
 }
 
 /// Model configuration within an Agent
