@@ -2504,6 +2504,142 @@ mod tests {
         .expect("failed to seed agent");
     }
 
+    #[test]
+    fn approval_recovery_authority_comes_from_execution_context_not_transcript() {
+        let store = create_test_store();
+        let session_id = "approval-recovery-authority";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Inspect approval recovery", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I'll inspect the workflow state.".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [
+                        {
+                            "id": "complete_1",
+                            "type": "function",
+                            "function": {
+                                "name": "complete_workflow",
+                                "arguments": { "summary": "Done" }
+                            }
+                        }
+                    ]
+                })),
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant message");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "{\"summary\":\"Done\"}".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "complete_1",
+                    "tool_name": "complete_workflow",
+                    "execution_status": "completed",
+                    "summary": "Done"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add completion tool message");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Waiting;
+        context.wait_reason = Some(WaitReason::Approval);
+        context.pending_tools = vec![PendingTool {
+            tool_call_id: "tool_571ae521".to_string(),
+            tool_name: "bash".to_string(),
+            arguments: json!({ "command": "sqlite3 workflow.db" }),
+            details: Some(json!({
+                "command": "sqlite3 workflow.db",
+                "description": "Inspect workflow state"
+            })),
+            display_type: Some("text".to_string()),
+        }];
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist approval snapshot");
+        store
+            .update_workflow_status(session_id, "awaiting_approval")
+            .expect("failed to update workflow status");
+
+        let workflow = store
+            .get_workflow_for_ui(session_id)
+            .expect("failed to load workflow for ui");
+        assert_eq!(workflow.status, "awaiting_approval");
+        assert_eq!(workflow.wait_reason.as_deref(), Some("approval"));
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot");
+        assert_eq!(snapshot.messages.len(), 2);
+        assert!(
+            !snapshot.messages.iter().any(|message| {
+                message.role == "tool"
+                    && message
+                        .metadata
+                        .as_ref()
+                        .and_then(|meta| meta.get("tool_call_id"))
+                        .and_then(Value::as_str)
+                        == Some("tool_571ae521")
+            }),
+            "transcript should not need a pending tool observation for approval recovery"
+        );
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load execution context")
+            .expect("approval snapshot should exist");
+        assert_eq!(restored.state, RuntimeState::Waiting);
+        assert_eq!(restored.wait_reason, Some(WaitReason::Approval));
+        assert_eq!(restored.pending_tools.len(), 1);
+        assert_eq!(restored.pending_tools[0].tool_call_id, "tool_571ae521");
+        assert_eq!(restored.pending_tools[0].tool_name, "bash");
+        assert_eq!(
+            restored.pending_tools[0].arguments,
+            json!({ "command": "sqlite3 workflow.db" })
+        );
+        assert_eq!(
+            restored.pending_tools[0].details,
+            Some(json!({
+                "command": "sqlite3 workflow.db",
+                "description": "Inspect workflow state"
+            }))
+        );
+        assert_eq!(
+            restored.pending_tools[0].display_type.as_deref(),
+            Some("text")
+        );
+    }
+
     fn add_window_test_message(
         store: &MainStore,
         session_id: &str,

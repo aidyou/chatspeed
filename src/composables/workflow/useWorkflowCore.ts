@@ -1209,8 +1209,6 @@ export function useWorkflowCore({
             return
         }
 
-        console.log('[Workflow] selectWorkflow completed, currentWorkflow:', workflowStore.currentWorkflow?.id, 'status:', workflowStore.currentWorkflow?.status)
-
         if (workflowStore.currentWorkflow) {
             const agent = agentStore.agents.find((a) => a.id === workflowStore.currentWorkflow.agentId)
             if (agent) {
@@ -1222,8 +1220,6 @@ export function useWorkflowCore({
 
             const status = workflowStore.currentWorkflow?.status?.toLowerCase()
             const pendingApprovalRequest = workflowStore.pendingApprovalRequest
-
-            console.log('[Workflow] Checking session recovery:', status, 'workflow:', workflowStore.currentWorkflow?.id, 'hasLiveSession:', workflowStore.hasLiveSession)
 
             clearPendingApprovalEntries(id)
             workflowStore.clearApprovalSubmissionsForSession(id)
@@ -1275,10 +1271,7 @@ export function useWorkflowCore({
             }
 
             if (status === WORKFLOW_STATUSES.PAUSED && workflowStore.waitReason === WORKFLOW_WAIT_REASONS.CONFIRMATION && workflowStore.hasLiveSession) {
-                console.log('[Workflow] Workflow in live confirmation waiting, showing dialog')
                 showConfirmationDialog()
-            } else {
-                console.log('[Workflow] No confirmation dialog recovery needed. status:', status)
             }
 
             // Initialize settings from workflow's agentConfig or fallback to agent defaults
@@ -1288,7 +1281,6 @@ export function useWorkflowCore({
 
         // Scroll to bottom after switching workflow (force scroll)
         nextTick(() => {
-            console.log('Scrolling to bottom after switching workflow')
             scrollToBottom(true)
         })
     }

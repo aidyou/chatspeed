@@ -15,6 +15,12 @@ import { deriveToolViewState } from '@/composables/workflow/useToolStateMapper';
 import { isAutoExecuteWorkflowTool } from '@/composables/workflow/toolApproval';
 import { getToolStatusSummary } from '@/composables/workflow/toolDisplay';
 import { inferWorkflowToolExecutionStatus } from '@/composables/workflow/messageProjectionRules';
+import {
+  appendMissingPendingToolMessages,
+  deriveInlinePendingApprovals,
+  detectApprovalRecoveryDrift,
+  normalizeExecutionContextForApproval
+} from './workflowApprovalRecovery.js';
 
 /**
  * Task Ledger - 统一任务账本模型
@@ -142,6 +148,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const taskCompletionRevision = ref(0);
   let messageLoadRevision = 0;
   const lastTaskCompletion = ref(null);
+  const reportedApprovalRecoveryInvariantSessions = new Set();
 
   // ==================== Task Ledger State ====================
   /**
@@ -372,30 +379,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
   };
 
   const normalizeExecutionContext = (ctx) => {
-    if (!ctx || typeof ctx !== 'object') return null;
+    const normalizedApproval = normalizeExecutionContextForApproval(ctx);
+    if (!normalizedApproval) return null;
     return {
       ...ctx,
-      waitReason: ctx.waitReason ?? ctx.wait_reason ?? null,
+      ...normalizedApproval,
       currentContextTokens: ctx.currentContextTokens ?? ctx.current_context_tokens ?? null,
       maxContextTokens: ctx.maxContextTokens ?? ctx.max_context_tokens ?? null,
-      pendingTools: ctx.pendingTools ?? ctx.pending_tools ?? [],
       waitingOnSubAgentId: ctx.waitingOnSubAgentId ?? ctx.waiting_on_sub_agent_id ?? null,
       subAgentSessions: ctx.subAgentSessions ?? ctx.sub_agent_sessions ?? []
-    };
-  };
-
-  const getStructuredPendingApproval = (ctx) => {
-    const normalized = normalizeExecutionContext(ctx);
-    if (!normalized) return null;
-    if (normalized.waitReason !== WORKFLOW_WAIT_REASONS.APPROVAL) return null;
-    const pendingTool = normalized.pendingTools.find(tool => tool?.tool_call_id || tool?.toolCallId);
-    if (!pendingTool) return null;
-    return {
-      toolCallId: pendingTool.toolCallId ?? pendingTool.tool_call_id ?? '',
-      toolName: pendingTool.toolName ?? pendingTool.tool_name ?? '',
-      arguments: pendingTool.arguments ?? null,
-      details: pendingTool.details ?? null,
-      displayType: pendingTool.displayType ?? pendingTool.display_type ?? ''
     };
   };
 
@@ -488,202 +480,43 @@ export const useWorkflowStore = defineStore('workflow', () => {
     );
   };
 
-  const getCurrentWorkflowPendingTools = () => {
-    const executionContext = normalizeExecutionContext(currentWorkflow.value?.executionContext);
-    const pendingTools = executionContext?.pendingTools || executionContext?.pending_tools || [];
-    return Array.isArray(pendingTools) ? pendingTools : [];
-  };
-
-  const stringifyStructuredMessageContent = (value) => {
-    if (typeof value === 'string') return value;
-    if (value == null) return '';
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
-  };
-
-  const buildStructuredPendingToolMetadata = (pendingTool = {}) => {
-    const toolCallId = String(pendingTool?.toolCallId || pendingTool?.tool_call_id || '').trim();
-    const toolName = String(pendingTool?.toolName || pendingTool?.tool_name || '').trim();
-    const argumentsValue = pendingTool?.arguments ?? null;
-    const details = pendingTool?.details ?? null;
-    const displayType = pendingTool?.displayType || pendingTool?.display_type || '';
-
-    return {
-      tool_call_id: toolCallId,
-      tool_name: toolName,
-      tool_call: {
-        id: toolCallId,
-        function: {
-          name: toolName,
-          arguments: argumentsValue
-        }
-      },
-      details,
-      display_type: displayType,
-      summary: getToolStatusSummary(toolName, 'pending', 'Awaiting approval'),
-      approval_status: 'pending',
-      execution_status: 'pending_approval'
-    };
-  };
-
-  const buildInlineApprovalEntry = ({
-    currentId,
-    workflowTitle,
-    toolCallId,
-    structuredPending = null,
-    meta = {}
-  }) => {
-    const toolName =
-      structuredPending?.toolName ??
-      structuredPending?.tool_name ??
-      meta.tool_name ??
-      meta.tool_call?.function?.name ??
-      meta.tool_call?.name ??
-      '';
-    const argumentsValue =
-      structuredPending?.arguments ??
-      meta.tool_call?.function?.arguments ??
-      meta.tool_call?.arguments ??
-      null;
-    const details = structuredPending?.details ?? meta.details ?? null;
-    const displayType =
-      structuredPending?.displayType ??
-      structuredPending?.display_type ??
-      meta.display_type ??
-      '';
-
-    return {
-      key: `${currentId}:${toolCallId}`,
-      id: toolCallId,
-      sessionId: currentId,
-      kind: 'approval',
-      workflowTitle,
-      action: toolName || meta.title || 'Tool Approval',
-      toolCallId,
-      toolName: toolName || meta.title || 'Tool Approval',
-      arguments: argumentsValue,
-      details,
-      displayType,
-      updatedAt: Date.now()
-    };
-  };
-
-  const hasPendingToolObservationMessage = (list = [], toolCallId) => {
-    const normalizedToolCallId = String(toolCallId || '').trim();
-    if (!normalizedToolCallId) return false;
-
-    return list.some((message) => {
-      const meta = message?.metadata || {};
-      if (String(meta.tool_call_id || '').trim() !== normalizedToolCallId) return false;
-      return getToolApprovalState(message, meta) === 'pending';
-    });
-  };
-
-  const getToolApprovalState = (message, meta = {}) => {
-    const approvalStatus = String(meta.approval_status || '').toLowerCase();
-    const executionStatus = String(meta.execution_status || '').toLowerCase();
-    const isError = message?.isError || message?.is_error || meta.is_error;
-
-    if (
-      (approvalStatus === 'pending' || executionStatus === 'pending_approval') &&
-      executionStatus !== 'approval_submitted' &&
-      executionStatus !== 'running' &&
-      executionStatus !== 'rejected' &&
-      executionStatus !== 'completed' &&
-      executionStatus !== 'failed' &&
-      executionStatus !== 'interrupted'
-    ) {
-      return 'pending';
-    }
-
-    if (
-      approvalStatus === 'approved' ||
-      approvalStatus === 'rejected' ||
-      executionStatus === 'approval_submitted' ||
-      executionStatus === 'running' ||
-      executionStatus === 'rejected' ||
-      executionStatus === 'completed' ||
-      executionStatus === 'failed' ||
-      executionStatus === 'interrupted' ||
-      isError
-    ) {
-      return 'resolved';
-    }
-
-    // A normal tool observation with the same tool_call_id is the final result
-    // for old histories where approval metadata was not patched in place.
-    if (message?.role === 'tool') {
-      return 'resolved';
-    }
-
-    return null;
-  };
-
   const deriveCurrentInlinePendingApprovals = () => {
-    if (!currentWorkflowId.value || !isCurrentWorkflowApprovalWaiting()) {
-      return [];
-    }
+    const inlineApprovals = deriveInlinePendingApprovals({
+      currentWorkflowId: currentWorkflowId.value,
+      workflowTitle:
+        currentWorkflow.value?.title || currentWorkflow.value?.userQuery || 'Untitled Workflow',
+      status: currentWorkflow.value?.status || '',
+      waitReason: getCurrentWorkflowWaitReason(),
+      executionContext: currentWorkflow.value?.executionContext,
+      messages: messages.value,
+      submittedToolIds:
+        approvalSubmissions.value.get(currentWorkflowId.value) || new Set(),
+      approvalWaitingStatuses: approvalWaitingStates,
+      approvalWaitReason: WORKFLOW_WAIT_REASONS.APPROVAL
+    });
+
+    const drift = detectApprovalRecoveryDrift({
+      status: currentWorkflow.value?.status || '',
+      waitReason: getCurrentWorkflowWaitReason(),
+      executionContext: currentWorkflow.value?.executionContext,
+      inlinePendingApprovals: inlineApprovals,
+      approvalWaitingStatuses: approvalWaitingStates,
+      approvalWaitReason: WORKFLOW_WAIT_REASONS.APPROVAL
+    });
 
     const currentId = currentWorkflowId.value;
-    const submittedToolIds = approvalSubmissions.value.get(currentId) || new Set();
-    const workflowTitle =
-      currentWorkflow.value?.title || currentWorkflow.value?.userQuery || 'Untitled Workflow';
-    const order = [];
-    const latestById = new Map();
-    const structuredPendingById = new Map();
-
-    for (const pendingTool of getCurrentWorkflowPendingTools()) {
-      const toolCallId = String(pendingTool?.toolCallId || pendingTool?.tool_call_id || '').trim();
-      if (!toolCallId) continue;
-
-      if (!structuredPendingById.has(toolCallId)) {
-        order.push(toolCallId);
-      }
-
-      structuredPendingById.set(toolCallId, pendingTool);
-    }
-
-    for (const message of messages.value) {
-      const messageSessionId = message?.sessionId || currentId;
-      if (messageSessionId !== currentId) continue;
-
-      const meta = message.metadata || {};
-      const toolCallId = String(meta.tool_call_id || '').trim();
-      if (!toolCallId) continue;
-
-      const state = getToolApprovalState(message, meta);
-      if (!state) continue;
-
-      if (!latestById.has(toolCallId)) {
-        order.push(toolCallId);
-      }
-
-      latestById.set(toolCallId, {
-        state,
-        meta
+    if (drift && currentId && !reportedApprovalRecoveryInvariantSessions.has(currentId)) {
+      reportedApprovalRecoveryInvariantSessions.add(currentId);
+      console.error('[Workflow][ApprovalRecovery] Structured pending tools were present without inline approvals', {
+        sessionId: currentId,
+        ...drift
       });
     }
+    if (!drift && currentId) {
+      reportedApprovalRecoveryInvariantSessions.delete(currentId);
+    }
 
-    return order
-      .map((toolCallId) => {
-        if (submittedToolIds.has(toolCallId)) return null;
-        const structuredPending = structuredPendingById.get(toolCallId) || null;
-        const latest = latestById.get(toolCallId);
-        if (latest?.state === 'resolved') return null;
-        if (!structuredPending && latest?.state !== 'pending') return null;
-        const meta = latest.meta || {};
-        return buildInlineApprovalEntry({
-          currentId,
-          workflowTitle,
-          toolCallId,
-          structuredPending,
-          meta
-        });
-      })
-      .filter(Boolean);
+    return inlineApprovals;
   };
 
   const isActivelyRunning = computed(() => {
@@ -1435,37 +1268,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const parsedMessages = (snapshot.messages || []).map(m =>
         normalizeWorkflowMessage(m, workflowId)
       );
-      const structuredPendingTools =
-        snapshot.workflow.executionContext?.pendingTools ||
-        snapshot.workflow.executionContext?.pending_tools ||
-        [];
-
-      if (Array.isArray(structuredPendingTools) && structuredPendingTools.length > 0) {
-        for (const pendingTool of structuredPendingTools) {
-          const toolCallId = String(
-            pendingTool?.toolCallId || pendingTool?.tool_call_id || ''
-          ).trim();
-          if (!toolCallId || hasPendingToolObservationMessage(parsedMessages, toolCallId)) {
-            continue;
-          }
-
-          const metadata = buildStructuredPendingToolMetadata(pendingTool);
-          parsedMessages.push({
-            id: null,
-            sessionId: workflowId,
-            role: 'tool',
-            message: stringifyStructuredMessageContent(metadata.details),
-            reasoning: null,
-            stepType: 'Observe',
-            stepIndex: parsedMessages.length,
-            isError: false,
-            errorType: null,
-            metadata
-          });
-        }
-      }
-
-      messages.value = parsedMessages;
+      messages.value = appendMissingPendingToolMessages({
+        messages: parsedMessages,
+        sessionId: workflowId,
+        executionContext: snapshot.workflow.executionContext,
+        getPendingSummary: toolName => getToolStatusSummary(toolName, 'pending', 'Awaiting approval')
+      });
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
       hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
       clearApprovalSubmissionsForSession(workflowId);
@@ -1886,9 +1694,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const snapshot = await invokeWrapper('get_workflow_snapshot', { sessionId: workflowId });
       if (currentWorkflowId.value !== workflowId || messageLoadRevision !== requestRevision) return;
 
-      messages.value = (snapshot.messages || []).map(message =>
+      const parsedMessages = (snapshot.messages || []).map(message =>
         normalizeWorkflowMessage(message, workflowId)
       );
+      messages.value = appendMissingPendingToolMessages({
+        messages: parsedMessages,
+        sessionId: workflowId,
+        executionContext: normalizeExecutionContext(snapshot.executionContext),
+        getPendingSummary: toolName => getToolStatusSummary(toolName, 'pending', 'Awaiting approval')
+      });
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
       hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
 
