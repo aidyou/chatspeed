@@ -71,6 +71,39 @@ assert.deepEqual(inlineApprovals[0].details, {
   description: 'Inspect workflow state'
 })
 
+const legacyTitleOnlyApproval = deriveInlinePendingApprovals({
+  currentWorkflowId: 'session-legacy',
+  workflowTitle: 'Legacy approval',
+  status: 'awaiting_approval',
+  waitReason: 'approval',
+  executionContext: null,
+  messages: [
+    {
+      sessionId: 'session-legacy',
+      role: 'tool',
+      metadata: {
+        tool_call_id: 'tool_legacy',
+        title: 'Submit Plan after running bash search',
+        approval_status: 'pending',
+        execution_status: 'pending_approval'
+      }
+    }
+  ],
+  approvalWaitingStatuses
+})
+
+assert.equal(legacyTitleOnlyApproval.length, 1)
+assert.equal(
+  legacyTitleOnlyApproval[0].toolName,
+  'unknown',
+  'legacy display titles must not be promoted into canonical tool identity'
+)
+assert.equal(
+  legacyTitleOnlyApproval[0].action,
+  'Submit Plan after running bash search',
+  'legacy titles may remain presentation-only labels'
+)
+
 const hydratedMessages = appendMissingPendingToolMessages({
   messages: historicalMessages,
   sessionId: 'session-1',

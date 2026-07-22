@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 
 import {
   collectSubAgentCompletions,
+  getStructuredWorkflowToolName,
   inferWorkflowToolExecutionStatus,
+  isPendingApprovalEntryForTool,
+  isWorkflowCompletionMessage,
   normalizeVisibleCompletionReport,
   shouldRenderSubAgentCard
 } from './messageProjectionRules.js'
@@ -54,6 +57,107 @@ assert.equal(
   ),
   'pending_approval',
   'pending approvals without an explicit execution status should still map to pending_approval'
+)
+
+assert.equal(
+  getStructuredWorkflowToolName({
+    metadata: {
+      title: 'Read write edit list bash grep glob web search Ask User FinishTask'
+    }
+  }),
+  '',
+  'display titles must never be interpreted as structured tool identity'
+)
+
+assert.equal(
+  getStructuredWorkflowToolName({
+    metadata: {
+      tool_call: {
+        function: {
+          name: 'BASH'
+        }
+      },
+      title: 'Submit Plan'
+    }
+  }),
+  'bash',
+  'structured tool identity must take precedence over unrelated display text'
+)
+
+assert.equal(
+  isPendingApprovalEntryForTool(
+    {
+      id: 'tool_bash',
+      sessionId: 'session-1',
+      toolName: 'bash',
+      action: 'Run a command containing submit plan'
+    },
+    'session-1',
+    'submit_plan'
+  ),
+  false,
+  'approval actions containing plan text must not be selected as submit_plan'
+)
+
+assert.equal(
+  isPendingApprovalEntryForTool(
+    {
+      id: 'tool_plan',
+      sessionId: 'session-1',
+      toolName: 'submit_plan',
+      action: 'Localized plan approval title'
+    },
+    'session-1',
+    'submit_plan'
+  ),
+  true,
+  'plan approval selection must use exact structured identity and session scope'
+)
+
+assert.equal(
+  isWorkflowCompletionMessage(
+    {
+      metadata: {
+        tool_name: 'bash',
+        execution_status: 'pending_approval',
+        approval_status: 'pending'
+      },
+      toolDisplay: {
+        action:
+          'Run sqlite3 chatspeed.db "SELECT InvalidFinishSummary, FinishTask FROM workflow_messages"'
+      }
+    }
+  ),
+  false,
+  'bash commands containing Finish markers must keep their approval presentation'
+)
+
+assert.equal(
+  isWorkflowCompletionMessage(
+    {
+      metadata: {
+        tool_name: 'complete_workflow'
+      },
+      toolDisplay: {
+        action: 'Finish task'
+      }
+    }
+  ),
+  true,
+  'structured complete_workflow messages must use the completion presentation'
+)
+
+assert.equal(
+  isWorkflowCompletionMessage(
+    {
+      metadata: {},
+      toolDisplay: {
+        action: 'Finish task'
+      }
+    }
+  ),
+  false,
+  'messages without structured tool identity must never use completion presentation'
 )
 
 const visibleCompletion = collectSubAgentCompletions(

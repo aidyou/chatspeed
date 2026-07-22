@@ -20,6 +20,7 @@ import {
 } from '@/composables/workflow/signalTypes'
 import { safeExecute } from './useErrorBoundary'
 import { BLOCKING_WAIT_REASONS } from './signalTypes'
+import { isPendingApprovalEntryForTool } from './messageProjectionRules'
 
 const FINAL_REVIEWER_BUILTIN_AGENT_ID = 'builtin:final-code-reviewer'
 
@@ -531,6 +532,7 @@ export function useWorkflowCore({
         const workflowTitle = workflow?.title || workflow?.userQuery || t('workflow.untitled')
         const approvalId = payload.id || 'awaiting_approval'
         const key = `${sessionId}:${approvalId}`
+        const toolName = String(payload.toolName || payload.tool_name || '').trim().toLowerCase()
 
         pendingApprovalEntries.value = {
             ...pendingApprovalEntries.value,
@@ -540,7 +542,8 @@ export function useWorkflowCore({
                 sessionId,
                 kind: payload.kind || 'approval',
                 workflowTitle,
-                action: payload.action || t('workflow.awaitingApproval'),
+                action: payload.action || toolName || t('workflow.awaitingApproval'),
+                toolName: toolName || 'unknown',
                 updatedAt: Date.now()
             }
         }
@@ -620,11 +623,7 @@ export function useWorkflowCore({
         if (!sessionId || !toolCallId) return
         if (hasResolvedToolObservation(sessionId, toolCallId)) return
 
-        const toolName =
-            payload.toolName ||
-            payload.tool_name ||
-            payload.action ||
-            t('workflow.awaitingApproval')
+        const toolName = payload.toolName || payload.tool_name || 'unknown'
         const argumentsValue = payload.arguments ?? null
         const details = payload.details ?? null
         const displayType = payload.displayType || payload.display_type || ''
@@ -739,6 +738,9 @@ export function useWorkflowCore({
                     pendingTool?.toolName ||
                     pendingTool?.tool_name ||
                     t('workflow.awaitingApproval'),
+                toolName: String(
+                    pendingTool?.toolName || pendingTool?.tool_name || 'unknown'
+                ).trim().toLowerCase(),
                 updatedAt: Date.now()
             }
             changed = true
@@ -1175,7 +1177,8 @@ export function useWorkflowCore({
                 upsertPendingApprovalEntry(previousWorkflowId, {
                     id: entry.id,
                     kind: 'approval',
-                    action: entry.action || t('workflow.awaitingApproval')
+                    action: entry.action || t('workflow.awaitingApproval'),
+                    toolName: entry.toolName || 'unknown'
                 })
             }
 
@@ -1256,7 +1259,8 @@ export function useWorkflowCore({
                 } else if (pendingApprovalRequest && !workflowStore.pendingApprovalMessage) {
                     upsertPendingApprovalEntry(id, {
                         id: pendingApprovalRequest.toolCallId || 'awaiting_approval',
-                        action: pendingApprovalRequest.toolName || t('workflow.awaitingApproval')
+                        action: pendingApprovalRequest.toolName || t('workflow.awaitingApproval'),
+                        toolName: pendingApprovalRequest.toolName || 'unknown'
                     })
                     upsertPendingApprovalMessage(id, {
                         toolCallId: pendingApprovalRequest.toolCallId || '',
@@ -1679,11 +1683,7 @@ export function useWorkflowCore({
             return toolName === 'submit_plan' && toolCallId
         })
         const submitPlanPendingEntry = pendingApprovalList.value.find(
-            (entry) =>
-                entry?.sessionId === currentSessionId &&
-                String(entry?.id || '').trim() &&
-                String(entry?.id) !== 'awaiting_approval' &&
-                String(entry?.action || '').toLowerCase().includes('submit plan')
+            (entry) => isPendingApprovalEntryForTool(entry, currentSessionId, 'submit_plan')
         )
         const submitPlanToolCallId =
             String(

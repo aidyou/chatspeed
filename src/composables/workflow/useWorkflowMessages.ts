@@ -2,10 +2,12 @@ import { ref, computed, watch } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
 import {
   collectSubAgentCompletions,
+  getStructuredWorkflowToolName,
   normalizeVisibleCompletionReport
 } from './messageProjectionRules'
 import { useSubAgentSummaries } from './useSubAgentSummaries'
 import { resolveWorkflowToolIcon } from './toolIcons'
+import { isWorkflowTodoTool } from './toolClassification'
 import { isAutoExecuteWorkflowTool } from './toolApproval'
 import { useI18n } from 'vue-i18n'
 import * as Diff from 'diff'
@@ -682,17 +684,16 @@ export function useWorkflowMessages(options = {}) {
         groups,
         files,
         readCount: groups.reduce(
-          (count, group) => count + group.tools.filter(tool => tool.action.startsWith('Read ')).length,
+          (count, group) =>
+            count +
+            group.tools.filter(tool => ['read_file', 'list_dir', 'web_fetch'].includes(tool.name)).length,
           0
         ),
         searchCount: groups.reduce(
           (count, group) =>
             count +
             group.tools.filter(
-              tool =>
-                tool.action.startsWith('Search ') ||
-                tool.action.startsWith('Grep ') ||
-                tool.action.startsWith('Glob ')
+              tool => ['web_search', 'grep', 'glob'].includes(tool.name)
             ).length,
           0
         ),
@@ -1043,7 +1044,7 @@ export function useWorkflowMessages(options = {}) {
               }
             })
             .filter(call => {
-              if (isInternalTodoTool(call.toolName)) return false
+              if (isWorkflowTodoTool(call.toolName)) return false
               if (call.toolName === 'sub_agent_run') return false
               if (toolMessageIds.has(call.id)) return false
               const callId = String(call.id || '').trim()
@@ -1210,7 +1211,7 @@ export function useWorkflowMessages(options = {}) {
     // Only force expansion for 'Ask User' to ensure visibility of interaction points.
     // Everything else (especially heavy Diffs) should be collapsed by default.
     if (message.metadata?.approval_status === 'pending') return true
-    if (message.toolDisplay?.action === 'Ask User') return true
+    if (getStructuredWorkflowToolName(message) === 'ask_user') return true
     return expandedMessages.value.has(message.displayId)
   }
 
@@ -1256,8 +1257,6 @@ export function useWorkflowMessages(options = {}) {
     ]
     return [...new Set(roots.filter(Boolean))]
   }
-
-  const isInternalTodoTool = toolName => String(toolName || '').toLowerCase().startsWith('todo_')
 
   const decodeCompatJsonPayload = value => {
     if (typeof value !== 'string') return value

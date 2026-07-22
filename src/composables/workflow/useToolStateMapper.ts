@@ -7,6 +7,7 @@
 
 import type { ToolViewState, ToolViewStatus } from './useTaskLedger'
 import { isAutoExecuteWorkflowTool } from './toolApproval'
+import { getStructuredWorkflowToolName } from './messageProjectionRules'
 import {
   formatDisplayPath,
   getToolStatusSummary,
@@ -107,33 +108,7 @@ function extractToolCallId(message: RawMessage): string | null {
  * Extract tool name from message
  */
 function extractToolName(message: RawMessage): string {
-  const meta = message.metadata
-  if (!meta) return 'unknown'
-
-  // Directly specified
-  if (meta.tool_name) return meta.tool_name
-
-  // Extract from tool_call
-  const toolCall = meta.tool_call
-  if (toolCall) {
-    return toolCall.name || toolCall.function?.name || 'unknown'
-  }
-
-  // Infer from title
-  if (meta.title) {
-    const title = meta.title.toLowerCase()
-    if (title.includes('read')) return 'read_file'
-    if (title.includes('write')) return 'write_file'
-    if (title.includes('edit')) return 'edit_file'
-    if (title.includes('list')) return 'list_dir'
-    if (title.includes('bash')) return 'bash'
-    if (title.includes('grep')) return 'grep'
-    if (title.includes('glob')) return 'glob'
-    if (title.includes('web')) return 'web_fetch'
-    if (title.includes('search')) return 'web_search'
-  }
-
-  return 'unknown'
+  return getStructuredWorkflowToolName(message) || 'unknown'
 }
 
 /**

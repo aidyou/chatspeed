@@ -630,7 +630,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     if (activeInlineEntry) {
       return {
         toolCallId: activeInlineEntry.toolCallId || activeInlineEntry.id || '',
-        toolName: activeInlineEntry.toolName || activeInlineEntry.action || 'Tool Approval',
+        toolName: activeInlineEntry.toolName || 'unknown',
         arguments: activeInlineEntry.arguments ?? null,
         details: activeInlineEntry.details ?? null,
         displayType: activeInlineEntry.displayType || ''
@@ -649,7 +649,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
     return {
       toolCallId: legacy?.metadata?.tool_call_id || '',
-      toolName: legacy?.metadata?.tool_name || legacy?.metadata?.title || 'Tool Approval',
+      toolName: legacy?.metadata?.tool_name || 'unknown',
       arguments: legacyArguments,
       details: legacyDetails,
       displayType: legacy?.metadata?.display_type || ''

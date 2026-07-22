@@ -152,7 +152,7 @@ const buildInlineApprovalEntry = ({
     workflowTitle,
     action: toolName || normalizedMeta.title || 'Tool Approval',
     toolCallId,
-    toolName: toolName || normalizedMeta.title || 'Tool Approval',
+    toolName: toolName || 'unknown',
     arguments: argumentsValue,
     details,
     displayType,

@@ -175,7 +175,7 @@ const isEditAction = computed(() => {
     return true
   }
   const action = normalizedAction.value
-  if (action.includes('edit_file') || action.includes('write_file')) {
+  if (action === 'edit_file' || action === 'write_file') {
     return true
   }
   return isFileChangePayload.value

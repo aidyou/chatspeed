@@ -875,7 +875,10 @@ import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
 import hljs from 'highlight.js'
-import { shouldRenderSubAgentCard } from '@/composables/workflow/messageProjectionRules'
+import {
+  isWorkflowCompletionMessage,
+  shouldRenderSubAgentCard
+} from '@/composables/workflow/messageProjectionRules'
 import { normalizeShellCommandForDisplay } from '@/composables/workflow/toolDisplay'
 import ApprovalDialog from './ApprovalDialog.vue'
 import FilePreviewDiff from './FilePreviewDiff.vue'
@@ -1374,15 +1377,7 @@ const getApprovalDetailsPayload = message => {
   return props.removeSystemReminder(message?.message || '')
 }
 
-const isFinishTaskMessage = message => {
-  const metaToolName = getMessageToolName(message)
-  const action = message?.toolDisplay?.action || ''
-  return (
-    metaToolName === 'complete_workflow' ||
-    action === t('workflow.finishTask') ||
-    action.includes('Finish')
-  )
-}
+const isFinishTaskMessage = message => isWorkflowCompletionMessage(message)
 
 const isFinishTaskErrorMessage = message => {
   if (!message || message.role !== 'tool') return false

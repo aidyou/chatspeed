@@ -84,6 +84,45 @@ export const inferWorkflowToolExecutionStatus = (message, existingMeta = {}) => 
 }
 
 /**
+ * Read canonical tool identity only from structured workflow metadata.
+ */
+export const getStructuredWorkflowToolName = message => {
+  const metadata = message?.metadata || message || {}
+  return String(
+    metadata.tool_name ||
+      metadata.tool_call?.name ||
+      metadata.tool_call?.function?.name ||
+      ''
+  )
+    .trim()
+    .toLowerCase()
+}
+
+export const isPendingApprovalEntryForTool = (entry, sessionId, toolName) => {
+  const entryId = String(entry?.id || '').trim()
+  const expectedToolName = String(toolName || '').trim().toLowerCase()
+  return (
+    !!expectedToolName &&
+    entry?.sessionId === sessionId &&
+    !!entryId &&
+    entryId !== 'awaiting_approval' &&
+    String(entry?.toolName || '').trim().toLowerCase() === expectedToolName
+  )
+}
+
+/**
+ * Identify the completion tool exclusively from structured metadata.
+ *
+ * Bash commands can legitimately contain strings such as `FinishTask` or
+ * `InvalidFinishSummary`. Do not add title, action, localized-label, or message
+ * content fallbacks here: they can hide another tool's approval UI behind the
+ * completion-only presentation. Historical records without a structured tool
+ * name intentionally use the generic tool presentation.
+ */
+export const isWorkflowCompletionMessage = message =>
+  getStructuredWorkflowToolName(message) === 'complete_workflow'
+
+/**
  * Decide whether a workflow message should render as a delegated-task card.
  *
  * Final review pending messages are persisted on the completion tool
