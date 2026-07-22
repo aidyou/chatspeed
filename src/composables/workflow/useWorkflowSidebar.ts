@@ -14,11 +14,11 @@ export function useWorkflowSidebar() {
   const maxSidebarWidth = ref(window.innerWidth * 0.5)
 
   const sidebarWidth = computed(() =>
-    sidebarCollapsed.value ? '0px' : `${sidebarWidthValue.value}px`
+    sidebarCollapsed.value ? '60px' : `${sidebarWidthValue.value}px`
   )
 
   const sidebarStyle = computed(() => ({
-    '--sidebar-width': sidebarCollapsed.value ? '0px' : `${sidebarWidthValue.value}px`
+    '--sidebar-width': sidebarCollapsed.value ? '60px' : `${sidebarWidthValue.value}px`
   }))
 
   const onToggleSidebar = () => {

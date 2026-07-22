@@ -1,7 +1,104 @@
 <template>
   <el-aside :width="sidebarWidth" :class="{ collapsed: sidebarCollapsed, dragging: isDragging }" class="sidebar"
     :style="sidebarStyle">
-    <div v-show="!sidebarCollapsed" class="sidebar-tabs-container">
+    <div v-if="sidebarCollapsed" class="sidebar-compact">
+      <div class="compact-sidebar-tabs">
+        <el-tooltip :content="$t('workflow.historyTab')" placement="right" :hide-after="0" :enterable="false">
+          <div
+            class="compact-sidebar-tab"
+            :class="{ active: compactSidebarTab === 'history' }"
+            @click="activeSidebarTab = 'history'">
+            <cs name="message" />
+          </div>
+        </el-tooltip>
+        <el-tooltip :content="$t('workflow.automation.title')" placement="right" :hide-after="0" :enterable="false">
+          <div
+            class="compact-sidebar-tab"
+            :class="{ active: compactSidebarTab === 'automation' }"
+            @click="activeSidebarTab = 'automation'">
+            <cs name="clock" />
+          </div>
+        </el-tooltip>
+      </div>
+
+      <div v-if="compactSidebarTab === 'history'" class="compact-sidebar-list">
+        <el-tooltip
+          v-for="wf in filteredWorkflows"
+          :key="wf.id"
+          placement="right"
+          :hide-after="0"
+          :enterable="false"
+          popper-class="workflow-sidebar-tooltip">
+          <template #content>
+            <div class="workflow-sidebar-tooltip__title">
+              {{ wf.title || wf.userQuery || $t('workflow.untitled') }}
+            </div>
+            <div class="workflow-sidebar-tooltip__meta">
+              <span class="workflow-sidebar-tooltip__status">
+                <span :class="['status-indicator', getWorkflowStatusClass(wf.status)]"></span>
+                {{ getWorkflowStatusLabel(wf.status) }}
+              </span>
+              <span v-if="getPrimaryRootName(wf)" class="workflow-sidebar-tooltip__root">
+                <cs name="ext-folder" />
+                {{ getPrimaryRootName(wf) }}
+              </span>
+            </div>
+          </template>
+          <div
+            class="compact-sidebar-item"
+            :class="[
+              getWorkflowStatusClass(wf.status),
+              { active: wf.id === currentWorkflowId, disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId }
+            ]"
+            @click="$emit('select-workflow', wf.id)">
+            <span class="compact-sidebar-item__badge">
+              {{ getPrimaryRootInitials(wf) }}
+            </span>
+            <span :class="['compact-sidebar-item__status', getWorkflowStatusClass(wf.status)]"></span>
+          </div>
+        </el-tooltip>
+      </div>
+
+      <div v-else class="compact-sidebar-list">
+        <el-tooltip
+          v-for="automation in filteredAutomations"
+          :key="automation.id"
+          placement="right"
+          :hide-after="0"
+          :enterable="false"
+          popper-class="workflow-sidebar-tooltip">
+          <template #content>
+            <div class="workflow-sidebar-tooltip__title">
+              {{ automation.title || $t('workflow.automation.untitled') }}
+            </div>
+            <div class="workflow-sidebar-tooltip__meta">
+              <span class="workflow-sidebar-tooltip__status">
+                <span :class="['status-indicator', getAutomationStatusClass(automation)]"></span>
+                {{ getAutomationStatusLabel(automation) }}
+              </span>
+              <span v-if="getPrimaryRootName(automation)" class="workflow-sidebar-tooltip__root">
+                <cs name="ext-folder" />
+                {{ getPrimaryRootName(automation) }}
+              </span>
+            </div>
+          </template>
+          <div
+            class="compact-sidebar-item"
+            :class="[
+              getAutomationStatusClass(automation),
+              { active: automation.id === selectedAutomationId }
+            ]"
+            @click="$emit('select-automation', automation.id)">
+            <span class="compact-sidebar-item__badge">
+              {{ getPrimaryRootInitials(automation) }}
+            </span>
+            <span :class="['compact-sidebar-item__status', getAutomationStatusClass(automation)]"></span>
+          </div>
+        </el-tooltip>
+      </div>
+    </div>
+
+    <div v-else class="sidebar-tabs-container">
       <el-tabs v-model="activeSidebarTab" class="sidebar-tabs">
         <el-tab-pane :label="$t('workflow.historyTab')" name="history">
           <div class="sidebar-header">
@@ -48,10 +145,8 @@
                   disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId
                 }">
                 <div class="workflow-title">{{ wf.title || wf.userQuery || $t('workflow.untitled') }}</div>
-                <div
-                  v-if="wf.status || getPrimaryRootName(wf)"
-                  class="workflow-status-row">
-                  <div class="workflow-status" v-if="wf.status">
+                <div class="workflow-status-row">
+                  <div class="workflow-status">
                     <span :class="['status-indicator', getWorkflowStatusClass(wf.status)]"></span>
                     {{ getWorkflowStatusLabel(wf.status) }}
                   </div>
@@ -114,18 +209,14 @@
                 </div>
                 <div class="workflow-status-row">
                   <div class="workflow-status">
-                    <span
-                      :class="[
-                        'status-indicator',
-                        automation.enabled ? 'completed' : 'paused'
-                      ]"></span>
-                    {{ automation.enabled ? $t('workflow.automation.enabled') : $t('workflow.automation.disabled') }}
+                    <span :class="['status-indicator', getAutomationStatusClass(automation)]"></span>
+                    {{ getAutomationStatusLabel(automation) }}
                   </div>
                   <div
-                    v-if="automation.nextRunAt"
+                    v-if="getPrimaryRootName(automation)"
                     class="workflow-primary-root"
-                    :title="automation.nextRunAt">
-                    {{ automation.nextRunAt }}
+                    :title="getPrimaryRootPath(automation)">
+                    {{ getPrimaryRootName(automation) }}
                   </div>
                 </div>
                 <div class="icons" v-show="automation.id === hoveredWorkflowIndex">
@@ -229,11 +320,41 @@ const activeSidebarTab = computed({
   get: () => props.activeTab,
   set: value => emit('update:activeTab', value)
 })
+const compactSidebarTab = computed(() =>
+  activeSidebarTab.value === 'automation' ? 'automation' : 'history'
+)
 const searchQuery = ref('')
 const automationSearchQuery = ref('')
 const hoveredWorkflowIndex = ref(null)
 const selectedPrimaryRootFilter = ref('')
-const runningStatuses = new Set(['thinking', 'executing', 'auditing', 'running'])
+const runningStatuses = new Set(['thinking', 'executing', 'auditing', 'running', 'stopping'])
+const waitingStatuses = new Set([
+  'paused',
+  'awaiting_user',
+  'awaiting_approval',
+  'awaiting_auto_approval',
+  'awaiting_sub_agent'
+])
+const failedStatuses = new Set(['error', 'failed'])
+const cancelledStatuses = new Set(['cancelled', 'interrupted'])
+const workflowStatusLabels = {
+  pending: 'workflow.sidebarStatus.pending',
+  thinking: 'workflow.sidebarStatus.thinking',
+  executing: 'workflow.sidebarStatus.executing',
+  auditing: 'workflow.sidebarStatus.auditing',
+  running: 'workflow.sidebarStatus.running',
+  stopping: 'workflow.sidebarStatus.stopping',
+  paused: 'workflow.sidebarStatus.paused',
+  awaiting_user: 'workflow.sidebarStatus.awaitingUser',
+  awaiting_approval: 'workflow.sidebarStatus.awaitingApproval',
+  awaiting_auto_approval: 'workflow.sidebarStatus.awaitingApproval',
+  awaiting_sub_agent: 'workflow.sidebarStatus.awaitingSubAgent',
+  completed: 'workflow.sidebarStatus.completed',
+  error: 'workflow.sidebarStatus.error',
+  failed: 'workflow.sidebarStatus.failed',
+  cancelled: 'workflow.sidebarStatus.cancelled',
+  interrupted: 'workflow.sidebarStatus.interrupted'
+}
 const rootFilterAllLabel = t('common.all')
 
 const trimTrailingSlash = (value = '') => String(value).replace(/[\\/]+$/, '')
@@ -260,15 +381,37 @@ const getPrimaryRootName = (workflow) => {
   return segments[segments.length - 1] || primaryRoot
 }
 
+const getPathInitials = (path) => {
+  const name = getPrimaryRootName({ allowedPaths: [path] })
+  if (!name) return '—'
+
+  const characters = Array.from(name.trim())
+  return characters.slice(0, 2).join('').toLocaleUpperCase()
+}
+
+const getPrimaryRootInitials = (item) => getPathInitials(getPrimaryRootPath(item))
+
 const getWorkflowStatusClass = (status) => {
   const normalized = String(status || '').toLowerCase()
-  return runningStatuses.has(normalized) ? 'running' : normalized
+  if (runningStatuses.has(normalized)) return 'running'
+  if (waitingStatuses.has(normalized)) return 'waiting'
+  if (failedStatuses.has(normalized)) return 'failed'
+  if (cancelledStatuses.has(normalized)) return 'cancelled'
+  return normalized || 'pending'
 }
 
 const getWorkflowStatusLabel = (status) => {
   const normalized = String(status || '').toLowerCase()
-  return runningStatuses.has(normalized) ? 'running' : status
+  const statusClass = getWorkflowStatusClass(normalized)
+  const key = workflowStatusLabels[normalized] || workflowStatusLabels[statusClass]
+  return t(key || workflowStatusLabels.pending)
 }
+
+const getAutomationStatusClass = (automation) =>
+  automation.enabled ? 'completed' : 'paused'
+
+const getAutomationStatusLabel = (automation) =>
+  automation.enabled ? t('workflow.automation.enabled') : t('workflow.automation.disabled')
 
 const primaryRootOptions = computed(() => {
   const seen = new Set()
