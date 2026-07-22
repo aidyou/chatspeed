@@ -28,7 +28,7 @@ export interface RawMessage {
   stepIndex?: number
 }
 
-/** Message metadata interface */
+/** Persisted and gateway message metadata uses the backend snake_case wire format. */
 export interface MessageMetadata {
   tool_call_id?: string
   tool_call?: ToolCallInfo

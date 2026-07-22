@@ -111,6 +111,30 @@ export const isPendingApprovalEntryForTool = (entry, sessionId, toolName) => {
 }
 
 /**
+ * Project approval visibility exclusively from the canonical pending ID set.
+ *
+ * Transcript metadata describes the message itself, while the pending approval
+ * collection describes the current workflow state. Do not infer current
+ * approval visibility from titles, actions, command text, or stale message
+ * statuses.
+ */
+export const isWorkflowMessagePendingApproval = (message, pendingApprovalIds = []) => {
+  const toolCallId = String(message?.metadata?.tool_call_id || '').trim()
+  if (!toolCallId) return false
+
+  const pendingIds =
+    pendingApprovalIds instanceof Set
+      ? pendingApprovalIds
+      : new Set(
+          (Array.isArray(pendingApprovalIds) ? pendingApprovalIds : [])
+            .map(id => String(id || '').trim())
+            .filter(Boolean)
+        )
+
+  return pendingIds.has(toolCallId)
+}
+
+/**
  * Identify the completion tool exclusively from structured metadata.
  *
  * Bash commands can legitimately contain strings such as `FinishTask` or

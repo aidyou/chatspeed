@@ -65,7 +65,7 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
-  action: String,
+  toolName: String,
   target: {
     type: String,
     default: ''
@@ -100,6 +100,12 @@ const emit = defineEmits([
 
 useI18n()
 
+/**
+ * Decode approval details that older records persisted as nested JSON strings.
+ * This compatibility boundary is presentation-only. It must never supply tool
+ * identity, approval state, or execution state; those come from structured
+ * metadata and the current pending approval collection.
+ */
 const decodeCompatJsonPayload = value => {
   if (typeof value !== 'string') return value
   const trimmed = value.trim()
@@ -157,32 +163,23 @@ const normalizeDetailsPayload = value => {
   return { detailsObject: null, detailsText: String(value) }
 }
 
-const normalizedAction = computed(() => (props.action || '').toLowerCase().trim())
+const normalizedToolName = computed(() => (props.toolName || '').toLowerCase().trim())
 const detailPayload = computed(() => normalizeDetailsPayload(props.details))
 const detailsObject = computed(() => detailPayload.value.detailsObject)
-
-const isFileChangePayload = computed(() => {
-  const data = detailsObject.value
-  if (!data) return false
-  const hasPath = typeof data.file_path === 'string' || typeof data.path === 'string'
-  const hasEditFields =
-    data.old_string !== undefined || data.new_string !== undefined || data.content !== undefined
-  return hasPath && hasEditFields
-})
 
 const isEditAction = computed(() => {
   if (props.displayType === 'diff') {
     return true
   }
-  const action = normalizedAction.value
-  if (action === 'edit_file' || action === 'write_file') {
+  const toolName = normalizedToolName.value
+  if (toolName === 'edit_file' || toolName === 'write_file') {
     return true
   }
-  return isFileChangePayload.value
+  return false
 })
 
-const isShellAction = computed(() => normalizedAction.value === 'bash')
-const isPlanApproval = computed(() => normalizedAction.value === 'submit_plan')
+const isShellAction = computed(() => normalizedToolName.value === 'bash')
+const isPlanApproval = computed(() => normalizedToolName.value === 'submit_plan')
 const isMarkdownAction = computed(() => {
   if (props.displayType === 'markdown') {
     return true

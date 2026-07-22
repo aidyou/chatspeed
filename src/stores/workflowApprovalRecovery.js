@@ -208,7 +208,7 @@ export const deriveInlinePendingApprovals = ({
     const state = getToolApprovalState(message, meta);
     if (!state) continue;
 
-    if (!latestById.has(toolCallId)) {
+    if (!structuredPendingById.has(toolCallId) && !latestById.has(toolCallId)) {
       order.push(toolCallId);
     }
 

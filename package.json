@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:workflow": "node --test src/components/workflow/approvalVisibility.test.js src/composables/workflow/messageProjectionRules.test.js src/composables/workflow/toolClassification.test.js src/composables/workflow/workflowConstitution.test.js src/composables/workflow/workflowUiContract.test.js src/stores/workflowApprovalRecovery.test.js"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.26",

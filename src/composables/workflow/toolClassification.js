@@ -1,17 +1,20 @@
 // Keep these exact names aligned with src-tauri/src/tools/constants.rs.
 // Unknown tools intentionally remain unclassified until they are added here.
-const TODO_TOOL_NAMES = new Set([
+export const WORKFLOW_TODO_TOOL_NAMES = Object.freeze([
   'todo_create',
   'todo_list',
   'todo_update',
   'todo_get'
 ])
 
-const SUB_AGENT_TOOL_NAMES = new Set([
+export const WORKFLOW_SUB_AGENT_TOOL_NAMES = Object.freeze([
   'sub_agent_run',
   'sub_agent_output',
   'sub_agent_stop'
 ])
+
+const TODO_TOOL_NAMES = new Set(WORKFLOW_TODO_TOOL_NAMES)
+const SUB_AGENT_TOOL_NAMES = new Set(WORKFLOW_SUB_AGENT_TOOL_NAMES)
 
 const normalizeToolName = toolName =>
   String(toolName || '')

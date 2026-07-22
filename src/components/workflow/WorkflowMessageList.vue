@@ -610,7 +610,7 @@
                 <ApprovalDialog
                   v-if="shouldShowApprovalDialog(message)"
                   inline
-                  :action="message.metadata?.tool_name || message.toolDisplay.action"
+                  :tool-name="getMessageToolName(message)"
                   :details="getApprovalDetailsPayload(message)"
                   :display-type="message.metadata?.display_type || message.toolDisplay.displayType"
                   :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
@@ -877,6 +877,7 @@ import { showMessage } from '@/libs/util'
 import hljs from 'highlight.js'
 import {
   isWorkflowCompletionMessage,
+  isWorkflowMessagePendingApproval,
   shouldRenderSubAgentCard
 } from '@/composables/workflow/messageProjectionRules'
 import { normalizeShellCommandForDisplay } from '@/composables/workflow/toolDisplay'
@@ -1943,11 +1944,8 @@ const hasThoughtCompleted = message => {
   return false
 }
 
-const isApprovalPending = message => {
-  const toolCallId = getMessageToolCallId(message)
-  if (!toolCallId) return false
-  return pendingApprovalIdSet.value.has(toolCallId)
-}
+const isApprovalPending = message =>
+  isWorkflowMessagePendingApproval(message, pendingApprovalIdSet.value)
 
 const isApprovalInFlight = message =>
   !!props.isApprovalSubmitting(props.currentWorkflowId, message?.metadata?.tool_call_id)
