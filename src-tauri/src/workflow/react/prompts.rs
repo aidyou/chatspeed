@@ -179,12 +179,9 @@ The workflow is not complete until `complete_workflow` has been called successfu
 
 ## Required Completion Rule
 
-When all required work is complete, call `complete_workflow` immediately. Treat the completion report and tool call as one atomic model response: never send the report in one response and defer the tool call to a later response. A completion report is required, but it has exactly one source:
+When all required work is complete, write one complete user-visible report and call parameter-free `complete_workflow({})` immediately in the same model response. The tool accepts no arguments. Treat the report and tool call as one atomic response; do not intentionally split them across responses.
 
-1. **Assistant message (recommended):** Write the complete user-visible report and call `complete_workflow` with `{"report_source":"assistant_message"}` in that same response. The report must appear immediately before the tool call; omit `summary`.
-2. **Tool argument:** Emit no user-visible completion report in the response; call `complete_workflow` with `{"report_source":"tool_argument","summary":"..."}` and put the report only in `summary`.
-
-Never provide both sources. The tool only accepts visible text from the same response; it never reuses a report from an earlier response. If you accidentally sent a completion report without the tool call, do not send another visible report. In the next response, call `complete_workflow` with `report_source="tool_argument"` and put one complete report in `summary`.
+If the runtime explicitly says that it captured a pending completion report draft from the preceding response, do not repeat, shorten, replace, or paraphrase that report. Call `complete_workflow({})` with no visible text. Any intervening user input or non-completion tool action invalidates the draft, and a second different report makes completion ambiguous and will be rejected.
 
 ## Completion Report Requirements
 
@@ -211,26 +208,29 @@ Before calling `complete_workflow`, confirm that:
 ## Forbidden Completion Behavior
 
 Do not:
-- provide a completion report without calling `complete_workflow`
-- use both `assistant_message` and `tool_argument` report sources
+- intentionally provide a completion report without calling `complete_workflow`
+- pass any arguments to `complete_workflow`
+- repeat or replace a report after the runtime says it captured a pending draft
 - use an empty, vague, or placeholder report such as `done`, `completed`, `fixed`, or `finished`
 - call `complete_workflow` while required work remains unresolved
+- call `complete_workflow` in the same response as a result-producing tool; only `todo_update` may precede it
+- add a todo whose only purpose is to write the final report or call `complete_workflow`
 - complete the workflow merely because one local fix or one subtask is done, if the broader active objective remains incomplete
 - continue optional cleanup, refactoring, or exploration after the required task is complete
 
 ## Valid Completion Patterns
 
-Use one of these patterns only:
-1. Finish required work, resolve todo statuses, write the complete report in the assistant message, then call `complete_workflow({"report_source":"assistant_message"})`.
-2. Finish required work, resolve todo statuses, write no user-visible report in the assistant message, then call `complete_workflow({"report_source":"tool_argument","summary":"complete report"})`.
+Use the normal pattern: finish required work, resolve todo statuses, write the complete report in the assistant message, then call `complete_workflow({})` in that same response.
+
+Use the recovery pattern only after an explicit runtime notice that a report draft was captured: emit no visible text and call `complete_workflow({})` to commit that exact draft.
 
 ## Rejection Handling
 
 If `complete_workflow` is rejected:
 - read the rejection reason
-- do not retry with the same invalid payload
-- fix the cause, such as an invalid source selection, missing report details, unresolved todos, or unfinished required work
-- call the tool again with one valid report source
+- do not retry with the same invalid response
+- fix the cause, such as a missing or ambiguous report, unresolved todos, or unfinished required work
+- call the parameter-free tool again with exactly one valid report candidate
 
 After successful completion, do not add another final summary unless the system explicitly requires a user-visible response."#;
 
@@ -510,7 +510,7 @@ Your primary goal is to perform the implementation steps accurately and safely.
 - **Approval Means Execute**: The user's plan approval is already explicit authorization to begin implementing the approved plan. Do NOT ask the user whether to start, continue, or confirm execution of the approved plan.
 - **Primary Focus**: Perform real actions (file edits, bash commands, tool integrations) within the authorized directories.
 - **Verification**: After each major implementation step, use read or search tools to verify your changes.
-- **Completion**: Once all steps in your todo list are finished, prepare one completion report using the required single-source contract, then call `complete_workflow`."#;
+- **Completion**: Once all steps in your todo list are finished, write one completion report and call parameter-free `complete_workflow` in the same response."#;
 
 /// Extra completion-report requirements when final audit is enabled.
 pub const FINAL_AUDIT_COMPLETION_REPORT_PROMPT: &str = r#"## Final Audit Mode: Completion Report Requirements
@@ -525,7 +525,7 @@ The report must include:
 - Method or style constraints: if the task required a specific style, framework, tone, methodology, or decision criterion, state how you applied it.
 - Remaining notes: mention limitations, skipped checks, follow-up risks, assumptions, disputed points, or data gaps. If there are none, state that explicitly.
 
-Reasoning/thinking text does not count as the report. Use exactly one report source: write it in the same assistant message before calling `complete_workflow({"report_source":"assistant_message"})`, or provide it only as `complete_workflow({"report_source":"tool_argument","summary":"..."})`."#;
+Reasoning/thinking text does not count as the report. Write the report in the same assistant message immediately before parameter-free `complete_workflow({})`. If the runtime explicitly says it captured a pending report draft, call the tool with no visible text instead of repeating the report."#;
 
 /// Specialized prompt for the Planning Mode.
 /// To be used by the PlanningExecutor for exploration and strategy.

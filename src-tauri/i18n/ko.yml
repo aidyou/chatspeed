@@ -302,6 +302,12 @@ workflow:
   cancelled: 사용자가 작업을 취소했습니다.
   cannot_access_path: '경로에 액세스할 수 없습니다: %{path}, 값이 객체/배열이 아닙니다.'
   circular_dependency: '노드 간 순환 종속성 존재: %{nodes}'
+  completion_report_claims:
+    limitations_absent: 알려진 제한 없음|남은 제한 없음|알려진 문제 없음|남은 문제 없음
+    limitations_present: 알려진 제한이 남아 있음|남은 제한|남은 문제
+    verification_failed: 테스트 실패|검증 실패
+    verification_not_run: 테스트 미실행|테스트하지 않음|검증되지 않음
+    verification_passed: 테스트 통과|테스트 성공|검증 성공|검증 완료
   compression_in_progress: 컨텍스트 압축 중...
   dependency_not_found: 노드 '%{node_id}'가 종속된 노드 '%{id}'가 존재하지 않습니다.
   duplicate_node_id: '중복된 노드 ID: %{id}'

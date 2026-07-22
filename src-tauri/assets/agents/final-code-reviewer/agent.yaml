@@ -1,6 +1,6 @@
 schema_version: 1
 builtin_id: final-code-reviewer
-builtin_version: 4
+builtin_version: 5
 name: Final Code Reviewer
 description: A read-only child reviewer used by workflow final review mode to independently inspect code changes and decide whether the parent workflow may complete.
 role: child

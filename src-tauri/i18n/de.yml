@@ -317,6 +317,12 @@ workflow:
   cancelled: Operation wurde vom Benutzer abgebrochen
   cannot_access_path: Zugriff auf Pfad %{path} nicht möglich, da Wert kein Objekt/Array ist
   circular_dependency: 'Zirkuläre Abhängigkeit zwischen Knoten: %{nodes}'
+  completion_report_claims:
+    limitations_absent: keine bekannten Einschränkungen|keine verbleibenden Einschränkungen|keine bekannten Probleme|keine verbleibenden Probleme
+    limitations_present: bekannte Einschränkungen verbleiben|verbleibende Einschränkung|verbleibendes Problem
+    verification_failed: Tests fehlgeschlagen|Test fehlgeschlagen|Überprüfung fehlgeschlagen
+    verification_not_run: Tests nicht ausgeführt|Test nicht ausgeführt|nicht getestet|nicht verifiziert
+    verification_passed: Tests bestanden|Test bestanden|Überprüfung erfolgreich|erfolgreich verifiziert
   compression_in_progress: Kontext wird komprimiert...
   dependency_not_found: Von Knoten '%{node_id}' abhängiger Knoten '%{id}' nicht vorhanden
   duplicate_node_id: 'Doppelte Knoten-ID: %{id}'

@@ -56,6 +56,7 @@ fn restore_execution_context_from_manual_clear_marker(
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
+            pending_completion_reports: Vec::new(),
             removed_queued_user_message_ids: Vec::new(),
         });
 
@@ -2119,13 +2120,11 @@ impl MainStore {
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
 
-        let result: Option<i64> = conn
-            .query_row(
-                "SELECT MAX(id) FROM workflow_events WHERE session_id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .optional()?;
+        let result: Option<i64> = conn.query_row(
+            "SELECT MAX(id) FROM workflow_events WHERE session_id = ?1",
+            params![session_id],
+            |row| row.get::<_, Option<i64>>(0),
+        )?;
 
         Ok(result)
     }
@@ -2510,7 +2509,13 @@ mod tests {
         let session_id = "approval-recovery-authority";
         seed_agent(&store, "agent-test");
         store
-            .create_workflow(session_id, "Inspect approval recovery", "agent-test", None, None)
+            .create_workflow(
+                session_id,
+                "Inspect approval recovery",
+                "agent-test",
+                None,
+                None,
+            )
             .expect("failed to create workflow");
 
         store

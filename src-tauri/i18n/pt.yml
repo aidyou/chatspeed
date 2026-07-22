@@ -312,6 +312,12 @@ workflow:
   cancelled: Operação cancelada pelo usuário
   cannot_access_path: 'Não é possível acessar o caminho: %{path}, porque o valor não é um objeto/array'
   circular_dependency: 'Existe uma dependência circular entre os nós: %{nodes}'
+  completion_report_claims:
+    limitations_absent: sem limitações conhecidas|sem limitações restantes|sem problemas conhecidos|sem problemas restantes
+    limitations_present: permanecem limitações conhecidas|limitação restante|problema restante
+    verification_failed: testes falharam|teste falhou|verificação falhou
+    verification_not_run: testes não executados|teste não executado|não testado|não verificado
+    verification_passed: testes passaram|teste passou|verificação bem-sucedida|verificado com sucesso
   compression_in_progress: Comprimindo contexto...
   dependency_not_found: O nó '%{node_id}' depende do nó '%{id}' que não existe
   duplicate_node_id: 'ID de nó duplicado: %{id}'

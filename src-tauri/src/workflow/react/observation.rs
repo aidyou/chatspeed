@@ -177,15 +177,21 @@ impl ObservationReinforcer {
                                 subject
                             ));
                         } else {
-                            // Treat completed, done, data_missing, and failed as terminal states
+                            // Treat all resolved todo statuses as terminal states.
                             let all_terminal = todos.iter().all(|t| {
                                 matches!(
                                     t["status"].as_str(),
-                                    Some("completed" | "done" | "data_missing" | "failed")
+                                    Some(
+                                        "completed"
+                                            | "done"
+                                            | "data_missing"
+                                            | "failed"
+                                            | "blocked"
+                                    )
                                 )
                             });
                             if all_terminal && !todos.is_empty() {
-                                list_str.push_str("<SYSTEM_REMINDER>Todos are terminal. If the requested work is complete, your next response must atomically provide the completion report and call `complete_workflow`: write the full user-visible report immediately before `complete_workflow` with `report_source=\"assistant_message\"` (preferred), or emit no visible report and put the full report in `summary` with `report_source=\"tool_argument\"`. Do not send a completion report without the tool call. Mention any failed or data-missing todos; if required work remains, continue with the next concrete tool action instead.</SYSTEM_REMINDER>\n");
+                                list_str.push_str("<SYSTEM_REMINDER>Todos are terminal. If you already wrote the completion report in the response containing this todo update, the runtime captured it as a pending draft; in the next response, emit no visible text and call parameter-free `complete_workflow({})`. Otherwise, if the requested work is complete, write the full user-visible report and call parameter-free `complete_workflow({})` atomically in the next response. Mention failed or data-missing todos. If required work remains, continue with the next concrete tool action instead; doing so invalidates any pending draft.</SYSTEM_REMINDER>\n");
                             }
                         }
                         raw_res = list_str;
@@ -796,16 +802,11 @@ mod tests {
         assert!(reinforced.content.contains("Todos are terminal"));
         assert!(reinforced
             .content
-            .contains("your next response must atomically"));
+            .contains("runtime captured it as a pending draft"));
         assert!(reinforced
             .content
-            .contains("report_source=\"assistant_message\""));
-        assert!(reinforced
-            .content
-            .contains("report_source=\"tool_argument\""));
-        assert!(reinforced
-            .content
-            .contains("Do not send a completion report without the tool call"));
+            .contains("parameter-free `complete_workflow({})`"));
+        assert!(!reinforced.content.contains("report_source"));
         assert!(reinforced.content.contains("failed or data-missing todos"));
     }
 

@@ -165,17 +165,11 @@ impl ToolDefinition for FinishTask {
     }
     fn description(&self) -> &str {
         "Signals that the current task has been fully addressed and is now complete.\n\n\
-        Arguments:\n\
-        - `report_source` (required): Select exactly one completion-report source.\n\
-          - `assistant_message`: The user-visible text in this same assistant message, immediately before this tool call, is the report. Omit `summary`.\n\
-          - `tool_argument`: Provide the report in `summary`. Use this when the assistant message contains no user-visible report.\n\
-        - `summary` (required only for `tool_argument`): A user-visible completion report.\n\n\
         Strict usage rules:\n\
         - Call this only after the requested work is actually complete or you have reached a clear stopping point accepted by the user.\n\
-        - When completion is ready, submit the report and this tool call atomically in one assistant response. Never send the report first and defer the tool call to a later response.\n\
-        - Preferred path: write the full user-visible report immediately before this tool call and use `report_source=assistant_message`; omit `summary`.\n\
-        - Recovery/alternative path: if this assistant message contains no visible report, use `report_source=tool_argument` and put the full report in `summary`.\n\
-        - Use exactly one source. Do not provide both a user-visible assistant report and `summary`; this avoids duplicate reports.\n\
+        - Write the full user-visible completion report immediately before this parameter-free tool call in the same assistant response.\n\
+        - If the runtime says it captured a pending completion report, call this tool with no visible report to commit that exact draft without repeating it.\n\
+        - Never write a second, different report while a pending completion report exists; conflicting reports are rejected.\n\
         - A completion report must explicitly cover: 1) what was completed, 2) what was verified, and 3) any important remaining notes or limitations.\n\
         - Reasoning/thinking text does not count as a completion report.\n\
         - Do not use placeholder reports such as 'done', 'completed', or hidden reasoning.\n\
@@ -193,28 +187,7 @@ impl ToolDefinition for FinishTask {
             description: self.description().to_string(),
             input_schema: json!({
                 "type": "object",
-                "properties": {
-                    "report_source": {
-                        "type": "string",
-                        "enum": ["assistant_message", "tool_argument"],
-                        "description": "The single source of the completion report. Use assistant_message for the visible text immediately before this call, or tool_argument to provide summary."
-                    },
-                    "summary": {
-                        "type": "string",
-                        "description": "User-visible completion report. Required only when report_source is tool_argument; omit it when report_source is assistant_message."
-                    }
-                },
-                "required": ["report_source"],
-                "allOf": [
-                    {
-                        "if": { "properties": { "report_source": { "const": "tool_argument" } } },
-                        "then": { "required": ["summary"] }
-                    },
-                    {
-                        "if": { "properties": { "report_source": { "const": "assistant_message" } } },
-                        "then": { "not": { "required": ["summary"] } }
-                    }
-                ],
+                "properties": {},
                 "additionalProperties": false
             }),
             output_schema: None,
@@ -223,44 +196,30 @@ impl ToolDefinition for FinishTask {
         }
     }
     async fn call(&self, params: Value) -> NativeToolResult {
-        let report_source = params
-            .get("report_source")
-            .and_then(|value| value.as_str())
-            .ok_or_else(|| ToolError::InvalidParams("report_source must be a string".into()))?;
-        let summary = params.get("summary");
-
-        match report_source {
-            "assistant_message" if summary.is_none() => {}
-            "assistant_message" => {
-                return Err(ToolError::InvalidParams(
-                    "summary must be omitted when report_source is assistant_message".into(),
-                ));
+        let object = params
+            .as_object()
+            .ok_or_else(|| ToolError::InvalidParams("arguments must be an object".into()))?;
+        let report_source = object.get("report_source").and_then(Value::as_str);
+        let summary_is_string = object.get("summary").is_some_and(Value::is_string);
+        let valid_shape = match object.len() {
+            0 => true,
+            1 => {
+                summary_is_string
+                    || (report_source == Some("assistant_message")
+                        && !object.contains_key("summary"))
             }
-            "tool_argument" => {
-                summary
-                    .and_then(|value| value.as_str())
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        ToolError::InvalidParams(
-                            "summary must be a non-empty string when report_source is tool_argument"
-                                .into(),
-                        )
-                    })?;
-            }
-            _ => {
-                return Err(ToolError::InvalidParams(
-                    "report_source must be assistant_message or tool_argument".into(),
-                ));
-            }
+            2 => report_source == Some("tool_argument") && summary_is_string,
+            _ => false,
+        };
+        if !valid_shape {
+            return Err(ToolError::InvalidParams(
+                "complete_workflow accepts no arguments; only historical completion payloads are supported for compatibility".into(),
+            ));
         }
 
         Ok(ToolCallResult::success(
             Some("Task finished".into()),
-            Some(json!({
-                "status": "completed",
-                "report_source": report_source
-            })),
+            Some(json!({ "status": "completed" })),
         ))
     }
 }
@@ -369,43 +328,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_finish_task_accepts_each_report_source() {
+    async fn test_finish_task_uses_parameter_free_schema() {
         let tool = FinishTask;
+        let declaration = tool.tool_calling_spec();
 
-        let result = tool
-            .call(json!({ "report_source": "assistant_message" }))
-            .await
-            .unwrap();
-        assert_eq!(result.content.unwrap(), "Task finished");
-        assert_eq!(
-            result.structured_content.unwrap()["report_source"],
-            "assistant_message"
-        );
+        assert_eq!(declaration.input_schema["type"], "object");
+        assert_eq!(declaration.input_schema["properties"], json!({}));
+        assert_eq!(declaration.input_schema["additionalProperties"], false);
+        assert!(declaration.input_schema.get("required").is_none());
 
-        let result = tool
-            .call(json!({
-                "report_source": "tool_argument",
-                "summary": "Completed the task, verified the result, and no known limitations remain."
-            }))
-            .await
-            .unwrap();
+        let result = tool.call(json!({})).await.unwrap();
         assert_eq!(result.content.unwrap(), "Task finished");
-        assert_eq!(
-            result.structured_content.unwrap()["report_source"],
-            "tool_argument"
-        );
+        assert_eq!(result.structured_content.unwrap()["status"], "completed");
     }
 
     #[tokio::test]
-    async fn test_finish_task_rejects_invalid_report_source_combinations() {
+    async fn test_finish_task_accepts_legacy_arguments_at_runtime_boundary() {
         let tool = FinishTask;
 
         for params in [
-            json!({}),
-            json!({ "report_source": "assistant_message", "summary": "Duplicate report" }),
+            json!({ "summary": "Legacy single-argument completion report." }),
+            json!({ "report_source": "assistant_message" }),
+            json!({
+                "report_source": "tool_argument",
+                "summary": "Legacy multi-argument completion report."
+            }),
+        ] {
+            assert!(tool.call(params).await.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_finish_task_rejects_invalid_legacy_argument_shapes() {
+        let tool = FinishTask;
+
+        for params in [
+            json!({ "summary": 42 }),
+            json!({ "report_source": "assistant_message", "summary": "duplicate" }),
             json!({ "report_source": "tool_argument" }),
-            json!({ "report_source": "tool_argument", "summary": "   " }),
-            json!({ "report_source": "unexpected" }),
+            json!({ "report_source": "unknown", "summary": "report" }),
+            json!({ "unexpected": "value" }),
         ] {
             assert!(tool.call(params).await.is_err());
         }
@@ -423,10 +385,7 @@ mod tests {
             crate::tools::TOOL_ASK_USER => json!({
                 "items": [{"title": "Choose", "options": ["A", "B"]}]
             }),
-            crate::tools::TOOL_COMPLETE_WORKFLOW => json!({
-                "report_source": "tool_argument",
-                "summary": "Completed the task, verified the result, and no known limitations remain."
-            }),
+            crate::tools::TOOL_COMPLETE_WORKFLOW => json!({}),
             crate::tools::TOOL_SUBMIT_RESULT => json!({
                 "result": "Result",
                 "summary": "Summary"

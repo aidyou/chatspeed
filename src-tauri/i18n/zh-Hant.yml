@@ -300,6 +300,12 @@ workflow:
   cancelled: 操作已被使用者取消
   cannot_access_path: 無法存取路徑：%{path}，因為值不是物件/陣列
   circular_dependency: 節點之間存在循環相依：%{nodes}
+  completion_report_claims:
+    limitations_absent: 無已知限制|沒有已知限制|無剩餘限制|無已知問題|無剩餘問題|沒有剩餘問題
+    limitations_present: 存在已知限制|仍有已知限制|剩餘限制|有剩餘問題|仍有問題
+    verification_failed: 測試失敗|驗證失敗|測試未通過|驗證未通過
+    verification_not_run: 測試尚未執行|測試未執行|未執行測試|未測試|尚未測試|未驗證|沒有驗證
+    verification_passed: 測試通過|驗證通過|測試成功|驗證成功|已驗證
   compression_in_progress: 上下文壓縮中，請稍後...
   dependency_not_found: 節點 '%{node_id}' 相依的節點 '%{id}' 不存在
   duplicate_node_id: '重複的節點 ID: %{id}'

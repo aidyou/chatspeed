@@ -1437,7 +1437,7 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
             if tool_name == crate::tools::TOOL_SUBMIT_RESULT {
                 "<SYSTEM_REMINDER>This delegated workflow requires a concrete tool action. If the text you just sent was intended as the final result, do not repeat it visibly; call `submit_result` in the next response with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
             } else {
-                "<SYSTEM_REMINDER>This workflow requires a concrete tool action. If the text you just sent was intended as the completion report, do not repeat it visibly; call `complete_workflow` in the next response with `report_source=\"tool_argument\"` and put one complete report in `summary`.</SYSTEM_REMINDER>".to_string()
+                "<SYSTEM_REMINDER>This workflow requires a concrete tool action. If the text you just sent was intended as the completion report and the runtime captured it as a pending draft, do not repeat it visibly; call parameter-free `complete_workflow({})` in the next response.</SYSTEM_REMINDER>".to_string()
             }
         }
         "Timeout" => {

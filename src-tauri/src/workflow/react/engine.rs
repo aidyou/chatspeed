@@ -46,8 +46,8 @@ use crate::workflow::react::{
     sinks::{DBSink, Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
     types::{
-        ExecutionContext, GatewayPayload, PendingTool, RuntimeState, StepType, SubAgentCompletion,
-        WaitReason, WorkflowSignal, WorkflowState,
+        ExecutionContext, GatewayPayload, PendingCompletionReport, PendingTool, RuntimeState,
+        StepType, SubAgentCompletion, WaitReason, WorkflowSignal, WorkflowState,
     },
 };
 
@@ -148,6 +148,7 @@ pub struct WorkflowExecutor {
     pub pending_sub_agent_completions: Vec<SubAgentCompletion>,
     /// Structured final review state used while a reviewer child is running.
     pub pending_final_review: Option<crate::workflow::react::types::PendingFinalReview>,
+    pub pending_completion_reports: Vec<PendingCompletionReport>,
 }
 
 impl WorkflowExecutor {
@@ -780,6 +781,7 @@ impl ReActExecutor for WorkflowExecutor {
     }
 
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
+        self.pending_completion_reports.clear();
         self.context
             .begin_new_task_segment_from_runtime_projection()
             .await?;
@@ -787,6 +789,7 @@ impl ReActExecutor for WorkflowExecutor {
     }
 
     async fn begin_manual_clear_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
+        self.pending_completion_reports.clear();
         self.context.begin_manual_clear_context_segment(0).await?;
         self.save_snapshot().await
     }
@@ -904,6 +907,7 @@ impl WorkflowExecutor {
         self.sub_agent_id = None;
         self.pending_sub_agent_completions.clear();
         self.pending_final_review = None;
+        self.pending_completion_reports.clear();
 
         self.update_state(WorkflowState::Thinking).await
     }
@@ -1078,6 +1082,7 @@ impl WorkflowExecutor {
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
+            pending_completion_reports: Vec::new(),
         };
 
         // Phase 6: wire default dispatcher with UI + DB sinks for all executors.
@@ -1317,6 +1322,7 @@ impl WorkflowExecutor {
                 self.sub_agent_sessions = context.sub_agent_sessions.clone();
                 self.pending_sub_agent_completions = context.pending_sub_agent_completions.clone();
                 self.pending_final_review = context.pending_final_review.clone();
+                self.pending_completion_reports = context.pending_completion_reports.clone();
                 self.removed_queued_user_message_ids = context
                     .removed_queued_user_message_ids
                     .iter()
@@ -1377,6 +1383,8 @@ impl WorkflowExecutor {
                         self.pending_sub_agent_completions =
                             context.pending_sub_agent_completions.clone();
                         self.pending_final_review = context.pending_final_review.clone();
+                        self.pending_completion_reports =
+                            context.pending_completion_reports.clone();
                         self.removed_queued_user_message_ids = context
                             .removed_queued_user_message_ids
                             .iter()
@@ -3657,7 +3665,7 @@ impl WorkflowExecutor {
 
                 self.update_state(WorkflowState::Executing).await?;
                 let results_opt = match self
-                    .execute_tools(persisted_response, tool_calls_json, &mut signal_rx)
+                    .execute_tools(persisted_response.clone(), tool_calls_json, &mut signal_rx)
                     .await
                 {
                     Ok(results) => Some(results),
@@ -3679,6 +3687,36 @@ impl WorkflowExecutor {
                 };
 
                 let mut observe_needs_compression = false;
+
+                let todo_update_only = !results.is_empty()
+                    && results.iter().all(|(_, reinforced, original_call)| {
+                        !reinforced.is_error
+                            && original_call
+                                .get("name")
+                                .or_else(|| {
+                                    original_call
+                                        .get("function")
+                                        .and_then(|value| value.get("name"))
+                                })
+                                .and_then(Value::as_str)
+                                == Some(crate::tools::TOOL_TODO_UPDATE)
+                    });
+                if todo_update_only {
+                    let todos_are_terminal = self
+                        .context
+                        .main_store
+                        .read()
+                        .ok()
+                        .and_then(|store| store.get_todo_list_for_workflow(&self.session_id).ok())
+                        .is_some_and(|todos| {
+                            !todos.is_empty() && Self::todos_allow_completion_report_capture(&todos)
+                        });
+                    if todos_are_terminal
+                        && self.capture_pending_completion_report(&persisted_response)
+                    {
+                        self.save_snapshot().await?;
+                    }
+                }
 
                 for (id, reinforced, original_call) in &results {
                     if Self::is_postponed_turn_block_result(reinforced) {
@@ -3865,6 +3903,19 @@ impl WorkflowExecutor {
                 }
 
                 if results.is_empty() {
+                    let completion_report_capture_allowed = self
+                        .context
+                        .main_store
+                        .read()
+                        .ok()
+                        .and_then(|store| store.get_todo_list_for_workflow(&self.session_id).ok())
+                        .is_some_and(|todos| Self::todos_allow_completion_report_capture(&todos));
+                    if !self.is_child_agent_workflow()
+                        && completion_report_capture_allowed
+                        && self.capture_pending_completion_report(&persisted_response)
+                    {
+                        self.save_snapshot().await?;
+                    }
                     const NO_TOOL_MEDIUM_REMINDER_THRESHOLD: u32 = 3;
                     const NO_TOOL_STRONG_REMINDER_THRESHOLD: u32 = 5;
                     self.loop_detector.reset_tool_call_history();
@@ -3899,7 +3950,7 @@ impl WorkflowExecutor {
                             )
                         } else {
                             format!(
-                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. Do not repeat or rewrite a visible completion report. Call `complete_workflow` now with `report_source=\"tool_argument\"` and put one complete report in `summary`. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. If a completion report draft was captured, do not repeat or rewrite it; call parameter-free `complete_workflow({{}})` now with no visible text. Otherwise choose one concrete work tool. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
                                 self.consecutive_no_tool_calls,
                                 self.current_step,
                                 self.max_steps,
@@ -3910,13 +3961,15 @@ impl WorkflowExecutor {
                         Some(if self.is_child_agent_workflow() {
                             "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Choose one concrete tool action now. If your previous response was intended as the final result, do not repeat it as visible text; call `submit_result` now with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>This workflow is action-oriented. Choose one concrete tool action now. If your previous response was intended as the completion report, do not repeat it as visible text; call `complete_workflow` now with `report_source=\"tool_argument\"` and put one complete report in `summary`.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>This workflow is action-oriented. If the runtime captured your previous response as a pending completion report, do not repeat it as visible text; call parameter-free `complete_workflow({})` now. Otherwise choose one concrete work tool.</SYSTEM_REMINDER>".to_string()
                         })
                     } else {
                         Some(if self.is_child_agent_workflow() {
                             "<SYSTEM_REMINDER>This delegated workflow advances through tool-mediated observations. Choose one concrete tool action now. If the text you just sent was intended as the final result, do not send another visible result; call `submit_result` in the next response with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
+                        } else if !self.pending_completion_reports.is_empty() {
+                            "<SYSTEM_REMINDER>A completion report draft from your preceding response was captured. If it is the intended final report, call parameter-free `complete_workflow` now with no visible text. Do not repeat or replace the report. If work remains, call the next concrete work tool; doing so invalidates the draft.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. Choose one concrete tool action now. If the text you just sent was intended as the completion report, do not send another visible report; call `complete_workflow` in the next response with `report_source=\"tool_argument\"` and put one complete report in `summary`.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. Choose one concrete tool action now. If the task is complete, write one complete report and call parameter-free `complete_workflow` in the same response.</SYSTEM_REMINDER>".to_string()
                         })
                     };
 
@@ -4618,6 +4671,29 @@ impl WorkflowExecutor {
             return Ok((Vec::new(), false));
         }
 
+        let turn_tool_names = tool_calls
+            .iter()
+            .filter_map(|call| {
+                call.get("function")
+                    .unwrap_or(call)
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect::<Vec<_>>();
+        let turn_tool_name_refs = turn_tool_names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let completion_turn_has_incompatible_tools =
+            Self::completion_turn_has_incompatible_tools(&turn_tool_name_refs);
+        if !self.pending_completion_reports.is_empty()
+            && Self::should_invalidate_pending_completion_reports(&turn_tool_name_refs)
+        {
+            self.pending_completion_reports.clear();
+            self.save_snapshot().await?;
+        }
+
         // Quick stop check before audit
         if self.check_stop_signal(signal_rx).await? {
             return Err(WorkflowEngineError::Cancelled(
@@ -4698,6 +4774,7 @@ impl WorkflowExecutor {
                     &args,
                     &text_part,
                     &planned_todo_status_overrides,
+                    completion_turn_has_incompatible_tools,
                 )
                 .await
             {
@@ -5039,6 +5116,7 @@ impl WorkflowExecutor {
         args: &serde_json::Value,
         text_part: &str,
         todo_status_overrides: &HashMap<String, String>,
+        completion_turn_has_incompatible_tools: bool,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         // --- 1. Workflow Control Interception (Submit, Finish, Ask) ---
         match name {
@@ -5072,9 +5150,22 @@ impl WorkflowExecutor {
                 return self.handle_submit_plan_intercept(id, args, text_part).await;
             }
             TOOL_COMPLETE_WORKFLOW => {
+                if completion_turn_has_incompatible_tools {
+                    return Ok(Some(ReinforcedResult {
+                        content: "<SYSTEM_REMINDER>complete_workflow cannot share a response with tools whose results could change the completion report. Wait for those observations, then submit the final report. Only todo_update may precede complete_workflow in the same response.</SYSTEM_REMINDER>".to_string(),
+                        llm_content: None,
+                        title: "Complete Workflow Error".to_string(),
+                        summary: "Completion submitted beside incompatible tools".to_string(),
+                        is_error: true,
+                        error_type: Some("AmbiguousCompletionBoundary".to_string()),
+                        display_type: "text".to_string(),
+                        approval_status: None,
+                        observation_kind: None,
+                    }));
+                }
                 return self
                     .handle_finish_task_intercept(text_part, args, todo_status_overrides)
-                    .await
+                    .await;
             }
             TOOL_SUBMIT_RESULT => return self.handle_submit_result_intercept(args).await,
             TOOL_ASK_USER => return self.handle_ask_user_intercept(args).await,
@@ -6631,6 +6722,11 @@ impl WorkflowExecutor {
             return Ok(());
         }
 
+        if !self.pending_completion_reports.is_empty() {
+            self.pending_completion_reports.clear();
+            self.save_snapshot().await?;
+        }
+
         self.queued_user_messages.push_back((
             queued_id.clone(),
             content.clone(),
@@ -6690,6 +6786,8 @@ impl WorkflowExecutor {
         if self.queued_user_messages.is_empty() {
             return Ok(false);
         }
+
+        self.pending_completion_reports.clear();
 
         if matches!(
             self.state,
@@ -6898,6 +6996,7 @@ impl WorkflowExecutor {
             sub_agent_sessions: self.sub_agent_sessions.clone(),
             pending_sub_agent_completions: self.pending_sub_agent_completions.clone(),
             pending_final_review: self.pending_final_review.clone(),
+            pending_completion_reports: self.pending_completion_reports.clone(),
             removed_queued_user_message_ids: self
                 .removed_queued_user_message_ids
                 .iter()
@@ -7114,6 +7213,27 @@ mod recovery_tests {
         );
         executor.dispatcher = None;
         executor.state = WorkflowState::Executing;
+        executor
+            .add_message_and_notify_internal(
+                "assistant".to_string(),
+                "Completed the prior request.\nVerified its focused checks passed.".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("completion report source should be persisted");
+        executor
+            .pending_completion_reports
+            .push(PendingCompletionReport::new(
+                "Completed the prior request.\nVerified its focused checks passed.",
+                Some(41),
+                executor.context.current_segment_id,
+                3,
+            ));
 
         executor
             .enqueue_user_message(
@@ -7124,6 +7244,7 @@ mod recovery_tests {
             )
             .await
             .expect("message should be queued");
+        assert!(executor.pending_completion_reports.is_empty());
         executor
             .enqueue_user_message(
                 "duplicate delivery".to_string(),

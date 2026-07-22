@@ -1724,6 +1724,7 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                     sub_agent_sessions: Vec::new(),
                     pending_sub_agent_completions: Vec::new(),
                     pending_final_review: None,
+                    pending_completion_reports: Vec::new(),
                     removed_queued_user_message_ids: Vec::new(),
                 });
         context.state = RuntimeState::Cancelled;
@@ -1950,6 +1951,7 @@ async fn hydrate_execution_context_for_snapshot(
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
+            pending_completion_reports: Vec::new(),
             removed_queued_user_message_ids: Vec::new(),
         }
     });
@@ -2024,6 +2026,7 @@ async fn begin_new_context_frame_for_cold_session(
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
+            pending_completion_reports: Vec::new(),
             removed_queued_user_message_ids: Vec::new(),
         }
     });

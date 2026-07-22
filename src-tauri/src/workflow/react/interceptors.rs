@@ -1,6 +1,9 @@
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap};
+use sha2::Digest;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::OnceLock;
 
+use crate::db::WorkflowMessage;
 use crate::tools::{
     READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_COMPLETE_WORKFLOW,
     TOOL_EDIT_FILE, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_WRITE_FILE,
@@ -17,7 +20,9 @@ use crate::workflow::react::intelligence::ToolApprovalReview;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::orchestrator::{spawn_call_sub_agent, FINAL_REVIEWER_BUILTIN_AGENT_ID};
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
-use crate::workflow::react::types::{GatewayPayload, StepType, WorkflowState};
+use crate::workflow::react::types::{
+    GatewayPayload, PendingCompletionReport, StepType, WorkflowState,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SmartApprovalDecision {
@@ -26,43 +31,91 @@ pub(crate) enum SmartApprovalDecision {
     ReviewByUser,
 }
 
-enum CompletionReportSource {
-    AssistantMessage,
-    ToolArgument(String),
+#[derive(Debug, PartialEq, Eq)]
+struct ResolvedCompletionReport {
+    content: String,
+    source_message_id: Option<i64>,
+    persist_as_message: bool,
+    recency: (u8, usize, i64),
+}
+
+struct CompletionReportClaimDictionary {
+    verification: [Vec<String>; 3],
+    limitations: [Vec<String>; 2],
 }
 
 impl WorkflowExecutor {
+    pub(crate) fn capture_pending_completion_report(&mut self, text_part: &str) -> bool {
+        if !Self::is_valid_finish_task_summary(text_part) {
+            return false;
+        }
+        let content = Self::normalized_finish_task_summary(text_part);
+        let source_message_id = self
+            .context
+            .messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.role == "assistant" && message.segment_id == self.context.current_segment_id
+            })
+            .and_then(|message| message.id);
+        let draft = PendingCompletionReport::new(
+            &content,
+            source_message_id,
+            self.context.current_segment_id,
+            self.current_step,
+        );
+        if self.pending_completion_reports.iter().any(|existing| {
+            existing.segment_id == draft.segment_id
+                && existing.content_hash == draft.content_hash
+                && existing.content == draft.content
+        }) {
+            return false;
+        }
+        self.pending_completion_reports.push(draft);
+        true
+    }
+
     fn final_review_mode_enabled(&self) -> bool {
         self.agent_config.final_audit.unwrap_or(false)
     }
 
+    pub(crate) fn should_invalidate_pending_completion_reports(tool_names: &[&str]) -> bool {
+        tool_names
+            .iter()
+            .any(|name| *name != TOOL_COMPLETE_WORKFLOW)
+    }
+
+    pub(crate) fn todos_allow_completion_report_capture(todos: &[Value]) -> bool {
+        todos.iter().all(|todo| {
+            matches!(
+                todo.get("status").and_then(Value::as_str),
+                Some("completed" | "done" | "data_missing" | "failed" | "blocked")
+            )
+        })
+    }
+
     async fn persist_completion_report(
         &mut self,
-        text_part: &str,
-        report_source: CompletionReportSource,
+        report: ResolvedCompletionReport,
     ) -> Result<String, WorkflowEngineError> {
-        match report_source {
-            CompletionReportSource::AssistantMessage => {
-                Ok(Self::normalized_finish_task_summary(text_part))
-            }
-            CompletionReportSource::ToolArgument(summary) => {
-                self.add_message_and_notify_internal(
-                    "assistant".to_string(),
-                    summary.clone(),
-                    None,
-                    None,
-                    Some(StepType::Think),
-                    false,
-                    None,
-                    Some(json!({
-                        "message_kind": "completion_report",
-                        "source": "complete_workflow.tool_argument"
-                    })),
-                )
-                .await?;
-                Ok(summary)
-            }
+        if report.persist_as_message {
+            self.add_message_and_notify_internal(
+                "assistant".to_string(),
+                report.content.clone(),
+                None,
+                None,
+                Some(StepType::Think),
+                false,
+                None,
+                Some(json!({
+                    "message_kind": "completion_report",
+                    "source": "complete_workflow.legacy_argument"
+                })),
+            )
+            .await?;
         }
+        Ok(report.content)
     }
 
     fn review_payload_changed_files(&self) -> Vec<Value> {
@@ -183,9 +236,145 @@ impl WorkflowExecutor {
             .collect()
     }
 
+    fn structured_tool_arguments(metadata: &Value) -> Option<Value> {
+        let tool_call = metadata.get("tool_call")?;
+        let function = tool_call.get("function").unwrap_or(tool_call);
+        let arguments = function
+            .get("arguments")
+            .or_else(|| function.get("input"))?;
+        match arguments {
+            Value::Object(_) => Some(arguments.clone()),
+            Value::String(raw) => serde_json::from_str(raw).ok(),
+            _ => None,
+        }
+    }
+
+    fn is_verification_command(command: &str) -> bool {
+        let command = command.to_ascii_lowercase();
+        [
+            "cargo check",
+            "cargo test",
+            "cargo clippy",
+            "cargo fmt --check",
+            "npm test",
+            "npm run test",
+            "npm run lint",
+            "npm run build",
+            "pnpm test",
+            "pnpm lint",
+            "pnpm build",
+            "yarn test",
+            "yarn lint",
+            "yarn build",
+            "go test",
+            "pytest",
+            "vitest",
+            "jest",
+            "ruff check",
+            "tsc --noemit",
+        ]
+        .iter()
+        .any(|needle| command.contains(needle))
+    }
+
+    fn bounded_evidence_excerpt(value: Option<&str>) -> Option<String> {
+        const MAX_CHARS: usize = 2_000;
+        let value = value.map(str::trim).filter(|value| !value.is_empty())?;
+        let mut excerpt = value.chars().take(MAX_CHARS).collect::<String>();
+        if value.chars().count() > MAX_CHARS {
+            excerpt.push_str("\n...[truncated]");
+        }
+        Some(excerpt)
+    }
+
+    pub(crate) fn build_final_review_evidence(messages: &[WorkflowMessage]) -> Value {
+        let mut mutation_ledger = Vec::new();
+        let mut verification_ledger = Vec::new();
+        let mut failed_actions = Vec::new();
+
+        for message in messages.iter().filter(|message| message.role == "tool") {
+            let Some(metadata) = message.metadata.as_ref() else {
+                continue;
+            };
+            let Some(tool_name) = metadata.get("tool_name").and_then(Value::as_str) else {
+                continue;
+            };
+            let execution_status = metadata
+                .get("execution_status")
+                .and_then(Value::as_str)
+                .unwrap_or(if message.is_error {
+                    "failed"
+                } else {
+                    "completed"
+                });
+            let summary = metadata
+                .get("summary")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let result_excerpt =
+                Self::bounded_evidence_excerpt(metadata.get("llm_content").and_then(Value::as_str));
+
+            if matches!(tool_name, TOOL_EDIT_FILE | TOOL_WRITE_FILE) {
+                let details = metadata.get("details");
+                mutation_ledger.push(json!({
+                    "message_id": message.id,
+                    "tool_name": tool_name,
+                    "status": execution_status,
+                    "path": details
+                        .and_then(|value| value.get("file_path").or_else(|| value.get("path")))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "summary": summary,
+                    "details": details.cloned().unwrap_or(Value::Null)
+                }));
+            }
+
+            let arguments = Self::structured_tool_arguments(metadata);
+            let command = arguments
+                .as_ref()
+                .and_then(|value| value.get("command").or_else(|| value.get("cmd")))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if command.is_some_and(Self::is_verification_command) {
+                verification_ledger.push(json!({
+                    "message_id": message.id,
+                    "tool_name": tool_name,
+                    "command": command,
+                    "status": execution_status,
+                    "summary": summary,
+                    "result_excerpt": result_excerpt.clone()
+                }));
+            }
+
+            if message.is_error || matches!(execution_status, "failed" | "rejected") {
+                failed_actions.push(json!({
+                    "message_id": message.id,
+                    "tool_name": tool_name,
+                    "status": execution_status,
+                    "error_type": metadata
+                        .get("error_type")
+                        .cloned()
+                        .or_else(|| message.error_type.as_ref().map(|value| json!(value)))
+                        .unwrap_or(Value::Null),
+                    "summary": summary,
+                    "result_excerpt": result_excerpt
+                }));
+            }
+        }
+
+        json!({
+            "mutation_ledger": mutation_ledger,
+            "verification_ledger": verification_ledger,
+            "failed_actions": failed_actions
+        })
+    }
+
     fn build_final_review_prompt(
         &self,
         completion_summary: &str,
+        completion_report_provenance: &Value,
         todo_status_overrides: &HashMap<String, String>,
     ) -> String {
         let user_messages = self
@@ -214,6 +403,8 @@ impl WorkflowExecutor {
             .collect::<Vec<_>>();
         let approved_plan = self.context.current_approved_plan_since_last_completion();
         let changed_files = self.review_payload_changed_files();
+        let evidence_messages = self.context.messages_since_last_completion();
+        let evidence = Self::build_final_review_evidence(&evidence_messages);
         let previous_review_results = self.review_payload_previous_results();
         let todo_status =
             if let Ok(store) = self.context.main_store.read() {
@@ -246,7 +437,17 @@ impl WorkflowExecutor {
         payload.insert("workflow_session_id".to_string(), json!(self.session_id));
         payload.insert("user_messages".to_string(), json!(user_messages));
         payload.insert("completion_report".to_string(), json!(completion_summary));
+        payload.insert(
+            "completion_report_provenance".to_string(),
+            completion_report_provenance.clone(),
+        );
         payload.insert("changed_files".to_string(), json!(changed_files));
+        for key in ["mutation_ledger", "verification_ledger", "failed_actions"] {
+            payload.insert(
+                key.to_string(),
+                evidence.get(key).cloned().unwrap_or_else(|| json!([])),
+            );
+        }
         if let Some(approved_plan) = approved_plan {
             if !approved_plan.trim().is_empty() {
                 payload.insert("approved_plan".to_string(), json!(approved_plan));
@@ -281,6 +482,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
     async fn launch_final_review(
         &mut self,
         completion_summary: String,
+        completion_report_provenance: Value,
         todo_status_overrides: &HashMap<String, String>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         let reviewer_agent = {
@@ -299,8 +501,11 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     ))
                 })?
         };
-        let review_prompt =
-            self.build_final_review_prompt(&completion_summary, todo_status_overrides);
+        let review_prompt = self.build_final_review_prompt(
+            &completion_summary,
+            &completion_report_provenance,
+            todo_status_overrides,
+        );
         let raw_result = spawn_call_sub_agent(
             self.sub_agent_factory.clone(),
             self.context.main_store.clone(),
@@ -509,6 +714,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         let (review_verdict, approved, summary, required_fixes) =
             Self::parse_final_review_verdict(result);
         self.pending_final_review = None;
+        self.pending_completion_reports.clear();
         self.sub_agent_sessions.retain(|id| id != sub_agent_id);
         if self.sub_agent_id.as_deref() == Some(sub_agent_id) {
             self.sub_agent_id = None;
@@ -667,48 +873,362 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         meaningful_lines >= 2 || has_sentence_shape
     }
 
-    fn finish_task_report_source_from_args(
+    fn completion_report_similarity_text(text: &str) -> Vec<char> {
+        text.chars()
+            .flat_map(char::to_lowercase)
+            .filter(|character| character.is_alphanumeric())
+            .collect()
+    }
+
+    fn completion_report_trigram_scores(left: &[char], right: &[char]) -> (f64, f64) {
+        if left.len() < 3 || right.len() < 3 {
+            return (0.0, 0.0);
+        }
+
+        let mut left_grams = HashMap::<[char; 3], usize>::new();
+        let mut right_grams = HashMap::<[char; 3], usize>::new();
+        for window in left.windows(3) {
+            *left_grams
+                .entry([window[0], window[1], window[2]])
+                .or_default() += 1;
+        }
+        for window in right.windows(3) {
+            *right_grams
+                .entry([window[0], window[1], window[2]])
+                .or_default() += 1;
+        }
+
+        let intersection = left_grams
+            .iter()
+            .map(|(gram, left_count)| {
+                (*left_count).min(right_grams.get(gram).copied().unwrap_or_default())
+            })
+            .sum::<usize>();
+        let left_total = left_grams.values().sum::<usize>();
+        let right_total = right_grams.values().sum::<usize>();
+        let dice = (2 * intersection) as f64 / (left_total + right_total) as f64;
+        let containment = intersection as f64 / left_total.min(right_total) as f64;
+        (dice, containment)
+    }
+
+    fn completion_report_code_literals(text: &str) -> HashSet<String> {
+        text.split('`')
+            .skip(1)
+            .step_by(2)
+            .map(|literal| {
+                literal
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase()
+            })
+            .filter(|literal| !literal.is_empty() && !literal.contains('\n'))
+            .collect()
+    }
+
+    fn completion_report_paths(literals: &HashSet<String>) -> HashSet<&str> {
+        literals
+            .iter()
+            .map(String::as_str)
+            .filter(|literal| {
+                literal.starts_with('/')
+                    || (literal.contains('/') && !literal.chars().any(char::is_whitespace))
+                    || literal
+                        .as_bytes()
+                        .get(1..3)
+                        .is_some_and(|suffix| suffix == b":/" || suffix == b":\\")
+            })
+            .collect()
+    }
+
+    fn completion_report_numeric_literals(literals: &HashSet<String>) -> HashSet<&str> {
+        literals
+            .iter()
+            .map(String::as_str)
+            .filter(|literal| {
+                literal.bytes().any(|byte| byte.is_ascii_digit())
+                    && literal
+                        .bytes()
+                        .any(|byte| matches!(byte, b'.' | b'%' | b':' | b'='))
+            })
+            .collect()
+    }
+
+    fn completion_report_verification_commands(literals: &HashSet<String>) -> HashSet<&str> {
+        literals
+            .iter()
+            .map(String::as_str)
+            .filter(|literal| Self::is_verification_command(literal))
+            .collect()
+    }
+
+    fn completion_report_hashes(literals: &HashSet<String>) -> HashSet<&str> {
+        literals
+            .iter()
+            .map(String::as_str)
+            .filter(|literal| {
+                (7..=64).contains(&literal.len())
+                    && literal.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && literal.bytes().any(|byte| byte.is_ascii_digit())
+                    && literal
+                        .bytes()
+                        .any(|byte| matches!(byte.to_ascii_lowercase(), b'a'..=b'f'))
+            })
+            .collect()
+    }
+
+    fn completion_report_claim_dictionary() -> &'static CompletionReportClaimDictionary {
+        static CLAIMS: OnceLock<CompletionReportClaimDictionary> = OnceLock::new();
+        CLAIMS.get_or_init(|| {
+            let load = |key: &str| {
+                let mut phrases = rust_i18n::available_locales!()
+                    .into_iter()
+                    .flat_map(|locale| {
+                        rust_i18n::t!(key, locale = locale)
+                            .split('|')
+                            .map(|phrase| {
+                                phrase
+                                    .to_lowercase()
+                                    .split_whitespace()
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                            .filter(|phrase| !phrase.is_empty())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                phrases.sort();
+                phrases.dedup();
+                phrases
+            };
+
+            CompletionReportClaimDictionary {
+                verification: [
+                    load("workflow.completion_report_claims.verification_passed"),
+                    load("workflow.completion_report_claims.verification_failed"),
+                    load("workflow.completion_report_claims.verification_not_run"),
+                ],
+                limitations: [
+                    load("workflow.completion_report_claims.limitations_absent"),
+                    load("workflow.completion_report_claims.limitations_present"),
+                ],
+            }
+        })
+    }
+
+    fn completion_report_claim_flags(text: &str, claims: &[Vec<String>]) -> u8 {
+        let mut searchable = text
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut flags = 0_u8;
+        for (index, alternatives) in claims.iter().enumerate() {
+            let matches = alternatives
+                .iter()
+                .filter(|alternative| searchable.contains(alternative.as_str()))
+                .collect::<Vec<_>>();
+            if !matches.is_empty() {
+                flags |= 1 << index;
+                for matched in matches {
+                    searchable = searchable.replace(matched.as_str(), " ");
+                }
+            }
+        }
+        flags
+    }
+
+    fn completion_report_claims_conflict(left: &str, right: &str) -> bool {
+        let claims = Self::completion_report_claim_dictionary();
+        [&claims.verification[..], &claims.limitations[..]]
+            .iter()
+            .any(|claims| {
+                let left_flags = Self::completion_report_claim_flags(left, claims);
+                let right_flags = Self::completion_report_claim_flags(right, claims);
+                left_flags != 0 && right_flags != 0 && left_flags & right_flags == 0
+            })
+    }
+
+    fn completion_reports_are_similar(left: &str, right: &str) -> bool {
+        let left_text = Self::completion_report_similarity_text(left);
+        let right_text = Self::completion_report_similarity_text(right);
+        let shorter_len = left_text.len().min(right_text.len());
+        let longer_len = left_text.len().max(right_text.len());
+        if shorter_len < 3 || shorter_len as f64 / (longer_len as f64) < 0.60 {
+            return false;
+        }
+
+        let (dice, containment) = Self::completion_report_trigram_scores(&left_text, &right_text);
+        let left_literals = Self::completion_report_code_literals(left);
+        let right_literals = Self::completion_report_code_literals(right);
+
+        if !left_literals.is_empty() && !right_literals.is_empty() {
+            let shared_literals = left_literals.intersection(&right_literals).count();
+            let literal_containment =
+                shared_literals as f64 / left_literals.len().min(right_literals.len()) as f64;
+            if literal_containment < 0.50 || dice < 0.52 || containment < 0.52 {
+                return false;
+            }
+        } else if dice < 0.72 || containment < 0.75 {
+            return false;
+        }
+
+        let left_paths = Self::completion_report_paths(&left_literals);
+        let right_paths = Self::completion_report_paths(&right_literals);
+        if !left_paths.is_empty() && !right_paths.is_empty() && left_paths != right_paths {
+            return false;
+        }
+
+        let left_hashes = Self::completion_report_hashes(&left_literals);
+        let right_hashes = Self::completion_report_hashes(&right_literals);
+        if !left_hashes.is_empty() && !right_hashes.is_empty() && left_hashes != right_hashes {
+            return false;
+        }
+
+        let left_numbers = Self::completion_report_numeric_literals(&left_literals);
+        let right_numbers = Self::completion_report_numeric_literals(&right_literals);
+        if !left_numbers.is_empty() && !right_numbers.is_empty() && left_numbers != right_numbers {
+            return false;
+        }
+
+        let left_commands = Self::completion_report_verification_commands(&left_literals);
+        let right_commands = Self::completion_report_verification_commands(&right_literals);
+        if !left_commands.is_empty()
+            && !right_commands.is_empty()
+            && left_commands != right_commands
+        {
+            return false;
+        }
+
+        !Self::completion_report_claims_conflict(left, right)
+    }
+
+    fn resolve_completion_report(
         args: &serde_json::Value,
         text_part: &str,
-    ) -> Result<CompletionReportSource, &'static str> {
-        let report_source = args
-            .get("report_source")
-            .and_then(|value| value.as_str())
-            .ok_or("report_source must be assistant_message or tool_argument")?;
-        let summary = args.get("summary");
-        let text_summary_valid = Self::is_valid_finish_task_summary(text_part);
-
-        match report_source {
-            "assistant_message" => {
-                if summary.is_some() {
-                    return Err("summary must be omitted when report_source is assistant_message");
-                }
-                if !text_summary_valid {
-                    return Err(
-                        "report_source assistant_message requires a valid user-visible completion report immediately before this tool call",
-                    );
-                }
-                Ok(CompletionReportSource::AssistantMessage)
-            }
-            "tool_argument" => {
-                if text_summary_valid {
-                    return Err(
-                        "report_source tool_argument cannot be used when this assistant message already contains a completion report",
-                    );
-                }
-                let summary = summary
-                    .and_then(|value| value.as_str())
-                    .map(str::trim)
-                    .filter(|value| Self::is_valid_finish_task_summary(value))
-                    .ok_or(
-                        "report_source tool_argument requires a valid non-empty summary completion report",
-                    )?;
-                Ok(CompletionReportSource::ToolArgument(
-                    Self::normalized_finish_task_summary(summary),
-                ))
-            }
-            _ => Err("report_source must be assistant_message or tool_argument"),
+        pending_reports: &[PendingCompletionReport],
+        current_segment_id: i32,
+    ) -> Result<ResolvedCompletionReport, &'static str> {
+        let object = args
+            .as_object()
+            .ok_or("complete_workflow arguments must be an object")?;
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "report_source" | "summary"))
+        {
+            return Err("complete_workflow contains unsupported arguments");
         }
+        let report_source = object.get("report_source").and_then(Value::as_str);
+        let summary = object.get("summary").and_then(Value::as_str);
+        match report_source {
+            Some("assistant_message") if object.contains_key("summary") => {
+                return Err("legacy assistant_message source cannot include summary");
+            }
+            Some("tool_argument") if summary.is_none() => {
+                return Err("legacy tool_argument source requires summary");
+            }
+            Some("assistant_message" | "tool_argument") | None => {}
+            Some(_) => return Err("legacy report_source is invalid"),
+        }
+
+        let mut candidates = Vec::<ResolvedCompletionReport>::new();
+
+        if Self::is_valid_finish_task_summary(text_part) {
+            candidates.push(ResolvedCompletionReport {
+                content: Self::normalized_finish_task_summary(text_part),
+                source_message_id: None,
+                persist_as_message: false,
+                recency: (1, 0, 0),
+            });
+        }
+
+        for pending in pending_reports
+            .iter()
+            .filter(|pending| pending.segment_id == current_segment_id)
+        {
+            let normalized = Self::normalized_finish_task_summary(&pending.content);
+            let expected = PendingCompletionReport::new(
+                &normalized,
+                pending.source_message_id,
+                pending.segment_id,
+                pending.created_at_step,
+            );
+            if Self::is_valid_finish_task_summary(&pending.content)
+                && expected.content_hash == pending.content_hash
+            {
+                candidates.push(ResolvedCompletionReport {
+                    content: normalized,
+                    source_message_id: pending.source_message_id,
+                    persist_as_message: false,
+                    recency: (
+                        0,
+                        pending.created_at_step,
+                        pending.source_message_id.unwrap_or_default(),
+                    ),
+                });
+            }
+        }
+
+        if let Some(summary) = summary {
+            if Self::is_valid_finish_task_summary(summary) {
+                candidates.push(ResolvedCompletionReport {
+                    content: Self::normalized_finish_task_summary(summary),
+                    source_message_id: None,
+                    persist_as_message: true,
+                    recency: (2, 0, 0),
+                });
+            } else {
+                return Err("legacy summary is not a valid completion report");
+            }
+        }
+
+        let mut unique = Vec::<ResolvedCompletionReport>::new();
+        for candidate in candidates {
+            if let Some(existing) = unique
+                .iter_mut()
+                .find(|existing| existing.content == candidate.content)
+            {
+                if existing.source_message_id.is_none() && candidate.source_message_id.is_some() {
+                    existing.source_message_id = candidate.source_message_id;
+                }
+                existing.persist_as_message &= candidate.persist_as_message;
+                existing.recency = existing.recency.max(candidate.recency);
+            } else {
+                unique.push(candidate);
+            }
+        }
+
+        match unique.len() {
+            0 => Err("no valid completion report is available"),
+            1 => Ok(unique.remove(0)),
+            _ => {
+                let latest_index = unique
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, candidate)| candidate.recency)
+                    .map(|(index, _)| index)
+                    .ok_or("no valid completion report is available")?;
+                let latest = &unique[latest_index];
+                if unique.iter().enumerate().all(|(index, candidate)| {
+                    index == latest_index
+                        || Self::completion_reports_are_similar(&candidate.content, &latest.content)
+                }) {
+                    Ok(unique.swap_remove(latest_index))
+                } else {
+                    Err("multiple different completion reports are available")
+                }
+            }
+        }
+    }
+
+    pub(crate) fn completion_turn_has_incompatible_tools(tool_names: &[&str]) -> bool {
+        tool_names.contains(&TOOL_COMPLETE_WORKFLOW)
+            && tool_names.iter().any(|name| {
+                !matches!(
+                    *name,
+                    TOOL_COMPLETE_WORKFLOW | crate::tools::TOOL_TODO_UPDATE
+                )
+            })
     }
 
     fn is_read_only_shell_stage(stage: &str) -> bool {
@@ -1152,12 +1672,17 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         args: &serde_json::Value,
         todo_status_overrides: &HashMap<String, String>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        let report_source = match Self::finish_task_report_source_from_args(args, text_part) {
-            Ok(report_source) => report_source,
+        let mut completion_report = match Self::resolve_completion_report(
+            args,
+            text_part,
+            &self.pending_completion_reports,
+            self.context.current_segment_id,
+        ) {
+            Ok(report) => report,
             Err(reason) => {
                 return Ok(Some(ReinforcedResult {
                     content: format!(
-                        "<SYSTEM_REMINDER>Error: {}. A completion report must cover what was completed, what was verified, and any remaining notes or limitations. Reasoning/thinking text does not count. Use exactly one source: either write the report in this assistant message and call complete_workflow with {{\"report_source\":\"assistant_message\"}}, or do not write a visible report and call it with {{\"report_source\":\"tool_argument\",\"summary\":\"...\"}}. Do not provide both.</SYSTEM_REMINDER>",
+                        "<SYSTEM_REMINDER>Error: {}. Write exactly one complete report covering what was completed, what was verified, and remaining notes or limitations, then call parameter-free complete_workflow in the same response. If a pending report was captured, call complete_workflow with no visible text to commit it. Do not provide a second different report.</SYSTEM_REMINDER>",
                         reason
                     ),
                     llm_content: None,
@@ -1171,6 +1696,21 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 }));
             }
         };
+
+        if completion_report.source_message_id.is_none() && !completion_report.persist_as_message {
+            completion_report.source_message_id = self
+                .context
+                .messages
+                .iter()
+                .rev()
+                .find(|message| {
+                    message.role == "assistant"
+                        && message.segment_id == self.context.current_segment_id
+                        && Self::normalized_finish_task_summary(&message.message)
+                            == completion_report.content
+                })
+                .and_then(|message| message.id);
+        }
 
         if let Ok(store) = self.context.main_store.read() {
             if let Ok(todos) = store.get_todo_list_for_workflow(&self.session_id) {
@@ -1215,9 +1755,30 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }
         }
 
-        let completion_summary = self
-            .persist_completion_report(text_part, report_source)
-            .await?;
+        let pending_source = self.pending_completion_reports.iter().find(|pending| {
+            pending.segment_id == self.context.current_segment_id
+                && pending.content_hash
+                    == hex::encode(sha2::Sha256::digest(completion_report.content.as_bytes()))
+                && pending.content == completion_report.content
+        });
+        let completion_report_provenance = json!({
+            "source_message_id": completion_report.source_message_id,
+            "source": if completion_report.persist_as_message {
+                "legacy_tool_argument"
+            } else if pending_source.is_some() {
+                "pending_assistant_message"
+            } else if completion_report.source_message_id.is_some() {
+                "current_assistant_message"
+            } else {
+                "current_assistant_response"
+            },
+            "content_hash": hex::encode(sha2::Sha256::digest(completion_report.content.as_bytes())),
+            "segment_id": self.context.current_segment_id,
+            "captured_at_step": pending_source.map(|pending| pending.created_at_step),
+            "resolved_at_step": self.current_step
+        });
+        let completion_summary = self.persist_completion_report(completion_report).await?;
+        self.pending_completion_reports.clear();
 
         if self.final_review_mode_enabled() {
             log::info!(
@@ -1226,7 +1787,11 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             );
             self.update_state(WorkflowState::Auditing).await?;
             return self
-                .launch_final_review(completion_summary, todo_status_overrides)
+                .launch_final_review(
+                    completion_summary,
+                    completion_report_provenance,
+                    todo_status_overrides,
+                )
                 .await;
         }
 
@@ -1607,9 +2172,24 @@ Return the final verdict ONLY by calling `submit_result`.\n\
 
 #[cfg(test)]
 mod tests {
-    use super::{CompletionReportSource, SmartApprovalDecision, WorkflowExecutor};
+    use super::{SmartApprovalDecision, WorkflowExecutor};
+    use crate::db::WorkflowMessage;
     use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_READ_FILE, TOOL_WRITE_FILE};
+    use crate::workflow::react::types::PendingCompletionReport;
     use serde_json::json;
+
+    fn report(text: &str, message_id: i64, segment_id: i32) -> PendingCompletionReport {
+        report_at(text, message_id, segment_id, 7)
+    }
+
+    fn report_at(
+        text: &str,
+        message_id: i64,
+        segment_id: i32,
+        created_at_step: usize,
+    ) -> PendingCompletionReport {
+        PendingCompletionReport::new(text, Some(message_id), segment_id, created_at_step)
+    }
 
     #[test]
     fn finish_task_summary_rejects_placeholder_text() {
@@ -1647,91 +2227,473 @@ mod tests {
     }
 
     #[test]
-    fn finish_task_report_source_rejects_reasoning_as_both_sources() {
+    fn completion_report_resolution_rejects_reasoning_without_a_pending_report() {
         let reasoning = "<think>This is a sufficiently long internal reasoning block. It must never be treated as a user-visible completion report.</think>";
 
-        assert!(WorkflowExecutor::finish_task_report_source_from_args(
-            &json!({ "report_source": "assistant_message" }),
-            reasoning,
-        )
-        .is_err());
-        assert!(WorkflowExecutor::finish_task_report_source_from_args(
-            &json!({ "report_source": "tool_argument", "summary": reasoning }),
-            "",
-        )
-        .is_err());
+        assert!(
+            WorkflowExecutor::resolve_completion_report(&json!({}), reasoning, &[], 1,).is_err()
+        );
     }
 
     #[test]
-    fn finish_task_report_source_accepts_visible_report_after_reasoning() {
+    fn completion_report_resolution_accepts_current_report_after_reasoning() {
         let report = "Completed the workflow change and verified the targeted tests passed.\nNo known limitations remain.";
         let text_part = format!(
             "<thought>Internal analysis that must not be included in the report.</thought>\n{report}"
         );
 
-        assert!(matches!(
-            WorkflowExecutor::finish_task_report_source_from_args(
-                &json!({ "report_source": "assistant_message" }),
-                &text_part,
-            ),
-            Ok(CompletionReportSource::AssistantMessage)
-        ));
+        let resolved = WorkflowExecutor::resolve_completion_report(&json!({}), &text_part, &[], 1)
+            .expect("current report should resolve");
+
+        assert_eq!(resolved.content, report);
+        assert_eq!(resolved.source_message_id, None);
     }
 
     #[test]
-    fn finish_task_report_source_accepts_exactly_one_valid_source() {
-        let report = "Committed the requested code and pushed it to origin/main.\nVerified the push completed without errors.";
+    fn completion_report_resolution_uses_the_only_pending_report() {
+        let full_report = "Implemented the requested workflow fix.\nVerified the focused tests and found no remaining limitations.";
+        let pending = vec![report(full_report, 41, 3)];
 
-        assert!(matches!(
-            WorkflowExecutor::finish_task_report_source_from_args(
-                &json!({ "report_source": "assistant_message" }),
-                report,
-            ),
-            Ok(CompletionReportSource::AssistantMessage)
-        ));
-        assert!(matches!(
-            WorkflowExecutor::finish_task_report_source_from_args(
-                &json!({ "report_source": "tool_argument", "summary": report }),
-                "",
-            ),
-            Ok(CompletionReportSource::ToolArgument(summary)) if summary == report
-        ));
-        let tool_argument =
-            format!("<think>Internal analysis that must not be persisted.</think>\n{report}");
-        assert!(matches!(
-            WorkflowExecutor::finish_task_report_source_from_args(
-                &json!({ "report_source": "tool_argument", "summary": tool_argument }),
-                "",
-            ),
-            Ok(CompletionReportSource::ToolArgument(summary)) if summary == report
-        ));
+        let resolved = WorkflowExecutor::resolve_completion_report(&json!({}), "", &pending, 3)
+            .expect("pending report should resolve");
+
+        assert_eq!(resolved.content, full_report);
+        assert_eq!(resolved.source_message_id, Some(41));
     }
 
     #[test]
-    fn finish_task_report_source_rejects_missing_duplicate_and_invalid_reports() {
-        let report = "Committed the requested code and pushed it to origin/main.\nVerified the push completed without errors.";
+    fn completion_report_resolution_deduplicates_identical_current_and_pending_reports() {
+        let full_report = "Implemented the requested workflow fix.\nVerified the focused tests and found no remaining limitations.";
+        let pending = vec![report(full_report, 42, 3)];
 
-        for (args, text_part) in [
-            (json!({}), ""),
-            (json!({ "report_source": "assistant_message" }), ""),
+        let resolved =
+            WorkflowExecutor::resolve_completion_report(&json!({}), full_report, &pending, 3)
+                .expect("identical reports should deduplicate");
+
+        assert_eq!(resolved.content, full_report);
+        assert_eq!(resolved.source_message_id, Some(42));
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_different_current_and_pending_reports() {
+        let full_report = "Implemented the requested workflow fix across the runtime.\nVerified all focused tests and found no remaining limitations.";
+        let brief_report = "Implemented the workflow fix.\nThe focused verification passed.";
+        let pending = vec![report(full_report, 43, 3)];
+
+        let error =
+            WorkflowExecutor::resolve_completion_report(&json!({}), brief_report, &pending, 3)
+                .expect_err("different reports must be ambiguous");
+
+        assert_eq!(error, "multiple different completion reports are available");
+    }
+
+    #[test]
+    fn completion_report_resolution_uses_latest_similar_rewrite() {
+        let earlier_report = "Created a global Git `pre-commit` hook at `/Users/test/.git-hooks/pre-commit` to reject staged `.db` files.\nVerified that database files are blocked, ordinary files are allowed, and the existing `commit-msg` hook still runs. No known limitations remain.";
+        let latest_report = "Implemented `/Users/test/.git-hooks/pre-commit`, a global `pre-commit` hook that blocks staged `.db` files.\nVerification confirmed that `.db` commits fail, normal files pass, and the existing `commit-msg` hook remains active. No further action is required.";
+        let pending = vec![report(earlier_report, 43, 3)];
+
+        let resolved =
+            WorkflowExecutor::resolve_completion_report(&json!({}), latest_report, &pending, 3)
+                .expect("a related rewrite should resolve to the latest report");
+
+        assert_eq!(resolved.content, latest_report);
+        assert_eq!(resolved.source_message_id, None);
+        assert!(!resolved.persist_as_message);
+    }
+
+    #[test]
+    fn completion_report_resolution_uses_latest_similar_legacy_summary() {
+        let earlier_report = "Implemented `src/workflow.rs` so terminal todos can finish cleanly.\nThe focused completion tests and `cargo check` passed. No known limitations remain.";
+        let latest_report = "Updated `src/workflow.rs` to complete workflows after all todos become terminal.\nVerified the focused completion suite and `cargo check`; both passed. No remaining limitations are known.";
+        let pending = vec![report(earlier_report, 44, 3)];
+
+        let resolved = WorkflowExecutor::resolve_completion_report(
+            &json!({ "summary": latest_report }),
+            "",
+            &pending,
+            3,
+        )
+        .expect("a compatible legacy summary should resolve to the latest report");
+
+        assert_eq!(resolved.content, latest_report);
+        assert_eq!(resolved.source_message_id, None);
+        assert!(resolved.persist_as_message);
+    }
+
+    #[test]
+    fn completion_report_resolution_uses_latest_similar_pending_report() {
+        let earlier_report = "Tested the `submit_plan` workflow in `/workspace/chatspeed`.\nThe plan was approved, `.gitignore` was read, and `src` plus `src-tauri` were listed successfully. No files were modified.";
+        let latest_report = "Completed the `submit_plan` workflow test in `/workspace/chatspeed`.\nVerification covered plan approval, reading `.gitignore`, and listing `src` and `src-tauri`; every step passed without modifying files.";
+        let pending = vec![
+            report_at(earlier_report, 45, 3, 7),
+            report_at(latest_report, 46, 3, 8),
+        ];
+
+        let resolved = WorkflowExecutor::resolve_completion_report(&json!({}), "", &pending, 3)
+            .expect("similar pending drafts should resolve by capture order");
+
+        assert_eq!(resolved.content, latest_report);
+        assert_eq!(resolved.source_message_id, Some(46));
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_similar_verification_conflicts() {
+        for (earlier_report, latest_report) in [
             (
-                json!({ "report_source": "assistant_message", "summary": report }),
-                report,
+                "Updated `src/workflow.rs` to fix completion handling.\nThe focused completion tests passed. No known limitations remain.",
+                "Updated `src/workflow.rs` to fix completion handling.\nThe focused completion tests failed. No known limitations remain.",
             ),
-            (json!({ "report_source": "tool_argument" }), ""),
             (
-                json!({ "report_source": "tool_argument", "summary": "done" }),
-                "",
+                "已更新 `src/workflow.rs` 的完成处理逻辑。\n相关测试已经验证通过，目前没有已知限制。",
+                "已更新 `src/workflow.rs` 的完成处理逻辑。\n相关测试尚未运行，目前没有已知限制。",
             ),
             (
-                json!({ "report_source": "tool_argument", "summary": report }),
-                report,
+                "Se actualizó `src/workflow.rs`.\nLas pruebas pasaron y no quedan limitaciones conocidas.",
+                "Se actualizó `src/workflow.rs`.\nLas pruebas no se ejecutaron y no quedan limitaciones conocidas.",
+            ),
+            (
+                "`src/workflow.rs` を更新しました。\nテストに合格し、既知の制限はありません。",
+                "`src/workflow.rs` を更新しました。\nテストは実行されていません。既知の制限はありません。",
             ),
         ] {
+            let pending = vec![report(earlier_report, 47, 3)];
             assert!(
-                WorkflowExecutor::finish_task_report_source_from_args(&args, text_part).is_err()
+                WorkflowExecutor::resolve_completion_report(
+                    &json!({}),
+                    latest_report,
+                    &pending,
+                    3,
+                )
+                .is_err(),
+                "conflicting verification claims must remain ambiguous"
             );
         }
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_similar_critical_literal_conflicts() {
+        for (earlier_report, latest_report) in [
+            (
+                "Updated `/workspace/api/src/auth.rs` to correct token validation.\nThe focused authentication tests passed, and no known limitations remain.",
+                "Updated `/workspace/web/src/auth.rs` to correct token validation.\nThe focused authentication tests passed, and no known limitations remain.",
+            ),
+            (
+                "Updated `src/auth.rs` for release `2.0.8`.\nThe focused authentication tests passed, and no known limitations remain.",
+                "Updated `src/auth.rs` for release `2.0.9`.\nThe focused authentication tests passed, and no known limitations remain.",
+            ),
+            (
+                "Updated `src/auth.rs` for release `2.0.8`.\nThe focused authentication tests passed, and no known limitations remain.",
+                "Updated `src/auth.rs` for release `20.8`.\nThe focused authentication tests passed, and no known limitations remain.",
+            ),
+            (
+                "Updated `src/auth.rs` and verified it with `cargo test auth`.\nThe focused authentication tests passed, and no known limitations remain.",
+                "Updated `src/auth.rs` and verified it with `cargo check`.\nThe focused authentication tests passed, and no known limitations remain.",
+            ),
+            (
+                "Updated `src/auth.rs` in commit `abc1234`.\nThe focused authentication tests passed, and no known limitations remain.",
+                "Updated `src/auth.rs` in commit `def5678`.\nThe focused authentication tests passed, and no known limitations remain.",
+            ),
+        ] {
+            let pending = vec![report(earlier_report, 48, 3)];
+            assert!(
+                WorkflowExecutor::resolve_completion_report(
+                    &json!({}),
+                    latest_report,
+                    &pending,
+                    3,
+                )
+                .is_err(),
+                "different critical literals must not be merged by aggregate similarity"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_similar_limitation_conflicts() {
+        let earlier_report = "Updated `src/workflow.rs` to fix completion handling.\nThe focused tests passed. No known limitations remain.";
+        let latest_report = "Updated `src/workflow.rs` to fix completion handling.\nThe focused tests passed. A remaining limitation affects Windows recovery.";
+        let pending = vec![report(earlier_report, 49, 3)];
+
+        assert!(
+            WorkflowExecutor::resolve_completion_report(&json!({}), latest_report, &pending, 3)
+                .is_err(),
+            "conflicting limitation claims must remain ambiguous"
+        );
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_omission_heavy_summary() {
+        let earlier_report = "Implemented `src/workflow.rs` completion report capture and invalidation.\nVerified pending-report recovery, queued-user invalidation, legacy payload compatibility, final-review evidence, `cargo test`, and `cargo check`. The broader suite still has one unrelated pre-existing failure.";
+        let latest_report =
+            "Implemented `src/workflow.rs` completion report capture.\nThe focused tests passed.";
+        let pending = vec![report(earlier_report, 50, 3)];
+
+        assert!(
+            WorkflowExecutor::resolve_completion_report(&json!({}), latest_report, &pending, 3)
+                .is_err(),
+            "a short report that drops verification and limitations must remain ambiguous"
+        );
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_multiple_pending_reports() {
+        let pending = vec![
+            report(
+                "Implemented the first version of the fix.\nVerification was not run yet.",
+                44,
+                3,
+            ),
+            report(
+                "Implemented the corrected version of the fix.\nVerification passed.",
+                45,
+                3,
+            ),
+        ];
+
+        assert!(WorkflowExecutor::resolve_completion_report(&json!({}), "", &pending, 3).is_err());
+    }
+
+    #[test]
+    fn completion_report_resolution_ignores_stale_segment_reports() {
+        let pending = vec![report(
+            "Implemented the previous task.\nVerified its focused tests.",
+            46,
+            2,
+        )];
+
+        assert!(WorkflowExecutor::resolve_completion_report(&json!({}), "", &pending, 3).is_err());
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_a_tampered_pending_report() {
+        let mut pending = report(
+            "Implemented the requested workflow fix.\nVerified the focused tests passed.",
+            47,
+            3,
+        );
+        pending.content =
+            "A different report was injected after the draft was captured.\nVerification is unknown."
+                .to_string();
+
+        assert!(
+            WorkflowExecutor::resolve_completion_report(&json!({}), "", &[pending], 3).is_err()
+        );
+    }
+
+    #[test]
+    fn completion_report_resolution_accepts_legacy_single_and_multi_parameter_payloads() {
+        let legacy_report =
+            "Implemented the legacy workflow change.\nVerified the focused tests passed.";
+
+        for args in [
+            json!({ "summary": legacy_report }),
+            json!({ "report_source": "tool_argument", "summary": legacy_report }),
+        ] {
+            let resolved = WorkflowExecutor::resolve_completion_report(&args, "", &[], 1).unwrap();
+            assert_eq!(resolved.content, legacy_report);
+        }
+    }
+
+    #[test]
+    fn completion_report_resolution_accepts_legacy_assistant_source_with_pending_report() {
+        let full_report =
+            "Implemented the requested workflow fix.\nVerified the focused tests passed.";
+        let pending = vec![report(full_report, 48, 3)];
+
+        let resolved = WorkflowExecutor::resolve_completion_report(
+            &json!({ "report_source": "assistant_message" }),
+            "",
+            &pending,
+            3,
+        )
+        .expect("legacy source marker should use the structured pending draft");
+
+        assert_eq!(resolved.content, full_report);
+        assert_eq!(resolved.source_message_id, Some(48));
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_invalid_legacy_argument_combinations() {
+        let full_report =
+            "Implemented the requested workflow fix.\nVerified the focused tests passed.";
+
+        for args in [
+            json!({ "report_source": "assistant_message", "summary": full_report }),
+            json!({ "report_source": "tool_argument" }),
+            json!({ "report_source": "unknown", "summary": full_report }),
+            json!({ "unexpected": full_report }),
+        ] {
+            assert!(
+                WorkflowExecutor::resolve_completion_report(&args, full_report, &[], 3).is_err(),
+                "legacy payload should be rejected: {args}"
+            );
+        }
+    }
+
+    #[test]
+    fn pending_completion_report_invalidation_obeys_tool_boundaries() {
+        assert!(
+            !WorkflowExecutor::should_invalidate_pending_completion_reports(&["complete_workflow"])
+        );
+        assert!(WorkflowExecutor::should_invalidate_pending_completion_reports(&["todo_update"]));
+        assert!(
+            WorkflowExecutor::should_invalidate_pending_completion_reports(&[
+                "todo_update",
+                "complete_workflow"
+            ])
+        );
+        assert!(WorkflowExecutor::should_invalidate_pending_completion_reports(&["bash"]));
+    }
+
+    #[test]
+    fn pending_completion_report_capture_requires_no_active_todos() {
+        assert!(WorkflowExecutor::todos_allow_completion_report_capture(&[]));
+        assert!(WorkflowExecutor::todos_allow_completion_report_capture(&[
+            json!({"status": "completed"}),
+            json!({"status": "data_missing"}),
+            json!({"status": "failed"}),
+        ]));
+        assert!(!WorkflowExecutor::todos_allow_completion_report_capture(&[
+            json!({"status": "completed"}),
+            json!({"status": "in_progress"}),
+        ]));
+        assert!(!WorkflowExecutor::todos_allow_completion_report_capture(&[
+            json!({"status": "pending"}),
+        ]));
+        assert!(!WorkflowExecutor::todos_allow_completion_report_capture(&[
+            json!({"status": "unknown"}),
+        ]));
+    }
+
+    fn tool_message(
+        id: i64,
+        message: &str,
+        is_error: bool,
+        metadata: serde_json::Value,
+    ) -> WorkflowMessage {
+        WorkflowMessage {
+            id: Some(id),
+            session_id: "review-evidence".to_string(),
+            role: "tool".to_string(),
+            message: message.to_string(),
+            reasoning: None,
+            message_kind: "tool".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(metadata),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: id as i32,
+            is_error,
+            error_type: is_error.then(|| "ToolExecutionError".to_string()),
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn final_review_evidence_uses_structured_tool_metadata() {
+        let messages = vec![
+            tool_message(
+                51,
+                "unstructured edit transcript",
+                false,
+                json!({
+                    "tool_name": "edit_file",
+                    "execution_status": "completed",
+                    "summary": "Updated completion resolution",
+                    "details": {"file_path": "src/runtime.rs", "start_line": 10}
+                }),
+            ),
+            tool_message(
+                52,
+                "this transcript must not be parsed for authority",
+                false,
+                json!({
+                    "tool_name": "bash",
+                    "execution_status": "completed",
+                    "summary": "Focused tests passed",
+                    "llm_content": "running 4 tests\ntest result: ok. 4 passed",
+                    "tool_call": {
+                        "function": {
+                            "name": "bash",
+                            "arguments": "{\"command\":\"cargo test --lib completion_report\"}"
+                        }
+                    }
+                }),
+            ),
+            tool_message(
+                53,
+                "cargo test appears only in ordinary transcript text",
+                false,
+                json!({
+                    "tool_name": "read_file",
+                    "execution_status": "completed",
+                    "summary": "Read documentation"
+                }),
+            ),
+            tool_message(
+                54,
+                "unstructured failure transcript",
+                true,
+                json!({
+                    "tool_name": "bash",
+                    "execution_status": "failed",
+                    "error_type": "ToolExecutionError",
+                    "summary": "Formatting check failed",
+                    "llm_content": "error: formatting differs",
+                    "tool_call": {
+                        "function": {
+                            "name": "bash",
+                            "arguments": {"command": "cargo fmt --check"}
+                        }
+                    }
+                }),
+            ),
+        ];
+
+        let evidence = WorkflowExecutor::build_final_review_evidence(&messages);
+
+        assert_eq!(evidence["mutation_ledger"].as_array().unwrap().len(), 1);
+        assert_eq!(evidence["mutation_ledger"][0]["path"], "src/runtime.rs");
+        assert_eq!(evidence["verification_ledger"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            evidence["verification_ledger"][0]["command"],
+            "cargo test --lib completion_report"
+        );
+        assert_eq!(evidence["failed_actions"].as_array().unwrap().len(), 1);
+        assert_eq!(evidence["failed_actions"][0]["message_id"], 54);
+        assert!(!evidence.to_string().contains("ordinary transcript text"));
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_conflicting_legacy_and_pending_reports() {
+        let pending = vec![report(
+            "Implemented the complete workflow fix.\nVerified every focused test passed.",
+            47,
+            1,
+        )];
+        let args = json!({
+            "summary": "Implemented a smaller workflow change.\nOnly compilation was checked."
+        });
+
+        assert!(WorkflowExecutor::resolve_completion_report(&args, "", &pending, 1).is_err());
+    }
+
+    #[test]
+    fn completion_turn_allows_only_todo_updates_beside_completion() {
+        assert!(!WorkflowExecutor::completion_turn_has_incompatible_tools(
+            &["todo_update", "complete_workflow",]
+        ));
+        assert!(WorkflowExecutor::completion_turn_has_incompatible_tools(&[
+            "bash",
+            "complete_workflow",
+        ]));
+        assert!(WorkflowExecutor::completion_turn_has_incompatible_tools(&[
+            "edit_file",
+            "complete_workflow",
+        ]));
     }
 
     #[test]

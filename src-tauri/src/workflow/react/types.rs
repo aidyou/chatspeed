@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use strum::{Display, EnumString};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Display, EnumString)]
@@ -451,6 +452,34 @@ pub struct PendingFinalReview {
     pub completion_summary: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingCompletionReport {
+    pub source_message_id: Option<i64>,
+    pub content: String,
+    pub content_hash: String,
+    pub segment_id: i32,
+    pub created_at_step: usize,
+}
+
+impl PendingCompletionReport {
+    pub fn new(
+        content: &str,
+        source_message_id: Option<i64>,
+        segment_id: i32,
+        created_at_step: usize,
+    ) -> Self {
+        let content = content.trim().to_string();
+        let content_hash = hex::encode(Sha256::digest(content.as_bytes()));
+        Self {
+            source_message_id,
+            content,
+            content_hash,
+            segment_id,
+            created_at_step,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionContext {
     pub session_id: String,
@@ -477,6 +506,8 @@ pub struct ExecutionContext {
     pub pending_sub_agent_completions: Vec<SubAgentCompletion>,
     #[serde(default)]
     pub pending_final_review: Option<PendingFinalReview>,
+    #[serde(default)]
+    pub pending_completion_reports: Vec<PendingCompletionReport>,
     #[serde(default)]
     pub removed_queued_user_message_ids: Vec<String>,
 }
@@ -507,6 +538,7 @@ impl ExecutionContext {
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
+            pending_completion_reports: Vec::new(),
             removed_queued_user_message_ids: Vec::new(),
         }
     }
@@ -560,6 +592,7 @@ mod tests {
         assert!(ctx.sub_agent_sessions.is_empty());
         assert!(ctx.pending_sub_agent_completions.is_empty());
         assert!(ctx.pending_final_review.is_none());
+        assert!(ctx.pending_completion_reports.is_empty());
     }
 
     #[test]
@@ -578,11 +611,37 @@ mod tests {
             details: Some(serde_json::json!("List files")),
             display_type: Some("text".to_string()),
         });
+        ctx.pending_completion_reports
+            .push(PendingCompletionReport::new(
+                "Implemented the requested change.\nVerified the focused tests passed.",
+                Some(77),
+                3,
+                5,
+            ));
 
         let json = serde_json::to_string(&ctx).unwrap();
         let deserialized: ExecutionContext = serde_json::from_str(&json).unwrap();
 
         assert_eq!(ctx, deserialized);
+    }
+
+    #[test]
+    fn execution_context_deserializes_legacy_snapshot_without_completion_drafts() {
+        let legacy = serde_json::json!({
+            "session_id": "legacy-session",
+            "state": "pending",
+            "wait_reason": null,
+            "current_segment_id": 2,
+            "current_step": 3,
+            "max_steps": 100,
+            "pending_tools": [],
+            "last_action_summary": null,
+            "version": "1.4.0"
+        });
+
+        let context: ExecutionContext = serde_json::from_value(legacy).unwrap();
+
+        assert!(context.pending_completion_reports.is_empty());
     }
 
     #[test]

@@ -321,6 +321,12 @@ workflow:
   cancelled: Opération annulée par l'utilisateur
   cannot_access_path: 'Impossible d''accéder au chemin : %{path}, car la valeur n''est pas un objet/tableau'
   circular_dependency: 'Une dépendance circulaire existe entre les nœuds : %{nodes}'
+  completion_report_claims:
+    limitations_absent: aucune limitation connue|aucune limitation restante|aucun problème connu|aucun problème restant
+    limitations_present: des limitations connues subsistent|limitation restante|problème restant
+    verification_failed: tests échoués|test échoué|vérification échouée|échec de la vérification
+    verification_not_run: tests non exécutés|test non exécuté|non testé|non vérifié
+    verification_passed: tests réussis|test réussi|vérification réussie|vérifié avec succès
   compression_in_progress: Compression du contexte en cours...
   dependency_not_found: Le nœud '%{node_id}' dépend du nœud '%{id}' qui n'existe pas
   duplicate_node_id: 'ID de nœud en double : %{id}'

@@ -317,6 +317,12 @@ workflow:
   cancelled: Operación cancelada por el usuario
   cannot_access_path: 'No se puede acceder a la ruta: %{path}, porque el valor no es un objeto/matriz'
   circular_dependency: 'Existe una dependencia circular entre los nodos: %{nodes}'
+  completion_report_claims:
+    limitations_absent: sin limitaciones conocidas|sin limitaciones restantes|sin problemas conocidos|sin problemas pendientes
+    limitations_present: quedan limitaciones conocidas|limitación restante|problema pendiente
+    verification_failed: las pruebas fallaron|prueba fallida|verificación fallida
+    verification_not_run: las pruebas no se ejecutaron|pruebas no ejecutadas|no probado|no verificado
+    verification_passed: las pruebas pasaron|pruebas superadas|verificación exitosa|verificado correctamente
   compression_in_progress: Comprimiendo contexto...
   dependency_not_found: El nodo '%{node_id}' depende del nodo '%{id}', que no existe
   duplicate_node_id: 'ID de nodo duplicado: %{id}'

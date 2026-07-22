@@ -307,6 +307,12 @@ workflow:
   cancelled: Operation was cancelled by user
   cannot_access_path: 'Cannot access path: %{path}, because value is not object/array'
   circular_dependency: 'Circular dependency exists between nodes: %{nodes}'
+  completion_report_claims:
+    limitations_absent: no known limitations|no remaining limitations|no known issues|no remaining issues
+    limitations_present: known limitations remain|known limitation remains|remaining limitation|remaining issue|known issue remains
+    verification_failed: tests failed|test failed|verification failed|verification did not pass
+    verification_not_run: tests were not run|tests not run|test was not run|not tested|verification was not run|not verified|unverified
+    verification_passed: tests passed|test passed|all tests pass|verification passed|verification succeeded|verified successfully
   compression_in_progress: Compressing context...
   dependency_not_found: Node '%{node_id}' depends on node '%{id}' which does not exist
   duplicate_node_id: 'Duplicate node ID: %{id}'
