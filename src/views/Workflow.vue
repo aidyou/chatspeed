@@ -159,7 +159,8 @@
         @edit-workflow="onEditWorkflow"
         @delete-workflow="onDeleteWorkflow"
         @add-path-from-tree="onAddPathFromTree"
-        @remove-path-from-tree="onRemovePathFromTree" />
+        @remove-path-from-tree="onRemovePathFromTree"
+        @insert-path-reference="insertPathReference" />
 
       <!-- Resize Handle -->
       <div
@@ -260,7 +261,7 @@
           @update-approval-level="approvalLevel = $event"
           @update-selected-agent="onSelectedAgentChange"
           @clear-context-frame="onClearContextFrame"
-          @create-new-workflow="createNewWorkflow"
+          @create-new-workflow="createNewWorkflow($event)"
           @open-image-dialog="openImageAttachmentDialogWithFeedback"
           @open-model-selector="openModelSelector"
           @remove-attachment="removeImageAttachment"
@@ -720,6 +721,7 @@ const {
   onCompositionEnd,
   onSkillSelect: originalOnSkillSelect,
   onFileSelect,
+  insertPathReference,
   clearInput
 } = inputComposable
 
@@ -1348,10 +1350,17 @@ const onSendMessage = async () => {
 }
 
 // Wrapper for createNewWorkflow that also clears input
-const createNewWorkflow = async () => {
-  await coreCreateNewWorkflow()
-  clearInput()
-  clearImageAttachments()
+const createNewWorkflow = async (options = null) => {
+  if (!options) {
+    inputAreaRef.value?.openCreateWorkflowDialog()
+    return
+  }
+
+  const created = await coreCreateNewWorkflow(options)
+  if (created) {
+    clearInput()
+    clearImageAttachments()
+  }
 }
 
 const togglePlanningModeWithFeedback = () => {
