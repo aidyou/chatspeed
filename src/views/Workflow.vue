@@ -160,7 +160,8 @@
         @delete-workflow="onDeleteWorkflow"
         @add-path-from-tree="onAddPathFromTree"
         @remove-path-from-tree="onRemovePathFromTree"
-        @insert-path-reference="insertPathReference" />
+        @insert-path-reference="insertPathReference"
+        @toggle-sidebar="onToggleSidebar" />
 
       <!-- Resize Handle -->
       <div

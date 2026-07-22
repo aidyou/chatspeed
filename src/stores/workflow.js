@@ -468,9 +468,118 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return null;
   };
 
+  const getCurrentWorkflowWaitReason = () => {
+    const executionContext = normalizeExecutionContext(currentWorkflow.value?.executionContext);
+    return String(
+      waitReason.value ??
+        currentWorkflow.value?.waitReason ??
+        currentWorkflow.value?.wait_reason ??
+        executionContext?.waitReason ??
+        executionContext?.wait_reason ??
+        ''
+    ).toLowerCase();
+  };
+
   const isCurrentWorkflowApprovalWaiting = () => {
     const status = currentWorkflow.value?.status?.toLowerCase() || '';
-    return waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL || approvalWaitingStates.includes(status);
+    return (
+      getCurrentWorkflowWaitReason() === WORKFLOW_WAIT_REASONS.APPROVAL ||
+      approvalWaitingStates.includes(status)
+    );
+  };
+
+  const getCurrentWorkflowPendingTools = () => {
+    const executionContext = normalizeExecutionContext(currentWorkflow.value?.executionContext);
+    const pendingTools = executionContext?.pendingTools || executionContext?.pending_tools || [];
+    return Array.isArray(pendingTools) ? pendingTools : [];
+  };
+
+  const stringifyStructuredMessageContent = (value) => {
+    if (typeof value === 'string') return value;
+    if (value == null) return '';
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  };
+
+  const buildStructuredPendingToolMetadata = (pendingTool = {}) => {
+    const toolCallId = String(pendingTool?.toolCallId || pendingTool?.tool_call_id || '').trim();
+    const toolName = String(pendingTool?.toolName || pendingTool?.tool_name || '').trim();
+    const argumentsValue = pendingTool?.arguments ?? null;
+    const details = pendingTool?.details ?? null;
+    const displayType = pendingTool?.displayType || pendingTool?.display_type || '';
+
+    return {
+      tool_call_id: toolCallId,
+      tool_name: toolName,
+      tool_call: {
+        id: toolCallId,
+        function: {
+          name: toolName,
+          arguments: argumentsValue
+        }
+      },
+      details,
+      display_type: displayType,
+      summary: getToolStatusSummary(toolName, 'pending', 'Awaiting approval'),
+      approval_status: 'pending',
+      execution_status: 'pending_approval'
+    };
+  };
+
+  const buildInlineApprovalEntry = ({
+    currentId,
+    workflowTitle,
+    toolCallId,
+    structuredPending = null,
+    meta = {}
+  }) => {
+    const toolName =
+      structuredPending?.toolName ??
+      structuredPending?.tool_name ??
+      meta.tool_name ??
+      meta.tool_call?.function?.name ??
+      meta.tool_call?.name ??
+      '';
+    const argumentsValue =
+      structuredPending?.arguments ??
+      meta.tool_call?.function?.arguments ??
+      meta.tool_call?.arguments ??
+      null;
+    const details = structuredPending?.details ?? meta.details ?? null;
+    const displayType =
+      structuredPending?.displayType ??
+      structuredPending?.display_type ??
+      meta.display_type ??
+      '';
+
+    return {
+      key: `${currentId}:${toolCallId}`,
+      id: toolCallId,
+      sessionId: currentId,
+      kind: 'approval',
+      workflowTitle,
+      action: toolName || meta.title || 'Tool Approval',
+      toolCallId,
+      toolName: toolName || meta.title || 'Tool Approval',
+      arguments: argumentsValue,
+      details,
+      displayType,
+      updatedAt: Date.now()
+    };
+  };
+
+  const hasPendingToolObservationMessage = (list = [], toolCallId) => {
+    const normalizedToolCallId = String(toolCallId || '').trim();
+    if (!normalizedToolCallId) return false;
+
+    return list.some((message) => {
+      const meta = message?.metadata || {};
+      if (String(meta.tool_call_id || '').trim() !== normalizedToolCallId) return false;
+      return getToolApprovalState(message, meta) === 'pending';
+    });
   };
 
   const getToolApprovalState = (message, meta = {}) => {
@@ -524,6 +633,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
       currentWorkflow.value?.title || currentWorkflow.value?.userQuery || 'Untitled Workflow';
     const order = [];
     const latestById = new Map();
+    const structuredPendingById = new Map();
+
+    for (const pendingTool of getCurrentWorkflowPendingTools()) {
+      const toolCallId = String(pendingTool?.toolCallId || pendingTool?.tool_call_id || '').trim();
+      if (!toolCallId) continue;
+
+      if (!structuredPendingById.has(toolCallId)) {
+        order.push(toolCallId);
+      }
+
+      structuredPendingById.set(toolCallId, pendingTool);
+    }
 
     for (const message of messages.value) {
       const messageSessionId = message?.sessionId || currentId;
@@ -549,18 +670,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return order
       .map((toolCallId) => {
         if (submittedToolIds.has(toolCallId)) return null;
+        const structuredPending = structuredPendingById.get(toolCallId) || null;
         const latest = latestById.get(toolCallId);
-        if (latest?.state !== 'pending') return null;
+        if (latest?.state === 'resolved') return null;
+        if (!structuredPending && latest?.state !== 'pending') return null;
         const meta = latest.meta || {};
-        return {
-          key: `${currentId}:${toolCallId}`,
-          id: toolCallId,
-          sessionId: currentId,
-          kind: 'approval',
+        return buildInlineApprovalEntry({
+          currentId,
           workflowTitle,
-          action: meta.tool_name || meta.title || 'Tool Approval',
-          updatedAt: Date.now()
-        };
+          toolCallId,
+          structuredPending,
+          meta
+        });
       })
       .filter(Boolean);
   };
@@ -670,8 +791,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
   });
 
   const pendingApprovalRequest = computed(() => {
-    const structured = getStructuredPendingApproval(currentWorkflow.value?.executionContext);
-    if (structured) return structured;
+    const activeInlineEntry = deriveCurrentInlinePendingApprovals().find(
+      entry => String(entry?.toolName || '').toLowerCase() !== 'submit_plan'
+    );
+    if (activeInlineEntry) {
+      return {
+        toolCallId: activeInlineEntry.toolCallId || activeInlineEntry.id || '',
+        toolName: activeInlineEntry.toolName || activeInlineEntry.action || 'Tool Approval',
+        arguments: activeInlineEntry.arguments ?? null,
+        details: activeInlineEntry.details ?? null,
+        displayType: activeInlineEntry.displayType || ''
+      };
+    }
 
     const legacy = pendingApprovalMessage.value;
     if (!legacy) return null;
@@ -701,9 +832,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
   });
 
   const pendingPlanApprovalRequest = computed(() => {
-    const structured = getStructuredPendingApproval(currentWorkflow.value?.executionContext);
-    if (structured?.toolName === 'submit_plan' && structured.toolCallId) {
-      return structured;
+    const activePlanEntry = deriveCurrentInlinePendingApprovals().find(
+      entry => String(entry?.toolName || '').toLowerCase() === 'submit_plan'
+    );
+    if (activePlanEntry) {
+      return {
+        toolCallId: activePlanEntry.toolCallId || activePlanEntry.id || '',
+        toolName: 'submit_plan',
+        arguments: activePlanEntry.arguments ?? null,
+        details: activePlanEntry.details ?? null,
+        displayType: activePlanEntry.displayType || ''
+      };
     }
 
     const legacy = pendingApprovalMessage.value;
@@ -727,18 +866,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
   });
 
   const canApprovePending = computed(() => {
-    const status = currentWorkflow.value?.status?.toLowerCase() || '';
-    const isApprovalWaiting =
-      waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL || approvalWaitingStates.includes(status);
-    if (!isApprovalWaiting) return false;
+    if (!isCurrentWorkflowApprovalWaiting()) return false;
     return !!pendingApprovalRequest.value;
   });
 
   const canApprovePlan = computed(() => {
-    const status = currentWorkflow.value?.status?.toLowerCase() || '';
-    const isApprovalWaiting =
-      waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL || approvalWaitingStates.includes(status);
-    if (!isApprovalWaiting) return false;
+    if (!isCurrentWorkflowApprovalWaiting()) return false;
     return !!pendingPlanApprovalRequest.value;
   });
 
@@ -1292,11 +1425,45 @@ export const useWorkflowStore = defineStore('workflow', () => {
       canRewindTail.value = snapshot.canRewindTail === true;
       isRunning.value = RUNNING_STATUSES.includes(status) && hasLiveSession.value;
 
-      waitReason.value = snapshot.workflow.waitReason || null;
+      waitReason.value =
+        snapshot.workflow.waitReason ||
+        snapshot.workflow.wait_reason ||
+        snapshot.workflow.executionContext?.waitReason ||
+        snapshot.workflow.executionContext?.wait_reason ||
+        null;
 
       const parsedMessages = (snapshot.messages || []).map(m =>
         normalizeWorkflowMessage(m, workflowId)
       );
+      const structuredPendingTools =
+        snapshot.workflow.executionContext?.pendingTools ||
+        snapshot.workflow.executionContext?.pending_tools ||
+        [];
+
+      if (Array.isArray(structuredPendingTools) && structuredPendingTools.length > 0) {
+        for (const pendingTool of structuredPendingTools) {
+          const toolCallId = String(
+            pendingTool?.toolCallId || pendingTool?.tool_call_id || ''
+          ).trim();
+          if (!toolCallId || hasPendingToolObservationMessage(parsedMessages, toolCallId)) {
+            continue;
+          }
+
+          const metadata = buildStructuredPendingToolMetadata(pendingTool);
+          parsedMessages.push({
+            id: null,
+            sessionId: workflowId,
+            role: 'tool',
+            message: stringifyStructuredMessageContent(metadata.details),
+            reasoning: null,
+            stepType: 'Observe',
+            stepIndex: parsedMessages.length,
+            isError: false,
+            errorType: null,
+            metadata
+          });
+        }
+      }
 
       messages.value = parsedMessages;
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;

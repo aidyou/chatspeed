@@ -89,6 +89,7 @@ Use full style for breaking changes, complex features, multi-system changes, or 
 - Keep the subject concise, preferably under 50 characters and no more than 72.
 - Do not end the subject with a period.
 - Use a clear scope when helpful, such as `auth`, `api`, `ui`, `db`, `config`, or `deps`.
+- State the key added or changed functionality clearly and briefly; include enough detail to explain the commit, but avoid low-level implementation details or exhaustive change lists.
 - In full style, explain what changed and why, not low-level implementation details.
 - Wrap body lines around 72 characters.
 - Use footers for breaking changes and issue references.
@@ -109,10 +110,39 @@ Suggest splitting commits when changes include:
 - generated files or formatting mixed with logic changes
 Do not split automatically unless the user approves or the workflow clearly supports multiple commits.
 
+## Sensitive Data Review
+Before staging or committing, inspect every file that would be included in the
+commit for potential sensitive data. Treat the following as high-risk signals,
+including case-insensitive variants and similarly named files:
+
+- environment and configuration secrets: `.env`, `.env.*`, `*.env`,
+  `secrets.*`, `credentials.*`, and `*.secret`
+- local databases and data exports: `*.db`, `*.sqlite`, `*.sqlite3`,
+  `*.mdb`, `*.accdb`
+- private keys, certificates, and keystores: `*.pem`, `*.key`, `*.ppk`,
+  `*.p12`, `*.pfx`, `*.jks`, `id_rsa`, `id_ed25519`, and their backups
+- credential-bearing tool files: `.netrc`, `.npmrc`, `.pypirc`,
+  `.aws/credentials`, `.docker/config.json`, and `kubeconfig`
+- files whose names suggest access material, such as names containing
+  `password`, `passwd`, `token`, `api-key`, `apikey`, `private`, or `vault`
+
+These patterns are warnings rather than proof that a file is safe or unsafe.
+Also consider the file's purpose and diff content, including hard-coded API
+keys, access tokens, passwords, connection strings, private keys, and other
+personal or confidential data in otherwise ordinary source or configuration
+files.
+
+If any candidate file is detected, stop before staging it or creating the
+commit. Warn the user that the pending commit may contain sensitive data, list
+every matching file path, and use the `ask_user` tool to ask whether to exclude
+those files from the commit or proceed with them. Do not commit a detected file
+unless the user explicitly chooses to proceed. If the user chooses exclusion,
+remove the files from the proposed commit and continue only with the remaining
+approved files.
+
 ## Safety
 - Do not call `/commit` or any nonexistent custom commit command.
 - Use real Git commands only.
 - Do not commit broken code unless the user explicitly wants a WIP commit.
-- Do not include secrets, credentials, tokens, private keys, or sensitive data.
 - Do not create branches, stashes, resets, checkouts, cleanups, or pushes without explicit approval.
 - Only create a commit when the user explicitly asked for one.

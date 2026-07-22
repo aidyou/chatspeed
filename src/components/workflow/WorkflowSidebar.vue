@@ -8,7 +8,7 @@
             class="compact-sidebar-tab"
             :class="{ active: compactSidebarTab === 'history' }"
             @click="activeSidebarTab = 'history'">
-            <cs name="message" />
+            <cs name="skill-plan3" size="var(--cs-font-size-lg)" />
           </div>
         </el-tooltip>
         <el-tooltip :content="$t('workflow.automation.title')" placement="right" :hide-after="0" :enterable="false">
@@ -16,47 +16,91 @@
             class="compact-sidebar-tab"
             :class="{ active: compactSidebarTab === 'automation' }"
             @click="activeSidebarTab = 'automation'">
-            <cs name="clock" />
+            <cs name="clock" size="var(--cs-font-size-lg)" />
           </div>
         </el-tooltip>
       </div>
 
-      <div v-if="compactSidebarTab === 'history'" class="compact-sidebar-list">
-        <el-tooltip
-          v-for="wf in filteredWorkflows"
-          :key="wf.id"
-          placement="right"
-          :hide-after="0"
-          :enterable="false"
-          popper-class="workflow-sidebar-tooltip">
-          <template #content>
-            <div class="workflow-sidebar-tooltip__title">
-              {{ wf.title || wf.userQuery || $t('workflow.untitled') }}
-            </div>
-            <div class="workflow-sidebar-tooltip__meta">
-              <span class="workflow-sidebar-tooltip__status">
-                <span :class="['status-indicator', getWorkflowStatusClass(wf.status)]"></span>
-                {{ getWorkflowStatusLabel(wf.status) }}
+      <div v-if="compactSidebarTab === 'history'" class="compact-sidebar-list compact-workflow-list">
+        <div v-if="compactActiveWorkflows.length" class="compact-sidebar-group">
+          <el-tooltip
+            v-for="wf in compactActiveWorkflows"
+            :key="wf.id"
+            placement="right"
+            :hide-after="0"
+            :enterable="false"
+            popper-class="workflow-sidebar-tooltip">
+            <template #content>
+              <div class="workflow-sidebar-tooltip__title">
+                {{ wf.title || wf.userQuery || $t('workflow.untitled') }}
+              </div>
+              <div class="workflow-sidebar-tooltip__meta">
+                <span class="workflow-sidebar-tooltip__status">
+                  <span :class="['status-indicator', getWorkflowStatusClass(wf.status)]"></span>
+                  {{ getWorkflowStatusLabel(wf.status) }}
+                </span>
+                <span v-if="getPrimaryRootName(wf)" class="workflow-sidebar-tooltip__root">
+                  <cs name="ext-folder" />
+                  {{ getPrimaryRootName(wf) }}
+                </span>
+              </div>
+            </template>
+            <div
+              class="compact-sidebar-item"
+              :class="[
+                getWorkflowStatusClass(wf.status),
+                { active: wf.id === currentWorkflowId, disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId }
+              ]"
+              @click="$emit('select-workflow', wf.id)">
+              <span class="compact-sidebar-item__badge">
+                {{ getPrimaryRootInitials(wf) }}
               </span>
-              <span v-if="getPrimaryRootName(wf)" class="workflow-sidebar-tooltip__root">
-                <cs name="ext-folder" />
-                {{ getPrimaryRootName(wf) }}
-              </span>
+              <span :class="['compact-sidebar-item__status', getWorkflowStatusClass(wf.status)]"></span>
             </div>
-          </template>
-          <div
-            class="compact-sidebar-item"
-            :class="[
-              getWorkflowStatusClass(wf.status),
-              { active: wf.id === currentWorkflowId, disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId }
-            ]"
-            @click="$emit('select-workflow', wf.id)">
-            <span class="compact-sidebar-item__badge">
-              {{ getPrimaryRootInitials(wf) }}
-            </span>
-            <span :class="['compact-sidebar-item__status', getWorkflowStatusClass(wf.status)]"></span>
-          </div>
-        </el-tooltip>
+          </el-tooltip>
+        </div>
+
+        <div
+          v-if="compactActiveWorkflows.length && compactRecentWorkflows.length"
+          class="compact-sidebar-group-separator" />
+
+        <div v-if="compactRecentWorkflows.length" class="compact-sidebar-group">
+          <el-tooltip
+            v-for="wf in compactRecentWorkflows"
+            :key="wf.id"
+            placement="right"
+            :hide-after="0"
+            :enterable="false"
+            popper-class="workflow-sidebar-tooltip">
+            <template #content>
+              <div class="workflow-sidebar-tooltip__title">
+                {{ wf.title || wf.userQuery || $t('workflow.untitled') }}
+              </div>
+              <div class="workflow-sidebar-tooltip__meta">
+                <span class="workflow-sidebar-tooltip__status">
+                  <span :class="['status-indicator', getWorkflowStatusClass(wf.status)]"></span>
+                  {{ getWorkflowStatusLabel(wf.status) }}
+                </span>
+                <span v-if="getPrimaryRootName(wf)" class="workflow-sidebar-tooltip__root">
+                  <cs name="ext-folder" />
+                  {{ getPrimaryRootName(wf) }}
+                </span>
+              </div>
+            </template>
+            <div
+              class="compact-sidebar-item"
+              :class="[
+                getWorkflowStatusClass(wf.status),
+                { active: wf.id === currentWorkflowId, disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId }
+              ]"
+              @click="$emit('select-workflow', wf.id)">
+              <span class="compact-sidebar-item__badge">
+                {{ getPrimaryRootInitials(wf) }}
+              </span>
+              <span :class="['compact-sidebar-item__status', getWorkflowStatusClass(wf.status)]"></span>
+            </div>
+          </el-tooltip>
+        </div>
       </div>
 
       <div v-else class="compact-sidebar-list">
@@ -337,6 +381,7 @@ const waitingStatuses = new Set([
 ])
 const failedStatuses = new Set(['error', 'failed'])
 const cancelledStatuses = new Set(['cancelled', 'interrupted'])
+const stoppedStatuses = new Set(['completed', ...failedStatuses, ...cancelledStatuses])
 const workflowStatusLabels = {
   pending: 'workflow.sidebarStatus.pending',
   thinking: 'workflow.sidebarStatus.thinking',
@@ -470,6 +515,18 @@ const filteredWorkflows = computed(() => {
       ((!title && !userQuery) && untitled.includes(query))
   })
 })
+
+const compactActiveWorkflows = computed(() =>
+  filteredWorkflows.value.filter((workflow) =>
+    !stoppedStatuses.has(String(workflow.status || '').toLowerCase())
+  )
+)
+
+const compactRecentWorkflows = computed(() =>
+  filteredWorkflows.value
+    .filter((workflow) => stoppedStatuses.has(String(workflow.status || '').toLowerCase()))
+    .slice(0, 5)
+)
 
 const filteredAutomations = computed(() => {
   return props.automations.filter((automation) => {
