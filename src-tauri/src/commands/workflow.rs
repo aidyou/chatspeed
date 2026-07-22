@@ -877,41 +877,93 @@ fn format_large_file_read_plan_block(
     )
 }
 
+fn parse_at_mentions(prompt: &str) -> Vec<String> {
+    let mention_re =
+        Regex::new(r#"@\"((?:\\.|[^\"\\])*)\"|@([^\s]+)"#).expect("at-mention regex must compile");
+
+    mention_re
+        .captures_iter(prompt)
+        .filter_map(|capture| {
+            if let Some(quoted) = capture.get(1) {
+                let mut value = String::new();
+                let mut chars = quoted.as_str().chars();
+                while let Some(ch) = chars.next() {
+                    if ch == '\\' {
+                        if let Some(escaped) = chars.next() {
+                            value.push(escaped);
+                        } else {
+                            value.push(ch);
+                        }
+                    } else {
+                        value.push(ch);
+                    }
+                }
+                return Some(value);
+            }
+
+            capture.get(2).map(|unquoted| unquoted.as_str().to_string())
+        })
+        .collect()
+}
+
+fn canonical_allowed_roots(allowed_paths: &[String]) -> Vec<PathBuf> {
+    allowed_paths
+        .iter()
+        .filter_map(|path| fs::canonicalize(path).ok())
+        .collect()
+}
+
+fn is_path_within_allowed_roots(path: &Path, allowed_roots: &[PathBuf]) -> Option<PathBuf> {
+    let canonical_path = fs::canonicalize(path).ok()?;
+    allowed_roots
+        .iter()
+        .any(|root| canonical_path.starts_with(root))
+        .then_some(canonical_path)
+}
+
+fn resolve_at_mention_targets(pattern: &str, allowed_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let pattern_path = Path::new(pattern);
+    let candidate_patterns = if pattern_path.is_absolute() {
+        vec![pattern_path.to_path_buf()]
+    } else {
+        allowed_roots
+            .iter()
+            .map(|root| root.join(pattern_path))
+            .collect()
+    };
+    let mut targets = std::collections::HashSet::new();
+
+    for candidate in candidate_patterns {
+        if pattern.contains('*') || pattern.contains('?') {
+            let candidate_pattern = candidate.to_string_lossy();
+            if let Ok(paths) = glob(&candidate_pattern) {
+                for path in paths.flatten() {
+                    if let Some(path) = is_path_within_allowed_roots(&path, allowed_roots) {
+                        targets.insert(path);
+                    }
+                }
+            }
+        } else if let Some(path) = is_path_within_allowed_roots(&candidate, allowed_roots) {
+            targets.insert(path);
+        }
+    }
+
+    targets.into_iter().collect()
+}
+
 fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String) {
     let mut attached_context = String::new();
-    let re = Regex::new(r"@([^\s]+)").unwrap();
+    let allowed_roots = canonical_allowed_roots(allowed_paths);
 
     let mut injections = Vec::new();
     let mut handled_patterns = std::collections::HashSet::new();
 
-    for cap in re.captures_iter(prompt) {
-        let pattern = &cap[1];
-        if handled_patterns.contains(pattern) {
+    for pattern in parse_at_mentions(prompt) {
+        if !handled_patterns.insert(pattern.clone()) {
             continue;
         }
-        handled_patterns.insert(pattern.to_string());
 
-        let mut target_paths = Vec::new();
-        if pattern.contains('*') || pattern.contains('?') {
-            for base in allowed_paths {
-                let full_pattern = Path::new(base).join(pattern).to_string_lossy().to_string();
-                if let Ok(paths) = glob(&full_pattern) {
-                    for entry in paths.flatten() {
-                        target_paths.push((entry, pattern.to_string()));
-                    }
-                }
-            }
-        } else {
-            for base in allowed_paths {
-                let full_path = Path::new(base).join(pattern);
-                if full_path.exists() {
-                    target_paths.push((full_path, pattern.to_string()));
-                    break;
-                }
-            }
-        }
-
-        for (path, rel_pattern) in target_paths {
+        for path in resolve_at_mention_targets(&pattern, &allowed_roots) {
             if injections.len() >= 20 {
                 break;
             }
@@ -928,18 +980,18 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
                     let reminder = if let Some(plan) = build_large_file_read_plan(&path) {
                         format!(
                             "{}\n{}",
-                            format_large_file_read_plan_block(&rel_pattern, size, &plan),
-                            format_large_file_read_plan(&rel_pattern, size, &plan)
+                            format_large_file_read_plan_block(&pattern, size, &plan),
+                            format_large_file_read_plan(&pattern, size, &plan)
                         )
                     } else {
                         format!(
                             "The user referenced a large file {}. If you only need specific symbols or sections, prefer 'grep' first. When you need to read the complete file, use sequential 'read_file' calls with 'offset' and 'limit' parameters.",
-                            rel_pattern
+                            pattern
                         )
                     };
                     injections.push(format!(
                         "\n<file_content path={:?}>\n[File too large to show full content]\n{}\n</file_content>\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
-                        rel_pattern, info, reminder
+                        pattern, info, reminder
                     ));
                 } else {
                     match fs::read(&path) {
@@ -947,12 +999,12 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
                             if let Ok(content) = String::from_utf8(bytes) {
                                 injections.push(format!(
                                     "\n<file_content path={:?}>\n{}\n</file_content>\n",
-                                    rel_pattern, content
+                                    pattern, content
                                 ));
                             } else {
                                 injections.push(format!(
                                     "\n<file_content path={:?}>\n[Binary File or Invalid Encoding]\nMetadata: {}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a binary file {} that cannot be displayed as text directly.</SYSTEM_REMINDER>",
-                                    rel_pattern, info, rel_pattern
+                                    pattern, info, pattern
                                 ));
                             }
                         }
@@ -976,6 +1028,11 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
                     };
 
                     if entry.depth() == 0 {
+                        continue;
+                    }
+
+                    let entry_path = entry.path();
+                    if is_path_within_allowed_roots(entry_path, &allowed_roots).is_none() {
                         continue;
                     }
 
@@ -1031,7 +1088,7 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
 
                 injections.push(format!(
                     "\n<list_dir path={:?}>\n{}\n</list_dir>\n",
-                    rel_pattern, list_str
+                    pattern, list_str
                 ));
             }
         }
@@ -5305,6 +5362,73 @@ mod tests {
         assert_eq!(plan.chunk_plan[0].offset, 0);
         assert!(plan.chunk_plan[0].limit > 0);
         assert!(plan.estimated_calls >= 1);
+    }
+
+    #[test]
+    fn test_inject_at_mentions_supports_quoted_authorized_paths() {
+        let primary_parent = tempdir().unwrap();
+        let primary_root = primary_parent.path().join("primary root ");
+        let secondary_root = tempdir().unwrap();
+        let primary_file = primary_root.join(" leading and trailing ");
+        let primary_dir = primary_root.join("folder name");
+        let secondary_file = secondary_root.path().join("secondary file.txt");
+        std::fs::create_dir(&primary_root).unwrap();
+        std::fs::write(&primary_file, "primary content").unwrap();
+        std::fs::create_dir(&primary_dir).unwrap();
+        std::fs::write(primary_dir.join("child.txt"), "child content").unwrap();
+        std::fs::write(&secondary_file, "secondary content").unwrap();
+
+        let prompt = format!(
+            r#"Review @" leading and trailing " and @"folder name" plus @"{}""#,
+            secondary_file.display()
+        );
+        let (_, attached) = inject_at_mentions(
+            &prompt,
+            &[
+                primary_root.to_string_lossy().to_string(),
+                secondary_root.path().to_string_lossy().to_string(),
+            ],
+        );
+
+        assert!(attached.contains("primary content"));
+        assert!(attached.contains("child.txt"));
+        assert!(attached.contains("secondary content"));
+    }
+
+    #[test]
+    fn test_inject_at_mentions_rejects_outside_absolute_paths() {
+        let allowed_root = tempdir().unwrap();
+        let outside_root = tempdir().unwrap();
+        let outside_file = outside_root.path().join("outside.txt");
+        std::fs::write(&outside_file, "outside content").unwrap();
+
+        let prompt = format!(r#"Review @"{}""#, outside_file.display());
+        let (_, attached) = inject_at_mentions(
+            &prompt,
+            &[allowed_root.path().to_string_lossy().to_string()],
+        );
+
+        assert!(attached.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_inject_at_mentions_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let allowed_root = tempdir().unwrap();
+        let outside_root = tempdir().unwrap();
+        let outside_file = outside_root.path().join("outside.txt");
+        let escaped_link = allowed_root.path().join("escaped-link.txt");
+        std::fs::write(&outside_file, "outside content").unwrap();
+        symlink(&outside_file, &escaped_link).unwrap();
+
+        let (_, attached) = inject_at_mentions(
+            "Review @escaped-link.txt",
+            &[allowed_root.path().to_string_lossy().to_string()],
+        );
+
+        assert!(attached.is_empty());
     }
 
     #[test]

@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-at:before {
+  content: "\e81e";
+}
+
 .cs-switch-line:before {
   content: "\e68b";
 }

@@ -57,7 +57,8 @@
             :node="child"
             :expanded-map="expandedNodes"
             @toggle="toggleExpand"
-            @preview="previewFile" />
+            @preview="previewFile"
+            @reference="emit('referencePath', $event)" />
         </div>
       </div>
     </div>
@@ -114,6 +115,7 @@
 
 <script setup>
 import { ref, watch, onMounted, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invokeWrapper } from '@/libs/tauri'
@@ -124,6 +126,8 @@ import MarkdownSimple from './MarkdownSimple.vue'
 import FilePreviewDiff from './FilePreviewDiff.vue'
 import TreeNode from './TreeNode.vue'
 
+const { t } = useI18n()
+
 const props = defineProps({
   paths: {
     type: Array,
@@ -131,7 +135,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['addPath', 'removePath'])
+const emit = defineEmits(['addPath', 'removePath', 'referencePath'])
 
 const roots = computed(() => props.paths)
 const expandedNodes = ref(new Map())
@@ -209,10 +213,10 @@ const copyRootPath = async path => {
   if (!path) return
   try {
     await writeClipboard(path)
-    showMessage('Path copied', 'success')
+    showMessage(t('common.copied'), 'success')
   } catch (error) {
     console.error('Failed to copy root path:', error)
-    showMessage('Failed to copy path', 'error')
+    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
   }
 }
 

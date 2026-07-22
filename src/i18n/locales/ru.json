@@ -1002,6 +1002,14 @@
     "historyTab": "Разговор",
     "installedSkillsGroup": "Установленные Skills",
     "newWorkflow": "Новый рабочий процесс",
+    "newWorkflowDialog": {
+      "defaultDescription": "Создает workflow с настройками выбранного агента по умолчанию.",
+      "defaultTitle": "Использовать настройки агента по умолчанию",
+      "description": "Выберите настройки для нового workflow.",
+      "inheritDescription": "Повторно использует агента, разрешённые папки и настройки текущего workflow.",
+      "inheritTitle": "Наследовать настройки текущего workflow",
+      "title": "Создать новый workflow"
+    },
     "noAgentError": "Нет доступных агентов. Сначала создайте агента в настройках.",
     "noAutoApprovedItems": "Нет автоодобряемых элементов",
     "notificationSound": "Звуковые уведомления",

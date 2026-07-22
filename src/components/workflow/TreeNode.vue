@@ -3,40 +3,47 @@
     <div
       class="node-item"
       :class="{ 'is-dir': node.is_dir }"
-      :draggable="true"
-      @click="handleClick"
-      @dragstart="handleDragStart">
+      @click="handleClick">
       <span class="node-icon">
         <cs :name="node.is_dir ? (isExpanded ? 'ext-folder-open' : 'ext-folder') : getFileIcon(node.name)"
           size="14px" />
       </span>
       <span class="node-name" :class="gitStatusClass">{{ node.name }}</span>
       <div v-if="node.git_status" class="git-status" :class="gitStatusClass" :title="node.git_status"></div>
-      <div v-if="node.is_dir" class="node-actions">
+      <div class="node-actions">
+        <cs name="at" size="12px" class="action-btn reference-btn" @click.stop="emit('reference', node.path)" />
         <cs name="copy" size="12px" class="action-btn copy-btn" @click.stop="copyNodePath" />
-        <cs name="ext-folder-open" size="12px" class="action-btn open-btn" @click.stop="openNodePath" />
+        <cs
+          v-if="node.is_dir"
+          name="ext-folder-open"
+          size="12px"
+          class="action-btn open-btn"
+          @click.stop="openNodePath" />
       </div>
     </div>
 
     <div v-if="node.is_dir && isExpanded" class="node-children">
       <tree-node v-for="child in children" :key="child.path" :node="child" :expanded-map="expandedMap"
-        @toggle="$emit('toggle', $event)" @preview="$emit('preview', $event)" />
+        @toggle="$emit('toggle', $event)" @preview="$emit('preview', $event)" @reference="$emit('reference', $event)" />
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { invokeWrapper } from '@/libs/tauri'
 import { writeClipboard } from '@/libs/clipboard'
 import { showMessage } from '@/libs/util'
+
+const { t } = useI18n()
 
 const props = defineProps({
   node: Object,
   expandedMap: Object
 })
 
-const emit = defineEmits(['toggle', 'preview'])
+const emit = defineEmits(['toggle', 'preview', 'reference'])
 
 const isExpanded = computed(() => props.expandedMap.has(props.node.path))
 const children = ref([])
@@ -71,10 +78,10 @@ const handleClick = () => {
 const copyNodePath = async () => {
   try {
     await writeClipboard(props.node.path)
-    showMessage('Path copied', 'success')
+    showMessage(t('common.copied'), 'success')
   } catch (error) {
     console.error('Failed to copy path:', error)
-    showMessage('Failed to copy path', 'error')
+    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
   }
 }
 
@@ -84,15 +91,6 @@ const openNodePath = async () => {
   } catch (error) {
     console.error('Failed to open directory:', error)
   }
-}
-
-const handleDragStart = event => {
-  const path = String(props.node?.path || '').trim()
-  if (!path || !event.dataTransfer) return
-
-  event.dataTransfer.effectAllowed = 'copy'
-  event.dataTransfer.setData('application/x-chatspeed-workflow-path', path)
-  event.dataTransfer.setData('text/plain', path)
 }
 
 const getFileIcon = (name) => {

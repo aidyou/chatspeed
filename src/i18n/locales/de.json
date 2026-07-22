@@ -1002,6 +1002,14 @@
     "historyTab": "Sitzung",
     "installedSkillsGroup": "Installierte Skills",
     "newWorkflow": "Neuer Workflow",
+    "newWorkflowDialog": {
+      "defaultDescription": "Erstellt einen Workflow mit der Standardkonfiguration des ausgewählten Agenten.",
+      "defaultTitle": "Agent-Standardwerte verwenden",
+      "description": "Wählen Sie die Konfiguration für den neuen Workflow.",
+      "inheritDescription": "Übernimmt Agent, autorisierte Verzeichnisse und Workflow-Einstellungen des aktuellen Workflows.",
+      "inheritTitle": "Konfiguration des aktuellen Workflows übernehmen",
+      "title": "Neuen Workflow erstellen"
+    },
     "noAgentError": "Keine Agenten verfügbar. Bitte zuerst in den Einstellungen einen Agenten anlegen.",
     "noAutoApprovedItems": "Keine Auto-Freigaben",
     "notificationSound": "Tonbenachrichtigungen",

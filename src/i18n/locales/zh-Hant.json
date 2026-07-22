@@ -1002,6 +1002,14 @@
     "historyTab": "對話",
     "installedSkillsGroup": "已安裝 Skills",
     "newWorkflow": "新增工作流程",
+    "newWorkflowDialog": {
+      "defaultDescription": "使用目前選取智能體的預設設定建立。",
+      "defaultTitle": "使用智能體預設設定",
+      "description": "選擇新工作流程要使用的設定。",
+      "inheritDescription": "重用目前工作流程的智能體、授權目錄與工作流程偏好。",
+      "inheritTitle": "繼承目前工作流程設定",
+      "title": "建立新工作流程"
+    },
     "noAgentError": "沒有可用的代理。請先在設定中建立代理。",
     "noAutoApprovedItems": "沒有自動審批項目",
     "notificationSound": "聲音通知",

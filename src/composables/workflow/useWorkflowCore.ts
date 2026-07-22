@@ -1873,115 +1873,57 @@ export function useWorkflowCore({
         })
     }
 
-    const createNewWorkflow = async () => {
+    const createNewWorkflow = async ({ inheritCurrent = true } = {}) => {
         try {
-            // 0. Ensure we have an agent selected
             if (!selectedAgent.value) {
-                // Try to select the first available agent
                 if (agentStore.agents.length > 0) {
                     selectedAgent.value = agentStore.agents[0]
                     console.log('[Workflow] Auto-selected first agent:', selectedAgent.value.id)
                 } else {
-                    // No agents available - show error
                     const errorMsg = t('workflow.noAgentError') || 'No agent available. Please create an agent first.'
                     console.error('[Workflow] Cannot create workflow: no agent available')
                     showMessage(errorMsg, 'error')
-                    return
+                    return false
                 }
             }
 
-            // 1. Get current config to inherit
-            let inheritedAgentConfig = null
-            let inheritedAgentId = selectedAgent.value?.id
-            let inheritedAllowedPaths = []
-            let inheritedFinalAudit = null
-            let inheritedApprovalLevel = null
+            const currentWorkflow = workflowStore.currentWorkflow
+            const currentConfig = getCurrentWorkflowAgentConfig()
+            const shouldInheritCurrent = inheritCurrent && Boolean(currentWorkflow)
+            const workflowAgentId = shouldInheritCurrent
+                ? currentWorkflow.agentId || selectedAgent.value.id
+                : selectedAgent.value.id
+            const inheritedAgentConfig = shouldInheritCurrent
+                ? JSON.stringify(buildInheritedWorkflowConfig(currentConfig))
+                : null
+            const allowedPaths = shouldInheritCurrent && Array.isArray(currentConfig.allowedPaths)
+                ? [...currentConfig.allowedPaths]
+                : undefined
 
-            if (workflowStore.currentWorkflow?.agentConfig) {
-                inheritedAgentConfig = JSON.stringify(
-                    buildInheritedWorkflowConfig(workflowStore.currentWorkflow.agentConfig)
-                )
-                inheritedAgentId = workflowStore.currentWorkflow.agentId
-                // Inherit allowed paths from current workflow's agentConfig
-                const config = workflowStore.currentWorkflow.agentConfig
-                if (config.allowedPaths && Array.isArray(config.allowedPaths)) {
-                    inheritedAllowedPaths = config.allowedPaths
-                }
-                // Inherit finalAudit from current workflow's agentConfig
-                if (config.finalAudit !== undefined && config.finalAudit !== null) {
-                    inheritedFinalAudit = config.finalAudit
-                }
-                // Inherit approvalLevel from current workflow's agentConfig
-                if (config.approvalLevel) {
-                    inheritedApprovalLevel = config.approvalLevel
-                }
-            } else {
-                inheritedAgentConfig = JSON.stringify(
-                    buildInheritedWorkflowConfig({
-                        allowedPaths: pendingPaths.value.length > 0 ? [...pendingPaths.value] : undefined
-                    })
-                )
-            }
-
-            // 2. Get allowed paths - prioritize inherited paths
-            let workflowAllowedPaths = []
-            if (inheritedAllowedPaths.length > 0) {
-                workflowAllowedPaths = [...inheritedAllowedPaths]
-            } else if (pendingPaths.value.length > 0) {
-                workflowAllowedPaths = [...pendingPaths.value]
-            } else if (selectedAgent.value?.allowedPaths) {
-                try {
-                    workflowAllowedPaths =
-                        typeof selectedAgent.value.allowedPaths === 'string'
-                            ? JSON.parse(selectedAgent.value.allowedPaths)
-                            : selectedAgent.value.allowedPaths
-                } catch (e) {
-                    console.error('Failed to parse agent allowedPaths:', e)
-                }
-            }
-
-            // 3. Use inherited finalAudit if available, otherwise use current local state
-            const workflowFinalAudit = inheritedFinalAudit !== null ? inheritedFinalAudit : finalAuditMode.value === 'on'
-
-            // 4. Update local state to match inherited values
-            if (inheritedApprovalLevel) {
-                approvalLevel.value = inheritedApprovalLevel
-            }
-            if (inheritedFinalAudit !== null) {
-                finalAuditMode.value = inheritedFinalAudit ? 'on' : 'off'
-            }
-            if (workflowStore.currentWorkflow?.agentConfig?.autoCompress !== undefined) {
-                autoCompressEnabled.value = !!workflowStore.currentWorkflow.agentConfig.autoCompress
-            }
-
-            // 5. Create empty workflow in backend
             const newWorkflowId = await invokeWrapper('create_workflow', {
                 request: {
-                    agentId: inheritedAgentId,
-                    allowedPaths: workflowAllowedPaths,
-                    finalAudit: workflowFinalAudit,
+                    agentId: workflowAgentId,
+                    allowedPaths,
                     inheritedAgentConfig
                 }
             })
 
-            // 6. Update selectedAgent if we inherited a different agent
-            if (inheritedAgentId && inheritedAgentId !== selectedAgent.value?.id) {
-                const inheritedAgent = agentStore.agents.find(a => a.id === inheritedAgentId)
+            if (shouldInheritCurrent && workflowAgentId !== selectedAgent.value?.id) {
+                const inheritedAgent = agentStore.agents.find(agent => agent.id === workflowAgentId)
                 if (inheritedAgent) {
                     selectedAgent.value = inheritedAgent
                 }
             }
 
-            // 7. Load and select the new workflow
             await workflowStore.loadWorkflows()
-            // IMPORTANT: use core-level selectWorkflow to bind event listener and
-            // recover any waiting UI state from live session/snapshot.
             await selectWorkflow(newWorkflowId)
 
             console.log('Created empty workflow:', newWorkflowId)
+            return true
         } catch (error) {
             console.error('Failed to create new workflow:', error)
             showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+            return false
         }
     }
 

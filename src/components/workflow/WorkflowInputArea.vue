@@ -388,7 +388,7 @@
               :hide-after="0"
               :enterable="false"
               placement="top">
-              <label @click="$emit('create-new-workflow')">
+              <label @click="openCreateWorkflowDialog">
                 <cs name="new-chat" class="small" />
               </label>
             </el-tooltip>
@@ -419,6 +419,45 @@
         </div>
       </div>
     </div>
+    <el-dialog
+      v-model="createWorkflowDialogVisible"
+      :title="$t('workflow.newWorkflowDialog.title')"
+      width="420px"
+      append-to-body
+      @keydown.capture="handleCreateWorkflowDialogKeydown">
+      <div class="new-workflow-options">
+        <button
+          type="button"
+          class="new-workflow-option"
+          :class="{ selected: createWorkflowInheritCurrent }"
+          :disabled="!currentWorkflow"
+          @click="createWorkflowInheritCurrent = true">
+          <span class="new-workflow-option-title">
+            {{ $t('workflow.newWorkflowDialog.inheritTitle') }}
+          </span>
+          <span class="new-workflow-option-description">
+            {{ $t('workflow.newWorkflowDialog.inheritDescription') }}
+          </span>
+          <cs v-if="createWorkflowInheritCurrent" name="check" size="16px" class="new-workflow-option-check" />
+        </button>
+        <button
+          type="button"
+          class="new-workflow-option"
+          :class="{ selected: !createWorkflowInheritCurrent }"
+          @click="createWorkflowInheritCurrent = false">
+          <span class="new-workflow-option-title">
+            {{ $t('workflow.newWorkflowDialog.defaultTitle') }}
+          </span>
+          <span class="new-workflow-option-description">
+            {{ $t('workflow.newWorkflowDialog.defaultDescription') }}
+          </span>
+          <cs v-if="!createWorkflowInheritCurrent" name="check" size="16px" class="new-workflow-option-check" />
+        </button>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="createWorkflowFromSelectedMode">{{ $t('common.confirm') }}</el-button>
+      </template>
+    </el-dialog>
   </el-footer>
 </template>
 
@@ -791,10 +830,39 @@ const importDefaultShellPolicies = async () => {
 }
 
 const inputRef = ref(null)
+const createWorkflowDialogVisible = ref(false)
+const createWorkflowInheritCurrent = ref(true)
 
 const inputMessage = defineModel('inputMessage', { type: String, default: '' })
 
 const autoCompressMenuLabel = computed(() => t('workflow.autoCompressShort'))
+
+const openCreateWorkflowDialog = () => {
+  createWorkflowInheritCurrent.value = Boolean(props.currentWorkflow)
+  createWorkflowDialogVisible.value = true
+}
+
+const createWorkflowFromSelectedMode = () => {
+  createWorkflowDialogVisible.value = false
+  emit('create-new-workflow', { inheritCurrent: createWorkflowInheritCurrent.value })
+}
+
+const handleCreateWorkflowDialogKeydown = event => {
+  if (!createWorkflowDialogVisible.value) return
+
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    createWorkflowFromSelectedMode()
+    return
+  }
+
+  if (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'Tab') {
+    event.preventDefault()
+    if (props.currentWorkflow) {
+      createWorkflowInheritCurrent.value = !createWorkflowInheritCurrent.value
+    }
+  }
+}
 
 const handleQuickActionCommand = command => {
   if (command === 'attachment') {
@@ -841,11 +909,76 @@ const handlePaste = event => {
 
 defineExpose({
   inputRef,
-  focus: () => inputRef.value?.focus()
+  focus: () => inputRef.value?.focus(),
+  openCreateWorkflowDialog
 })
 </script>
 
 <style scoped lang="scss">
+.new-workflow-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-sm, 8px);
+}
+
+.new-workflow-option {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: var(--cs-space-md, 16px);
+  border: 1px solid var(--cs-border-color);
+  border-radius: var(--cs-border-radius-base, 8px);
+  background: var(--cs-bg-color);
+  color: var(--cs-text-color);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.new-workflow-option:hover:not(:disabled) {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+
+.new-workflow-option.selected {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.new-workflow-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.new-workflow-option-title,
+.new-workflow-option-description {
+  display: block;
+  padding-right: 24px;
+}
+
+.new-workflow-option-title {
+  font-size: var(--cs-font-size-md, 16px);
+  font-weight: 600;
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.new-workflow-option-description {
+  margin-top: var(--cs-space-xs, 4px);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-sm);
+  line-height: 1.5;
+}
+
+.new-workflow-option-check {
+  position: absolute;
+  top: var(--cs-space-md, 16px);
+  right: var(--cs-space-md, 16px);
+  color: var(--el-color-primary);
+}
+
 .workflow-attachments {
   display: flex;
   flex-wrap: wrap;

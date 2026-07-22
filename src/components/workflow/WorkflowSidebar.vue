@@ -141,8 +141,11 @@
           </div>
         </el-tab-pane>
         <el-tab-pane :label="$t('settings.agent.authorizedPaths')" name="files">
-          <FileTree :paths="currentPaths" @add-path="$emit('add-path-from-tree', $event)"
-            @remove-path="$emit('remove-path-from-tree', $event)" />
+          <FileTree
+            :paths="currentPaths"
+            @add-path="$emit('add-path-from-tree', $event)"
+            @remove-path="$emit('remove-path-from-tree', $event)"
+            @reference-path="$emit('insert-path-reference', $event)" />
         </el-tab-pane>
       </el-tabs>
     </div>
@@ -218,7 +221,8 @@ const emit = defineEmits([
   'update:activeTab',
   'toggle-sidebar',
   'add-path-from-tree',
-  'remove-path-from-tree'
+  'remove-path-from-tree',
+  'insert-path-reference'
 ])
 
 const activeSidebarTab = computed({

@@ -1002,6 +1002,14 @@
     "historyTab": "대화",
     "installedSkillsGroup": "설치된 Skills",
     "newWorkflow": "새 워크플로우",
+    "newWorkflowDialog": {
+      "defaultDescription": "선택한 에이전트의 기본 설정으로 워크플로우를 만듭니다.",
+      "defaultTitle": "에이전트 기본 설정 사용",
+      "description": "새 워크플로우에 사용할 설정을 선택하세요.",
+      "inheritDescription": "현재 워크플로우의 에이전트, 허용된 디렉터리 및 워크플로우 설정을 재사용합니다.",
+      "inheritTitle": "현재 워크플로우 설정 상속",
+      "title": "새 워크플로우 만들기"
+    },
     "noAgentError": "사용 가능한 에이전트가 없습니다. 먼저 설정에서 에이전트를 만드세요.",
     "noAutoApprovedItems": "자동 승인 항목이 없습니다",
     "notificationSound": "알림 소리",

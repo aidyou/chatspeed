@@ -1002,6 +1002,14 @@
     "historyTab": "会话",
     "installedSkillsGroup": "已安装 Skills",
     "newWorkflow": "新建工作流",
+    "newWorkflowDialog": {
+      "defaultDescription": "使用当前选择的智能体默认配置创建。",
+      "defaultTitle": "使用智能体默认配置",
+      "description": "选择新工作流要使用的配置。",
+      "inheritDescription": "复用当前工作流的智能体、授权目录和工作流偏好。",
+      "inheritTitle": "继承当前工作流配置",
+      "title": "创建新工作流"
+    },
     "noAgentError": "没有可用的代理。请先在设置中创建代理。",
     "noAutoApprovedItems": "没有自动审批的项目",
     "notificationSound": "声音通知",

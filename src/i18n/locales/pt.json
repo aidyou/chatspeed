@@ -1002,6 +1002,14 @@
     "historyTab": "Conversa",
     "installedSkillsGroup": "Skills instaladas",
     "newWorkflow": "Novo fluxo de trabalho",
+    "newWorkflowDialog": {
+      "defaultDescription": "Cria um workflow com a configuração padrão do agente selecionado.",
+      "defaultTitle": "Usar padrões do agente",
+      "description": "Escolha a configuração do novo workflow.",
+      "inheritDescription": "Reutiliza o agente, as pastas autorizadas e as preferências do workflow atual.",
+      "inheritTitle": "Herdar a configuração do workflow atual",
+      "title": "Criar novo workflow"
+    },
     "noAgentError": "Nenhum agente disponível. Crie um primeiro em Configurações.",
     "noAutoApprovedItems": "Nenhum item autoaprovado",
     "notificationSound": "Notificações sonoras",

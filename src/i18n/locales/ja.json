@@ -1002,6 +1002,14 @@
     "historyTab": "会話",
     "installedSkillsGroup": "インストール済み Skills",
     "newWorkflow": "新しいワークフロー",
+    "newWorkflowDialog": {
+      "defaultDescription": "選択中のエージェントのデフォルト設定で作成します。",
+      "defaultTitle": "エージェントのデフォルトを使用",
+      "description": "新しいワークフローで使用する設定を選択してください。",
+      "inheritDescription": "現在のワークフローのエージェント、許可済みディレクトリ、設定を再利用します。",
+      "inheritTitle": "現在のワークフロー設定を継承",
+      "title": "新しいワークフローを作成"
+    },
     "noAgentError": "利用可能なエージェントがありません。先に設定で作成してください。",
     "noAutoApprovedItems": "自動承認項目はありません",
     "notificationSound": "通知音",

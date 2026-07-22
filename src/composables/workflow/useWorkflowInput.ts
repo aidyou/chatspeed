@@ -159,9 +159,79 @@ export function useWorkflowInput({
         }
     }
 
+    const getReferencePath = (file) => {
+        const path = typeof file?.path === 'string' ? file.path : ''
+        if (!path) return ''
+
+        const normalizedPath = path.replace(/[\\/]+$/, '')
+        const normalizedRoots = (currentPaths.value || [])
+            .map(root => (typeof root === 'string' ? root : '').replace(/[\\/]+$/, ''))
+            .filter(root => root !== '')
+        const primaryRoot = normalizedRoots[0]
+        const rootPath = (typeof file?.root_path === 'string' ? file.root_path : '').replace(
+            /[\\/]+$/,
+            ''
+        )
+        const matchedRoot = rootPath || normalizedRoots.find(root =>
+            normalizedPath === root || normalizedPath.startsWith(`${root}/`) || normalizedPath.startsWith(`${root}\\`)
+        )
+
+        if (matchedRoot && matchedRoot === primaryRoot) {
+            const relativePath = normalizedPath
+                .slice(matchedRoot.length)
+                .replace(/^[\\/]+/, '')
+            return relativePath || '.'
+        }
+
+        return normalizedPath || path
+    }
+
+    const formatFileReference = (path) => {
+        if (!/[\s"\\]/.test(path)) return `@${path}`
+        return `@"${path.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+    }
+
+    const insertFileReference = (file, { replaceAtMention = false } = {}) => {
+        const displayPath = getReferencePath(file)
+        if (!displayPath) return false
+
+        ignoreNextSearch.value = true
+        const textarea = inputRef.value?.$el.querySelector('textarea')
+        const cursorPosition = textarea?.selectionStart ?? inputMessage.value.length
+        const textBeforeCursor = inputMessage.value.slice(0, cursorPosition)
+        const textAfterCursor = inputMessage.value.slice(cursorPosition)
+        const prefix = replaceAtMention
+            ? textBeforeCursor.replace(/@(?:"(?:\\.|[^"\\])*"|[^\s]*)$/, '')
+            : textBeforeCursor && !/\s$/.test(textBeforeCursor)
+              ? `${textBeforeCursor} `
+              : textBeforeCursor
+        const newTextBefore = `${prefix}${formatFileReference(displayPath)} `
+
+        inputMessage.value = newTextBefore + textAfterCursor
+        showFileSuggestions.value = false
+        selectedFileIndex.value = 0
+
+        nextTick(() => {
+            if (inputRef.value) {
+                inputRef.value.focus()
+                const newPos = newTextBefore.length
+                const nextTextarea = inputRef.value?.$el.querySelector('textarea')
+                nextTextarea?.setSelectionRange(newPos, newPos)
+            }
+            setTimeout(() => {
+                ignoreNextSearch.value = false
+            }, 100)
+        })
+
+        return true
+    }
+
+    const insertPathReference = (path) => insertFileReference({ path })
+
     const onFileSelect = async (file) => {
         ignoreNextSearch.value = true
-        const cursorPosition = inputRef.value?.$el.querySelector('textarea').selectionStart || 0
+        const textarea = inputRef.value?.$el.querySelector('textarea')
+        const cursorPosition = textarea?.selectionStart ?? inputMessage.value.length
         const textBeforeCursor = inputMessage.value.slice(0, cursorPosition)
         const textAfterCursor = inputMessage.value.slice(cursorPosition)
         const isImageFile =
@@ -170,7 +240,7 @@ export function useWorkflowInput({
         if (isImageFile && typeof onImageFileSelect === 'function') {
             const handled = await onImageFileSelect(file)
             if (handled === true || handled === 'handled') {
-                const newTextBefore = textBeforeCursor.replace(/@([^\s]*)$/, '')
+                const newTextBefore = textBeforeCursor.replace(/@(?:"(?:\\.|[^"\\])*"|[^\s]*)$/, '')
                 inputMessage.value = newTextBefore + textAfterCursor
                 showFileSuggestions.value = false
                 selectedFileIndex.value = 0
@@ -200,39 +270,7 @@ export function useWorkflowInput({
             }
         }
 
-        // Smart path display: primary directory uses relative path, others use absolute path
-        let displayPath: string
-        const primaryRoot = currentPaths.value?.[0] // First authorized path is the primary directory
-
-        if (file.root_path && file.root_path !== primaryRoot) {
-            // Not from primary directory: show absolute path for backend to expand
-            displayPath = file.path
-        } else {
-            // From primary directory: use simple relative path
-            displayPath = file.relative_path
-        }
-
-        // Replace the @query part with @path
-        const newTextBefore = textBeforeCursor.replace(/@([^\s]*)$/, `@${displayPath} `)
-        inputMessage.value = newTextBefore + textAfterCursor
-
-        showFileSuggestions.value = false
-        selectedFileIndex.value = 0
-
-        nextTick(() => {
-            if (inputRef.value) {
-                inputRef.value.focus()
-                const newPos = newTextBefore.length
-                const textarea = inputRef.value?.$el.querySelector('textarea')
-                if (textarea) {
-                    textarea.setSelectionRange(newPos, newPos)
-                }
-            }
-            // Allow search again after UI has updated
-            setTimeout(() => {
-                ignoreNextSearch.value = false
-            }, 100)
-        })
+        insertFileReference(file, { replaceAtMention: true })
     }
 
     const onSkillSelect = (skill) => {
@@ -397,6 +435,7 @@ export function useWorkflowInput({
         onCompositionEnd,
         onSkillSelect,
         onFileSelect,
+        insertPathReference,
         searchFiles,
         clearInput,
         onSendMessage

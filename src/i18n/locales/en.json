@@ -1002,6 +1002,14 @@
     "historyTab": "Conversation",
     "installedSkillsGroup": "Installed Skills",
     "newWorkflow": "New Workflow",
+    "newWorkflowDialog": {
+      "defaultDescription": "Create a workflow with the selected agent's default configuration.",
+      "defaultTitle": "Use agent defaults",
+      "description": "Choose the configuration for the new workflow.",
+      "inheritDescription": "Reuse the current workflow's agent, authorized directories, and workflow preferences.",
+      "inheritTitle": "Inherit current workflow configuration",
+      "title": "Create New Workflow"
+    },
     "noAgentError": "No agent available. Please create an agent in Settings first.",
     "noAutoApprovedItems": "No auto-approved items",
     "notificationSound": "Sound notifications",
