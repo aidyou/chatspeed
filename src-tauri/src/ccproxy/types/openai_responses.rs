@@ -75,6 +75,8 @@ impl Default for OpenAIResponsesInput {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct OpenAIResponsesInputItem {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<OpenAIResponsesContent>,
@@ -83,7 +85,15 @@ pub struct OpenAIResponsesInputItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<OpenAIResponsesTool>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -128,6 +138,8 @@ pub struct OpenAIResponsesFunctionTool {
     pub description: Option<String>,
     #[serde(default)]
     pub parameters: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -178,6 +190,8 @@ pub struct OpenAIResponsesOutputItem {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<Vec<OpenAIResponsesReasoningSummary>>,
 }

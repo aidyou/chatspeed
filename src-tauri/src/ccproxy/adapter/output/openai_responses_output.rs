@@ -4,7 +4,6 @@ use crate::ccproxy::adapter::unified::{
 };
 use crate::ccproxy::helper::sse::Event;
 use crate::ccproxy::helper::{get_msg_id, get_tool_id};
-use crate::ccproxy::types::openai::{OpenAIFunctionCall, UnifiedToolCall};
 use crate::ccproxy::types::openai_responses::{
     OpenAIResponsesInputTokensDetails, OpenAIResponsesOutputContent, OpenAIResponsesOutputItem,
     OpenAIResponsesOutputTokensDetails, OpenAIResponsesReasoningSummary, OpenAIResponsesResponse,
@@ -28,7 +27,7 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
     ) -> Result<Response, anyhow::Error> {
         let mut text_content = String::new();
         let mut reasoning_content: Option<String> = None;
-        let mut tool_calls: Vec<UnifiedToolCall> = Vec::new();
+        let mut tool_calls = Vec::new();
 
         for c in response.content {
             match c {
@@ -50,15 +49,7 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
                     name,
                     input,
                 } => {
-                    tool_calls.push(UnifiedToolCall {
-                        id: Some(id),
-                        r#type: Some("function".to_string()),
-                        function: Some(OpenAIFunctionCall {
-                            name: Some(name),
-                            arguments: Some(input.to_string()),
-                        }),
-                        index: None,
-                    });
+                    tool_calls.push((id, name, input));
                 }
                 _ => {}
             }
@@ -107,6 +98,7 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
                     call_id: None,
                     name: None,
                     arguments: None,
+                    input: None,
                     summary: Some(vec![OpenAIResponsesReasoningSummary {
                         summary_type: "summary_text".to_string(),
                         text: reasoning,
@@ -135,24 +127,28 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
                 call_id: None,
                 name: None,
                 arguments: None,
+                input: None,
                 summary: None,
             });
         }
-        for tool_call in tool_calls {
-            if let Some(function) = tool_call.function {
-                let call_id = tool_call.id.unwrap_or_else(get_tool_id);
-                output.push(OpenAIResponsesOutputItem {
-                    id: call_id.clone(),
-                    item_type: "function_call".to_string(),
-                    status: "completed".to_string(),
-                    role: None,
-                    content: None,
-                    call_id: Some(call_id),
-                    name: function.name,
-                    arguments: function.arguments,
-                    summary: None,
-                });
-            }
+        for (call_id, name, tool_input) in tool_calls {
+            let is_custom = responses_is_custom_tool(&sse_status, &name);
+            output.push(OpenAIResponsesOutputItem {
+                id: call_id.clone(),
+                item_type: if is_custom {
+                    "custom_tool_call".to_string()
+                } else {
+                    "function_call".to_string()
+                },
+                status: "completed".to_string(),
+                role: None,
+                content: None,
+                call_id: Some(call_id),
+                name: Some(name),
+                arguments: (!is_custom).then(|| tool_input.to_string()),
+                input: is_custom.then(|| custom_tool_input_from_value(&tool_input)),
+                summary: None,
+            });
         }
 
         let cached_tokens = response
@@ -332,6 +328,7 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
                 id, name, index, ..
             } => {
                 let item_id = get_tool_id();
+                let is_custom = responses_is_custom_tool(&sse_status, &name);
                 if let Ok(mut status) = sse_status.write() {
                     status
                         .responses_tool_item_ids
@@ -343,39 +340,59 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
                         .or_insert_with(String::new);
                     status.responses_tool_indexes.insert(id.clone(), index);
                 }
+                let item = if is_custom {
+                    json!({
+                        "id": item_id,
+                        "type": "custom_tool_call",
+                        "status": "in_progress",
+                        "call_id": id,
+                        "name": name,
+                        "input": ""
+                    })
+                } else {
+                    json!({
+                        "id": item_id,
+                        "type": "function_call",
+                        "status": "in_progress",
+                        "call_id": id,
+                        "name": name,
+                        "arguments": ""
+                    })
+                };
                 Ok(vec![Event::default()
                     .event("response.output_item.added")
                     .data(
                         json!({
                             "type": "response.output_item.added",
                             "output_index": index,
-                            "item": {
-                                "id": item_id,
-                                "type": "function_call",
-                                "status": "in_progress",
-                                "call_id": id,
-                                "name": name,
-                                "arguments": ""
-                            }
+                            "item": item
                         })
                         .to_string(),
                     )])
             }
             UnifiedStreamChunk::ToolUseDelta { id, delta, index } => {
-                let item_id = if let Ok(mut status) = sse_status.write() {
+                let (item_id, is_custom) = if let Ok(mut status) = sse_status.write() {
                     status
                         .responses_tool_arguments
                         .entry(id.clone())
                         .or_insert_with(String::new)
                         .push_str(&delta);
-                    status
+                    let item_id = status
                         .responses_tool_item_ids
                         .get(&id)
                         .cloned()
-                        .unwrap_or_else(get_tool_id)
+                        .unwrap_or_else(get_tool_id);
+                    let is_custom = status
+                        .responses_tool_names
+                        .get(&id)
+                        .is_some_and(|name| status.responses_custom_tool_names.contains(name));
+                    (item_id, is_custom)
                 } else {
-                    get_tool_id()
+                    (get_tool_id(), false)
                 };
+                if is_custom {
+                    return Ok(Vec::new());
+                }
                 Ok(vec![Event::default()
                     .event("response.function_call_arguments.delta")
                     .data(
@@ -389,53 +406,7 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
                     )])
             }
             UnifiedStreamChunk::ToolUseEnd { id } => {
-                let (item_id, name, arguments, output_index) =
-                    if let Ok(mut status) = sse_status.write() {
-                        let item_id = status
-                            .responses_tool_item_ids
-                            .get(&id)
-                            .cloned()
-                            .unwrap_or_else(get_tool_id);
-                        let name = status.responses_tool_names.remove(&id).unwrap_or_default();
-                        let arguments = status
-                            .responses_tool_arguments
-                            .remove(&id)
-                            .unwrap_or_default();
-                        let output_index = status.responses_tool_indexes.remove(&id).unwrap_or(0);
-                        status.responses_tool_item_ids.remove(&id);
-                        (item_id, name, arguments, output_index)
-                    } else {
-                        (get_tool_id(), String::new(), String::new(), 0)
-                    };
-
-                Ok(vec![
-                    Event::default()
-                        .event("response.function_call_arguments.done")
-                        .data(
-                            json!({
-                                "type": "response.function_call_arguments.done",
-                                "item_id": item_id,
-                                "output_index": output_index,
-                                "arguments": arguments
-                            })
-                            .to_string(),
-                        ),
-                    Event::default().event("response.output_item.done").data(
-                        json!({
-                            "type": "response.output_item.done",
-                            "output_index": output_index,
-                            "item": {
-                                "id": item_id,
-                                "type": "function_call",
-                                "status": "completed",
-                                "call_id": id,
-                                "name": name,
-                                "arguments": arguments
-                            }
-                        })
-                        .to_string(),
-                    ),
-                ])
+                Ok(complete_response_tool_call(&sse_status, &id))
             }
             UnifiedStreamChunk::MessageStop {
                 stop_reason: _,
@@ -445,6 +416,10 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
                 let model = model_from_status(&sse_status, String::new());
                 let usage_json = stream_usage_json(&usage, &sse_status);
                 let mut events = Vec::new();
+                // Some backend streams stop immediately after the final tool delta.
+                for id in pending_response_tool_ids(&sse_status) {
+                    events.extend(complete_response_tool_call(&sse_status, &id));
+                }
                 let has_text = sse_status
                     .read()
                     .map(|status| status.responses_text_started)
@@ -456,6 +431,16 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
                 let reasoning_text = sse_status
                     .read()
                     .map(|status| status.responses_reasoning_buffer.clone())
+                    .unwrap_or_default();
+                let completed_tool_items = sse_status
+                    .read()
+                    .map(|status| {
+                        status
+                            .responses_completed_tool_items
+                            .values()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
                     .unwrap_or_default();
                 let has_reasoning = !reasoning_text.trim().is_empty();
                 let (_, reasoning_item_id) = reasoning_ids_from_status(&sse_status);
@@ -566,6 +551,7 @@ impl OutputAdapter for OpenAIResponsesOutputAdapter {
                                     has_text,
                                     &item_id,
                                     &output_text,
+                                    &completed_tool_items,
                                 ))
                             )
                         })
@@ -612,6 +598,151 @@ fn response_id(source_id: &str) -> String {
 
 fn reasoning_id() -> String {
     format!("rs_{}", uuid::Uuid::new_v4().to_string().replace('-', ""))
+}
+
+fn responses_is_custom_tool(sse_status: &Arc<RwLock<SseStatus>>, name: &str) -> bool {
+    sse_status
+        .read()
+        .is_ok_and(|status| status.responses_custom_tool_names.contains(name))
+}
+
+fn custom_tool_input_from_value(input: &serde_json::Value) -> String {
+    match input {
+        serde_json::Value::Object(object) => object
+            .get("input")
+            .map(|input| match input {
+                serde_json::Value::String(input) => input.clone(),
+                input => input.to_string(),
+            })
+            .unwrap_or_else(|| input.to_string()),
+        serde_json::Value::String(input) => input.clone(),
+        input => input.to_string(),
+    }
+}
+
+fn custom_tool_input_from_arguments(arguments: &str) -> String {
+    serde_json::from_str(arguments)
+        .map(|input| custom_tool_input_from_value(&input))
+        .unwrap_or_else(|_| arguments.to_string())
+}
+
+fn pending_response_tool_ids(sse_status: &Arc<RwLock<SseStatus>>) -> Vec<String> {
+    let mut pending = sse_status
+        .read()
+        .map(|status| {
+            status
+                .responses_tool_indexes
+                .iter()
+                .map(|(id, index)| (*index, id.clone()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    pending.sort_by_key(|(index, _)| *index);
+    pending.into_iter().map(|(_, id)| id).collect()
+}
+
+fn complete_response_tool_call(sse_status: &Arc<RwLock<SseStatus>>, id: &str) -> Vec<Event> {
+    let (item_id, name, arguments, output_index, is_custom) =
+        if let Ok(mut status) = sse_status.write() {
+            let item_id = status
+                .responses_tool_item_ids
+                .remove(id)
+                .unwrap_or_else(get_tool_id);
+            let name = status.responses_tool_names.remove(id).unwrap_or_default();
+            let arguments = status
+                .responses_tool_arguments
+                .remove(id)
+                .unwrap_or_default();
+            let output_index = status.responses_tool_indexes.remove(id).unwrap_or(0);
+            let is_custom = status.responses_custom_tool_names.contains(&name);
+            (item_id, name, arguments, output_index, is_custom)
+        } else {
+            (get_tool_id(), String::new(), String::new(), 0, false)
+        };
+
+    if is_custom {
+        let input = custom_tool_input_from_arguments(&arguments);
+        let completed_item = json!({
+            "id": item_id,
+            "type": "custom_tool_call",
+            "status": "completed",
+            "call_id": id,
+            "name": name,
+            "input": input
+        });
+        if let Ok(mut status) = sse_status.write() {
+            status
+                .responses_completed_tool_items
+                .insert(output_index, completed_item.clone());
+        }
+        return vec![
+            Event::default()
+                .event("response.custom_tool_call_input.delta")
+                .data(
+                    json!({
+                        "type": "response.custom_tool_call_input.delta",
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "delta": input
+                    })
+                    .to_string(),
+                ),
+            Event::default()
+                .event("response.custom_tool_call_input.done")
+                .data(
+                    json!({
+                        "type": "response.custom_tool_call_input.done",
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "input": input
+                    })
+                    .to_string(),
+                ),
+            Event::default().event("response.output_item.done").data(
+                json!({
+                    "type": "response.output_item.done",
+                    "output_index": output_index,
+                    "item": completed_item
+                })
+                .to_string(),
+            ),
+        ];
+    }
+
+    let completed_item = json!({
+        "id": item_id,
+        "type": "function_call",
+        "status": "completed",
+        "call_id": id,
+        "name": name,
+        "arguments": arguments
+    });
+    if let Ok(mut status) = sse_status.write() {
+        status
+            .responses_completed_tool_items
+            .insert(output_index, completed_item.clone());
+    }
+    vec![
+        Event::default()
+            .event("response.function_call_arguments.done")
+            .data(
+                json!({
+                    "type": "response.function_call_arguments.done",
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "arguments": arguments
+                })
+                .to_string(),
+            ),
+        Event::default().event("response.output_item.done").data(
+            json!({
+                "type": "response.output_item.done",
+                "output_index": output_index,
+                "item": completed_item
+            })
+            .to_string(),
+        ),
+    ]
 }
 
 fn ids_from_status(sse_status: &Arc<RwLock<SseStatus>>) -> (String, String) {
@@ -689,6 +820,7 @@ fn stream_output_items_json(
     has_text: bool,
     message_item_id: &str,
     output_text: &str,
+    completed_tool_items: &[serde_json::Value],
 ) -> serde_json::Value {
     let mut output = Vec::new();
     if has_reasoning {
@@ -700,6 +832,7 @@ fn stream_output_items_json(
     if has_text {
         output.push(message_output_item_json(message_item_id, output_text));
     }
+    output.extend_from_slice(completed_tool_items);
     serde_json::Value::Array(output)
 }
 
@@ -835,6 +968,41 @@ mod tests {
             .all(|item| item["type"] != "reasoning_text"));
     }
 
+    #[tokio::test]
+    async fn adapted_response_restores_custom_tool_call() {
+        let adapter = OpenAIResponsesOutputAdapter;
+        let response = UnifiedResponse {
+            id: "chatcmpl_custom".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            content: vec![UnifiedContentBlock::ToolUse {
+                id: "call_123".to_string(),
+                name: "exec".to_string(),
+                input: json!({ "input": "const value = await run();" }),
+            }],
+            stop_reason: Some("tool_calls".to_string()),
+            usage: UnifiedUsage::default(),
+        };
+        let mut status = SseStatus::default();
+        status
+            .responses_custom_tool_names
+            .insert("exec".to_string());
+
+        let http_response = adapter
+            .adapt_response(response, Arc::new(RwLock::new(status)))
+            .expect("response should adapt");
+        let body = body::to_bytes(http_response.into_body(), usize::MAX)
+            .await
+            .expect("body should read");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("body should be json");
+
+        assert_eq!(payload["output"][0]["type"], "custom_tool_call");
+        assert_eq!(payload["output"][0]["call_id"], "call_123");
+        assert_eq!(payload["output"][0]["name"], "exec");
+        assert_eq!(payload["output"][0]["input"], "const value = await run();");
+        assert!(payload["output"][0].get("arguments").is_none());
+    }
+
     #[test]
     fn stream_chunks_are_emitted_as_responses_events() {
         let adapter = OpenAIResponsesOutputAdapter;
@@ -946,7 +1114,7 @@ mod tests {
                 UnifiedStreamChunk::ToolUseEnd {
                     id: "call_123".to_string(),
                 },
-                status,
+                status.clone(),
             )
             .expect("tool end should adapt")
             .into_iter()
@@ -958,6 +1126,160 @@ mod tests {
         assert!(end.contains("\"call_id\":\"call_123\""));
         assert!(end.contains("\"name\":\"write_stdin\""));
         assert!(end.contains("\"status\":\"completed\""));
+
+        let completed = adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::MessageStop {
+                    stop_reason: "tool_calls".to_string(),
+                    usage: UnifiedUsage::default(),
+                },
+                status,
+            )
+            .expect("message stop should adapt")
+            .into_iter()
+            .map(|event| event.to_string())
+            .collect::<String>();
+        assert!(completed.contains("response.completed"));
+        assert!(completed.contains("\"type\":\"function_call\""));
+        assert!(completed.contains("\"call_id\":\"call_123\""));
+    }
+
+    #[test]
+    fn custom_tool_call_stream_restores_custom_input_events() {
+        let adapter = OpenAIResponsesOutputAdapter;
+        let mut initial_status = SseStatus::new(
+            "msg_custom".to_string(),
+            "deepseek-v4-pro".to_string(),
+            false,
+            10.0,
+        );
+        initial_status
+            .responses_custom_tool_names
+            .insert("exec".to_string());
+        let status = Arc::new(RwLock::new(initial_status));
+
+        let start = adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::ToolUseStart {
+                    tool_type: "tool_use".to_string(),
+                    id: "call_custom".to_string(),
+                    name: "exec".to_string(),
+                    index: 1,
+                },
+                status.clone(),
+            )
+            .expect("tool start should adapt")
+            .into_iter()
+            .map(|event| event.to_string())
+            .collect::<String>();
+        assert!(start.contains("response.output_item.added"));
+        assert!(start.contains("\"type\":\"custom_tool_call\""));
+        assert!(start.contains("\"input\":\"\""));
+        assert!(!start.contains("\"arguments\""));
+
+        let delta = adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::ToolUseDelta {
+                    id: "call_custom".to_string(),
+                    delta: "{\"input\":\"const value = await run();\"}".to_string(),
+                    index: 1,
+                },
+                status.clone(),
+            )
+            .expect("tool delta should buffer");
+        assert!(delta.is_empty());
+
+        let end = adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::ToolUseEnd {
+                    id: "call_custom".to_string(),
+                },
+                status.clone(),
+            )
+            .expect("tool end should adapt")
+            .into_iter()
+            .map(|event| event.to_string())
+            .collect::<String>();
+        assert!(end.contains("response.custom_tool_call_input.delta"));
+        assert!(end.contains("response.custom_tool_call_input.done"));
+        assert!(end.contains("const value = await run();"));
+        assert!(end.contains("\"type\":\"custom_tool_call\""));
+        assert!(!end.contains("response.function_call_arguments"));
+
+        let completed = adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::MessageStop {
+                    stop_reason: "tool_calls".to_string(),
+                    usage: UnifiedUsage::default(),
+                },
+                status,
+            )
+            .expect("message stop should adapt")
+            .into_iter()
+            .map(|event| event.to_string())
+            .collect::<String>();
+        assert!(completed.contains("response.completed"));
+        assert!(completed.contains("\"type\":\"custom_tool_call\""));
+        assert!(completed.contains("\"call_id\":\"call_custom\""));
+        assert!(completed.contains("const value = await run();"));
+    }
+
+    #[test]
+    fn message_stop_completes_pending_custom_tool_call_from_any_backend() {
+        let adapter = OpenAIResponsesOutputAdapter;
+        let mut initial_status = SseStatus::new(
+            "msg_custom".to_string(),
+            "backend-model".to_string(),
+            false,
+            10.0,
+        );
+        initial_status
+            .responses_custom_tool_names
+            .insert("exec".to_string());
+        let status = Arc::new(RwLock::new(initial_status));
+
+        adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::ToolUseStart {
+                    tool_type: "tool_use".to_string(),
+                    id: "call_pending".to_string(),
+                    name: "exec".to_string(),
+                    index: 1,
+                },
+                status.clone(),
+            )
+            .expect("tool start should adapt");
+        adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::ToolUseDelta {
+                    id: "call_pending".to_string(),
+                    delta: "{\"input\":\"const value = await run();\"}".to_string(),
+                    index: 1,
+                },
+                status.clone(),
+            )
+            .expect("tool delta should buffer");
+
+        let completed = adapter
+            .adapt_stream_chunk(
+                UnifiedStreamChunk::MessageStop {
+                    stop_reason: "tool_calls".to_string(),
+                    usage: UnifiedUsage::default(),
+                },
+                status,
+            )
+            .expect("message stop should finalize pending tools")
+            .into_iter()
+            .map(|event| event.to_string())
+            .collect::<String>();
+
+        assert!(completed.contains("response.custom_tool_call_input.delta"));
+        assert!(completed.contains("response.custom_tool_call_input.done"));
+        assert!(completed.contains("response.output_item.done"));
+        assert!(completed.contains("response.completed"));
+        assert!(completed.contains("\"type\":\"custom_tool_call\""));
+        assert!(completed.contains("\"call_id\":\"call_pending\""));
+        assert!(completed.contains("const value = await run();"));
     }
 
     #[test]

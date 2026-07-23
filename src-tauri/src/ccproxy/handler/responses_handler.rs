@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::response::{IntoResponse, Response};
 use reqwest::header::HeaderMap;
 use rust_i18n::t;
+use serde::Deserialize;
 use serde_json::Value;
 use std::sync::{Arc, RwLock};
 
@@ -24,6 +25,12 @@ use crate::constants::{
 };
 use crate::db::{CcproxyStat, MainStore};
 
+// Native Responses forwarding must tolerate input item variants added by upstream APIs.
+#[derive(Deserialize)]
+struct OpenAIResponsesRoutingRequest {
+    model: String,
+}
+
 fn supports_responses_api(proxy_model: &ProxyModel) -> bool {
     proxy_model
         .model_metadata
@@ -39,6 +46,27 @@ fn supports_responses_api(proxy_model: &ProxyModel) -> bool {
 
 fn get_provider_responses_full_url(base_url: &str) -> String {
     format!("{}/responses", base_url.trim_end_matches('/'))
+}
+
+fn prepare_direct_responses_body(
+    client_request_body: &[u8],
+    backend_model: &str,
+) -> ProxyResult<Value> {
+    let mut body_json: Value = serde_json::from_slice(client_request_body).map_err(|e| {
+        CCProxyError::InternalError(format!(
+            "Failed to deserialize Responses request body: {}",
+            e
+        ))
+    })?;
+
+    if let Some(obj) = body_json.as_object_mut() {
+        obj.insert(
+            "model".to_string(),
+            Value::String(backend_model.trim().to_string()),
+        );
+    }
+
+    Ok(body_json)
 }
 
 fn response_usage_tokens(body_json: &Value) -> (i64, i64, i64) {
@@ -131,21 +159,7 @@ async fn direct_forward_responses(
         reqwest::header::HeaderValue::from_static("application/json"),
     );
 
-    let mut body_json: Value = serde_json::from_slice(&client_request_body).map_err(|e| {
-        CCProxyError::InternalError(format!(
-            "Failed to deserialize Responses request body: {}",
-            e
-        ))
-    })?;
-
-    crate::ai::util::merge_custom_params_value(&mut body_json, &proxy_model.custom_params);
-
-    if let Some(obj) = body_json.as_object_mut() {
-        obj.insert(
-            "model".to_string(),
-            Value::String(proxy_model.model.trim().to_string()),
-        );
-    }
+    let body_json = prepare_direct_responses_body(&client_request_body, &proxy_model.model)?;
 
     let modified_body = serde_json::to_vec(&body_json).map_err(|e| {
         CCProxyError::InternalError(format!("Failed to serialize Responses request body: {}", e))
@@ -247,14 +261,14 @@ pub async fn handle_responses(
         false
     };
 
-    let client_request_payload: OpenAIResponsesRequest =
+    let routing_request: OpenAIResponsesRoutingRequest =
         serde_json::from_slice(&client_request_body).map_err(|e| {
             CCProxyError::InternalError(
                 t!("proxy.error.invalid_request_format", error = e.to_string()).to_string(),
             )
         })?;
 
-    let proxy_alias_raw = client_request_payload.model.clone();
+    let proxy_alias_raw = routing_request.model;
     let (proxy_alias, group_name) = if let Some((g, a)) = proxy_alias_raw.split_once('@') {
         (a.to_string(), Some(g.to_string()))
     } else {
@@ -306,6 +320,13 @@ pub async fn handle_responses(
         return Ok(response.into_response());
     }
 
+    let client_request_payload: OpenAIResponsesRequest =
+        serde_json::from_slice(&client_request_body).map_err(|e| {
+            CCProxyError::InternalError(
+                t!("proxy.error.invalid_request_format", error = e.to_string()).to_string(),
+            )
+        })?;
+
     // TODO: The Responses-to-chat-completion fallback still needs detailed testing and
     // debugging, especially for streaming reasoning output and client-side completion
     // behavior. Prefer the direct Responses path when a provider supports it.
@@ -342,7 +363,10 @@ pub async fn handle_responses(
 
 #[cfg(test)]
 mod tests {
-    use super::{response_usage_tokens, response_usage_tokens_from_body, supports_responses_api};
+    use super::{
+        prepare_direct_responses_body, response_usage_tokens, response_usage_tokens_from_body,
+        supports_responses_api, OpenAIResponsesRoutingRequest,
+    };
     use crate::ccproxy::types::{ChatProtocol, ProxyModel};
     use serde_json::json;
 
@@ -395,6 +419,73 @@ mod tests {
                 "supportsResponsesApi": true
             })
         ))));
+    }
+
+    #[test]
+    fn responses_routing_accepts_structured_custom_tool_output() {
+        let request = json!({
+            "model": "gpt-5.6",
+            "input": [
+                {
+                    "type": "custom_tool_call",
+                    "call_id": "call_123",
+                    "name": "functions.exec",
+                    "input": "const result = await tools.exec_command({\"cmd\":\"pwd\"});"
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_123",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": "Process exited with code 0"
+                        }
+                    ]
+                }
+            ],
+            "store": false,
+            "stream": true
+        });
+
+        let routing_request: OpenAIResponsesRoutingRequest =
+            serde_json::from_value(request).expect("routing request should deserialize");
+
+        assert_eq!(routing_request.model, "gpt-5.6");
+    }
+
+    #[test]
+    fn direct_responses_body_only_replaces_model() {
+        let request = json!({
+            "model": "gpt-5.6-alias",
+            "conversation": "conv_123",
+            "input": [
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_123",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": "Process exited with code 0"
+                        }
+                    ]
+                }
+            ],
+            "prompt_cache_retention": "24h",
+            "reasoning": {
+                "context": "all_turns",
+                "effort": "high"
+            },
+            "store": false,
+            "stream": true
+        });
+        let body = serde_json::to_vec(&request).expect("request should serialize");
+
+        let modified =
+            prepare_direct_responses_body(&body, "gpt-5.6").expect("body should prepare");
+        let mut expected = request;
+        expected["model"] = json!("gpt-5.6");
+
+        assert_eq!(modified, expected);
     }
 
     #[test]

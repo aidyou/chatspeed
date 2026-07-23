@@ -441,12 +441,15 @@ pub(crate) async fn execute_unified_chat_request(
     let estimated_input_tokens =
         crate::ccproxy::utils::token_estimator::estimate_unified_request_tokens(&unified_request);
 
-    let sse_status = Arc::new(RwLock::new(SseStatus::new(
+    let responses_custom_tool_names = unified_request.responses_custom_tool_names.clone();
+    let mut status = SseStatus::new(
         message_id,
         proxy_alias.clone(),
         tool_compat_mode,
         estimated_input_tokens,
-    )));
+    );
+    status.responses_custom_tool_names = responses_custom_tool_names;
+    let sse_status = Arc::new(RwLock::new(status));
 
     if is_streaming_request {
         let res = handle_streamed_response(

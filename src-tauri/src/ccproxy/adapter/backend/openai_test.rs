@@ -5,9 +5,10 @@ mod tests {
     use super::super::openai::OpenAIBackendAdapter;
     use super::super::{BackendAdapter, BackendResponse};
     use crate::ccproxy::adapter::{
-        input::{from_claude, from_ollama},
+        input::{from_claude, from_ollama, from_openai_responses},
         unified::{UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool},
     };
+    use crate::ccproxy::types::openai_responses::OpenAIResponsesRequest;
     use reqwest::Client;
     use serde_json::{json, Value};
 
@@ -66,6 +67,77 @@ mod tests {
             .and_then(|body| body.as_bytes())
             .expect("request body should be available as bytes");
         serde_json::from_slice(body).expect("request body should be valid json")
+    }
+
+    #[tokio::test]
+    async fn responses_custom_tool_history_uses_object_arguments() {
+        let responses_request: OpenAIResponsesRequest = serde_json::from_value(json!({
+            "model": "proxy-alias",
+            "input": [
+                {
+                    "role": "developer",
+                    "tools": [{
+                        "type": "custom",
+                        "name": "exec",
+                        "description": "Run JavaScript",
+                        "format": {
+                            "type": "grammar",
+                            "syntax": "lark",
+                            "definition": "start: /[\\s\\S]+/"
+                        }
+                    }]
+                },
+                {
+                    "type": "custom_tool_call",
+                    "call_id": "call_123",
+                    "name": "exec",
+                    "input": "const value = await run();"
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_123",
+                    "output": [{
+                        "type": "input_text",
+                        "text": "done"
+                    }]
+                }
+            ],
+            "stream": true,
+            "tool_choice": "auto"
+        }))
+        .expect("Responses request should deserialize");
+        let mut unified_request =
+            from_openai_responses(responses_request, false).expect("request should normalize");
+
+        let request = OpenAIBackendAdapter
+            .adapt_request(
+                &Client::new(),
+                &mut unified_request,
+                "test-api-key",
+                "https://example.com/v1/chat/completions",
+                "deepseek-v4-pro",
+                false,
+                &mut reqwest::header::HeaderMap::new(),
+            )
+            .await
+            .expect("OpenAI-compatible request should adapt");
+        let payload = request_json(request);
+
+        assert_eq!(payload["tools"][0]["function"]["name"], "exec");
+        assert_eq!(
+            payload["tools"][0]["function"]["parameters"]["properties"]["input"]["type"],
+            "string"
+        );
+        let arguments = payload["messages"][0]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .expect("function arguments should be a JSON string");
+        assert_eq!(
+            serde_json::from_str::<Value>(arguments)
+                .expect("function arguments should contain valid JSON"),
+            json!({ "input": "const value = await run();" })
+        );
+        assert_eq!(payload["messages"][1]["role"], "tool");
+        assert_eq!(payload["messages"][1]["tool_call_id"], "call_123");
     }
 
     /// Test that tool calls are properly paired with tool results

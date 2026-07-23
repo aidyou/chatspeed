@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
@@ -19,6 +19,8 @@ pub struct UnifiedRequest {
     pub system_prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<UnifiedTool>>,
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub responses_custom_tool_names: HashSet<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<UnifiedToolChoice>,
     pub stream: bool,
@@ -460,6 +462,8 @@ pub struct SseStatus {
     pub responses_tool_names: HashMap<String, String>,
     pub responses_tool_arguments: HashMap<String, String>,
     pub responses_tool_indexes: HashMap<String, u32>,
+    pub responses_custom_tool_names: HashSet<String>,
+    pub responses_completed_tool_items: BTreeMap<u32, Value>,
 }
 
 impl Default for SseStatus {
@@ -497,6 +501,8 @@ impl Default for SseStatus {
             responses_tool_names: HashMap::new(),
             responses_tool_arguments: HashMap::new(),
             responses_tool_indexes: HashMap::new(),
+            responses_custom_tool_names: HashSet::new(),
+            responses_completed_tool_items: BTreeMap::new(),
         }
     }
 }

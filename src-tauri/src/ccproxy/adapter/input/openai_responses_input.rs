@@ -15,6 +15,7 @@ use crate::ccproxy::{
     },
 };
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// Converts an OpenAI Responses API request into the canonical chat adaptation request.
 pub fn from_openai_responses(
@@ -37,6 +38,17 @@ pub fn from_openai_responses(
         user,
         ..
     } = req;
+
+    let mut response_tools = tools.unwrap_or_default();
+    if let Some(OpenAIResponsesInput::Items(items)) = input.as_ref() {
+        response_tools.extend(
+            items
+                .iter()
+                .filter_map(|item| item.tools.as_ref())
+                .flatten()
+                .cloned(),
+        );
+    }
 
     let (mut messages, input_system_prompt) = match input {
         Some(input) => responses_input_to_unified_messages(input)?,
@@ -62,26 +74,12 @@ pub fn from_openai_responses(
         });
     }
 
-    let tools = tools.map(|tools| {
-        tools
-            .into_iter()
-            .filter_map(|tool| match tool {
-                OpenAIResponsesTool::Chat(tool) => Some(UnifiedTool {
-                    name: tool.function.name,
-                    description: tool.function.description,
-                    input_schema: tool.function.parameters,
-                }),
-                OpenAIResponsesTool::Function(tool) if tool.tool_type == "function" => {
-                    Some(UnifiedTool {
-                        name: tool.name,
-                        description: tool.description,
-                        input_schema: tool.parameters,
-                    })
-                }
-                OpenAIResponsesTool::Function(_) | OpenAIResponsesTool::Other(_) => None,
-            })
-            .collect()
-    });
+    let (tools, responses_custom_tool_names) = responses_tools_to_unified(response_tools);
+    let tool_choice = if tools.is_some() {
+        tool_choice.map(convert_openai_tool_choice)
+    } else {
+        None
+    };
 
     let response_format = text
         .as_ref()
@@ -93,7 +91,8 @@ pub fn from_openai_responses(
         messages,
         system_prompt,
         tools,
-        tool_choice: tool_choice.map(convert_openai_tool_choice),
+        responses_custom_tool_names,
+        tool_choice,
         stream: stream.unwrap_or(false),
         temperature: temperature.and_then(|t| {
             if t < 0.0 {
@@ -140,6 +139,76 @@ pub fn from_openai_responses(
             .and_then(|format| format.json_schema.clone()),
         tool_compat_mode,
         ..Default::default()
+    })
+}
+
+fn responses_tools_to_unified(
+    tools: Vec<OpenAIResponsesTool>,
+) -> (Option<Vec<UnifiedTool>>, HashSet<String>) {
+    let mut names = HashSet::new();
+    let mut custom_tool_names = HashSet::new();
+    let mut unified_tools = Vec::new();
+
+    for tool in tools {
+        let (tool, is_custom) = match tool {
+            OpenAIResponsesTool::Chat(tool) => (
+                UnifiedTool {
+                    name: tool.function.name,
+                    description: tool.function.description,
+                    input_schema: tool.function.parameters,
+                },
+                false,
+            ),
+            OpenAIResponsesTool::Function(tool) if tool.tool_type == "function" => (
+                UnifiedTool {
+                    name: tool.name,
+                    description: tool.description,
+                    input_schema: tool.parameters,
+                },
+                false,
+            ),
+            OpenAIResponsesTool::Function(tool) if tool.tool_type == "custom" => (
+                UnifiedTool {
+                    name: tool.name,
+                    description: tool.description,
+                    input_schema: custom_tool_input_schema(tool.format.as_ref()),
+                },
+                true,
+            ),
+            OpenAIResponsesTool::Function(_) | OpenAIResponsesTool::Other(_) => continue,
+        };
+
+        if !names.insert(tool.name.clone()) {
+            continue;
+        }
+        if is_custom {
+            custom_tool_names.insert(tool.name.clone());
+        }
+        unified_tools.push(tool);
+    }
+
+    let tools = if unified_tools.is_empty() {
+        None
+    } else {
+        Some(unified_tools)
+    };
+    (tools, custom_tool_names)
+}
+
+fn custom_tool_input_schema(format: Option<&Value>) -> Value {
+    let input_description = format
+        .map(|format| format!("Raw input for the custom tool. Format: {}", format))
+        .unwrap_or_else(|| "Raw input for the custom tool.".to_string());
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "input": {
+                "type": "string",
+                "description": input_description
+            }
+        },
+        "required": ["input"],
+        "additionalProperties": false
     })
 }
 
@@ -217,18 +286,41 @@ fn responses_input_item_to_unified_message(
     let role = match item.role.as_deref().or(item_type) {
         Some("system") | Some("developer") => UnifiedRole::System,
         Some("assistant") | Some("message") => UnifiedRole::Assistant,
-        Some("tool") | Some("function_call_output") => UnifiedRole::Tool,
+        Some("tool") | Some("function_call_output") | Some("custom_tool_call_output") => {
+            UnifiedRole::Tool
+        }
         Some("user") | Some("input_message") | None => UnifiedRole::User,
         Some(_) => UnifiedRole::User,
     };
 
-    if item_type == Some("function_call_output") {
+    if matches!(
+        item_type,
+        Some("function_call_output") | Some("custom_tool_call_output")
+    ) {
         return Ok(Some(UnifiedMessage {
             role: UnifiedRole::Tool,
             content: vec![UnifiedContentBlock::ToolResult {
-                tool_use_id: item.call_id.unwrap_or_default(),
-                content: item.output.unwrap_or_default(),
+                tool_use_id: item.call_id.or(item.id).unwrap_or_default(),
+                content: responses_tool_output_to_text(item.output)?,
                 is_error: false,
+            }],
+            reasoning_content: None,
+        }));
+    }
+
+    if matches!(item_type, Some("function_call") | Some("custom_tool_call")) {
+        let raw_input = item.arguments.or(item.input).unwrap_or_default();
+        let input = if item_type == Some("custom_tool_call") {
+            serde_json::json!({ "input": raw_input })
+        } else {
+            serde_json::from_str(&raw_input).unwrap_or(Value::String(raw_input))
+        };
+        return Ok(Some(UnifiedMessage {
+            role: UnifiedRole::Assistant,
+            content: vec![UnifiedContentBlock::ToolUse {
+                id: item.call_id.or(item.id).unwrap_or_default(),
+                name: item.name.unwrap_or_default(),
+                input,
             }],
             reasoning_content: None,
         }));
@@ -280,6 +372,25 @@ fn responses_input_item_to_unified_message(
             content,
             reasoning_content: None,
         }))
+    }
+}
+
+fn responses_tool_output_to_text(output: Option<Value>) -> Result<String, anyhow::Error> {
+    match output {
+        None => Ok(String::new()),
+        Some(Value::String(text)) => Ok(text),
+        Some(Value::Array(parts)) => parts
+            .into_iter()
+            .map(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+                    .map(Ok)
+                    .unwrap_or_else(|| serde_json::to_string(&part).map_err(Into::into))
+            })
+            .collect::<Result<Vec<_>, anyhow::Error>>()
+            .map(|parts| parts.join("\n")),
+        Some(output) => serde_json::to_string(&output).map_err(Into::into),
     }
 }
 
@@ -457,6 +568,135 @@ mod tests {
                 name: "lookup".to_string()
             })
         );
+    }
+
+    #[test]
+    fn custom_tool_history_preserves_call_and_structured_output() {
+        let custom_input =
+            "const result = await tools.exec_command({ cmd: userCommand });\nreturn result.output;";
+        let req: OpenAIResponsesRequest = serde_json::from_value(json!({
+            "model": "gpt-5.6",
+            "input": [
+                {
+                    "role": "developer",
+                    "tools": [
+                        {
+                            "type": "custom",
+                            "name": "functions.exec",
+                            "description": "Run JavaScript",
+                            "format": {
+                                "type": "grammar",
+                                "syntax": "lark",
+                                "definition": "start: /[\\s\\S]+/"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "type": "custom_tool_call",
+                    "call_id": "call_123",
+                    "name": "functions.exec",
+                    "input": custom_input
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_123",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": "Process exited with code 0"
+                        },
+                        {
+                            "type": "input_file",
+                            "file_id": "file_123"
+                        }
+                    ]
+                }
+            ]
+        }))
+        .expect("request should deserialize");
+
+        let unified = from_openai_responses(req, false).expect("conversion should succeed");
+        assert_eq!(unified.messages.len(), 2);
+        assert!(unified
+            .responses_custom_tool_names
+            .contains("functions.exec"));
+        let tools = unified
+            .tools
+            .as_ref()
+            .expect("custom tool should be retained");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "functions.exec");
+        assert_eq!(tools[0].input_schema["type"], "object");
+        assert_eq!(
+            tools[0].input_schema["properties"]["input"]["type"],
+            "string"
+        );
+        assert_eq!(tools[0].input_schema["required"], json!(["input"]));
+        assert_eq!(unified.messages[0].role, UnifiedRole::Assistant);
+        assert!(matches!(
+            &unified.messages[0].content[0],
+            UnifiedContentBlock::ToolUse { id, name, input }
+                if id == "call_123"
+                    && name == "functions.exec"
+                    && input == &json!({ "input": custom_input })
+        ));
+
+        assert_eq!(unified.messages[1].role, UnifiedRole::Tool);
+        let UnifiedContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } = &unified.messages[1].content[0]
+        else {
+            panic!("expected custom tool result");
+        };
+        assert_eq!(tool_use_id, "call_123");
+        assert!(!is_error);
+        let (text, structured_part) = content
+            .split_once('\n')
+            .expect("structured output parts should remain present");
+        assert_eq!(text, "Process exited with code 0");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(structured_part)
+                .expect("non-text output part should remain valid JSON"),
+            json!({ "type": "input_file", "file_id": "file_123" })
+        );
+    }
+
+    #[test]
+    fn function_tool_history_preserves_json_arguments_and_string_output() {
+        let req: OpenAIResponsesRequest = serde_json::from_value(json!({
+            "model": "alias",
+            "input": [
+                {
+                    "type": "function_call",
+                    "id": "item_123",
+                    "call_id": "call_456",
+                    "name": "lookup",
+                    "arguments": "{\"query\":\"status\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_456",
+                    "output": "ready"
+                }
+            ]
+        }))
+        .expect("request should deserialize");
+
+        let unified = from_openai_responses(req, false).expect("conversion should succeed");
+        assert_eq!(unified.messages.len(), 2);
+        assert!(matches!(
+            &unified.messages[0].content[0],
+            UnifiedContentBlock::ToolUse { id, name, input }
+                if id == "call_456" && name == "lookup" && input == &json!({ "query": "status" })
+        ));
+        assert!(matches!(
+            &unified.messages[1].content[0],
+            UnifiedContentBlock::ToolResult { tool_use_id, content, is_error }
+                if tool_use_id == "call_456" && content == "ready" && !is_error
+        ));
     }
 
     #[test]
