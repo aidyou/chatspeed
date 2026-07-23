@@ -1,4 +1,5 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::libs::ai_temp::{display_ai_temp_path, resolve_ai_temp_path};
 use crate::tools::llm_output::{preview_grep_lines_for_llm, preview_path_lines_for_llm};
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::security::PathGuard;
@@ -21,7 +22,7 @@ fn primary_directory(path_guard: Option<&Arc<RwLock<PathGuard>>>) -> PathBuf {
 }
 
 fn resolve_tool_path(path_str: &str, path_guard: Option<&Arc<RwLock<PathGuard>>>) -> PathBuf {
-    let path = PathBuf::from(path_str);
+    let path = resolve_ai_temp_path(Path::new(path_str));
     if path.is_absolute() {
         path
     } else {
@@ -33,6 +34,10 @@ fn display_path_for_tool_output(
     path: &Path,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> String {
+    if let Some(display_path) = display_ai_temp_path(path) {
+        return display_path;
+    }
+
     let primary_dir = primary_directory(path_guard);
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Ok(relative) = canonical_path.strip_prefix(&primary_dir) {
@@ -44,6 +49,10 @@ fn display_path_for_tool_output(
     } else {
         path.to_string_lossy().to_string()
     }
+}
+
+fn result_path_for_tool_output(path: &Path) -> String {
+    display_ai_temp_path(path).unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
 #[derive(Clone, Default)]
@@ -150,7 +159,7 @@ impl ToolDefinition for Glob {
                 Some("[No matches found]".into()),
                 Some(json!({
                     "pattern": pattern,
-                    "path": base_path.to_string_lossy(),
+                    "path": result_path_for_tool_output(&base_path),
                     "display_path": display_base_path,
                     "count": 0,
                     "truncated": false,
@@ -163,7 +172,7 @@ impl ToolDefinition for Glob {
                 Some(results.join("\n")),
                 Some(json!({
                     "pattern": pattern,
-                    "path": base_path.to_string_lossy(),
+                    "path": result_path_for_tool_output(&base_path),
                     "display_path": display_base_path,
                     "count": count,
                     "truncated": truncated,
@@ -668,26 +677,26 @@ mod tests {
         let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
+        let display_path = display_ai_temp_path(Path::new(&path)).unwrap();
 
         fs::write(&path, "Hello World\nGoodbye World\nAnother line").unwrap();
 
         let params = json!({
             "pattern": "World",
-            "path": path,
+            "path": display_path,
             "output_mode": "content"
         });
 
         let result = tool.call(params).await.unwrap();
         let content = result.content.unwrap();
         let matches: Vec<&str> = content.lines().collect();
-
         assert_eq!(matches.len(), 2);
 
         // Check content
         for match_item in matches {
             assert!(match_item.contains("World"));
             // Check format path:line:content
-            assert!(match_item.contains(&path));
+            assert!(match_item.contains(&display_path));
             assert!(match_item.contains(":1:") || match_item.contains(":2:"));
         }
     }
@@ -709,10 +718,11 @@ mod tests {
         let result = tool.call(params).await.unwrap();
         let content = result.content.unwrap();
         let matches: Vec<&str> = content.lines().collect();
+        let display_path = display_ai_temp_path(Path::new(&path)).unwrap();
 
         // Should return file path once even with multiple matches
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0], path);
+        assert_eq!(matches[0], display_path);
     }
 
     #[tokio::test]
@@ -775,9 +785,10 @@ mod tests {
         let result = tool.call(params).await.unwrap();
         let content = result.content.unwrap();
         let matches: Vec<&str> = content.lines().collect();
+        let display_path = display_ai_temp_path(Path::new(&path)).unwrap();
 
         assert_eq!(matches.len(), 1);
-        assert!(matches[0].contains(&path));
+        assert!(matches[0].contains(&display_path));
         assert!(matches[0].contains("2"));
     }
 

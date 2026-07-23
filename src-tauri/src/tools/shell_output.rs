@@ -1,3 +1,4 @@
+use crate::libs::ai_temp::persist_large_tool_output;
 use crate::tools::helper::{is_frontend_build_command, reduce_with_command_reducers};
 use crate::tools::ToolCallResult;
 use serde_json::json;
@@ -20,11 +21,18 @@ pub(crate) fn build_shell_tool_result(
 ) -> ToolCallResult {
     let (normalized_stdout, normalized_stderr) =
         normalize_shell_output_streams(command_str, exit_code, stdout, stderr);
+    let raw_content = format_shell_output(exit_code, &normalized_stdout, &normalized_stderr);
+    let persisted_output = match persist_large_tool_output(&raw_content) {
+        Ok(persisted) => persisted,
+        Err(error) => {
+            log::warn!("Failed to persist complete bash output: {}", error);
+            None
+        }
+    };
     let display_stdout = truncate_with_marker(&normalized_stdout, MAX_DISPLAY_CHARS);
     let display_stderr = truncate_with_marker(&normalized_stderr, MAX_DISPLAY_CHARS);
     let display_content = format_shell_output(exit_code, &display_stdout, &display_stderr);
 
-    let raw_content = format_shell_output(exit_code, &normalized_stdout, &normalized_stderr);
     let llm_content = reduce_shell_output_for_llm(
         command_str,
         exit_code,
@@ -33,13 +41,18 @@ pub(crate) fn build_shell_tool_result(
         &raw_content,
     );
 
-    ToolCallResult::success(
-        Some(display_content),
-        Some(json!({
-            "exit_code": exit_code,
-            "llm_content": llm_content,
-        })),
-    )
+    let mut structured_content = json!({
+        "exit_code": exit_code,
+        "llm_content": llm_content,
+    });
+    if let Some(persisted) = persisted_output {
+        structured_content["persisted_output"] = json!({
+            "path": persisted.path,
+            "file_size_bytes": persisted.file_size_bytes,
+        });
+    }
+
+    ToolCallResult::success(Some(display_content), Some(structured_content))
 }
 
 pub(crate) fn should_render_stderr_line_as_stdout(command_str: &str, line: &str) -> bool {
@@ -464,6 +477,9 @@ mod tests {
         build_shell_tool_result, normalize_shell_output_streams,
         should_render_stderr_line_as_stdout, strip_ansi_escape_sequences,
     };
+    use crate::libs::ai_temp::resolve_ai_temp_path;
+    use std::fs;
+    use std::path::Path;
 
     #[test]
     fn cargo_check_without_args_uses_tail_for_llm_content() {
@@ -482,6 +498,32 @@ mod tests {
         assert!(llm_content.starts_with("[truncated previous output]"));
         assert!(llm_content.contains("line 30"));
         assert!(!llm_content.contains("line 1\n"));
+    }
+
+    #[test]
+    fn large_shell_output_is_persisted_without_display_truncation_loss() {
+        let stdout = (1..=500)
+            .map(|line| format!("line {line:03}: {}", "x".repeat(80)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = build_shell_tool_result("custom-command", 0, &stdout, "");
+        let structured = result.structured_content.unwrap();
+        let persisted = &structured["persisted_output"];
+        let ai_path = persisted["path"].as_str().unwrap();
+        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+        let saved_output = fs::read_to_string(&physical_path).unwrap();
+
+        assert!(ai_path.starts_with("/tmp/"));
+        assert_eq!(Path::new(ai_path).file_name().unwrap().len(), 13);
+        assert_eq!(
+            persisted["file_size_bytes"].as_u64(),
+            Some(saved_output.len() as u64)
+        );
+        assert!(saved_output.contains("line 001:"));
+        assert!(saved_output.contains("line 500:"));
+        assert!(!saved_output.contains("[Truncated]"));
+
+        fs::remove_file(physical_path).unwrap();
     }
 
     #[test]
@@ -798,5 +840,9 @@ mod tests {
 
         assert!(llm_content.starts_with("[truncated previous output]"));
         assert!(llm_content.contains("knowledge result line 320"));
+
+        if let Some(path) = structured["persisted_output"]["path"].as_str() {
+            fs::remove_file(resolve_ai_temp_path(Path::new(path))).unwrap();
+        }
     }
 }

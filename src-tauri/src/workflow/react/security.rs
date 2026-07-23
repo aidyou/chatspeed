@@ -1,3 +1,4 @@
+use crate::libs::ai_temp::resolve_ai_temp_path;
 use crate::workflow::react::error::WorkflowEngineError;
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -204,20 +205,7 @@ impl PathGuard {
 
     fn normalize_requested_path(path: &Path) -> PathBuf {
         let normalized = Self::normalize_path(path);
-
-        #[cfg(target_os = "macos")]
-        {
-            let tmp_root = Path::new("/tmp");
-            if normalized == tmp_root {
-                return std::env::temp_dir();
-            }
-
-            if let Ok(relative) = normalized.strip_prefix(tmp_root) {
-                return std::env::temp_dir().join(relative);
-            }
-        }
-
-        normalized
+        resolve_ai_temp_path(&normalized)
     }
 
     fn resolve_physical_path(path: &Path) -> PathBuf {
@@ -250,11 +238,12 @@ impl PathGuard {
         is_write: bool,
         is_delete: bool,
     ) -> Result<PathBuf, WorkflowEngineError> {
-        let abs_path = if target.is_absolute() {
-            target.to_path_buf()
+        let resolved_target = resolve_ai_temp_path(target);
+        let abs_path = if resolved_target.is_absolute() {
+            resolved_target
         } else {
             match &self.primary_root {
-                Some(root) => root.join(target),
+                Some(root) => root.join(resolved_target),
                 None => {
                     return Err(WorkflowEngineError::Security(format!(
                         "Relative Path Denied: {:?} - No primary workspace is configured. You MUST provide an absolute path, or ask the user to add the directory to 'Authorized Paths' in settings.",
@@ -502,21 +491,25 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
     fn test_path_guard_maps_tmp_alias_into_process_temp_dir() {
         let guard = PathGuard::new(vec![], vec![std::env::temp_dir()], vec![]);
-        assert!(guard
-            .validate(
-                Path::new("/tmp/chatspeed-security-test.txt"),
-                false,
-                true,
-                false,
-            )
-            .is_ok());
+        assert_eq!(
+            guard
+                .validate(
+                    Path::new("/tmp/chatspeed-security-test.txt"),
+                    false,
+                    true,
+                    false,
+                )
+                .unwrap(),
+            std::env::temp_dir()
+                .canonicalize()
+                .unwrap()
+                .join("chatspeed-security-test.txt")
+        );
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
     fn test_path_guard_treats_tmp_alias_as_authorized_root() {
         let guard = PathGuard::new(vec![], vec![std::env::temp_dir()], vec![]);
         assert!(guard.is_authorized_root(Path::new("/tmp")));

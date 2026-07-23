@@ -183,7 +183,7 @@
 
       &.cancelled,
       &.interrupted {
-        background-color: var(--el-color-warning);
+        background-color: #8b5cf6;
       }
     }
   }
@@ -356,7 +356,7 @@
 
             &.cancelled,
             &.interrupted {
-              background-color: var(--el-color-warning);
+              background-color: #8b5cf6;
             }
           }
         }
@@ -489,7 +489,7 @@
 
     &.cancelled,
     &.interrupted {
-      background-color: var(--el-color-warning);
+      background-color: #8b5cf6;
     }
   }
 }

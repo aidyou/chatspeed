@@ -645,7 +645,7 @@ impl ToolDefinition for ShellExecute {
           - Commands run in the workflow's primary allowed root when available; shell state such as `cd` does not persist between tool calls.\n\
           - If you need a different working directory, include it in the command itself (for example: `cd \"path\" && npm test`).\n\
           - You can specify an optional timeout in milliseconds. Defaults to 120000ms and is capped at 600000ms.\n\
-          - Successful output is returned as stdout only and is truncated after 30000 characters. Non-zero exits return stderr as an error."
+          - Large output is returned as a preview and saved to a temporary file that can be inspected with read_file or grep. Non-zero exits include stderr in the result."
     }
 
     fn category(&self) -> ToolCategory {
@@ -1035,14 +1035,6 @@ impl ShellExecute {
                     match child.try_wait() {
                         Ok(Some(status)) => {
                             // Process has exited
-                            if full_stdout.len() > 30_000 {
-                                full_stdout.truncate(30_000);
-                                full_stdout.push_str("\n[Truncated]");
-                            }
-                            if full_stderr.len() > 30_000 {
-                                full_stderr.truncate(30_000);
-                                full_stderr.push_str("\n[Truncated]");
-                            }
                             let exit_code = status.code().unwrap_or(-1);
                             if !pending_frontend_build_stderr.is_empty() {
                                 let stream_name = frontend_build_stderr_stream_name(exit_code);

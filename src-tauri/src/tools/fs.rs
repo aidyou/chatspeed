@@ -1,4 +1,5 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::libs::ai_temp::{display_ai_temp_path, resolve_ai_temp_path};
 use crate::tools::llm_output::preview_path_lines_for_llm;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::security::PathGuard;
@@ -25,7 +26,7 @@ fn primary_directory(path_guard: Option<&Arc<RwLock<PathGuard>>>) -> PathBuf {
 }
 
 fn resolve_tool_path(path_str: &str, path_guard: Option<&Arc<RwLock<PathGuard>>>) -> PathBuf {
-    let path = PathBuf::from(path_str);
+    let path = resolve_ai_temp_path(Path::new(path_str));
     if path.is_absolute() {
         path
     } else {
@@ -37,6 +38,10 @@ fn display_path_for_tool_output(
     path: &Path,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> String {
+    if let Some(display_path) = display_ai_temp_path(path) {
+        return display_path;
+    }
+
     let primary_dir = primary_directory(path_guard);
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Ok(relative) = canonical_path.strip_prefix(&primary_dir) {
@@ -48,6 +53,10 @@ fn display_path_for_tool_output(
     } else {
         path.to_string_lossy().to_string()
     }
+}
+
+fn result_path_for_tool_output(path: &Path) -> String {
+    display_ai_temp_path(path).unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
 fn format_read_file_open_error(path_str: &str, error: &std::io::Error) -> ToolError {
@@ -194,6 +203,7 @@ fn execute_read_file(
 
     let resolved_path = resolve_tool_path(path_str, path_guard);
     let display_path = display_path_for_tool_output(&resolved_path, path_guard);
+    let result_path = result_path_for_tool_output(&resolved_path);
     let path = resolved_path.as_path();
 
     if path.is_dir() {
@@ -265,7 +275,7 @@ fn execute_read_file(
                     .into(),
             ),
             Some(json!({
-                "file_path": resolved_path.to_string_lossy(),
+                "file_path": result_path,
                 "display_path": display_path,
                 "offset": offset,
                 "limit": limit,
@@ -306,7 +316,7 @@ fn execute_read_file(
                 truncated_body, reminder
             )),
             Some(json!({
-                "file_path": resolved_path.to_string_lossy(),
+                "file_path": result_path,
                 "display_path": display_path,
                 "offset": offset,
                 "limit": limit,
@@ -340,7 +350,7 @@ fn execute_read_file(
     Ok(ToolCallResult::success(
         Some(lines.join("\n")),
         Some(json!({
-            "file_path": resolved_path.to_string_lossy(),
+            "file_path": result_path,
             "display_path": display_path,
             "offset": offset,
             "limit": limit,
@@ -520,9 +530,10 @@ fn execute_edit_file(
         ToolError::IoError(format!("Edit write failed: {}. Check file permissions.", e))
     })?;
 
+    let display_path = display_path_for_tool_output(&resolved_path, path_guard);
     let result_json = json!({
-        "file_path": resolved_path.to_string_lossy(),
-        "display_path": display_path_for_tool_output(&resolved_path, path_guard),
+        "file_path": result_path_for_tool_output(&resolved_path),
+        "display_path": display_path,
         "old_string": old_str_unix,
         "new_string": new_str_unix,
         "replace_all": replace_all,
@@ -721,6 +732,7 @@ impl ToolDefinition for WriteFile {
         fs::write(&path, content)
             .map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
 
+        let display_path = display_path_for_tool_output(&path, self.path_guard.as_ref());
         Ok(ToolCallResult::success(
             Some(if overwritten {
                 "File written successfully; existing file was backed up first.".to_string()
@@ -728,13 +740,16 @@ impl ToolDefinition for WriteFile {
                 "New file created successfully.".to_string()
             }),
             Some(json!({
-                "file_path": path.to_string_lossy(),
-                "display_path": display_path_for_tool_output(&path, self.path_guard.as_ref()),
+                "file_path": result_path_for_tool_output(&path),
+                "display_path": display_path,
                 "bytes_written": content.len(),
                 "overwritten": overwritten,
                 "old_string": old_content,
                 "content": content,
-                "backup_path": backup_path.as_ref().map(|value| value.to_string_lossy().to_string())
+                "backup_path": backup_path.as_ref().map(|value| {
+                    display_ai_temp_path(value)
+                        .unwrap_or_else(|| value.to_string_lossy().to_string())
+                })
             })),
         ))
     }
@@ -1147,7 +1162,7 @@ impl ToolDefinition for ListDir {
             Ok(ToolCallResult::success(
                 Some("Directory is empty.".into()),
                 Some(json!({
-                    "path": path.to_string_lossy(),
+                    "path": result_path_for_tool_output(&path),
                     "display_path": display_path,
                     "recursive": recursive,
                     "count": 0,
@@ -1160,7 +1175,7 @@ impl ToolDefinition for ListDir {
             Ok(ToolCallResult::success(
                 Some(rendered_entries.join("\n")),
                 Some(json!({
-                    "path": path.to_string_lossy(),
+                    "path": result_path_for_tool_output(&path),
                     "display_path": display_path,
                     "recursive": recursive,
                     "count": count,
@@ -1205,6 +1220,27 @@ mod tests {
         assert!(output.contains("line1"));
         assert!(output.contains("line2"));
         assert!(output.contains("line3"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_resolves_and_preserves_ai_temp_alias() {
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(temp_file.path(), "temporary content").unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_string_lossy();
+        let ai_path = format!("/tmp/{file_name}");
+
+        let result = ReadFile::default()
+            .call(json!({ "file_path": ai_path }))
+            .await
+            .unwrap();
+        let structured = result.structured_content.unwrap();
+
+        assert_eq!(structured["file_path"].as_str(), Some(ai_path.as_str()));
+        assert_eq!(structured["display_path"].as_str(), Some(ai_path.as_str()));
+        assert!(structured["llm_content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("temporary content"));
     }
 
     #[tokio::test]
@@ -1556,9 +1592,15 @@ mod tests {
             .as_str()
             .expect("backup path should be present");
         assert!(backup_path.ends_with(".bak"));
-        assert!(backup_path.starts_with(std::env::temp_dir().to_string_lossy().as_ref()));
+        assert!(backup_path.starts_with("/tmp/"));
+        let physical_backup_path = resolve_ai_temp_path(Path::new(backup_path));
+        assert!(physical_backup_path.starts_with(std::env::temp_dir()));
         assert_eq!(fs::read_to_string(&path).unwrap(), "new content");
-        assert_eq!(fs::read_to_string(backup_path).unwrap(), "original content");
+        assert_eq!(
+            fs::read_to_string(&physical_backup_path).unwrap(),
+            "original content"
+        );
+        fs::remove_file(physical_backup_path).unwrap();
     }
 
     #[tokio::test]

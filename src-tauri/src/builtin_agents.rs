@@ -3,6 +3,7 @@
 use crate::constants::CFG_BUILTIN_AGENTS_LAST_SYNCED_APP_VERSION;
 use crate::db::agent::{AgentModels, ShellPolicyRule};
 use crate::db::{Agent, MainStore};
+use crate::tools::MCP_TOOL_NAME_SPLIT;
 use serde::Deserialize;
 use serde_json::json;
 use std::fs;
@@ -107,6 +108,37 @@ fn builtin_agent_db_id(builtin_id: &str) -> String {
 
 fn serialize_json<T: serde::Serialize>(value: &Option<T>) -> Option<String> {
     value.as_ref().and_then(|v| serde_json::to_string(v).ok())
+}
+
+fn merge_builtin_tools_with_existing_mcp(
+    builtin_tools: Option<String>,
+    existing_tools: Option<&str>,
+) -> Option<String> {
+    let existing_mcp_tools = existing_tools
+        .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|tool| tool.contains(MCP_TOOL_NAME_SPLIT))
+        .collect::<Vec<_>>();
+
+    if existing_mcp_tools.is_empty() {
+        return builtin_tools;
+    }
+
+    match builtin_tools {
+        Some(tools) => {
+            let Ok(mut merged_tools) = serde_json::from_str::<Vec<String>>(&tools) else {
+                return Some(tools);
+            };
+            for mcp_tool in existing_mcp_tools {
+                if !merged_tools.contains(&mcp_tool) {
+                    merged_tools.push(mcp_tool);
+                }
+            }
+            serde_json::to_string(&merged_tools).ok()
+        }
+        None => None,
+    }
 }
 
 fn read_prompt_file(base_dir: &Path, relative_path: &str) -> Result<String, String> {
@@ -340,13 +372,17 @@ fn sync_single_builtin_agent(
                 return Ok(());
             }
 
+            let available_tools = merge_builtin_tools_with_existing_mcp(
+                desired.available_tools,
+                current.available_tools.as_deref(),
+            );
             let mut updated = current;
             updated.role = desired.role;
             updated.parent_agent_id = desired.parent_agent_id;
             updated.system_prompt = desired.system_prompt;
             updated.planning_prompt = desired.planning_prompt;
             updated.image_recognition_prompt = desired.image_recognition_prompt;
-            updated.available_tools = desired.available_tools;
+            updated.available_tools = available_tools;
             updated.auto_approve = desired.auto_approve;
             updated.is_system = Some(true);
             updated.version = Some(definition.manifest.builtin_version);
@@ -392,7 +428,10 @@ mod tests {
             "old prompt".to_string(),
             None,
             None,
-            Some("[\"user-tool\"]".to_string()),
+            Some(format!(
+                "[\"user-tool\",\"example{}search\"]",
+                crate::tools::MCP_TOOL_NAME_SPLIT
+            )),
             Some("[\"user-auto-approve\"]".to_string()),
             Some(configured_models),
             Some("[\"user-shell-policy\"]".to_string()),
@@ -493,7 +532,10 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Vec<String>>(&updated.available_tools.expect("tools"))
                 .expect("tools json"),
-            vec![crate::tools::TOOL_GIT_INSPECT.to_string()]
+            vec![
+                crate::tools::TOOL_GIT_INSPECT.to_string(),
+                format!("example{}search", crate::tools::MCP_TOOL_NAME_SPLIT),
+            ]
         );
         assert_eq!(
             serde_json::from_str::<Vec<String>>(&updated.auto_approve.expect("auto approve"))
