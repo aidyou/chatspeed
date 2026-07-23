@@ -435,6 +435,33 @@ impl ContextManager {
         Self::merge_attached_context(&message.message, message.attached_context.as_deref())
     }
 
+    fn approved_plan_context_projection(message: &WorkflowMessage) -> String {
+        let metadata = message.metadata.as_ref();
+        let plan = metadata
+            .and_then(|meta| meta.get("plan_content"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let todos = metadata
+            .and_then(|meta| meta.get("todo_content"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("[]");
+        let todo_scope = metadata
+            .and_then(|meta| meta.get("todo_scope"))
+            .and_then(|value| value.as_str());
+
+        if todo_scope == Some("pre_approval") {
+            format!(
+                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<pre_approval_todo_snapshot>\n{}\n</pre_approval_todo_snapshot>\nThe pre-approval todo snapshot records progress from before plan approval. It is not the active execution todo list.",
+                plan, todos
+            )
+        } else {
+            format!(
+                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
+                plan, todos
+            )
+        }
+    }
+
     fn llm_visibility(
         metadata: Option<&serde_json::Value>,
     ) -> Option<RuntimeObservationLlmVisibility> {
@@ -806,22 +833,7 @@ impl ContextManager {
 
             let merged_content = Self::content_for_context_projection(message);
             let final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
-                let plan = message
-                    .metadata
-                    .as_ref()
-                    .and_then(|meta| meta.get("plan_content"))
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("");
-                let todos = message
-                    .metadata
-                    .as_ref()
-                    .and_then(|meta| meta.get("todo_content"))
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("[]");
-                format!(
-                    "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
-                    plan, todos
-                )
+                Self::approved_plan_context_projection(message)
             } else if message.role == "user"
                 && step_type.as_ref() != Some(&StepType::Observe)
                 && !projected
@@ -1057,24 +1069,7 @@ impl ContextManager {
             session_id: self.session_id.clone(),
             segment_id: self.current_segment_id,
             role: approved_plan.role.clone(),
-            message: {
-                let plan = approved_plan
-                    .metadata
-                    .as_ref()
-                    .and_then(|meta| meta.get("plan_content"))
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("");
-                let todos = approved_plan
-                    .metadata
-                    .as_ref()
-                    .and_then(|meta| meta.get("todo_content"))
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("[]");
-                format!(
-                    "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
-                    plan, todos
-                )
-            },
+            message: Self::approved_plan_context_projection(&approved_plan),
             reasoning: approved_plan.reasoning.clone(),
             message_kind: approved_plan.message_kind.clone(),
             message_subtype: approved_plan.message_subtype.clone(),
@@ -2603,6 +2598,44 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn approved_plan_projection_distinguishes_pre_approval_todos_from_legacy_execution_todos() {
+        let mut approved_plan = WorkflowMessage {
+            id: Some(1),
+            session_id: "s".to_string(),
+            role: "system".to_string(),
+            message: "# APPROVED EXECUTION PLAN".to_string(),
+            reasoning: None,
+            message_kind: "summary".to_string(),
+            message_subtype: Some("approved_plan".to_string()),
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(json!({
+                "type": "summary",
+                "subtype": "approved_plan",
+                "plan_content": "implement the approved change",
+                "todo_content": "[{\"subject\":\"Research alternatives\",\"status\":\"completed\"}]"
+            })),
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        let legacy_projection = ContextManager::approved_plan_context_projection(&approved_plan);
+        assert!(legacy_projection.contains("<current_todo_list>"));
+        assert!(!legacy_projection.contains("<pre_approval_todo_snapshot>"));
+
+        approved_plan.metadata.as_mut().expect("metadata")["todo_scope"] = json!("pre_approval");
+        let pre_approval_projection =
+            ContextManager::approved_plan_context_projection(&approved_plan);
+        assert!(pre_approval_projection.contains("<pre_approval_todo_snapshot>"));
+        assert!(pre_approval_projection.contains("progress from before plan approval"));
+        assert!(!pre_approval_projection.contains("<current_todo_list>"));
+    }
+
     #[tokio::test]
     async fn get_messages_for_llm_carries_forward_context_on_new_user_message() {
         let (_dir, store) = setup_store();
@@ -4066,7 +4099,8 @@ mod tests {
                     "type": "summary",
                     "subtype": "approved_plan",
                     "plan_content": "1. edit files\n2. run tests",
-                    "todo_content": "[]"
+                    "todo_content": "[{\"subject\":\"Inspect implementation options\",\"status\":\"completed\"}]",
+                    "todo_scope": "pre_approval"
                 })),
             )
             .await
@@ -4090,6 +4124,12 @@ mod tests {
         assert!(context.ai_context_messages[1]
             .message
             .contains("<approved_plan>\n1. edit files\n2. run tests\n</approved_plan>"));
+        assert!(context.ai_context_messages[1]
+            .message
+            .contains("<pre_approval_todo_snapshot>"));
+        assert!(!context.ai_context_messages[1]
+            .message
+            .contains("<current_todo_list>"));
     }
 
     #[tokio::test]

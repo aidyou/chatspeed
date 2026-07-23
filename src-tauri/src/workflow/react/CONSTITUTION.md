@@ -609,7 +609,28 @@ It is not allowed to become:
 
 If command-layer logic must inspect transcript history, that logic must be explicitly justified as presentation or migration compatibility, not core correctness.
 
-## 12. Observability Law
+## 12. Prompt Compatibility Law
+
+Workflow and agent system prompts are compatibility contracts for models with different
+reasoning, planning, tool-use, and state-tracking capabilities. They must not assume that
+every supported model can infer rules left implicit for the sake of brevity.
+
+Prompt simplification may remove genuine duplication or wording that adds no behavioral
+value, but it must preserve the explicit guidance needed for reliable execution across
+model capability levels. This includes, when relevant:
+
+- conditions that trigger or prohibit an action
+- phase, priority, and planning-versus-execution relationships
+- behavioral boundaries and required state-transition or handoff order
+- concrete recovery guidance after an invalid action or tool error
+- brief explanations or examples when the rule would otherwise be ambiguous
+
+A rule being inferable by a strong model does not mean it is sufficiently specified for all
+supported models. Before shortening a system prompt, verify that each critical workflow can
+still be followed directly without reconstructing omitted logic. Cross-model behavioral
+reliability takes precedence over minimizing prompt tokens.
+
+## 13. Observability Law
 
 Any change to lifecycle, waiting, approval, recovery, or context rules must keep logs good enough to answer:
 
@@ -621,7 +642,7 @@ Any change to lifecycle, waiting, approval, recovery, or context rules must keep
 
 If a change reduces traceability, it is not acceptable.
 
-## 13. Forbidden Patterns
+## 14. Forbidden Patterns
 
 The following patterns are forbidden unless they are strictly isolated compatibility shims:
 
@@ -633,7 +654,7 @@ The following patterns are forbidden unless they are strictly isolated compatibi
 - adding new signal names on only one side of the wire
 - fixing a structured payload problem by adding more frontend string parsing
 
-## 14. Required Review Questions
+## 15. Required Review Questions
 
 Every change touching this module must answer:
 
@@ -646,7 +667,7 @@ Every change touching this module must answer:
 
 If these answers are not explicit, the change is not ready.
 
-## 15. Minimum Validation Before Merge
+## 16. Minimum Validation Before Merge
 
 Changes touching lifecycle, waiting, approval, recovery, or context must validate the relevant scenarios:
 
@@ -660,7 +681,7 @@ Changes touching lifecycle, waiting, approval, recovery, or context must validat
 
 Manual validation is acceptable, but it must be stated.
 
-## 16. Amendment Rule
+## 17. Amendment Rule
 
 This constitution may be changed only when:
 

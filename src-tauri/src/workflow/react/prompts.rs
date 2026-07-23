@@ -120,23 +120,35 @@ Rules:
 - If snapshot content conflicts with current tool observations, trust current tool observations.
 - Do not treat old state as active unless explicitly marked active or clearly relevant.
 
-# Plan vs Todo
+# Planning and Todo Tracking
 
-Planning and todo tracking are different:
+Planning and todo tracking operate at different levels and may both be required:
 
-- **Planning** decides the approach before execution.
-- **Todos** track active execution progress.
+- **Planning** is pre-execution design. It determines scope, approach, dependencies, risks, and verification, and may require user approval.
+- **Todos** are phase-local active-work tracking. They break current planning or implementation work into concrete units and record progress and outcomes.
 
-A plan is a roadmap. Todos are the active work queue.
+When both apply, planning comes first. An approved plan is the governing execution guidance; derive the todo list from that plan after planning ends. Planning does not replace todo tracking, because a written or approved plan is not live progress state. Todos do not replace planning and must not expand or contradict an approved plan.
 
-Rules:
-- Use planning when phase or agent-specific instructions require it.
-- Use todo tools only when execution tracking adds real value, such as multi-step, multi-file, interruption-prone, or verification-heavy work.
-- Do not treat a written plan as progress state.
-- Do not skip todos just because a plan contains execution steps.
-- Do not create todos for single-step or immediately verifiable local tasks.
-- When todo tracking is in use, todos are the source of truth for active progress.
-- Before completion, reconcile todo state with actual work performed.
+Phase rules:
+
+- In manually activated Plan Mode, todos may track planning work such as research, clarification, alternative analysis, and plan validation. Keep these planning todos separate from proposed implementation units, which belong in the plan until approved.
+- Before calling `submit_plan`, reconcile planning todo statuses with the planning work performed. Do not add a todo whose purpose is to wait for approval.
+- After plan approval switches the workflow to implementation, use `todo_create` with `mode="replace"` before the first implementation action when execution has multiple concrete units, meaningful verification steps, or real interruption risk. Derive the new execution todos from the approved plan; never append them to the pre-approval todo list.
+- In Standard mode, formal `submit_plan` approval is not part of the workflow. Once the task shape is understood, create todos before execution when tracking adds real value.
+
+Todo usage rules:
+
+- Use todos for multiple meaningful stages or deliverables, coordinated work across components or artifacts, risky or regression-prone work, or work likely to span turns, interruption, delegation, or review.
+- Skip todos for a simple answer, one direct command or check, one obvious local change, or another task that can be completed and verified immediately.
+- Do not wait until most or all work is finished to create the list. If a task expands into non-trivial work, create todos before continuing.
+- Create the initial meaningful work units together. Use `replace` for a new objective and `append` only for genuine additions to the active objective.
+- Track independently verifiable outcomes, not individual tool calls or tiny navigation steps.
+- Mark the next item `in_progress` when starting it, keep at most one item `in_progress`, and update it as soon as its outcome is known.
+- Mark an item `completed` only after its work and reasonable verification are done. Use `failed` for an unrecoverable failure or `data_missing` when required data cannot be obtained.
+- Treat the active todo list as the source of truth for the current phase's tracked progress. Reuse it while it remains valid, and revise or replace it when the objective or phase materially changes.
+- Never invent todo IDs; list the current todos before addressing an unknown ID.
+- Do not create a catch-all todo for work already completed, the final report, or the `complete_workflow` call.
+- Before completion, reconcile todos with actual work and leave no item `pending` or `in_progress`.
 
 # ask_user
 
@@ -530,9 +542,10 @@ Your primary goal is to perform the implementation steps accurately and safely.
 **RULES & GUIDELINES**:
 - **Stick to the Plan**: Follow the approved implementation strategy closely. If you encounter a significant obstacle that requires a major change in strategy, inform the user via `ask_user`.
 - **Approval Means Execute**: The user's plan approval is already explicit authorization to begin implementing the approved plan. Do NOT ask the user whether to start, continue, or confirm execution of the approved plan.
+- **Execution Tracking**: The approved plan governs scope and strategy. When it contains multiple concrete execution units, meaningful verification steps, or real interruption risk, use `todo_create` with `mode="replace"` before the first implementation action to replace pre-approval todos with execution todos derived from the approved plan. Never append execution todos to the pre-approval list. Todos track execution and must not expand or contradict the approved plan. Skip execution todos only when the approved work is a single immediately verifiable unit.
 - **Primary Focus**: Perform real actions (file edits, bash commands, tool integrations) within the authorized directories.
 - **Verification**: After each major implementation step, use read or search tools to verify your changes.
-- **Completion**: Once all steps in your todo list are finished, call `complete_workflow` with a complete `summary`, unless a valid current-response or pending report already exists."#;
+- **Completion**: Once the approved work is finished and every todo in use is terminal, call `complete_workflow` with a complete `summary`, unless a valid current-response or pending report already exists."#;
 
 /// Extra completion-report requirements when final audit is enabled.
 pub const FINAL_AUDIT_COMPLETION_REPORT_PROMPT: &str = r#"## Final Audit Mode: Completion Report Requirements
@@ -598,9 +611,11 @@ Your final response should include:
 - **Context**: A brief explanation of the problem or need and the intended outcome.
 - **Approach**: A clear, concise description of the recommended strategy.
 - **Resources**: Paths to critical files, specific data sources, or existing utilities that will be used.
-- **Todo List**: A structured set of tasks for the execution phase (using `todo_create` or similar).
+- **Execution Units**: A structured set of proposed tasks that can be converted into execution todos after approval.
 - **Verification**: A plan for how to verify that the final outcome is correct and meets requirements.
 - The `submit_plan.plan` argument must contain the complete plan that should be approved. Do not rely on surrounding assistant text as the plan source.
+- Todo tools may be used in Plan Mode to track research, clarification, design, and plan validation. These are planning todos, not implementation todos.
+- Keep proposed implementation units in the submitted plan rather than adding them to the active todo list before approval. Reconcile planning todo statuses before calling `submit_plan`.
 - The final action in Plan Mode should normally be `submit_plan`, not another exploratory or implementation tool call.
 
 ### Phase 5: Request Approval
@@ -619,7 +634,7 @@ pub const APPROVED_PLAN_EXECUTION_REMINDER: &str = r#"The plan has been approved
 
 Do not ask the user whether to start, continue, or confirm execution of this approved plan. Use `ask_user` only if you discover a new blocking ambiguity, safety issue, missing credential, destructive action, or major strategy change that is not covered by the approved plan.
 
-Use the approved plan as execution guidance. Do not assume an approved plan automatically requires todo tracking. Use todo* tools only when execution has multiple concrete units, meaningful verification steps, or real interruption risk; skip todos for single-step or immediately verifiable local work."#;
+The approved plan governs implementation scope and strategy. The todo list carried across approval is a pre-approval snapshot, not the new execution queue. If implementation contains multiple concrete units, meaningful verification steps, or real interruption risk, your first implementation tracking action must be `todo_create` with `mode="replace"`, deriving execution todos from the approved plan. Never append execution todos to the pre-approval list. The execution todo list tracks progress; it does not replace the approved plan and must not expand or contradict the approved plan. Skip execution todos only when the approved work is a single immediately verifiable unit."#;
 
 #[cfg(test)]
 mod tests {
@@ -660,6 +675,55 @@ mod tests {
 
         assert!(!CORE_SYSTEM_PROMPT.contains("pass any arguments to `complete_workflow`"));
         assert!(!CORE_SYSTEM_PROMPT.contains("The tool accepts no arguments"));
+    }
+
+    #[test]
+    fn core_prompt_defines_planning_precedence_and_todo_lifecycle() {
+        for required in [
+            "When both apply, planning comes first",
+            "An approved plan is the governing execution guidance",
+            "Planning does not replace todo tracking",
+            "Todos do not replace planning",
+            "todos may track planning work",
+            "Keep these planning todos separate from proposed implementation units",
+            "Before calling `submit_plan`, reconcile planning todo statuses",
+            "use `todo_create` with `mode=\"replace\"` before the first implementation action",
+            "never append them to the pre-approval todo list",
+            "In Standard mode, formal `submit_plan` approval is not part of the workflow",
+            "Do not wait until most or all work is finished to create the list",
+            "keep at most one item `in_progress`",
+            "Do not create a catch-all todo for work already completed",
+        ] {
+            assert!(CORE_SYSTEM_PROMPT.contains(required), "missing: {required}");
+        }
+    }
+
+    #[test]
+    fn phase_prompts_keep_planning_and_execution_todos_separate() {
+        for required in [
+            "proposed tasks that can be converted into execution todos after approval",
+            "Todo tools may be used in Plan Mode",
+            "These are planning todos, not implementation todos",
+            "Reconcile planning todo statuses before calling `submit_plan`",
+        ] {
+            assert!(
+                PLANNING_MODE_PROMPT.contains(required),
+                "missing: {required}"
+            );
+        }
+        assert!(!PLANNING_MODE_PROMPT.contains("using `todo_create` or similar"));
+        assert!(!PLANNING_MODE_PROMPT.contains("Do not call todo tools in Plan Mode"));
+
+        for prompt in [EXECUTION_MODE_PROMPT, APPROVED_PLAN_EXECUTION_REMINDER] {
+            for required in [
+                "`todo_create` with `mode=\"replace\"`",
+                "Never append execution todos to the pre-approval list",
+                "must not expand or contradict the approved plan",
+                "single immediately verifiable unit",
+            ] {
+                assert!(prompt.contains(required), "missing: {required}");
+            }
+        }
     }
 
     #[test]
@@ -744,7 +808,8 @@ mod tests {
             "using `read_file` offsets and limits",
             "Do not implement adjacent bugs, cleanup, or refactor ideas without approval",
             "uncertain, overlapping, generated, or recently changed",
-            "Create todos only after the task shape is understood",
+            "Follow the core planning and todo contract",
+            "Derive implementation todos from an approved plan",
             "prefer verification over further exploration",
             "If tests are not added, explain why",
             "command injection, SQL injection, XSS",

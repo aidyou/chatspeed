@@ -1964,7 +1964,7 @@ impl WorkflowExecutor {
             .add_message_and_notify_internal(
                 "system".to_string(),
                 format!(
-                    "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## TODO LIST\n{}",
+                    "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## PRE-APPROVAL TODO SNAPSHOT\n{}",
                     approved_plan, todo_json
                 ),
                 None,
@@ -1976,7 +1976,8 @@ impl WorkflowExecutor {
                     "type": "summary",
                     "subtype": "approved_plan",
                     "plan_content": approved_plan,
-                    "todo_content": todo_json
+                    "todo_content": todo_json,
+                    "todo_scope": "pre_approval"
                 })),
             )
             .await?;

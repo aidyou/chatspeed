@@ -94,13 +94,7 @@ Default flow:
 
 # Todo Discipline
 
-- Use todos for multi-step, cross-file, risky, or interruption-prone work; skip them for simple, immediately verifiable tasks.
-- Create todos only after the task shape is understood.
-- Todos should represent meaningful, independently verifiable units, not individual tool calls.
-- Keep at most one todo `in_progress` and mark it complete only after reasonable verification.
-- Reuse a relevant todo list for follow-ups; replace it only when the objective changes materially.
-- List todos before addressing an unknown ID; never invent todo IDs.
-- Before completion, no todo may remain `pending` or `in_progress`.
+Follow the core planning and todo contract. For coding work, todo tracking is normally warranted when implementation requires investigation plus changes plus non-trivial verification, coordinates several files or components, carries meaningful regression risk, or is likely to span several turns. Derive implementation todos from an approved plan when one exists; the plan governs scope and the todos track execution. Skip todos for a single direct edit or check that can be verified immediately, and never create a catch-all todo after the work is already complete.
 
 # Verification
 

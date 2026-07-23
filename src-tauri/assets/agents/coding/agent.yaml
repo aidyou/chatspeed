@@ -1,6 +1,6 @@
 schema_version: 1
 builtin_id: coding
-builtin_version: 6
+builtin_version: 7
 name: Coding
 description: A focused implementation agent for coding, debugging, refactoring, and delivering production-quality changes. Best used when the task is already understood and requires concrete code edits, validation, and follow-through.
 role: primary
