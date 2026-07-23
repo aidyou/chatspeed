@@ -167,9 +167,10 @@ impl ToolDefinition for FinishTask {
         "Signals that the current task has been fully addressed and is now complete.\n\n\
         Strict usage rules:\n\
         - Call this only after the requested work is actually complete or you have reached a clear stopping point accepted by the user.\n\
-        - Write the full user-visible completion report immediately before this parameter-free tool call in the same assistant response.\n\
-        - If the runtime says it captured a pending completion report, call this tool with no visible report to commit that exact draft without repeating it.\n\
-        - Never write a second, different report while a pending completion report exists; conflicting reports are rejected.\n\
+        - A completion report is required. Put the full report in `summary` unless a valid report is already present in this assistant response or the runtime explicitly says it captured a pending report.\n\
+        - `summary` is optional only when the runtime can use that current or pending report. Otherwise it must be a non-empty, complete report.\n\
+        - If the runtime says it captured a pending completion report, omit `summary` and visible report text to commit that exact draft without repeating it.\n\
+        - Equivalent report sources are deduplicated, but conflicting reports are rejected.\n\
         - A completion report must explicitly cover: 1) what was completed, 2) what was verified, and 3) any important remaining notes or limitations.\n\
         - Reasoning/thinking text does not count as a completion report.\n\
         - Do not use placeholder reports such as 'done', 'completed', or hidden reasoning.\n\
@@ -187,7 +188,13 @@ impl ToolDefinition for FinishTask {
             description: self.description().to_string(),
             input_schema: json!({
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The complete user-visible completion report. Required unless a valid report is already present in the current assistant response or was explicitly captured by the runtime."
+                    }
+                },
                 "additionalProperties": false
             }),
             output_schema: None,
@@ -200,20 +207,23 @@ impl ToolDefinition for FinishTask {
             .as_object()
             .ok_or_else(|| ToolError::InvalidParams("arguments must be an object".into()))?;
         let report_source = object.get("report_source").and_then(Value::as_str);
-        let summary_is_string = object.get("summary").is_some_and(Value::is_string);
+        let summary_is_non_empty = object
+            .get("summary")
+            .and_then(Value::as_str)
+            .is_some_and(|summary| !summary.trim().is_empty());
         let valid_shape = match object.len() {
             0 => true,
             1 => {
-                summary_is_string
+                summary_is_non_empty
                     || (report_source == Some("assistant_message")
                         && !object.contains_key("summary"))
             }
-            2 => report_source == Some("tool_argument") && summary_is_string,
+            2 => report_source == Some("tool_argument") && summary_is_non_empty,
             _ => false,
         };
         if !valid_shape {
             return Err(ToolError::InvalidParams(
-                "complete_workflow accepts no arguments; only historical completion payloads are supported for compatibility".into(),
+                "complete_workflow accepts an optional non-empty summary; only historical report_source payloads are additionally supported for compatibility".into(),
             ));
         }
 
@@ -328,18 +338,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_finish_task_uses_parameter_free_schema() {
+    async fn test_finish_task_uses_optional_summary_schema() {
         let tool = FinishTask;
         let declaration = tool.tool_calling_spec();
 
         assert_eq!(declaration.input_schema["type"], "object");
-        assert_eq!(declaration.input_schema["properties"], json!({}));
+        assert_eq!(
+            declaration.input_schema["properties"]["summary"]["type"],
+            "string"
+        );
+        assert_eq!(
+            declaration.input_schema["properties"]["summary"]["minLength"],
+            1
+        );
         assert_eq!(declaration.input_schema["additionalProperties"], false);
         assert!(declaration.input_schema.get("required").is_none());
 
-        let result = tool.call(json!({})).await.unwrap();
-        assert_eq!(result.content.unwrap(), "Task finished");
-        assert_eq!(result.structured_content.unwrap()["status"], "completed");
+        for params in [
+            json!({}),
+            json!({ "summary": "Completed the requested work and verified it." }),
+        ] {
+            let result = tool.call(params).await.unwrap();
+            assert_eq!(result.content.unwrap(), "Task finished");
+            assert_eq!(result.structured_content.unwrap()["status"], "completed");
+        }
     }
 
     #[tokio::test]
@@ -363,6 +385,8 @@ mod tests {
         let tool = FinishTask;
 
         for params in [
+            json!({ "summary": "" }),
+            json!({ "summary": "   " }),
             json!({ "summary": 42 }),
             json!({ "report_source": "assistant_message", "summary": "duplicate" }),
             json!({ "report_source": "tool_argument" }),

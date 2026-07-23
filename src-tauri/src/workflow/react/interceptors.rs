@@ -1120,6 +1120,9 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }
         let report_source = object.get("report_source").and_then(Value::as_str);
         let summary = object.get("summary").and_then(Value::as_str);
+        if object.contains_key("summary") && summary.is_none() {
+            return Err("complete_workflow summary must be a string");
+        }
         match report_source {
             Some("assistant_message") if object.contains_key("summary") => {
                 return Err("legacy assistant_message source cannot include summary");
@@ -1178,7 +1181,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     recency: (2, 0, 0),
                 });
             } else {
-                return Err("legacy summary is not a valid completion report");
+                return Err("complete_workflow summary is not a valid completion report");
             }
         }
 
@@ -1218,6 +1221,35 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     Err("multiple different completion reports are available")
                 }
             }
+        }
+    }
+
+    fn completion_report_rejection_reminder(
+        reason: &str,
+        has_current_segment_pending_report: bool,
+    ) -> String {
+        if reason == "no valid completion report is available"
+            && !has_current_segment_pending_report
+        {
+            return "<SYSTEM_REMINDER>Completion rejected: no valid completion report is available. STATE: PENDING_COMPLETION_REPORT=false. An empty complete_workflow({}) call cannot succeed because neither the current response nor the runtime contains a valid report. NEXT ACTION: call complete_workflow exactly once with a non-empty `summary` containing:\nCompleted: <what you completed>.\nVerified: <what you checked, or what was not run>.\nRemaining: <remaining limitations, or state that none remain>.\nUse `complete_workflow({\"summary\":\"...\"})`. Do not retry with an empty object. Do not send the report as a separate text-only response.</SYSTEM_REMINDER>".to_string();
+        }
+
+        if reason == "no valid completion report is available" {
+            return "<SYSTEM_REMINDER>Completion rejected: stored completion draft data exists for the current segment, but no draft passed validation. STATE: PENDING_COMPLETION_REPORT=invalid. Repeating an empty complete_workflow({}) call cannot succeed. NEXT ACTION: use the next concrete task-relevant work or verification tool to invalidate the unusable draft. After that work is complete, call complete_workflow with one fresh non-empty `summary` covering completed work, verification, and remaining limitations. Do not reuse the invalid draft.</SYSTEM_REMINDER>".to_string();
+        }
+
+        if reason == "multiple different completion reports are available" {
+            return "<SYSTEM_REMINDER>Completion rejected: multiple conflicting completion reports are available for the current segment. STATE: COMPLETION_REPORT=ambiguous. Repeating complete_workflow or adding another report cannot resolve this conflict. NEXT ACTION: continue with the next concrete task-relevant work or verification tool so the stale drafts are invalidated. When the work is complete, call complete_workflow with one fresh non-empty `summary` covering completed work, verification, and remaining limitations.</SYSTEM_REMINDER>".to_string();
+        }
+
+        if has_current_segment_pending_report {
+            format!(
+                "<SYSTEM_REMINDER>Completion rejected because the complete_workflow call was invalid: {reason}. STATE: PENDING_COMPLETION_REPORT=true. NEXT ACTION: emit no visible report, omit `summary`, and call complete_workflow({{}}) exactly once to commit the already captured draft. Do not repeat or replace that draft.</SYSTEM_REMINDER>"
+            )
+        } else {
+            format!(
+                "<SYSTEM_REMINDER>Completion rejected because the complete_workflow call was invalid: {reason}. STATE: PENDING_COMPLETION_REPORT=false. NEXT ACTION: call complete_workflow exactly once with a non-empty `summary` covering completed work, verification, and remaining limitations. Do not retry with an empty object.</SYSTEM_REMINDER>"
+            )
         }
     }
 
@@ -1680,10 +1712,14 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         ) {
             Ok(report) => report,
             Err(reason) => {
+                let has_current_segment_pending_report = self
+                    .pending_completion_reports
+                    .iter()
+                    .any(|pending| pending.segment_id == self.context.current_segment_id);
                 return Ok(Some(ReinforcedResult {
-                    content: format!(
-                        "<SYSTEM_REMINDER>Error: {}. Write exactly one complete report covering what was completed, what was verified, and remaining notes or limitations, then call parameter-free complete_workflow in the same response. If a pending report was captured, call complete_workflow with no visible text to commit it. Do not provide a second different report.</SYSTEM_REMINDER>",
-                        reason
+                    content: Self::completion_report_rejection_reminder(
+                        reason,
+                        has_current_segment_pending_report,
                     ),
                     llm_content: None,
                     title: "FinishTask Error".to_string(),
@@ -1764,7 +1800,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         let completion_report_provenance = json!({
             "source_message_id": completion_report.source_message_id,
             "source": if completion_report.persist_as_message {
-                "legacy_tool_argument"
+                "tool_argument_summary"
             } else if pending_source.is_some() {
                 "pending_assistant_message"
             } else if completion_report.source_message_id.is_some() {
@@ -1779,6 +1815,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         });
         let completion_summary = self.persist_completion_report(completion_report).await?;
         self.pending_completion_reports.clear();
+        self.next_llm_runtime_reminder = None;
+        self.save_snapshot().await?;
 
         if self.final_review_mode_enabled() {
             log::info!(
@@ -2236,6 +2274,55 @@ mod tests {
     }
 
     #[test]
+    fn missing_completion_report_reminder_requires_summary_argument() {
+        let reminder = WorkflowExecutor::completion_report_rejection_reminder(
+            "no valid completion report is available",
+            false,
+        );
+
+        assert!(reminder.contains("PENDING_COMPLETION_REPORT=false"));
+        assert!(reminder.contains("Completed: <what you completed>."));
+        assert!(reminder.contains("Verified: <what you checked, or what was not run>."));
+        assert!(reminder.contains("Remaining: <remaining limitations"));
+        assert!(reminder.contains("complete_workflow({\"summary\":\"...\"})"));
+        assert!(reminder.contains("Do not retry with an empty object"));
+        assert!(reminder.contains("Do not send the report as a separate text-only response"));
+        assert!(!reminder.contains("If a pending report was captured"));
+    }
+
+    #[test]
+    fn invalid_pending_completion_report_reminder_prohibits_empty_retry() {
+        let reminder = WorkflowExecutor::completion_report_rejection_reminder(
+            "no valid completion report is available",
+            true,
+        );
+
+        assert!(reminder.contains("PENDING_COMPLETION_REPORT=invalid"));
+        assert!(reminder.contains("Repeating an empty complete_workflow({}) call cannot succeed"));
+        assert!(reminder.contains("one fresh non-empty `summary`"));
+        assert!(!reminder.contains("call complete_workflow with no visible text"));
+    }
+
+    #[test]
+    fn invalid_completion_arguments_use_the_actual_pending_state() {
+        let with_pending = WorkflowExecutor::completion_report_rejection_reminder(
+            "complete_workflow contains unsupported arguments",
+            true,
+        );
+        let without_pending = WorkflowExecutor::completion_report_rejection_reminder(
+            "complete_workflow contains unsupported arguments",
+            false,
+        );
+
+        assert!(with_pending.contains("PENDING_COMPLETION_REPORT=true"));
+        assert!(with_pending.contains("emit no visible report"));
+        assert!(with_pending.contains("omit `summary`"));
+        assert!(without_pending.contains("PENDING_COMPLETION_REPORT=false"));
+        assert!(without_pending.contains("non-empty `summary`"));
+        assert!(without_pending.contains("Do not retry with an empty object"));
+    }
+
+    #[test]
     fn completion_report_resolution_accepts_current_report_after_reasoning() {
         let report = "Completed the workflow change and verified the targeted tests passed.\nNo known limitations remain.";
         let text_part = format!(
@@ -2303,7 +2390,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_report_resolution_uses_latest_similar_legacy_summary() {
+    fn completion_report_resolution_uses_latest_similar_optional_summary() {
         let earlier_report = "Implemented `src/workflow.rs` so terminal todos can finish cleanly.\nThe focused completion tests and `cargo check` passed. No known limitations remain.";
         let latest_report = "Updated `src/workflow.rs` to complete workflows after all todos become terminal.\nVerified the focused completion suite and `cargo check`; both passed. No remaining limitations are known.";
         let pending = vec![report(earlier_report, 44, 3)];
@@ -2314,7 +2401,7 @@ mod tests {
             &pending,
             3,
         )
-        .expect("a compatible legacy summary should resolve to the latest report");
+        .expect("a compatible optional summary should resolve to the latest report");
 
         assert_eq!(resolved.content, latest_report);
         assert_eq!(resolved.source_message_id, None);
@@ -2482,7 +2569,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_report_resolution_accepts_legacy_single_and_multi_parameter_payloads() {
+    fn completion_report_resolution_accepts_optional_summary_and_legacy_payload() {
         let legacy_report =
             "Implemented the legacy workflow change.\nVerified the focused tests passed.";
 
@@ -2519,6 +2606,7 @@ mod tests {
             "Implemented the requested workflow fix.\nVerified the focused tests passed.";
 
         for args in [
+            json!({ "summary": 42 }),
             json!({ "report_source": "assistant_message", "summary": full_report }),
             json!({ "report_source": "tool_argument" }),
             json!({ "report_source": "unknown", "summary": full_report }),

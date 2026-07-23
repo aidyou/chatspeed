@@ -225,6 +225,15 @@ fn latest_successful_completion_index(messages: &[WorkflowMessage]) -> Option<us
         })
 }
 
+const NEW_SEGMENT_AFTER_COMPLETION_REMINDER: &str = "<SYSTEM_REMINDER>This is a new context segment following earlier completed work. A segment boundary is not necessarily an objective boundary. Determine the completion-report scope from the user's current request. If the request is independent, complete and summarize only the work and verification for this segment's task. If the user explicitly continues, corrects, refines, or extends the immediately preceding objective, treat the related segments as one continuous objective and summarize the combined outcome, including relevant earlier work and the current changes. Do not include unrelated completed tasks. In either case, this segment requires a new current completion report; never reuse an earlier task's completion report or pending draft as this segment's report.</SYSTEM_REMINDER>";
+
+fn prompt_with_new_segment_completion_scope(clean_prompt: &str) -> String {
+    format!(
+        "{}\n\n{}",
+        clean_prompt, NEW_SEGMENT_AFTER_COMPLETION_REMINDER
+    )
+}
+
 fn extract_completion_summary_from_tool_message(message: &WorkflowMessage) -> Option<String> {
     if !is_successful_completion_tool_message(message) {
         return None;
@@ -2502,8 +2511,6 @@ async fn append_initial_prompt_to_executor(
     related_task_summary: Option<&str>,
     begin_new_segment: bool,
 ) -> Result<(), crate::workflow::react::error::WorkflowEngineError> {
-    const NEW_TASK_AFTER_COMPLETION_REMINDER: &str = "<SYSTEM_REMINDER>This is a new task following earlier completed work. Refer to previously completed tasks only if they are directly relevant to the current request. If they are not relevant, prioritize the current task and avoid being distracted by older context.</SYSTEM_REMINDER>";
-
     if begin_new_segment {
         executor.begin_new_context_segment().await?;
     }
@@ -2548,7 +2555,7 @@ async fn append_initial_prompt_to_executor(
 
     if !is_duplicate {
         let user_content = if begin_new_segment && has_previous_completed_work {
-            format!("{}\n\n{}", clean_prompt, NEW_TASK_AFTER_COMPLETION_REMINDER)
+            prompt_with_new_segment_completion_scope(clean_prompt)
         } else {
             clean_prompt.to_string()
         };
@@ -5065,6 +5072,21 @@ mod tests {
             ],
         )
         .expect("failed to seed agent");
+    }
+
+    #[test]
+    fn new_segment_reminder_defines_completion_scope_for_independent_and_continuous_tasks() {
+        let prompt = prompt_with_new_segment_completion_scope("Correct the previous version tag");
+
+        assert!(prompt.starts_with("Correct the previous version tag"));
+        assert!(prompt.contains("A segment boundary is not necessarily an objective boundary"));
+        assert!(prompt.contains("If the request is independent"));
+        assert!(prompt.contains("summarize only the work and verification for this segment's task"));
+        assert!(prompt.contains("explicitly continues, corrects, refines, or extends"));
+        assert!(prompt.contains("summarize the combined outcome"));
+        assert!(prompt.contains("Do not include unrelated completed tasks"));
+        assert!(prompt.contains("requires a new current completion report"));
+        assert!(prompt.contains("never reuse an earlier task's completion report or pending draft"));
     }
 
     #[test]

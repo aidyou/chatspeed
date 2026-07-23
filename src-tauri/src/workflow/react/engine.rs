@@ -149,6 +149,9 @@ pub struct WorkflowExecutor {
     /// Structured final review state used while a reviewer child is running.
     pub pending_final_review: Option<crate::workflow::react::types::PendingFinalReview>,
     pub pending_completion_reports: Vec<PendingCompletionReport>,
+    /// Request-local runtime guidance. This is consumed by the next LLM call and is never
+    /// persisted into transcript history or the AI context projection cache.
+    pub(crate) next_llm_runtime_reminder: Option<String>,
 }
 
 impl WorkflowExecutor {
@@ -782,6 +785,7 @@ impl ReActExecutor for WorkflowExecutor {
 
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
         self.pending_completion_reports.clear();
+        self.next_llm_runtime_reminder = None;
         self.context
             .begin_new_task_segment_from_runtime_projection()
             .await?;
@@ -790,6 +794,7 @@ impl ReActExecutor for WorkflowExecutor {
 
     async fn begin_manual_clear_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
         self.pending_completion_reports.clear();
+        self.next_llm_runtime_reminder = None;
         self.context.begin_manual_clear_context_segment(0).await?;
         self.save_snapshot().await
     }
@@ -908,6 +913,7 @@ impl WorkflowExecutor {
         self.pending_sub_agent_completions.clear();
         self.pending_final_review = None;
         self.pending_completion_reports.clear();
+        self.next_llm_runtime_reminder = None;
 
         self.update_state(WorkflowState::Thinking).await
     }
@@ -1083,6 +1089,7 @@ impl WorkflowExecutor {
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
             pending_completion_reports: Vec::new(),
+            next_llm_runtime_reminder: None,
         };
 
         // Phase 6: wire default dispatcher with UI + DB sinks for all executors.
@@ -3571,6 +3578,7 @@ impl WorkflowExecutor {
                     .get_tool_calling_spec(None, None)
                     .await
                     .unwrap_or_default();
+                let runtime_reminder = self.next_llm_runtime_reminder.take();
 
                 let (full_response, tool_calls_json, response_reasoning, usage) = self
                     .llm_processor
@@ -3584,6 +3592,7 @@ impl WorkflowExecutor {
                         &self.policy,
                         &mut signal_rx,
                         false, // allow brief reasoning-only turns; runtime still converges via tool observations and completion tools
+                        runtime_reminder,
                     )
                     .await?;
 
@@ -3928,12 +3937,9 @@ impl WorkflowExecutor {
                         self.session_id,
                         self.consecutive_no_tool_calls
                     );
-                    let mut runtime_observation_type = RuntimeObservationType::NoToolCall;
                     let reminder_msg = if let Some(warning) = repeated_no_tool_warning {
-                        runtime_observation_type = RuntimeObservationType::LoopDetected;
                         Some(warning)
                     } else if let Some(invalid_tool_call_error) = invalid_tool_call_error {
-                        runtime_observation_type = RuntimeObservationType::InvalidToolCall;
                         Some(format!(
                             "<SYSTEM_REMINDER>Error: {}. Choose one valid tool call that best advances the task, and make sure the tool name and arguments match the available schema.</SYSTEM_REMINDER>",
                             invalid_tool_call_error
@@ -3948,9 +3954,17 @@ impl WorkflowExecutor {
                                 self.max_steps,
                                 remaining
                             )
+                        } else if !self.pending_completion_reports.is_empty() {
+                            format!(
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. The runtime retained the valid report from your preceding response. Emit no visible text and call `complete_workflow({{}})` exactly once with no `summary`. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
+                                self.consecutive_no_tool_calls,
+                                self.current_step,
+                                self.max_steps,
+                                remaining
+                            )
                         } else {
                             format!(
-                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. If a completion report draft was captured, do not repeat or rewrite it; call parameter-free `complete_workflow({{}})` now with no visible text. Otherwise choose one concrete work tool. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. No completion report is pending. Choose one concrete work tool, or if the task is complete call `complete_workflow` exactly once with a complete non-empty `summary`. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
                                 self.consecutive_no_tool_calls,
                                 self.current_step,
                                 self.max_steps,
@@ -3960,46 +3974,30 @@ impl WorkflowExecutor {
                     } else if self.consecutive_no_tool_calls >= NO_TOOL_MEDIUM_REMINDER_THRESHOLD {
                         Some(if self.is_child_agent_workflow() {
                             "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Choose one concrete tool action now. If your previous response was intended as the final result, do not repeat it as visible text; call `submit_result` now with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
+                        } else if !self.pending_completion_reports.is_empty() {
+                            "<SYSTEM_REMINDER>The runtime retained the valid completion report from your preceding response. Emit no visible text and call `complete_workflow({})` exactly once with no `summary`.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>This workflow is action-oriented. If the runtime captured your previous response as a pending completion report, do not repeat it as visible text; call parameter-free `complete_workflow({})` now. Otherwise choose one concrete work tool.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>No completion report is pending. Choose one concrete work tool now, or if the task is complete call `complete_workflow` exactly once with a complete non-empty `summary`.</SYSTEM_REMINDER>".to_string()
                         })
                     } else {
                         Some(if self.is_child_agent_workflow() {
                             "<SYSTEM_REMINDER>This delegated workflow advances through tool-mediated observations. Choose one concrete tool action now. If the text you just sent was intended as the final result, do not send another visible result; call `submit_result` in the next response with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
                         } else if !self.pending_completion_reports.is_empty() {
-                            "<SYSTEM_REMINDER>A completion report draft from your preceding response was captured. If it is the intended final report, call parameter-free `complete_workflow` now with no visible text. Do not repeat or replace the report. If work remains, call the next concrete work tool; doing so invalidates the draft.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>A completion report draft from your preceding response was captured. If it is the intended final report, call `complete_workflow({})` now with no visible text or `summary`. Do not repeat or replace the report. If work remains, call the next concrete work tool; doing so invalidates the draft.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. Choose one concrete tool action now. If the task is complete, write one complete report and call parameter-free `complete_workflow` in the same response.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. Choose one concrete tool action now. If the task is complete, call `complete_workflow` with one complete non-empty `summary`.</SYSTEM_REMINDER>".to_string()
                         })
                     };
 
-                    if let Some(reminder_msg) = reminder_msg {
-                        let _ = self
-                            .add_message_and_notify_internal(
-                                "user".to_string(),
-                                reminder_msg.clone(),
-                                None,
-                                None,
-                                Some(StepType::Observe),
-                                false,
-                                None,
-                                Some(runtime_observation_metadata(
-                                    runtime_observation_type,
-                                    serde_json::json!({
-                                        "consecutive_no_tool_calls": self.consecutive_no_tool_calls,
-                                        "current_step": self.current_step,
-                                        "max_steps": self.max_steps,
-                                        "llm_content": reminder_msg,
-                                    }),
-                                )),
-                            )
-                            .await?;
-                    }
-                    if self.flush_queued_user_messages().await? {
+                    let queued_applied = self.flush_queued_user_messages().await?;
+                    if queued_applied {
+                        self.next_llm_runtime_reminder = None;
                         self.current_step = 0;
                         self.consecutive_no_tool_calls = 0;
                         self.loop_detector.reset_tool_call_history();
                         self.loop_detector.reset_no_tool_response_history();
+                    } else {
+                        self.next_llm_runtime_reminder = reminder_msg;
                     }
                     // Skip further processing since there are no tool results
                     sleep(Duration::from_millis(100)).await;
@@ -4163,19 +4161,13 @@ impl WorkflowExecutor {
                     normalized[field] =
                         serde_json::json!(Self::completion_response_without_reasoning(value));
                 }
-            } else if normalized
-                .get("report_source")
-                .and_then(|value| value.as_str())
-                == Some("tool_argument")
-            {
+            } else {
                 let Some(summary) = normalized.get("summary").and_then(|value| value.as_str())
                 else {
                     continue;
                 };
                 normalized["summary"] =
                     serde_json::json!(Self::completion_response_without_reasoning(summary));
-            } else {
-                continue;
             }
             let sanitized = if is_string {
                 serde_json::to_string(&normalized)
@@ -4691,6 +4683,7 @@ impl WorkflowExecutor {
             && Self::should_invalidate_pending_completion_reports(&turn_tool_name_refs)
         {
             self.pending_completion_reports.clear();
+            self.next_llm_runtime_reminder = None;
             self.save_snapshot().await?;
         }
 
@@ -5163,9 +5156,47 @@ impl WorkflowExecutor {
                         observation_kind: None,
                     }));
                 }
-                return self
+                let completion_result = self
                     .handle_finish_task_intercept(text_part, args, todo_status_overrides)
-                    .await;
+                    .await?;
+                if let Some(rejected) = completion_result.as_ref().filter(|result| result.is_error)
+                {
+                    if self.loop_detector.record_and_check(name, args).is_some() {
+                        let next_action = match rejected.error_type.as_deref() {
+                            Some("InvalidFinishSummary")
+                                if self.pending_completion_reports.iter().any(|pending| {
+                                    pending.segment_id == self.context.current_segment_id
+                                }) =>
+                            {
+                                "Do not call complete_workflow again with the same empty response. Follow the immediately preceding rejection's NEXT ACTION exactly; the current pending draft state must be resolved before completion can succeed."
+                            }
+                            Some("InvalidFinishSummary") => {
+                                "Do not call complete_workflow with an empty object again. Call it once with a non-empty `summary` using `Completed: ...`, `Verified: ...`, and `Remaining: ...`."
+                            }
+                            Some("PendingTodos") => {
+                                "Do not call complete_workflow again yet. Resolve every pending or in-progress todo with the appropriate work and todo tools, then call complete_workflow with one complete non-empty `summary`."
+                            }
+                            _ => {
+                                "Do not repeat the same complete_workflow call. Read the immediately preceding rejection, correct the stated cause, and only then try completion again."
+                            }
+                        };
+                        return Ok(Some(ReinforcedResult {
+                            content: format!(
+                                "<SYSTEM_REMINDER>COMPLETION RETRY LOOP: complete_workflow has been rejected at least three consecutive times without resolving the reported error. Latest rejection: {}. NEXT ACTION: {} Repeating the same call is prohibited.</SYSTEM_REMINDER>",
+                                rejected.summary, next_action
+                            ),
+                            llm_content: None,
+                            title: "Complete Workflow Loop".to_string(),
+                            summary: "Repeated rejected completion calls".to_string(),
+                            is_error: true,
+                            error_type: Some("LoopDetected".to_string()),
+                            display_type: "text".to_string(),
+                            approval_status: None,
+                            observation_kind: None,
+                        }));
+                    }
+                }
+                return Ok(completion_result);
             }
             TOOL_SUBMIT_RESULT => return self.handle_submit_result_intercept(args).await,
             TOOL_ASK_USER => return self.handle_ask_user_intercept(args).await,
@@ -6380,6 +6411,7 @@ impl WorkflowExecutor {
                     audit
                 );
                 self.agent_config.final_audit = Some(audit);
+                self.llm_processor.agent_config.final_audit = Some(audit);
                 if let Ok(store) = self.context.main_store.write() {
                     if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
                         let mut agent_config: serde_json::Value = snapshot
@@ -6726,6 +6758,7 @@ impl WorkflowExecutor {
             self.pending_completion_reports.clear();
             self.save_snapshot().await?;
         }
+        self.next_llm_runtime_reminder = None;
 
         self.queued_user_messages.push_back((
             queued_id.clone(),
@@ -6788,6 +6821,7 @@ impl WorkflowExecutor {
         }
 
         self.pending_completion_reports.clear();
+        self.next_llm_runtime_reminder = None;
 
         if matches!(
             self.state,
@@ -7150,6 +7184,100 @@ mod recovery_tests {
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
         Arc::new(std::sync::RwLock::new(store))
+    }
+
+    #[tokio::test]
+    async fn repeated_empty_completion_rejections_trigger_loop_protection() {
+        let store = create_test_store();
+        let session_id = "repeated-empty-completion";
+        let agent = Agent::new(
+            "completion-loop-agent".to_string(),
+            "Completion Loop Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .add_agent(&agent)
+                .expect("failed to add test agent");
+            store_guard
+                .create_workflow(session_id, "test", &agent.id, None, None)
+                .expect("failed to create test workflow");
+        }
+
+        let (observed_status_tx, _observed_status_rx) = mpsc::unbounded_channel();
+        let gateway: Arc<dyn Gateway> = Arc::new(TerminalStatusGateway {
+            store: store.clone(),
+            observed_status_tx,
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store,
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(12).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Executing;
+
+        for attempt in 1..=3 {
+            let result = executor
+                .pre_dispatch_check(
+                    &format!("completion-{attempt}"),
+                    TOOL_COMPLETE_WORKFLOW,
+                    &serde_json::json!({}),
+                    "",
+                    &HashMap::new(),
+                    false,
+                )
+                .await
+                .expect("completion interception should succeed")
+                .expect("empty completion must be intercepted");
+
+            if attempt < 3 {
+                assert_eq!(result.error_type.as_deref(), Some("InvalidFinishSummary"));
+                assert!(result.content.contains("PENDING_COMPLETION_REPORT=false"));
+                assert!(result.content.contains("Do not retry with an empty object"));
+                assert!(result
+                    .content
+                    .contains("complete_workflow({\"summary\":\"...\"})"));
+            } else {
+                assert_eq!(result.error_type.as_deref(), Some("LoopDetected"));
+                assert!(result.content.contains("COMPLETION RETRY LOOP"));
+                assert!(result
+                    .content
+                    .contains("Do not call complete_workflow with an empty object again"));
+                assert!(result.content.contains("non-empty `summary`"));
+            }
+        }
     }
 
     #[tokio::test]
@@ -7717,12 +7845,12 @@ mod recovery_tests {
     }
 
     #[test]
-    fn test_completion_tool_metadata_removes_reasoning_from_tool_argument_summary() {
+    fn test_completion_tool_metadata_removes_reasoning_from_optional_summary() {
         let calls = vec![serde_json::json!({
             "id": "completion_1",
             "function": {
                 "name": "complete_workflow",
-                "arguments": "{\"report_source\":\"tool_argument\",\"summary\":\"<THINK>Internal reasoning.</THINK>\\nCompleted the requested change.\"}"
+                "arguments": "{\"summary\":\"<THINK>Internal reasoning.</THINK>\\nCompleted the requested change.\"}"
             }
         })];
 

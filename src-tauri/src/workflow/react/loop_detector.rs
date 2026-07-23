@@ -249,6 +249,25 @@ mod tests {
     }
 
     #[test]
+    fn detects_repeated_rejected_parameter_free_completion_calls() {
+        let mut detector = LoopDetector::new();
+        let args = json!({});
+
+        assert!(detector
+            .record_and_check(crate::tools::TOOL_COMPLETE_WORKFLOW, &args)
+            .is_none());
+        assert!(detector
+            .record_and_check(crate::tools::TOOL_COMPLETE_WORKFLOW, &args)
+            .is_none());
+        let warning = detector.record_and_check(crate::tools::TOOL_COMPLETE_WORKFLOW, &args);
+
+        assert!(
+            warning.is_some(),
+            "the third consecutive rejected completion call must trigger loop protection"
+        );
+    }
+
+    #[test]
     fn does_not_count_interleaved_identical_calls_as_identical_loop() {
         let mut detector = LoopDetector::new();
         let bash_args = json!({"command":"cargo check --manifest-path src-tauri/Cargo.toml"});

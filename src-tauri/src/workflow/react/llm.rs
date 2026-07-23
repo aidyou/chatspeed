@@ -286,6 +286,7 @@ impl LlmProcessor {
         policy: &ExecutionPolicy,
         signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
         require_tool_call: bool,
+        runtime_reminder: Option<String>,
     ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
         let raw_history = context.get_messages_for_llm();
 
@@ -306,7 +307,8 @@ impl LlmProcessor {
         // Extract the next pending todo item for progress display.
         let next_pending_task = None::<String>;
 
-        let history = self.normalize_history(raw_history);
+        let mut history = self.normalize_history(raw_history);
+        Self::append_runtime_reminder(&mut history, runtime_reminder);
         let final_history = self.inject_prompts(
             history,
             current_step,
@@ -778,6 +780,18 @@ impl LlmProcessor {
 
     fn normalize_history(&self, raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
         Self::normalize_history_messages(raw_history)
+    }
+
+    fn append_runtime_reminder(
+        history: &mut Vec<serde_json::Value>,
+        runtime_reminder: Option<String>,
+    ) {
+        if let Some(reminder) = runtime_reminder.filter(|value| !value.trim().is_empty()) {
+            history.push(serde_json::json!({
+                "role": "user",
+                "content": reminder,
+            }));
+        }
     }
 
     fn sanitize_history_reasoning(role: &str, reasoning: Option<&str>) -> Option<String> {
@@ -1437,7 +1451,7 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
             if tool_name == crate::tools::TOOL_SUBMIT_RESULT {
                 "<SYSTEM_REMINDER>This delegated workflow requires a concrete tool action. If the text you just sent was intended as the final result, do not repeat it visibly; call `submit_result` in the next response with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
             } else {
-                "<SYSTEM_REMINDER>This workflow requires a concrete tool action. If the text you just sent was intended as the completion report and the runtime captured it as a pending draft, do not repeat it visibly; call parameter-free `complete_workflow({})` in the next response.</SYSTEM_REMINDER>".to_string()
+                "<SYSTEM_REMINDER>This workflow requires a concrete tool action. If the text you just sent was intended as the completion report and the runtime captured it as a pending draft, do not repeat it visibly or in `summary`; call `complete_workflow({})` in the next response.</SYSTEM_REMINDER>".to_string()
             }
         }
         "Timeout" => {
@@ -1554,6 +1568,18 @@ mod tests {
             cached_global_agents: None,
             cached_project_agents: None,
         }
+    }
+
+    #[test]
+    fn runtime_reminder_is_appended_only_to_the_outgoing_history() {
+        let mut history = vec![json!({ "role": "user", "content": "Current task" })];
+        let reminder = "<SYSTEM_REMINDER>Use the current structured state.</SYSTEM_REMINDER>";
+
+        LlmProcessor::append_runtime_reminder(&mut history, Some(reminder.to_string()));
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1]["role"], "user");
+        assert_eq!(history[1]["content"], reminder);
     }
 
     fn message(
@@ -1728,6 +1754,32 @@ mod tests {
         assert!(system.contains("<SOURCE_PATH>/tmp/global/AGENTS.md</SOURCE_PATH>"));
         assert!(system.contains("<SOURCE_PATH>/tmp/project/AGENTS.md</SOURCE_PATH>"));
         assert!(system.trim_end().ends_with("</PREVIOUS_CONTEXT_SNAPSHOT>"));
+    }
+
+    #[test]
+    fn inject_prompts_reflects_runtime_final_audit_flag() {
+        let mut processor = test_llm_processor();
+        let history = vec![json!({ "role": "user", "content": "Do work" })];
+
+        let without_audit = processor.inject_prompts(
+            history.clone(),
+            0,
+            0,
+            None,
+            None,
+            &ExecutionPolicy::standard(),
+        );
+        let without_audit_system = without_audit[0]["content"].as_str().unwrap_or_default();
+        assert!(!without_audit_system.contains("Final audit is enabled"));
+
+        processor.agent_config.final_audit = Some(true);
+        let with_audit =
+            processor.inject_prompts(history, 0, 0, None, None, &ExecutionPolicy::standard());
+        let with_audit_system = with_audit[0]["content"].as_str().unwrap_or_default();
+        assert!(with_audit_system.contains("Final audit is enabled"));
+        assert!(with_audit_system.contains("Key deliverables or changes:"));
+        assert!(with_audit_system.contains("Verification:"));
+        assert!(with_audit_system.contains("Remaining notes:"));
     }
 
     #[test]
@@ -2008,6 +2060,51 @@ mod tests {
                     .unwrap_or_default()
                     .contains("active tasks"))
         }));
+    }
+
+    #[test]
+    fn normalize_history_keeps_deferred_loop_detected_tool_result_paired() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Finish the task", None, None),
+            message(
+                "assistant",
+                "",
+                Some("think"),
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "fc_complete_1",
+                        "type": "function",
+                        "function": { "name": "complete_workflow", "arguments": "{}" }
+                    }]
+                })),
+            ),
+            message(
+                "tool",
+                "<SYSTEM_REMINDER>Call complete_workflow with a non-empty summary.</SYSTEM_REMINDER>",
+                Some("observe"),
+                Some(json!({
+                    "message_kind": "runtime_observation",
+                    "observation_type": "loop_detected",
+                    "llm_visibility": "defer",
+                    "ui_visibility": "hide",
+                    "tool_call_id": "fc_complete_1",
+                    "tool_name": "complete_workflow",
+                    "data": {
+                        "tool_call_id": "fc_complete_1",
+                        "llm_content": "<SYSTEM_REMINDER>Call complete_workflow with a non-empty summary.</SYSTEM_REMINDER>"
+                    }
+                })),
+            ),
+        ]);
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[1]["role"], "assistant");
+        assert_eq!(history[2]["role"], "tool");
+        assert_eq!(history[2]["tool_call_id"], "fc_complete_1");
+        assert!(history[2]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("non-empty summary"));
     }
 
     #[test]

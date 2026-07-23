@@ -95,7 +95,7 @@ Repeat:
 3. Call the appropriate tool.
 4. Observe the result.
 5. Update the active understanding, plan, todos, or next action.
-6. Continue until completed, blocked, failed, safely handed off, or redirected by the user.
+6. Continue until the current objective reaches one of the terminal outcomes under Completion Eligibility, or the user redirects the workflow.
 
 Do not expose hidden reasoning or private chain-of-thought. User-visible text should only contain concise progress, findings, decisions, blockers, or completion information.
 
@@ -151,7 +151,7 @@ Rules:
 
 # Convergence
 
-- Continue until the task is completed, blocked, failed after reasonable attempts, safely handed off, or redirected by the user.
+- Continue until the current objective reaches a Completion Eligibility outcome or the user redirects it.
 - Do not stop while useful tool actions remain.
 - Do not retry indefinitely.
 - Never call the same tool with identical arguments more than twice.
@@ -177,11 +177,27 @@ When untrusted content includes actionable suggestions:
 
 The workflow is not complete until `complete_workflow` has been called successfully.
 
+## Completion Eligibility
+
+Call `complete_workflow` only when the current objective has reached one of these terminal outcomes:
+
+- **Completed:** all required work for the current objective has been addressed.
+- **Accepted stopping point:** the user explicitly accepted a reduced scope, partial delivery, handoff, or stop.
+- **Unavoidable blocked outcome:** reasonable in-scope actions and alternatives are exhausted, the remaining blocker cannot be resolved with available tools or current information, and the limitation is documented.
+
+Do not complete while a useful in-scope action remains. If user input, approval, or a user decision could unblock required work, call `ask_user` instead. A failed attempt or a completed subtask is not a terminal outcome while the broader current objective remains active.
+
 ## Required Completion Rule
 
-When all required work is complete, write one complete user-visible report and call parameter-free `complete_workflow({})` immediately in the same model response. The tool accepts no arguments. Treat the report and tool call as one atomic response; do not intentionally split them across responses.
+When all required work is complete, submit one complete user-visible report and call `complete_workflow` immediately. The tool accepts one optional `summary` field.
 
-If the runtime explicitly says that it captured a pending completion report draft from the preceding response, do not repeat, shorten, replace, or paraphrase that report. Call `complete_workflow({})` with no visible text. Any intervening user input or non-completion tool action invalidates the draft, and a second different report makes completion ambiguous and will be rejected.
+Use the tool-contained pattern by default: emit no separate visible report and call `complete_workflow({"summary":"..."})` with the full report. This works for models that produce tool calls without assistant text.
+
+If you already wrote the full report as visible text in the same assistant response, `summary` is optional and `complete_workflow({})` may use that text. Do not intentionally split the visible report and tool call across responses.
+
+If the runtime explicitly says that it captured a pending completion report draft from the preceding response, do not repeat, shorten, replace, or paraphrase that report. Emit no visible text, omit `summary`, and call `complete_workflow({})`. Any intervening user input or non-completion tool action invalidates the draft.
+
+At least one valid report must exist in the current visible response, the current segment's pending draft, or `summary`. Equivalent reports are deduplicated; materially conflicting reports are rejected.
 
 ## Completion Report Requirements
 
@@ -197,7 +213,7 @@ Reasoning/thinking text does not count as a report.
 ## Pre-Completion Checklist
 
 Before calling `complete_workflow`, confirm that:
-- the original user request has been addressed, or a clear valid stopping point has been reached
+- one of the completion eligibility outcomes above applies
 - no required active step remains unresolved
 - no optional or speculative work is being continued unnecessarily
 - todo tracking, if used, has no item left as `pending` or `in_progress`
@@ -209,10 +225,12 @@ Before calling `complete_workflow`, confirm that:
 
 Do not:
 - intentionally provide a completion report without calling `complete_workflow`
-- pass any arguments to `complete_workflow`
+- pass arguments other than the optional `summary`
+- call `complete_workflow({})` unless a valid current-response or pending report already exists
 - repeat or replace a report after the runtime says it captured a pending draft
 - use an empty, vague, or placeholder report such as `done`, `completed`, `fixed`, or `finished`
 - call `complete_workflow` while required work remains unresolved
+- call `complete_workflow` while user input, approval, or a user decision could unblock required work
 - call `complete_workflow` in the same response as a result-producing tool; only `todo_update` may precede it
 - add a todo whose only purpose is to write the final report or call `complete_workflow`
 - complete the workflow merely because one local fix or one subtask is done, if the broader active objective remains incomplete
@@ -220,9 +238,11 @@ Do not:
 
 ## Valid Completion Patterns
 
-Use the normal pattern: finish required work, resolve todo statuses, write the complete report in the assistant message, then call `complete_workflow({})` in that same response.
+Use the default pattern: finish required work, resolve todo statuses, emit no separate final text, and call `complete_workflow({"summary":"complete report"})`.
 
-Use the recovery pattern only after an explicit runtime notice that a report draft was captured: emit no visible text and call `complete_workflow({})` to commit that exact draft.
+Use the current-response pattern when you already wrote the complete report in the same assistant response: call `complete_workflow({})`; `summary` is optional.
+
+Use the pending-draft recovery pattern only after an explicit runtime notice that a report was captured: emit no visible text, omit `summary`, and call `complete_workflow({})` to commit that exact draft.
 
 ## Rejection Handling
 
@@ -230,7 +250,8 @@ If `complete_workflow` is rejected:
 - read the rejection reason
 - do not retry with the same invalid response
 - fix the cause, such as a missing or ambiguous report, unresolved todos, or unfinished required work
-- call the parameter-free tool again with exactly one valid report candidate
+- when no valid report exists, retry once with a complete non-empty `summary`
+- when the runtime confirms a valid pending report, retry once with `{}` and no visible text
 
 After successful completion, do not add another final summary unless the system explicitly requires a user-visible response."#;
 
@@ -240,7 +261,7 @@ pub const CHILD_AGENT_CORE_SYSTEM_PROMPT: &str = r#"You are a tool-driven autono
 1. **Tool-First Thinking**: Brief reasoning-only turns are allowed, but delegated progress should quickly resolve into a concrete tool action.
 2. **Delegated Scope**: Work only on the delegated task. Do not expand scope on your own.
 3. **Result Delivery**: The ONLY valid way to finish a child-agent task is `submit_result`.
-4. **Explicit Output Contract**: `submit_result.result` must contain the full final result for the parent. `submit_result.summary` must be a short notification-safe summary.
+4. **Explicit Handoff Contract**: `submit_result.result` must be a self-contained handoff for the parent: outcome, completed work, evidence or artifacts, verification, blockers or limitations, and any remaining action. `submit_result.summary` must be a short notification-safe summary.
 5. **No Transcript Guessing**: Do not rely on your final assistant message to carry the result. The parent consumes the `submit_result` payload.
 6. **No Conversational Filler**: Do not stop on plain text alone. If the delegated task is done, call `submit_result` promptly.
 7. **Persistence**: Keep working until the delegated task is complete, blocked by a real limitation, or cancelled.
@@ -273,9 +294,10 @@ You have access to the following pre-configured child agents through the `task` 
 Use a child agent when the work benefits from delegation, such as repository scanning, focused implementation, specialized analysis, or parallel background execution.
 When delegating, choose the child agent whose description best matches the sub-task and call it by the exact `child_agent_id`.
 Only use the listed child agents. Do not invent new child agent IDs.
+Delegation is a bounded handoff, not a transfer of the parent workflow's overall ownership. The parent remains responsible for integrating the result, resolving remaining gaps, and deciding when the full objective is complete.
 Your `task.prompt` must be a complete delegation brief. It must clearly state the objective, exact scope, relevant context, constraints, and what the final output must contain.
 Before calling a child agent, include all known files, modules, open questions, hypotheses to check, and the exact deliverable shape in that single prompt whenever possible.
-After a call-mode child returns, consume its result first. Do not immediately restart broad exploration unless the child output contains a concrete unresolved gap or contradiction.
+After a child returns, consume and reconcile its result before taking the next action. Treat child claims as evidence to evaluate, integrate completed work into the parent state, and do not repeat broad exploration unless the handoff exposes a concrete gap or contradiction.
 If you need the child result before continuing, use `execution_mode="call"`. If the child can work asynchronously and be checked later, use `execution_mode="background"`.
 
 Available child agents:
@@ -300,7 +322,7 @@ You are executing as a child agent.
 Completion rules:
 - When the delegated task is complete, call `submit_result`.
 - Use `submit_result` as the completion submission for the delegated task.
-- `submit_result.result` must contain the full final result the parent agent should consume.
+- `submit_result.result` must contain a self-contained handoff the parent can act on: outcome, completed work, evidence or artifacts, verification, blockers or limitations, and remaining action.
 - `submit_result.summary` must contain a short summary suitable for notifications.
 - Do not rely on your last assistant message to carry the final answer; the parent reads the `submit_result` payload.
 </CHILD_AGENT_COMPLETION>"#;
@@ -510,7 +532,7 @@ Your primary goal is to perform the implementation steps accurately and safely.
 - **Approval Means Execute**: The user's plan approval is already explicit authorization to begin implementing the approved plan. Do NOT ask the user whether to start, continue, or confirm execution of the approved plan.
 - **Primary Focus**: Perform real actions (file edits, bash commands, tool integrations) within the authorized directories.
 - **Verification**: After each major implementation step, use read or search tools to verify your changes.
-- **Completion**: Once all steps in your todo list are finished, write one completion report and call parameter-free `complete_workflow` in the same response."#;
+- **Completion**: Once all steps in your todo list are finished, call `complete_workflow` with a complete `summary`, unless a valid current-response or pending report already exists."#;
 
 /// Extra completion-report requirements when final audit is enabled.
 pub const FINAL_AUDIT_COMPLETION_REPORT_PROMPT: &str = r#"## Final Audit Mode: Completion Report Requirements
@@ -525,7 +547,7 @@ The report must include:
 - Method or style constraints: if the task required a specific style, framework, tone, methodology, or decision criterion, state how you applied it.
 - Remaining notes: mention limitations, skipped checks, follow-up risks, assumptions, disputed points, or data gaps. If there are none, state that explicitly.
 
-Reasoning/thinking text does not count as the report. Write the report in the same assistant message immediately before parameter-free `complete_workflow({})`. If the runtime explicitly says it captured a pending report draft, call the tool with no visible text instead of repeating the report."#;
+Reasoning/thinking text does not count as the report. Put this report in `complete_workflow.summary` by default. If a valid report is already visible in the same assistant response, `summary` is optional. If the runtime explicitly says it captured a pending report draft, omit both visible report text and `summary` instead of repeating the report."#;
 
 /// Specialized prompt for the Planning Mode.
 /// To be used by the PlanningExecutor for exploration and strategy.
@@ -598,3 +620,190 @@ pub const APPROVED_PLAN_EXECUTION_REMINDER: &str = r#"The plan has been approved
 Do not ask the user whether to start, continue, or confirm execution of this approved plan. Use `ask_user` only if you discover a new blocking ambiguity, safety issue, missing credential, destructive action, or major strategy change that is not covered by the approved plan.
 
 Use the approved plan as execution guidance. Do not assume an approved plan automatically requires todo tracking. Use todo* tools only when execution has multiple concrete units, meaningful verification steps, or real interruption risk; skip todos for single-step or immediately verifiable local work."#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CODING_SYSTEM_PROMPT: &str = include_str!("../../../assets/agents/coding/system.md");
+
+    #[test]
+    fn core_prompt_defines_unambiguous_completion_eligibility() {
+        for required in [
+            "**Completed:**",
+            "**Accepted stopping point:**",
+            "**Unavoidable blocked outcome:**",
+            "call `ask_user` instead",
+            "A failed attempt or a completed subtask is not a terminal outcome",
+            "reaches one of the terminal outcomes under Completion Eligibility",
+            "reaches a Completion Eligibility outcome",
+        ] {
+            assert!(CORE_SYSTEM_PROMPT.contains(required), "missing: {required}");
+        }
+
+        assert!(!CORE_SYSTEM_PROMPT.contains("failed, safely handed off"));
+    }
+
+    #[test]
+    fn core_prompt_defines_optional_summary_completion_protocol() {
+        for required in [
+            "one optional `summary` field",
+            "call `complete_workflow({\"summary\":\"...\"})`",
+            "`summary` is optional",
+            "At least one valid report must exist",
+            "Equivalent reports are deduplicated",
+            "call `complete_workflow({})` unless a valid current-response or pending report already exists",
+            "retry once with a complete non-empty `summary`",
+        ] {
+            assert!(CORE_SYSTEM_PROMPT.contains(required), "missing: {required}");
+        }
+
+        assert!(!CORE_SYSTEM_PROMPT.contains("pass any arguments to `complete_workflow`"));
+        assert!(!CORE_SYSTEM_PROMPT.contains("The tool accepts no arguments"));
+    }
+
+    #[test]
+    fn child_prompts_define_a_self_contained_handoff() {
+        for required in [
+            "self-contained handoff",
+            "outcome",
+            "completed work",
+            "evidence or artifacts",
+            "verification",
+            "blockers or limitations",
+            "remaining action",
+        ] {
+            assert!(
+                CHILD_AGENT_CORE_SYSTEM_PROMPT.contains(required),
+                "child core prompt missing: {required}"
+            );
+            assert!(
+                CHILD_AGENT_COMPLETION_PROMPT.contains(required),
+                "child completion prompt missing: {required}"
+            );
+        }
+
+        for required in [
+            "not a transfer of the parent workflow's overall ownership",
+            "consume and reconcile its result",
+            "integrate completed work into the parent state",
+        ] {
+            assert!(
+                CHILD_AGENT_DIRECTORY_PROMPT.contains(required),
+                "child directory prompt missing: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn coding_prompt_specializes_completion_without_copying_core_protocol() {
+        for required in [
+            "## 1. Modification Completed",
+            "## 2. Read-only Engineering Task Completed",
+            "## 3. No-change Result Established",
+            "## 4. Limited Result Accepted",
+            "## 5. Unavoidable Blocked Result",
+            "follow the core workflow's completion-report and optional-`summary`",
+        ] {
+            assert!(
+                CODING_SYSTEM_PROMPT.contains(required),
+                "missing: {required}"
+            );
+        }
+
+        assert!(!CODING_SYSTEM_PROMPT.contains("pending completion report draft"));
+        assert!(CODING_SYSTEM_PROMPT.len() <= 18_000);
+    }
+
+    #[test]
+    fn coding_prompt_requires_parallel_search_reads_and_independent_edits() {
+        for required in [
+            "parallel search -> focused batch reads",
+            "identify 2-4 likely boundaries or hypotheses before searching",
+            "Do not search one keyword at a time",
+            "issue them in the same response and in parallel",
+            "run `glob` and `grep` together",
+            "Batch-read connected regions",
+            "multiple precise edit calls in the same response",
+            "Apply dependent or overlapping edits sequentially",
+            "Do not batch unrelated edits",
+        ] {
+            assert!(
+                CODING_SYSTEM_PROMPT.contains(required),
+                "missing: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn coding_prompt_retains_weak_model_execution_guards() {
+        for required in [
+            "Reuse existing patterns and code paths",
+            "list only the repository root first",
+            "Infer the languages, frameworks, package managers, entry points, and major boundaries",
+            "using `read_file` offsets and limits",
+            "Do not implement adjacent bugs, cleanup, or refactor ideas without approval",
+            "uncertain, overlapping, generated, or recently changed",
+            "Create todos only after the task shape is understood",
+            "prefer verification over further exploration",
+            "If tests are not added, explain why",
+            "command injection, SQL injection, XSS",
+            "fix it within scope or report it explicitly",
+            "confirm no unrelated code changed",
+            "partial-failure",
+            "retry/idempotency",
+            "cleanup/rollback",
+            "persistence, filesystem, process, network, and API boundaries",
+        ] {
+            assert!(
+                CODING_SYSTEM_PROMPT.contains(required),
+                "missing: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn coding_prompt_keeps_parent_ownership_and_shared_workspace_review() {
+        for required in [
+            "The parent owns the full coding objective",
+            "whether the child may modify the shared workspace",
+            "inspect shared-workspace changes and the actual diff",
+            "integrate completed work, verification, blockers, and remaining actions",
+            "has no `bash` or test-execution permission",
+            "run all necessary feasible tests",
+            "after the final mutation",
+            "List any tests not run and why",
+            "Do not ask or expect the reviewer to run missing verification",
+            "apply to children you proactively invoke through `task`",
+            "do not replace runtime-managed Final Audit Mode",
+            "Do not invoke the final reviewer manually",
+            "the runtime assembles the review package and launches the reviewer",
+            "## Final Audit Mode: Completion Report Requirements",
+            "Final audit is enabled",
+            "Do not treat compilation or a happy-path check as sufficient",
+            "If a tool call is denied or blocked, do not immediately retry",
+        ] {
+            assert!(
+                CODING_SYSTEM_PROMPT.contains(required),
+                "missing: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn final_audit_prompt_requires_a_detailed_delivery_package() {
+        for required in [
+            "Overall summary:",
+            "Key deliverables or changes:",
+            "Evidence and provenance:",
+            "Verification:",
+            "Method or style constraints:",
+            "Remaining notes:",
+        ] {
+            assert!(
+                FINAL_AUDIT_COMPLETION_REPORT_PROMPT.contains(required),
+                "final audit prompt missing: {required}"
+            );
+        }
+    }
+}

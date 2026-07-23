@@ -3,7 +3,8 @@ use crate::libs::tsid::TsidGenerator;
 use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::runtime_observation::{
-    is_runtime_observation, RuntimeObservationLlmVisibility,
+    is_runtime_observation, runtime_observation_type, RuntimeObservationLlmVisibility,
+    RuntimeObservationType,
 };
 use crate::workflow::react::types::StepType;
 use serde_json::json;
@@ -468,6 +469,33 @@ impl ContextManager {
         metadata.and_then(|meta| meta.get("llm_content")).is_some()
     }
 
+    fn is_transient_runtime_reminder(message: &WorkflowMessage) -> bool {
+        if message.role == "tool" {
+            return false;
+        }
+
+        let typed_transient = matches!(
+            runtime_observation_type(message.metadata.as_ref()),
+            Some(
+                RuntimeObservationType::NoToolCall
+                    | RuntimeObservationType::InvalidToolCall
+                    | RuntimeObservationType::LoopDetected
+                    | RuntimeObservationType::StepBudgetWarning
+                    | RuntimeObservationType::GenericReminder
+            )
+        );
+        if typed_transient {
+            return true;
+        }
+
+        // Compatibility only: old builds persisted this request-local instruction as a
+        // user observation. It must never become completion state during context rebuild.
+        message.role == "user"
+            && message.message.contains("<SYSTEM_REMINDER>")
+            && message.message.contains("completion report draft")
+            && message.message.contains("complete_workflow")
+    }
+
     fn should_project_message_for_llm(
         message: &WorkflowMessage,
         idx: usize,
@@ -475,6 +503,10 @@ impl ContextManager {
     ) -> bool {
         if message.role == "system" {
             return true;
+        }
+
+        if Self::is_transient_runtime_reminder(message) {
+            return false;
         }
 
         if is_runtime_observation(message.metadata.as_ref())
@@ -1196,6 +1228,9 @@ impl ContextManager {
 
     pub fn get_messages_for_llm(&self) -> Vec<WorkflowMessage> {
         Self::to_workflow_messages(&self.ai_context_messages)
+            .into_iter()
+            .filter(|message| !Self::is_transient_runtime_reminder(message))
+            .collect()
     }
 
     /// Gets the initial user query for the session.
@@ -1275,6 +1310,9 @@ mod tests {
     use crate::libs::tsid::TsidGenerator;
     use crate::tools::TOOL_COMPLETE_WORKFLOW;
     use crate::workflow::react::constants::TASK_FINISHED;
+    use crate::workflow::react::runtime_observation::{
+        runtime_observation_metadata, RuntimeObservationType,
+    };
     use crate::workflow::react::types::{ExecutionContext, StepType};
     use serde_json::json;
     use std::sync::{Arc, RwLock};
@@ -3023,6 +3061,177 @@ mod tests {
         assert!(llm_contents
             .iter()
             .any(|content| content.contains("Follow-up clarification")));
+    }
+
+    #[tokio::test]
+    async fn context_rebuild_drops_persisted_completion_draft_reminders() {
+        let (_dir, store) = setup_store();
+        let session_id = "completion_draft_projection";
+        insert_workflow(&store, session_id);
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store,
+            20_000,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Original task".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add original task");
+        context
+            .add_message(
+                "assistant".to_string(),
+                "Completed the original task.\nVerified the focused checks passed.".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                2,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add completion report");
+
+        let reminder = "<SYSTEM_REMINDER>A completion report draft from your preceding response was captured. Call complete_workflow now.</SYSTEM_REMINDER>";
+        context
+            .add_message(
+                "user".to_string(),
+                reminder.to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                3,
+                false,
+                None,
+                Some(runtime_observation_metadata(
+                    RuntimeObservationType::NoToolCall,
+                    json!({ "llm_content": reminder }),
+                )),
+            )
+            .await
+            .expect("failed to add legacy persisted reminder");
+        context
+            .add_message(
+                "tool".to_string(),
+                TASK_FINISHED.to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                4,
+                false,
+                None,
+                Some(json!({ "tool_name": TOOL_COMPLETE_WORKFLOW })),
+            )
+            .await
+            .expect("failed to add successful completion");
+
+        context
+            .begin_new_task_segment_from_runtime_projection()
+            .await
+            .expect("failed to rebuild context");
+        context
+            .add_message(
+                "user".to_string(),
+                "Follow-up task".to_string(),
+                None,
+                None,
+                None,
+                5,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add follow-up task");
+
+        let llm_messages = context.get_messages_for_llm();
+        assert!(llm_messages
+            .iter()
+            .all(|message| !message.message.contains("completion report draft")));
+        assert!(llm_messages
+            .iter()
+            .any(|message| message.message.contains("Follow-up task")));
+    }
+
+    #[test]
+    fn context_projection_drops_untyped_legacy_completion_draft_reminder() {
+        let message = WorkflowMessage {
+            id: Some(1),
+            session_id: "session".to_string(),
+            role: "user".to_string(),
+            message: "<SYSTEM_REMINDER>A completion report draft was captured. Call complete_workflow now.</SYSTEM_REMINDER>".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: None,
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 1,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        assert!(ContextManager::is_transient_runtime_reminder(&message));
+    }
+
+    #[test]
+    fn llm_boundary_filters_transient_reminder_from_existing_context_cache() {
+        let (_dir, store) = setup_store();
+        let mut context = ContextManager::new(
+            "stale_context_cache".to_string(),
+            store,
+            20_000,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+        let reminder = "<SYSTEM_REMINDER>A completion report draft was captured. Call complete_workflow now.</SYSTEM_REMINDER>";
+        context.ai_context_messages.push(WorkflowAiContextMessage {
+            id: Some(1),
+            session_id: context.session_id.clone(),
+            segment_id: 5,
+            role: "user".to_string(),
+            message: reminder.to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            metadata: Some(runtime_observation_metadata(
+                RuntimeObservationType::NoToolCall,
+                json!({ "llm_content": reminder }),
+            )),
+            source_message_id: Some(41),
+            created_at: None,
+        });
+        context.ai_context_messages.push(WorkflowAiContextMessage {
+            id: Some(2),
+            session_id: context.session_id.clone(),
+            segment_id: 5,
+            role: "user".to_string(),
+            message: "Current task".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            metadata: None,
+            source_message_id: Some(42),
+            created_at: None,
+        });
+
+        let messages = context.get_messages_for_llm();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].message, "Current task");
     }
 
     #[tokio::test]

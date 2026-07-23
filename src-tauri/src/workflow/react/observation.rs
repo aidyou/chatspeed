@@ -191,7 +191,7 @@ impl ObservationReinforcer {
                                 )
                             });
                             if all_terminal && !todos.is_empty() {
-                                list_str.push_str("<SYSTEM_REMINDER>Todos are terminal. If you already wrote the completion report in the response containing this todo update, the runtime captured it as a pending draft; in the next response, emit no visible text and call parameter-free `complete_workflow({})`. Otherwise, if the requested work is complete, write the full user-visible report and call parameter-free `complete_workflow({})` atomically in the next response. Mention failed or data-missing todos. If required work remains, continue with the next concrete tool action instead; doing so invalidates any pending draft.</SYSTEM_REMINDER>\n");
+                                list_str.push_str("<SYSTEM_REMINDER>Todos are terminal. If you already wrote the completion report in the response containing this todo update, the runtime captured it as a pending draft; in the next response, emit no visible text or `summary` and call `complete_workflow({})`. Otherwise, if the requested work is complete, call `complete_workflow` with one complete non-empty `summary`. Mention failed or data-missing todos. If required work remains, continue with the next concrete tool action instead; doing so invalidates any pending draft.</SYSTEM_REMINDER>\n");
                             }
                         }
                         raw_res = list_str;
@@ -803,9 +803,10 @@ mod tests {
         assert!(reinforced
             .content
             .contains("runtime captured it as a pending draft"));
+        assert!(reinforced.content.contains("call `complete_workflow({})`"));
         assert!(reinforced
             .content
-            .contains("parameter-free `complete_workflow({})`"));
+            .contains("one complete non-empty `summary`"));
         assert!(!reinforced.content.contains("report_source"));
         assert!(reinforced.content.contains("failed or data-missing todos"));
     }

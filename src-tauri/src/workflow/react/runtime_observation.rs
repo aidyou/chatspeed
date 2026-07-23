@@ -121,12 +121,26 @@ pub fn render_runtime_observation_for_llm(
         .unwrap_or_else(|| message.message.clone());
 
     let observation_type = runtime_observation_type(metadata);
+    // Function-calling history must retain the result paired with every tool call.
+    let is_tool_result = message.role == "tool"
+        && metadata.is_some_and(|metadata| {
+            metadata
+                .get("tool_call_id")
+                .or_else(|| {
+                    metadata
+                        .get("data")
+                        .and_then(|data| data.get("tool_call_id"))
+                })
+                .and_then(Value::as_str)
+                .is_some_and(|tool_call_id| !tool_call_id.trim().is_empty())
+        });
     let visibility = metadata
         .and_then(|meta| meta.get("llm_visibility"))
         .and_then(|value| {
             serde_json::from_value::<RuntimeObservationLlmVisibility>(value.clone()).ok()
         });
-    let placement = if observation_type == Some(RuntimeObservationType::SubAgentCompletion)
+    let placement = if is_tool_result
+        || observation_type == Some(RuntimeObservationType::SubAgentCompletion)
         || is_legacy_sub_agent_completion_observation(message)
     {
         RuntimeObservationPlacement::Preserve
@@ -334,5 +348,40 @@ mod tests {
         let rendered = render_runtime_observation_for_llm(&message)
             .expect("legacy sub-agent completion should still render");
         assert_eq!(rendered.placement, RuntimeObservationPlacement::Preserve);
+    }
+
+    #[test]
+    fn deferred_loop_detected_tool_result_preserves_function_call_pairing() {
+        let mut metadata = runtime_observation_metadata(
+            RuntimeObservationType::LoopDetected,
+            json!({
+                "tool_call_id": "fc_complete_1",
+                "llm_content": "<SYSTEM_REMINDER>Use a non-empty summary.</SYSTEM_REMINDER>"
+            }),
+        );
+        metadata["tool_call_id"] = json!("fc_complete_1");
+        let message = WorkflowMessage {
+            id: None,
+            session_id: "session".to_string(),
+            role: "tool".to_string(),
+            message: "Loop detected".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(metadata),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 2,
+            is_error: true,
+            error_type: Some("LoopDetected".to_string()),
+            created_at: None,
+        };
+
+        let rendered = render_runtime_observation_for_llm(&message)
+            .expect("loop-detected tool result should render");
+        assert_eq!(rendered.placement, RuntimeObservationPlacement::Preserve);
+        assert!(rendered.content.contains("non-empty summary"));
     }
 }

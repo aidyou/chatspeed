@@ -347,6 +347,23 @@ Interactive waits include:
 
 This exists to prevent splitting a live or interactive protocol across transcript segments in ways that would orphan tool calls, approvals, user-input waits, or stop/recovery state from their structured authority.
 
+### 8.8 Intermediate state is not AI history
+
+Request-local and control-flow intermediate state must remain in memory and must not be
+persisted as transcript messages or AI-context messages. This includes temporary drafts,
+retry instructions, projection helpers, normalization artifacts, and one-shot runtime
+reminders.
+
+When an intermediate state must be durable for crash recovery, it may be persisted only in
+its canonical structured recovery form, such as snapshot state or a structured event. That
+persistence does not make the state part of AI-visible history.
+
+The AI projection may contain canonical user, assistant, and tool interaction records, but it
+must expose the resolved result of stateful processing rather than its storage or control-flow
+intermediates. Once an intermediate state resolves, subsequent AI context must expose only the
+canonical result. Intermediate data already persisted by older versions must be filtered at
+projection boundaries and must not be interpreted as current runtime state.
+
 ## 9. Recovery Law
 
 ### 9.1 Snapshot first, replay fallback
