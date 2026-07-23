@@ -140,14 +140,14 @@
                   <cs v-if="tool.isApproved" name="check" size="14px" class="approved-icon" />
                 </div>
                 <div
-                  v-if="!isMessageExpanded(tool)"
+                  v-if="!isToolMessageExpanded(tool)"
                   class="tool-line summary expandable"
                   @click="$emit('toggle-expand', tool.displayId)">
                   <span class="corner-icon">⎿</span>
-                  <span class="summary-text">{{ tool.toolDisplay?.summary }}</span>
+                  <span class="summary-text">{{ getToolSummaryText(tool) }}</span>
                   <span class="expand-hint">(click to expand)</span>
                 </div>
-                <div v-if="isMessageExpanded(tool)" class="tool-detail">
+                <div v-if="isToolMessageExpanded(tool)" class="tool-detail">
                   <pre
                     v-if="isBashToolCall(tool)"
                     class="bash-command"
@@ -483,13 +483,13 @@
               <!-- Hide summary when expanded -->
               <div
                 class="tool-line summary expandable"
-                v-if="!isMessageExpanded(message)"
+                v-if="!isToolMessageExpanded(message)"
                 @click="$emit('toggle-expand', message.displayId)">
                 <span class="corner-icon">⎿</span>
-                <span class="summary-text">{{ message.toolDisplay.summary }}</span>
+                <span class="summary-text">{{ getToolSummaryText(message) }}</span>
                 <span class="expand-hint">(click to expand)</span>
               </div>
-              <div v-if="isMessageExpanded(message)" class="tool-detail">
+              <div v-if="isToolMessageExpanded(message)" class="tool-detail">
                 <pre
                   v-if="isBashToolCall(message) && !isApprovalPending(message)"
                   class="bash-command"
@@ -619,16 +619,10 @@
                   @update:rejection-message="
                     value => setApprovalDraft(message.metadata?.tool_call_id, value)
                   "
-                  @approve="$emit('approve-tool', message.metadata?.tool_call_id)"
-                  @approve-all="$emit('approve-all-tool', message.metadata?.tool_call_id)"
+                  @approve="onApproveTool(message.metadata?.tool_call_id)"
+                  @approve-all="onApproveAllTool(message.metadata?.tool_call_id)"
                   @approve-all-pending="onApproveAllPending(message.metadata?.tool_call_id)"
-                  @reject="
-                    $emit(
-                      'reject-tool',
-                      message.metadata?.tool_call_id,
-                      getApprovalDraft(message.metadata?.tool_call_id)
-                    )
-                  " />
+                  @reject="onRejectTool(message.metadata?.tool_call_id)" />
               </div>
             </template>
           </div>
@@ -878,6 +872,7 @@ import hljs from 'highlight.js'
 import {
   isWorkflowCompletionMessage,
   isWorkflowMessagePendingApproval,
+  isWorkflowToolAwaitingExecution,
   shouldRenderSubAgentCard
 } from '@/composables/workflow/messageProjectionRules'
 import { normalizeShellCommandForDisplay } from '@/composables/workflow/toolDisplay'
@@ -1012,6 +1007,7 @@ const emit = defineEmits([
 const messagesRef = ref(null)
 const approvalDrafts = ref({})
 const askUserDrafts = ref({})
+const approvedSubmissionIds = new Set()
 const userMessageOverflowMap = ref({})
 const userMessageCollapsedHeightMap = ref({})
 const isRevealingEarlierTaskGroup = ref(false)
@@ -1953,6 +1949,21 @@ const isApprovalInFlight = message =>
 const isActiveApproval = message =>
   !!props.approvalLoading && props.activeApprovalId === message?.metadata?.tool_call_id
 
+const isToolAwaitingExecution = message => {
+  const toolCallId = String(message?.metadata?.tool_call_id || '').trim()
+  const hasApprovedSubmission =
+    approvedSubmissionIds.has(toolCallId) && isApprovalInFlight(message)
+  return isWorkflowToolAwaitingExecution(message, hasApprovedSubmission)
+}
+
+const isToolMessageExpanded = message =>
+  isApprovalPending(message) || props.isMessageExpanded(message)
+
+const getToolSummaryText = message =>
+  isToolAwaitingExecution(message)
+    ? t('workflow.awaitingExecution')
+    : message?.toolDisplay?.summary || ''
+
 const shouldShowApprovalDialog = message =>
   isApprovalPending(message) && (!isApprovalInFlight(message) || isActiveApproval(message))
 
@@ -1962,14 +1973,16 @@ const shouldShowRunningPlaceholder = message => {
   if (!toolCallId) return false
 
   const executionStatus = String(meta.execution_status || '').toLowerCase()
-  if (executionStatus !== 'approval_submitted' && executionStatus !== 'running') return false
+  if (!isToolAwaitingExecution(message) && executionStatus !== 'running') return false
   if (workflowStore.getToolStream(toolCallId).length > 0) return false
   if (props.shouldShowToolRawContent(message)) return false
   return true
 }
 
 const getRunningPlaceholderText = message =>
-  message?.toolDisplay?.summary || t('workflow.executing') || 'Executing...'
+  isToolAwaitingExecution(message)
+    ? t('workflow.awaitingExecution')
+    : message?.toolDisplay?.summary || t('workflow.executing')
 
 const shouldShowErrorAlert = message => {
   if (!message?.isError) return false
@@ -2088,7 +2101,25 @@ const setApprovalDraft = (toolCallId, value) => {
   }
 }
 
+const onApproveTool = toolCallId => {
+  if (toolCallId) approvedSubmissionIds.add(toolCallId)
+  emit('approve-tool', toolCallId)
+}
+
+const onApproveAllTool = toolCallId => {
+  if (toolCallId) approvedSubmissionIds.add(toolCallId)
+  emit('approve-all-tool', toolCallId)
+}
+
+const onRejectTool = toolCallId => {
+  approvedSubmissionIds.delete(toolCallId)
+  emit('reject-tool', toolCallId, getApprovalDraft(toolCallId))
+}
+
 const onApproveAllPending = toolCallId => {
+  for (const pendingToolCallId of getVisiblePendingApprovalIds()) {
+    approvedSubmissionIds.add(pendingToolCallId)
+  }
   emit('approve-all-pending', {
     startingToolCallId: toolCallId,
     orderedToolCallIds: getVisiblePendingApprovalIds()

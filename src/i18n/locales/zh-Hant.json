@@ -909,6 +909,7 @@
     "autoCompressDisabledMessage": "已關閉自動滾動壓縮",
     "autoCompressEnabledMessage": "已開啟自動滾動壓縮",
     "awaitingApproval": "等待使用者審批",
+    "awaitingExecution": "等待執行...",
     "awaitingUser": "等待使用者輸入",
     "statusNotifier": {
       "awaitingBashApproval": "等待命令審批：{command}",

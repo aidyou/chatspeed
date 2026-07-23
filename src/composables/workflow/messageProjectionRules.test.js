@@ -6,6 +6,7 @@ import {
   inferWorkflowToolExecutionStatus,
   isPendingApprovalEntryForTool,
   isWorkflowCompletionMessage,
+  isWorkflowToolAwaitingExecution,
   normalizeVisibleCompletionReport,
   shouldRenderSubAgentCard
 } from './messageProjectionRules.js'
@@ -57,6 +58,62 @@ assert.equal(
   ),
   'pending_approval',
   'pending approvals without an explicit execution status should still map to pending_approval'
+)
+
+assert.equal(
+  isWorkflowToolAwaitingExecution(
+    {
+      metadata: {
+        approval_status: 'approved',
+        execution_status: 'approval_submitted'
+      }
+    },
+    false
+  ),
+  true,
+  'approval-submitted tools must render as awaiting execution before tool_started'
+)
+
+assert.equal(
+  isWorkflowToolAwaitingExecution(
+    {
+      metadata: {
+        approval_status: 'pending',
+        execution_status: 'pending_approval'
+      }
+    },
+    true
+  ),
+  true,
+  'the local submission flag must cover the interval before approval metadata reconciliation'
+)
+
+assert.equal(
+  isWorkflowToolAwaitingExecution(
+    {
+      metadata: {
+        approval_status: 'approved',
+        execution_status: 'running'
+      }
+    },
+    true
+  ),
+  false,
+  'the backend running state must take precedence over a stale local submission flag'
+)
+
+assert.equal(
+  isWorkflowToolAwaitingExecution(
+    {
+      metadata: {
+        approval_status: 'rejected',
+        execution_status: 'rejected'
+      }
+    },
+    true
+  ),
+  false,
+  'terminal backend states must take precedence over a stale local submission flag'
 )
 
 assert.equal(

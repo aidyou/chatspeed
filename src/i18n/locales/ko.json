@@ -909,6 +909,7 @@
     "autoCompressDisabledMessage": "자동 롤업 압축을 껐습니다",
     "autoCompressEnabledMessage": "자동 롤업 압축을 켰습니다",
     "awaitingApproval": "사용자 승인 대기 중",
+    "awaitingExecution": "실행 대기 중...",
     "awaitingUser": "사용자 입력 대기",
     "statusNotifier": {
       "awaitingBashApproval": "명령 승인 대기: {command}",

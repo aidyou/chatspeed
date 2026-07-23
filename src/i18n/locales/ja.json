@@ -909,6 +909,7 @@
     "autoCompressDisabledMessage": "自動ロールアップ圧縮をオフにしました",
     "autoCompressEnabledMessage": "自動ロールアップ圧縮をオンにしました",
     "awaitingApproval": "ユーザーの承認待ち",
+    "awaitingExecution": "実行待ち...",
     "awaitingUser": "ユーザー入力待ち",
     "statusNotifier": {
       "awaitingBashApproval": "コマンドの承認待ち: {command}",

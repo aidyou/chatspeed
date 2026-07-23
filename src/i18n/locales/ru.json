@@ -909,6 +909,7 @@
     "autoCompressDisabledMessage": "Автосжатие rollup выключено",
     "autoCompressEnabledMessage": "Автосжатие rollup включено",
     "awaitingApproval": "Ожидает подтверждения",
+    "awaitingExecution": "Ожидание выполнения...",
     "awaitingUser": "Ожидание ввода",
     "statusNotifier": {
       "awaitingBashApproval": "Ожидается одобрение команды: {command}",

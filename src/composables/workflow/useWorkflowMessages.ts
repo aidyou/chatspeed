@@ -1209,8 +1209,9 @@ export function useWorkflowMessages(options = {}) {
 
   const isMessageExpanded = message => {
     // Only force expansion for 'Ask User' to ensure visibility of interaction points.
-    // Everything else (especially heavy Diffs) should be collapsed by default.
-    if (message.metadata?.approval_status === 'pending') return true
+    // Pending approval expansion is resolved in WorkflowMessageList from the
+    // backend-reconciled pending ID set so stale transcript metadata cannot
+    // leave an already approved tool expanded.
     if (getStructuredWorkflowToolName(message) === 'ask_user') return true
     return expandedMessages.value.has(message.displayId)
   }

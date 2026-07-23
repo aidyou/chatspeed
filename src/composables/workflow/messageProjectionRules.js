@@ -135,6 +135,22 @@ export const isWorkflowMessagePendingApproval = (message, pendingApprovalIds = [
 }
 
 /**
+ * Distinguish an approved tool waiting for its turn from a tool that has
+ * actually started. The local approved-submission flag covers the short interval
+ * before the backend approval event updates the message metadata.
+ */
+export const isWorkflowToolAwaitingExecution = (message, approvedSubmission = false) => {
+  const executionStatus = String(message?.metadata?.execution_status || '').toLowerCase()
+
+  if (executionStatus === 'approval_submitted') return true
+  if (['running', 'completed', 'failed', 'interrupted', 'rejected'].includes(executionStatus)) {
+    return false
+  }
+
+  return Boolean(approvedSubmission)
+}
+
+/**
  * Identify the completion tool exclusively from structured metadata.
  *
  * Bash commands can legitimately contain strings such as `FinishTask` or

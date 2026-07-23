@@ -909,6 +909,7 @@
     "autoCompressDisabledMessage": "Auto rollup compression disabled",
     "autoCompressEnabledMessage": "Auto rollup compression enabled",
     "awaitingApproval": "Awaiting approval",
+    "awaitingExecution": "Awaiting execution...",
     "awaitingUser": "Awaiting user input",
     "statusNotifier": {
       "awaitingBashApproval": "Awaiting command approval: {command}",
