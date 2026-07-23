@@ -206,10 +206,7 @@ const getToolCommand = tool => {
 
 const getToolLabel = tool => truncateText(tool?.title || tool?.summary || '', 72)
 
-const buildToolText = (key, params, fallback) => {
-  const translated = t(key, params)
-  return typeof translated === 'string' && translated !== key ? translated : fallback
-}
+const buildToolText = (key, params) => t(key, params)
 
 const buildToolState = tool => {
   if (!tool) return null
@@ -222,11 +219,7 @@ const buildToolState = tool => {
   if (tool.status === 'pending') {
     if (toolName === 'edit_file' && path) {
       return {
-        text: buildToolText(
-          'workflow.statusNotifier.awaitingEditApproval',
-          { path },
-          `等待修改审批: ${path}`
-        ),
+        text: buildToolText('workflow.statusNotifier.awaitingEditApproval', { path }),
         tone: 'warning',
         icon: getToolIcon(toolName, 'edit'),
         spinning: false
@@ -235,11 +228,7 @@ const buildToolState = tool => {
 
     if (toolName === 'write_file' && path) {
       return {
-        text: buildToolText(
-          'workflow.statusNotifier.awaitingCreateApproval',
-          { path },
-          `等待创建审批: ${path}`
-        ),
+        text: buildToolText('workflow.statusNotifier.awaitingCreateApproval', { path }),
         tone: 'warning',
         icon: getToolIcon(toolName, 'write_file'),
         spinning: false
@@ -248,11 +237,9 @@ const buildToolState = tool => {
 
     if (toolName === 'bash') {
       return {
-        text: buildToolText(
-          'workflow.statusNotifier.awaitingBashApproval',
-          { command: command || label },
-          `等待命令执行审批: ${command || label}`
-        ),
+        text: buildToolText('workflow.statusNotifier.awaitingBashApproval', {
+          command: command || label
+        }),
         tone: 'warning',
         icon: getToolIcon(toolName, 'bash'),
         spinning: false
@@ -265,7 +252,7 @@ const buildToolState = tool => {
   if (tool.status === 'approved_running') {
     if (toolName === 'edit_file' && path) {
       return {
-        text: buildToolText('workflow.statusNotifier.editingFile', { path }, `正在编辑文件: ${path}`),
+        text: buildToolText('workflow.statusNotifier.editingFile', { path }),
         tone: 'info',
         icon: getToolIcon(toolName, 'edit'),
         spinning: false
@@ -274,7 +261,7 @@ const buildToolState = tool => {
 
     if (toolName === 'write_file' && path) {
       return {
-        text: buildToolText('workflow.statusNotifier.creatingFile', { path }, `正在创建文件: ${path}`),
+        text: buildToolText('workflow.statusNotifier.creatingFile', { path }),
         tone: 'info',
         icon: getToolIcon(toolName, 'write_file'),
         spinning: false
@@ -283,11 +270,9 @@ const buildToolState = tool => {
 
     if (toolName === 'bash') {
       return {
-        text: buildToolText(
-          'workflow.statusNotifier.runningCommand',
-          { command: command || label },
-          `正在执行命令: ${command || label}`
-        ),
+        text: buildToolText('workflow.statusNotifier.runningCommand', {
+          command: command || label
+        }),
         tone: 'info',
         icon: getToolIcon(toolName, 'bash'),
         spinning: false
@@ -295,7 +280,7 @@ const buildToolState = tool => {
     }
 
     return {
-      text: buildToolText('workflow.statusNotifier.runningTool', { tool: label }, `正在执行工具: ${label}`),
+      text: buildToolText('workflow.statusNotifier.runningTool', { tool: label }),
       tone: 'info',
       icon: getToolIcon(toolName, 'tool'),
       spinning: false
@@ -305,11 +290,7 @@ const buildToolState = tool => {
   if (tool.status === 'final_success') {
     if (toolName === 'edit_file' && path) {
       return {
-        text: buildToolText(
-          'workflow.statusNotifier.fileEditedDone',
-          { path },
-          `文件编辑完成: ${path}`
-        ),
+        text: buildToolText('workflow.statusNotifier.fileEditedDone', { path }),
         tone: 'info',
         icon: getToolIcon(toolName, 'check-circle'),
         spinning: false
@@ -318,11 +299,7 @@ const buildToolState = tool => {
 
     if (toolName === 'write_file' && path) {
       return {
-        text: buildToolText(
-          'workflow.statusNotifier.fileCreatedDone',
-          { path },
-          `文件创建完成: ${path}`
-        ),
+        text: buildToolText('workflow.statusNotifier.fileCreatedDone', { path }),
         tone: 'info',
         icon: getToolIcon(toolName, 'check-circle'),
         spinning: false
@@ -331,11 +308,9 @@ const buildToolState = tool => {
 
     if (toolName === 'bash') {
       return {
-        text: buildToolText(
-          'workflow.statusNotifier.toolCompleted',
-          { tool: command || label },
-          `工具执行完成: ${command || label}`
-        ),
+        text: buildToolText('workflow.statusNotifier.toolCompleted', {
+          tool: command || label
+        }),
         tone: 'info',
         icon: getToolIcon(toolName, 'check-circle'),
         spinning: false
@@ -343,7 +318,7 @@ const buildToolState = tool => {
     }
 
     return {
-      text: buildToolText('workflow.statusNotifier.toolCompleted', { tool: label }, `工具执行完成: ${label}`),
+      text: buildToolText('workflow.statusNotifier.toolCompleted', { tool: label }),
       tone: 'info',
       icon: getToolIcon(toolName, 'check-circle'),
       spinning: false
@@ -371,10 +346,7 @@ const displayState = computed(() => {
 
   if (isWaitingForPlanApproval.value) {
     return {
-      text:
-        buildToolText('workflow.statusNotifier.awaitingPlanApproval', {}, '等待用户确认计划') ||
-        t('workflow.awaitingApproval') ||
-        'Awaiting approval',
+      text: buildToolText('workflow.statusNotifier.awaitingPlanApproval'),
       tone: 'warning',
       icon: 'skill-plan',
       spinning: false
@@ -383,7 +355,7 @@ const displayState = computed(() => {
 
   if (isWaitingForUser.value) {
     return {
-      text: buildToolText('workflow.statusNotifier.awaitingUserReply', {}, '等待用户回复'),
+      text: buildToolText('workflow.statusNotifier.awaitingUserReply'),
       tone: 'warning',
       icon: 'ask_user',
       spinning: false
@@ -398,7 +370,7 @@ const displayState = computed(() => {
 
   if (isWaitingForApproval.value) {
     return {
-      text: t('workflow.awaitingApproval') || 'Awaiting approval',
+      text: t('workflow.awaitingApproval'),
       tone: 'warning',
       icon: 'warning',
       spinning: false

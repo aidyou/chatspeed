@@ -1092,6 +1092,7 @@
     "thinkingExpanded": "思考過程",
     "thoughtCompleted": "思考完了",
     "todo": {
+      "batchTarget": "{count} 件",
       "create": "TODO を作成",
       "createBatch": "バッチ TODO を作成",
       "list": "TODO を一覧",

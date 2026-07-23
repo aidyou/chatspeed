@@ -1432,7 +1432,7 @@ export function useWorkflowMessages(options = {}) {
             icon: resolveWorkflowToolIcon(name, 'add'),
             toolType: 'tool-todo',
             action: t('workflow.todo.createBatch'),
-            target: `${tasks.length}项`
+            target: t('workflow.todo.batchTarget', { count: tasks.length })
           }
         }
         return {

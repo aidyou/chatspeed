@@ -1092,6 +1092,7 @@
     "thinkingExpanded": "Thinking Process",
     "thoughtCompleted": "Thought completed",
     "todo": {
+      "batchTarget": "{count} items",
       "create": "Create todo",
       "createBatch": "Create batch todos",
       "list": "List todos",

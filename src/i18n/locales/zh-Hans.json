@@ -1092,6 +1092,7 @@
     "thinkingExpanded": "思考过程",
     "thoughtCompleted": "已思考",
     "todo": {
+      "batchTarget": "{count} 项",
       "create": "创建待办",
       "createBatch": "批量创建待办",
       "list": "查看待办列表",

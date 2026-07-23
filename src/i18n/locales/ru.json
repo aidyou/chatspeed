@@ -1092,6 +1092,7 @@
     "thinkingExpanded": "Ход рассуждений",
     "thoughtCompleted": "Мысль завершена",
     "todo": {
+      "batchTarget": "{count} элементов",
       "create": "Создать задачу",
       "createBatch": "Создать пакет задач",
       "list": "Список задач",

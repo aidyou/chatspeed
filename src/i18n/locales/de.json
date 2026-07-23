@@ -1092,6 +1092,7 @@
     "thinkingExpanded": "Denkprozess",
     "thoughtCompleted": "Gedanke abgeschlossen",
     "todo": {
+      "batchTarget": "{count} Elemente",
       "create": "To-do erstellen",
       "createBatch": "To-dos stapelweise erstellen",
       "list": "To-do-Liste anzeigen",

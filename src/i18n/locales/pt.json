@@ -1092,6 +1092,7 @@
     "thinkingExpanded": "Processo de raciocínio",
     "thoughtCompleted": "Pensamento concluído",
     "todo": {
+      "batchTarget": "{count} itens",
       "create": "Criar tarefa",
       "createBatch": "Criar tarefas em lote",
       "list": "Listar tarefas",

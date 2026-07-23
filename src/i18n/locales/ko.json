@@ -1092,6 +1092,7 @@
     "thinkingExpanded": "사고 과정",
     "thoughtCompleted": "사고 완료",
     "todo": {
+      "batchTarget": "{count}개 항목",
       "create": "할 일 생성",
       "createBatch": "할 일 일괄 생성",
       "list": "할 일 목록",
