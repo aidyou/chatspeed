@@ -870,6 +870,7 @@ import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
 import hljs from 'highlight.js'
 import {
+  excludeLeadingManualClearContextMarkers,
   isWorkflowCompletionMessage,
   isWorkflowMessagePendingApproval,
   isWorkflowToolAwaitingExecution,
@@ -1876,11 +1877,13 @@ const collapseToolMessageGroups = messages => {
 }
 
 const visibleMessages = computed(() =>
-  collapseToolMessageGroups(
-    collapseAssistantCompletionPairs(
-      collapseRepeatedFinishTaskErrors(
-        props.messages.filter(
-          message => !isHiddenSystemObservation(message) || isManualClearContextMessage(message)
+  excludeLeadingManualClearContextMarkers(
+    collapseToolMessageGroups(
+      collapseAssistantCompletionPairs(
+        collapseRepeatedFinishTaskErrors(
+          props.messages.filter(
+            message => !isHiddenSystemObservation(message) || isManualClearContextMessage(message)
+          )
         )
       )
     )

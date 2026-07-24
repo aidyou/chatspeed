@@ -77,6 +77,24 @@ assert.match(
   /isWorkflowMessagePendingApproval\(message, pendingApprovalIdSet\.value\)/
 )
 
+const workflowView = readProjectFile('src/views/Workflow.vue')
+const workflowMessages = readProjectFile('src/composables/workflow/useWorkflowMessages.ts')
+assert.doesNotMatch(
+  workflowMessages,
+  /visibleTaskGroupCount\.value\s*=\s*DEFAULT_VISIBLE_TASK_GROUPS/,
+  'normal task transitions must preserve the history window explicitly expanded by the user'
+)
+const clearContextProjection = sourceSection(
+  workflowView,
+  'const onClearContextFrame = async () => {',
+  '// Wrapper for skill select that properly handles send'
+)
+assert.ok(
+  clearContextProjection.indexOf('visibleTaskGroupCount.value = 1') <
+    clearContextProjection.indexOf('workflowStore.addMessage({'),
+  'clear-context success must collapse expanded history before inserting the marker projection'
+)
+
 const approvalDialog = readProjectFile('src/components/workflow/ApprovalDialog.vue')
 assert.match(approvalDialog, /toolName: String/)
 assert.doesNotMatch(

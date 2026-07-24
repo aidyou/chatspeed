@@ -26,6 +26,259 @@ export const resolveWorkflowPhaseFromPlanningMode = (planningMode, configuredPha
     : 'standard'
 }
 
+export const isWorkflowManualClearContextMessage = message =>
+  message?.role === 'system' &&
+  message?.messageKind === 'summary' &&
+  message?.messageSubtype === 'manual_clear_context'
+
+const hasSameWorkflowMessageIdentity = (left, right) => {
+  const leftId = left?.id ?? left?.displayId
+  const rightId = right?.id ?? right?.displayId
+  if (leftId !== null && leftId !== undefined && rightId !== null && rightId !== undefined) {
+    return String(leftId) === String(rightId)
+  }
+  return left === right
+}
+
+/**
+ * Keep manual clear-context dividers on the hidden side of the display boundary.
+ * The marker starts a new context segment, but visually belongs to the task group
+ * before it so opening a new task does not leave an orphan divider above the
+ * active task.
+ */
+export const mergeManualClearContextMarkersIntoPreviousGroups = (
+  groups = [],
+  buildGroupId = groupMessages => groupMessages[0]?.id || ''
+) => {
+  const mergedGroups = []
+
+  for (const group of groups) {
+    const messages = group?.messages || []
+    let markerCount = 0
+    while (
+      markerCount < messages.length &&
+      isWorkflowManualClearContextMessage(messages[markerCount])
+    ) {
+      markerCount += 1
+    }
+
+    if (!markerCount || !mergedGroups.length) {
+      mergedGroups.push(group)
+      continue
+    }
+
+    const markers = messages.slice(0, markerCount)
+    const previousGroup = mergedGroups[mergedGroups.length - 1]
+    const previousMessages = previousGroup.messages || []
+    const newMarkers = markers.filter(
+      marker =>
+        !previousMessages.some(previousMessage =>
+          hasSameWorkflowMessageIdentity(previousMessage, marker)
+        )
+    )
+    const nextPreviousMessages = [...previousMessages, ...newMarkers]
+    mergedGroups[mergedGroups.length - 1] = {
+      ...previousGroup,
+      id: buildGroupId(nextPreviousMessages),
+      messages: nextPreviousMessages
+    }
+
+    const remainingMessages = messages.slice(markerCount)
+    if (remainingMessages.length) {
+      mergedGroups.push({
+        ...group,
+        id: buildGroupId(remainingMessages),
+        messages: remainingMessages
+      })
+    }
+  }
+
+  return mergedGroups
+}
+
+export const excludeManualClearContextMarkers = (messages = []) =>
+  messages.filter(message => !isWorkflowManualClearContextMessage(message))
+
+export const excludeLeadingManualClearContextMarkers = (messages = []) => {
+  const firstContentIndex = messages.findIndex(
+    message => !isWorkflowManualClearContextMessage(message)
+  )
+  if (firstContentIndex < 0) return []
+
+  return messages.filter(
+    (message, index) =>
+      !isWorkflowManualClearContextMessage(message) || index > firstContentIndex
+  )
+}
+
+export const hasOpenWorkflowTaskFrame = (completedGroups = [], activeMessages = []) => {
+  if (activeMessages.length) return true
+  const latestCompletedMessages = completedGroups[completedGroups.length - 1]?.messages || []
+  return isWorkflowManualClearContextMessage(
+    latestCompletedMessages[latestCompletedMessages.length - 1]
+  )
+}
+
+export const selectVisibleWorkflowTaskGroups = (
+  completedGroups = [],
+  activeGroup = null,
+  visibleGroupCount = 1,
+  hasOpenTaskFrame = Boolean(activeGroup)
+) => {
+  const completedLimit = Math.max(0, visibleGroupCount - (hasOpenTaskFrame ? 1 : 0))
+  const visibleCompletedGroups = completedLimit
+    ? completedGroups.slice(-completedLimit)
+    : []
+  return activeGroup ? [...visibleCompletedGroups, activeGroup] : visibleCompletedGroups
+}
+
+export const reconcileWorkflowTaskWindowState = ({
+  messages = [],
+  workflowId = null,
+  state,
+  acceptedCompletionIds,
+  isAcceptedCompletionMessage,
+  buildTaskGroups,
+  buildGroupId,
+  getMessageIdentity,
+  getMessageToolCallId
+}) => {
+  const emptyState = {
+    workflowId,
+    initialized: false,
+    completedGroups: [],
+    activeMessages: [],
+    lastCompletionIndex: -1,
+    lastCompletionId: '',
+    lastCompletionToolCallId: ''
+  }
+
+  if (!messages.length) return emptyState
+
+  const initialize = () => {
+    acceptedCompletionIds.clear()
+    for (const message of messages) {
+      if (!isAcceptedCompletionMessage(message)) continue
+      const toolCallId = getMessageToolCallId(message)
+      if (toolCallId) acceptedCompletionIds.add(toolCallId)
+    }
+
+    const groups = buildTaskGroups(messages, true)
+    const completedGroups = groups.filter(group => group.isCompleted)
+    const activeGroup = groups.find(group => !group.isCompleted)
+    let lastCompletionIndex = -1
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (
+        acceptedCompletionIds.has(getMessageToolCallId(message)) ||
+        isAcceptedCompletionMessage(message)
+      ) {
+        lastCompletionIndex = index
+        break
+      }
+    }
+
+    return {
+      workflowId,
+      initialized: true,
+      completedGroups,
+      activeMessages: activeGroup?.messages || [],
+      lastCompletionIndex,
+      lastCompletionId:
+        lastCompletionIndex >= 0
+          ? getMessageIdentity(messages[lastCompletionIndex], lastCompletionIndex)
+          : '',
+      lastCompletionToolCallId:
+        lastCompletionIndex >= 0 ? getMessageToolCallId(messages[lastCompletionIndex]) : ''
+    }
+  }
+
+  if (!state?.initialized || state.workflowId !== workflowId) return initialize()
+
+  const findCompletionBoundaryIndex = () => {
+    if (state.lastCompletionIndex < 0) return -1
+
+    const previousToolCallId = String(state.lastCompletionToolCallId || '')
+    if (previousToolCallId) {
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (getMessageToolCallId(messages[index]) === previousToolCallId) return index
+      }
+    }
+
+    const previousIdentity = String(state.lastCompletionId || '')
+    if (!previousIdentity) return -1
+
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (getMessageIdentity(messages[index], index) === previousIdentity) return index
+    }
+
+    return -1
+  }
+
+  let lastCompletionIndex = state.lastCompletionIndex
+  let lastCompletionId = state.lastCompletionId
+  let lastCompletionToolCallId = state.lastCompletionToolCallId
+
+  if (lastCompletionIndex >= 0) {
+    const boundaryMessage = messages[lastCompletionIndex]
+    if (
+      !boundaryMessage ||
+      getMessageIdentity(boundaryMessage, lastCompletionIndex) !== lastCompletionId
+    ) {
+      const relocatedBoundaryIndex = findCompletionBoundaryIndex()
+      if (relocatedBoundaryIndex < 0 || relocatedBoundaryIndex !== lastCompletionIndex) {
+        return initialize()
+      }
+
+      lastCompletionIndex = relocatedBoundaryIndex
+      lastCompletionId = getMessageIdentity(messages[relocatedBoundaryIndex], relocatedBoundaryIndex)
+      lastCompletionToolCallId = getMessageToolCallId(messages[relocatedBoundaryIndex])
+    }
+  }
+
+  const activeStartIndex = lastCompletionIndex + 1
+  const activeTail = messages.slice(activeStartIndex)
+  const tailGroups = buildTaskGroups(activeTail)
+  const newlyCompletedGroups = tailGroups.filter(group => group.isCompleted)
+  const reconciledGroups = mergeManualClearContextMarkersIntoPreviousGroups(
+    [...state.completedGroups, ...tailGroups],
+    buildGroupId
+  )
+  const completedGroups = reconciledGroups.filter(group => group.isCompleted)
+  const activeGroup = reconciledGroups.find(group => !group.isCompleted)
+
+  if (!newlyCompletedGroups.length) {
+    return {
+      ...state,
+      workflowId,
+      initialized: true,
+      completedGroups,
+      activeMessages: activeGroup?.messages || [],
+      lastCompletionIndex,
+      lastCompletionId,
+      lastCompletionToolCallId
+    }
+  }
+
+  let nextLastCompletionIndex = lastCompletionIndex
+  for (let index = activeStartIndex; index < messages.length; index += 1) {
+    if (acceptedCompletionIds.has(getMessageToolCallId(messages[index]))) {
+      nextLastCompletionIndex = index
+    }
+  }
+
+  return {
+    workflowId,
+    initialized: true,
+    completedGroups,
+    activeMessages: activeGroup?.messages || [],
+    lastCompletionIndex: nextLastCompletionIndex,
+    lastCompletionId: getMessageIdentity(messages[nextLastCompletionIndex], nextLastCompletionIndex),
+    lastCompletionToolCallId: getMessageToolCallId(messages[nextLastCompletionIndex])
+  }
+}
+
 export const collectSubAgentCompletions = (visibleGroups = [], progressValues = []) => {
   const completions = new Map()
 

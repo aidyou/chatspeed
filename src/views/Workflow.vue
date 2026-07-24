@@ -380,7 +380,7 @@ const planningMode = ref(false)
 const autoCompressEnabled = ref(true)
 const imageAttachments = ref([])
 const defaultImageRecognitionPrompt = ref('')
-const visibleCompletedTaskGroupCount = ref(2)
+const visibleTaskGroupCount = ref(1)
 const automationDrawerVisible = ref(false)
 const workflowSidebarActiveTab = ref('history')
 const lastHistoryWorkflowId = ref(null)
@@ -548,6 +548,7 @@ const {
   expandedReasonings,
   enhancedMessages,
   hiddenCompletedTaskGroupCount,
+  revealLoadedEarlierTaskGroup,
   lastAssistantMessage,
   toggleMessageExpand,
   isMessageExpanded,
@@ -559,14 +560,16 @@ const {
   getParsedMessage,
   shouldShowToolRawContent
 } = useWorkflowMessages({
-  visibleCompletedTaskGroupCount
+  visibleTaskGroupCount
 })
 
 const revealEarlierTaskGroup = async done => {
   try {
+    if (revealLoadedEarlierTaskGroup()) return
+
     const loaded = await workflowStore.loadEarlierTaskGroup()
     if (loaded) {
-      visibleCompletedTaskGroupCount.value += 1
+      visibleTaskGroupCount.value += 1
     }
   } finally {
     done?.()
@@ -1468,6 +1471,8 @@ const onClearContextFrame = async () => {
       return
     }
 
+    visibleTaskGroupCount.value = 1
+
     const markerMessage = result?.markerMessage || null
     if (markerMessage) {
       workflowStore.addMessage({
@@ -1477,7 +1482,7 @@ const onClearContextFrame = async () => {
     }
 
     await workflowStore.loadMessages(currentWorkflowId.value)
-    visibleCompletedTaskGroupCount.value = 2
+    visibleTaskGroupCount.value = 1
 
     if (workflowStore.currentWorkflow?.executionContext) {
       workflowStore.currentWorkflow.executionContext.currentSegmentId = result?.segmentId || null
@@ -2061,7 +2066,7 @@ watch(
 watch(
   () => currentWorkflowId.value,
   () => {
-    visibleCompletedTaskGroupCount.value = 2
+    visibleTaskGroupCount.value = 1
     clearImageAttachments()
   }
 )
