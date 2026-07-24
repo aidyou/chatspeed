@@ -1,5 +1,5 @@
 use crate::libs::tsid::TsidGenerator;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
@@ -14,6 +14,92 @@ const TEMP_FILE_CREATE_ATTEMPTS: usize = 4;
 pub struct PersistedToolOutput {
     pub path: String,
     pub file_size_bytes: u64,
+}
+
+pub(crate) struct ToolOutputWriter {
+    file: Option<File>,
+    physical_path: PathBuf,
+}
+
+impl ToolOutputWriter {
+    pub(crate) fn create() -> io::Result<Self> {
+        let generator = TsidGenerator::new(1).map_err(io::Error::other)?;
+
+        for _ in 0..TEMP_FILE_CREATE_ATTEMPTS {
+            let tsid = generator.generate().map_err(io::Error::other)?;
+            let physical_path = std::env::temp_dir().join(tsid);
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+
+            match options.open(&physical_path) {
+                Ok(file) => {
+                    return Ok(Self {
+                        file: Some(file),
+                        physical_path,
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "failed to allocate a unique temporary output file",
+        ))
+    }
+
+    pub(crate) fn append(&mut self, content: &str) -> io::Result<()> {
+        let Some(file) = self.file.as_mut() else {
+            return Err(io::Error::other("temporary output writer is finalized"));
+        };
+        if let Err(error) = file.write_all(content.as_bytes()) {
+            self.cleanup();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finalize(mut self) -> io::Result<PersistedToolOutput> {
+        let Some(mut file) = self.file.take() else {
+            return Err(io::Error::other("temporary output writer is finalized"));
+        };
+        if let Err(error) = file.flush() {
+            drop(file);
+            self.cleanup();
+            return Err(error);
+        }
+        let file_size_bytes = match file.metadata() {
+            Ok(metadata) => metadata.len(),
+            Err(error) => {
+                drop(file);
+                self.cleanup();
+                return Err(error);
+            }
+        };
+        drop(file);
+        let path = display_ai_temp_path(&self.physical_path)
+            .unwrap_or_else(|| self.physical_path.to_string_lossy().to_string());
+        Ok(PersistedToolOutput {
+            path,
+            file_size_bytes,
+        })
+    }
+
+    fn cleanup(&mut self) {
+        self.file.take();
+        let _ = fs::remove_file(&self.physical_path);
+    }
+}
+
+impl Drop for ToolOutputWriter {
+    fn drop(&mut self) {
+        if self.file.is_some() {
+            self.cleanup();
+        }
+    }
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
@@ -80,44 +166,9 @@ pub fn display_ai_temp_path(path: &Path) -> Option<String> {
 }
 
 pub fn persist_tool_output(content: &str) -> io::Result<PersistedToolOutput> {
-    let generator = TsidGenerator::new(1).map_err(io::Error::other)?;
-
-    for _ in 0..TEMP_FILE_CREATE_ATTEMPTS {
-        let tsid = generator.generate().map_err(io::Error::other)?;
-        let physical_path = std::env::temp_dir().join(tsid);
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-
-        let mut file = match options.open(&physical_path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        };
-
-        if let Err(error) = file
-            .write_all(content.as_bytes())
-            .and_then(|_| file.flush())
-        {
-            drop(file);
-            let _ = fs::remove_file(&physical_path);
-            return Err(error);
-        }
-
-        let file_size_bytes = file.metadata()?.len();
-        let path = display_ai_temp_path(&physical_path)
-            .unwrap_or_else(|| physical_path.to_string_lossy().to_string());
-        return Ok(PersistedToolOutput {
-            path,
-            file_size_bytes,
-        });
-    }
-
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "failed to allocate a unique temporary output file",
-    ))
+    let mut writer = ToolOutputWriter::create()?;
+    writer.append(content)?;
+    writer.finalize()
 }
 
 pub fn persist_large_tool_output(content: &str) -> io::Result<Option<PersistedToolOutput>> {
@@ -146,6 +197,44 @@ mod tests {
             display_ai_temp_path(&std::env::temp_dir().join("example.txt")).as_deref(),
             Some("/tmp/example.txt")
         );
+    }
+
+    #[test]
+    fn incremental_writer_preserves_append_order_and_size() {
+        let mut writer = ToolOutputWriter::create().unwrap();
+        writer.append("stage one\n").unwrap();
+        writer.append("stage two\n").unwrap();
+        let persisted = writer.finalize().unwrap();
+        let physical_path = resolve_ai_temp_path(Path::new(&persisted.path));
+
+        assert!(persisted.path.starts_with("/tmp/"));
+        assert_eq!(
+            fs::read_to_string(&physical_path).unwrap(),
+            "stage one\nstage two\n"
+        );
+        assert_eq!(persisted.file_size_bytes, 20);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&physical_path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        fs::remove_file(physical_path).unwrap();
+    }
+
+    #[test]
+    fn dropping_unfinalized_writer_removes_the_file() {
+        let physical_path = {
+            let mut writer = ToolOutputWriter::create().unwrap();
+            writer.append("partial").unwrap();
+            writer.physical_path.clone()
+        };
+
+        assert!(!physical_path.exists());
     }
 
     #[test]

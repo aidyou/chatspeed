@@ -23,6 +23,10 @@ impl CommandOutputReducer for GitReducer {
         sole_git_command_tokens(normalized_command).is_some()
     }
 
+    fn supports(&self, normalized_command: &str) -> bool {
+        git_command(normalized_command).is_some()
+    }
+
     fn reduce(&self, normalized_command: &str, exit_code: i32, raw_content: &str) -> String {
         if exit_code != 0 {
             return raw_content.to_string();
@@ -87,12 +91,41 @@ fn git_subcommand(tokens: &[String]) -> Option<&str> {
 
     let mut index = 1;
     while let Some(token) = tokens.get(index) {
-        if !token.starts_with('-') {
-            return Some(token);
-        }
-        index += 1;
-        if matches!(token.as_str(), "-C" | "-c" | "--git-dir" | "--work-tree") {
-            index += 1;
+        match token.as_str() {
+            "--no-pager"
+            | "--no-replace-objects"
+            | "--bare"
+            | "--no-optional-locks"
+            | "--literal-pathspecs"
+            | "--glob-pathspecs"
+            | "--noglob-pathspecs"
+            | "--icase-pathspecs" => index += 1,
+            "-C" | "--git-dir" | "--work-tree" => {
+                tokens.get(index + 1)?;
+                index += 2;
+            }
+            "-c" => {
+                let config = tokens.get(index + 1)?;
+                let (name, value) = config.split_once('=')?;
+                if name.is_empty() || value.is_empty() {
+                    return None;
+                }
+                index += 2;
+            }
+            _ if token.starts_with("-C") && token.len() > 2 => index += 1,
+            _ if token.starts_with("--git-dir=") && token.len() > "--git-dir=".len() => index += 1,
+            _ if token.starts_with("--work-tree=") && token.len() > "--work-tree=".len() => {
+                index += 1
+            }
+            _ if token.starts_with("-c") && token.len() > 2 => {
+                let (name, value) = token[2..].split_once('=')?;
+                if name.is_empty() || value.is_empty() {
+                    return None;
+                }
+                index += 1;
+            }
+            _ if token.starts_with('-') => return None,
+            _ => return Some(token),
         }
     }
     None

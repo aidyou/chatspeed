@@ -1,5 +1,6 @@
 use crate::libs::ai_temp::{
-    persist_large_tool_output, persist_tool_output, LARGE_TOOL_OUTPUT_CHAR_LIMIT,
+    persist_large_tool_output, persist_tool_output, PersistedToolOutput,
+    LARGE_TOOL_OUTPUT_CHAR_LIMIT,
 };
 use crate::tools::helper::{
     contains_unquoted_shell_operator, detect_json_stdout, is_git_log_command,
@@ -14,13 +15,33 @@ const GENERIC_LLM_MAX_LINES: usize = 40;
 const EXPLICIT_SHAPED_LLM_MAX_LINES: usize = 240;
 const EXPLICIT_SHAPED_LLM_MAX_CHARS: usize = 20_000;
 const KSP_LLM_PRESERVE_CHARS: usize = 15_000;
+const COMPOUND_LLM_MAX_CHARS: usize = 20_000;
 
-pub(crate) fn build_shell_tool_result(
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedShellOutput {
+    pub raw_content: String,
+    pub display_content: String,
+    pub llm_content: String,
+    pub output_was_reduced: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CompoundShellStageResult {
+    pub index: usize,
+    pub command: String,
+    pub cwd: String,
+    pub executed: bool,
+    pub exit_code: Option<i32>,
+    pub skip_reason: Option<String>,
+    pub output: Option<PreparedShellOutput>,
+}
+
+pub(crate) fn prepare_shell_output(
     command_str: &str,
     exit_code: i32,
     stdout: &str,
     stderr: &str,
-) -> ToolCallResult {
+) -> PreparedShellOutput {
     let (normalized_stdout, normalized_stderr) =
         normalize_shell_output_streams(command_str, exit_code, stdout, stderr);
     let raw_content = format_shell_output(exit_code, &normalized_stdout, &normalized_stderr);
@@ -62,10 +83,26 @@ pub(crate) fn build_shell_tool_result(
             let output_was_reduced = llm_content != raw_content;
             (display_content, llm_content, output_was_reduced)
         };
-    let persisted_output = if output_was_reduced {
-        persist_tool_output(&raw_content).map(Some)
+
+    PreparedShellOutput {
+        raw_content,
+        display_content,
+        llm_content,
+        output_was_reduced,
+    }
+}
+
+pub(crate) fn build_shell_tool_result(
+    command_str: &str,
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+) -> ToolCallResult {
+    let prepared = prepare_shell_output(command_str, exit_code, stdout, stderr);
+    let persisted_output = if prepared.output_was_reduced {
+        persist_tool_output(&prepared.raw_content).map(Some)
     } else {
-        persist_large_tool_output(&raw_content)
+        persist_large_tool_output(&prepared.raw_content)
     };
     let persisted_output = match persisted_output {
         Ok(persisted) => persisted,
@@ -77,15 +114,65 @@ pub(crate) fn build_shell_tool_result(
 
     let mut structured_content = json!({
         "exit_code": exit_code,
-        "llm_content": llm_content,
+        "llm_content": prepared.llm_content,
     });
     if let Some(persisted) = persisted_output {
         structured_content["persisted_output"] = json!({
             "path": persisted.path,
             "file_size_bytes": persisted.file_size_bytes,
-            "reason": if output_was_reduced { "reduced" } else { "large" },
+            "reason": if prepared.output_was_reduced { "reduced" } else { "large" },
         });
     }
+
+    ToolCallResult::success(Some(prepared.display_content), Some(structured_content))
+}
+
+pub(crate) fn build_compound_shell_tool_result(
+    exit_code: i32,
+    stages: &[CompoundShellStageResult],
+    persisted: PersistedToolOutput,
+) -> ToolCallResult {
+    let mut display_sections = Vec::new();
+    let mut llm_sections = Vec::new();
+    let mut stage_metadata = Vec::with_capacity(stages.len());
+
+    for stage in stages {
+        let title = format!("Stage {}: {}", stage.index, stage.command);
+        if let Some(output) = stage.output.as_ref() {
+            display_sections.push(format!("{title}\n{}", output.display_content));
+            llm_sections.push(format!("{title}\n{}", output.llm_content));
+        } else if !stage.executed {
+            display_sections.push(format!(
+                "{title}\nSkipped: {}",
+                stage.skip_reason.as_deref().unwrap_or("not executed")
+            ));
+            llm_sections.push(format!(
+                "{title}\nSkipped: {}",
+                stage.skip_reason.as_deref().unwrap_or("not executed")
+            ));
+        }
+        stage_metadata.push(json!({
+            "index": stage.index,
+            "command": stage.command,
+            "cwd": stage.cwd,
+            "executed": stage.executed,
+            "exit_code": stage.exit_code,
+            "skip_reason": stage.skip_reason,
+        }));
+    }
+
+    let display_content = truncate_with_marker(&display_sections.join("\n\n"), MAX_DISPLAY_CHARS);
+    let llm_content = truncate_with_marker(&llm_sections.join("\n\n"), COMPOUND_LLM_MAX_CHARS);
+    let structured_content = json!({
+        "exit_code": exit_code,
+        "llm_content": llm_content,
+        "persisted_output": {
+            "path": persisted.path,
+            "file_size_bytes": persisted.file_size_bytes,
+            "reason": "compound",
+        },
+        "stages": stage_metadata,
+    });
 
     ToolCallResult::success(Some(display_content), Some(structured_content))
 }
@@ -386,12 +473,114 @@ fn truncate_with_marker(content: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_shell_tool_result, normalize_shell_output_streams,
-        should_render_stderr_line_as_stdout, strip_ansi_escape_sequences,
+        build_compound_shell_tool_result, build_shell_tool_result, normalize_shell_output_streams,
+        prepare_shell_output, should_render_stderr_line_as_stdout, strip_ansi_escape_sequences,
+        CompoundShellStageResult,
     };
-    use crate::libs::ai_temp::{resolve_ai_temp_path, LARGE_TOOL_OUTPUT_CHAR_LIMIT};
+    use crate::libs::ai_temp::{
+        resolve_ai_temp_path, PersistedToolOutput, LARGE_TOOL_OUTPUT_CHAR_LIMIT,
+    };
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    fn compound_builder_preserves_stage_order_and_metadata() {
+        let stages = vec![
+            CompoundShellStageResult {
+                index: 1,
+                command: "python script.py".to_string(),
+                cwd: "/workspace".to_string(),
+                executed: true,
+                exit_code: Some(0),
+                skip_reason: None,
+                output: Some(prepare_shell_output(
+                    "python script.py",
+                    0,
+                    "plain output\n",
+                    "",
+                )),
+            },
+            CompoundShellStageResult {
+                index: 2,
+                command: "git status".to_string(),
+                cwd: "/workspace".to_string(),
+                executed: true,
+                exit_code: Some(1),
+                skip_reason: None,
+                output: Some(prepare_shell_output("git status", 1, "", "fatal error\n")),
+            },
+            CompoundShellStageResult {
+                index: 3,
+                command: "diff a b".to_string(),
+                cwd: "/workspace".to_string(),
+                executed: false,
+                exit_code: None,
+                skip_reason: Some("previous stage failed".to_string()),
+                output: None,
+            },
+        ];
+        let result = build_compound_shell_tool_result(
+            1,
+            &stages,
+            PersistedToolOutput {
+                path: "/tmp/test-compound".to_string(),
+                file_size_bytes: 123,
+            },
+        );
+        let content = result.content.expect("display content missing");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+
+        assert!(content.find("Stage 1").unwrap() < content.find("Stage 2").unwrap());
+        assert!(content.find("Stage 2").unwrap() < content.find("Stage 3").unwrap());
+        assert_eq!(structured["exit_code"].as_i64(), Some(1));
+        assert_eq!(structured["stages"][0]["command"], "python script.py");
+        assert_eq!(structured["stages"][1]["exit_code"].as_i64(), Some(1));
+        assert_eq!(structured["stages"][2]["executed"].as_bool(), Some(false));
+        assert_eq!(
+            structured["stages"][2]["skip_reason"].as_str(),
+            Some("previous stage failed")
+        );
+        assert_eq!(structured["persisted_output"]["reason"], "compound");
+    }
+
+    #[test]
+    fn compound_builder_applies_a_global_llm_budget() {
+        let stages = (1..=3)
+            .map(|index| CompoundShellStageResult {
+                index,
+                command: format!("python stage{index}.py"),
+                cwd: "/workspace".to_string(),
+                executed: true,
+                exit_code: Some(0),
+                skip_reason: None,
+                output: Some(prepare_shell_output(
+                    "python script.py",
+                    0,
+                    &"x".repeat(10_000),
+                    "",
+                )),
+            })
+            .collect::<Vec<_>>();
+        let result = build_compound_shell_tool_result(
+            0,
+            &stages,
+            PersistedToolOutput {
+                path: "/tmp/test-compound".to_string(),
+                file_size_bytes: 30_000,
+            },
+        );
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm content missing");
+
+        assert!(llm_content.len() <= 20_020);
+        assert!(llm_content.ends_with("[Truncated]"));
+    }
 
     #[test]
     fn cargo_check_without_args_uses_tail_for_llm_content() {

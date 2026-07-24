@@ -1,10 +1,13 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::libs::ai_temp::ToolOutputWriter;
 use crate::tools::helper::is_node_build_command;
 use crate::tools::helper::{
-    classify_shell_stage, shell_tokens, split_shell_command_segments, ShellStage,
+    classify_shell_stage, parse_safe_compound_command, shell_tokens, split_shell_command_segments,
+    SafeCompoundCommand, SafeCompoundStage, ShellStage,
 };
 use crate::tools::shell_output::{
-    build_shell_tool_result, should_collect_stderr_line_as_stdout, AnsiOutputSanitizer,
+    build_compound_shell_tool_result, build_shell_tool_result, prepare_shell_output,
+    should_collect_stderr_line_as_stdout, AnsiOutputSanitizer, CompoundShellStageResult,
 };
 use crate::tools::{NativeToolResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::error::WorkflowEngineError;
@@ -14,11 +17,11 @@ use crate::workflow::react::types::GatewayPayload;
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
-use tokio::time::{timeout, Duration};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::time::{timeout, Duration, Instant};
 
 /// Decision levels for shell auditing
 #[derive(Debug, PartialEq, Clone, serde::Serialize)]
@@ -699,6 +702,13 @@ impl ToolDefinition for ShellExecute {
                 .await;
         }
 
+        if let Some(plan) = (!cfg!(target_os = "windows"))
+            .then(|| parse_safe_compound_command(command_str))
+            .flatten()
+        {
+            return self.call_safe_compound(plan, timeout_ms, working_dir).await;
+        }
+
         // Fallback to standard execution
         let cmd_future = if cfg!(target_os = "windows") {
             let mut command = Command::new("cmd");
@@ -737,6 +747,166 @@ impl ToolDefinition for ShellExecute {
     }
 }
 
+#[cfg(unix)]
+fn configure_process_group(command: &mut Command) {
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_command: &mut Command) {}
+
+struct StageProcessGuard {
+    #[cfg(unix)]
+    process_group_id: i32,
+    active: bool,
+}
+
+impl StageProcessGuard {
+    fn new(child: &Child) -> Self {
+        Self {
+            #[cfg(unix)]
+            process_group_id: child.id().map_or(0, |id| id as i32),
+            active: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+
+    fn kill_group(&mut self) {
+        if !self.active {
+            return;
+        }
+        #[cfg(unix)]
+        if self.process_group_id > 0 {
+            unsafe extern "C" {
+                fn kill(pid: i32, signal: i32) -> i32;
+            }
+            const SIGKILL: i32 = 9;
+            let _ = unsafe { kill(-self.process_group_id, SIGKILL) };
+        }
+        self.active = false;
+    }
+}
+
+impl Drop for StageProcessGuard {
+    fn drop(&mut self) {
+        self.kill_group();
+    }
+}
+
+async fn terminate_stage_process(child: &mut Child, process_guard: &mut StageProcessGuard) {
+    process_guard.kill_group();
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill().await;
+    }
+    let _ = child.wait().await;
+}
+
+async fn run_stage_with_deadline(
+    command_str: &str,
+    cwd: &Path,
+    deadline: Instant,
+    timeout_ms: u64,
+) -> Result<(i32, Vec<u8>, Vec<u8>), ToolError> {
+    use std::process::Stdio;
+
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(ToolError::ExecutionFailed(format!(
+            "Command timed out after {timeout_ms}ms"
+        )));
+    }
+
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", command_str])
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    configure_process_group(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|error| ToolError::ExecutionFailed(format!("Failed to spawn stage: {error}")))?;
+    let mut process_guard = StageProcessGuard::new(&child);
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stage stdout".to_string()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stage stderr".to_string()))?;
+    let stdout_task = tokio::spawn(async move {
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).await.map(|_| output)
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut output = Vec::new();
+        stderr.read_to_end(&mut output).await.map(|_| output)
+    });
+
+    let status = match timeout(remaining, child.wait()).await {
+        Ok(result) => result.map_err(|error| {
+            ToolError::ExecutionFailed(format!("Failed to wait for stage process: {error}"))
+        })?,
+        Err(_) => {
+            terminate_stage_process(&mut child, &mut process_guard).await;
+            stdout_task.abort();
+            stderr_task.abort();
+            return Err(ToolError::ExecutionFailed(format!(
+                "Command timed out after {timeout_ms}ms"
+            )));
+        }
+    };
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let readers = async {
+        let stdout = stdout_task
+            .await
+            .map_err(|error| ToolError::ExecutionFailed(format!("stdout reader failed: {error}")))?
+            .map_err(|error| {
+                ToolError::ExecutionFailed(format!("Failed to read stdout: {error}"))
+            })?;
+        let stderr = stderr_task
+            .await
+            .map_err(|error| ToolError::ExecutionFailed(format!("stderr reader failed: {error}")))?
+            .map_err(|error| {
+                ToolError::ExecutionFailed(format!("Failed to read stderr: {error}"))
+            })?;
+        Ok::<_, ToolError>((stdout, stderr))
+    };
+    let (stdout, stderr) = match timeout(remaining, readers).await {
+        Ok(result) => result?,
+        Err(_) => {
+            process_guard.kill_group();
+            return Err(ToolError::ExecutionFailed(format!(
+                "Command timed out after {timeout_ms}ms"
+            )));
+        }
+    };
+    process_guard.disarm();
+    Ok((status.code().unwrap_or(-1), stdout, stderr))
+}
+
+async fn send_tool_stream(gateway: &dyn Gateway, session_id: &str, tool_id: &str, output: &str) {
+    let _ = gateway
+        .send(
+            session_id,
+            GatewayPayload::ToolStream {
+                tool_id: tool_id.to_string(),
+                output: output.to_string(),
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+            },
+        )
+        .await;
+}
+
 fn format_tool_stream_output(
     last_stream_name: Option<&str>,
     stream_name: &'static str,
@@ -759,7 +929,524 @@ fn node_build_stderr_stream_name(exit_code: i32) -> &'static str {
     }
 }
 
+fn format_compound_raw_section(
+    index: usize,
+    command: &str,
+    cwd: &str,
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+) -> String {
+    format!(
+        "===== Stage {index} =====\ncommand: {command}\ncwd: {cwd}\nexit_code: {exit_code}\n\nstdout:\n{stdout}\n\nstderr:\n{stderr}\n\n"
+    )
+}
+
 impl ShellExecute {
+    async fn call_safe_compound(
+        &self,
+        plan: SafeCompoundCommand,
+        timeout_ms: u64,
+        working_dir: Option<PathBuf>,
+    ) -> NativeToolResult {
+        let mut cwd = match working_dir {
+            Some(path) => path,
+            None => std::env::current_dir().map_err(|error| {
+                ToolError::ExecutionFailed(format!("Failed to resolve working directory: {error}"))
+            })?,
+        };
+
+        let validated_navigation = match plan.stages.first() {
+            Some(SafeCompoundStage::Navigation { target, .. }) => {
+                let requested = PathBuf::from(target);
+                let requested = if requested.is_absolute() {
+                    requested
+                } else {
+                    cwd.join(requested)
+                };
+                let validated = self
+                    .policy_engine
+                    .path_guard
+                    .read()
+                    .map_err(|_| {
+                        ToolError::ExecutionFailed("Path guard lock is poisoned".to_string())
+                    })?
+                    .validate(&requested, self.planning_mode, false, false)
+                    .map_err(|error| ToolError::Security(error.to_string()))?;
+                Some(validated)
+            }
+            _ => None,
+        };
+
+        let mut writer = ToolOutputWriter::create().map_err(|error| {
+            ToolError::ExecutionFailed(format!(
+                "Failed to create compound command output file: {error}"
+            ))
+        })?;
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let mut records = Vec::with_capacity(plan.stages.len());
+        let mut final_exit_code = 0;
+        let mut short_circuited = false;
+
+        for (offset, stage) in plan.stages.into_iter().enumerate() {
+            let index = offset + 1;
+            let stage_cwd = cwd.to_string_lossy().to_string();
+            let original = match &stage {
+                SafeCompoundStage::Navigation { original, .. }
+                | SafeCompoundStage::Command { original, .. } => original.clone(),
+            };
+
+            if short_circuited {
+                records.push(CompoundShellStageResult {
+                    index,
+                    command: original,
+                    cwd: stage_cwd,
+                    executed: false,
+                    exit_code: None,
+                    skip_reason: Some("previous stage failed".to_string()),
+                    output: None,
+                });
+                continue;
+            }
+
+            match stage {
+                SafeCompoundStage::Navigation { .. } => {
+                    let target = validated_navigation
+                        .as_ref()
+                        .ok_or_else(|| {
+                            ToolError::ExecutionFailed(
+                                "Validated navigation target is missing".to_string(),
+                            )
+                        })?
+                        .clone();
+                    let (exit_code, stderr) = if target.is_dir() {
+                        cwd = target;
+                        (0, String::new())
+                    } else {
+                        (
+                            1,
+                            format!("sh: cd: {}: Not a directory\n", target.display()),
+                        )
+                    };
+                    let output = prepare_shell_output(&original, exit_code, "", &stderr);
+                    writer
+                        .append(&format_compound_raw_section(
+                            index,
+                            &original,
+                            &stage_cwd,
+                            exit_code,
+                            "",
+                            &stderr,
+                        ))
+                        .map_err(|error| {
+                            ToolError::ExecutionFailed(format!(
+                                "Failed to persist compound command output after execution started: {error}"
+                            ))
+                        })?;
+                    records.push(CompoundShellStageResult {
+                        index,
+                        command: original,
+                        cwd: stage_cwd,
+                        executed: true,
+                        exit_code: Some(exit_code),
+                        skip_reason: None,
+                        output: Some(output),
+                    });
+                    final_exit_code = exit_code;
+                    short_circuited = exit_code != 0;
+                }
+                SafeCompoundStage::Command { original, .. } => {
+                    let (exit_code, stdout, stderr) =
+                        run_stage_with_deadline(&original, &cwd, deadline, timeout_ms).await?;
+                    let stdout = String::from_utf8_lossy(&stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&stderr).to_string();
+                    let mut prepared = prepare_shell_output(&original, exit_code, &stdout, &stderr);
+                    writer
+                        .append(&format_compound_raw_section(
+                            index,
+                            &original,
+                            &stage_cwd,
+                            exit_code,
+                            &stdout,
+                            &stderr,
+                        ))
+                        .map_err(|error| {
+                            ToolError::ExecutionFailed(format!(
+                                "Failed to persist compound command output after execution started: {error}"
+                            ))
+                        })?;
+                    prepared.raw_content.clear();
+                    records.push(CompoundShellStageResult {
+                        index,
+                        command: original,
+                        cwd: stage_cwd,
+                        executed: true,
+                        exit_code: Some(exit_code),
+                        skip_reason: None,
+                        output: Some(prepared),
+                    });
+                    final_exit_code = exit_code;
+                    short_circuited = exit_code != 0;
+                }
+            }
+        }
+
+        let persisted = writer.finalize().map_err(|error| {
+            ToolError::ExecutionFailed(format!(
+                "Failed to finalize compound command output after execution started: {error}"
+            ))
+        })?;
+        Ok(build_compound_shell_tool_result(
+            final_exit_code,
+            &records,
+            persisted,
+        ))
+    }
+
+    async fn call_safe_compound_streaming(
+        &self,
+        plan: SafeCompoundCommand,
+        timeout_ms: u64,
+        working_dir: Option<PathBuf>,
+        gateway: &dyn Gateway,
+        session_id: &str,
+        tool_id: &str,
+    ) -> NativeToolResult {
+        let mut cwd = match working_dir {
+            Some(path) => path,
+            None => std::env::current_dir().map_err(|error| {
+                ToolError::ExecutionFailed(format!("Failed to resolve working directory: {error}"))
+            })?,
+        };
+        let validated_navigation = match plan.stages.first() {
+            Some(SafeCompoundStage::Navigation { target, .. }) => {
+                let requested = PathBuf::from(target);
+                let requested = if requested.is_absolute() {
+                    requested
+                } else {
+                    cwd.join(requested)
+                };
+                Some(
+                    self.policy_engine
+                        .path_guard
+                        .read()
+                        .map_err(|_| {
+                            ToolError::ExecutionFailed("Path guard lock is poisoned".to_string())
+                        })?
+                        .validate(&requested, self.planning_mode, false, false)
+                        .map_err(|error| ToolError::Security(error.to_string()))?,
+                )
+            }
+            _ => None,
+        };
+        let mut writer = ToolOutputWriter::create().map_err(|error| {
+            ToolError::ExecutionFailed(format!(
+                "Failed to create compound command output file: {error}"
+            ))
+        })?;
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let mut records = Vec::with_capacity(plan.stages.len());
+        let mut final_exit_code = 0;
+        let mut short_circuited = false;
+        let mut has_streamed_output = false;
+
+        for (offset, stage) in plan.stages.into_iter().enumerate() {
+            let index = offset + 1;
+            let stage_cwd = cwd.to_string_lossy().to_string();
+            let original = match &stage {
+                SafeCompoundStage::Navigation { original, .. }
+                | SafeCompoundStage::Command { original, .. } => original.clone(),
+            };
+            if short_circuited {
+                records.push(CompoundShellStageResult {
+                    index,
+                    command: original,
+                    cwd: stage_cwd,
+                    executed: false,
+                    exit_code: None,
+                    skip_reason: Some("previous stage failed".to_string()),
+                    output: None,
+                });
+                continue;
+            }
+
+            send_tool_stream(
+                gateway,
+                session_id,
+                tool_id,
+                &format!(
+                    "{}Stage {index}: {original}",
+                    if has_streamed_output { "\n" } else { "" }
+                ),
+            )
+            .await;
+            has_streamed_output = true;
+
+            match stage {
+                SafeCompoundStage::Navigation { .. } => {
+                    let target = validated_navigation
+                        .as_ref()
+                        .ok_or_else(|| {
+                            ToolError::ExecutionFailed(
+                                "Validated navigation target is missing".to_string(),
+                            )
+                        })?
+                        .clone();
+                    let (exit_code, stderr) = if target.is_dir() {
+                        cwd = target;
+                        (0, String::new())
+                    } else {
+                        (
+                            1,
+                            format!("sh: cd: {}: Not a directory\n", target.display()),
+                        )
+                    };
+                    if !stderr.is_empty() {
+                        send_tool_stream(
+                            gateway,
+                            session_id,
+                            tool_id,
+                            &format!("\nstderr:\n{stderr}"),
+                        )
+                        .await;
+                    }
+                    let mut prepared = prepare_shell_output(&original, exit_code, "", &stderr);
+                    writer
+                        .append(&format_compound_raw_section(
+                            index,
+                            &original,
+                            &stage_cwd,
+                            exit_code,
+                            "",
+                            &stderr,
+                        ))
+                        .map_err(|error| {
+                            ToolError::ExecutionFailed(format!(
+                                "Failed to persist compound command output after execution started: {error}"
+                            ))
+                        })?;
+                    prepared.raw_content.clear();
+                    records.push(CompoundShellStageResult {
+                        index,
+                        command: original,
+                        cwd: stage_cwd,
+                        executed: true,
+                        exit_code: Some(exit_code),
+                        skip_reason: None,
+                        output: Some(prepared),
+                    });
+                    final_exit_code = exit_code;
+                    short_circuited = exit_code != 0;
+                }
+                SafeCompoundStage::Command { original, .. } => {
+                    let (exit_code, stdout, stderr) = self
+                        .stream_safe_stage(
+                            &original, &cwd, deadline, timeout_ms, gateway, session_id, tool_id,
+                        )
+                        .await?;
+                    let mut prepared = prepare_shell_output(&original, exit_code, &stdout, &stderr);
+                    writer
+                        .append(&format_compound_raw_section(
+                            index,
+                            &original,
+                            &stage_cwd,
+                            exit_code,
+                            &stdout,
+                            &stderr,
+                        ))
+                        .map_err(|error| {
+                            ToolError::ExecutionFailed(format!(
+                                "Failed to persist compound command output after execution started: {error}"
+                            ))
+                        })?;
+                    prepared.raw_content.clear();
+                    records.push(CompoundShellStageResult {
+                        index,
+                        command: original,
+                        cwd: stage_cwd,
+                        executed: true,
+                        exit_code: Some(exit_code),
+                        skip_reason: None,
+                        output: Some(prepared),
+                    });
+                    final_exit_code = exit_code;
+                    short_circuited = exit_code != 0;
+                }
+            }
+        }
+
+        send_tool_stream(
+            gateway,
+            session_id,
+            tool_id,
+            &format!("\nExit code: {final_exit_code}"),
+        )
+        .await;
+        let persisted = writer.finalize().map_err(|error| {
+            ToolError::ExecutionFailed(format!(
+                "Failed to finalize compound command output after execution started: {error}"
+            ))
+        })?;
+        Ok(build_compound_shell_tool_result(
+            final_exit_code,
+            &records,
+            persisted,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn stream_safe_stage(
+        &self,
+        command_str: &str,
+        cwd: &Path,
+        deadline: Instant,
+        timeout_ms: u64,
+        gateway: &dyn Gateway,
+        session_id: &str,
+        tool_id: &str,
+    ) -> Result<(i32, String, String), ToolError> {
+        use std::process::Stdio;
+
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", command_str])
+            .current_dir(cwd)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        configure_process_group(&mut command);
+        let mut child = command.spawn().map_err(|error| {
+            ToolError::ExecutionFailed(format!("Failed to spawn stage: {error}"))
+        })?;
+        let mut process_guard = StageProcessGuard::new(&child);
+        let stdout = child.stdout.take().ok_or_else(|| {
+            ToolError::ExecutionFailed("Failed to capture stage stdout".to_string())
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            ToolError::ExecutionFailed("Failed to capture stage stderr".to_string())
+        })?;
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stderr_reader = BufReader::new(stderr).lines();
+        let mut full_stdout = String::new();
+        let mut full_stderr = String::new();
+        let mut pending_node_build_stderr = String::new();
+        let mut stdout_sanitizer = AnsiOutputSanitizer::default();
+        let mut stderr_sanitizer = AnsiOutputSanitizer::default();
+        let buffers_node_build_stderr =
+            is_node_build_command(&crate::tools::shell_output::normalize_command(command_str));
+        let mut stdout_eof = false;
+        let mut stderr_eof = false;
+        let mut last_stream_name: Option<&'static str> = None;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                terminate_stage_process(&mut child, &mut process_guard).await;
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Command timed out after {timeout_ms}ms"
+                )));
+            }
+            if stdout_eof && stderr_eof {
+                let status = match timeout(remaining, child.wait()).await {
+                    Ok(result) => result.map_err(|error| {
+                        ToolError::ExecutionFailed(format!(
+                            "Failed to wait for stage process: {error}"
+                        ))
+                    })?,
+                    Err(_) => {
+                        terminate_stage_process(&mut child, &mut process_guard).await;
+                        return Err(ToolError::ExecutionFailed(format!(
+                            "Command timed out after {timeout_ms}ms"
+                        )));
+                    }
+                };
+                let exit_code = status.code().unwrap_or(-1);
+                if !pending_node_build_stderr.is_empty() {
+                    let stream_name = node_build_stderr_stream_name(exit_code);
+                    send_tool_stream(
+                        gateway,
+                        session_id,
+                        tool_id,
+                        &format_tool_stream_output(
+                            last_stream_name,
+                            stream_name,
+                            pending_node_build_stderr.trim_end(),
+                        ),
+                    )
+                    .await;
+                }
+                process_guard.disarm();
+                return Ok((exit_code, full_stdout, full_stderr));
+            }
+
+            tokio::select! {
+                line = stdout_reader.next_line(), if !stdout_eof => {
+                    match line {
+                        Ok(Some(line)) => {
+                            let raw_line = format!("{line}\n");
+                            full_stdout.push_str(&raw_line);
+                            let line = stdout_sanitizer.sanitize(&raw_line);
+                            if !line.is_empty() {
+                                send_tool_stream(
+                                    gateway,
+                                    session_id,
+                                    tool_id,
+                                    &format_tool_stream_output(last_stream_name, "stdout", line.trim_end_matches('\n')),
+                                ).await;
+                                last_stream_name = Some("stdout");
+                            }
+                        }
+                        Ok(None) => stdout_eof = true,
+                        Err(error) => {
+                            terminate_stage_process(&mut child, &mut process_guard).await;
+                            return Err(ToolError::ExecutionFailed(format!(
+                                "Failed to read stage stdout: {error}"
+                            )));
+                        }
+                    }
+                }
+                line = stderr_reader.next_line(), if !stderr_eof => {
+                    match line {
+                        Ok(Some(line)) => {
+                            let raw_line = format!("{line}\n");
+                            full_stderr.push_str(&raw_line);
+                            let line = stderr_sanitizer.sanitize(&raw_line);
+                            if !line.is_empty() {
+                                if should_collect_stderr_line_as_stdout(command_str, &line) {
+                                    send_tool_stream(
+                                        gateway,
+                                        session_id,
+                                        tool_id,
+                                        &format_tool_stream_output(last_stream_name, "stdout", line.trim_end_matches('\n')),
+                                    ).await;
+                                    last_stream_name = Some("stdout");
+                                } else if buffers_node_build_stderr {
+                                    pending_node_build_stderr.push_str(&line);
+                                } else {
+                                    send_tool_stream(
+                                        gateway,
+                                        session_id,
+                                        tool_id,
+                                        &format_tool_stream_output(last_stream_name, "stderr", line.trim_end_matches('\n')),
+                                    ).await;
+                                    last_stream_name = Some("stderr");
+                                }
+                            }
+                        }
+                        Ok(None) => stderr_eof = true,
+                        Err(error) => {
+                            terminate_stage_process(&mut child, &mut process_guard).await;
+                            return Err(ToolError::ExecutionFailed(format!(
+                                "Failed to read stage stderr: {error}"
+                            )));
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(remaining.min(Duration::from_millis(100))) => {}
+            }
+        }
+    }
+
     fn default_working_dir(&self) -> Option<std::path::PathBuf> {
         self.policy_engine
             .path_guard
@@ -796,6 +1483,22 @@ impl ShellExecute {
                 )
             });
         let working_dir = self.default_working_dir();
+
+        if let Some(plan) = (!cfg!(target_os = "windows"))
+            .then(|| parse_safe_compound_command(command_str))
+            .flatten()
+        {
+            return self
+                .call_safe_compound_streaming(
+                    plan,
+                    timeout_ms,
+                    working_dir,
+                    gateway.as_ref(),
+                    session_id,
+                    &tool_id,
+                )
+                .await;
+        }
 
         let mut child = if cfg!(target_os = "windows") {
             let mut command = Command::new("cmd");
@@ -1109,7 +1812,38 @@ mod tests {
     use super::*;
     use crate::tools::shell_output::{strip_ansi_escape_sequences, AnsiOutputSanitizer};
     use crate::workflow::react::security::PathGuard;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    #[derive(Default)]
+    struct RecordingGateway {
+        streams: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl Gateway for RecordingGateway {
+        async fn send(
+            &self,
+            _session_id: &str,
+            payload: GatewayPayload,
+        ) -> Result<(), WorkflowEngineError> {
+            if let GatewayPayload::ToolStream {
+                tool_id, output, ..
+            } = payload
+            {
+                self.streams.lock().unwrap().push((tool_id, output));
+            }
+            Ok(())
+        }
+
+        async fn inject_input(
+            &self,
+            _session_id: &str,
+            _input: String,
+        ) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+    }
 
     fn setup_test_context() -> (
         tempfile::TempDir,
@@ -1162,8 +1896,8 @@ mod tests {
     }
 
     #[test]
-    fn node_build_command_detection_supports_shell_segments_and_environment_assignments() {
-        assert!(is_node_build_command(
+    fn node_build_command_detection_is_stage_local() {
+        assert!(!is_node_build_command(
             &crate::tools::shell_output::normalize_command("cd app; pnpm build")
         ));
         assert!(is_node_build_command(
@@ -1174,7 +1908,7 @@ mod tests {
                 "BUILD_LABEL=\"release candidate\" pnpm build"
             )
         ));
-        assert!(is_node_build_command(
+        assert!(!is_node_build_command(
             &crate::tools::shell_output::normalize_command(
                 "cd app; BUILD_LABEL=\"release candidate\" pnpm build"
             )
@@ -1583,6 +2317,309 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn test_shell_execute(project_root: PathBuf) -> ShellExecute {
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_root],
+            vec![],
+            vec![],
+        )));
+        ShellExecute::new(
+            guard,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(1).unwrap()),
+            vec![],
+            false,
+        )
+    }
+
+    fn initialize_test_git_repository(project_root: &Path) {
+        let status = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(project_root)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn safe_compound_execution_tracks_cwd_and_persists_all_raw_stages() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let nested = project_root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        initialize_test_git_repository(&nested);
+        let shell = test_shell_execute(project_root);
+
+        let result = shell
+            .call(json!({
+                "command": "cd nested && /bin/pwd && git status --short",
+                "timeout": 10_000,
+            }))
+            .await
+            .unwrap();
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+
+        assert_eq!(structured["exit_code"].as_i64(), Some(0));
+        assert_eq!(structured["stages"].as_array().map(Vec::len), Some(3));
+        assert_eq!(structured["stages"][0]["command"], "cd nested");
+        assert_eq!(
+            structured["stages"][1]["cwd"].as_str(),
+            Some(nested.to_string_lossy().as_ref())
+        );
+        assert_eq!(structured["stages"][2]["executed"].as_bool(), Some(true));
+
+        let model_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted path missing");
+        let physical_path = crate::libs::ai_temp::resolve_ai_temp_path(Path::new(model_path));
+        let raw = std::fs::read_to_string(&physical_path).unwrap();
+        assert!(raw.contains("===== Stage 1 ====="));
+        assert!(raw.contains("command: /bin/pwd"));
+        assert!(raw.contains(nested.to_string_lossy().as_ref()));
+        assert!(raw.contains("command: git status --short"));
+        std::fs::remove_file(physical_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn safe_compound_execution_short_circuits_after_failure() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        initialize_test_git_repository(&project_root);
+        let shell = test_shell_execute(project_root.clone());
+
+        let result = shell
+            .call(json!({
+                "command": "/usr/bin/false && git status && /usr/bin/touch marker",
+                "timeout": 10_000,
+            }))
+            .await
+            .unwrap();
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+
+        assert_eq!(structured["exit_code"].as_i64(), Some(1));
+        assert_eq!(structured["stages"][0]["executed"].as_bool(), Some(true));
+        assert_eq!(structured["stages"][1]["executed"].as_bool(), Some(false));
+        assert_eq!(structured["stages"][2]["executed"].as_bool(), Some(false));
+        assert_eq!(
+            structured["stages"][2]["skip_reason"].as_str(),
+            Some("previous stage failed")
+        );
+        assert!(!project_root.join("marker").exists());
+
+        let model_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted path missing");
+        let physical_path = crate::libs::ai_temp::resolve_ai_temp_path(Path::new(model_path));
+        let raw = std::fs::read_to_string(&physical_path).unwrap();
+        assert!(raw.contains("command: /usr/bin/false"));
+        assert!(!raw.contains("command: git status"));
+        assert!(!raw.contains("command: /usr/bin/touch marker"));
+        std::fs::remove_file(physical_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn safe_compound_streaming_uses_one_tool_id_and_short_circuits() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        initialize_test_git_repository(&project_root);
+        let gateway = Arc::new(RecordingGateway::default());
+        let shell = test_shell_execute(project_root.clone())
+            .with_gateway(gateway.clone(), "test-session".to_string());
+
+        let result = shell
+            .call(json!({
+                "command": "/bin/echo first && /usr/bin/false && git status --short",
+                "timeout": 10_000,
+                crate::constants::INTERNAL_PARAM_TOOL_CALL_ID: "tool-safe-compound",
+            }))
+            .await
+            .unwrap();
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        assert_eq!(structured["exit_code"].as_i64(), Some(1));
+        assert_eq!(structured["stages"][2]["executed"].as_bool(), Some(false));
+
+        let streams = gateway.streams.lock().unwrap().clone();
+        assert!(!streams.is_empty());
+        assert!(streams
+            .iter()
+            .all(|(tool_id, _)| tool_id == "tool-safe-compound"));
+        let combined = streams
+            .iter()
+            .map(|(_, output)| output.as_str())
+            .collect::<String>();
+        assert!(combined.contains("Stage 1: /bin/echo first"));
+        assert!(combined.contains("Stage 2: /usr/bin/false"));
+        assert!(!combined.contains("Stage 3: git status --short"));
+        assert_eq!(combined.matches("Exit code: 1").count(), 1);
+
+        let model_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted path missing");
+        let physical_path = crate::libs::ai_temp::resolve_ai_temp_path(Path::new(model_path));
+        std::fs::remove_file(physical_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn commands_without_a_reducer_or_with_complex_syntax_use_the_legacy_path() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        initialize_test_git_repository(&project_root);
+        let shell = test_shell_execute(project_root);
+
+        for command in [
+            "/bin/echo first && /bin/echo second",
+            "git status --short | cat",
+        ] {
+            let result = shell
+                .call(json!({ "command": command, "timeout": 10_000 }))
+                .await
+                .unwrap();
+            let structured = result
+                .structured_content
+                .expect("structured content missing");
+            assert!(
+                structured.get("stages").is_none(),
+                "unexpected split for {command}"
+            );
+            if let Some(model_path) = structured["persisted_output"]["path"].as_str() {
+                let physical_path =
+                    crate::libs::ai_temp::resolve_ai_temp_path(Path::new(model_path));
+                std::fs::remove_file(physical_path).unwrap();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn write_long_running_child_script(project_root: &Path) {
+        std::fs::write(
+            project_root.join("spawn-child.sh"),
+            "sleep 30 &\necho $! > child.pid\nwait\n",
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    async fn assert_recorded_child_stopped(project_root: &Path) {
+        let pid_path = project_root.join("child.pid");
+        for _ in 0..20 {
+            if pid_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let pid = std::fs::read_to_string(&pid_path)
+            .expect("child pid file missing")
+            .trim()
+            .to_string();
+        for _ in 0..50 {
+            let running = std::process::Command::new("kill")
+                .args(["-0", pid.as_str()])
+                .status()
+                .is_ok_and(|status| status.success());
+            if !running {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("child process {pid} survived stage timeout");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn safe_compound_timeout_kills_the_non_streaming_process_group() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        initialize_test_git_repository(&project_root);
+        write_long_running_child_script(&project_root);
+        let shell = test_shell_execute(project_root.clone());
+
+        let result = shell
+            .call(json!({
+                "command": "sh spawn-child.sh && git status --short",
+                "timeout": 150,
+            }))
+            .await;
+
+        assert!(
+            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.contains("timed out after 150ms"))
+        );
+        assert_recorded_child_stopped(&project_root).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn safe_compound_timeout_kills_the_streaming_process_group() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        initialize_test_git_repository(&project_root);
+        write_long_running_child_script(&project_root);
+        let gateway = Arc::new(RecordingGateway::default());
+        let shell = test_shell_execute(project_root.clone())
+            .with_gateway(gateway, "test-session".to_string());
+
+        let result = shell
+            .call(json!({
+                "command": "sh spawn-child.sh && git status --short",
+                "timeout": 150,
+            }))
+            .await;
+
+        assert!(
+            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.contains("timed out after 150ms"))
+        );
+        assert_recorded_child_stopped(&project_root).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn safe_compound_execution_uses_one_total_timeout_budget() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        initialize_test_git_repository(&project_root);
+        let shell = test_shell_execute(project_root);
+        let started = Instant::now();
+
+        let result = shell
+            .call(json!({
+                "command": "/bin/sleep 0.08 && /bin/sleep 0.08 && git status --short",
+                "timeout": 120,
+            }))
+            .await;
+
+        assert!(
+            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.contains("timed out after 120ms"))
+        );
+        assert!(started.elapsed() < Duration::from_millis(220));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn safe_compound_execution_revalidates_cd_against_path_guard() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let outside_root = tempdir().unwrap();
+        initialize_test_git_repository(&project_root);
+        let shell = test_shell_execute(project_root.clone());
+        let plan = parse_safe_compound_command("cd ../outside && git status")
+            .expect("command should be syntactically safe");
+
+        let result = shell
+            .call_safe_compound(plan, 10_000, Some(project_root))
+            .await;
+
+        assert!(matches!(result, Err(ToolError::Security(_))));
+        drop(outside_root);
     }
 
     #[test]
