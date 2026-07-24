@@ -19,6 +19,13 @@ export const normalizeVisibleCompletionReport = value => {
     .join('\n')
 }
 
+export const resolveWorkflowPhaseFromPlanningMode = (planningMode, configuredPhase) => {
+  if (planningMode) return 'planning'
+  return String(configuredPhase || '').toLowerCase() === 'implementation'
+    ? 'implementation'
+    : 'standard'
+}
+
 export const collectSubAgentCompletions = (visibleGroups = [], progressValues = []) => {
   const completions = new Map()
 

@@ -5,8 +5,9 @@ use std::sync::OnceLock;
 
 use crate::db::WorkflowMessage;
 use crate::tools::{
-    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_BASH, TOOL_COMPLETE_WORKFLOW,
-    TOOL_EDIT_FILE, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_WRITE_FILE,
+    READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_ASK_USER, TOOL_BASH,
+    TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
+    TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_TODO_GET, TOOL_TODO_LIST, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::constants::TASK_FINISHED;
 use crate::workflow::react::engine::WorkflowExecutor;
@@ -93,6 +94,67 @@ impl WorkflowExecutor {
                 Some("completed" | "done" | "data_missing" | "failed" | "blocked")
             )
         })
+    }
+
+    fn has_implementation_action_after_approved_plan(messages: &[WorkflowMessage]) -> bool {
+        let Some(approved_plan_index) = messages
+            .iter()
+            .rposition(|message| message.message_subtype.as_deref() == Some("approved_plan"))
+        else {
+            return false;
+        };
+
+        messages[approved_plan_index + 1..].iter().any(|message| {
+            if message.role != "tool" || message.is_error {
+                return false;
+            }
+
+            let tool_name = message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_name"))
+                .and_then(Value::as_str);
+            !matches!(
+                tool_name,
+                None | Some(
+                    TOOL_SUBMIT_PLAN
+                        | TOOL_COMPLETE_WORKFLOW
+                        | TOOL_ASK_USER
+                        | TOOL_TODO_LIST
+                        | TOOL_TODO_GET
+                        | TOOL_PLAN_READ_NOTE
+                        | TOOL_PLAN_EDIT_NOTE
+                        | TOOL_PLAN_WRITE_NOTE
+                )
+            )
+        })
+    }
+
+    fn implementation_completion_is_blocked_for(
+        phase: &ExecutionPhase,
+        messages: &[WorkflowMessage],
+    ) -> bool {
+        if phase != &ExecutionPhase::Implementation
+            || !messages
+                .iter()
+                .any(|message| message.message_subtype.as_deref() == Some("approved_plan"))
+        {
+            return false;
+        }
+
+        !Self::has_implementation_action_after_approved_plan(messages)
+    }
+
+    pub(crate) fn implementation_completion_is_blocked(&self) -> bool {
+        Self::implementation_completion_is_blocked_for(
+            &self.policy.phase,
+            &self.context.messages_since_last_completion(),
+        )
+    }
+
+    pub(crate) fn completion_report_capture_allowed(&self, todos: &[Value]) -> bool {
+        Self::todos_allow_completion_report_capture(todos)
+            && !self.implementation_completion_is_blocked()
     }
 
     async fn persist_completion_report(
@@ -1704,6 +1766,25 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         args: &serde_json::Value,
         todo_status_overrides: &HashMap<String, String>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
+        if self.implementation_completion_is_blocked() {
+            log::warn!(
+                "WorkflowExecutor {}: Rejected complete_workflow in phase {} because no successful implementation action followed the approved plan boundary",
+                self.session_id,
+                self.policy.phase
+            );
+            return Ok(Some(ReinforcedResult {
+                content: "<SYSTEM_REMINDER>The approved plan has entered implementation, but no successful implementation action has been observed after the approval boundary. Do not complete the workflow yet. Start executing the approved plan with one concrete work tool; create a replacement execution todo list first when the plan has multiple units.</SYSTEM_REMINDER>".to_string(),
+                llm_content: None,
+                title: "Implementation Not Started".to_string(),
+                summary: "Approved plan implementation has not started".to_string(),
+                is_error: true,
+                error_type: Some("ImplementationNotStarted".into()),
+                display_type: "text".to_string(),
+                approval_status: None,
+                observation_kind: None,
+            }));
+        }
+
         let mut completion_report = match Self::resolve_completion_report(
             args,
             text_part,
@@ -2213,6 +2294,7 @@ mod tests {
     use super::{SmartApprovalDecision, WorkflowExecutor};
     use crate::db::WorkflowMessage;
     use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_READ_FILE, TOOL_WRITE_FILE};
+    use crate::workflow::react::policy::ExecutionPhase;
     use crate::workflow::react::types::PendingCompletionReport;
     use serde_json::json;
 
@@ -2652,6 +2734,63 @@ mod tests {
         assert!(!WorkflowExecutor::todos_allow_completion_report_capture(&[
             json!({"status": "unknown"}),
         ]));
+    }
+
+    #[test]
+    fn approved_plan_completion_requires_a_successful_implementation_action() {
+        let approved_plan = WorkflowMessage {
+            id: Some(1),
+            session_id: "implementation-boundary".to_string(),
+            role: "system".to_string(),
+            message: "# APPROVED EXECUTION PLAN".to_string(),
+            reasoning: None,
+            message_kind: "summary".to_string(),
+            message_subtype: Some("approved_plan".to_string()),
+            segment_id: 2,
+            source_event_type: None,
+            metadata: Some(json!({"plan_content": "Implement the fix"})),
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        let approval_observation = tool_message(
+            2,
+            "Plan approved",
+            false,
+            json!({"tool_name": "submit_plan"}),
+        );
+        let todo_read = tool_message(3, "[]", false, json!({"tool_name": "todo_list"}));
+        let failed_action = tool_message(4, "read failed", true, json!({"tool_name": "read_file"}));
+        let messages = vec![
+            approved_plan.clone(),
+            approval_observation,
+            todo_read,
+            failed_action,
+        ];
+
+        assert!(WorkflowExecutor::implementation_completion_is_blocked_for(
+            &ExecutionPhase::Implementation,
+            &messages,
+        ));
+        assert!(!WorkflowExecutor::implementation_completion_is_blocked_for(
+            &ExecutionPhase::Standard,
+            &messages,
+        ));
+
+        let mut started_messages = messages;
+        started_messages.push(tool_message(
+            5,
+            "file contents",
+            false,
+            json!({"tool_name": "read_file"}),
+        ));
+        assert!(!WorkflowExecutor::implementation_completion_is_blocked_for(
+            &ExecutionPhase::Implementation,
+            &started_messages,
+        ));
     }
 
     fn tool_message(

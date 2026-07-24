@@ -1582,6 +1582,43 @@ mod tests {
         assert_eq!(history[1]["content"], reminder);
     }
 
+    #[test]
+    fn implementation_request_preserves_the_projected_approved_plan() {
+        let processor = test_llm_processor();
+        let mut approved_plan = message(
+            "user",
+            "# APPROVED EXECUTION PLAN\n<approved_plan>\nEdit the file and run tests.\n</approved_plan>",
+            None,
+            Some(json!({"plan_content": "Edit the file and run tests."})),
+        );
+        approved_plan.message_kind = "summary".to_string();
+        approved_plan.message_subtype = Some("approved_plan".to_string());
+
+        let normalized = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Ship the fix", None, None),
+            approved_plan,
+        ]);
+        let final_history = processor.inject_prompts(
+            normalized,
+            0,
+            100,
+            None,
+            None,
+            &ExecutionPolicy::implementation(),
+        );
+
+        assert!(final_history[0]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Execution mode is active"));
+        assert!(final_history.iter().skip(1).any(|message| {
+            message["content"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("<approved_plan>\nEdit the file and run tests.\n</approved_plan>")
+        }));
+    }
+
     fn message(
         role: &str,
         content: &str,

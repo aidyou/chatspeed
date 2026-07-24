@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import {
   appendMissingPendingToolMessages,
   deriveInlinePendingApprovals,
-  detectApprovalRecoveryDrift
+  detectApprovalRecoveryDrift,
+  resolveExecutionContextPendingTool
 } from './workflowApprovalRecovery.js'
 
 const approvalWaitingStatuses = ['awaiting_approval', 'awaiting_auto_approval']
@@ -23,6 +24,12 @@ const executionContext = {
     }
   ]
 }
+
+assert.deepEqual(
+  resolveExecutionContextPendingTool(executionContext, 'tool_571ae521')?.pendingTools,
+  [],
+  'a structured resolution event must remove its tool from the live execution-context cache'
+)
 
 const historicalMessages = [
   {

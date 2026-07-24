@@ -188,6 +188,7 @@ impl ContextManager {
         let latest_manual_clear_id = Self::latest_manual_clear_context_index(messages)
             .and_then(|index| messages.get(index))
             .and_then(|message| message.id);
+        let execution_handoff_ids = Self::active_execution_handoff_message_ids(messages);
 
         messages
             .iter()
@@ -198,12 +199,50 @@ impl ContextManager {
                 if message.id == latest_manual_clear_id {
                     return true;
                 }
+                if message
+                    .id
+                    .is_some_and(|id| execution_handoff_ids.contains(&id))
+                {
+                    return true;
+                }
                 !Self::is_summary_message(message)
                     && message
                         .id
                         .is_some_and(|id| id > compressed_until_message_id)
             })
             .cloned()
+            .collect()
+    }
+
+    fn active_execution_handoff_message_ids(messages: &[WorkflowMessage]) -> HashSet<i64> {
+        let completion_start = Self::latest_successful_completion_index(messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let manual_clear_start = Self::latest_manual_clear_context_index(messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let task_start = completion_start.max(manual_clear_start);
+        let current_task = &messages[task_start..];
+        let Some(approved_plan_index) = current_task
+            .iter()
+            .rposition(|message| message.message_subtype.as_deref() == Some("approved_plan"))
+        else {
+            return HashSet::new();
+        };
+
+        current_task[..=approved_plan_index]
+            .iter()
+            .filter(|message| {
+                message.message_subtype.as_deref() == Some("approved_plan")
+                    || (message.role == "user"
+                        && message.step_type.as_deref() != Some("observe")
+                        && (!message.message.trim().is_empty()
+                            || message
+                                .attached_context
+                                .as_deref()
+                                .is_some_and(|attached| !attached.trim().is_empty())))
+            })
+            .filter_map(|message| message.id)
             .collect()
     }
 
@@ -451,8 +490,9 @@ impl ContextManager {
 
         if todo_scope == Some("pre_approval") {
             format!(
-                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<pre_approval_todo_snapshot>\n{}\n</pre_approval_todo_snapshot>\nThe pre-approval todo snapshot records progress from before plan approval. It is not the active execution todo list.",
-                plan, todos
+                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
+                plan,
+                super::prompts::APPROVED_PLAN_EXECUTION_REMINDER
             )
         } else {
             format!(
@@ -766,6 +806,10 @@ impl ContextManager {
             .unwrap_or(0);
         let scoped_messages = &self.messages[start_index..];
 
+        if let Some(execution_handoff) = Self::approved_plan_execution_projection(scoped_messages) {
+            return execution_handoff;
+        }
+
         let Some(summary_idx) = Self::latest_summary_index(scoped_messages) else {
             return scoped_messages.to_vec();
         };
@@ -813,6 +857,49 @@ impl ContextManager {
         projection
     }
 
+    fn approved_plan_execution_projection(
+        scoped_messages: &[WorkflowMessage],
+    ) -> Option<Vec<WorkflowMessage>> {
+        let task_start = Self::latest_successful_completion_index(scoped_messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let current_task = &scoped_messages[task_start..];
+        let approved_plan_index = current_task
+            .iter()
+            .rposition(|message| message.message_subtype.as_deref() == Some("approved_plan"))?;
+
+        let mut projection = current_task[..approved_plan_index]
+            .iter()
+            .filter(|message| {
+                message.role == "user"
+                    && message.step_type.as_deref() != Some("observe")
+                    && (!message.message.trim().is_empty()
+                        || message
+                            .attached_context
+                            .as_deref()
+                            .is_some_and(|attached| !attached.trim().is_empty()))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        projection.push(current_task[approved_plan_index].clone());
+        projection.extend(
+            current_task[approved_plan_index + 1..]
+                .iter()
+                .filter(|message| {
+                    !(message.role == "tool"
+                        && message
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.get("tool_name"))
+                            .and_then(|value| value.as_str())
+                            == Some(crate::tools::TOOL_SUBMIT_PLAN))
+                })
+                .cloned(),
+        );
+        Some(projection)
+    }
+
     fn build_context_projection(
         &self,
         source_messages: &[WorkflowMessage],
@@ -849,7 +936,11 @@ impl ContextManager {
                 id: None,
                 session_id: self.session_id.clone(),
                 segment_id,
-                role: message.role.clone(),
+                role: if message.message_subtype.as_deref() == Some("approved_plan") {
+                    "user".to_string()
+                } else {
+                    message.role.clone()
+                },
                 message: final_content,
                 reasoning: message.reasoning.clone(),
                 message_kind: message.message_kind.clone(),
@@ -991,94 +1082,39 @@ impl ContextManager {
             .collect()
     }
 
-    async fn persist_context_seed(
-        &self,
-        seed: WorkflowAiContextMessage,
-    ) -> Result<WorkflowAiContextMessage, WorkflowEngineError> {
-        let store = self.main_store.read().map_err(|e| {
-            WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-        })?;
-        store
-            .add_workflow_ai_context_message(&seed)
-            .map_err(WorkflowEngineError::from)
-    }
-
-    pub async fn begin_new_segment_with_seed(
-        &mut self,
-        seed_messages: Vec<WorkflowAiContextMessage>,
-    ) -> Result<(), WorkflowEngineError> {
-        self.current_segment_id += 1;
-        self.ai_context_messages.clear();
-
-        for mut seed in seed_messages {
-            seed.segment_id = self.current_segment_id;
-            seed.session_id = self.session_id.clone();
-            let persisted = self.persist_context_seed(seed).await?;
-            self.ai_context_messages.push(persisted);
-        }
-
-        Ok(())
-    }
-
     pub async fn begin_execution_segment_from_approved_plan(
         &mut self,
     ) -> Result<(), WorkflowEngineError> {
-        let initial_user = self
+        let has_current_user = self
             .messages_since_last_completion()
             .into_iter()
-            .find(|message| {
+            .any(|message| {
                 message.role == "user"
                     && message.step_type.as_deref() != Some("observe")
-                    && !message.message.trim().is_empty()
-            })
-            .ok_or_else(|| {
-                WorkflowEngineError::General(
-                    "Cannot start execution segment without a current user query".to_string(),
-                )
-            })?;
+                    && (!message.message.trim().is_empty()
+                        || message
+                            .attached_context
+                            .as_deref()
+                            .is_some_and(|attached| !attached.trim().is_empty()))
+            });
+        if !has_current_user {
+            return Err(WorkflowEngineError::General(
+                "Cannot start execution segment without a current user query".to_string(),
+            ));
+        }
 
-        let approved_plan = self
+        let has_approved_plan = self
             .messages_since_last_completion()
             .into_iter()
             .rev()
-            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
-            .ok_or_else(|| {
-                WorkflowEngineError::General(
-                    "Cannot start execution segment without an approved plan anchor".to_string(),
-                )
-            })?;
+            .any(|message| message.message_subtype.as_deref() == Some("approved_plan"));
+        if !has_approved_plan {
+            return Err(WorkflowEngineError::General(
+                "Cannot start execution segment without an approved plan anchor".to_string(),
+            ));
+        }
 
-        let initial_user_seed = WorkflowAiContextMessage {
-            id: None,
-            session_id: self.session_id.clone(),
-            segment_id: self.current_segment_id,
-            role: initial_user.role.clone(),
-            message: format!(
-                "<user_query>\n{}\n</user_query>",
-                Self::content_for_context_projection(&initial_user)
-            ),
-            reasoning: initial_user.reasoning.clone(),
-            message_kind: initial_user.message_kind.clone(),
-            message_subtype: initial_user.message_subtype.clone(),
-            metadata: initial_user.metadata.clone(),
-            source_message_id: initial_user.id,
-            created_at: None,
-        };
-        let approved_plan_seed = WorkflowAiContextMessage {
-            id: None,
-            session_id: self.session_id.clone(),
-            segment_id: self.current_segment_id,
-            role: approved_plan.role.clone(),
-            message: Self::approved_plan_context_projection(&approved_plan),
-            reasoning: approved_plan.reasoning.clone(),
-            message_kind: approved_plan.message_kind.clone(),
-            message_subtype: approved_plan.message_subtype.clone(),
-            metadata: approved_plan.metadata.clone(),
-            source_message_id: approved_plan.id,
-            created_at: None,
-        };
-
-        self.begin_new_segment_with_seed(vec![initial_user_seed, approved_plan_seed])
+        self.rebuild_context_projection_from_runtime_messages(true, true)
             .await
     }
 
@@ -2599,7 +2635,7 @@ mod tests {
     }
 
     #[test]
-    fn approved_plan_projection_distinguishes_pre_approval_todos_from_legacy_execution_todos() {
+    fn approved_plan_projection_hides_pre_approval_todos_from_execution() {
         let mut approved_plan = WorkflowMessage {
             id: Some(1),
             session_id: "s".to_string(),
@@ -2631,9 +2667,89 @@ mod tests {
         approved_plan.metadata.as_mut().expect("metadata")["todo_scope"] = json!("pre_approval");
         let pre_approval_projection =
             ContextManager::approved_plan_context_projection(&approved_plan);
-        assert!(pre_approval_projection.contains("<pre_approval_todo_snapshot>"));
-        assert!(pre_approval_projection.contains("progress from before plan approval"));
+        assert!(!pre_approval_projection.contains("<pre_approval_todo_snapshot>"));
+        assert!(!pre_approval_projection.contains("Research alternatives"));
         assert!(!pre_approval_projection.contains("<current_todo_list>"));
+        assert!(pre_approval_projection.contains("switched to implementation"));
+    }
+
+    #[test]
+    fn active_task_compression_preserves_execution_handoff_authority() {
+        let message = |id: i64,
+                       role: &str,
+                       content: &str,
+                       kind: &str,
+                       subtype: Option<&str>,
+                       metadata: Option<serde_json::Value>| WorkflowMessage {
+            id: Some(id),
+            session_id: "execution-compression".to_string(),
+            role: role.to_string(),
+            message: content.to_string(),
+            reasoning: None,
+            message_kind: kind.to_string(),
+            message_subtype: subtype.map(str::to_string),
+            segment_id: 2,
+            source_event_type: None,
+            metadata,
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        let messages = vec![
+            message(1, "user", "Ship the fix", "message", None, None),
+            message(
+                2,
+                "assistant",
+                "Planning-only investigation",
+                "message",
+                None,
+                None,
+            ),
+            message(
+                3,
+                "system",
+                "# APPROVED EXECUTION PLAN",
+                "summary",
+                Some("approved_plan"),
+                Some(json!({
+                    "plan_content": "Edit the file and run tests",
+                    "todo_scope": "pre_approval"
+                })),
+            ),
+            message(
+                4,
+                "tool",
+                "Earlier implementation output",
+                "message",
+                None,
+                Some(json!({"tool_name": "read_file"})),
+            ),
+            message(
+                5,
+                "system",
+                "<state_snapshot>Implementation summary</state_snapshot>",
+                "summary",
+                Some("compression"),
+                Some(json!({"compressed_until_message_id": 4})),
+            ),
+        ];
+
+        let compacted = ContextManager::rebuild_compacted_messages(&messages, 4096);
+        let retained_ids = compacted
+            .iter()
+            .filter_map(|message| message.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(retained_ids, vec![1, 3, 5]);
+        let execution_projection = ContextManager::approved_plan_execution_projection(&compacted)
+            .expect("approved plan should remain the active execution boundary");
+        assert_eq!(execution_projection.len(), 3);
+        assert_eq!(execution_projection[0].id, Some(1));
+        assert_eq!(execution_projection[1].id, Some(3));
+        assert_eq!(execution_projection[2].id, Some(5));
     }
 
     #[tokio::test]
@@ -4087,12 +4203,62 @@ mod tests {
             .expect("failed to add user");
         let _ = context
             .add_message(
+                "assistant".to_string(),
+                "Planning investigation".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                1,
+                false,
+                None,
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool_planning_read",
+                        "function": {"name": "read_file", "arguments": "{}"}
+                    }]
+                })),
+            )
+            .await
+            .expect("failed to add planning assistant");
+        let _ = context
+            .add_message(
+                "tool".to_string(),
+                "Planning-only file contents".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                1,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool_planning_read",
+                    "tool_name": "read_file"
+                })),
+            )
+            .await
+            .expect("failed to add planning observation");
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Keep the change narrowly scoped".to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user refinement");
+        let _ = context
+            .add_message(
                 "system".to_string(),
                 "# APPROVED EXECUTION PLAN".to_string(),
                 None,
                 None,
                 None,
-                1,
+                3,
                 false,
                 None,
                 Some(json!({
@@ -4111,25 +4277,75 @@ mod tests {
             .await
             .expect("execution segment should start from durable transcript authority");
 
-        assert_eq!(context.ai_context_messages.len(), 2);
+        assert_eq!(context.ai_context_messages.len(), 3);
         assert_eq!(context.ai_context_messages[0].role, "user");
         assert_eq!(
             context.ai_context_messages[0].message,
             "<user_query>\nShip the fix\n</user_query>"
         );
         assert_eq!(
-            context.ai_context_messages[1].message_subtype.as_deref(),
+            context.ai_context_messages[1].message,
+            "Keep the change narrowly scoped"
+        );
+        assert_eq!(
+            context.ai_context_messages[2].message_subtype.as_deref(),
             Some("approved_plan")
         );
-        assert!(context.ai_context_messages[1]
+        assert_eq!(context.ai_context_messages[2].role, "user");
+        assert!(context.ai_context_messages[2]
             .message
             .contains("<approved_plan>\n1. edit files\n2. run tests\n</approved_plan>"));
-        assert!(context.ai_context_messages[1]
+        assert!(!context.ai_context_messages[2]
             .message
-            .contains("<pre_approval_todo_snapshot>"));
-        assert!(!context.ai_context_messages[1]
+            .contains("Inspect implementation options"));
+        assert!(context
+            .ai_context_messages
+            .iter()
+            .all(|message| !message.message.contains("Planning-only")));
+
+        let _ = context
+            .add_message(
+                "tool".to_string(),
+                "# Approved Plan".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                4,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool_submit_plan",
+                    "tool_name": "submit_plan",
+                    "approval_status": "approved"
+                })),
+            )
+            .await
+            .expect("failed to append approval observation");
+
+        assert_eq!(context.ai_context_messages.len(), 3);
+        assert!(context
+            .ai_context_messages
+            .iter()
+            .all(|message| message.role == "user"));
+
+        let mut recovered = ContextManager::new(
+            session_id.to_string(),
+            store,
+            4096,
+            Arc::new(TsidGenerator::new(2).expect("failed to create recovery tsid")),
+        );
+        recovered
+            .load_history()
+            .await
+            .expect("execution projection should recover from durable transcript");
+        assert_eq!(recovered.ai_context_messages.len(), 3);
+        assert!(recovered.ai_context_messages[2]
             .message
-            .contains("<current_todo_list>"));
+            .contains("<approved_plan>"));
+        assert!(recovered
+            .ai_context_messages
+            .iter()
+            .all(|message| !message.message.contains("Planning-only")));
     }
 
     #[tokio::test]

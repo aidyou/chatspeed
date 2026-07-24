@@ -8,6 +8,7 @@ import {
   isWorkflowCompletionMessage,
   isWorkflowToolAwaitingExecution,
   normalizeVisibleCompletionReport,
+  resolveWorkflowPhaseFromPlanningMode,
   shouldRenderSubAgentCard
 } from './messageProjectionRules.js'
 
@@ -260,5 +261,13 @@ assert.equal(
   '',
   'reasoning-only completion summaries must not render'
 )
+
+assert.equal(resolveWorkflowPhaseFromPlanningMode(true, 'implementation'), 'planning')
+assert.equal(
+  resolveWorkflowPhaseFromPlanningMode(false, 'implementation'),
+  'implementation',
+  'a programmatic planning toggle update must not downgrade active implementation to standard'
+)
+assert.equal(resolveWorkflowPhaseFromPlanningMode(false, 'planning'), 'standard')
 
 console.log('messageProjectionRules tests passed')

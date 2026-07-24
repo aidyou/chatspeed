@@ -71,12 +71,15 @@ pub enum GatewayPayload {
     },
     ApprovalResolved {
         tool_call_id: String,
+        tool_name: String,
         approved: bool,
         approve_all: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         approval_status: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         execution_status: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rejection_message: Option<String>,
     },
     QueuedUserMessageRemoved {
         queued_user_message_id: String,
@@ -576,6 +579,26 @@ mod tests {
         assert_eq!(serialized["tool_name"], "bash");
         assert_eq!(serialized["arguments"]["command"], "pwd");
         assert_eq!(serialized["display_type"], "text");
+    }
+
+    #[test]
+    fn test_approval_resolved_gateway_payload_preserves_tool_identity() {
+        let payload = GatewayPayload::ApprovalResolved {
+            tool_call_id: "call_plan_123".to_string(),
+            tool_name: "submit_plan".to_string(),
+            approved: true,
+            approve_all: false,
+            approval_status: Some("approved".to_string()),
+            execution_status: Some("approval_submitted".to_string()),
+            rejection_message: None,
+        };
+        let serialized = serde_json::to_value(payload).unwrap();
+        assert_eq!(serialized["type"], "approval_resolved");
+        assert_eq!(serialized["tool_call_id"], "call_plan_123");
+        assert_eq!(serialized["tool_name"], "submit_plan");
+        assert_eq!(serialized["approval_status"], "approved");
+        assert_eq!(serialized["execution_status"], "approval_submitted");
+        assert!(serialized.get("rejection_message").is_none());
     }
 
     #[test]

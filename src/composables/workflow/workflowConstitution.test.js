@@ -61,6 +61,14 @@ const approvePlan = sourceSection(workflowCore, 'const onApprovePlan', 'const on
 assert.doesNotMatch(approvePlan, /entry\?*\.action|includes\(['"]submit plan['"]\)/i)
 assert.match(approvePlan, /isPendingApprovalEntryForTool\(entry, currentSessionId, 'submit_plan'\)/)
 
+const approvalResolvedHandler = sourceSection(
+  workflowCore,
+  "} else if (payload.type === 'approval_resolved') {",
+  "} else if (payload.type === 'tool_started') {"
+)
+assert.match(approvalResolvedHandler, /payload\.tool_name === 'submit_plan'/)
+assert.match(approvalResolvedHandler, /resolvePendingTool\(sessionId, payload\.tool_call_id\)/)
+
 const messageList = readProjectFile('src/components/workflow/WorkflowMessageList.vue')
 assert.match(messageList, /:tool-name="getMessageToolName\(message\)"/)
 assert.doesNotMatch(messageList, /:action="message\.metadata\?\.tool_name/)

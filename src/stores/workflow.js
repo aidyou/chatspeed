@@ -19,7 +19,8 @@ import {
   appendMissingPendingToolMessages,
   deriveInlinePendingApprovals,
   detectApprovalRecoveryDrift,
-  normalizeExecutionContextForApproval
+  normalizeExecutionContextForApproval,
+  resolveExecutionContextPendingTool
 } from './workflowApprovalRecovery.js';
 
 /**
@@ -1623,6 +1624,20 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
+  const resolvePendingTool = (workflowId, toolCallId) => {
+    if (!workflowId || !toolCallId) return;
+
+    const workflowIndex = workflows.value.findIndex(workflow => workflow.id === workflowId);
+    if (workflowIndex === -1) return;
+
+    const executionContext = resolveExecutionContextPendingTool(
+      workflows.value[workflowIndex].executionContext,
+      toolCallId
+    );
+    if (!executionContext) return;
+    workflows.value[workflowIndex].executionContext = executionContext;
+  };
+
   const setCurrentContextTokens = (workflowId, totalTokens, maxTokens = null) => {
     if (!workflowId) return;
     const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
@@ -1880,6 +1895,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     setRunning,
     setHasLiveSession,
     updateWorkflowStatus,
+    resolvePendingTool,
     setCurrentContextTokens,
     upsertSubAgentProgress,
     clearSubAgentProgress,

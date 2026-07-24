@@ -20,7 +20,10 @@ import {
 } from '@/composables/workflow/signalTypes'
 import { safeExecute } from './useErrorBoundary'
 import { BLOCKING_WAIT_REASONS } from './signalTypes'
-import { isPendingApprovalEntryForTool } from './messageProjectionRules'
+import {
+    isPendingApprovalEntryForTool,
+    resolveWorkflowPhaseFromPlanningMode
+} from './messageProjectionRules'
 
 const FINAL_REVIEWER_BUILTIN_AGENT_ID = 'builtin:final-code-reviewer'
 
@@ -227,7 +230,12 @@ export function useWorkflowCore({
         return `update_${snake}`
     }
     const isSyncingWorkflowConfig = ref(false)
-    const currentPhaseValue = () => (planningMode.value ? 'planning' : 'standard')
+    const currentPhaseValue = () => {
+        return resolveWorkflowPhaseFromPlanningMode(
+            planningMode.value,
+            getCurrentWorkflowAgentConfig().phase
+        )
+    }
     const getCurrentWorkflowAgentConfig = () => {
         const rawConfig =
             workflowStore.currentWorkflow?.agentConfig ??
@@ -818,6 +826,7 @@ export function useWorkflowCore({
                         payload.type === 'tool_failed'
                     ) {
                         clearPendingApprovalEntry(sessionId, payload.tool_call_id)
+                        workflowStore.resolvePendingTool(sessionId, payload.tool_call_id)
                         return
                     }
 
@@ -1008,6 +1017,7 @@ export function useWorkflowCore({
                 } else if (payload.type === 'approval_resolved') {
                     markSessionLiveFromNonTerminalEvent()
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
+                    workflowStore.resolvePendingTool(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     if (payload.approved && payload.tool_name === 'submit_plan') {
                         transitionWorkflowIntoExecutionLocally(sessionId)
@@ -1033,6 +1043,7 @@ export function useWorkflowCore({
                 } else if (payload.type === 'tool_started') {
                     markSessionLiveFromNonTerminalEvent()
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
+                    workflowStore.resolvePendingTool(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     if (payload.tool_name === 'submit_plan') {
                         transitionWorkflowIntoExecutionLocally(sessionId)
@@ -1041,6 +1052,7 @@ export function useWorkflowCore({
                 } else if (payload.type === 'tool_completed') {
                     markSessionLiveFromNonTerminalEvent()
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
+                    workflowStore.resolvePendingTool(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     const resultValue = payload.result
                     const resultText =
@@ -1058,6 +1070,7 @@ export function useWorkflowCore({
                 } else if (payload.type === 'tool_failed') {
                     markSessionLiveFromNonTerminalEvent()
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
+                    workflowStore.resolvePendingTool(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
                     workflowStore.finalizeToolExecution(
                         payload.tool_call_id,
@@ -1946,6 +1959,7 @@ export function useWorkflowCore({
 
     watch(planningMode, async (newVal) => {
         if (isSyncingWorkflowConfig.value) return
+        if (!newVal && currentPhaseValue() === 'implementation') return
         await updateWorkflowConfig('phase', newVal ? 'planning' : 'standard')
     })
 

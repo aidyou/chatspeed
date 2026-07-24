@@ -1905,17 +1905,34 @@ impl WorkflowExecutor {
             self.session_id
         );
 
-        let approved_plan = plan.clone();
+        self.activate_approved_plan(Some(tool_call_id), &plan).await
+    }
+
+    async fn activate_approved_plan(
+        &mut self,
+        tool_call_id: Option<&str>,
+        approved_plan: &str,
+    ) -> Result<(), WorkflowEngineError> {
         self.persist_approved_plan_anchor(&approved_plan).await?;
-        self.context
-            .begin_execution_segment_from_approved_plan()
-            .await?;
-        self.save_snapshot().await?;
+
+        {
+            let store = self.context.main_store.read().map_err(|error| {
+                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(error.to_string()))
+            })?;
+            store.update_workflow_todo_list(&self.session_id, "[]")?;
+        }
+        self.sync_todo_list().await?;
+        self.pending_completion_reports.clear();
+        self.next_llm_runtime_reminder = None;
 
         let mut new_policy = ExecutionPolicy::implementation();
         new_policy.approval_level = self.policy.approval_level.clone();
         self.policy = new_policy;
         self.sync_runtime_limits();
+
+        self.context
+            .begin_execution_segment_from_approved_plan()
+            .await?;
 
         let mut updated_agent_config: Option<Value> = None;
         if let Ok(store) = self.context.main_store.write() {
@@ -1942,10 +1959,62 @@ impl WorkflowExecutor {
                 .await?;
         }
 
-        self.append_approved_plan_observation(Some(tool_call_id), &approved_plan)
+        self.append_approved_plan_observation(tool_call_id, &approved_plan)
             .await?;
+        if let Some(tool_call_id) = tool_call_id.filter(|id| !id.trim().is_empty()) {
+            self.record_approved_plan_tool_completion(tool_call_id)
+                .await;
+        }
 
-        self.update_state(WorkflowState::Thinking).await
+        self.update_state(WorkflowState::Thinking).await?;
+        self.save_snapshot().await?;
+        log::info!(
+            "WorkflowExecutor {}: Approved plan activated; phase={}, segment_id={}, planning_todos_cleared=true, trigger_tool_call_id={:?}",
+            self.session_id,
+            self.policy.phase,
+            self.context.current_segment_id,
+            tool_call_id
+        );
+        Ok(())
+    }
+
+    async fn record_approved_plan_tool_completion(&self, tool_call_id: &str) {
+        let event = WorkflowEvent::tool_completed(
+            self.session_id.clone(),
+            tool_call_id.to_string(),
+            TOOL_SUBMIT_PLAN.to_string(),
+            Some(json!({
+                "summary": "Plan approved",
+                "display_type": "markdown"
+            })),
+        );
+        if let Err(error) = self.append_event(&event) {
+            log::error!(
+                "[Workflow][session={}][phase=implementation][event=tool_completed] Failed to persist submit_plan completion for tool_call_id={}: {}",
+                self.session_id,
+                tool_call_id,
+                error
+            );
+        }
+
+        if let Err(error) = self
+            .dispatch_ui_payload(GatewayPayload::ToolCompleted {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: TOOL_SUBMIT_PLAN.to_string(),
+                result: Some(json!({
+                    "summary": "Plan approved",
+                    "display_type": "markdown"
+                })),
+            })
+            .await
+        {
+            log::warn!(
+                "[Workflow][session={}][phase=implementation][event=tool_completed] Failed to dispatch submit_plan completion for tool_call_id={}: {}",
+                self.session_id,
+                tool_call_id,
+                error
+            );
+        }
     }
 
     async fn persist_approved_plan_anchor(
@@ -2402,10 +2471,12 @@ impl WorkflowExecutor {
                                 if let Err(e) = self
                                     .dispatch_ui_payload(GatewayPayload::ApprovalResolved {
                                         tool_call_id: tool_call_id.clone(),
+                                        tool_name: tool_name.clone(),
                                         approved,
                                         approve_all,
                                         approval_status: Some(approval_status.to_string()),
                                         execution_status: Some(execution_status.to_string()),
+                                        rejection_message: rejection_message.clone(),
                                     })
                                     .await
                                 {
@@ -3412,59 +3483,8 @@ impl WorkflowExecutor {
                                 })
                             });
 
-                        self.persist_approved_plan_anchor(&plan).await?;
-                        self.context
-                            .begin_execution_segment_from_approved_plan()
+                        self.activate_approved_plan(submit_plan_tool_call_id.as_deref(), &plan)
                             .await?;
-                        self.save_snapshot().await?;
-
-                        // B. Policy & State Reset
-                        let mut new_policy = ExecutionPolicy::implementation();
-                        new_policy.approval_level = self.policy.approval_level.clone();
-                        self.policy = new_policy;
-                        self.sync_runtime_limits();
-
-                        // Persist phase change to database
-                        let mut updated_agent_config: Option<Value> = None;
-                        if let Ok(store) = self.context.main_store.write() {
-                            if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
-                                let mut agent_config: serde_json::Value = snapshot
-                                    .workflow
-                                    .agent_config
-                                    .and_then(|s| serde_json::from_str(&s).ok())
-                                    .unwrap_or(serde_json::json!({}));
-                                agent_config["phase"] =
-                                    serde_json::json!(self.policy.phase.to_string());
-                                if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                                    let _ = store.update_workflow_agent_config(
-                                        &self.session_id,
-                                        &config_str,
-                                    );
-                                }
-                                updated_agent_config = Some(agent_config);
-                            }
-                        }
-
-                        // Reset step count for the new phase to ensure clear history separation
-                        self.current_step = 0;
-                        self.consecutive_no_tool_calls = 0;
-
-                        // C. Toolset Refresh: CRITICAL for giving the AI the right tools for the new phase
-                        self.register_foundation_tools().await?;
-                        self.dispatch_context_usage().await?;
-                        if let Some(agent_config) = updated_agent_config {
-                            self.dispatch_ui_payload(GatewayPayload::AgentConfigUpdated {
-                                agent_config,
-                            })
-                            .await?;
-                        }
-                        self.append_approved_plan_observation(
-                            submit_plan_tool_call_id.as_deref(),
-                            &plan,
-                        )
-                        .await?;
-
-                        self.update_state(WorkflowState::Thinking).await?;
                         continue;
                     } else {
                         log::warn!(
@@ -3719,7 +3739,7 @@ impl WorkflowExecutor {
                         .ok()
                         .and_then(|store| store.get_todo_list_for_workflow(&self.session_id).ok())
                         .is_some_and(|todos| {
-                            !todos.is_empty() && Self::todos_allow_completion_report_capture(&todos)
+                            !todos.is_empty() && self.completion_report_capture_allowed(&todos)
                         });
                     if todos_are_terminal
                         && self.capture_pending_completion_report(&persisted_response)
@@ -3919,7 +3939,7 @@ impl WorkflowExecutor {
                         .read()
                         .ok()
                         .and_then(|store| store.get_todo_list_for_workflow(&self.session_id).ok())
-                        .is_some_and(|todos| Self::todos_allow_completion_report_capture(&todos));
+                        .is_some_and(|todos| self.completion_report_capture_allowed(&todos));
                     if !self.is_child_agent_workflow()
                         && completion_report_capture_allowed
                         && self.capture_pending_completion_report(&persisted_response)
@@ -5176,6 +5196,9 @@ impl WorkflowExecutor {
                             }
                             Some("PendingTodos") => {
                                 "Do not call complete_workflow again yet. Resolve every pending or in-progress todo with the appropriate work and todo tools, then call complete_workflow with one complete non-empty `summary`."
+                            }
+                            Some("ImplementationNotStarted") => {
+                                "Do not call complete_workflow again yet. Execute the approved plan with one concrete work tool first, creating replacement execution todos when the plan has multiple units."
                             }
                             _ => {
                                 "Do not repeat the same complete_workflow call. Read the immediately preceding rejection, correct the stated cause, and only then try completion again."
@@ -7162,6 +7185,33 @@ mod recovery_tests {
         }
     }
 
+    struct RecordingGateway {
+        payloads: Arc<std::sync::Mutex<Vec<GatewayPayload>>>,
+    }
+
+    #[async_trait]
+    impl Gateway for RecordingGateway {
+        async fn send(
+            &self,
+            _session_id: &str,
+            payload: GatewayPayload,
+        ) -> Result<(), WorkflowEngineError> {
+            self.payloads
+                .lock()
+                .map_err(|error| WorkflowEngineError::General(error.to_string()))?
+                .push(payload);
+            Ok(())
+        }
+
+        async fn inject_input(
+            &self,
+            _session_id: &str,
+            _input: String,
+        ) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+    }
+
     struct UnusedSubAgentFactory;
 
     #[async_trait]
@@ -7185,6 +7235,149 @@ mod recovery_tests {
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
         Arc::new(std::sync::RwLock::new(store))
+    }
+
+    #[tokio::test]
+    async fn approved_plan_transition_starts_a_clean_execution_phase() {
+        let store = create_test_store();
+        let session_id = "approved-plan-clean-execution";
+        let agent = Agent::new(
+            "approved-plan-agent".to_string(),
+            "Approved Plan Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .add_agent(&agent)
+                .expect("failed to add test agent");
+            store_guard
+                .create_workflow(session_id, "Ship the fix", &agent.id, None, None)
+                .expect("failed to create test workflow");
+            store_guard
+                .update_workflow_todo_list(
+                    session_id,
+                    r#"[{"id":"plan-1","subject":"Investigate","status":"completed"}]"#,
+                )
+                .expect("failed to seed planning todos");
+        }
+
+        let observed_payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: observed_payloads.clone(),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(13).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::planning_strict(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::AwaitingApproval;
+        executor
+            .context
+            .add_message(
+                "user".to_string(),
+                "Ship the fix".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user request");
+        executor
+            .context
+            .add_message(
+                "assistant".to_string(),
+                "Planning-only investigation".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add planning history");
+
+        executor
+            .activate_approved_plan(
+                Some("submit-plan-call"),
+                "1. Edit the file\n2. Run focused tests",
+            )
+            .await
+            .expect("approved plan transition should succeed");
+
+        assert_eq!(executor.policy.phase, ExecutionPhase::Implementation);
+        assert_eq!(executor.state, WorkflowState::Thinking);
+        assert_eq!(executor.context.ai_context_messages.len(), 2);
+        assert!(executor.context.ai_context_messages.iter().all(|message| {
+            !message.message.contains("Planning-only") && message.role == "user"
+        }));
+        assert!(executor.context.ai_context_messages[1]
+            .message
+            .contains("<approved_plan>\n1. Edit the file\n2. Run focused tests\n</approved_plan>"));
+        assert!(observed_payloads
+            .lock()
+            .expect("payload lock")
+            .iter()
+            .any(|payload| matches!(
+                payload,
+                GatewayPayload::ToolCompleted {
+                    tool_call_id,
+                    tool_name,
+                    ..
+                } if tool_call_id == "submit-plan-call" && tool_name == TOOL_SUBMIT_PLAN
+            )));
+
+        let store_guard = store.read().expect("store lock");
+        assert!(store_guard
+            .get_todo_list_for_workflow(session_id)
+            .expect("failed to read execution todos")
+            .is_empty());
+        let snapshot = store_guard
+            .get_execution_context(session_id)
+            .expect("failed to read execution snapshot")
+            .expect("execution snapshot should exist");
+        assert_eq!(
+            snapshot.current_segment_id,
+            executor.context.current_segment_id
+        );
+        assert_eq!(snapshot.state, RuntimeState::Running);
     }
 
     #[tokio::test]

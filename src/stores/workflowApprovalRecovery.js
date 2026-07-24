@@ -45,6 +45,21 @@ export const normalizeExecutionContextForApproval = (ctx) => {
   };
 };
 
+export const resolveExecutionContextPendingTool = (ctx, toolCallId) => {
+  const normalized = normalizeExecutionContextForApproval(ctx);
+  const normalizedToolCallId = String(toolCallId || '').trim();
+  if (!normalized || !normalizedToolCallId) return normalized;
+
+  const nextContext = {
+    ...normalized,
+    pendingTools: normalized.pendingTools.filter(
+      tool => tool.toolCallId !== normalizedToolCallId
+    )
+  };
+  delete nextContext.pending_tools;
+  return nextContext;
+};
+
 export const buildStructuredPendingToolMetadata = (
   pendingTool = {},
   { summary = DEFAULT_PENDING_SUMMARY } = {}

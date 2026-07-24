@@ -634,7 +634,7 @@ pub const APPROVED_PLAN_EXECUTION_REMINDER: &str = r#"The plan has been approved
 
 Do not ask the user whether to start, continue, or confirm execution of this approved plan. Use `ask_user` only if you discover a new blocking ambiguity, safety issue, missing credential, destructive action, or major strategy change that is not covered by the approved plan.
 
-The approved plan governs implementation scope and strategy. The todo list carried across approval is a pre-approval snapshot, not the new execution queue. If implementation contains multiple concrete units, meaningful verification steps, or real interruption risk, your first implementation tracking action must be `todo_create` with `mode="replace"`, deriving execution todos from the approved plan. Never append execution todos to the pre-approval list. The execution todo list tracks progress; it does not replace the approved plan and must not expand or contradict the approved plan. Skip execution todos only when the approved work is a single immediately verifiable unit."#;
+The approved plan governs implementation scope and strategy. Planning todos ended at approval and the active execution todo list now starts empty. If implementation contains multiple concrete units, meaningful verification steps, or real interruption risk, your first implementation tracking action must be `todo_create` with `mode="replace"`, deriving execution todos from the approved plan. The execution todo list tracks progress; it does not replace the approved plan and must not expand or contradict the approved plan. Skip execution todos only when the approved work is a single immediately verifiable unit."#;
 
 #[cfg(test)]
 mod tests {
@@ -717,7 +717,6 @@ mod tests {
         for prompt in [EXECUTION_MODE_PROMPT, APPROVED_PLAN_EXECUTION_REMINDER] {
             for required in [
                 "`todo_create` with `mode=\"replace\"`",
-                "Never append execution todos to the pre-approval list",
                 "must not expand or contradict the approved plan",
                 "single immediately verifiable unit",
             ] {
