@@ -21,6 +21,38 @@ fn strip_benign_shell_redirection(command: &str) -> String {
         .replace("&>/dev/null", " ")
 }
 
+pub(crate) fn contains_unquoted_shell_operator(command: &str) -> bool {
+    let mut chars = command.chars();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' && !in_single_quote {
+            escaped = true;
+            continue;
+        }
+        if ch == '\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            continue;
+        }
+        if ch == '"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            continue;
+        }
+        if !in_single_quote && !in_double_quote && matches!(ch, ';' | '&' | '|' | '\n') {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub(crate) fn split_shell_command_segments(command: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
@@ -276,7 +308,39 @@ pub(crate) fn generate_shell_approval_patterns(command: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_shell_stage, generate_shell_approval_patterns, ShellStage};
+    use super::{
+        classify_shell_stage, contains_unquoted_shell_operator, generate_shell_approval_patterns,
+        ShellStage,
+    };
+
+    #[test]
+    fn detects_unquoted_compound_operators_without_matching_quoted_arguments() {
+        for command in [
+            "cargo test && git status",
+            "cargo test; git status",
+            "cargo test || git status",
+            "cargo test | cat",
+            "cargo test |& cat",
+            "cargo test &",
+            "cargo test\ngit status",
+        ] {
+            assert!(
+                contains_unquoted_shell_operator(command),
+                "expected operator in {command}"
+            );
+        }
+        for command in [
+            "cargo test -- --exact 'a;b'",
+            "echo \"a|b\"",
+            "echo 'a&&b'",
+            "cargo test \\& literal",
+        ] {
+            assert!(
+                !contains_unquoted_shell_operator(command),
+                "unexpected operator in {command}"
+            );
+        }
+    }
 
     #[test]
     fn classify_shell_stage_ignores_benign_stream_merge_and_tail_filter() {

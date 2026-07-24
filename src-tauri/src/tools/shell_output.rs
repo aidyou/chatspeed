@@ -2,8 +2,9 @@ use crate::libs::ai_temp::{
     persist_large_tool_output, persist_tool_output, LARGE_TOOL_OUTPUT_CHAR_LIMIT,
 };
 use crate::tools::helper::{
-    detect_json_stdout, is_git_log_command, is_go_build_or_test_command, is_node_build_command,
-    reduce_command_output, reduce_priority_log_output, should_reduce_priority_log,
+    contains_unquoted_shell_operator, detect_json_stdout, is_git_log_command,
+    is_go_build_or_test_command, is_node_build_command, reduce_command_output,
+    reduce_priority_log_output, should_reduce_priority_log,
 };
 use crate::tools::ToolCallResult;
 use serde_json::json;
@@ -24,8 +25,11 @@ pub(crate) fn build_shell_tool_result(
         normalize_shell_output_streams(command_str, exit_code, stdout, stderr);
     let raw_content = format_shell_output(exit_code, &normalized_stdout, &normalized_stderr);
     let normalized_command = normalize_command(command_str);
+    let has_compound_shell_operator = contains_unquoted_shell_operator(command_str);
     let json_output = detect_json_stdout(&normalized_stdout, &normalized_stderr);
-    let command_reduction = reduce_command_output(&normalized_command, exit_code, &raw_content);
+    let command_reduction = (!has_compound_shell_operator)
+        .then(|| reduce_command_output(&normalized_command, exit_code, &raw_content))
+        .flatten();
     let (display_content, llm_content, output_was_reduced) =
         if let Some(reduction) = command_reduction.as_ref() {
             let display_stdout = truncate_with_marker(&normalized_stdout, MAX_DISPLAY_CHARS);
@@ -91,8 +95,9 @@ pub(crate) fn should_render_stderr_line_as_stdout(command_str: &str, line: &str)
 }
 
 pub(crate) fn should_collect_stderr_line_as_stdout(command_str: &str, line: &str) -> bool {
-    let normalized_command = normalize_command(command_str);
-    is_go_build_or_test_command(&normalized_command) && line.starts_with("go: downloading ")
+    !contains_unquoted_shell_operator(command_str)
+        && is_go_build_or_test_command(&normalize_command(command_str))
+        && line.starts_with("go: downloading ")
 }
 
 pub(crate) fn normalize_shell_output_streams(
@@ -104,7 +109,7 @@ pub(crate) fn normalize_shell_output_streams(
     let stdout = strip_ansi_escape_sequences(stdout);
     let stderr = strip_ansi_escape_sequences(stderr);
 
-    if exit_code != 0 || stderr.trim().is_empty() {
+    if exit_code != 0 || stderr.trim().is_empty() || contains_unquoted_shell_operator(command_str) {
         return (stdout, stderr);
     }
 
@@ -648,6 +653,65 @@ mod tests {
     }
 
     #[test]
+    fn compound_specialized_commands_preserve_aggregate_output() {
+        let cases = [
+            (
+                "cargo test && git status",
+                "running test suite\ntest result: ok\nOn branch main\nmodified: src/main.rs\n",
+                "On branch main",
+            ),
+            (
+                "pnpm build; git status",
+                "✓ built in 1.00s\nOn branch main\nmodified: src/main.rs\n",
+                "On branch main",
+            ),
+            (
+                "pytest || git status",
+                "FAILED tests/example.py::test_value\nOn branch main\nmodified: src/main.rs\n",
+                "On branch main",
+            ),
+            (
+                "pnpm vitest run |& cat",
+                "Tests  1 passed (1)\ntrailing pipeline output\n",
+                "trailing pipeline output",
+            ),
+            (
+                "cargo test\ngit status",
+                "test result: ok\nOn branch main\nmodified: src/main.rs\n",
+                "On branch main",
+            ),
+            (
+                "pnpm build\ngit status",
+                "✓ built in 1.00s\nOn branch main\nmodified: src/main.rs\n",
+                "On branch main",
+            ),
+            (
+                "pytest\ngit status",
+                "FAILED tests/example.py::test_value\nOn branch main\nmodified: src/main.rs\n",
+                "On branch main",
+            ),
+        ];
+
+        for (command, stdout, required_output) in cases {
+            let result = build_shell_tool_result(command, 0, stdout, "");
+            let structured = result
+                .structured_content
+                .expect("structured content missing");
+            let llm_content = structured["llm_content"]
+                .as_str()
+                .expect("llm content missing");
+
+            assert!(
+                llm_content.contains(required_output),
+                "expected aggregate output for {command}"
+            );
+            assert!(!llm_content.contains("Build result:"));
+            assert!(!llm_content.contains("Pytest result:"));
+            assert!(!llm_content.contains("Vitest result:"));
+        }
+    }
+
+    #[test]
     fn git_status_removes_hints_and_persists_complete_output() {
         let stdout = "On branch main\nYour branch is ahead of 'origin/main' by 1 commit.\n\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n  (use \"git restore <file>...\" to discard changes in working directory)\n\tmodified:   src/main.rs\n\nUntracked files:\n  (use \"git add <file>...\" to include in what will be committed)\n\tnew file.txt\n";
         let result = build_shell_tool_result("git status", 0, stdout, "");
@@ -1046,6 +1110,27 @@ mod tests {
         assert!(stdout.is_empty());
         assert!(stderr.contains("go: downloading github.com/foo/bar v1.0.0"));
         assert!(stderr.contains("build failed"));
+    }
+
+    #[test]
+    fn compound_commands_do_not_reclassify_successful_stderr() {
+        let node_command = "pnpm build\ngit status";
+        let node_stderr = "build warning\n";
+        let (node_stdout, node_remaining_stderr) =
+            normalize_shell_output_streams(node_command, 0, "On branch main\n", node_stderr);
+        assert_eq!(node_stdout, "On branch main\n");
+        assert_eq!(node_remaining_stderr, node_stderr);
+
+        let go_command = "go build ./...\ngit status";
+        let go_stderr = "go: downloading github.com/foo/bar v1.0.0\n";
+        let (go_stdout, go_remaining_stderr) =
+            normalize_shell_output_streams(go_command, 0, "On branch main\n", go_stderr);
+        assert_eq!(go_stdout, "On branch main\n");
+        assert_eq!(go_remaining_stderr, go_stderr);
+        assert!(!should_render_stderr_line_as_stdout(
+            go_command,
+            "go: downloading github.com/foo/bar v1.0.0"
+        ));
     }
 
     #[test]

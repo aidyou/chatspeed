@@ -1,5 +1,5 @@
 use super::{reduce_priority_log_output, should_reduce_priority_log, CommandOutputReducer};
-use crate::tools::helper::{shell_tokens, split_shell_command_segments};
+use crate::tools::helper::{contains_unquoted_shell_operator, shell_tokens};
 
 const BUILD_TAIL_LINES: usize = 20;
 const TEST_TAIL_LINES: usize = 30;
@@ -51,15 +51,18 @@ pub(crate) fn is_go_build_or_test_command(normalized_command: &str) -> bool {
 }
 
 fn command_segments(command: &str) -> Vec<Vec<String>> {
-    split_shell_command_segments(command)
-        .into_iter()
-        .filter_map(|segment| shell_tokens(&segment))
+    if contains_unquoted_shell_operator(command) {
+        return Vec::new();
+    }
+
+    shell_tokens(command)
         .map(|tokens| {
             tokens
                 .into_iter()
                 .skip_while(is_environment_assignment)
                 .collect()
         })
+        .into_iter()
         .collect()
 }
 
@@ -102,7 +105,6 @@ mod tests {
             "cargo check",
             "cargo check --workspace",
             "RUSTFLAGS='-D warnings' cargo clippy --all-targets",
-            "cd app && cargo build --release",
             "go build ./...",
         ] {
             assert!(is_rust_or_go_build_command(command), "expected {command}");
@@ -111,7 +113,6 @@ mod tests {
         for command in [
             "cargo test",
             "cargo test reducer --lib",
-            "cd server; go test ./...",
             "GOFLAGS=-mod=mod go test ./pkg/...",
         ] {
             assert!(is_rust_or_go_test_command(command), "expected {command}");
@@ -121,6 +122,23 @@ mod tests {
     #[test]
     fn does_not_match_unrelated_cargo_or_go_commands() {
         for command in ["cargo run", "cargo fmt", "go fmt ./...", "echo cargo build"] {
+            assert!(
+                !is_rust_or_go_build_command(command),
+                "unexpected {command}"
+            );
+            assert!(!is_rust_or_go_test_command(command), "unexpected {command}");
+        }
+    }
+
+    #[test]
+    fn does_not_match_compound_commands() {
+        for command in [
+            "cargo test && git status",
+            "cargo build; git status",
+            "go test ./... || git status",
+            "cargo test | cat",
+            "go build ./... |& cat",
+        ] {
             assert!(
                 !is_rust_or_go_build_command(command),
                 "unexpected {command}"

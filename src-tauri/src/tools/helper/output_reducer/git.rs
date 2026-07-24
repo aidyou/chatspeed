@@ -1,5 +1,7 @@
 use super::CommandOutputReducer;
-use crate::tools::helper::{shell_tokens, split_shell_command_segments};
+use crate::tools::helper::{
+    contains_unquoted_shell_operator, shell_tokens, split_shell_command_segments,
+};
 
 pub(crate) struct GitReducer;
 
@@ -67,40 +69,15 @@ fn git_command(command: &str) -> Option<GitCommand> {
 }
 
 fn sole_git_command_tokens(command: &str) -> Option<Vec<String>> {
-    let segments = split_shell_command_segments(command);
-    let (last, prefixes) = segments.split_last()?;
-    if prefixes
-        .iter()
-        .any(|segment| !is_navigation_segment(segment))
-    {
+    if contains_unquoted_shell_operator(command) {
         return None;
     }
 
-    let tokens = shell_tokens(last)?
+    let tokens = shell_tokens(command)?
         .into_iter()
         .skip_while(is_environment_assignment)
         .collect::<Vec<_>>();
-    if tokens
-        .iter()
-        .any(|token| token.starts_with('|') || token == "&" || token.starts_with("&|"))
-    {
-        return None;
-    }
     (tokens.first().is_some_and(|token| token == "git")).then_some(tokens)
-}
-
-fn is_navigation_segment(segment: &str) -> bool {
-    let Some(tokens) = shell_tokens(segment) else {
-        return false;
-    };
-    let tokens = tokens
-        .into_iter()
-        .skip_while(is_environment_assignment)
-        .collect::<Vec<_>>();
-    matches!(
-        tokens.first().map(String::as_str),
-        Some("cd" | "pushd" | "popd")
-    )
 }
 
 fn git_subcommand(tokens: &[String]) -> Option<&str> {
@@ -365,7 +342,6 @@ mod tests {
         for command in [
             "git status",
             "git -C app status --short",
-            "cd app && git diff HEAD~1",
             "GIT_PAGER=cat git show HEAD",
             "git add src/main.rs",
             "git commit -m message",
@@ -374,8 +350,8 @@ mod tests {
         ] {
             assert!(git_command(command).is_some(), "expected {command}");
         }
-        assert!(git_command("cd app && git diff HEAD~1").is_some());
         for command in [
+            "cd app && git diff HEAD~1",
             "git diff && git status",
             "git show; echo trailing output",
             "git status | cat",

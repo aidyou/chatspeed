@@ -1,5 +1,5 @@
 use super::CommandOutputReducer;
-use crate::tools::helper::{shell_tokens, split_shell_command_segments};
+use crate::tools::helper::{contains_unquoted_shell_operator, shell_tokens};
 
 const BUILD_FAILURE_TAIL_LINES: usize = 30;
 const KILOBYTE_BYTES: f64 = 1024.0;
@@ -195,9 +195,8 @@ fn format_size(bytes: f64) -> String {
 }
 
 pub(crate) fn is_node_build_command(normalized_command: &str) -> bool {
-    split_shell_command_segments(normalized_command)
-        .iter()
-        .any(|segment| is_node_build_command_segment(segment))
+    !contains_unquoted_shell_operator(normalized_command)
+        && is_node_build_command_segment(normalized_command)
 }
 
 fn is_node_build_command_segment(command: &str) -> bool {
@@ -284,14 +283,24 @@ mod tests {
             "yarn run tauri build",
             "yarm tauri build",
             "yarm run tauri build",
-            "cd app && pnpm build --mode production",
-            "cd app; pnpm build --mode production",
             "CI=1 pnpm build",
             "BUILD_LABEL=\"release candidate\" pnpm build",
-            "cd app; BUILD_LABEL=\"release candidate\" pnpm build",
         ] {
             assert!(reducer.matches(command), "expected to match {command}");
             assert!(is_node_build_command(command));
+        }
+    }
+
+    #[test]
+    fn does_not_match_compound_commands() {
+        for command in [
+            "pnpm build && git status",
+            "pnpm build; git status",
+            "pnpm build || git status",
+            "pnpm build | cat",
+            "pnpm build |& cat",
+        ] {
+            assert!(!is_node_build_command(command), "unexpected {command}");
         }
     }
 

@@ -1,5 +1,5 @@
 use super::CommandOutputReducer;
-use crate::tools::helper::{shell_tokens, split_shell_command_segments};
+use crate::tools::helper::{contains_unquoted_shell_operator, shell_tokens};
 use serde_json::Value;
 
 const MAX_FAILURES: usize = 10;
@@ -37,78 +37,77 @@ enum TestFramework {
 }
 
 fn test_framework(command: &str) -> Option<TestFramework> {
-    split_shell_command_segments(command)
-        .iter()
-        .filter_map(|segment| shell_tokens(segment))
-        .map(|tokens| {
-            tokens
-                .into_iter()
-                .skip_while(|token| is_environment_assignment(token))
-                .collect::<Vec<_>>()
-        })
-        .find_map(|tokens| match tokens.as_slice() {
-            [python, module, framework, ..]
-                if matches!(python.as_str(), "python" | "python3")
-                    && module == "-m"
-                    && framework == "pytest" =>
-            {
-                Some(TestFramework::Pytest)
-            }
-            [framework, ..] if framework == "pytest" => Some(TestFramework::Pytest),
-            [runner, subcommand, framework, ..]
-                if runner == "uv" && subcommand == "run" && framework == "pytest" =>
-            {
-                Some(TestFramework::Pytest)
-            }
-            [runner, subcommand, python, module, framework, ..]
-                if runner == "uv"
-                    && subcommand == "run"
-                    && matches!(python.as_str(), "python" | "python3")
-                    && module == "-m"
-                    && framework == "pytest" =>
-            {
-                Some(TestFramework::Pytest)
-            }
-            [runner, framework, ..]
-                if matches!(runner.as_str(), "npx" | "pnpm" | "yarn") && framework == "vitest" =>
-            {
-                Some(TestFramework::Vitest)
-            }
-            [runner, executable, framework, ..]
-                if matches!(runner.as_str(), "pnpm" | "yarn")
-                    && executable == "exec"
-                    && framework == "vitest" =>
-            {
-                Some(TestFramework::Vitest)
-            }
-            [framework, ..] if framework == "vitest" => Some(TestFramework::Vitest),
-            [runner, framework, ..]
-                if matches!(runner.as_str(), "npx" | "pnpm" | "yarn") && framework == "jest" =>
-            {
-                Some(TestFramework::Jest)
-            }
-            [runner, executable, framework, ..]
-                if matches!(runner.as_str(), "pnpm" | "yarn")
-                    && executable == "exec"
-                    && framework == "jest" =>
-            {
-                Some(TestFramework::Jest)
-            }
-            [framework, ..] if framework == "jest" => Some(TestFramework::Jest),
-            [runner, script, ..]
-                if matches!(runner.as_str(), "npm" | "pnpm" | "yarn") && script == "test" =>
-            {
-                Some(TestFramework::JavaScript)
-            }
-            [runner, subcommand, script, ..]
-                if matches!(runner.as_str(), "npm" | "pnpm" | "yarn")
-                    && subcommand == "run"
-                    && script == "test" =>
-            {
-                Some(TestFramework::JavaScript)
-            }
-            _ => None,
-        })
+    if contains_unquoted_shell_operator(command) {
+        return None;
+    }
+
+    let tokens = shell_tokens(command)?
+        .into_iter()
+        .skip_while(is_environment_assignment)
+        .collect::<Vec<_>>();
+    match tokens.as_slice() {
+        [python, module, framework, ..]
+            if matches!(python.as_str(), "python" | "python3")
+                && module == "-m"
+                && framework == "pytest" =>
+        {
+            Some(TestFramework::Pytest)
+        }
+        [framework, ..] if framework == "pytest" => Some(TestFramework::Pytest),
+        [runner, subcommand, framework, ..]
+            if runner == "uv" && subcommand == "run" && framework == "pytest" =>
+        {
+            Some(TestFramework::Pytest)
+        }
+        [runner, subcommand, python, module, framework, ..]
+            if runner == "uv"
+                && subcommand == "run"
+                && matches!(python.as_str(), "python" | "python3")
+                && module == "-m"
+                && framework == "pytest" =>
+        {
+            Some(TestFramework::Pytest)
+        }
+        [runner, framework, ..]
+            if matches!(runner.as_str(), "npx" | "pnpm" | "yarn") && framework == "vitest" =>
+        {
+            Some(TestFramework::Vitest)
+        }
+        [runner, executable, framework, ..]
+            if matches!(runner.as_str(), "pnpm" | "yarn")
+                && executable == "exec"
+                && framework == "vitest" =>
+        {
+            Some(TestFramework::Vitest)
+        }
+        [framework, ..] if framework == "vitest" => Some(TestFramework::Vitest),
+        [runner, framework, ..]
+            if matches!(runner.as_str(), "npx" | "pnpm" | "yarn") && framework == "jest" =>
+        {
+            Some(TestFramework::Jest)
+        }
+        [runner, executable, framework, ..]
+            if matches!(runner.as_str(), "pnpm" | "yarn")
+                && executable == "exec"
+                && framework == "jest" =>
+        {
+            Some(TestFramework::Jest)
+        }
+        [framework, ..] if framework == "jest" => Some(TestFramework::Jest),
+        [runner, script, ..]
+            if matches!(runner.as_str(), "npm" | "pnpm" | "yarn") && script == "test" =>
+        {
+            Some(TestFramework::JavaScript)
+        }
+        [runner, subcommand, script, ..]
+            if matches!(runner.as_str(), "npm" | "pnpm" | "yarn")
+                && subcommand == "run"
+                && script == "test" =>
+        {
+            Some(TestFramework::JavaScript)
+        }
+        _ => None,
+    }
 }
 
 fn is_environment_assignment(token: &String) -> bool {
@@ -397,6 +396,15 @@ mod tests {
             assert!(test_framework(command).is_some(), "expected {command}");
         }
         assert!(test_framework("echo pytest").is_none());
+        for command in [
+            "pytest && git status",
+            "pytest; git status",
+            "pytest || git status",
+            "pytest | cat",
+            "pnpm vitest run |& cat",
+        ] {
+            assert!(test_framework(command).is_none(), "unexpected {command}");
+        }
     }
 
     #[test]

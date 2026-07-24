@@ -1,5 +1,33 @@
 [
   {
+    "pattern": "^ant -diagnostics($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ant -p($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ant -projecthelp($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ant -version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^awk .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^bandit --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^bandit($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^base64($| .*)",
     "decision": "allow"
   },
@@ -8,7 +36,47 @@
     "decision": "allow"
   },
   {
+    "pattern": "^black --check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^black --diff($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^black --version($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^blkid($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^brew config($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^brew doctor($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^brew info($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^brew list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^bundle list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^bzcat($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^bzip2 -t($| .*)",
     "decision": "allow"
   },
   {
@@ -16,7 +84,59 @@
     "decision": "allow"
   },
   {
+    "pattern": "^cargo --list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo clippy($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo fmt($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo install --list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo locate-project($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo metadata($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo pkgid($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo test($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo tree($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo verify-project($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cargo version($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^cat .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^cksum($| .*)",
     "decision": "allow"
   },
   {
@@ -24,7 +144,31 @@
     "decision": "allow"
   },
   {
+    "pattern": "^codesign -d($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^comm($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^command($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^composer show($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^conda --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^conda info($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^conda list($| .*)",
     "decision": "allow"
   },
   {
@@ -33,6 +177,10 @@
   },
   {
     "pattern": "^date($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^defaults read($| .*)",
     "decision": "allow"
   },
   {
@@ -48,7 +196,39 @@
     "decision": "allow"
   },
   {
+    "pattern": "^diskutil list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^dmesg($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker compose config($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker compose images($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker compose logs($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^docker compose ps($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker compose top($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker container ls($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker image ls($| .*)",
     "decision": "allow"
   },
   {
@@ -57,6 +237,14 @@
   },
   {
     "pattern": "^docker info($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker inspect($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^docker logs($| .*)",
     "decision": "allow"
   },
   {
@@ -72,6 +260,10 @@
     "decision": "allow"
   },
   {
+    "pattern": "^docker system df($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^docker version($| .*)",
     "decision": "allow"
   },
@@ -84,6 +276,10 @@
     "decision": "allow"
   },
   {
+    "pattern": "^echo($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^file($| .*)",
     "decision": "allow"
   },
@@ -92,7 +288,19 @@
     "decision": "allow"
   },
   {
+    "pattern": "^flake8 --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^flake8($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^free($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gem environment($| .*)",
     "decision": "allow"
   },
   {
@@ -104,11 +312,19 @@
     "decision": "allow"
   },
   {
+    "pattern": "^git --version($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^git blame($| .*)",
     "decision": "allow"
   },
   {
     "pattern": "^git branch($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git config --list($| .*)",
     "decision": "allow"
   },
   {
@@ -120,11 +336,11 @@
     "decision": "allow"
   },
   {
-    "pattern": "^git log($| .*)",
+    "pattern": "^git grep .*",
     "decision": "allow"
   },
   {
-    "pattern": "^git remote($| .*)",
+    "pattern": "^git log($| .*)",
     "decision": "allow"
   },
   {
@@ -132,11 +348,27 @@
     "decision": "allow"
   },
   {
+    "pattern": "^git ls-remote($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^git reflog($| .*)",
     "decision": "allow"
   },
   {
+    "pattern": "^git remote($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git rev-list($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^git rev-parse($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^git shortlog($| .*)",
     "decision": "allow"
   },
   {
@@ -160,7 +392,131 @@
     "decision": "allow"
   },
   {
+    "pattern": "^git worktree list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go clean -n($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go doc($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go env($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go fmt -n($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go help($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go mod graph($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go mod verify($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go mod why($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go test($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go tool dist list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^go vet($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gofmt -d($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gofmt -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle -v($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle buildEnvironment($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle components($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle dependencies($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle dependencyInsight($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle model($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle outgoingVariants($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle projects($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle properties($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle resolvableConfigurations($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle tasks($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gradle test($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^grep .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gzip -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^gzip -t($| .*)",
     "decision": "allow"
   },
   {
@@ -168,19 +524,127 @@
     "decision": "allow"
   },
   {
+    "pattern": "^helm history($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^helm list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^helm status($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^hexdump($| .*)",
     "decision": "allow"
   },
   {
-    "pattern": "^hostname$",
-    "decision": "allow"
-  },
-  {
-    "pattern": "^id($| .*)",
-    "decision": "allow"
-  },
-  {
     "pattern": "^iptables -L($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^isort --check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^isort --diff($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^isort --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^jar --list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^jar -t($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^jarsigner -verify($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^java -version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^java --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^javac -version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^javac --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^javap($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^jdeprscan($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^jdeps($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^jps($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^jstack($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^jstat($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^jq .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^keytool -list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^keytool -printcert($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^kubectl api-resources($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^kubectl api-versions($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^kubectl describe($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^kubectl get($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^kubectl logs($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^launchctl list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ldd($| .*)",
     "decision": "allow"
   },
   {
@@ -208,7 +672,27 @@
     "decision": "allow"
   },
   {
+    "pattern": "^mamba --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mamba info($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mamba list($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^md5sum($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mdfind .*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mdls($| .*)",
     "decision": "allow"
   },
   {
@@ -216,11 +700,135 @@
     "decision": "allow"
   },
   {
+    "pattern": "^mvn -v($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mvn --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mvn dependency:list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mvn dependency:tree($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mvn help:all-profiles($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mvn help:describe($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mvn help:effective-pom($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mvn help:effective-settings($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mvn help:system($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mvn test($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mvn validate($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mypy --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mypy($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^mysql --version($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^netstat($| .*)",
     "decision": "allow"
   },
   {
+    "pattern": "^nm($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^node -c($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^node --check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^node --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm bin($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm cache verify($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm config get($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm config list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm diff($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm doctor($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm explain($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^npm list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm pack --dry-run($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm prefix($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm query($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm root($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^npm test($| .*)",
     "decision": "allow"
   },
   {
@@ -232,7 +840,83 @@
     "decision": "allow"
   },
   {
+    "pattern": "^openssl version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^otool($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pgrep($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^php -i($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^php -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^php -m($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^php --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pidof($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip -V($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip cache dir($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip cache info($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip cache list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip config get($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip config list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip debug($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^pip freeze($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip hash($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pip inspect($| .*)",
     "decision": "allow"
   },
   {
@@ -244,11 +928,183 @@
     "decision": "allow"
   },
   {
+    "pattern": "^pipdeptree($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pipenv --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pipenv graph($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pipenv verify($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pkgutil --pkgs($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^plutil -p($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pnpm --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pnpm bin($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pnpm config get($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pnpm config list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pnpm list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pnpm root($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pnpm store path($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pnpm store status($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pnpm test($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pnpm why($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^poetry --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^poetry check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^poetry config --list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^poetry env info($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^poetry env list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^poetry lock --check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^poetry show($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^printf($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^ps($| .*)",
     "decision": "allow"
   },
   {
+    "pattern": "^psql --version($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^pwd($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pylint --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pylint($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pyright --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pyright($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pytest --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pytest --collect-only($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pytest --fixtures($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pytest --markers($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^pytest($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^python -V($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^python -m json\\.tool($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^python -m platform($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^python -m site($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^python -m sysconfig($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^python --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^python3 -V($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^python3 --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^readelf($| .*)",
     "decision": "allow"
   },
   {
@@ -260,7 +1116,87 @@
     "decision": "allow"
   },
   {
+    "pattern": "^redis-cli --version($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^rg($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ruby --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ruff --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ruff check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ruff format --check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ruff format --diff($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ruff linter($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^ruff rule($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^rustc --explain($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^rustc --print($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^rustc --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^rustup component list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^rustup default$",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^rustup show($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^rustup target list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^rustup toolchain list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^rustup which($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^sbt --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^sbt about($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^serialver($| .*)",
     "decision": "allow"
   },
   {
@@ -292,6 +1228,14 @@
     "decision": "allow"
   },
   {
+    "pattern": "^sysctl -[an]($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^system_profiler($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^systemctl status($| .*)",
     "decision": "allow"
   },
@@ -301,6 +1245,50 @@
   },
   {
     "pattern": "^tar -t.*",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^terraform output($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^terraform plan($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^terraform show($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^terraform state list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^timedatectl status($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^top -b($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^top -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^tox --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^tox -a($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^tox -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^tox --listenvs($| .*)",
     "decision": "allow"
   },
   {
@@ -336,6 +1324,78 @@
     "decision": "allow"
   },
   {
+    "pattern": "^uv --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv cache dir($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv lock --check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv pip check($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv pip compile($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv pip freeze($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv pip list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv pip show($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv pip tree($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv python dir($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv python find($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv python list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv tool dir($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv tool list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv tree($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^uv version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^virtualenv --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^vm_stat($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^wc($| .*)",
     "decision": "allow"
   },
@@ -348,7 +1408,11 @@
     "decision": "allow"
   },
   {
-    "pattern": "^whoami($| .*)",
+    "pattern": "^xcode-select -p($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^xcodebuild -list($| .*)",
     "decision": "allow"
   },
   {
@@ -356,7 +1420,87 @@
     "decision": "allow"
   },
   {
+    "pattern": "^xz -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^xz -t($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^xzcat($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn --version($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn bin($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn config get($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn config list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn pack --dry-run($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn plugin list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn plugin runtime($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn test($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn why($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn workspaces info($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yarn workspaces list($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^yq($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^zcat($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^zip -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^zstd -l($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^zstd -t($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^zstdcat($| .*)",
     "decision": "allow"
   },
   {
@@ -376,6 +1520,14 @@
     "decision": "allow"
   },
   {
+    "pattern": "^Compare-Object($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-Alias($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^Get-ChildItem($| .*)",
     "decision": "allow"
   },
@@ -392,6 +1544,18 @@
     "decision": "allow"
   },
   {
+    "pattern": "^Get-Date($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-DnsClientCache($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-ExecutionPolicy($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^Get-FileHash($| .*)",
     "decision": "allow"
   },
@@ -404,7 +1568,19 @@
     "decision": "allow"
   },
   {
+    "pattern": "^Get-Module($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-NetAdapter($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^Get-NetIPAddress($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-NetRoute($| .*)",
     "decision": "allow"
   },
   {
@@ -416,7 +1592,15 @@
     "decision": "allow"
   },
   {
+    "pattern": "^Get-PSDrive($| .*)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^Get-Service($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Get-Variable($| .*)",
     "decision": "allow"
   },
   {
@@ -449,6 +1633,10 @@
   },
   {
     "pattern": "^where($| .*)",
+    "decision": "allow"
+  },
+  {
+    "pattern": "^Write-Output($| .*)",
     "decision": "allow"
   }
 ]
