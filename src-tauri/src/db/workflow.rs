@@ -521,6 +521,14 @@ fn latest_answered_user_input_wait_event_ids(events: &[WorkflowEventRecord]) -> 
     Some((latest_wait.id, latest_resume.id))
 }
 
+fn latest_user_input_event_id(events: &[WorkflowEventRecord]) -> Option<i64> {
+    events
+        .iter()
+        .rev()
+        .find(|event| event.event_type == "user_input_received")
+        .map(|event| event.id)
+}
+
 fn assistant_batch_message_id_for_tool_call(
     messages: &[WorkflowMessage],
     tool_call_id: &str,
@@ -618,7 +626,10 @@ fn determine_tail_rewind_plan(
             return Some(TailRewindPlan {
                 kind: "user_message",
                 delete_message_boundary_id: Some(message.id?),
-                event_boundary_id: None,
+                // Continuation messages append runtime events after a prior
+                // terminal state. Trim those events together with the
+                // message so replay restores the state shown by the tail.
+                event_boundary_id: latest_user_input_event_id(events),
                 phase: RewindPhase::Preserve,
                 message_metadata_updates: Vec::new(),
             });
@@ -3694,6 +3705,108 @@ mod tests {
         assert_eq!(restored.wait_reason, Some(WaitReason::Approval));
         assert_eq!(restored.pending_tools.len(), 1);
         assert_eq!(restored.last_event_id, Some(last_event_id));
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_rewinds_continuation_state_to_prior_completion() {
+        let store = create_test_store();
+        let session_id = "session-delete-last-continuation-after-completion";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "Task completed".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: Some("tool_completed".to_string()),
+                metadata: Some(json!({
+                    "tool_call_id": "complete-1",
+                    "tool_name": crate::tools::TOOL_COMPLETE_WORKFLOW,
+                    "approval_status": "approved",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add completion message");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Continue the conversation".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 2,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add continuation message");
+
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started event");
+        let completed_event_id = store
+            .append_workflow_event(&WorkflowEvent::workflow_completed(
+                session_id.to_string(),
+                Some("Task completed".to_string()),
+            ))
+            .expect("failed to append workflow_completed event");
+        store
+            .append_workflow_event(&WorkflowEvent::user_input_received(
+                session_id.to_string(),
+                "Continue the conversation".to_string(),
+            ))
+            .expect("failed to append user_input_received event");
+        store
+            .append_workflow_event(&WorkflowEvent::state_changed(
+                session_id.to_string(),
+                "completed".to_string(),
+                "thinking".to_string(),
+            ))
+            .expect("failed to append continuation state event");
+
+        let deleted = store
+            .delete_last_message(session_id)
+            .expect("failed to delete continuation message");
+        assert!(deleted);
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load rewound workflow snapshot");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.workflow.status, "completed");
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load rewound execution context")
+            .expect("rewound execution context should exist");
+        assert_eq!(restored.state, RuntimeState::Completed);
+        assert_eq!(restored.last_event_id, Some(completed_event_id));
     }
 
     #[test]
