@@ -121,9 +121,16 @@
                       <span class="dropdown-text">{{ $t('chat.addAttachment') }}</span>
                     </span>
                   </el-dropdown-item>
+                  <el-dropdown-item command="skillsConfig" :divided="canAttachImages">
+                    <cs name="skill" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-text">{{ $t('workflow.skillsConfigTitle') }}</span>
+                    </span>
+                  </el-dropdown-item>
                   <el-dropdown-item
                     v-if="showPlanningModeToggle"
                     command="planning"
+                    divided
                     :disabled="!canTogglePlanningMode"
                     :class="{ active: planningMode }">
                     <cs name="skill-plan" size="14px" class="dropdown-icon" />
@@ -137,6 +144,7 @@
                   </el-dropdown-item>
                   <el-dropdown-item
                     command="finalAudit"
+                    :divided="!showPlanningModeToggle"
                     :disabled="!canToggleFinalAuditMode"
                     :class="{ active: finalAuditMode !== 'off' }">
                     <cs name="check-circle" size="14px" class="dropdown-icon" />
@@ -867,6 +875,11 @@ const handleCreateWorkflowDialogKeydown = event => {
 const handleQuickActionCommand = command => {
   if (command === 'attachment') {
     emit('open-image-dialog')
+    return
+  }
+
+  if (command === 'skillsConfig') {
+    emit('open-skills-selector')
     return
   }
 
