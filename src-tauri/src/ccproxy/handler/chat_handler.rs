@@ -1,8 +1,6 @@
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use reqwest::header::HeaderMap;
 use rust_i18n::t;
-use serde_json::{json, Value};
 use std::sync::{Arc, RwLock};
 
 use crate::ccproxy::handler::request_preprocessor::{
@@ -370,32 +368,16 @@ pub(crate) async fn execute_unified_chat_request(
             error_body_str
         );
 
-        let mut error_type_str = "upstream_api_error".to_string();
-        let message_content = if let Ok(json_error) = serde_json::from_str::<Value>(&error_body_str)
-        {
-            if let Some(err_obj) = json_error.get("error") {
-                error_type_str = err_obj
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or(&error_type_str)
-                    .to_string();
-                err_obj
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or(&error_body_str)
-                    .to_string()
-            } else {
-                error_body_str.to_string()
-            }
-        } else {
-            error_body_str.to_string()
-        };
-        let final_error_json = serde_json::json!({
-            "message": message_content,
-            "type": error_type_str,
-            "param": null,
-            "code": status_code.as_u16().to_string()
-        });
+        let mut unified_error = crate::ccproxy::adapter::error::normalize_backend_error(
+            &proxy_model.chat_protocol,
+            status_code,
+            &headers_from_target,
+            &error_body_bytes,
+        );
+        if unified_error.request_id.is_none() {
+            unified_error.request_id = Some(message_id.clone());
+        }
+        let message_content = unified_error.message.clone();
 
         if let Ok(store) = main_store_arc.read() {
             let _ = store.record_ccproxy_stat(CcproxyStat {
@@ -415,16 +397,14 @@ pub(crate) async fn execute_unified_chat_request(
             });
         }
 
-        let mut response =
-            (status_code, Json(json!({ "error": final_error_json }))).into_response();
+        let mut response = output_adapter.adapt_error_response(unified_error);
 
         let filtered_headers =
             crate::ccproxy::utils::http::filter_proxy_headers(&headers_from_target);
         let final_headers = response.headers_mut();
 
         for (name, value) in filtered_headers.iter() {
-            let name_str = name.as_str().to_lowercase();
-            if name_str.starts_with("x-") || name_str == "retry-after" {
+            if name != http::header::CONTENT_TYPE {
                 final_headers.insert(name.clone(), value.clone());
             }
         }

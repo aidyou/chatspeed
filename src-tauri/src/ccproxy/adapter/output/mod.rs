@@ -1,5 +1,6 @@
 mod adapter_enum;
 mod claude_output;
+mod error_response;
 mod gemini_output;
 mod ollama_output;
 mod openai_output;

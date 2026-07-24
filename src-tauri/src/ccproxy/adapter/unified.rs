@@ -274,6 +274,16 @@ pub struct UnifiedResponse {
     pub usage: UnifiedUsage,
 }
 
+/// The protocol-agnostic representation of an error returned by a backend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnifiedErrorResponse {
+    pub status_code: u16,
+    pub message: String,
+    pub error_type: Option<String>,
+    pub code: Option<Value>,
+    pub request_id: Option<String>,
+}
+
 /// The unified, protocol-agnostic representation of a single chunk from a streaming response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UnifiedStreamChunk {

@@ -9,7 +9,7 @@ use super::{
     openai_responses_output::OpenAIResponsesOutputAdapter,
 };
 use crate::ccproxy::adapter::unified::{
-    SseStatus, UnifiedEmbeddingResponse, UnifiedResponse, UnifiedStreamChunk,
+    SseStatus, UnifiedEmbeddingResponse, UnifiedErrorResponse, UnifiedResponse, UnifiedStreamChunk,
 };
 use crate::ccproxy::helper::sse::Event;
 
@@ -19,6 +19,19 @@ pub enum OutputAdapterEnum {
     Claude(ClaudeOutputAdapter),
     Gemini(GeminiOutputAdapter),
     Ollama(OllamaOutputAdapter),
+}
+
+impl OutputAdapterEnum {
+    pub fn adapt_error_response(&self, error: UnifiedErrorResponse) -> Response {
+        match self {
+            Self::OpenAI(_) | Self::OpenAIResponses(_) => {
+                super::error_response::openai_error_response(error)
+            }
+            Self::Claude(_) => super::error_response::claude_error_response(error),
+            Self::Gemini(_) => super::error_response::gemini_error_response(error),
+            Self::Ollama(_) => super::error_response::ollama_error_response(error),
+        }
+    }
 }
 
 #[allow(refining_impl_trait)]
