@@ -53,11 +53,8 @@ pub(crate) fn prepare_shell_output(
         .flatten();
     let (display_content, llm_content, output_was_reduced) =
         if let Some(reduction) = command_reduction.as_ref() {
-            let display_stdout = truncate_with_marker(&normalized_stdout, MAX_DISPLAY_CHARS);
-            let display_stderr = truncate_with_marker(&normalized_stderr, MAX_DISPLAY_CHARS);
-            let display_content = format_shell_output(exit_code, &display_stdout, &display_stderr);
             (
-                display_content,
+                reduction.content.clone(),
                 reduction.content.clone(),
                 reduction.persist_complete_output
                     || reduction.preserve_raw_output
@@ -1232,19 +1229,21 @@ mod tests {
         assert!(normalized_stderr.is_empty());
 
         let result = build_shell_tool_result("pnpm build", 0, stdout, stderr);
-        let expected_content = format!("Exit code: 0\n\nstdout:\n{stdout}{stderr}");
-        assert_eq!(result.content.as_deref(), Some(expected_content.as_str()));
+        let expected_raw_content = format!("Exit code: 0\n\nstdout:\n{stdout}{stderr}");
+        let expected_reduced_content = "Exit code: 0\n\nBuild result:\nBuild output: 1 file, 3.23 MB (gzip: 1023.37 kB across 1 file)\n✓ built in 16.02s";
+        assert_eq!(result.content.as_deref(), Some(expected_reduced_content));
         let structured = result
             .structured_content
             .expect("structured content missing");
         let llm_content = structured["llm_content"]
             .as_str()
             .expect("llm_content should be a string");
-        assert_eq!(
-            llm_content,
-            "Exit code: 0\n\nBuild result:\nBuild output: 1 file, 3.23 MB (gzip: 1023.37 kB across 1 file)\n✓ built in 16.02s"
-        );
-        assert!(!llm_content.contains("bin/assets/index.js"));
+        assert_eq!(llm_content, expected_reduced_content);
+        assert!(!result
+            .content
+            .as_deref()
+            .expect("display content missing")
+            .contains("bin/assets/index.js"));
         assert_eq!(
             structured["persisted_output"]["reason"].as_str(),
             Some("reduced")
@@ -1256,7 +1255,7 @@ mod tests {
         let physical_path = resolve_ai_temp_path(Path::new(ai_path));
         assert_eq!(
             fs::read_to_string(&physical_path).unwrap(),
-            expected_content
+            expected_raw_content
         );
         fs::remove_file(physical_path).unwrap();
     }
