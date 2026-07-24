@@ -2,8 +2,8 @@ use crate::libs::ai_temp::{
     persist_large_tool_output, persist_tool_output, LARGE_TOOL_OUTPUT_CHAR_LIMIT,
 };
 use crate::tools::helper::{
-    detect_json_stdout, is_go_build_or_test_command, is_node_build_command, reduce_command_output,
-    reduce_priority_log_output, should_reduce_priority_log,
+    detect_json_stdout, is_git_log_command, is_go_build_or_test_command, is_node_build_command,
+    reduce_command_output, reduce_priority_log_output, should_reduce_priority_log,
 };
 use crate::tools::ToolCallResult;
 use serde_json::json;
@@ -13,9 +13,6 @@ const GENERIC_LLM_MAX_LINES: usize = 40;
 const EXPLICIT_SHAPED_LLM_MAX_LINES: usize = 240;
 const EXPLICIT_SHAPED_LLM_MAX_CHARS: usize = 20_000;
 const KSP_LLM_PRESERVE_CHARS: usize = 15_000;
-const BUILD_LLM_TAIL_LINES: usize = 20;
-const GIT_LOG_HEAD_LINES: usize = 30;
-const GIT_DIFF_MAX_FILES: usize = 20;
 
 pub(crate) fn build_shell_tool_result(
     command_str: &str,
@@ -28,45 +25,39 @@ pub(crate) fn build_shell_tool_result(
     let raw_content = format_shell_output(exit_code, &normalized_stdout, &normalized_stderr);
     let normalized_command = normalize_command(command_str);
     let json_output = detect_json_stdout(&normalized_stdout, &normalized_stderr);
-    let command_reduction = if json_output.is_none() {
-        reduce_command_output(&normalized_command, exit_code, &raw_content)
-    } else {
-        None
-    };
-    let (display_content, llm_content, output_was_reduced) = if let Some(json_output) = json_output
-    {
-        let json_content = format_json_output(exit_code, &json_output.compact_content);
-        if json_content.chars().count() <= LARGE_TOOL_OUTPUT_CHAR_LIMIT {
-            (json_content.clone(), json_content, json_output.was_minified)
-        } else {
-            let summary = summarize_large_json_output(
-                exit_code,
-                json_output.compact_content.chars().count(),
-                json_output.was_minified,
-            );
-            (summary.clone(), summary, true)
-        }
-    } else {
-        let display_stdout = truncate_with_marker(&normalized_stdout, MAX_DISPLAY_CHARS);
-        let display_stderr = truncate_with_marker(&normalized_stderr, MAX_DISPLAY_CHARS);
-        let display_content = format_shell_output(exit_code, &display_stdout, &display_stderr);
-        let llm_content = if let Some(reduction) = command_reduction.as_ref() {
-            reduction.content.clone()
-        } else {
-            reduce_shell_output_for_llm(
-                &normalized_command,
-                exit_code,
-                &normalized_stdout,
-                &normalized_stderr,
-                &raw_content,
+    let command_reduction = reduce_command_output(&normalized_command, exit_code, &raw_content);
+    let (display_content, llm_content, output_was_reduced) =
+        if let Some(reduction) = command_reduction.as_ref() {
+            let display_stdout = truncate_with_marker(&normalized_stdout, MAX_DISPLAY_CHARS);
+            let display_stderr = truncate_with_marker(&normalized_stderr, MAX_DISPLAY_CHARS);
+            let display_content = format_shell_output(exit_code, &display_stdout, &display_stderr);
+            (
+                display_content,
+                reduction.content.clone(),
+                reduction.persist_complete_output
+                    || reduction.preserve_raw_output
+                    || reduction.content != raw_content,
             )
+        } else if let Some(json_output) = json_output {
+            let json_content = format_json_output(exit_code, &json_output.compact_content);
+            if json_content.chars().count() <= LARGE_TOOL_OUTPUT_CHAR_LIMIT {
+                (json_content.clone(), json_content, json_output.was_minified)
+            } else {
+                let summary = summarize_large_json_output(
+                    exit_code,
+                    json_output.compact_content.chars().count(),
+                    json_output.was_minified,
+                );
+                (summary.clone(), summary, true)
+            }
+        } else {
+            let display_stdout = truncate_with_marker(&normalized_stdout, MAX_DISPLAY_CHARS);
+            let display_stderr = truncate_with_marker(&normalized_stderr, MAX_DISPLAY_CHARS);
+            let display_content = format_shell_output(exit_code, &display_stdout, &display_stderr);
+            let llm_content = reduce_shell_output_for_llm(&normalized_command, &raw_content);
+            let output_was_reduced = llm_content != raw_content;
+            (display_content, llm_content, output_was_reduced)
         };
-        let output_was_reduced = command_reduction
-            .as_ref()
-            .is_some_and(|reduction| reduction.persist_complete_output)
-            || llm_content != raw_content;
-        (display_content, llm_content, output_was_reduced)
-    };
     let persisted_output = if output_was_reduced {
         persist_tool_output(&raw_content).map(Some)
     } else {
@@ -286,19 +277,9 @@ fn format_shell_output(exit_code: i32, stdout: &str, stderr: &str) -> String {
     result
 }
 
-fn reduce_shell_output_for_llm(
-    normalized_command: &str,
-    exit_code: i32,
-    stdout: &str,
-    stderr: &str,
-    raw_content: &str,
-) -> String {
-    if normalized_command.contains("git show") || normalized_command.contains("git diff") {
-        return reduce_git_diff_like_output(exit_code, stdout, stderr, raw_content);
-    }
-
-    if normalized_command.contains("git log") {
-        return reduce_git_log_output(raw_content);
+fn reduce_shell_output_for_llm(normalized_command: &str, raw_content: &str) -> String {
+    if is_git_log_command(normalized_command) {
+        return raw_content.to_string();
     }
 
     if is_explicitly_shaped_read_output(&normalized_command) {
@@ -345,79 +326,6 @@ fn is_explicitly_shaped_read_output(command: &str) -> bool {
         || command.contains("awk ")
 }
 
-fn reduce_git_log_output(raw_content: &str) -> String {
-    let lines: Vec<&str> = raw_content.lines().collect();
-    if lines.len() <= GIT_LOG_HEAD_LINES {
-        return raw_content.to_string();
-    }
-
-    format!(
-        "{}\n[truncated remaining git log output]",
-        lines[..GIT_LOG_HEAD_LINES].join("\n")
-    )
-}
-
-fn reduce_git_diff_like_output(
-    exit_code: i32,
-    stdout: &str,
-    stderr: &str,
-    raw_content: &str,
-) -> String {
-    if stdout.is_empty() && stderr.is_empty() {
-        return raw_content.to_string();
-    }
-
-    let header_lines: Vec<&str> = stdout
-        .lines()
-        .take_while(|line| !line.starts_with("diff --git "))
-        .take(20)
-        .collect();
-
-    let changed_files: Vec<String> = stdout
-        .lines()
-        .filter_map(|line| line.strip_prefix("diff --git "))
-        .filter_map(|rest| rest.split_whitespace().nth(1))
-        .map(|path| path.trim_start_matches("b/").to_string())
-        .collect();
-
-    if changed_files.is_empty() && raw_content.lines().count() <= GENERIC_LLM_MAX_LINES {
-        return raw_content.to_string();
-    }
-
-    let mut output = format!("Exit code: {}\n", exit_code);
-    if !header_lines.is_empty() {
-        output.push_str("\nstdout:\n");
-        output.push_str(&header_lines.join("\n"));
-        output.push('\n');
-    }
-
-    if !changed_files.is_empty() {
-        output.push_str("\nChanged files:\n");
-        for file in changed_files.iter().take(GIT_DIFF_MAX_FILES) {
-            output.push_str("- ");
-            output.push_str(file);
-            output.push('\n');
-        }
-        if changed_files.len() > GIT_DIFF_MAX_FILES {
-            output.push_str(&format!(
-                "- ... and {} more files\n",
-                changed_files.len() - GIT_DIFF_MAX_FILES
-            ));
-        }
-    }
-
-    if !stderr.trim().is_empty() {
-        output.push_str("\nstderr:\n");
-        output.push_str(&tail_lines(stderr, BUILD_LLM_TAIL_LINES));
-        output.push('\n');
-    }
-
-    output.push_str(
-        "\n[full diff omitted for LLM context; inspect specific files with read_file or narrower git commands if needed]",
-    );
-    output
-}
-
 fn reduce_generic_output(raw_content: &str, tail_lines_count: usize) -> String {
     let lines: Vec<&str> = raw_content.lines().collect();
     if lines.len() <= tail_lines_count {
@@ -454,12 +362,6 @@ fn reduce_explicitly_shaped_output(raw_content: &str) -> String {
         .join("\n");
 
     format!("{}\n[truncated middle output]\n{}", head, tail)
-}
-
-fn tail_lines(text: &str, count: usize) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let start = lines.len().saturating_sub(count);
-    lines[start..].join("\n")
 }
 
 fn truncate_with_marker(content: &str, max_len: usize) -> String {
@@ -540,6 +442,66 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&physical_path).unwrap(),
             format!("Exit code: 0\n\nstdout:\n{stdout}")
+        );
+        fs::remove_file(physical_path).unwrap();
+    }
+
+    #[test]
+    fn test_reporter_json_uses_the_specialized_summary_and_persists_raw_output() {
+        let stdout = "{\"numTotalTests\":3,\"numPassedTests\":2,\"numFailedTests\":1,\"numPendingTests\":0,\"testResults\":[{\"name\":\"src/example.test.ts\",\"assertionResults\":[{\"fullName\":\"example fails\",\"status\":\"failed\",\"failureMessages\":[\"expected true to be false\"]}]}]}";
+        let result = build_shell_tool_result("pnpm vitest run --reporter=json", 1, stdout, "");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm content missing");
+
+        assert!(llm_content.contains("Vitest result:"));
+        assert!(llm_content.contains("Tests 3 total | 2 passed | 1 failed | 0 skipped"));
+        assert!(llm_content.contains("src/example.test.ts > example fails"));
+        assert_eq!(
+            structured["persisted_output"]["reason"].as_str(),
+            Some("reduced")
+        );
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+        assert_eq!(
+            fs::read_to_string(&physical_path).unwrap(),
+            format!("Exit code: 1\n\nstdout:\n{stdout}")
+        );
+        fs::remove_file(physical_path).unwrap();
+    }
+
+    #[test]
+    fn uv_pytest_retains_diagnostics_and_persists_raw_output() {
+        let stdout = "============================= test session starts =============================\ncollected 2 items\n\ntests/example.py .F [100%]\n\n=================================== FAILURES ===================================\n_______________________________ test_value _______________________________\n>       assert actual == 2\nE       AssertionError: expected 2\ntests/example.py:12: AssertionError\n\n=========================== short test summary info ============================\nFAILED tests/example.py::test_value - AssertionError: expected 2\n========================= 1 passed, 1 failed in 0.12s =========================";
+        let result = build_shell_tool_result("uv run pytest", 1, stdout, "");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm content missing");
+
+        assert!(llm_content.contains("Pytest result:"));
+        assert!(llm_content.contains("assert actual == 2"));
+        assert!(llm_content.contains("tests/example.py:12"));
+        assert_eq!(
+            structured["persisted_output"]["reason"].as_str(),
+            Some("reduced")
+        );
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+        assert_eq!(
+            fs::read_to_string(&physical_path).unwrap(),
+            format!("Exit code: 1\n\nstdout:\n{stdout}")
         );
         fs::remove_file(physical_path).unwrap();
     }
@@ -645,9 +607,264 @@ mod tests {
     }
 
     #[test]
-    fn git_show_llm_content_omits_full_diff() {
-        let stdout = "commit abc\nAuthor: test\nDate: today\n\ndiff --git a/src/main.rs b/src/main.rs\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n";
-        let result = build_shell_tool_result("git show HEAD", 0, stdout, "");
+    fn chained_git_commands_preserve_aggregate_output() {
+        let stdout = "diff --git a/src/main.rs b/src/main.rs\n@@ -1 +1 @@\n-old\n+new\nOn branch main\nChanges not staged for commit:\n\tmodified:   src/main.rs\n";
+        let result = build_shell_tool_result("git diff && git status", 0, stdout, "");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm content missing");
+
+        assert!(llm_content.contains("+new"));
+        assert!(llm_content.contains("On branch main"));
+        assert!(llm_content.contains("modified:   src/main.rs"));
+        assert!(!llm_content.contains("Changes:\n"));
+    }
+
+    #[test]
+    fn git_pipelines_preserve_aggregate_output() {
+        let stdout = "diff --git a/src/main.rs b/src/main.rs\n@@ -1 +1 @@\n-old\n+new\ntrailing filtered output\n";
+        for command in ["git diff | cat", "git diff |& sed -n '1,10p'"] {
+            let result = build_shell_tool_result(command, 0, stdout, "");
+            let structured = result
+                .structured_content
+                .expect("structured content missing");
+            let llm_content = structured["llm_content"]
+                .as_str()
+                .expect("llm content missing");
+
+            assert!(
+                llm_content.contains("+new"),
+                "expected raw output for {command}"
+            );
+            assert!(
+                llm_content.contains("trailing filtered output"),
+                "expected trailing output for {command}"
+            );
+            assert!(!llm_content.contains("Changes:\n"));
+        }
+    }
+
+    #[test]
+    fn git_status_removes_hints_and_persists_complete_output() {
+        let stdout = "On branch main\nYour branch is ahead of 'origin/main' by 1 commit.\n\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n  (use \"git restore <file>...\" to discard changes in working directory)\n\tmodified:   src/main.rs\n\nUntracked files:\n  (use \"git add <file>...\" to include in what will be committed)\n\tnew file.txt\n";
+        let result = build_shell_tool_result("git status", 0, stdout, "");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm content missing");
+
+        assert!(llm_content.contains("On branch main"));
+        assert!(llm_content.contains("modified:   src/main.rs"));
+        assert!(llm_content.contains("new file.txt"));
+        assert!(!llm_content.contains("use \"git add"));
+        assert_eq!(
+            structured["persisted_output"]["reason"].as_str(),
+            Some("reduced")
+        );
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+        assert_eq!(
+            fs::read_to_string(&physical_path).unwrap(),
+            format!("Exit code: 0\n\nstdout:\n{stdout}")
+        );
+        fs::remove_file(physical_path).unwrap();
+    }
+
+    #[test]
+    fn git_write_successes_are_compacted_and_failures_are_preserved() {
+        let cases = [
+            ("git add src/main.rs", 0, "", "", "ok"),
+            (
+                "git commit -m message",
+                0,
+                "[main abc1234def] message\n 1 file changed\n",
+                "",
+                "Exit code: 0\n\nGit commit: ok abc1234",
+            ),
+            (
+                "git push",
+                0,
+                "",
+                "Writing objects: 100%\n   abc1234..def5678  main -> main\n",
+                "Exit code: 0\n\nGit push: ok main",
+            ),
+            (
+                "git pull",
+                0,
+                "Updating abc1234..def5678\n 3 files changed, 10 insertions(+), 2 deletions(-)\n",
+                "",
+                "Exit code: 0\n\nGit pull: ok 3 files +10 -2",
+            ),
+        ];
+
+        for (command, exit_code, stdout, stderr, expected) in cases {
+            let result = build_shell_tool_result(command, exit_code, stdout, stderr);
+            let structured = result
+                .structured_content
+                .expect("structured content missing");
+            assert_eq!(structured["llm_content"].as_str(), Some(expected));
+            assert_eq!(
+                structured["persisted_output"]["reason"].as_str(),
+                Some("reduced")
+            );
+
+            let ai_path = structured["persisted_output"]["path"]
+                .as_str()
+                .expect("persisted output path missing");
+            fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
+        }
+
+        let stdout = "remote: Permission denied\nfatal: unable to access remote\n";
+        let result = build_shell_tool_result("git push", 1, "", stdout);
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        assert_eq!(
+            structured["llm_content"].as_str(),
+            Some("Exit code: 1\n\nstderr:\nremote: Permission denied\nfatal: unable to access remote\n")
+        );
+    }
+
+    #[test]
+    fn large_git_write_failures_remain_complete_for_llm() {
+        let diagnostic = (1..=130)
+            .map(|line| format!("fatal diagnostic {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for command in [
+            "git add src/main.rs",
+            "git commit -m message",
+            "git push",
+            "git pull",
+        ] {
+            let result = build_shell_tool_result(command, 1, "", &diagnostic);
+            let structured = result
+                .structured_content
+                .expect("structured content missing");
+            let expected = format!("Exit code: 1\n\nstderr:\n{diagnostic}");
+            assert_eq!(
+                structured["llm_content"].as_str(),
+                Some(expected.as_str()),
+                "expected complete diagnostics for {command}"
+            );
+            assert_eq!(
+                structured["persisted_output"]["reason"].as_str(),
+                Some("reduced")
+            );
+
+            let ai_path = structured["persisted_output"]["path"]
+                .as_str()
+                .expect("persisted output path missing");
+            fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_git_diff_and_status_remain_complete_for_llm() {
+        let cases = [
+            (
+                "git diff --exit-code",
+                "diff --git a/src/main.rs b/src/main.rs\n@@ -1 +1 @@\n-old\n+new\n",
+            ),
+            (
+                "git status --porcelain",
+                "fatal: not a git repository (or any of the parent directories): .git\n",
+            ),
+        ];
+
+        for (command, stdout) in cases {
+            let result = build_shell_tool_result(command, 1, stdout, "");
+            let structured = result
+                .structured_content
+                .expect("structured content missing");
+            let expected = format!("Exit code: 1\n\nstdout:\n{stdout}");
+            assert_eq!(
+                structured["llm_content"].as_str(),
+                Some(expected.as_str()),
+                "expected complete diagnostics for {command}"
+            );
+
+            let ai_path = structured["persisted_output"]["path"]
+                .as_str()
+                .expect("persisted output path missing");
+            let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+            assert_eq!(fs::read_to_string(&physical_path).unwrap(), expected);
+            fs::remove_file(physical_path).unwrap();
+        }
+    }
+
+    #[test]
+    fn unsupported_git_failures_remain_complete_for_llm() {
+        let diagnostic = (1..=130)
+            .map(|line| format!("git failure detail {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for command in ["git fetch", "git merge feature"] {
+            let result = build_shell_tool_result(command, 1, "", &diagnostic);
+            let structured = result
+                .structured_content
+                .expect("structured content missing");
+            let expected = format!("Exit code: 1\n\nstderr:\n{diagnostic}");
+            assert_eq!(
+                structured["llm_content"].as_str(),
+                Some(expected.as_str()),
+                "expected complete diagnostics for {command}"
+            );
+
+            let ai_path = structured["persisted_output"]["path"]
+                .as_str()
+                .expect("persisted output path missing");
+            let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+            assert_eq!(fs::read_to_string(&physical_path).unwrap(), expected);
+            fs::remove_file(physical_path).unwrap();
+        }
+    }
+
+    #[test]
+    fn invalid_global_git_option_failure_remains_complete_for_llm() {
+        let diagnostic = (1..=130)
+            .map(|line| format!("unknown option diagnostic {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = build_shell_tool_result("git --invalid-global-option", 129, "", &diagnostic);
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let expected = format!("Exit code: 129\n\nstderr:\n{diagnostic}");
+        assert_eq!(structured["llm_content"].as_str(), Some(expected.as_str()));
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+        assert_eq!(fs::read_to_string(&physical_path).unwrap(), expected);
+        fs::remove_file(physical_path).unwrap();
+    }
+
+    #[test]
+    fn git_show_llm_content_retains_hunks_and_patch_lines() {
+        let stdout = format!(
+            "commit abc\nAuthor: test\nDate: today\n\ndiff --git a/src/main.rs b/src/main.rs\nindex 123..456 100644\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,102 +1,102 @@\n-old\n+new\n{}\ndiff --git a/src/lib.rs b/src/lib.rs\nindex 789..abc 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,102 +1,102 @@\n-old\n+new\n{}",
+            (1..=100)
+                .map(|line| format!(" unchanged main context {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            (1..=100)
+                .map(|line| format!(" unchanged lib context {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let result = build_shell_tool_result("git show HEAD", 0, &stdout, "");
         let structured = result
             .structured_content
             .expect("structured content missing");
@@ -655,16 +872,36 @@ mod tests {
             .as_str()
             .expect("llm_content should be a string");
 
-        assert!(llm_content.contains("Changed files:"));
+        assert!(llm_content.contains("Commit metadata:"));
         assert!(llm_content.contains("src/main.rs"));
         assert!(llm_content.contains("src/lib.rs"));
-        assert!(llm_content.contains("full diff omitted"));
-        assert!(!llm_content.contains("@@ -1 +1 @@"));
+        assert!(llm_content.contains("@@ -1,102 +1,102 @@"));
+        assert!(llm_content.contains("-old"));
+        assert!(llm_content.contains("+new"));
 
         let ai_path = structured["persisted_output"]["path"]
             .as_str()
             .expect("persisted output path missing");
         fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
+    }
+
+    #[test]
+    fn git_log_with_global_options_remains_complete_for_llm() {
+        let stdout = (1..=60)
+            .map(|line| format!("commit detail line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = build_shell_tool_result("git --no-pager log -1", 0, &stdout, "");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm content missing");
+
+        assert!(llm_content.contains("commit detail line 1"));
+        assert!(llm_content.contains("commit detail line 60"));
+        assert!(!llm_content.contains("truncated"));
     }
 
     #[test]
@@ -965,9 +1202,19 @@ mod tests {
     }
 
     #[test]
-    fn git_diff_llm_content_omits_patch_body() {
-        let stdout = "diff --git a/src/main.rs b/src/main.rs\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n";
-        let result = build_shell_tool_result("git diff HEAD~1", 0, stdout, "");
+    fn git_diff_llm_content_retains_patch_hunks_and_lines() {
+        let stdout = format!(
+            "diff --git a/src/main.rs b/src/main.rs\nindex 123..456 100644\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,102 +1,102 @@\n-old\n+new\n{}\ndiff --git a/src/lib.rs b/src/lib.rs\nindex 789..abc 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,102 +1,102 @@\n-old\n+new\n{}",
+            (1..=100)
+                .map(|line| format!(" unchanged main context {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            (1..=100)
+                .map(|line| format!(" unchanged lib context {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let result = build_shell_tool_result("git diff HEAD~1", 0, &stdout, "");
         let structured = result
             .structured_content
             .expect("structured content missing");
@@ -975,9 +1222,12 @@ mod tests {
             .as_str()
             .expect("llm_content should be a string");
 
-        assert!(llm_content.contains("Changed files:"));
+        assert!(llm_content.contains("Changes:"));
         assert!(llm_content.contains("src/main.rs"));
-        assert!(!llm_content.contains("@@ -1 +1 @@"));
+        assert!(llm_content.contains("src/lib.rs"));
+        assert!(llm_content.contains("@@ -1,102 +1,102 @@"));
+        assert!(llm_content.contains("-old"));
+        assert!(llm_content.contains("+new"));
 
         let ai_path = structured["persisted_output"]["path"]
             .as_str()

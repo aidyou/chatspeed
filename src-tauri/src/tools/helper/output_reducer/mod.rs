@@ -1,8 +1,11 @@
+mod git;
 mod json;
 mod log;
 mod node_build;
 mod rust_go;
+mod test;
 
+pub(crate) use git::is_git_log_command;
 pub(crate) use json::detect_json_stdout;
 pub(crate) use log::{reduce_priority_log_output, should_reduce_priority_log};
 pub(crate) use node_build::is_node_build_command;
@@ -11,6 +14,7 @@ pub(crate) use rust_go::is_go_build_or_test_command;
 pub(crate) struct CommandOutputReduction {
     pub content: String,
     pub persist_complete_output: bool,
+    pub preserve_raw_output: bool,
 }
 
 pub(crate) trait CommandOutputReducer {
@@ -21,6 +25,10 @@ pub(crate) trait CommandOutputReducer {
     fn persist_complete_output(&self) -> bool {
         false
     }
+
+    fn preserve_raw_output(&self, _exit_code: i32) -> bool {
+        false
+    }
 }
 
 pub(crate) fn reduce_command_output(
@@ -28,14 +36,25 @@ pub(crate) fn reduce_command_output(
     exit_code: i32,
     raw_content: &str,
 ) -> Option<CommandOutputReduction> {
-    let reducers: [&dyn CommandOutputReducer; 2] =
-        [&node_build::NodeBuildReducer, &rust_go::RustGoReducer];
+    let reducers: [&dyn CommandOutputReducer; 4] = [
+        &git::GitReducer,
+        &node_build::NodeBuildReducer,
+        &rust_go::RustGoReducer,
+        &test::TestOutputReducer,
+    ];
     let reducer = reducers
         .iter()
         .find(|reducer| reducer.matches(normalized_command))?;
+    let content = reducer.reduce(normalized_command, exit_code, raw_content);
+    let preserve_raw_output = reducer.preserve_raw_output(exit_code);
+
+    if !preserve_raw_output && content.len() >= raw_content.len() {
+        return None;
+    }
 
     Some(CommandOutputReduction {
-        content: reducer.reduce(normalized_command, exit_code, raw_content),
+        content,
         persist_complete_output: reducer.persist_complete_output(),
+        preserve_raw_output,
     })
 }
