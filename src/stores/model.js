@@ -85,9 +85,7 @@ export const useModelStore = defineStore('modelProvider', () => {
    */
   const setModelProviders = (value) => {
     const newProviders = isEmpty(value) ? [] : [...value]
-    console.log('setModelProviders: updating providers', providers.value.length, '->', newProviders.length)
     providers.value = newProviders
-    console.log('providers', providers.value)
   }
 
   let isModelLoading = false
@@ -111,9 +109,7 @@ export const useModelStore = defineStore('modelProvider', () => {
         const newProviders = result.map(model => {
           return processModelLogo(model)
         });
-        console.log('updateModelStore: updating providers', providers.value.length, '->', newProviders.length)
         providers.value = newProviders;
-        console.debug('models', providers.value)
 
         initDefaultModel();
       })
@@ -149,9 +145,11 @@ export const useModelStore = defineStore('modelProvider', () => {
    * @param {Object} value - The new default model configuration.
    */
   const setDefaultModelProvider = (value) => {
-    console.log('setDefaultModelProvider', value)
     defaultModelProvider.value = !isEmpty(value) ? processModelLogo(value) : {}
-    csSetStorage(csStorageKey.defaultProvider, defaultModelProvider.value)
+    csSetStorage(
+      csStorageKey.defaultProvider,
+      isEmpty(defaultModelProvider.value) ? {} : { id: defaultModelProvider.value.id }
+    )
   }
 
   /**
@@ -164,7 +162,6 @@ export const useModelStore = defineStore('modelProvider', () => {
     if (isEmpty(providers.value)) return;
 
     defaultModelProvider.value = csGetStorage(csStorageKey.defaultProvider, {})
-    console.debug('load defaultModel from localstorage', defaultModelProvider.value)
 
     if (!isEmpty(defaultModelProvider.value)) {
       // check if the default model is available
@@ -329,6 +326,11 @@ export const useModelStore = defineStore('modelProvider', () => {
   // =================================================
   // Initialize the model store and export the functions
   // =================================================
+
+  const persistedDefaultProvider = csGetStorage(csStorageKey.defaultProvider, {})
+  if (!isEmpty(persistedDefaultProvider)) {
+    csSetStorage(csStorageKey.defaultProvider, { id: persistedDefaultProvider.id })
+  }
 
   // Initialize the model store
   updateModelStore();

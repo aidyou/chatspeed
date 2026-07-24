@@ -266,6 +266,31 @@
     },
     "general": {
       "advancedSettings": "Configuración avanzada",
+      "apiKeyProtection": {
+        "fileFilterName": "Archivo de clave de ChatSpeed",
+        "generateFile": "Generar archivo de clave",
+        "keyFile": "Archivo de clave",
+        "manage": "Gestión de claves",
+        "notSelected": "No se seleccionó ningún archivo",
+        "operationFailed": "Error al gestionar el archivo de clave",
+        "reasons": {
+          "decryption_failed": "El archivo no puede descifrar las claves API almacenadas",
+          "invalid_key_file": "El archivo de clave seleccionado no es válido",
+          "key_file_missing": "No se encuentra el archivo de clave configurado",
+          "key_file_not_configured": "Seleccione el archivo usado para cifrar estas claves API",
+          "unsupported_version": "La base de datos usa una versión de cifrado no compatible",
+          "wrong_key_file": "Este archivo de clave no corresponde a la base de datos"
+        },
+        "saveSuccess": "Protección de claves API actualizada",
+        "selectFile": "Seleccionar archivo de clave",
+        "states": { "legacy": "Protección anterior", "locked": "Bloqueado", "ready": "Protección con archivo activada", "unsupported": "Cifrado no compatible" },
+        "status": "Estado de protección",
+        "statusFailed": "No se pudo comprobar la protección",
+        "title": "Protección de claves API",
+        "tooltip": "El archivo de clave se guarda separado de la base de datos y es necesario para descifrar las claves API.",
+        "unlockSuccess": "Claves API desbloqueadas",
+        "unlockTitle": "Se requiere el archivo de clave"
+      },
       "assistantWindowVisibleAndPasteShortcut": "Mostrar asistente y pegar",
       "assistantWindowVisibleShortcut": "Mostrar asistente",
       "autoStart": "Iniciar al iniciar sesión",

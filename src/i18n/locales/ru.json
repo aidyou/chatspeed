@@ -266,6 +266,31 @@
     },
     "general": {
       "advancedSettings": "Расширенные настройки",
+      "apiKeyProtection": {
+        "fileFilterName": "Файл ключа ChatSpeed",
+        "generateFile": "Создать новый файл ключа",
+        "keyFile": "Файл ключа",
+        "manage": "Управление ключом",
+        "notSelected": "Файл ключа не выбран",
+        "operationFailed": "Ошибка операции с файлом ключа",
+        "reasons": {
+          "decryption_failed": "Этот файл не может расшифровать сохранённые API-ключи",
+          "invalid_key_file": "Выбран недопустимый файл ключа",
+          "key_file_missing": "Настроенный файл ключа не найден",
+          "key_file_not_configured": "Выберите файл, использованный для шифрования API-ключей",
+          "unsupported_version": "База данных использует неподдерживаемую версию шифрования",
+          "wrong_key_file": "Этот файл ключа не соответствует базе данных"
+        },
+        "saveSuccess": "Защита API-ключей обновлена",
+        "selectFile": "Выбрать файл ключа",
+        "states": { "legacy": "Прежняя защита", "locked": "Заблокировано", "ready": "Защита файлом включена", "unsupported": "Неподдерживаемое шифрование" },
+        "status": "Состояние защиты",
+        "statusFailed": "Не удалось проверить защиту",
+        "title": "Защита API-ключей",
+        "tooltip": "Файл ключа хранится отдельно от базы данных и необходим для расшифровки API-ключей.",
+        "unlockSuccess": "API-ключи разблокированы",
+        "unlockTitle": "Требуется файл ключа"
+      },
       "assistantWindowVisibleAndPasteShortcut": "Показать ассистента и вставить",
       "assistantWindowVisibleShortcut": "Показать ассистента",
       "autoStart": "Автозапуск при входе в систему",

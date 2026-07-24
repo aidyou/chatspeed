@@ -32,6 +32,7 @@
 //!
 
 use crate::constants::*;
+use crate::db::api_key_crypto::{ApiKeyEncryptionStatus, API_KEY_FILE_CONFIG_KEY};
 use crate::db::{AiModel, AiSkill, MainStore, ModelConfig, StoreError};
 use crate::db::{BackupConfig, DbBackup};
 use crate::libs::fs::{self, get_file_name};
@@ -164,6 +165,44 @@ pub fn reload_config(state: State<Arc<RwLock<MainStore>>>) -> Result<()> {
     config_store.reload_config().map_err(AppError::Db)
 }
 
+#[command]
+pub fn get_api_key_encryption_status(
+    state: State<Arc<RwLock<MainStore>>>,
+) -> Result<ApiKeyEncryptionStatus> {
+    let config_store = state.read()?;
+    config_store
+        .api_key_encryption_status()
+        .map_err(AppError::Db)
+}
+
+#[command]
+pub fn activate_api_key_file(
+    state: State<Arc<RwLock<MainStore>>>,
+    path: String,
+) -> Result<ApiKeyEncryptionStatus> {
+    let mut config_store = state.write()?;
+    config_store
+        .activate_api_key_file(Path::new(&path))
+        .map_err(AppError::Db)?;
+    config_store
+        .api_key_encryption_status()
+        .map_err(AppError::Db)
+}
+
+#[command]
+pub fn generate_api_key_file(
+    state: State<Arc<RwLock<MainStore>>>,
+    path: String,
+) -> Result<ApiKeyEncryptionStatus> {
+    let mut config_store = state.write()?;
+    config_store
+        .generate_and_activate_api_key_file(Path::new(&path))
+        .map_err(AppError::Db)?;
+    config_store
+        .api_key_encryption_status()
+        .map_err(AppError::Db)
+}
+
 // =================================================
 // About AI Model
 // =================================================
@@ -209,7 +248,7 @@ pub fn get_ai_model_by_id(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Resu
 #[command]
 pub fn get_all_ai_models(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<AiModel>> {
     let config_store = state.read()?;
-    Ok(config_store.config.get_ai_models())
+    config_store.config.get_ai_models().map_err(AppError::Db)
 }
 
 /// Add a new AI model
@@ -772,6 +811,7 @@ pub async fn restore_setting(
     // 1. Define configuration keys that are machine-specific and should be preserved
     let machine_specific_keys = [
         "backup_dir",
+        API_KEY_FILE_CONFIG_KEY,
         CFG_WINDOW_POSITION,
         CFG_WINDOW_SIZE,
         CFG_ASSISTANT_WINDOW_SIZE,

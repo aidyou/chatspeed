@@ -266,6 +266,36 @@
     },
     "general": {
       "advancedSettings": "Advanced Settings",
+      "apiKeyProtection": {
+        "fileFilterName": "ChatSpeed key file",
+        "generateFile": "Generate New Key File",
+        "keyFile": "Key File",
+        "manage": "Key Management",
+        "notSelected": "No key file selected",
+        "operationFailed": "Key file operation failed",
+        "reasons": {
+          "decryption_failed": "The key file could not decrypt the stored API keys",
+          "invalid_key_file": "The selected key file is invalid",
+          "key_file_missing": "The configured key file cannot be found",
+          "key_file_not_configured": "Select the key file used to encrypt these API keys",
+          "unsupported_version": "The database uses an unsupported API key encryption version",
+          "wrong_key_file": "This key file does not match the database"
+        },
+        "saveSuccess": "API key protection updated",
+        "selectFile": "Select Key File",
+        "states": {
+          "legacy": "Legacy protection",
+          "locked": "Locked",
+          "ready": "Key file protection enabled",
+          "unsupported": "Unsupported encryption version"
+        },
+        "status": "Protection Status",
+        "statusFailed": "Failed to check API key protection",
+        "title": "API Key Protection",
+        "tooltip": "The key file is stored separately from the database and is required to decrypt AI provider API keys.",
+        "unlockSuccess": "API keys unlocked",
+        "unlockTitle": "API Key File Required"
+      },
       "assistantWindowVisibleAndPasteShortcut": "Show Assistant and Paste",
       "assistantWindowVisibleShortcut": "Show Assistant",
       "autoStart": "Start on Login",

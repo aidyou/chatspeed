@@ -266,6 +266,31 @@
     },
     "general": {
       "advancedSettings": "Erweiterte Einstellungen",
+      "apiKeyProtection": {
+        "fileFilterName": "ChatSpeed-Schlüsseldatei",
+        "generateFile": "Neue Schlüsseldatei erstellen",
+        "keyFile": "Schlüsseldatei",
+        "manage": "Schlüsselverwaltung",
+        "notSelected": "Keine Schlüsseldatei ausgewählt",
+        "operationFailed": "Schlüsseldatei-Vorgang fehlgeschlagen",
+        "reasons": {
+          "decryption_failed": "Die Schlüsseldatei kann die gespeicherten API-Schlüssel nicht entschlüsseln",
+          "invalid_key_file": "Die ausgewählte Schlüsseldatei ist ungültig",
+          "key_file_missing": "Die konfigurierte Schlüsseldatei wurde nicht gefunden",
+          "key_file_not_configured": "Wählen Sie die zum Verschlüsseln verwendete Schlüsseldatei aus",
+          "unsupported_version": "Die Datenbank verwendet eine nicht unterstützte Verschlüsselungsversion",
+          "wrong_key_file": "Diese Schlüsseldatei passt nicht zur Datenbank"
+        },
+        "saveSuccess": "API-Schlüsselschutz aktualisiert",
+        "selectFile": "Schlüsseldatei auswählen",
+        "states": { "legacy": "Bisheriger Schutz", "locked": "Gesperrt", "ready": "Schlüsseldateischutz aktiviert", "unsupported": "Nicht unterstützte Verschlüsselung" },
+        "status": "Schutzstatus",
+        "statusFailed": "API-Schlüsselschutz konnte nicht geprüft werden",
+        "title": "API-Schlüsselschutz",
+        "tooltip": "Die Schlüsseldatei wird getrennt von der Datenbank gespeichert und zum Entschlüsseln der Anbieter-API-Schlüssel benötigt.",
+        "unlockSuccess": "API-Schlüssel entsperrt",
+        "unlockTitle": "Schlüsseldatei erforderlich"
+      },
       "assistantWindowVisibleAndPasteShortcut": "Assistent aufrufen und einfügen",
       "assistantWindowVisibleShortcut": "Assistent aufrufen",
       "autoStart": "Automatisch starten",

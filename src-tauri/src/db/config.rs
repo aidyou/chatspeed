@@ -1,6 +1,9 @@
 use super::types::{AiSkill, ModelConfig};
 use crate::constants::{CFG_WINDOW_POSITION, HTTP_SERVER_DIR};
-use crate::db::api_key_crypto::{encrypt_api_key, API_KEY_ENCRYPTION_CONFIG_KEY};
+use crate::db::api_key_crypto::{
+    activate_key_file, encrypt_api_key, generate_key_file, inspect_encryption_status,
+    ApiKeyEncryptionStatus, API_KEY_ENCRYPTION_CONFIG_KEY, API_KEY_FILE_CONFIG_KEY,
+};
 use crate::db::error::StoreError;
 use crate::db::main_store::MainStore;
 use crate::window::WindowSize;
@@ -26,7 +29,7 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn set_config(&mut self, key: &str, value: &Value) -> Result<(), StoreError> {
-        if key == API_KEY_ENCRYPTION_CONFIG_KEY {
+        if matches!(key, API_KEY_ENCRYPTION_CONFIG_KEY | API_KEY_FILE_CONFIG_KEY) {
             return Err(StoreError::InvalidData(
                 "The API key encryption key cannot be updated".to_string(),
             ));
@@ -52,7 +55,7 @@ impl MainStore {
     /// # Arguments
     /// * `key` - The key of the configuration item to delete.
     pub fn delete_config(&mut self, key: &str) -> Result<(), StoreError> {
-        if key == API_KEY_ENCRYPTION_CONFIG_KEY {
+        if matches!(key, API_KEY_ENCRYPTION_CONFIG_KEY | API_KEY_FILE_CONFIG_KEY) {
             return Err(StoreError::InvalidData(
                 "The API key encryption key cannot be deleted".to_string(),
             ));
@@ -68,6 +71,30 @@ impl MainStore {
         }
         self.config.settings.remove(key);
         Ok(())
+    }
+
+    pub fn api_key_encryption_status(&self) -> Result<ApiKeyEncryptionStatus, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        inspect_encryption_status(&conn)
+    }
+
+    pub fn activate_api_key_file(&mut self, path: &Path) -> Result<(), StoreError> {
+        {
+            let mut conn = self
+                .conn
+                .lock()
+                .map_err(|e| StoreError::LockError(e.to_string()))?;
+            activate_key_file(&mut conn, path)?;
+        }
+        self.reload_config()
+    }
+
+    pub fn generate_and_activate_api_key_file(&mut self, path: &Path) -> Result<(), StoreError> {
+        generate_key_file(path)?;
+        self.activate_api_key_file(path)
     }
 
     /// Adds a new AI model to the database.

@@ -266,6 +266,36 @@
     },
     "general": {
       "advancedSettings": "高级设置",
+      "apiKeyProtection": {
+        "fileFilterName": "ChatSpeed 密钥文件",
+        "generateFile": "生成新密钥文件",
+        "keyFile": "密钥文件",
+        "manage": "密钥管理",
+        "notSelected": "尚未选择密钥文件",
+        "operationFailed": "密钥文件操作失败",
+        "reasons": {
+          "decryption_failed": "该密钥文件无法解密数据库中的 API 密钥",
+          "invalid_key_file": "所选密钥文件无效",
+          "key_file_missing": "找不到已配置的密钥文件",
+          "key_file_not_configured": "请选择加密这些 API 密钥时使用的密钥文件",
+          "unsupported_version": "数据库使用了当前版本不支持的 API 密钥加密格式",
+          "wrong_key_file": "该密钥文件与当前数据库不匹配"
+        },
+        "saveSuccess": "API 密钥保护设置已更新",
+        "selectFile": "选择密钥文件",
+        "states": {
+          "legacy": "旧版保护",
+          "locked": "已锁定",
+          "ready": "已启用密钥文件保护",
+          "unsupported": "不支持的加密版本"
+        },
+        "status": "保护状态",
+        "statusFailed": "检查 API 密钥保护状态失败",
+        "title": "API 密钥保护",
+        "tooltip": "密钥文件与数据库分开保存，解密 AI 服务商的 API 密钥时必须提供该文件。",
+        "unlockSuccess": "API 密钥已解锁",
+        "unlockTitle": "需要密钥文件"
+      },
       "assistantWindowVisibleAndPasteShortcut": "唤起助手并粘贴",
       "assistantWindowVisibleShortcut": "唤起助手",
       "autoStart": "开机启动",

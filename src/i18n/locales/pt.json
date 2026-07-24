@@ -266,6 +266,31 @@
     },
     "general": {
       "advancedSettings": "Configurações avançadas",
+      "apiKeyProtection": {
+        "fileFilterName": "Arquivo de chave do ChatSpeed",
+        "generateFile": "Gerar novo arquivo de chave",
+        "keyFile": "Arquivo de chave",
+        "manage": "Gerenciamento da chave",
+        "notSelected": "Nenhum arquivo de chave selecionado",
+        "operationFailed": "Falha na operação do arquivo de chave",
+        "reasons": {
+          "decryption_failed": "O arquivo não consegue descriptografar as chaves API armazenadas",
+          "invalid_key_file": "O arquivo de chave selecionado é inválido",
+          "key_file_missing": "O arquivo de chave configurado não foi encontrado",
+          "key_file_not_configured": "Selecione o arquivo usado para criptografar estas chaves API",
+          "unsupported_version": "O banco usa uma versão de criptografia não suportada",
+          "wrong_key_file": "Este arquivo de chave não corresponde ao banco de dados"
+        },
+        "saveSuccess": "Proteção das chaves API atualizada",
+        "selectFile": "Selecionar arquivo de chave",
+        "states": { "legacy": "Proteção anterior", "locked": "Bloqueado", "ready": "Proteção por arquivo ativada", "unsupported": "Criptografia não suportada" },
+        "status": "Status da proteção",
+        "statusFailed": "Falha ao verificar a proteção",
+        "title": "Proteção das chaves API",
+        "tooltip": "O arquivo de chave é armazenado separadamente do banco e é necessário para descriptografar as chaves API.",
+        "unlockSuccess": "Chaves API desbloqueadas",
+        "unlockTitle": "Arquivo de chave necessário"
+      },
       "assistantWindowVisibleAndPasteShortcut": "Invocar assistente e colar",
       "assistantWindowVisibleShortcut": "Invocar assistente",
       "autoStart": "Iniciar com o sistema",

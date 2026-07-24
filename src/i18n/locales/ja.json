@@ -266,6 +266,31 @@
     },
     "general": {
       "advancedSettings": "詳細設定",
+      "apiKeyProtection": {
+        "fileFilterName": "ChatSpeed キーファイル",
+        "generateFile": "新しいキーファイルを生成",
+        "keyFile": "キーファイル",
+        "manage": "キー管理",
+        "notSelected": "キーファイルが選択されていません",
+        "operationFailed": "キーファイルの操作に失敗しました",
+        "reasons": {
+          "decryption_failed": "このキーファイルでは保存済み API キーを復号できません",
+          "invalid_key_file": "選択したキーファイルは無効です",
+          "key_file_missing": "設定済みのキーファイルが見つかりません",
+          "key_file_not_configured": "API キーの暗号化に使用したキーファイルを選択してください",
+          "unsupported_version": "データベースの暗号化バージョンはサポートされていません",
+          "wrong_key_file": "このキーファイルはデータベースと一致しません"
+        },
+        "saveSuccess": "API キー保護を更新しました",
+        "selectFile": "キーファイルを選択",
+        "states": { "legacy": "旧方式の保護", "locked": "ロック中", "ready": "キーファイル保護が有効", "unsupported": "未対応の暗号化" },
+        "status": "保護状態",
+        "statusFailed": "API キー保護を確認できませんでした",
+        "title": "API キー保護",
+        "tooltip": "キーファイルはデータベースとは別に保存され、API キーの復号に必要です。",
+        "unlockSuccess": "API キーのロックを解除しました",
+        "unlockTitle": "キーファイルが必要です"
+      },
       "assistantWindowVisibleAndPasteShortcut": "アシスタントを呼び出して貼り付け",
       "assistantWindowVisibleShortcut": "アシスタントを呼び出す",
       "autoStart": "起動時に自動起動",

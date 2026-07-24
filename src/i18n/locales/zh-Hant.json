@@ -266,6 +266,36 @@
     },
     "general": {
       "advancedSettings": "進階設定",
+      "apiKeyProtection": {
+        "fileFilterName": "ChatSpeed 金鑰檔案",
+        "generateFile": "產生新金鑰檔案",
+        "keyFile": "金鑰檔案",
+        "manage": "金鑰管理",
+        "notSelected": "尚未選擇金鑰檔案",
+        "operationFailed": "金鑰檔案操作失敗",
+        "reasons": {
+          "decryption_failed": "此金鑰檔案無法解密資料庫中的 API 金鑰",
+          "invalid_key_file": "所選金鑰檔案無效",
+          "key_file_missing": "找不到已設定的金鑰檔案",
+          "key_file_not_configured": "請選擇加密這些 API 金鑰時使用的金鑰檔案",
+          "unsupported_version": "資料庫使用了目前版本不支援的 API 金鑰加密格式",
+          "wrong_key_file": "此金鑰檔案與目前資料庫不相符"
+        },
+        "saveSuccess": "API 金鑰保護設定已更新",
+        "selectFile": "選擇金鑰檔案",
+        "states": {
+          "legacy": "舊版保護",
+          "locked": "已鎖定",
+          "ready": "已啟用金鑰檔案保護",
+          "unsupported": "不支援的加密版本"
+        },
+        "status": "保護狀態",
+        "statusFailed": "檢查 API 金鑰保護狀態失敗",
+        "title": "API 金鑰保護",
+        "tooltip": "金鑰檔案與資料庫分開儲存，解密 AI 服務商的 API 金鑰時必須提供此檔案。",
+        "unlockSuccess": "API 金鑰已解鎖",
+        "unlockTitle": "需要金鑰檔案"
+      },
       "assistantWindowVisibleAndPasteShortcut": "喚起助手並貼上",
       "assistantWindowVisibleShortcut": "喚起助手",
       "autoStart": "開機啟動",

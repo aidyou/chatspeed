@@ -6,6 +6,9 @@
       @pointerdown="handleDragStart"
       @pointerup="handleDragEnd" />
     <router-view />
+    <api-key-unlock-dialog
+      :active="requiresApiKeyUnlock"
+      :window-label="windowStore.windowLabel" />
   </div>
 </template>
 
@@ -36,6 +39,7 @@ import { useUpdateStore } from '@/stores/update'
 import { useWindowStore } from '@/stores/window'
 import { useMcpStore } from './stores/mcp'
 import { useProxyGroupStore } from '@/stores/proxy_group'
+import ApiKeyUnlockDialog from '@/components/common/ApiKeyUnlockDialog.vue'
 
 const router = useRouter()
 const settingStore = useSettingStore()
@@ -48,6 +52,9 @@ const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
 const proxyGroupStore = useProxyGroupStore()
 const listener = ref(null)
+const requiresApiKeyUnlock = ['main', 'assistant', 'workflow', 'settings', 'proxy_switcher'].includes(
+  windowStore.windowLabel
+)
 
 const { settings } = storeToRefs(settingStore)
 const windowType = ref('main')

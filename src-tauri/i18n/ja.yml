@@ -35,6 +35,7 @@ db:
   ai_model_not_found_by_id: ID %{id} の AI モデルが見つかりません
   ai_skill_not_found_by_id: ID %{id} の AI スキルが見つかりません
   already_exists: データは既に存在します：%{error}
+  api_keys_locked: AI モデルの API キーはロックされています。続行するには対応するキーファイルを選択してください。
   backup:
     dir_not_found: バックアップディレクトリ '%{path}' が見つかりません
     failed_to_add_file_to_zip: ファイル '%{path}' の ZIP への追加に失敗しました：%{error}

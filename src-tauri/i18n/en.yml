@@ -35,6 +35,7 @@ db:
   ai_model_not_found_by_id: AI model with ID %{id} not found
   ai_skill_not_found_by_id: AI skill with ID %{id} not found
   already_exists: 'Data already exists: %{error}'
+  api_keys_locked: AI model API keys are locked. Select the matching key file to continue.
   backup:
     dir_not_found: Backup directory '%{path}' not found
     failed_to_add_file_to_zip: 'Failed to add file ''%{path}'' to ZIP: %{error}'

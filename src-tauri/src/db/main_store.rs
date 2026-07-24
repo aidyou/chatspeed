@@ -1,14 +1,14 @@
 use crate::db::{error::StoreError, ProxyGroup};
 
 use log::error;
-use rusqlite::{Connection, OpenFlags, Result};
+use rusqlite::{params, Connection, OpenFlags, Result};
 
 use rust_i18n::t;
 use serde_json::Value;
 use std::{collections::HashMap, path::Path, sync::Mutex};
 
 use super::{
-    api_key_crypto::decrypt_api_key,
+    api_key_crypto::{decrypt_api_key, inspect_encryption_status},
     mcp::Mcp,
     sql::migrations::manager,
     types::{Config, ModelConfig},
@@ -53,6 +53,11 @@ impl Config {
     /// # Returns
     /// Returns an `Option<AiModel>` containing the AI model if found, or `None` if not found.
     pub fn get_ai_model_by_id(&self, id: i64) -> Result<AiModel, StoreError> {
+        if self.api_keys_locked {
+            return Err(StoreError::InvalidData(
+                t!("db.api_keys_locked").to_string(),
+            ));
+        }
         self.ai_models
             .iter()
             .find(|m| m.id == Some(id))
@@ -67,8 +72,13 @@ impl Config {
     /// # Returns
     ///
     /// Returns an `Arc<Vec<AiModel>>` containing the AI models.
-    pub fn get_ai_models(&self) -> Vec<AiModel> {
-        self.ai_models.clone()
+    pub fn get_ai_models(&self) -> Result<Vec<AiModel>, StoreError> {
+        if self.api_keys_locked {
+            return Err(StoreError::InvalidData(
+                t!("db.api_keys_locked").to_string(),
+            ));
+        }
+        Ok(self.ai_models.clone())
     }
 
     /// Retrieves an AI skill by its ID.
@@ -217,6 +227,7 @@ impl MainStore {
             log::error!("{}", err);
             StoreError::Query(err)
         })?;
+        super::api_key_crypto::migrate_to_configured_key_if_available(&mut conn)?;
 
         let conn = Mutex::new(conn);
         let config = {
@@ -243,7 +254,13 @@ impl MainStore {
     /// Returns a `Result` containing the `Config` struct if successful, or a `StoreError` if an error occurs.
     fn load_config(conn: &Connection) -> Result<Config, StoreError> {
         let settings = Self::get_all_config(conn)?;
-        let ai_models = Self::get_all_ai_models(conn)?;
+        let api_key_status = inspect_encryption_status(conn)?;
+        let api_keys_locked = api_key_status.is_locked();
+        let ai_models = if api_keys_locked {
+            Vec::new()
+        } else {
+            Self::get_all_ai_models(conn)?
+        };
         let ai_skills = Self::get_all_ai_skills(conn)?;
         let mcps = Self::get_all_mcps(conn)?;
         let proxy_groups = Self::proxy_group_list(conn)?;
@@ -251,6 +268,7 @@ impl MainStore {
         Ok(Config {
             settings,
             ai_models,
+            api_keys_locked,
             ai_skills,
             mcps,
             proxy_groups,
@@ -262,10 +280,11 @@ impl MainStore {
     /// # Returns
     /// Returns a `Result` containing `()` if successful, or a `StoreError` if an error occurs.
     pub fn reload_config(&mut self) -> Result<(), StoreError> {
-        let conn = self
+        let mut conn = self
             .conn
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
+        super::api_key_crypto::migrate_to_configured_key_if_available(&mut conn)?;
         match Self::load_config(&conn) {
             Ok(config) => {
                 self.config = config;
@@ -292,6 +311,36 @@ impl MainStore {
                 StoreError::from(e)
             })?;
 
+        Ok(())
+    }
+
+    fn restore_machine_specific_config(
+        &mut self,
+        key: &str,
+        value: Option<&Value>,
+    ) -> Result<(), StoreError> {
+        if key != crate::db::api_key_crypto::API_KEY_FILE_CONFIG_KEY {
+            return match value {
+                Some(value) => self.set_config(key, value),
+                None => self.delete_config(key),
+            };
+        }
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        match value {
+            Some(value) => {
+                conn.execute(
+                    "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
+                    params![key, value.to_string()],
+                )?;
+            }
+            None => {
+                conn.execute("DELETE FROM config WHERE key = ?1", [key])?;
+            }
+        }
         Ok(())
     }
 
@@ -411,11 +460,7 @@ impl MainStore {
         let restore_result = (|| -> Result<(), StoreError> {
             self.reopen(main_db_path)?;
             for &key in machine_specific_keys {
-                if let Some(value) = preserved_configs.get(key) {
-                    self.set_config(key, value)?;
-                } else {
-                    self.delete_config(key)?;
-                }
+                self.restore_machine_specific_config(key, preserved_configs.get(key))?;
             }
             self.reload_config()
         })();
@@ -648,6 +693,7 @@ impl MainStore {
 #[cfg(test)]
 mod tests {
     use super::MainStore;
+    use crate::db::api_key_crypto::API_KEY_FILE_CONFIG_KEY;
     use serde_json::json;
 
     #[test]
@@ -697,5 +743,63 @@ mod tests {
         main_store
             .set_config("restore_test_after_failure", &json!(true))
             .unwrap();
+    }
+
+    #[test]
+    fn missing_v2_key_file_opens_the_database_in_locked_state() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("main.db");
+        let key_path = temp_dir.path().join("api-key.csk");
+        let mut store = MainStore::new(&db_path).unwrap();
+        store
+            .add_ai_model(
+                "Provider".to_string(),
+                Vec::new(),
+                String::new(),
+                "openai".to_string(),
+                "https://example.com".to_string(),
+                "secret".to_string(),
+                0,
+                0.0,
+                0.0,
+                0,
+                false,
+                None,
+            )
+            .unwrap();
+        store.generate_and_activate_api_key_file(&key_path).unwrap();
+        drop(store);
+        std::fs::remove_file(&key_path).unwrap();
+
+        let reopened = MainStore::new(&db_path).unwrap();
+        assert!(reopened.config.api_keys_locked);
+        assert!(reopened.config.get_ai_models().is_err());
+    }
+
+    #[test]
+    fn atomic_restore_preserves_the_local_api_key_file_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let main_path = temp_dir.path().join("main.db");
+        let staged_path = temp_dir.path().join("staged.db");
+        let key_path = temp_dir.path().join("api-key.csk");
+        let mut main_store = MainStore::new(&main_path).unwrap();
+        main_store
+            .generate_and_activate_api_key_file(&key_path)
+            .unwrap();
+        let staged_store = MainStore::new(&staged_path).unwrap();
+        drop(staged_store);
+
+        main_store
+            .atomic_restore(&staged_path, &main_path, &[API_KEY_FILE_CONFIG_KEY])
+            .unwrap();
+
+        assert_eq!(
+            main_store.config.get_setting(API_KEY_FILE_CONFIG_KEY),
+            Some(&json!(key_path
+                .canonicalize()
+                .unwrap()
+                .display()
+                .to_string()))
+        );
     }
 }

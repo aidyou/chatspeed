@@ -38,6 +38,7 @@ db:
   ai_model_not_found_by_id: No se encontró el modelo de IA con ID %{id}
   ai_skill_not_found_by_id: No se encontró la habilidad de IA con ID %{id}
   already_exists: 'Los datos ya existen: %{error}'
+  api_keys_locked: Las claves API de los modelos de IA están bloqueadas. Seleccione el archivo de clave correspondiente para continuar.
   backup:
     dir_not_found: No se encontró el directorio de copia de seguridad '%{path}'
     failed_to_add_file_to_zip: 'Error al agregar el archivo ''%{path}'' al ZIP: %{error}'

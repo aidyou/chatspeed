@@ -696,6 +696,47 @@
     </div>
   </div>
 
+  <!-- API key protection -->
+  <div class="card">
+    <div class="title">{{ $t('settings.general.apiKeyProtection.title') }}</div>
+    <div class="list">
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.apiKeyProtection.status') }}
+            <small class="tooltip">{{ $t('settings.general.apiKeyProtection.tooltip') }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-tag :type="apiKeyStatusType">{{ apiKeyStatusText }}</el-tag>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.apiKeyProtection.keyFile') }}</div>
+        <div class="value api-key-file-path" :title="apiKeyEncryptionStatus?.keyFile || ''">
+          {{ apiKeyEncryptionStatus?.keyFile || $t('settings.general.apiKeyProtection.notSelected') }}
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.apiKeyProtection.manage') }}</div>
+        <div class="value api-key-actions">
+          <el-button :loading="apiKeyFileBusy" @click="selectApiKeyFile">
+            <cs name="ext-folder-open" />
+            {{ $t('settings.general.apiKeyProtection.selectFile') }}
+          </el-button>
+          <el-button
+            type="primary"
+            plain
+            :loading="apiKeyFileBusy"
+            :disabled="apiKeyEncryptionStatus?.state === 'locked' || apiKeyEncryptionStatus?.state === 'unsupported'"
+            @click="generateApiKeyFile">
+            {{ $t('settings.general.apiKeyProtection.generateFile') }}
+          </el-button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- backup settings -->
   <div class="card">
     <div class="title">{{ $t('settings.general.backupSettings') }}</div>
@@ -737,7 +778,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open, save } from '@tauri-apps/plugin-dialog'
 import { relaunch } from '@tauri-apps/plugin-process'
 
 import {
@@ -801,6 +842,22 @@ const manualUpdateButtonText = computed(() => {
 
 const backups = ref([])
 const restoreDir = ref('')
+const apiKeyEncryptionStatus = ref(null)
+const apiKeyFileBusy = ref(false)
+const apiKeyStatusType = computed(() => {
+  const state = apiKeyEncryptionStatus.value?.state
+  if (state === 'ready') return 'success'
+  if (state === 'locked' || state === 'unsupported') return 'danger'
+  return 'warning'
+})
+const apiKeyStatusText = computed(() => {
+  const state = apiKeyEncryptionStatus.value?.state || 'legacy'
+  const reason = apiKeyEncryptionStatus.value?.reason
+  if (reason && state !== 'ready') {
+    return t(`settings.general.apiKeyProtection.reasons.${reason}`)
+  }
+  return t(`settings.general.apiKeyProtection.states.${state}`)
+})
 const searchEngines = computed(() => {
   const engines = ['bing', 'duckduckgo', 'brave', 'so', 'sogou']
 
@@ -885,6 +942,12 @@ const softwareLanguages = getSoftwareLanguages()
 const unlistenSyncState = ref(null)
 
 onMounted(async () => {
+  try {
+    await refreshApiKeyEncryptionStatus()
+  } catch (error) {
+    console.error('Failed to inspect API key encryption status:', error)
+    showMessage(t('settings.general.apiKeyProtection.statusFailed'), 'error')
+  }
   defaultBackupDir.value = `${await appDataDir()}/backups`
   getAllBackups()
   await sensitiveStore.fetchConfig()
@@ -898,6 +961,46 @@ onMounted(async () => {
     }
   })
 })
+
+const refreshApiKeyEncryptionStatus = async () => {
+  apiKeyEncryptionStatus.value = await invokeWrapper('get_api_key_encryption_status')
+}
+
+const applyApiKeyFile = async (command, path) => {
+  apiKeyFileBusy.value = true
+  try {
+    apiKeyEncryptionStatus.value = await invokeWrapper(command, { path })
+    modelStore.updateModelStore()
+    sendSyncState('model', settingStore.windowLabel)
+    showMessage(t('settings.general.apiKeyProtection.saveSuccess'), 'success')
+  } catch (error) {
+    console.error('Failed to update API key file:', error)
+    showMessage(t('settings.general.apiKeyProtection.operationFailed'), 'error')
+  } finally {
+    apiKeyFileBusy.value = false
+  }
+}
+
+const selectApiKeyFile = async () => {
+  const path = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: t('settings.general.apiKeyProtection.fileFilterName'), extensions: ['csk', 'json'] }]
+  })
+  if (path) {
+    await applyApiKeyFile('activate_api_key_file', path)
+  }
+}
+
+const generateApiKeyFile = async () => {
+  const path = await save({
+    defaultPath: 'chatspeed-api-key.csk',
+    filters: [{ name: t('settings.general.apiKeyProtection.fileFilterName'), extensions: ['csk'] }]
+  })
+  if (path) {
+    await applyApiKeyFile('generate_api_key_file', path)
+  }
+}
 
 onBeforeUnmount(() => {
   if (unlistenSyncState.value) {
@@ -1505,6 +1608,26 @@ const getAllBackups = () => {
     font-size: 12px;
     color: var(--el-text-color-secondary);
     line-height: 1.4;
+  }
+}
+
+.api-key-file-path {
+  display: block;
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--cs-text-color-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.api-key-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--cs-space-xs);
+
+  .el-button + .el-button {
+    margin-left: 0;
   }
 }
 

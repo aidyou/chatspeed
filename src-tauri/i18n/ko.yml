@@ -35,6 +35,7 @@ db:
   ai_model_not_found_by_id: ID가 %{id}인 AI 모델을 찾을 수 없습니다.
   ai_skill_not_found_by_id: ID가 %{id}인 AI 기술을 찾을 수 없습니다.
   already_exists: '데이터가 이미 존재합니다: %{error}'
+  api_keys_locked: AI 모델 API 키가 잠겨 있습니다. 계속하려면 일치하는 키 파일을 선택하세요.
   backup:
     dir_not_found: 백업 디렉터리 '%{path}'를 찾을 수 없습니다.
     failed_to_add_file_to_zip: '파일 ''%{path}''을(를) ZIP에 추가하지 못했습니다: %{error}'

@@ -37,6 +37,7 @@ db:
   ai_model_not_found_by_id: KI-Modell mit ID %{id} nicht gefunden
   ai_skill_not_found_by_id: KI-Fähigkeit mit ID %{id} nicht gefunden
   already_exists: 'Daten bereits vorhanden: %{error}'
+  api_keys_locked: Die API-Schlüssel der KI-Modelle sind gesperrt. Wählen Sie die passende Schlüsseldatei aus, um fortzufahren.
   backup:
     dir_not_found: Sicherungsverzeichnis '%{path}' nicht gefunden
     failed_to_add_file_to_zip: 'Datei ''%{path}'' konnte nicht zum ZIP-Archiv hinzugefügt werden: %{error}'

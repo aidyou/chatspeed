@@ -266,6 +266,31 @@
     },
     "general": {
       "advancedSettings": "Paramètres avancés",
+      "apiKeyProtection": {
+        "fileFilterName": "Fichier de clé ChatSpeed",
+        "generateFile": "Générer un fichier de clé",
+        "keyFile": "Fichier de clé",
+        "manage": "Gestion de la clé",
+        "notSelected": "Aucun fichier de clé sélectionné",
+        "operationFailed": "Échec de l'opération sur le fichier de clé",
+        "reasons": {
+          "decryption_failed": "Ce fichier ne peut pas déchiffrer les clés API enregistrées",
+          "invalid_key_file": "Le fichier de clé sélectionné est invalide",
+          "key_file_missing": "Le fichier de clé configuré est introuvable",
+          "key_file_not_configured": "Sélectionnez le fichier utilisé pour chiffrer ces clés API",
+          "unsupported_version": "La base utilise une version de chiffrement non prise en charge",
+          "wrong_key_file": "Ce fichier de clé ne correspond pas à la base de données"
+        },
+        "saveSuccess": "Protection des clés API mise à jour",
+        "selectFile": "Sélectionner le fichier de clé",
+        "states": { "legacy": "Protection précédente", "locked": "Verrouillé", "ready": "Protection par fichier activée", "unsupported": "Chiffrement non pris en charge" },
+        "status": "État de la protection",
+        "statusFailed": "Impossible de vérifier la protection",
+        "title": "Protection des clés API",
+        "tooltip": "Le fichier de clé est conservé séparément de la base et requis pour déchiffrer les clés API.",
+        "unlockSuccess": "Clés API déverrouillées",
+        "unlockTitle": "Fichier de clé requis"
+      },
       "assistantWindowVisibleAndPasteShortcut": "Afficher l'assistant et coller",
       "assistantWindowVisibleShortcut": "Afficher l'assistant",
       "autoStart": "Démarrer à la connexion",

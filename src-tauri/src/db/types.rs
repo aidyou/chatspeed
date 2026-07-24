@@ -220,6 +220,8 @@ pub struct Config {
     pub settings: HashMap<String, Value>,
     /// A vector of AI models.
     pub ai_models: Vec<AiModel>,
+    /// Whether encrypted AI model API keys require a user-provided key file.
+    pub api_keys_locked: bool,
     /// A vector of AI skills.
     pub ai_skills: Vec<AiSkill>,
     /// Mcp server configurations.

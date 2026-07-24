@@ -36,6 +36,7 @@ db:
   ai_model_not_found_by_id: Модель ИИ с ID %{id} не найдена
   ai_skill_not_found_by_id: Навык ИИ с ID %{id} не найден
   already_exists: 'Данные уже существуют: %{error}'
+  api_keys_locked: Ключи API моделей ИИ заблокированы. Выберите соответствующий файл ключа, чтобы продолжить.
   backup:
     dir_not_found: Каталог резервных копий '%{path}' не найден
     failed_to_add_file_to_zip: 'Не удалось добавить файл ''%{path}'' в ZIP: %{error}'

@@ -20,7 +20,7 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
 mod tests {
     use super::*;
     use crate::db::api_key_crypto::{
-        decrypt_api_key, API_KEY_ENCRYPTION_CONFIG_KEY, ENCRYPTED_VALUE_PREFIX,
+        decrypt_api_key, API_KEY_ENCRYPTION_CONFIG_KEY, LEGACY_ENCRYPTED_VALUE_PREFIX,
     };
 
     #[test]
@@ -66,8 +66,8 @@ mod tests {
             })
             .expect("missing encrypted uppercase-prefixed provider key");
 
-        assert!(encrypted_key.starts_with(ENCRYPTED_VALUE_PREFIX));
-        assert!(encrypted_uppercase_prefixed_key.starts_with(ENCRYPTED_VALUE_PREFIX));
+        assert!(encrypted_key.starts_with(LEGACY_ENCRYPTED_VALUE_PREFIX));
+        assert!(encrypted_uppercase_prefixed_key.starts_with(LEGACY_ENCRYPTED_VALUE_PREFIX));
         assert_eq!(
             decrypt_api_key(&conn, &encrypted_key).unwrap(),
             "legacy-key"

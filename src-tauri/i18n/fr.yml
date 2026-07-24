@@ -38,6 +38,7 @@ db:
   ai_model_not_found_by_id: Modèle d'IA avec l'ID %{id} non trouvé
   ai_skill_not_found_by_id: Compétence d'IA avec l'ID %{id} non trouvée
   already_exists: 'Les données existent déjà : %{error}'
+  api_keys_locked: Les clés API des modèles d'IA sont verrouillées. Sélectionnez le fichier de clé correspondant pour continuer.
   backup:
     dir_not_found: Répertoire de sauvegarde '%{path}' non trouvé
     failed_to_add_file_to_zip: 'Échec de l''ajout du fichier ''%{path}'' au ZIP : %{error}'

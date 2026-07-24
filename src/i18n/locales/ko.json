@@ -266,6 +266,31 @@
     },
     "general": {
       "advancedSettings": "고급 설정",
+      "apiKeyProtection": {
+        "fileFilterName": "ChatSpeed 키 파일",
+        "generateFile": "새 키 파일 생성",
+        "keyFile": "키 파일",
+        "manage": "키 관리",
+        "notSelected": "선택한 키 파일 없음",
+        "operationFailed": "키 파일 작업 실패",
+        "reasons": {
+          "decryption_failed": "이 키 파일로 저장된 API 키를 복호화할 수 없습니다",
+          "invalid_key_file": "선택한 키 파일이 올바르지 않습니다",
+          "key_file_missing": "설정된 키 파일을 찾을 수 없습니다",
+          "key_file_not_configured": "API 키 암호화에 사용한 키 파일을 선택하세요",
+          "unsupported_version": "데이터베이스의 암호화 버전이 지원되지 않습니다",
+          "wrong_key_file": "이 키 파일은 데이터베이스와 일치하지 않습니다"
+        },
+        "saveSuccess": "API 키 보호 설정이 업데이트되었습니다",
+        "selectFile": "키 파일 선택",
+        "states": { "legacy": "이전 방식 보호", "locked": "잠김", "ready": "키 파일 보호 활성화", "unsupported": "지원되지 않는 암호화" },
+        "status": "보호 상태",
+        "statusFailed": "API 키 보호 상태 확인 실패",
+        "title": "API 키 보호",
+        "tooltip": "키 파일은 데이터베이스와 별도로 저장되며 API 키 복호화에 필요합니다.",
+        "unlockSuccess": "API 키 잠금이 해제되었습니다",
+        "unlockTitle": "키 파일 필요"
+      },
       "assistantWindowVisibleAndPasteShortcut": "도우미 창 활성화 및 붙여넣기",
       "assistantWindowVisibleShortcut": "도우미 창 활성화",
       "autoStart": "부팅 시 시작",
