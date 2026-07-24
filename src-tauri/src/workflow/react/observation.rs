@@ -132,6 +132,11 @@ impl ObservationReinforcer {
                         Some((
                             persisted.get("path")?.as_str()?.to_string(),
                             persisted.get("file_size_bytes")?.as_u64()?,
+                            persisted
+                                .get("reason")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("large")
+                                .to_string(),
                         ))
                     });
                 let raw_res_for_summary =
@@ -249,12 +254,20 @@ impl ObservationReinforcer {
                         observation_kind: None,
                     }
                 } else if tool_name == TOOL_BASH && persisted_output.is_some() {
-                    let (file_path, file_size) = persisted_output.unwrap_or_default();
+                    let (file_path, file_size, persistence_reason) =
+                        persisted_output.unwrap_or_default();
                     let preview = line_based_preview(&raw_res, LARGE_TOOL_OUTPUT_CHAR_LIMIT);
-                    let reminder = format!(
-                        "<SYSTEM_REMINDER>bash output exceeded {} chars, so the complete output was saved to '{}'. File size: {} bytes. Use read_file with offset=0 to inspect the complete output, or use grep on this file path to find specific facts. Treat the saved file as the source of truth instead of rerunning the command solely to recover omitted output.</SYSTEM_REMINDER>",
-                        LARGE_TOOL_OUTPUT_CHAR_LIMIT, file_path, file_size,
-                    );
+                    let reminder = if persistence_reason == "reduced" {
+                        format!(
+                            "<SYSTEM_REMINDER>bash output was reduced for this command, so the complete output was saved to '{}'. File size: {} bytes. Use read_file with offset=0 to inspect the complete output, or use grep on this file path to find specific facts. Treat the saved file as the source of truth instead of rerunning the command solely to recover omitted output.</SYSTEM_REMINDER>",
+                            file_path, file_size,
+                        )
+                    } else {
+                        format!(
+                            "<SYSTEM_REMINDER>bash output exceeded {} chars, so the complete output was saved to '{}'. File size: {} bytes. Use read_file with offset=0 to inspect the complete output, or use grep on this file path to find specific facts. Treat the saved file as the source of truth instead of rerunning the command solely to recover omitted output.</SYSTEM_REMINDER>",
+                            LARGE_TOOL_OUTPUT_CHAR_LIMIT, file_path, file_size,
+                        )
+                    };
                     let llm_content = llm_content_override
                         .map(|content| format!("{}\n{}", content, reminder))
                         .or_else(|| Some(reminder.clone()));
@@ -265,7 +278,15 @@ impl ObservationReinforcer {
                         ),
                         llm_content,
                         title,
-                        summary: format!("{} (Persisted overflow)", summary),
+                        summary: format!(
+                            "{} ({})",
+                            summary,
+                            if persistence_reason == "reduced" {
+                                "Persisted reduction"
+                            } else {
+                                "Persisted overflow"
+                            }
+                        ),
                         is_error: false,
                         error_type: None,
                         display_type: display_type.to_string(),
@@ -819,6 +840,42 @@ mod tests {
         assert!(reinforced
             .content
             .contains("Continue with read_file using offset=0"));
+
+        remove_persisted_output(&reinforced.content);
+    }
+
+    #[test]
+    fn reinforce_bash_reduction_points_ai_to_complete_persisted_output() {
+        let full_output = "bin/assets/index.js 3,303.40 kB\n✓ built in 15.99s\n";
+        let persisted = persist_tool_output(full_output).unwrap();
+        let tool_call = json!({
+            "function": {
+                "name": TOOL_BASH,
+                "arguments": {"command":"pnpm build"}
+            }
+        });
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(json!({
+                "content": full_output,
+                "structured_content": {
+                    "llm_content": "Exit code: 0\n\nBuild result:\nBuild output: 1 file, 3.23 MB",
+                    "persisted_output": {
+                        "path": persisted.path,
+                        "file_size_bytes": persisted.file_size_bytes,
+                        "reason": "reduced"
+                    }
+                }
+            })),
+            None,
+            None,
+        );
+
+        assert!(reinforced.summary.contains("Persisted reduction"));
+        let llm_content = reinforced.llm_content.as_deref().unwrap_or_default();
+        assert!(llm_content.contains("output was reduced for this command"));
+        assert!(!llm_content.contains("output exceeded"));
 
         remove_persisted_output(&reinforced.content);
     }

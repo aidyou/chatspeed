@@ -75,7 +75,7 @@
             <cs
               name="filter"
               @click="sensitiveStore.status.healthy && onToggleSensitiveFiltering()"
-              :class="{ 
+              :class="{
                 active: sensitiveStore.config.enabled && sensitiveStore.status.healthy,
                 disabled: !sensitiveStore.status.healthy
               }" />

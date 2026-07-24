@@ -1,5 +1,10 @@
-use crate::libs::ai_temp::persist_large_tool_output;
-use crate::tools::helper::{is_frontend_build_command, reduce_with_command_reducers};
+use crate::libs::ai_temp::{
+    persist_large_tool_output, persist_tool_output, LARGE_TOOL_OUTPUT_CHAR_LIMIT,
+};
+use crate::tools::helper::{
+    detect_json_stdout, is_go_build_or_test_command, is_node_build_command, reduce_command_output,
+    reduce_priority_log_output, should_reduce_priority_log,
+};
 use crate::tools::ToolCallResult;
 use serde_json::json;
 
@@ -9,7 +14,6 @@ const EXPLICIT_SHAPED_LLM_MAX_LINES: usize = 240;
 const EXPLICIT_SHAPED_LLM_MAX_CHARS: usize = 20_000;
 const KSP_LLM_PRESERVE_CHARS: usize = 15_000;
 const BUILD_LLM_TAIL_LINES: usize = 20;
-const TEST_LLM_TAIL_LINES: usize = 30;
 const GIT_LOG_HEAD_LINES: usize = 30;
 const GIT_DIFF_MAX_FILES: usize = 20;
 
@@ -22,24 +26,59 @@ pub(crate) fn build_shell_tool_result(
     let (normalized_stdout, normalized_stderr) =
         normalize_shell_output_streams(command_str, exit_code, stdout, stderr);
     let raw_content = format_shell_output(exit_code, &normalized_stdout, &normalized_stderr);
-    let persisted_output = match persist_large_tool_output(&raw_content) {
+    let normalized_command = normalize_command(command_str);
+    let json_output = detect_json_stdout(&normalized_stdout, &normalized_stderr);
+    let command_reduction = if json_output.is_none() {
+        reduce_command_output(&normalized_command, exit_code, &raw_content)
+    } else {
+        None
+    };
+    let (display_content, llm_content, output_was_reduced) = if let Some(json_output) = json_output
+    {
+        let json_content = format_json_output(exit_code, &json_output.compact_content);
+        if json_content.chars().count() <= LARGE_TOOL_OUTPUT_CHAR_LIMIT {
+            (json_content.clone(), json_content, json_output.was_minified)
+        } else {
+            let summary = summarize_large_json_output(
+                exit_code,
+                json_output.compact_content.chars().count(),
+                json_output.was_minified,
+            );
+            (summary.clone(), summary, true)
+        }
+    } else {
+        let display_stdout = truncate_with_marker(&normalized_stdout, MAX_DISPLAY_CHARS);
+        let display_stderr = truncate_with_marker(&normalized_stderr, MAX_DISPLAY_CHARS);
+        let display_content = format_shell_output(exit_code, &display_stdout, &display_stderr);
+        let llm_content = if let Some(reduction) = command_reduction.as_ref() {
+            reduction.content.clone()
+        } else {
+            reduce_shell_output_for_llm(
+                &normalized_command,
+                exit_code,
+                &normalized_stdout,
+                &normalized_stderr,
+                &raw_content,
+            )
+        };
+        let output_was_reduced = command_reduction
+            .as_ref()
+            .is_some_and(|reduction| reduction.persist_complete_output)
+            || llm_content != raw_content;
+        (display_content, llm_content, output_was_reduced)
+    };
+    let persisted_output = if output_was_reduced {
+        persist_tool_output(&raw_content).map(Some)
+    } else {
+        persist_large_tool_output(&raw_content)
+    };
+    let persisted_output = match persisted_output {
         Ok(persisted) => persisted,
         Err(error) => {
             log::warn!("Failed to persist complete bash output: {}", error);
             None
         }
     };
-    let display_stdout = truncate_with_marker(&normalized_stdout, MAX_DISPLAY_CHARS);
-    let display_stderr = truncate_with_marker(&normalized_stderr, MAX_DISPLAY_CHARS);
-    let display_content = format_shell_output(exit_code, &display_stdout, &display_stderr);
-
-    let llm_content = reduce_shell_output_for_llm(
-        command_str,
-        exit_code,
-        &normalized_stdout,
-        &normalized_stderr,
-        &raw_content,
-    );
 
     let mut structured_content = json!({
         "exit_code": exit_code,
@@ -49,6 +88,7 @@ pub(crate) fn build_shell_tool_result(
         structured_content["persisted_output"] = json!({
             "path": persisted.path,
             "file_size_bytes": persisted.file_size_bytes,
+            "reason": if output_was_reduced { "reduced" } else { "large" },
         });
     }
 
@@ -61,8 +101,7 @@ pub(crate) fn should_render_stderr_line_as_stdout(command_str: &str, line: &str)
 
 pub(crate) fn should_collect_stderr_line_as_stdout(command_str: &str, line: &str) -> bool {
     let normalized_command = normalize_command(command_str);
-    (is_plain_go_build(&normalized_command) || is_plain_go_test(&normalized_command))
-        && line.starts_with("go: downloading ")
+    is_go_build_or_test_command(&normalized_command) && line.starts_with("go: downloading ")
 }
 
 pub(crate) fn normalize_shell_output_streams(
@@ -79,7 +118,7 @@ pub(crate) fn normalize_shell_output_streams(
     }
 
     let normalized_command = normalize_command(command_str);
-    if is_frontend_build_command(&normalized_command) {
+    if is_node_build_command(&normalized_command) {
         return (append_output(stdout, &stderr), String::new());
     }
 
@@ -214,6 +253,26 @@ pub(crate) fn strip_ansi_escape_sequences(content: &str) -> String {
     AnsiOutputSanitizer::default().sanitize(content)
 }
 
+fn format_json_output(exit_code: i32, compact_json: &str) -> String {
+    format!("Exit code: {exit_code}\n\nstdout (JSON):\n{compact_json}")
+}
+
+fn summarize_large_json_output(
+    exit_code: i32,
+    compact_char_count: usize,
+    was_minified: bool,
+) -> String {
+    let minification_note = if was_minified {
+        " Pretty-printed whitespace was removed before storage."
+    } else {
+        ""
+    };
+    format!(
+        "Exit code: {exit_code}\n\nstdout (JSON):\n[Valid JSON output is {compact_char_count} characters and was omitted without truncation. The complete original output was saved for inspection.]{}",
+        minification_note
+    )
+}
+
 fn format_shell_output(exit_code: i32, stdout: &str, stderr: &str) -> String {
     let mut result = format!("Exit code: {}\n", exit_code);
     if !stdout.is_empty() {
@@ -228,34 +287,12 @@ fn format_shell_output(exit_code: i32, stdout: &str, stderr: &str) -> String {
 }
 
 fn reduce_shell_output_for_llm(
-    command_str: &str,
+    normalized_command: &str,
     exit_code: i32,
     stdout: &str,
     stderr: &str,
     raw_content: &str,
 ) -> String {
-    let normalized_command = normalize_command(command_str);
-
-    if let Some(reduced) = reduce_with_command_reducers(&normalized_command, exit_code, raw_content)
-    {
-        return reduced;
-    }
-
-    if is_plain_cargo_check(&normalized_command)
-        || is_plain_cargo_build(&normalized_command)
-        || is_plain_cargo_clippy(&normalized_command)
-    {
-        return reduce_build_like_output(raw_content, BUILD_LLM_TAIL_LINES);
-    }
-
-    if is_plain_cargo_test(&normalized_command) || is_plain_go_test(&normalized_command) {
-        return reduce_build_like_output(raw_content, TEST_LLM_TAIL_LINES);
-    }
-
-    if is_plain_go_build(&normalized_command) {
-        return reduce_build_like_output(raw_content, BUILD_LLM_TAIL_LINES);
-    }
-
     if normalized_command.contains("git show") || normalized_command.contains("git diff") {
         return reduce_git_diff_like_output(exit_code, stdout, stderr, raw_content);
     }
@@ -273,6 +310,10 @@ fn reduce_shell_output_for_llm(
         return raw_content.to_string();
     }
 
+    if should_reduce_priority_log(raw_content) {
+        return reduce_priority_log_output(raw_content);
+    }
+
     if raw_content.lines().count() > 120 || raw_content.chars().count() > 8_000 {
         return reduce_generic_output(raw_content, GENERIC_LLM_MAX_LINES);
     }
@@ -286,30 +327,6 @@ pub(crate) fn normalize_command(command: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
-}
-
-fn is_plain_cargo_check(command: &str) -> bool {
-    command.ends_with("cargo check")
-}
-
-fn is_plain_go_build(command: &str) -> bool {
-    command == "go build" || command.contains(" go build ") || command.starts_with("go build ")
-}
-
-fn is_plain_go_test(command: &str) -> bool {
-    command.ends_with("go test")
-}
-
-fn is_plain_cargo_build(command: &str) -> bool {
-    command.ends_with("cargo build")
-}
-
-fn is_plain_cargo_clippy(command: &str) -> bool {
-    command.ends_with("cargo clippy")
-}
-
-fn is_plain_cargo_test(command: &str) -> bool {
-    command.ends_with("cargo test")
 }
 
 fn is_ksp_command(command: &str) -> bool {
@@ -326,18 +343,6 @@ fn is_explicitly_shaped_read_output(command: &str) -> bool {
         || command.starts_with("tail ")
         || command.contains("sed -n ")
         || command.contains("awk ")
-}
-
-fn reduce_build_like_output(raw_content: &str, tail_lines: usize) -> String {
-    let lines: Vec<&str> = raw_content.lines().collect();
-    if lines.len() <= tail_lines {
-        return raw_content.to_string();
-    }
-
-    format!(
-        "[truncated previous output]\n{}",
-        lines[lines.len().saturating_sub(tail_lines)..].join("\n")
-    )
 }
 
 fn reduce_git_log_output(raw_content: &str) -> String {
@@ -477,7 +482,7 @@ mod tests {
         build_shell_tool_result, normalize_shell_output_streams,
         should_render_stderr_line_as_stdout, strip_ansi_escape_sequences,
     };
-    use crate::libs::ai_temp::resolve_ai_temp_path;
+    use crate::libs::ai_temp::{resolve_ai_temp_path, LARGE_TOOL_OUTPUT_CHAR_LIMIT};
     use std::fs;
     use std::path::Path;
 
@@ -498,6 +503,78 @@ mod tests {
         assert!(llm_content.starts_with("[truncated previous output]"));
         assert!(llm_content.contains("line 30"));
         assert!(!llm_content.contains("line 1\n"));
+        assert_eq!(
+            structured["persisted_output"]["reason"].as_str(),
+            Some("reduced")
+        );
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
+    }
+
+    #[test]
+    fn valid_pretty_json_is_compacted_and_original_output_is_persisted() {
+        let stdout = "{\n  \"items\": [\n    { \"id\": 1 },\n    { \"id\": 2 }\n  ]\n}\n";
+        let result = build_shell_tool_result("cargo check --workspace", 0, stdout, "");
+        let content = result.content.as_deref().expect("display content missing");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+
+        assert_eq!(
+            content,
+            "Exit code: 0\n\nstdout (JSON):\n{\"items\":[{\"id\":1},{\"id\":2}]}"
+        );
+        assert_eq!(structured["llm_content"].as_str(), Some(content));
+        assert_eq!(
+            structured["persisted_output"]["reason"].as_str(),
+            Some("reduced")
+        );
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+        assert_eq!(
+            fs::read_to_string(&physical_path).unwrap(),
+            format!("Exit code: 0\n\nstdout:\n{stdout}")
+        );
+        fs::remove_file(physical_path).unwrap();
+    }
+
+    #[test]
+    fn large_complete_json_is_summarized_without_partial_json() {
+        let stdout = format!(
+            "{{\"payload\":\"{}\"}}",
+            "x".repeat(LARGE_TOOL_OUTPUT_CHAR_LIMIT)
+        );
+        let result = build_shell_tool_result("cargo test --workspace", 0, &stdout, "");
+        let content = result.content.as_deref().expect("display content missing");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+
+        assert!(content.contains("Valid JSON output is"));
+        assert!(content.contains("omitted without truncation"));
+        assert!(!content.contains("[Truncated]"));
+        assert!(!content.contains("\"payload\":\"xxx"));
+        assert_eq!(structured["llm_content"].as_str(), Some(content));
+        assert_eq!(
+            structured["persisted_output"]["reason"].as_str(),
+            Some("reduced")
+        );
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+        assert_eq!(
+            fs::read_to_string(&physical_path).unwrap(),
+            format!("Exit code: 0\n\nstdout:\n{stdout}")
+        );
+        fs::remove_file(physical_path).unwrap();
     }
 
     #[test]
@@ -527,6 +604,47 @@ mod tests {
     }
 
     #[test]
+    fn long_log_prioritizes_early_diagnostics_and_persists_original_output() {
+        let stdout = (1..=70)
+            .map(|line| match line {
+                5 => "before error context".to_string(),
+                6 => "ERROR: unable to compile package".to_string(),
+                7 => "after error context".to_string(),
+                25 | 26 => "warning: deprecated setting".to_string(),
+                45 => "test result: FAILED. 1 passed; 1 failed".to_string(),
+                _ => format!("progress line {line}"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = build_shell_tool_result("custom-command", 1, &stdout, "");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm content missing");
+
+        assert!(llm_content.contains("before error context"));
+        assert!(llm_content.contains("ERROR: unable to compile package"));
+        assert!(llm_content.contains("after error context"));
+        assert_eq!(
+            llm_content.matches("warning: deprecated setting").count(),
+            1
+        );
+        assert!(llm_content.contains("test result: FAILED"));
+        assert!(llm_content.contains("[omitted log lines]"));
+        assert_eq!(
+            structured["persisted_output"]["reason"].as_str(),
+            Some("reduced")
+        );
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
+    }
+
+    #[test]
     fn git_show_llm_content_omits_full_diff() {
         let stdout = "commit abc\nAuthor: test\nDate: today\n\ndiff --git a/src/main.rs b/src/main.rs\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n";
         let result = build_shell_tool_result("git show HEAD", 0, stdout, "");
@@ -542,6 +660,11 @@ mod tests {
         assert!(llm_content.contains("src/lib.rs"));
         assert!(llm_content.contains("full diff omitted"));
         assert!(!llm_content.contains("@@ -1 +1 @@"));
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
     }
 
     #[test]
@@ -561,6 +684,11 @@ mod tests {
         assert!(llm_content.contains("test line 40"));
         assert!(llm_content.contains("test line 11"));
         assert!(!llm_content.contains("test line 1\n"));
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
     }
 
     #[test]
@@ -604,8 +732,8 @@ mod tests {
     }
 
     #[test]
-    fn successful_frontend_build_moves_stderr_to_stdout() {
-        let stdout = "✓ built in 16.02s\n";
+    fn successful_node_build_moves_stderr_to_stdout_and_persists_reduced_output() {
+        let stdout = "bin/assets/index.js 3,303.40 kB │ gzip: 1,023.37 kB\n✓ built in 16.02s\n";
         let stderr = "(!) Some chunks are larger than 500 kB after minification. Consider:\n- Using dynamic import() to code-split the application\n";
         let (normalized_stdout, normalized_stderr) =
             normalize_shell_output_streams("pnpm build", 0, stdout, stderr);
@@ -616,19 +744,35 @@ mod tests {
         let result = build_shell_tool_result("pnpm build", 0, stdout, stderr);
         let expected_content = format!("Exit code: 0\n\nstdout:\n{stdout}{stderr}");
         assert_eq!(result.content.as_deref(), Some(expected_content.as_str()));
-        let llm_content = result
+        let structured = result
             .structured_content
-            .as_ref()
-            .and_then(|content| content["llm_content"].as_str())
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
             .expect("llm_content should be a string");
         assert_eq!(
             llm_content,
-            "Exit code: 0\n\nBuild result:\n✓ built in 16.02s"
+            "Exit code: 0\n\nBuild result:\nBuild output: 1 file, 3.23 MB (gzip: 1023.37 kB across 1 file)\n✓ built in 16.02s"
         );
+        assert!(!llm_content.contains("bin/assets/index.js"));
+        assert_eq!(
+            structured["persisted_output"]["reason"].as_str(),
+            Some("reduced")
+        );
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+        assert_eq!(
+            fs::read_to_string(&physical_path).unwrap(),
+            expected_content
+        );
+        fs::remove_file(physical_path).unwrap();
     }
 
     #[test]
-    fn failed_frontend_build_keeps_stderr_for_diagnostics() {
+    fn failed_node_build_keeps_stderr_for_diagnostics() {
         let (stdout, stderr) = normalize_shell_output_streams(
             "pnpm build",
             1,
@@ -668,7 +812,7 @@ mod tests {
     }
 
     #[test]
-    fn frontend_build_stderr_waits_for_exit_code_before_stream_classification() {
+    fn node_build_stderr_waits_for_exit_code_before_stream_classification() {
         assert!(!should_render_stderr_line_as_stdout(
             "pnpm build",
             "(!) Some chunks are larger than 500 kB after minification. Consider:"
@@ -692,12 +836,15 @@ mod tests {
     }
 
     #[test]
-    fn frontend_build_llm_content_keeps_results_without_asset_list_or_chunk_warning() {
-        let stdout = "vite v6.0.0 building for production...\ndist/assets/index.js 3,303.40 kB\n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Use dynamic import() to code-split the application\n✓ built in 15.99s\n";
+    fn node_build_llm_content_summarizes_assets_and_preserves_complete_output() {
+        let stdout = "vite v6.0.0 building for production...\nbin/index.html 0.76 kB\nbin/assets/index.js 3,303.40 kB │ gzip: 1,023.37 kB\n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Use dynamic import() to code-split the application\n✓ built in 15.99s\n";
         for command in [
             "pnpm build",
+            "pnpm run build",
             "npm build",
+            "npm run build",
             "yarn build",
+            "yarn run build",
             "pnpm tauri build",
             "pnpm run tauri build",
             "npm tauri build",
@@ -715,16 +862,75 @@ mod tests {
                 .expect("llm_content should be a string");
 
             assert_eq!(
-                llm_content, "Exit code: 0\n\nBuild result:\n✓ built in 15.99s",
+                llm_content,
+                "Exit code: 0\n\nBuild result:\nBuild output: 2 files, 3.23 MB (gzip: 1023.37 kB across 1 file)\n✓ built in 15.99s",
                 "unexpected LLM output for {command}"
             );
-            assert!(!llm_content.contains("dist/assets/index.js"));
+            assert!(!llm_content.contains("bin/assets/index.js"));
             assert!(!llm_content.contains("Some chunks are larger"));
+            assert_eq!(
+                structured["persisted_output"]["reason"].as_str(),
+                Some("reduced")
+            );
+
+            let ai_path = structured["persisted_output"]["path"]
+                .as_str()
+                .expect("persisted output path missing");
+            fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
         }
     }
 
     #[test]
-    fn failed_frontend_build_llm_content_keeps_diagnostic_tail() {
+    fn webpack_and_cra_builds_reduce_assets_and_persist_complete_output() {
+        let builds = [
+            (
+                "npm run build",
+                "asset main.js 244 KiB [emitted] [minimized] (name: main)\nasset main.css 12.5 KiB [emitted] [minimized]\nWARNING in asset size limit: The following asset(s) exceed the recommended size limit (244 KiB).\nwebpack 5.95.0 compiled successfully in 8432 ms\n",
+                "Build output: 2 files, 256.50 kB",
+                "webpack 5.95.0 compiled successfully in 8432 ms",
+            ),
+            (
+                "yarn build",
+                "Creating an optimized production build...\nCompiled successfully.\n\nFile sizes after gzip:\n\n  46.6 kB  build/static/js/main.abc.js\n  1.77 kB  build/static/css/main.def.css\n\nThe build folder is ready to be deployed.\n",
+                "Build output: 2 files (gzip: 48.37 kB across 2 files)",
+                "Compiled successfully.",
+            ),
+        ];
+
+        for (command, stdout, summary, completion) in builds {
+            let result = build_shell_tool_result(command, 0, stdout, "");
+            let structured = result
+                .structured_content
+                .expect("structured content missing");
+            let llm_content = structured["llm_content"]
+                .as_str()
+                .expect("llm_content should be a string");
+
+            assert!(
+                llm_content.contains(summary),
+                "unexpected LLM output for {command}"
+            );
+            assert!(
+                llm_content.contains(completion),
+                "unexpected LLM output for {command}"
+            );
+            assert!(!llm_content.contains("asset main.js"));
+            assert!(!llm_content.contains("build/static/js/main.abc.js"));
+            assert!(!llm_content.contains("WARNING in asset size limit"));
+            assert_eq!(
+                structured["persisted_output"]["reason"].as_str(),
+                Some("reduced")
+            );
+
+            let ai_path = structured["persisted_output"]["path"]
+                .as_str()
+                .expect("persisted output path missing");
+            fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_node_build_llm_content_uses_uniform_diagnostic_tail() {
         let stdout = (1..=35)
             .map(|line| format!("build output {line}"))
             .collect::<Vec<_>>()
@@ -742,9 +948,20 @@ mod tests {
             .as_str()
             .expect("llm_content should be a string");
 
-        assert!(llm_content.starts_with("[truncated previous output]"));
+        assert!(llm_content.starts_with(
+            "Exit code: 1\n\nBuild failed. Diagnostic tail:\n[truncated previous output]"
+        ));
         assert!(llm_content.contains("error: failed to bundle application"));
         assert!(!llm_content.contains("build output 1\n"));
+        assert_eq!(
+            structured["persisted_output"]["reason"].as_str(),
+            Some("reduced")
+        );
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
     }
 
     #[test]
@@ -761,6 +978,11 @@ mod tests {
         assert!(llm_content.contains("Changed files:"));
         assert!(llm_content.contains("src/main.rs"));
         assert!(!llm_content.contains("@@ -1 +1 @@"));
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
     }
 
     #[test]

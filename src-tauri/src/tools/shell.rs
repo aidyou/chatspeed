@@ -1,5 +1,5 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
-use crate::tools::helper::is_frontend_build_command;
+use crate::tools::helper::is_node_build_command;
 use crate::tools::helper::{
     classify_shell_stage, shell_tokens, split_shell_command_segments, ShellStage,
 };
@@ -751,7 +751,7 @@ fn format_tool_stream_output(
     format!("\n{stream_name}:\n{line}")
 }
 
-fn frontend_build_stderr_stream_name(exit_code: i32) -> &'static str {
+fn node_build_stderr_stream_name(exit_code: i32) -> &'static str {
     if exit_code == 0 {
         "stdout"
     } else {
@@ -835,11 +835,11 @@ impl ShellExecute {
 
         let mut full_stdout = String::new();
         let mut full_stderr = String::new();
-        let mut pending_frontend_build_stderr = String::new();
+        let mut pending_node_build_stderr = String::new();
         let mut stdout_sanitizer = AnsiOutputSanitizer::default();
         let mut stderr_sanitizer = AnsiOutputSanitizer::default();
-        let buffers_frontend_stderr =
-            is_frontend_build_command(&crate::tools::shell_output::normalize_command(command_str));
+        let buffers_node_build_stderr =
+            is_node_build_command(&crate::tools::shell_output::normalize_command(command_str));
         let mut stdout_eof = false;
         let mut stderr_eof = false;
         let mut last_stream_name: Option<&'static str> = None;
@@ -864,8 +864,8 @@ impl ShellExecute {
                     Ok(Some(status)) => {
                         // Process has exited
                         let exit_code = status.code().unwrap_or(-1);
-                        if !pending_frontend_build_stderr.is_empty() {
-                            let stream_name = frontend_build_stderr_stream_name(exit_code);
+                        if !pending_node_build_stderr.is_empty() {
+                            let stream_name = node_build_stderr_stream_name(exit_code);
                             let _ = gateway
                                 .send(
                                     session_id,
@@ -874,7 +874,7 @@ impl ShellExecute {
                                         output: format_tool_stream_output(
                                             last_stream_name,
                                             stream_name,
-                                            pending_frontend_build_stderr.trim_end(),
+                                            pending_node_build_stderr.trim_end(),
                                         ),
                                         timestamp: std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
@@ -1001,8 +1001,8 @@ impl ShellExecute {
                             } else {
                                 full_stderr.push_str(&l);
 
-                                if buffers_frontend_stderr {
-                                    pending_frontend_build_stderr.push_str(&l);
+                                if buffers_node_build_stderr {
+                                    pending_node_build_stderr.push_str(&l);
                                 } else {
                                     let _ = gateway.send(
                                         session_id,
@@ -1036,8 +1036,8 @@ impl ShellExecute {
                         Ok(Some(status)) => {
                             // Process has exited
                             let exit_code = status.code().unwrap_or(-1);
-                            if !pending_frontend_build_stderr.is_empty() {
-                                let stream_name = frontend_build_stderr_stream_name(exit_code);
+                            if !pending_node_build_stderr.is_empty() {
+                                let stream_name = node_build_stderr_stream_name(exit_code);
                                 let _ = gateway
                                     .send(
                                         session_id,
@@ -1046,7 +1046,7 @@ impl ShellExecute {
                                             output: format_tool_stream_output(
                                                 last_stream_name,
                                                 stream_name,
-                                                pending_frontend_build_stderr.trim_end(),
+                                                pending_node_build_stderr.trim_end(),
                                             ),
                                             timestamp: std::time::SystemTime::now()
                                                 .duration_since(std::time::UNIX_EPOCH)
@@ -1162,19 +1162,19 @@ mod tests {
     }
 
     #[test]
-    fn frontend_build_command_detection_supports_shell_segments_and_environment_assignments() {
-        assert!(is_frontend_build_command(
+    fn node_build_command_detection_supports_shell_segments_and_environment_assignments() {
+        assert!(is_node_build_command(
             &crate::tools::shell_output::normalize_command("cd app; pnpm build")
         ));
-        assert!(is_frontend_build_command(
+        assert!(is_node_build_command(
             &crate::tools::shell_output::normalize_command("CI=1 pnpm build")
         ));
-        assert!(is_frontend_build_command(
+        assert!(is_node_build_command(
             &crate::tools::shell_output::normalize_command(
                 "BUILD_LABEL=\"release candidate\" pnpm build"
             )
         ));
-        assert!(is_frontend_build_command(
+        assert!(is_node_build_command(
             &crate::tools::shell_output::normalize_command(
                 "cd app; BUILD_LABEL=\"release candidate\" pnpm build"
             )
@@ -1182,13 +1182,13 @@ mod tests {
     }
 
     #[test]
-    fn frontend_build_stderr_stream_name_depends_on_exit_code() {
-        assert_eq!(frontend_build_stderr_stream_name(0), "stdout");
-        assert_eq!(frontend_build_stderr_stream_name(1), "stderr");
+    fn node_build_stderr_stream_name_depends_on_exit_code() {
+        assert_eq!(node_build_stderr_stream_name(0), "stdout");
+        assert_eq!(node_build_stderr_stream_name(1), "stderr");
         assert_eq!(
             format_tool_stream_output(
                 Some("stdout"),
-                frontend_build_stderr_stream_name(1),
+                node_build_stderr_stream_name(1),
                 "error: failed to build"
             ),
             "\nstderr:\nerror: failed to build"
@@ -1196,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    fn frontend_build_stderr_stream_payload_uses_stdout_label() {
+    fn node_build_stderr_stream_payload_uses_stdout_label() {
         let warning = "(!) Some chunks are larger than 500 kB after minification.";
 
         assert_eq!(
