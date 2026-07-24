@@ -168,6 +168,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preserves_backend_request_message_in_claude_api_error() {
+        let message = "Request to backend failed: error sending request for url (https://api.example.com/v1/chat/completions)";
+        let response = claude_error_response(UnifiedErrorResponse {
+            status_code: 502,
+            message: message.to_string(),
+            error_type: None,
+            code: None,
+            request_id: Some("req_transport_error".to_string()),
+        });
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response_json(response).await,
+            json!({
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": message
+                },
+                "request_id": "req_transport_error"
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn maps_backend_529_to_gemini_unavailable_error() {
         let response = gemini_error_response(error(529));
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);

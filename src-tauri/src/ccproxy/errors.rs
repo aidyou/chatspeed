@@ -18,6 +18,9 @@ pub enum CCProxyError {
     /// An internal server error occurred.
     #[error("{}", t!("proxy.error.internal_server_error", error = _0))]
     InternalError(String),
+    /// A backend request failed before an HTTP response was received.
+    #[error("{0}")]
+    BackendRequestError(String),
     /// Authorization header is missing or malformed.
     #[error("{}", t!("proxy.error.missing_auth_header"))]
     MissingToken,
@@ -74,6 +77,11 @@ impl IntoResponse for CCProxyError {
                 "Internal Server Error",
                 t!("proxy.error.internal_server_error", error = message).to_string(),
             ),
+            CCProxyError::BackendRequestError(message) => (
+                StatusCode::BAD_GATEWAY,
+                "Upstream Connection Error",
+                message,
+            ),
             CCProxyError::ModelAliasNotFound(alias) => (
                 StatusCode::NOT_FOUND,
                 "Model Not Found",
@@ -99,3 +107,39 @@ impl IntoResponse for CCProxyError {
 }
 
 pub type ProxyResult<T> = std::result::Result<T, CCProxyError>;
+
+#[cfg(test)]
+mod tests {
+    use super::CCProxyError;
+    use axum::{body::to_bytes, response::IntoResponse};
+    use http::StatusCode;
+    use serde_json::{json, Value};
+
+    #[tokio::test]
+    async fn backend_request_error_preserves_original_message() {
+        let message = "Request to backend failed: error sending request for url (https://api.example.com/v1/chat/completions)";
+        let response = CCProxyError::BackendRequestError(message.to_string()).into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body: Value =
+            serde_json::from_slice(&body).expect("response body should be valid JSON");
+
+        assert_eq!(
+            body,
+            json!({
+                "error": {
+                    "message": message,
+                    "type": "Upstream Connection Error"
+                }
+            })
+        );
+        assert!(!body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("内部服务器错误"));
+    }
+}

@@ -16,7 +16,7 @@ use crate::ccproxy::{
             ClaudeOutputAdapter, GeminiOutputAdapter, OllamaOutputAdapter, OpenAIOutputAdapter,
             OutputAdapter, OutputAdapterEnum,
         },
-        unified::{SseStatus, UnifiedRequest},
+        unified::{SseStatus, UnifiedErrorResponse, UnifiedRequest},
     },
     claude::ClaudeNativeRequest,
     errors::{CCProxyError, ProxyResult},
@@ -339,7 +339,49 @@ pub(crate) async fn execute_unified_chat_request(
     };
     let retry_config = RetryConfig::from_settings(max_retries);
 
-    let target_response = send_with_retry(onward_request_builder, &retry_config).await?;
+    let target_response = match send_with_retry(onward_request_builder, &retry_config).await {
+        Ok(response) => response,
+        Err(CCProxyError::BackendRequestError(message)) => {
+            log::warn!(
+                "Backend request failed before receiving a response (alias: '{}', model: '{}', provider: '{}'): error={}",
+                proxy_alias,
+                proxy_model.model,
+                proxy_model.provider,
+                message
+            );
+
+            if log_org_to_file {
+                log::info!(target: "ccproxy_logger", "[ERROR] Backend request failed before receiving a response, protocol: {}, model: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, message);
+            }
+
+            if let Ok(store) = main_store_arc.read() {
+                let _ = store.record_ccproxy_stat(CcproxyStat {
+                    id: None,
+                    client_model: proxy_model.client_alias.clone(),
+                    backend_model: proxy_model.model.clone(),
+                    provider_id: Some(proxy_model.provider_id),
+                    provider: proxy_model.provider.clone(),
+                    protocol: client_protocol.to_string(),
+                    tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
+                    status_code: http::StatusCode::BAD_GATEWAY.as_u16() as i32,
+                    error_message: Some(message.clone()),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_tokens: 0,
+                    request_at: None,
+                });
+            }
+
+            return Ok(output_adapter.adapt_error_response(UnifiedErrorResponse {
+                status_code: http::StatusCode::BAD_GATEWAY.as_u16(),
+                message,
+                error_type: None,
+                code: None,
+                request_id: Some(message_id),
+            }));
+        }
+        Err(error) => return Err(error),
+    };
 
     if !target_response.status().is_success() {
         let status_code = target_response.status();

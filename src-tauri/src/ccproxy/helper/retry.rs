@@ -1,6 +1,7 @@
 use crate::ccproxy::errors::{CCProxyError, ProxyResult};
 use reqwest::{RequestBuilder, Response};
 use rust_i18n::t;
+use std::error::Error;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -53,10 +54,10 @@ pub async fn send_with_retry(
 ) -> ProxyResult<Response> {
     if retry_config.max_retries == 0 {
         // No retry, send request directly
-        return request_builder
-            .send()
-            .await
-            .map_err(|e| CCProxyError::InternalError(format!("Request to backend failed: {}", e)));
+        return request_builder.send().await.map_err(|error| {
+            log_backend_request_error(None, &error);
+            CCProxyError::BackendRequestError(format_backend_request_error(&error))
+        });
     }
 
     let mut last_error: Option<String> = None;
@@ -112,9 +113,9 @@ pub async fn send_with_retry(
                     return Ok(response);
                 }
             }
-            Err(e) => {
-                let error_msg = format!("Request failed: {}", e);
-                log::error!("Request error on attempt {}: {}", attempt, error_msg);
+            Err(error) => {
+                let error_msg = format_backend_request_error(&error);
+                log_backend_request_error(Some(attempt), &error);
                 last_error = Some(error_msg);
 
                 // If not the last attempt, wait and retry
@@ -127,14 +128,56 @@ pub async fn send_with_retry(
     }
 
     // All retries failed
-    Err(CCProxyError::InternalError(last_error.unwrap_or_else(
-        || t!("proxy.error.retry_exceeded").to_string(),
-    )))
+    Err(CCProxyError::BackendRequestError(
+        last_error.unwrap_or_else(|| t!("proxy.error.retry_exceeded").to_string()),
+    ))
+}
+
+fn format_backend_request_error(error: &reqwest::Error) -> String {
+    format!("Request to backend failed: {}", error)
+}
+
+fn format_error_sources(error: &(dyn Error + 'static)) -> String {
+    let mut messages = Vec::new();
+    let mut current = error.source();
+
+    while let Some(cause) = current {
+        let message = cause.to_string();
+        if !message.is_empty() && messages.last() != Some(&message) {
+            messages.push(message);
+        }
+        current = cause.source();
+    }
+
+    messages.join(" -> ")
+}
+
+fn log_backend_request_error(attempt: Option<u32>, error: &reqwest::Error) {
+    let causes = format_error_sources(error);
+    let attempt = attempt
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_string());
+
+    if causes.is_empty() {
+        log::error!(
+            "Backend request error: attempt={}, error={}",
+            attempt,
+            error
+        );
+    } else {
+        log::error!(
+            "Backend request error: attempt={}, error={}, causes={}",
+            attempt,
+            error,
+            causes
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
 
     #[test]
     fn test_retry_config_default() {
@@ -170,5 +213,36 @@ mod tests {
 
         // Should be capped at 5000ms
         assert_eq!(config.calculate_backoff(10), Duration::from_millis(5000));
+    }
+
+    #[test]
+    fn test_format_error_sources_excludes_top_level_message() {
+        let result: anyhow::Result<()> = Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "connection refused by test backend",
+        ))
+        .context("TCP connection failed")
+        .context("request dispatch failed");
+        let error = result.expect_err("test error chain should be present");
+
+        assert_eq!(
+            format_error_sources(error.as_ref()),
+            "TCP connection failed -> connection refused by test backend"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_backend_request_error_adds_context_once() {
+        let request = reqwest::Client::new().get("http://127.0.0.1:0/test");
+        let error = send_with_retry(request, &RetryConfig::default())
+            .await
+            .expect_err("test endpoint should reject the connection");
+
+        let CCProxyError::BackendRequestError(message) = error else {
+            panic!("connection failure should produce BackendRequestError");
+        };
+
+        assert_eq!(message.matches("Request to backend failed:").count(), 1);
+        assert!(message.contains("error sending request for url"));
     }
 }
