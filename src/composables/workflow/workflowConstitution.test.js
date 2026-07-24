@@ -84,10 +84,42 @@ assert.doesNotMatch(
   /visibleTaskGroupCount\.value\s*=\s*DEFAULT_VISIBLE_TASK_GROUPS/,
   'normal task transitions must preserve the history window explicitly expanded by the user'
 )
+const workflowStore = readProjectFile('src/stores/workflow.js')
+const clearContextEligibility = sourceSection(
+  workflowStore,
+  'const canClearContext = computed(() => {',
+  'const canStop = computed(() => {'
+)
+assert.match(clearContextEligibility, /WORKFLOW_STATUSES\.CANCELLED/)
+assert.match(clearContextEligibility, /WORKFLOW_STATUSES\.COMPLETED/)
+assert.match(clearContextEligibility, /WORKFLOW_STATUSES\.ERROR/)
+assert.match(clearContextEligibility, /WORKFLOW_STATUSES\.FAILED/)
+assert.match(
+  clearContextEligibility,
+  /workflowState !== WORKFLOW_STATUSES\.PENDING \|\| hasLiveSession\.value/
+)
+assert.ok(
+  clearContextEligibility.indexOf('if (stoppedStates.includes(workflowState)) return true') <
+    clearContextEligibility.indexOf('const executionState'),
+  'terminal workflow status must override stale non-terminal execution context state'
+)
 const clearContextProjection = sourceSection(
   workflowView,
   'const onClearContextFrame = async () => {',
   '// Wrapper for skill select that properly handles send'
+)
+assert.match(
+  clearContextProjection,
+  /await workflowStore\.updateWorkflowStatus\([\s\S]*result\?\.state \|\| WORKFLOW_STATUSES\.PENDING[\s\S]*result\?\.waitReason/
+)
+assert.match(
+  clearContextProjection,
+  /workflowStore\.setHasLiveSession\(result\?\.hasLiveSession === true\)/
+)
+assert.ok(
+  clearContextProjection.indexOf('await workflowStore.updateWorkflowStatus(') <
+    clearContextProjection.indexOf('if (result?.noop)'),
+  'clear-context noop recovery must reconcile backend lifecycle state before returning'
 )
 assert.ok(
   clearContextProjection.indexOf('visibleTaskGroupCount.value = 1') <

@@ -551,8 +551,20 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const canClearContext = computed(() => {
     if (!currentWorkflow.value?.id) return false;
     const executionContext = normalizeExecutionContext(currentWorkflow.value?.executionContext);
-    const state = String(
-      executionContext?.state || currentWorkflow.value?.status || WORKFLOW_STATUSES.PENDING
+    const workflowState = String(
+      currentWorkflow.value?.status || WORKFLOW_STATUSES.PENDING
+    ).toLowerCase();
+    const stoppedStates = [
+      WORKFLOW_STATUSES.COMPLETED,
+      WORKFLOW_STATUSES.ERROR,
+      WORKFLOW_STATUSES.FAILED,
+      WORKFLOW_STATUSES.CANCELLED
+    ];
+    if (stoppedStates.includes(workflowState)) return true;
+    if (workflowState !== WORKFLOW_STATUSES.PENDING || hasLiveSession.value) return false;
+
+    const executionState = String(
+      executionContext?.state || WORKFLOW_STATUSES.PENDING
     ).toLowerCase();
     const waitReasonValue = String(
       executionContext?.waitReason ?? currentWorkflow.value?.waitReason ?? waitReason.value ?? ''
@@ -567,13 +579,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     ) {
       return false;
     }
-    return [
-      WORKFLOW_STATUSES.PENDING,
-      WORKFLOW_STATUSES.COMPLETED,
-      WORKFLOW_STATUSES.ERROR,
-      WORKFLOW_STATUSES.FAILED,
-      WORKFLOW_STATUSES.CANCELLED
-    ].includes(state);
+    return executionState === WORKFLOW_STATUSES.PENDING;
   });
 
   const canStop = computed(() => {
@@ -1586,6 +1592,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     try {
       const statusLower = status.toLowerCase();
       const localUpdateStates = [
+        WORKFLOW_STATUSES.PENDING,
         ...RUNNING_STATUSES,
         ...WAITING_STATUSES,
         WORKFLOW_STATUSES.STOPPING,

@@ -2,7 +2,7 @@ import { ref, computed, watch } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
 import {
   collectSubAgentCompletions,
-  excludeManualClearContextMarkers,
+  excludeLeadingManualClearContextMarkers,
   getStructuredWorkflowToolName,
   hasOpenWorkflowTaskFrame,
   mergeManualClearContextMarkersIntoPreviousGroups,
@@ -355,7 +355,7 @@ export function useWorkflowMessages(options = {}) {
 
   const visibleTaskGroupsState = computed(() => {
     const state = taskWindowState.value
-    const visibleActiveMessages = excludeManualClearContextMarkers(state.activeMessages)
+    const visibleActiveMessages = excludeLeadingManualClearContextMarkers(state.activeMessages)
     const activeGroup = visibleActiveMessages.length
       ? {
           id: buildTaskGroupId(visibleActiveMessages),

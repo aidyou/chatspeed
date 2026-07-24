@@ -461,6 +461,44 @@ fn workflow_state_allows_manual_clear(state: &WorkflowState) -> bool {
     )
 }
 
+fn persist_cancelled_workflow_state(store: &MainStore, session_id: &str) -> Result<(), String> {
+    store
+        .update_workflow_status(session_id, &WorkflowState::Cancelled.to_string())
+        .map_err(|error| error.to_string())?;
+
+    if let Some(mut context) = store
+        .get_execution_context(session_id)
+        .map_err(|error| error.to_string())?
+    {
+        context.state = RuntimeState::Cancelled;
+        context.wait_reason = None;
+        store
+            .upsert_execution_context(&context)
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn persist_pending_workflow_state(store: &MainStore, session_id: &str) -> Result<(), String> {
+    if let Some(mut context) = store
+        .get_execution_context(session_id)
+        .map_err(|error| error.to_string())?
+    {
+        context.state = RuntimeState::Pending;
+        context.wait_reason = None;
+        store
+            .upsert_execution_context(&context)
+            .map_err(|error| error.to_string())?;
+    }
+
+    store
+        .update_workflow_status(session_id, &WorkflowState::Pending.to_string())
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
 fn workflow_auto_compress_enabled(config: &Value) -> bool {
     config
         .get("autoCompress")
@@ -1892,6 +1930,9 @@ pub struct WorkflowContextFrameResult {
     pub marker_message: Option<WorkflowMessage>,
     pub current_context_tokens: usize,
     pub max_context_tokens: usize,
+    pub state: WorkflowState,
+    pub wait_reason: Option<WaitReason>,
+    pub has_live_session: bool,
 }
 
 fn newest_persisted_segment_id(messages: &[WorkflowMessage]) -> i32 {
@@ -1917,6 +1958,23 @@ async fn hydrate_execution_context_for_snapshot(
     workflow_status: Option<&str>,
     execution_context: Option<ExecutionContext>,
 ) -> Option<ExecutionContext> {
+    let terminal_runtime_state = workflow_status
+        .and_then(|status| status.parse::<WorkflowState>().ok())
+        .map(|state| RuntimeState::from(&state))
+        .filter(|state| {
+            matches!(
+                state,
+                RuntimeState::Completed | RuntimeState::Failed | RuntimeState::Cancelled
+            )
+        });
+    let mut execution_context = execution_context;
+    if let (Some(context), Some(terminal_state)) =
+        (execution_context.as_mut(), terminal_runtime_state)
+    {
+        context.state = terminal_state;
+        context.wait_reason = None;
+    }
+
     let needs_recovery = match execution_context.as_ref() {
         Some(ctx) => ctx.current_context_tokens.is_none(),
         None => true,
@@ -1975,8 +2033,8 @@ async fn begin_new_context_frame_for_cold_session(
     main_store: Arc<std::sync::RwLock<MainStore>>,
     tsid_generator: Arc<TsidGenerator>,
     session_id: &str,
+    previous_execution_context: Option<ExecutionContext>,
 ) -> Result<(i32, Option<WorkflowMessage>), String> {
-    let previous_execution_context = restore_context_for_signal(main_store.clone(), session_id);
     if previous_execution_context
         .as_ref()
         .is_some_and(|ctx| !runtime_state_allows_manual_clear(&ctx.state))
@@ -2051,15 +2109,49 @@ async fn begin_new_context_frame_for_cold_session(
     Ok((context.current_segment_id, context.messages.last().cloned()))
 }
 
+async fn finalize_manual_clear_context_state(
+    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    workflow_manager: &Arc<WorkflowManager>,
+    gateway: &Arc<TauriGateway>,
+    session_id: &str,
+) -> Result<(), String> {
+    {
+        let store = main_store.read().map_err(|error| error.to_string())?;
+        persist_pending_workflow_state(&store, session_id)?;
+    }
+
+    if let Some(executor) = workflow_manager.get_executor(session_id) {
+        let mut guard = executor.lock().await;
+        guard.set_state(WorkflowState::Pending);
+    }
+    workflow_manager.remove_session(session_id);
+    BACKGROUND_TASKS.remove(session_id);
+    WorkflowManager::unregister_session_signal_tx_with_source(
+        session_id,
+        "begin_new_context_frame.finalize",
+    );
+    gateway
+        .unregister_session_with_source(session_id, "begin_new_context_frame.finalize")
+        .await;
+
+    log::info!(
+        "[Workflow][session={}][phase=begin_new_context_frame] Manual clear completed; authoritative state transitioned to pending and stopped executor resources were released",
+        session_id
+    );
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn workflow_begin_new_context_frame(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
+    gateway: State<'_, Arc<TauriGateway>>,
     session_id: String,
 ) -> Result<WorkflowContextFrameResult, String> {
     let main_store = state.inner().clone();
     let workflow_manager = workflow_manager.inner().clone();
+    let gateway = gateway.inner().clone();
     let tsid_generator = tsid_generator.inner().clone();
 
     let snapshot = {
@@ -2085,6 +2177,8 @@ pub async fn workflow_begin_new_context_frame(
         .last()
         .is_some_and(ContextManager::is_manual_clear_context_message)
     {
+        finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
+            .await?;
         return Ok(WorkflowContextFrameResult {
             noop: true,
             segment_id: effective_segment_id,
@@ -2097,6 +2191,9 @@ pub async fn workflow_begin_new_context_frame(
                 .as_ref()
                 .and_then(|ctx| ctx.max_context_tokens)
                 .unwrap_or(4096),
+            state: WorkflowState::Pending,
+            wait_reason: None,
+            has_live_session: false,
         });
     }
 
@@ -2152,43 +2249,62 @@ pub async fn workflow_begin_new_context_frame(
                 .map_err(|e| e.to_string())?;
         }
 
-        let store = main_store.read().map_err(|e| e.to_string())?;
-        let marker_message = store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?
-            .messages
-            .last()
-            .cloned();
-        let segment_id = store
-            .get_execution_context(&session_id)
-            .map_err(|e| e.to_string())?
-            .map(|ctx| ctx.current_segment_id)
-            .unwrap_or(effective_segment_id.saturating_add(1));
+        let (marker_message, segment_id, current_context_tokens, max_context_tokens) = {
+            let store = main_store.read().map_err(|e| e.to_string())?;
+            let marker_message = store
+                .get_workflow_snapshot(&session_id)
+                .map_err(|e| e.to_string())?
+                .messages
+                .last()
+                .cloned();
+            let current_context = store
+                .get_execution_context(&session_id)
+                .map_err(|e| e.to_string())?;
+            (
+                marker_message,
+                current_context
+                    .as_ref()
+                    .map(|ctx| ctx.current_segment_id)
+                    .unwrap_or(effective_segment_id.saturating_add(1)),
+                current_context
+                    .as_ref()
+                    .and_then(|ctx| ctx.current_context_tokens)
+                    .unwrap_or(0),
+                current_context
+                    .as_ref()
+                    .and_then(|ctx| ctx.max_context_tokens)
+                    .unwrap_or(4096),
+            )
+        };
+        finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
+            .await?;
         return Ok(WorkflowContextFrameResult {
             noop: false,
             segment_id,
             marker_message,
-            current_context_tokens: store
-                .get_execution_context(&session_id)
-                .map_err(|e| e.to_string())?
-                .and_then(|ctx| ctx.current_context_tokens)
-                .unwrap_or(0),
-            max_context_tokens: store
-                .get_execution_context(&session_id)
-                .map_err(|e| e.to_string())?
-                .and_then(|ctx| ctx.max_context_tokens)
-                .unwrap_or(4096),
+            current_context_tokens,
+            max_context_tokens,
+            state: WorkflowState::Pending,
+            wait_reason: None,
+            has_live_session: false,
         });
     }
 
-    let (segment_id, marker_message) =
-        begin_new_context_frame_for_cold_session(main_store, tsid_generator, &session_id).await?;
+    let (segment_id, marker_message) = begin_new_context_frame_for_cold_session(
+        main_store.clone(),
+        tsid_generator,
+        &session_id,
+        execution_context,
+    )
+    .await?;
     let current_context = {
         let store = state.read().map_err(|e| e.to_string())?;
         store
             .get_execution_context(&session_id)
             .map_err(|e| e.to_string())?
     };
+    finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
+        .await?;
     Ok(WorkflowContextFrameResult {
         noop: false,
         segment_id,
@@ -2201,6 +2317,9 @@ pub async fn workflow_begin_new_context_frame(
             .as_ref()
             .and_then(|ctx| ctx.max_context_tokens)
             .unwrap_or(4096),
+        state: WorkflowState::Pending,
+        wait_reason: None,
+        has_live_session: false,
     })
 }
 
@@ -2666,10 +2785,7 @@ async fn try_resume_completed_live_session(
         if let Err(e) = guard.run_loop().await {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
                 if let Ok(store) = main_store_for_spawn.read() {
-                    let _ = store.update_workflow_status(
-                        &session_id_for_spawn,
-                        &WorkflowState::Cancelled.to_string(),
-                    );
+                    let _ = persist_cancelled_workflow_state(&store, &session_id_for_spawn);
                 }
                 let _ = manager_for_spawn
                     .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
@@ -3396,10 +3512,7 @@ pub async fn workflow_start(
         if let Err(e) = guard.run_loop().await {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
                 if let Ok(store) = main_store_for_spawn.read() {
-                    let _ = store.update_workflow_status(
-                        &session_id_for_spawn,
-                        &WorkflowState::Cancelled.to_string(),
-                    );
+                    let _ = persist_cancelled_workflow_state(&store, &session_id_for_spawn);
                 }
                 let _ = manager_for_spawn
                     .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
@@ -4252,8 +4365,7 @@ pub async fn workflow_stop(
                 guard.set_state(WorkflowState::Cancelled);
             }
             if let Ok(store) = state.inner().read() {
-                let _ = store
-                    .update_workflow_status(&session_id, &WorkflowState::Cancelled.to_string());
+                let _ = persist_cancelled_workflow_state(&store, &session_id);
             }
             let _ = workflow_manager
                 .update_session_status(&session_id, ManagedSessionStatus::Cancelled);
@@ -5620,6 +5732,74 @@ mod tests {
     }
 
     #[test]
+    fn test_persist_cancelled_workflow_state_updates_execution_context() {
+        let store = create_test_store();
+        let session_id = "cancelled-context-state";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        context.wait_reason = Some(WaitReason::Approval);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist execution context");
+
+        persist_cancelled_workflow_state(&store, session_id)
+            .expect("failed to persist cancelled workflow state");
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot");
+        let execution_context = store
+            .get_execution_context(session_id)
+            .expect("failed to load execution context")
+            .expect("execution context should exist");
+        assert_eq!(snapshot.workflow.status, "cancelled");
+        assert_eq!(execution_context.state, RuntimeState::Cancelled);
+        assert_eq!(execution_context.wait_reason, None);
+    }
+
+    #[test]
+    fn test_persist_pending_workflow_state_updates_execution_context() {
+        let store = create_test_store();
+        let session_id = "manual-clear-pending-state";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+        store
+            .update_workflow_status(session_id, &WorkflowState::Cancelled.to_string())
+            .expect("failed to seed cancelled workflow status");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Cancelled;
+        context.current_segment_id = 2;
+        context.current_context_tokens = Some(64);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist execution context");
+
+        persist_pending_workflow_state(&store, session_id)
+            .expect("failed to persist pending workflow state");
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot");
+        let execution_context = store
+            .get_execution_context(session_id)
+            .expect("failed to load execution context")
+            .expect("execution context should exist");
+        assert_eq!(snapshot.workflow.status, "pending");
+        assert_eq!(execution_context.state, RuntimeState::Pending);
+        assert_eq!(execution_context.wait_reason, None);
+        assert_eq!(execution_context.current_segment_id, 2);
+        assert_eq!(execution_context.current_context_tokens, Some(64));
+    }
+
+    #[test]
     fn test_can_resume_user_message_from_recovery_prefers_terminal_snapshot() {
         let mut running = ExecutionContext::new("session-5".to_string());
         running.state = RuntimeState::Running;
@@ -6263,5 +6443,27 @@ mod tests {
                 .is_some_and(|tokens| tokens > 0),
             "recovered snapshot should expose a positive current_context_tokens value"
         );
+    }
+
+    #[test]
+    fn test_hydrate_execution_context_prefers_terminal_workflow_status() {
+        let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        let store = Arc::new(std::sync::RwLock::new(create_test_store()));
+        let mut context = ExecutionContext::new("cancelled-snapshot".to_string());
+        context.state = RuntimeState::Running;
+        context.wait_reason = Some(WaitReason::Approval);
+        context.current_context_tokens = Some(128);
+
+        let hydrated = runtime.block_on(hydrate_execution_context_for_snapshot(
+            store,
+            "cancelled-snapshot",
+            Some("cancelled"),
+            Some(context),
+        ));
+
+        let hydrated = hydrated.expect("expected execution context to be preserved");
+        assert_eq!(hydrated.state, RuntimeState::Cancelled);
+        assert_eq!(hydrated.wait_reason, None);
+        assert_eq!(hydrated.current_context_tokens, Some(128));
     }
 }

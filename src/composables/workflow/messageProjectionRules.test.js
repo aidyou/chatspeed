@@ -548,6 +548,45 @@ assert.equal(
   'both loaded completed groups remain available for one-at-a-time history reveal'
 )
 
+const cancelledTaskHarness = createTaskWindowHarness()
+const cancelledTaskState = cancelledTaskHarness.reconcile([
+  taskOneUser,
+  clearContextMarker
+])
+assert.equal(
+  cancelledTaskState.completedGroups.length,
+  0,
+  'a cancelled task must not be projected as completed without complete_workflow'
+)
+assert.deepEqual(
+  excludeLeadingManualClearContextMarkers(cancelledTaskState.activeMessages).map(
+    message => message.id
+  ),
+  ['task-1-user', 'clear-context-marker'],
+  'a new-session marker after visible cancelled work must remain visible'
+)
+
+const cancelledTaskAfterCompletedHistory = createTaskWindowHarness()
+const cancelledTaskWithHistoryState = cancelledTaskAfterCompletedHistory.reconcile([
+  earlierTaskUser,
+  earlierTaskCompletion,
+  taskOneUser,
+  clearContextMarker,
+  taskTwoUser
+])
+assert.equal(
+  cancelledTaskWithHistoryState.completedGroups.length,
+  1,
+  'completed history must remain available to the earlier-task expansion control'
+)
+assert.deepEqual(
+  excludeLeadingManualClearContextMarkers(cancelledTaskWithHistoryState.activeMessages).map(
+    message => message.id
+  ),
+  ['task-1-user', 'clear-context-marker', 'task-2-user'],
+  'cancelled work, its new-session marker, and following work must remain in the active task group'
+)
+
 const persistedFallbackHarness = createTaskWindowHarness()
 const persistedCompletionWithoutToolCallId = {
   id: 'persisted-completion-without-tool-id',

@@ -1466,6 +1466,13 @@ const onClearContextFrame = async () => {
       sessionId: currentWorkflowId.value
     })
 
+    await workflowStore.updateWorkflowStatus(
+      currentWorkflowId.value,
+      result?.state || WORKFLOW_STATUSES.PENDING,
+      result?.waitReason ?? null
+    )
+    workflowStore.setHasLiveSession(result?.hasLiveSession === true)
+
     if (result?.noop) {
       showMessage(t('workflow.clearContextFrameNoop'), 'info')
       return
