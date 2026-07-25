@@ -109,7 +109,11 @@
           </div>
 
           <div class="icons">
-            <el-dropdown trigger="click" @command="handleQuickActionCommand">
+            <el-dropdown
+              ref="quickActionsDropdownRef"
+              trigger="click"
+              :hide-on-click="false"
+              @command="handleQuickActionCommand">
               <label class="icon-btn upperLayer">
                 <cs name="add" class="small" />
               </label>
@@ -140,6 +144,20 @@
                         <cs v-if="planningMode" name="check" size="14px" class="dropdown-check" />
                       </span>
                       <span class="dropdown-note">{{ $t('workflow.planningModeTooltip') }}</span>
+                    </span>
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="showPlanningModeToggle && planningMode"
+                    command="autoApprovePlan"
+                    :disabled="!canToggleAutoApprovePlan"
+                    :class="{ active: autoApprovePlan }">
+                    <cs name="check-circle" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-main">
+                        <span class="dropdown-text">{{ $t('workflow.autoApprovePlan') }}</span>
+                        <cs v-if="autoApprovePlan" name="check" size="14px" class="dropdown-check" />
+                      </span>
+                      <span class="dropdown-note">{{ $t('workflow.autoApprovePlanTooltip') }}</span>
                     </span>
                   </el-dropdown-item>
                   <el-dropdown-item
@@ -528,6 +546,14 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  autoApprovePlan: {
+    type: Boolean,
+    default: false
+  },
+  canToggleAutoApprovePlan: {
+    type: Boolean,
+    default: true
+  },
   canTogglePlanningMode: {
     type: Boolean,
     default: true
@@ -624,6 +650,7 @@ const emit = defineEmits([
   'stop',
   'approve-plan',
   'toggle-planning-mode',
+  'toggle-auto-approve-plan',
   'toggle-final-audit-mode',
   'toggle-auto-compress',
   'update-approval-level',
@@ -838,6 +865,7 @@ const importDefaultShellPolicies = async () => {
 }
 
 const inputRef = ref(null)
+const quickActionsDropdownRef = ref(null)
 const createWorkflowDialogVisible = ref(false)
 const createWorkflowInheritCurrent = ref(true)
 
@@ -874,11 +902,13 @@ const handleCreateWorkflowDialogKeydown = event => {
 
 const handleQuickActionCommand = command => {
   if (command === 'attachment') {
+    quickActionsDropdownRef.value?.handleClose?.()
     emit('open-image-dialog')
     return
   }
 
   if (command === 'skillsConfig') {
+    quickActionsDropdownRef.value?.handleClose?.()
     emit('open-skills-selector')
     return
   }
@@ -886,6 +916,13 @@ const handleQuickActionCommand = command => {
   if (command === 'planning') {
     if (props.showPlanningModeToggle && props.canTogglePlanningMode) {
       emit('toggle-planning-mode')
+    }
+    return
+  }
+
+  if (command === 'autoApprovePlan') {
+    if (props.planningMode && props.canToggleAutoApprovePlan) {
+      emit('toggle-auto-approve-plan')
     }
     return
   }

@@ -1366,6 +1366,7 @@ impl WorkflowExecutor {
                 );
             } else if self.state == WorkflowState::AwaitingUser
                 || self.state == WorkflowState::AwaitingApproval
+                || self.state == WorkflowState::AwaitingAutoApproval
                 || self.state == WorkflowState::AwaitingSubAgent
             {
                 // Use the new recovery mechanism for AwaitingUser and AwaitingApproval states
@@ -1402,12 +1403,15 @@ impl WorkflowExecutor {
                             &context.removed_queued_user_message_ids,
                         );
 
-                        if self.state == WorkflowState::AwaitingApproval
-                            && context.pending_tools.is_empty()
+                        if matches!(
+                            self.state,
+                            WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval
+                        ) && context.pending_tools.is_empty()
                         {
                             log::warn!(
-                                "[Workflow][session={}][phase=restore] Recovery returned empty pending_tools for AwaitingApproval state",
-                                self.session_id
+                                "[Workflow][session={}][phase=restore] Recovery returned empty pending_tools for {} state",
+                                self.session_id,
+                                self.state
                             );
                         } else {
                             for tool in &context.pending_tools {
@@ -1424,16 +1428,18 @@ impl WorkflowExecutor {
                                     .insert(tool.tool_call_id.clone(), info_with_details);
                                 self.enqueue_pending_approval(&tool.tool_call_id);
 
-                                let _ = self
-                                    .dispatch_ui_payload(GatewayPayload::Confirm {
-                                        id: tool.tool_call_id.clone(),
-                                        action: tool.tool_name.clone(),
-                                        tool_name: tool.tool_name.clone(),
-                                        arguments: tool.arguments.clone(),
-                                        details: details_value,
-                                        display_type: tool.display_type.clone(),
-                                    })
-                                    .await;
+                                if self.state == WorkflowState::AwaitingApproval {
+                                    let _ = self
+                                        .dispatch_ui_payload(GatewayPayload::Confirm {
+                                            id: tool.tool_call_id.clone(),
+                                            action: tool.tool_name.clone(),
+                                            tool_name: tool.tool_name.clone(),
+                                            arguments: tool.arguments.clone(),
+                                            details: details_value,
+                                            display_type: tool.display_type.clone(),
+                                        })
+                                        .await;
+                                }
                             }
                         }
 
@@ -1886,6 +1892,16 @@ impl WorkflowExecutor {
         tool_call_id: &str,
         tool_args: &Value,
     ) -> Result<(), WorkflowEngineError> {
+        self.transition_approved_plan_with_source(tool_call_id, tool_args, "user")
+            .await
+    }
+
+    async fn transition_approved_plan_with_source(
+        &mut self,
+        tool_call_id: &str,
+        tool_args: &Value,
+        approval_source: &str,
+    ) -> Result<(), WorkflowEngineError> {
         let parsed_args = if tool_args.is_string() {
             serde_json::from_str::<Value>(tool_args.as_str().unwrap_or("{}"))
                 .unwrap_or_else(|_| tool_args.clone())
@@ -1913,21 +1929,45 @@ impl WorkflowExecutor {
         }
 
         log::info!(
-            "WorkflowExecutor {}: Plan approved, transitioning to Implementation phase",
-            self.session_id
+            "WorkflowExecutor {}: Plan approved via {}, transitioning to Implementation phase",
+            self.session_id,
+            approval_source
         );
 
-        self.activate_approved_plan(Some(tool_call_id), &plan, acceptance_contract.as_ref())
-            .await
+        self.activate_approved_plan_with_source(
+            Some(tool_call_id),
+            &plan,
+            acceptance_contract.as_ref(),
+            approval_source,
+        )
+        .await
     }
 
-    async fn activate_approved_plan(
+    async fn transition_structured_auto_approved_plan(
+        &mut self,
+    ) -> Result<bool, WorkflowEngineError> {
+        let pending_plan = self
+            .ordered_pending_approvals()
+            .into_iter()
+            .find(|(_, info)| info.get("name").and_then(Value::as_str) == Some(TOOL_SUBMIT_PLAN));
+        let Some((tool_call_id, info)) = pending_plan else {
+            return Ok(false);
+        };
+
+        let tool_args = info.get("arguments").cloned().unwrap_or_else(|| json!({}));
+        self.transition_approved_plan_with_source(&tool_call_id, &tool_args, "automatic")
+            .await?;
+        Ok(true)
+    }
+
+    async fn activate_approved_plan_with_source(
         &mut self,
         tool_call_id: Option<&str>,
         approved_plan: &str,
         acceptance_contract: Option<&Value>,
+        approval_source: &str,
     ) -> Result<(), WorkflowEngineError> {
-        self.persist_approved_plan_anchor(approved_plan, acceptance_contract)
+        self.persist_approved_plan_anchor(approved_plan, acceptance_contract, approval_source)
             .await?;
 
         {
@@ -1974,10 +2014,15 @@ impl WorkflowExecutor {
                 .await?;
         }
 
-        self.append_approved_plan_observation(tool_call_id, approved_plan, acceptance_contract)
-            .await?;
+        self.append_approved_plan_observation(
+            tool_call_id,
+            approved_plan,
+            acceptance_contract,
+            approval_source,
+        )
+        .await?;
         if let Some(tool_call_id) = tool_call_id.filter(|id| !id.trim().is_empty()) {
-            self.record_approved_plan_tool_completion(tool_call_id)
+            self.record_approved_plan_tool_completion(tool_call_id, approval_source)
                 .await;
         }
 
@@ -1993,14 +2038,19 @@ impl WorkflowExecutor {
         Ok(())
     }
 
-    async fn record_approved_plan_tool_completion(&self, tool_call_id: &str) {
+    async fn record_approved_plan_tool_completion(
+        &self,
+        tool_call_id: &str,
+        approval_source: &str,
+    ) {
         let event = WorkflowEvent::tool_completed(
             self.session_id.clone(),
             tool_call_id.to_string(),
             TOOL_SUBMIT_PLAN.to_string(),
             Some(json!({
                 "summary": "Plan approved",
-                "display_type": "markdown"
+                "display_type": "markdown",
+                "approval_source": approval_source
             })),
         );
         if let Err(error) = self.append_event(&event) {
@@ -2018,7 +2068,8 @@ impl WorkflowExecutor {
                 tool_name: TOOL_SUBMIT_PLAN.to_string(),
                 result: Some(json!({
                     "summary": "Plan approved",
-                    "display_type": "markdown"
+                    "display_type": "markdown",
+                    "approval_source": approval_source
                 })),
             })
             .await
@@ -2036,6 +2087,7 @@ impl WorkflowExecutor {
         &mut self,
         approved_plan: &str,
         acceptance_contract: Option<&Value>,
+        approval_source: &str,
     ) -> Result<(), WorkflowEngineError> {
         let todo_json = {
             let store = self.context.main_store.read().map_err(|e| {
@@ -2055,7 +2107,8 @@ impl WorkflowExecutor {
             "subtype": "approved_plan",
             "plan_content": approved_plan,
             "todo_content": todo_json.clone(),
-            "todo_scope": "pre_approval"
+            "todo_scope": "pre_approval",
+            "approval_source": approval_source
         });
         if let Some(contract) = acceptance_contract {
             metadata["acceptance_contract"] = contract.clone();
@@ -2084,6 +2137,7 @@ impl WorkflowExecutor {
         tool_call_id: Option<&str>,
         approved_plan: &str,
         acceptance_contract: Option<&Value>,
+        approval_source: &str,
     ) -> Result<(), WorkflowEngineError> {
         let mut metadata = json!({
             "tool_name": TOOL_SUBMIT_PLAN,
@@ -2092,7 +2146,8 @@ impl WorkflowExecutor {
             "execution_status": "completed",
             "is_error": false,
             "display_type": "markdown",
-            "approval_status": "approved"
+            "approval_status": "approved",
+            "approval_source": approval_source
         });
         if let Some(tool_call_id) = tool_call_id.filter(|id| !id.trim().is_empty()) {
             metadata["tool_call_id"] = json!(tool_call_id);
@@ -3458,7 +3513,12 @@ impl WorkflowExecutor {
                         self.session_id
                     );
 
-                    // 1. Find the latest SubmitPlan call in history to extract the finalized plan
+                    if self.transition_structured_auto_approved_plan().await? {
+                        continue;
+                    }
+
+                    // Compatibility fallback for snapshots created before automatic plans were
+                    // persisted in ExecutionContext.pending_tools.
                     let plan_content = self.context.messages.iter().rev().find_map(|m| {
                         if let Some(meta) = &m.metadata {
                             if let Some(tc) = meta.get("tool_calls").and_then(|v| v.as_array()) {
@@ -3524,10 +3584,11 @@ impl WorkflowExecutor {
                                 })
                             });
 
-                        self.activate_approved_plan(
+                        self.activate_approved_plan_with_source(
                             submit_plan_tool_call_id.as_deref(),
                             &plan,
                             acceptance_contract.as_ref(),
+                            "automatic_legacy_recovery",
                         )
                         .await?;
                         continue;
@@ -7399,10 +7460,11 @@ mod recovery_tests {
             "unresolved_blockers": []
         });
         executor
-            .activate_approved_plan(
+            .activate_approved_plan_with_source(
                 Some("submit-plan-call"),
                 "1. Edit the file\n2. Run focused tests",
                 Some(&acceptance_contract),
+                "user",
             )
             .await
             .expect("approved plan transition should succeed");
@@ -7446,6 +7508,195 @@ mod recovery_tests {
             executor.context.current_segment_id
         );
         assert_eq!(snapshot.state, RuntimeState::Running);
+    }
+
+    #[tokio::test]
+    async fn automatic_plan_approval_uses_structured_pending_plan_and_skips_confirmation() {
+        let store = create_test_store();
+        let session_id = "automatic-plan-approval";
+        let agent = Agent::new(
+            "automatic-plan-agent".to_string(),
+            "Automatic Plan Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        let workflow_config = crate::db::agent::AgentConfig {
+            auto_approve_plan: Some(true),
+            phase: Some("planning".to_string()),
+            ..crate::db::agent::AgentConfig::default()
+        };
+        {
+            let store_guard = store.read().expect("store lock");
+            store_guard
+                .add_agent(&agent)
+                .expect("failed to add test agent");
+            store_guard
+                .create_workflow(
+                    session_id,
+                    "Ship automatically approved plan",
+                    &agent.id,
+                    Some(workflow_config.to_json()),
+                    None,
+                )
+                .expect("failed to create test workflow");
+        }
+
+        let observed_payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: observed_payloads.clone(),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state.clone(),
+            gateway.clone(),
+            Arc::new(UnusedSubAgentFactory),
+            agent.clone(),
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(14).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::planning_strict(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Thinking;
+        executor
+            .context
+            .add_message(
+                "user".to_string(),
+                "Ship automatically approved plan".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user request");
+
+        let tool_args = json!({
+            "plan": "1. Edit the file\n2. Run focused tests",
+            "acceptance_contract": {
+                "acceptance_criteria": [{"id": "AC-1", "description": "Behavior is implemented"}],
+                "invariants": [],
+                "implementation_units": [{
+                    "id": "U-1",
+                    "description": "Edit the file",
+                    "covers": ["AC-1"],
+                    "depends_on": [],
+                    "files": ["src/example.rs"]
+                }],
+                "verification_items": [{
+                    "id": "V-1",
+                    "description": "Run focused tests",
+                    "covers": ["AC-1"],
+                    "method": "focused test",
+                    "expected_evidence": "test passes"
+                }],
+                "unresolved_blockers": []
+            }
+        });
+
+        let intercepted = executor
+            .handle_submit_plan_intercept("auto-submit-plan-call", &tool_args, "")
+            .await
+            .expect("automatic plan interception should succeed");
+        assert!(intercepted.is_none());
+        assert_eq!(executor.state, WorkflowState::AwaitingAutoApproval);
+        let pending = executor.export_execution_context().pending_tools;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].tool_call_id, "auto-submit-plan-call");
+        assert_eq!(pending[0].tool_name, TOOL_SUBMIT_PLAN);
+        assert_eq!(pending[0].arguments, tool_args);
+        let persisted_pending = store
+            .read()
+            .expect("store lock")
+            .get_execution_context(session_id)
+            .expect("failed to read automatic approval snapshot")
+            .expect("automatic approval snapshot should exist")
+            .pending_tools;
+        assert_eq!(persisted_pending, pending);
+        assert!(observed_payloads
+            .lock()
+            .expect("payload lock")
+            .iter()
+            .all(|payload| !matches!(payload, GatewayPayload::Confirm { .. })));
+
+        drop(executor);
+        let mut recovered_executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(14).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::planning_strict(),
+        );
+        recovered_executor.dispatcher = None;
+        recovered_executor
+            .init_internal()
+            .await
+            .expect("automatic approval recovery should initialize");
+        assert_eq!(
+            recovered_executor.state,
+            WorkflowState::AwaitingAutoApproval
+        );
+        assert_eq!(recovered_executor.pending_approvals.len(), 1);
+        assert!(observed_payloads
+            .lock()
+            .expect("payload lock")
+            .iter()
+            .all(|payload| !matches!(payload, GatewayPayload::Confirm { .. })));
+
+        assert!(recovered_executor
+            .transition_structured_auto_approved_plan()
+            .await
+            .expect("automatic plan transition should succeed"));
+        assert_eq!(
+            recovered_executor.policy.phase,
+            ExecutionPhase::Implementation
+        );
+        assert_eq!(recovered_executor.state, WorkflowState::Thinking);
+        assert!(recovered_executor.pending_approvals.is_empty());
+        assert!(recovered_executor.context.messages.iter().any(|message| {
+            message.message_subtype.as_deref() == Some("approved_plan")
+                && message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("approval_source"))
+                    .and_then(Value::as_str)
+                    == Some("automatic")
+        }));
     }
 
     #[tokio::test]

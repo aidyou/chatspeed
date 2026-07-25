@@ -688,6 +688,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .auto_approve
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
+            auto_approve_plan: None,
             auto_compress: Some(true),
             available_tools: agent_config
                 .available_tools

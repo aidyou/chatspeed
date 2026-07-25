@@ -944,6 +944,10 @@
       },
       "weekdays": "Дни недели"
     },
+    "autoApprovePlan": "Автоматически утверждать план",
+    "autoApprovePlanDisabled": "Автоматическое утверждение плана отключено",
+    "autoApprovePlanEnabled": "Автоматическое утверждение плана включено",
+    "autoApprovePlanTooltip": "Автоматически активирует корректный отправленный план без ожидания проверки пользователем",
     "autoCompressShort": "Автосжатие rollup",
     "autoCompressTooltip": "Автоматически сжимает старые завершённые задачи при запуске новой задачи",
     "autoCompressDisabledMessage": "Автосжатие rollup выключено",

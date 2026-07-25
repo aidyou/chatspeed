@@ -35,6 +35,7 @@ import { AGENT_ROLE, SUB_AGENT_ROLE } from '@/constants/agent'
 export function useWorkflowCore({
     selectedAgent,
     planningMode,
+    autoApprovePlan,
     approvalLevel,
     finalAuditMode,
     autoCompressEnabled,
@@ -275,6 +276,7 @@ export function useWorkflowCore({
             }
 
             autoCompressEnabled.value = config.autoCompress ?? true
+            autoApprovePlan.value = config.autoApprovePlan === true
 
             if (config.approvalLevel) {
                 approvalLevel.value = config.approvalLevel
@@ -346,6 +348,7 @@ export function useWorkflowCore({
     const mergeLocalUiOverrides = (baseConfig = {}) => ({
         ...baseConfig,
         approvalLevel: approvalLevel.value,
+        autoApprovePlan: autoApprovePlan.value,
         autoCompress: autoCompressEnabled.value,
         finalAudit: finalAuditMode.value === 'on',
         phase: currentPhaseValue()
@@ -357,6 +360,7 @@ export function useWorkflowCore({
             'allowedPaths',
             'approvalLevel',
             'autoApprove',
+            'autoApprovePlan',
             'autoCompress',
             'finalAudit',
             'finalReviewMode',
@@ -1114,6 +1118,7 @@ export function useWorkflowCore({
                         workflowStore.setAutoApprovedTools(nextConfig.autoApprove || [])
 
                         isSyncingWorkflowConfig.value = true
+                        autoApprovePlan.value = nextConfig.autoApprovePlan === true
                         planningMode.value =
                             String(nextConfig.phase || '').toLowerCase() === 'planning'
                         isSyncingWorkflowConfig.value = false
@@ -1436,6 +1441,7 @@ export function useWorkflowCore({
                     userQuery: visiblePrompt,
                     agentId: inheritedAgentId || selectedAgent.value.id,
                     allowedPaths: workflowAllowedPaths,
+                    autoApprovePlan: autoApprovePlan.value,
                     finalAudit: finalAuditMode.value === 'on',
                     inheritedAgentConfig
                 }
@@ -1964,6 +1970,11 @@ export function useWorkflowCore({
     watch(autoCompressEnabled, async (newVal) => {
         if (isSyncingWorkflowConfig.value) return
         await updateWorkflowConfig('autoCompress', !!newVal)
+    })
+
+    watch(autoApprovePlan, async (newVal) => {
+        if (isSyncingWorkflowConfig.value) return
+        await updateWorkflowConfig('autoApprovePlan', !!newVal)
     })
 
     watch(planningMode, async (newVal) => {

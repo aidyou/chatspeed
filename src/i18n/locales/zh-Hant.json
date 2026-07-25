@@ -949,6 +949,10 @@
       },
       "weekdays": "週幾執行"
     },
+    "autoApprovePlan": "自動批准計畫",
+    "autoApprovePlanDisabled": "已關閉自動批准計畫",
+    "autoApprovePlanEnabled": "已開啟自動批准計畫",
+    "autoApprovePlanTooltip": "有效計畫提交後無需等待使用者審閱，自動進入實施階段",
     "autoCompressShort": "自動滾動壓縮",
     "autoCompressTooltip": "開始新任務時自動壓縮較早的已完成任務",
     "autoCompressDisabledMessage": "已關閉自動滾動壓縮",

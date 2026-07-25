@@ -949,6 +949,10 @@
       },
       "weekdays": "周几执行"
     },
+    "autoApprovePlan": "自动批准计划",
+    "autoApprovePlanDisabled": "已关闭自动批准计划",
+    "autoApprovePlanEnabled": "已开启自动批准计划",
+    "autoApprovePlanTooltip": "有效计划提交后无需等待用户审阅，自动进入实施阶段",
     "autoCompressShort": "自动滚动压缩",
     "autoCompressTooltip": "开启新任务时自动压缩较早的已完成任务",
     "autoCompressDisabledMessage": "已关闭自动滚动压缩",

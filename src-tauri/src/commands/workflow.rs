@@ -1221,6 +1221,7 @@ pub struct CreateWorkflowRequest {
     pub user_query: Option<String>, // Allow empty for new workflow creation
     pub agent_id: String,
     pub allowed_paths: Option<Value>,
+    pub auto_approve_plan: Option<bool>,
     pub final_audit: Option<bool>,
     pub inherited_agent_config: Option<String>,
 }
@@ -1325,6 +1326,10 @@ fn build_workflow_config_for_request(
         }
     }
 
+    if let Some(auto_approve_plan) = request.auto_approve_plan {
+        config.auto_approve_plan = Some(auto_approve_plan);
+    }
+
     fill_missing_agent_config_fields(&mut config, agent);
     config
 }
@@ -1379,6 +1384,9 @@ fn merge_inherited_workflow_config(
         .approval_level
         .clone()
         .or(merged.approval_level);
+    merged.auto_approve_plan = inherited_config
+        .auto_approve_plan
+        .or(merged.auto_approve_plan);
     merged.auto_compress = inherited_config.auto_compress.or(merged.auto_compress);
     merged.final_audit = inherited_config.final_audit.or(merged.final_audit);
     merged.final_review_mode = inherited_config
@@ -6138,6 +6146,7 @@ mod tests {
             user_query: Some("test".to_string()),
             agent_id: agent.id.clone(),
             allowed_paths: Some(json!(["/workflow"])),
+            auto_approve_plan: Some(true),
             final_audit: Some(false),
             inherited_agent_config: Some(
                 serde_json::to_string(&AgentConfig {
@@ -6157,6 +6166,7 @@ mod tests {
                     }]),
                     allowed_paths: Some(vec!["/inherited".to_string()]),
                     approval_level: Some("smart".to_string()),
+                    auto_approve_plan: Some(false),
                     ..AgentConfig::default()
                 })
                 .expect("serialize inherited config"),
@@ -6190,6 +6200,7 @@ mod tests {
             persisted.allowed_paths,
             Some(vec!["/inherited".to_string()])
         );
+        assert_eq!(persisted.auto_approve_plan, Some(true));
         assert_eq!(persisted.approval_level, Some("smart".to_string()));
     }
 

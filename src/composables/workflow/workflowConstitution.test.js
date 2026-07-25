@@ -57,6 +57,12 @@ assert.match(extractToolName, /getStructuredWorkflowToolName\(message\)/)
 assert.doesNotMatch(extractToolName, /title|action|message\.message|content/)
 
 const workflowCore = readProjectFile('src/composables/workflow/useWorkflowCore.ts')
+assert.match(workflowCore, /autoApprovePlan: autoApprovePlan\.value/)
+assert.match(workflowCore, /'autoApprovePlan'/)
+assert.match(
+  workflowCore,
+  /watch\(autoApprovePlan,[\s\S]*updateWorkflowConfig\('autoApprovePlan', !!newVal\)/
+)
 const approvePlan = sourceSection(workflowCore, 'const onApprovePlan', 'const onStop')
 assert.doesNotMatch(approvePlan, /entry\?*\.action|includes\(['"]submit plan['"]\)/i)
 assert.match(approvePlan, /isPendingApprovalEntryForTool\(entry, currentSessionId, 'submit_plan'\)/)
@@ -78,6 +84,17 @@ assert.match(
 )
 
 const workflowView = readProjectFile('src/views/Workflow.vue')
+const workflowInputArea = readProjectFile('src/components/workflow/WorkflowInputArea.vue')
+assert.match(
+  workflowInputArea,
+  /v-if="showPlanningModeToggle && planningMode"[\s\S]*command="autoApprovePlan"/
+)
+assert.match(workflowInputArea, /emit\('toggle-auto-approve-plan'\)/)
+assert.match(workflowInputArea, /:hide-on-click="false"/)
+assert.match(
+  workflowInputArea,
+  /command === 'attachment'[\s\S]*quickActionsDropdownRef\.value\?\.handleClose\?\.\(\)[\s\S]*command === 'skillsConfig'[\s\S]*quickActionsDropdownRef\.value\?\.handleClose\?\.\(\)/
+)
 const workflowMessages = readProjectFile('src/composables/workflow/useWorkflowMessages.ts')
 assert.doesNotMatch(
   workflowMessages,

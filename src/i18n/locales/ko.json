@@ -944,6 +944,10 @@
       },
       "weekdays": "실행 요일"
     },
+    "autoApprovePlan": "계획 자동 승인",
+    "autoApprovePlanDisabled": "계획 자동 승인을 껐습니다",
+    "autoApprovePlanEnabled": "계획 자동 승인을 켰습니다",
+    "autoApprovePlanTooltip": "유효한 계획이 제출되면 사용자 검토를 기다리지 않고 자동으로 실행 단계로 전환합니다",
     "autoCompressShort": "자동 롤업 압축",
     "autoCompressTooltip": "새 작업 시작 시 이전 완료 작업을 자동으로 압축합니다",
     "autoCompressDisabledMessage": "자동 롤업 압축을 껐습니다",

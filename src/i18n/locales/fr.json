@@ -944,6 +944,10 @@
       },
       "weekdays": "Jours de la semaine"
     },
+    "autoApprovePlan": "Approuver automatiquement le plan",
+    "autoApprovePlanDisabled": "Approbation automatique du plan désactivée",
+    "autoApprovePlanEnabled": "Approbation automatique du plan activée",
+    "autoApprovePlanTooltip": "Active automatiquement un plan valide soumis sans attendre la vérification de l’utilisateur",
     "autoCompressShort": "Compression de rollup automatique",
     "autoCompressTooltip": "Compresse automatiquement les anciennes tâches terminées au démarrage d'une nouvelle tâche",
     "autoCompressDisabledMessage": "Compression automatique par rollup désactivée",

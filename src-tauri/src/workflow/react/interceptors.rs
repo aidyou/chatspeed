@@ -1716,6 +1716,34 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
+        let auto_approve_plan = self
+            .context
+            .main_store
+            .read()
+            .ok()
+            .and_then(|store| store.get_workflow_snapshot(&self.session_id).ok())
+            .and_then(|snapshot| snapshot.workflow.agent_config)
+            .and_then(|config| crate::db::agent::AgentConfig::from_json(&config))
+            .and_then(|config| config.auto_approve_plan)
+            .unwrap_or(false);
+
+        if auto_approve_plan {
+            self.pending_approvals.insert(
+                id.to_string(),
+                json!({
+                    "name": TOOL_SUBMIT_PLAN,
+                    "arguments": args,
+                    "details": args,
+                    "display_type": "markdown",
+                    "approval_source": "automatic"
+                }),
+            );
+            self.enqueue_pending_approval(id);
+            self.update_state(WorkflowState::AwaitingAutoApproval)
+                .await?;
+            return Ok(None);
+        }
+
         self.handle_approval_interception(id, TOOL_SUBMIT_PLAN, args, None)
             .await
     }

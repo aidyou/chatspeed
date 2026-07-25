@@ -944,6 +944,10 @@
       },
       "weekdays": "実行曜日"
     },
+    "autoApprovePlan": "計画を自動承認",
+    "autoApprovePlanDisabled": "計画の自動承認を無効にしました",
+    "autoApprovePlanEnabled": "計画の自動承認を有効にしました",
+    "autoApprovePlanTooltip": "有効な計画が提出されたら、ユーザー確認を待たずに自動的に実行段階へ移行します",
     "autoCompressShort": "自動ロールアップ圧縮",
     "autoCompressTooltip": "新しいタスク開始時に古い完了タスクを自動圧縮します",
     "autoCompressDisabledMessage": "自動ロールアップ圧縮をオフにしました",

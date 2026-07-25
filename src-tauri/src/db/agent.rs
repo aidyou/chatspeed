@@ -29,6 +29,7 @@ pub struct AgentConfig {
     pub shell_policy: Option<Vec<ShellPolicyRule>>,
     pub approval_level: Option<String>,
     pub auto_approve: Option<Vec<String>>,
+    pub auto_approve_plan: Option<bool>,
     pub auto_compress: Option<bool>,
     pub available_tools: Option<Vec<String>>,
     pub final_audit: Option<bool>,

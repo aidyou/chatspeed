@@ -303,10 +303,10 @@ impl ToolDefinition for SubmitPlan {
         crate::tools::TOOL_SUBMIT_PLAN
     }
     fn description(&self) -> &str {
-        "Submits a proposed plan for user review before implementation begins. \
+        "Submits a finalized plan to the workflow's configured approval gate before implementation begins. \
         The authoritative approval payload MUST include both the structured `plan` and `acceptance_contract` arguments. Do not rely on surrounding assistant text as the plan source. \
         The plan should be a detailed Markdown document outlining the research findings and implementation steps you intend to take. \
-        Once submitted, the session will enter an 'Awaiting Approval' state where the user can review and approve your plan before you begin execution."
+        Once submitted, the workflow will either wait for user approval or automatically activate the plan when the user explicitly enabled automatic plan approval."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::Interaction
@@ -413,9 +413,9 @@ impl ToolDefinition for SubmitPlan {
         })?;
         validate_acceptance_contract(acceptance_contract).map_err(ToolError::InvalidParams)?;
         Ok(ToolCallResult::success(
-            Some("Plan submitted for review. Entering 'Awaiting Approval' state.".into()),
+            Some("Plan submitted to the configured approval gate.".into()),
             Some(json!({
-                "status": "awaiting_approval",
+                "status": "submitted",
                 "plan_length": plan.len(),
                 "acceptance_contract": acceptance_contract
             })),
@@ -649,7 +649,7 @@ mod tests {
 
         assert_eq!(
             result.structured_content.expect("structured result")["status"],
-            "awaiting_approval"
+            "submitted"
         );
     }
 

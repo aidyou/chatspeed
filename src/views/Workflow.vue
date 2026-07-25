@@ -231,6 +231,8 @@
           :can-toggle-planning-mode="canTogglePlanningMode"
           :active-model-name="activeModelName"
           :planning-mode="planningMode"
+          :auto-approve-plan="autoApprovePlan"
+          :can-toggle-auto-approve-plan="canTogglePlanningMode"
           :approval-level="approvalLevel"
           :final-audit-mode="finalAuditMode"
           :can-toggle-final-audit-mode="canToggleFinalAuditMode"
@@ -257,6 +259,7 @@
           @stop="onStop"
           @approve-plan="onApprovePlan"
           @toggle-planning-mode="togglePlanningModeWithFeedback"
+          @toggle-auto-approve-plan="toggleAutoApprovePlanWithFeedback"
           @toggle-final-audit-mode="toggleFinalAuditModeWithFeedback"
           @toggle-auto-compress="toggleAutoCompressWithFeedback"
           @update-approval-level="approvalLevel = $event"
@@ -377,6 +380,7 @@ const selectedAgent = ref(null)
 const approvalLevel = ref('default')
 const finalAuditMode = ref('off')
 const planningMode = ref(false)
+const autoApprovePlan = ref(false)
 const autoCompressEnabled = ref(true)
 const imageAttachments = ref([])
 const defaultImageRecognitionPrompt = ref('')
@@ -733,6 +737,7 @@ const {
 const core = useWorkflowCore({
   selectedAgent,
   planningMode,
+  autoApprovePlan,
   approvalLevel,
   finalAuditMode,
   autoCompressEnabled,
@@ -1380,6 +1385,21 @@ const togglePlanningModeWithFeedback = () => {
   return true
 }
 
+const toggleAutoApprovePlanWithFeedback = () => {
+  if (!planningMode.value || !canTogglePlanningMode.value) {
+    return false
+  }
+
+  autoApprovePlan.value = !autoApprovePlan.value
+  showMessage(
+    autoApprovePlan.value
+      ? t('workflow.autoApprovePlanEnabled')
+      : t('workflow.autoApprovePlanDisabled'),
+    'success'
+  )
+  return true
+}
+
 const toggleFinalAuditModeWithFeedback = () => {
   if (!canToggleFinalAuditMode.value) {
     return false
@@ -1941,6 +1961,7 @@ const onSelectedAgentChange = async agent => {
     if (agentConfig?.phase) {
       planningMode.value = String(agentConfig.phase).toLowerCase() === 'planning'
     }
+    autoApprovePlan.value = agentConfig?.autoApprovePlan === true
     autoCompressEnabled.value = agentConfig?.autoCompress ?? true
   } catch (error) {
     console.error('Failed to update workflow agent:', error)

@@ -949,6 +949,10 @@
       },
       "weekdays": "Weekdays"
     },
+    "autoApprovePlan": "Auto-approve plan",
+    "autoApprovePlanDisabled": "Automatic plan approval disabled",
+    "autoApprovePlanEnabled": "Automatic plan approval enabled",
+    "autoApprovePlanTooltip": "Automatically activate a valid submitted plan without waiting for user review",
     "autoCompressShort": "Auto rollup compression",
     "autoCompressTooltip": "Automatically compress older completed tasks when a new task starts",
     "autoCompressDisabledMessage": "Auto rollup compression disabled",
