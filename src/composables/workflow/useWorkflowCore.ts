@@ -301,6 +301,8 @@ export function useWorkflowCore({
 
             applyWorkflowConfigToLocalStore(config)
             syncWorkflowUiControlsFromConfig(config)
+            workflowStore.setShellPolicy(config.shellPolicy || [])
+            workflowStore.setAutoApprovedTools(config.autoApprove || [])
         } catch (refreshError) {
             console.warn('Failed to refresh workflow config after update error:', refreshError)
         }
@@ -1581,6 +1583,7 @@ export function useWorkflowCore({
                         initialAttachedContext: options.attachedContext || null,
                         planningMode: planningMode.value
                     })
+                    await refreshCurrentWorkflowUiConfig()
                     return true
                 } catch (error) {
                     const errorText = String(error)
@@ -1862,6 +1865,13 @@ export function useWorkflowCore({
 
             try {
                 await invokeWrapper('delete_workflow', { sessionId: id })
+
+                clearPendingApprovalEntries(id)
+                const backgroundListener = backgroundStateListeners.get(id)
+                if (backgroundListener) {
+                    backgroundListener()
+                    backgroundStateListeners.delete(id)
+                }
 
                 // If deleting the current workflow, clear it
                 if (id === currentWorkflowId.value) {

@@ -1331,6 +1331,7 @@ fn build_workflow_config_for_request(
     }
 
     fill_missing_agent_config_fields(&mut config, agent);
+    enforce_auto_approve_tool_visibility(&mut config);
     config
 }
 
@@ -1344,6 +1345,18 @@ fn merge_unique_tools(tool_lists: impl IntoIterator<Item = Option<Vec<String>>>)
         }
     }
     merged
+}
+
+fn enforce_auto_approve_tool_visibility(config: &mut AgentConfig) {
+    let available_tools = config.available_tools.as_ref();
+    if let Some(auto_approve) = config.auto_approve.as_mut() {
+        auto_approve.retain(|tool| {
+            tool != crate::tools::TOOL_BASH
+                && available_tools
+                    .map(|available| available.contains(tool))
+                    .unwrap_or(true)
+        });
+    }
 }
 
 fn merge_shell_allow_rules(
@@ -1440,7 +1453,45 @@ fn merge_inherited_workflow_config(
 
     merged.max_contexts = agent_config.max_contexts;
     merged.sync_legacy_final_audit_flag();
+    enforce_auto_approve_tool_visibility(&mut merged);
     merged
+}
+
+fn sync_workflow_agent_config_at_tool_boundary(
+    store: &MainStore,
+    session_id: &str,
+) -> Result<AgentConfig, String> {
+    let workflow = store
+        .get_workflow(session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Workflow {} not found", session_id))?;
+    let agent = store
+        .get_agent(&workflow.agent_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
+
+    let agent_config = build_agent_config_from_agent(&agent, None, None);
+    let mut merged = workflow
+        .agent_config
+        .as_deref()
+        .and_then(validated_inherited_agent_config)
+        .map(|inherited| merge_inherited_workflow_config(&agent_config, &inherited))
+        .unwrap_or(agent_config);
+    fill_missing_agent_config_fields(&mut merged, &agent);
+    enforce_auto_approve_tool_visibility(&mut merged);
+
+    let merged_json = merged.to_json();
+    if workflow.agent_config.as_deref() != Some(merged_json.as_str()) {
+        store
+            .update_workflow_agent_config(session_id, &merged_json)
+            .map_err(|e| e.to_string())?;
+        log::info!(
+            "[Workflow][session={}][phase=config] Synchronized Agent tool capabilities at task boundary",
+            session_id
+        );
+    }
+
+    Ok(merged)
 }
 
 fn agent_shell_policy_value(agent: &Agent) -> Option<Value> {
@@ -2185,6 +2236,10 @@ pub async fn workflow_begin_new_context_frame(
         .last()
         .is_some_and(ContextManager::is_manual_clear_context_message)
     {
+        {
+            let store = main_store.read().map_err(|e| e.to_string())?;
+            sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
+        }
         finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
             .await?;
         return Ok(WorkflowContextFrameResult {
@@ -2250,6 +2305,11 @@ pub async fn workflow_begin_new_context_frame(
         }
 
         {
+            let store = main_store.read().map_err(|e| e.to_string())?;
+            sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
+        }
+
+        {
             let mut guard = executor.lock().await;
             guard
                 .begin_manual_clear_context_segment()
@@ -2296,6 +2356,11 @@ pub async fn workflow_begin_new_context_frame(
             wait_reason: None,
             has_live_session: false,
         });
+    }
+
+    {
+        let store = main_store.read().map_err(|e| e.to_string())?;
+        sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
     }
 
     let (segment_id, marker_message) = begin_new_context_frame_for_cold_session(
@@ -3181,6 +3246,17 @@ pub async fn workflow_start(
     let workflow_manager_arc = workflow_manager.inner().clone();
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
     let planning_mode = planning_mode.unwrap_or(false);
+
+    if initial_prompt.is_some() {
+        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        let workflow = store
+            .get_workflow(&session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Workflow {} not found", session_id))?;
+        if workflow.status.parse::<WorkflowState>().ok() == Some(WorkflowState::Completed) {
+            sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
+        }
+    }
 
     let (
         raw_prompt,
@@ -4930,13 +5006,17 @@ pub async fn update_workflow_agent_config(
         raw_workflow_agent_config_json(&store, &session_id)?
     };
 
-    let signal_agent_config = serde_json::from_str::<Value>(&agent_config)
-        .map_err(|e| format!("Invalid agent config JSON: {}", e))?;
+    let mut normalized_config = AgentConfig::from_json(&agent_config)
+        .ok_or_else(|| "Invalid agent config JSON".to_string())?;
+    enforce_auto_approve_tool_visibility(&mut normalized_config);
+    let normalized_config_json = normalized_config.to_json();
+    let signal_agent_config =
+        serde_json::to_value(&normalized_config).map_err(|e| e.to_string())?;
 
     {
         let store = state.read().map_err(|e| e.to_string())?;
         store
-            .update_workflow_agent_config(&session_id, &agent_config)
+            .update_workflow_agent_config(&session_id, &normalized_config_json)
             .map_err(|e| e.to_string())?;
     }
 
@@ -5028,15 +5108,15 @@ pub async fn get_auto_approved_tools(
     session_id: String,
 ) -> Result<Vec<String>, String> {
     let store = state.read().map_err(|e| e.to_string())?;
-    let auto_approve = store
+    let mut config = store
         .get_workflow(&session_id)
         .map_err(|e| e.to_string())?
         .and_then(|workflow| workflow.agent_config)
         .and_then(|s| AgentConfig::from_json(&s))
-        .and_then(|config| config.auto_approve)
         .unwrap_or_default();
+    enforce_auto_approve_tool_visibility(&mut config);
 
-    Ok(auto_approve)
+    Ok(config.auto_approve.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -5991,6 +6071,147 @@ mod tests {
         );
         assert_eq!(merged.max_contexts, Some(128_000));
         assert!(merged.shell_policy.is_none());
+    }
+
+    #[test]
+    fn task_boundary_sync_refreshes_visible_and_auto_approved_tools_together() {
+        let store = create_test_store();
+        let session_id = "task-boundary-tool-sync";
+        seed_agent(&store, "agent-test");
+
+        {
+            let conn = store
+                .conn
+                .lock()
+                .expect("failed to lock db connection for agent update");
+            conn.execute(
+                "UPDATE agents
+                 SET available_tools = ?1, auto_approve = ?2, mcp_tool_exposure = ?3,
+                     shell_policy = ?4
+                 WHERE id = ?5",
+                params![
+                    serde_json::to_string(&vec![
+                        "read_file",
+                        "server__MCP__new_tool",
+                        crate::tools::TOOL_BASH
+                    ])
+                    .expect("serialize Agent available tools"),
+                    serde_json::to_string(&vec![
+                        "server__MCP__new_tool",
+                        "server__MCP__removed_tool"
+                    ])
+                    .expect("serialize Agent auto approve"),
+                    serde_json::to_string(&vec![
+                        "server__MCP__new_tool",
+                        "server__MCP__removed_tool"
+                    ])
+                    .expect("serialize Agent MCP exposure"),
+                    serde_json::to_string(&vec![crate::tools::ShellPolicyRule {
+                        pattern: "^git status$".to_string(),
+                        decision: crate::tools::ShellDecision::Review(
+                            "Review repository state".to_string(),
+                        ),
+                        description: None,
+                    }])
+                    .expect("serialize Agent shell policy"),
+                    "agent-test"
+                ],
+            )
+            .expect("failed to update Agent tool config");
+        }
+
+        let stale_config = AgentConfig {
+            allowed_paths: Some(vec!["/workflow".to_string()]),
+            available_tools: Some(vec![
+                "read_file".to_string(),
+                "server__MCP__removed_tool".to_string(),
+            ]),
+            auto_approve: Some(vec![
+                "read_file".to_string(),
+                "server__MCP__removed_tool".to_string(),
+            ]),
+            mcp_tool_exposure: Some(vec!["server__MCP__removed_tool".to_string()]),
+            shell_policy: Some(vec![crate::tools::ShellPolicyRule {
+                pattern: "^git diff$".to_string(),
+                decision: crate::tools::ShellDecision::Allow,
+                description: None,
+            }]),
+            ..AgentConfig::default()
+        };
+        store
+            .create_workflow(
+                session_id,
+                "Initial query",
+                "agent-test",
+                Some(stale_config.to_json()),
+                None,
+            )
+            .expect("failed to create workflow");
+
+        let synced = sync_workflow_agent_config_at_tool_boundary(&store, session_id)
+            .expect("failed to synchronize Agent tool config");
+
+        assert_eq!(
+            synced.available_tools,
+            Some(vec![
+                "read_file".to_string(),
+                "server__MCP__new_tool".to_string(),
+                crate::tools::TOOL_BASH.to_string(),
+            ])
+        );
+        assert_eq!(
+            synced.auto_approve,
+            Some(vec![
+                "server__MCP__new_tool".to_string(),
+                "read_file".to_string(),
+            ])
+        );
+        assert_eq!(
+            synced.mcp_tool_exposure,
+            Some(vec!["server__MCP__new_tool".to_string()])
+        );
+        assert_eq!(synced.allowed_paths, Some(vec!["/workflow".to_string()]));
+        let shell_policy = synced
+            .shell_policy
+            .as_ref()
+            .expect("missing synchronized shell policy");
+        assert_eq!(shell_policy.len(), 2);
+        assert_eq!(shell_policy[0].pattern, "^git status$");
+        assert!(matches!(
+            shell_policy[0].decision,
+            crate::tools::ShellDecision::Review(_)
+        ));
+        assert_eq!(shell_policy[1].pattern, "^git diff$");
+        assert!(matches!(
+            shell_policy[1].decision,
+            crate::tools::ShellDecision::Allow
+        ));
+
+        let persisted = store
+            .get_workflow(session_id)
+            .expect("failed to load workflow")
+            .and_then(|workflow| workflow.agent_config)
+            .and_then(|config| AgentConfig::from_json(&config))
+            .expect("missing persisted Agent config");
+        assert_eq!(persisted.available_tools, synced.available_tools);
+        assert_eq!(persisted.auto_approve, synced.auto_approve);
+    }
+
+    #[test]
+    fn auto_approved_tools_are_filtered_by_visible_tool_capabilities() {
+        let mut config = AgentConfig {
+            available_tools: Some(vec!["read_file".to_string()]),
+            auto_approve: Some(vec![
+                "read_file".to_string(),
+                "write_file".to_string(),
+                crate::tools::TOOL_BASH.to_string(),
+            ]),
+            ..AgentConfig::default()
+        };
+
+        enforce_auto_approve_tool_visibility(&mut config);
+
+        assert_eq!(config.auto_approve, Some(vec!["read_file".to_string()]));
     }
 
     #[test]

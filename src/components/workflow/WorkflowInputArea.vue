@@ -676,9 +676,18 @@ const isImportingShellPolicies = ref(false)
 const newShellCommandPattern = ref('')
 const shellCommandSearch = ref('')
 
-const autoApprovedTools = computed(() =>
-  [...workflowStore.autoApprovedTools].sort((a, b) => a.localeCompare(b))
-)
+const workflowAvailableToolIds = computed(() => {
+  if (Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)) {
+    return props.currentWorkflow.agentConfig.availableTools
+  }
+  return Array.isArray(props.selectedAgent?.availableTools) ? props.selectedAgent.availableTools : []
+})
+const autoApprovedTools = computed(() => {
+  const availableSet = new Set(workflowAvailableToolIds.value)
+  return workflowStore.autoApprovedTools
+    .filter(tool => availableSet.has(tool))
+    .sort((a, b) => a.localeCompare(b))
+})
 const allowedShellCommands = computed(() =>
   [...workflowStore.allowedShellCommands].sort((a, b) => a.pattern.localeCompare(b.pattern))
 )
@@ -693,14 +702,10 @@ const filteredAllowedShellCommands = computed(() => {
   })
 })
 const availableApprovalTools = computed(() => {
-  const allowedToolIds = Array.isArray(props.selectedAgent?.availableTools)
-    ? props.selectedAgent.availableTools
-    : Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)
-      ? props.currentWorkflow.agentConfig.availableTools
-      : []
-
   const allowedSet = new Set(
-    allowedToolIds.filter(toolId => toolId && toolId !== 'bash' && toolId !== 'mcp_tool_load')
+    workflowAvailableToolIds.value.filter(
+      toolId => toolId && toolId !== 'bash' && toolId !== 'mcp_tool_load'
+    )
   )
 
   return agentStore.availableTools

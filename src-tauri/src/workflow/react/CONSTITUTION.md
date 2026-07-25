@@ -235,6 +235,43 @@ The frontend may keep compatibility fallback for old data, but new live data mus
 
 If a special preview policy is needed, it must preserve semantic renderability.
 
+### 7.5 Auto-approved tools must be visible tools
+
+For non-shell tools, the auto-approved tool set must be a subset of the workflow's current
+AI-visible tool capabilities.
+
+This invariant applies to:
+
+- persisted workflow Agent configuration
+- live executor approval state
+- tool schemas exposed to the AI
+- frontend auto-approval lists, counts, and controls
+
+The frontend must derive auto-approval options from the workflow's effective
+`available_tools`, not from a newer Agent definition that has not yet synchronized into the
+workflow. The backend must filter invalid or stale auto-approval entries before persistence,
+runtime injection, and display.
+
+Agent tool changes synchronize into an existing workflow only at canonical task boundaries:
+
+- a new workflow is created
+- new user input resumes a completed workflow
+- the user manually clears context
+
+They must not silently change the tool set of an already-running task segment.
+
+### 7.6 Shell approval policy remains separate and cumulative
+
+Shell approval must not be represented as ordinary tool auto-approval. `bash` availability is
+controlled by `available_tools`, while auto-approved shell commands are controlled by structured
+`shell_policy` rules.
+
+At an Agent tool synchronization boundary, non-conflicting workflow-level shell `Allow` rules
+must be retained alongside the current Agent shell policy so that user-defined commands form a
+cumulative set. Rules must be deduplicated by pattern. When the same pattern already exists in
+the current Agent policy, that current rule is authoritative; inherited rules must never weaken
+an Agent `Review` or `Deny` decision.
+
 ## 8. Context Law
 
 ### 8.1 `messages` is the durable history

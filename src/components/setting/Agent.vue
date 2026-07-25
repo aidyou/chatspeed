@@ -461,7 +461,10 @@
               v-model="agentForm.availableTools"
               :placeholder="$t('settings.agent.selectAvailableTools')"
               multiple
-              filterable>
+              filterable
+              collapse-tags
+              :max-collapse-tags="2"
+              collapse-tags-tooltip>
               <el-option
                 v-for="tool in sortedAvailableTools"
                 :key="tool.id"
@@ -474,7 +477,10 @@
               v-model="agentForm.mcpToolExposure"
               :placeholder="$t('settings.agent.selectMcpToolExposure')"
               multiple
-              filterable>
+              filterable
+              collapse-tags
+              :max-collapse-tags="2"
+              collapse-tags-tooltip>
               <el-option
                 v-for="tool in availableMcpToolOptions"
                 :key="tool.id"
@@ -489,7 +495,10 @@
               v-model="agentForm.autoApprove"
               :placeholder="$t('settings.agent.selectAutoApproveTools')"
               multiple
-              filterable>
+              filterable
+              collapse-tags
+              :max-collapse-tags="2"
+              collapse-tags-tooltip>
               <el-option
                 v-for="tool in autoApproveOptions"
                 :key="tool.id"
@@ -749,6 +758,8 @@ const availableMcpToolOptions = computed(() => {
     tool => tool.category === 'MCP' && enabledToolIds.has(tool.id)
   )
 })
+
+const availableMcpToolIds = computed(() => new Set(availableMcpToolOptions.value.map(tool => tool.id)))
 
 const sortedSystemSkills = computed(() => {
   return [...systemSkills.value]
@@ -1157,7 +1168,9 @@ const normalizeAgentFormForSave = form => {
     ? sortSkillNamesByName(normalized.selectedSkills)
     : []
   normalized.mcpToolExposure = Array.isArray(normalized.mcpToolExposure)
-    ? [...new Set(normalized.mcpToolExposure)]
+    ? [...new Set(normalized.mcpToolExposure)].filter(tool =>
+        normalized.availableTools.includes(tool) && availableMcpToolIds.value.has(tool)
+      )
     : []
 
   if (normalized.role === AGENT_ROLE.CHILD) {
@@ -1706,14 +1719,14 @@ watch(
 )
 
 watch(
-  () => agentForm.value.availableTools,
-  availableToolIds => {
+  [() => agentForm.value.availableTools, availableMcpToolIds],
+  ([availableToolIds, mcpToolIds]) => {
     const enabledToolIds = new Set(availableToolIds || [])
-    agentForm.value.mcpToolExposure = (agentForm.value.mcpToolExposure || []).filter(tool =>
-      enabledToolIds.has(tool)
+    agentForm.value.mcpToolExposure = (agentForm.value.mcpToolExposure || []).filter(
+      tool => enabledToolIds.has(tool) && mcpToolIds.has(tool)
     )
   },
-  { deep: true }
+  { deep: true, immediate: true }
 )
 
 watch(

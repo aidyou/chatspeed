@@ -6146,6 +6146,28 @@ impl WorkflowExecutor {
         }
     }
 
+    fn replace_runtime_tool_config_from_snapshot(
+        &mut self,
+        config: &crate::db::agent::AgentConfig,
+    ) {
+        self.agent_config.available_tools = config
+            .available_tools
+            .as_ref()
+            .and_then(|tools| serde_json::to_string(tools).ok());
+        self.agent_config.auto_approve = config
+            .auto_approve
+            .as_ref()
+            .and_then(|tools| serde_json::to_string(tools).ok());
+        self.agent_config.mcp_tool_exposure = config
+            .mcp_tool_exposure
+            .as_ref()
+            .and_then(|tools| serde_json::to_string(tools).ok());
+        self.agent_config.shell_policy = config
+            .shell_policy
+            .as_ref()
+            .and_then(|policy| serde_json::to_string(policy).ok());
+    }
+
     async fn rebuild_foundation_tools_for_runtime_update(
         &mut self,
     ) -> Result<(), WorkflowEngineError> {
@@ -6298,10 +6320,14 @@ impl WorkflowExecutor {
             return Ok(());
         };
 
+        let snapshot_config = crate::db::agent::AgentConfig::from_json(&config_json);
         self.agent_config.merge_config(&config_json);
+        if let Some(config) = snapshot_config.as_ref() {
+            self.replace_runtime_tool_config_from_snapshot(config);
+        }
         self.sync_runtime_skills_from_agent_config();
 
-        if let Some(config) = crate::db::agent::AgentConfig::from_json(&config_json) {
+        if let Some(config) = snapshot_config {
             if let Some(phase_str) = config.phase.as_deref() {
                 if let Some((phase_str, phase)) =
                     Self::parse_phase_from_signal(&serde_json::json!({ "phase": phase_str }))

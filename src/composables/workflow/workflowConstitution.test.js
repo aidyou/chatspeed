@@ -85,6 +85,26 @@ assert.match(
 
 const workflowView = readProjectFile('src/views/Workflow.vue')
 const workflowInputArea = readProjectFile('src/components/workflow/WorkflowInputArea.vue')
+const visibleAutoApprovalTools = sourceSection(
+  workflowInputArea,
+  'const workflowAvailableToolIds',
+  'const allowedShellCommands'
+)
+assert.ok(
+  visibleAutoApprovalTools.indexOf('props.currentWorkflow?.agentConfig?.availableTools') <
+    visibleAutoApprovalTools.indexOf('props.selectedAgent?.availableTools'),
+  'workflow tool capabilities must take precedence over a newer unsynchronized Agent definition'
+)
+assert.match(visibleAutoApprovalTools, /filter\(tool => availableSet\.has\(tool\)\)/)
+
+const workflowConstitution = readProjectFile(
+  'src-tauri/src/workflow/react/CONSTITUTION.md'
+)
+assert.match(workflowConstitution, /Auto-approved tools must be visible tools/)
+assert.match(workflowConstitution, /auto-approved tool set must be a subset/)
+assert.match(workflowConstitution, /Shell approval policy remains separate and cumulative/)
+assert.match(workflowConstitution, /workflow-level shell `Allow` rules/)
+
 assert.match(
   workflowInputArea,
   /v-if="showPlanningModeToggle && planningMode"[\s\S]*command="autoApprovePlan"/
@@ -149,6 +169,20 @@ assert.match(approvalDialog, /toolName: String/)
 assert.doesNotMatch(
   approvalDialog,
   /action: String|props\.action|normalizedAction|isFileChangePayload/
+)
+
+const deleteWorkflow = sourceSection(
+  workflowCore,
+  'const onDeleteWorkflow',
+  'const createNewWorkflow'
+)
+assert.match(deleteWorkflow, /await invokeWrapper\('delete_workflow', \{ sessionId: id \}\)/)
+assert.match(deleteWorkflow, /clearPendingApprovalEntries\(id\)/)
+assert.match(deleteWorkflow, /backgroundStateListeners\.delete\(id\)/)
+assert.ok(
+  deleteWorkflow.indexOf('clearPendingApprovalEntries(id)') <
+    deleteWorkflow.indexOf('await workflowStore.loadWorkflows()'),
+  'deleting a workflow must clear its background reminder cache before refreshing the sidebar'
 )
 
 const classification = readProjectFile('src/composables/workflow/toolClassification.js')

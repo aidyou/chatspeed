@@ -24,12 +24,24 @@ use tokio::process::{Child, Command};
 use tokio::time::{timeout, Duration, Instant};
 
 /// Decision levels for shell auditing
-#[derive(Debug, PartialEq, Clone, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ShellDecision {
     Allow,
     Review(String),
     Deny(String),
+}
+
+impl serde::Serialize for ShellDecision {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Allow => serializer.serialize_str("allow"),
+            Self::Review(reason) => serializer.serialize_str(&format!("review:{reason}")),
+            Self::Deny(reason) => serializer.serialize_str(&format!("deny:{reason}")),
+        }
+    }
 }
 
 impl<'de> serde::Deserialize<'de> for ShellDecision {
@@ -1814,6 +1826,31 @@ mod tests {
     use crate::workflow::react::security::PathGuard;
     use std::sync::Mutex;
     use tempfile::tempdir;
+
+    #[test]
+    fn shell_decisions_round_trip_as_policy_strings() {
+        let rules = vec![
+            ShellPolicyRule {
+                pattern: "^git status$".to_string(),
+                decision: ShellDecision::Review("repository state".to_string()),
+                description: None,
+            },
+            ShellPolicyRule {
+                pattern: "^rm ".to_string(),
+                decision: ShellDecision::Deny("destructive command".to_string()),
+                description: None,
+            },
+        ];
+
+        let json = serde_json::to_string(&rules).expect("failed to serialize shell policy");
+        assert!(json.contains(r#""decision":"review:repository state""#));
+        assert!(json.contains(r#""decision":"deny:destructive command""#));
+
+        let decoded: Vec<ShellPolicyRule> =
+            serde_json::from_str(&json).expect("failed to deserialize shell policy");
+        assert_eq!(decoded[0].decision, rules[0].decision);
+        assert_eq!(decoded[1].decision, rules[1].decision);
+    }
 
     #[derive(Default)]
     struct RecordingGateway {
