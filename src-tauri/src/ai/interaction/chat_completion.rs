@@ -146,6 +146,23 @@ impl ChatState {
                     }
                 }
             });
+
+            let mut mcp_tool_change_receiver = tool_manager.subscribe_mcp_tool_change_events();
+            let app_handle_clone_for_spawn = app_handle.clone();
+            tokio::spawn(async move {
+                loop {
+                    match mcp_tool_change_receiver.recv().await {
+                        Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            if let Err(e) = app_handle_clone_for_spawn
+                                .emit("cs://sync-state", json!({ "type": "mcp_tools_changed" }))
+                            {
+                                log::error!("Failed to emit MCP tool change event: {}", e);
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
         }
         state
     }

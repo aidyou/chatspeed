@@ -170,6 +170,10 @@ onMounted(async () => {
       agentStore.fetchAvailableTools().catch(error => {
         console.error('Failed to refresh available tools after MCP config update:', error)
       })
+    } else if (eventType === 'mcp_tools_changed') {
+      agentStore.fetchAvailableTools().catch(error => {
+        console.error('Failed to refresh available tools after MCP tool list change:', error)
+      })
     }
 
     // Ignore events from current windows

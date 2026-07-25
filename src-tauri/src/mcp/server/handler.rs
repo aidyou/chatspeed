@@ -14,7 +14,7 @@ use rmcp::{
         InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
         ServerCapabilities, ServerInfo, Tool,
     },
-    service::{RequestContext, RoleServer},
+    service::{NotificationContext, Peer, RequestContext, RoleServer},
     ServerHandler,
 };
 use rust_i18n::t;
@@ -23,7 +23,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 /// Converts MCPToolDeclaration to rmcp Tool
 impl From<MCPToolDeclaration> for Tool {
@@ -66,6 +66,8 @@ pub struct McpProxyHandler {
     /// Key: display name
     /// Value: ToolReference
     tool_map: Arc<RwLock<HashMap<String, ToolReference>>>,
+    /// Receives changes to the externally visible MCP tool list.
+    tool_change_receiver: Mutex<Option<broadcast::Receiver<()>>>,
 }
 
 impl McpProxyHandler {
@@ -77,10 +79,37 @@ impl McpProxyHandler {
     /// # Returns
     /// Returns a new MCP proxy handler instance
     pub fn new(chat_state: Arc<ChatState>) -> Self {
+        let tool_change_receiver = chat_state.tool_manager.subscribe_mcp_tool_change_events();
         Self {
             chat_state,
             tool_map: Arc::new(RwLock::new(HashMap::new())),
+            tool_change_receiver: Mutex::new(Some(tool_change_receiver)),
         }
+    }
+
+    async fn start_tool_change_notifier(&self, peer: Peer<RoleServer>) {
+        let Some(mut receiver) = self.tool_change_receiver.lock().await.take() else {
+            return;
+        };
+        let tool_map = self.tool_map.clone();
+
+        tokio::spawn(async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                        tool_map.write().await.clear();
+                        if let Err(error) = peer.notify_tool_list_changed().await {
+                            log::debug!(
+                                "Failed to notify MCP client about a tool list change: {}",
+                                error
+                            );
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
     }
 
     /// Ensures the tool map is loaded, reloads if empty
@@ -106,6 +135,10 @@ impl McpProxyHandler {
         let mut used_short_names = HashSet::new();
 
         for tool_spec in all_tools {
+            if tool_spec.disabled {
+                continue;
+            }
+
             // Built-in tools
             if !tool_spec.name.contains(MCP_TOOL_NAME_SPLIT)
                 && (tool_spec.scope == Some(crate::tools::ToolScope::Chat)
@@ -157,7 +190,10 @@ impl ServerHandler for McpProxyHandler {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
         info.protocol_version = ProtocolVersion::default();
-        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info.capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_tool_list_changed()
+            .build();
         info.server_info = Implementation::new("Chatspeed MCP Hub", env!("CARGO_PKG_VERSION"))
             .with_title("Chatspeed")
             .with_website_url("https://chatspeed.aidyou.ai");
@@ -171,6 +207,10 @@ impl ServerHandler for McpProxyHandler {
         _context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, rmcp::model::ErrorData> {
         Ok(self.get_info())
+    }
+
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        self.start_tool_change_notifier(context.peer).await;
     }
 
     async fn list_tools(
@@ -191,6 +231,10 @@ impl ServerHandler for McpProxyHandler {
         let mut used_short_names = HashSet::new();
 
         for tool_spec in all_tools {
+            if tool_spec.disabled {
+                continue;
+            }
+
             // Built-in tools
             if !tool_spec.name.contains(MCP_TOOL_NAME_SPLIT)
                 && (tool_spec.scope == Some(crate::tools::ToolScope::Chat)

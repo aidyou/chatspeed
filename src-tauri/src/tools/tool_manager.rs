@@ -130,6 +130,8 @@ pub struct ToolManager {
     mcp_tools: RwLock<HashMap<String, Vec<MCPToolDeclaration>>>,
     /// A channel for sending MCP status events.
     mcp_status_event_sender: broadcast::Sender<(String, McpStatus)>,
+    /// A channel for notifying consumers that the externally visible MCP tool list changed.
+    mcp_tool_change_event_sender: broadcast::Sender<()>,
     /// A set to track MCP server IDs with ongoing operations (start, stop, restart, refresh).
     /// This is used to prevent race conditions from rapid UI clicks.
     pub ops_in_progress: tokio::sync::Mutex<HashSet<i64>>,
@@ -138,12 +140,14 @@ pub struct ToolManager {
 impl ToolManager {
     /// Creates a new instance of `FunctionManager`.
     pub fn new() -> Self {
-        let (sender, _) = broadcast::channel(DEFAULT_BROADCAST_CAPACITY);
+        let (mcp_status_event_sender, _) = broadcast::channel(DEFAULT_BROADCAST_CAPACITY);
+        let (mcp_tool_change_event_sender, _) = broadcast::channel(DEFAULT_BROADCAST_CAPACITY);
         Self {
             tools: RwLock::new(HashMap::new()),
             mcp_servers: RwLock::new(HashMap::new()),
             mcp_tools: RwLock::new(HashMap::new()),
-            mcp_status_event_sender: sender,
+            mcp_status_event_sender,
+            mcp_tool_change_event_sender,
             ops_in_progress: tokio::sync::Mutex::new(HashSet::new()),
         }
     }
@@ -153,7 +157,12 @@ impl ToolManager {
         if clear_mcp {
             self.mcp_servers.write().await.clear();
             self.mcp_tools.write().await.clear();
+            self.notify_mcp_tools_changed();
         }
+    }
+
+    fn notify_mcp_tools_changed(&self) {
+        let _ = self.mcp_tool_change_event_sender.send(());
     }
 
     /// Register tools for DAG Workflow
@@ -369,6 +378,9 @@ impl ToolManager {
         let tools = self.tools.read().await;
         let mut meta = Vec::new();
         for tool in tools.values() {
+            if tool.category() == ToolCategory::Mcp && tool.tool_calling_spec().disabled {
+                continue;
+            }
             meta.push(json!({
                 "id": tool.name(),
                 "name": tool.name(),
@@ -389,6 +401,12 @@ impl ToolManager {
     /// * `ToolResult` - The result of the function execution.
     pub async fn native_tool_call(&self, name: &str, params: Value) -> NativeToolResult {
         let tool = self.get_tool(name).await?;
+        if tool.category() == ToolCategory::Mcp && tool.tool_calling_spec().disabled {
+            return Err(ToolError::Security(format!(
+                "MCP tool '{}' is disabled",
+                name
+            )));
+        }
         match AssertUnwindSafe(tool.call(params)).catch_unwind().await {
             Ok(result) => result,
             Err(payload) => {
@@ -451,7 +469,10 @@ impl ToolManager {
 
                 // Apply exclusion filter
                 if !excluded.contains(tool.name()) {
-                    specs.push(tool.tool_calling_spec());
+                    let spec = tool.tool_calling_spec();
+                    if !spec.disabled {
+                        specs.push(spec);
+                    }
                 }
             }
         }
@@ -488,7 +509,15 @@ impl ToolManager {
             return Err(ToolError::InvalidParams("Not an MCP tool".to_string()));
         }
 
-        Ok(tool.tool_calling_spec())
+        let declaration = tool.tool_calling_spec();
+        if declaration.disabled {
+            return Err(ToolError::Security(format!(
+                "MCP tool '{}' is disabled",
+                tool_name
+            )));
+        }
+
+        Ok(declaration)
     }
 
     // =================================================
@@ -772,6 +801,11 @@ impl ToolManager {
             }
         }
 
+        drop(tools_guard);
+        drop(servers_guard);
+        drop(mcp_tools_guard);
+        self.notify_mcp_tools_changed();
+
         #[cfg(debug_assertions)]
         {
             log::debug!("MCP server {} inner registration process completed.", name);
@@ -799,6 +833,7 @@ impl ToolManager {
             let prefix = format!("{}{}", name, MCP_TOOL_NAME_SPLIT);
             tools_guard.retain(|tool_name, _| !tool_name.starts_with(&prefix));
         }
+        self.notify_mcp_tools_changed();
 
         // Get the server Arc to stop it *after* removing it from the map
         // and releasing the FunctionManager's mcp_servers lock.
@@ -907,6 +942,7 @@ impl ToolManager {
                         tools_guard.insert(combined_name, wrapper);
                     }
                 }
+                self.notify_mcp_tools_changed();
 
                 // On success, notify that it's "Running" again.
                 self.mcp_status_event_sender
@@ -921,8 +957,15 @@ impl ToolManager {
                     name,
                     e.to_string()
                 );
-                let mut mcp_tools_guard = self.mcp_tools.write().await;
-                mcp_tools_guard.insert(name.to_string(), Vec::new());
+                {
+                    let mut mcp_tools_guard = self.mcp_tools.write().await;
+                    let mut tools_guard = self.tools.write().await;
+                    mcp_tools_guard.insert(name.to_string(), Vec::new());
+
+                    let prefix = format!("{}{}", name, MCP_TOOL_NAME_SPLIT);
+                    tools_guard.retain(|tool_name, _| !tool_name.starts_with(&prefix));
+                }
+                self.notify_mcp_tools_changed();
 
                 // On failure, notify "Error" status.
                 self.mcp_status_event_sender
@@ -1051,7 +1094,7 @@ impl ToolManager {
         let mut mcp_tools_guard = self.mcp_tools.write().await;
         let mut tools_guard = self.tools.write().await;
 
-        if let Some(tools) = mcp_tools_guard.get_mut(mcp_server_name) {
+        let result = if let Some(tools) = mcp_tools_guard.get_mut(mcp_server_name) {
             // find the tool in the list by name
             if let Some(tool_decl) = tools.iter_mut().find(|td| td.name == mcp_tool_name) {
                 // 1. Update the legacy declaration
@@ -1097,7 +1140,14 @@ impl ToolManager {
                 "Server {} not found in mcp_tools cache.",
                 mcp_server_name
             )))
+        };
+
+        drop(tools_guard);
+        drop(mcp_tools_guard);
+        if result.is_ok() {
+            self.notify_mcp_tools_changed();
         }
+        result
     }
 
     pub async fn mcp_tool_call(
@@ -1106,6 +1156,25 @@ impl ToolManager {
         tool_name: &str,
         params: Value,
     ) -> ToolResult {
+        {
+            let tools = self.mcp_tools.read().await;
+            let declaration = tools
+                .get(mcp_name)
+                .and_then(|tools| tools.iter().find(|tool| tool.name == tool_name))
+                .ok_or_else(|| {
+                    ToolError::FunctionNotFound(format!(
+                        "{}{}{}",
+                        mcp_name, MCP_TOOL_NAME_SPLIT, tool_name
+                    ))
+                })?;
+            if declaration.disabled {
+                return Err(ToolError::Security(format!(
+                    "MCP tool '{}{}{}' is disabled",
+                    mcp_name, MCP_TOOL_NAME_SPLIT, tool_name
+                )));
+            }
+        }
+
         let client_arc = self.get_mcp_server(mcp_name).await?;
         client_arc
             .call(tool_name, params.clone())
@@ -1126,6 +1195,10 @@ impl ToolManager {
 
     pub fn subscribe_mcp_status_events(&self) -> broadcast::Receiver<(String, McpStatus)> {
         self.mcp_status_event_sender.subscribe()
+    }
+
+    pub fn subscribe_mcp_tool_change_events(&self) -> broadcast::Receiver<()> {
+        self.mcp_tool_change_event_sender.subscribe()
     }
 }
 
@@ -1263,6 +1336,16 @@ mod tests {
         let specs = manager.get_tool_calling_spec(None, None).await.unwrap();
         let names: HashSet<_> = specs.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(combined_name.as_str()));
+    }
+
+    #[tokio::test]
+    async fn broadcasts_mcp_tool_change_events() {
+        let manager = ToolManager::new();
+        let mut receiver = manager.subscribe_mcp_tool_change_events();
+
+        manager.notify_mcp_tools_changed();
+
+        receiver.recv().await.expect("tool change event");
     }
 }
 

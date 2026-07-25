@@ -244,6 +244,11 @@ pub async fn update_mcp_server(
 ) -> Result<Mcp> {
     check_form(&name, &config)?;
 
+    let previous_server_name = {
+        let store_guard = main_store.read()?;
+        store_guard.config.get_mcp_by_id(id)?.name
+    };
+
     {
         let mut store_guard = main_store.write()?;
         store_guard.update_mcp(id, name, description, config.clone(), disabled)?;
@@ -260,10 +265,10 @@ pub async fn update_mcp_server(
         let config_clone = config.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = fm.unregister_mcp_server(&server_name).await {
+            if let Err(e) = fm.unregister_mcp_server(&previous_server_name).await {
                 log::warn!(
                     "Failed to unregister MCP server '{}' during update: {}",
-                    server_name,
+                    previous_server_name,
                     e
                 );
             }
