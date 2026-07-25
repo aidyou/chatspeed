@@ -254,6 +254,10 @@
       "skillEnabled": "Habilitar skills",
       "skillsHint": "Somente as skills selecionadas serão expostas ao runtime de workflow deste agente.",
       "skillsLabel": "Skills",
+      "subAgentRole": "Responsabilidade do subagente",
+      "subAgentRoleExplorer": "Navegar / Investigar",
+      "subAgentRoleFinalReviewer": "Revisor final",
+      "subAgentRoleGeneral": "Geral",
       "systemPrompt": "Prompt do Sistema",
       "systemPromptRequired": "Por favor, insira o prompt do sistema",
       "temperature": "Temperatura",
@@ -861,8 +865,19 @@
   "workflow": {
     "allowedShellCommands": "Comandos Shell permitidos",
     "approval": {
+      "acceptanceContract": "Contrato de aceitacao",
+      "acceptanceCriteria": "Criterios de aceitacao",
+      "covers": "Cobre",
+      "dependsOn": "Depende de",
+      "expectedEvidence": "Evidencia esperada",
+      "files": "Arquivos",
+      "implementationUnits": "Unidades de implementacao",
+      "invariants": "Invariantes protegidas",
+      "method": "Metodo",
       "rejectionMessageLabel": "Motivo da rejeição",
-      "rejectionMessagePlaceholder": "Se você não quiser executar esta ação, informe o motivo."
+      "rejectionMessagePlaceholder": "Se você não quiser executar esta ação, informe o motivo.",
+      "unresolvedBlockers": "Bloqueios nao resolvidos",
+      "verificationItems": "Itens de verificacao"
     },
     "approvalSound": "Som de aprovação",
     "approvePlan": "Aprovar plano",

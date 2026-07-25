@@ -1334,7 +1334,11 @@ const normalizeDiffPayload = message => {
   }
 
   const toolName = getMessageToolName(message)
-  if (['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note'].includes(toolName)) {
+  if (
+    ['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note', 'submit_plan'].includes(
+      toolName
+    )
+  ) {
     const args = normalizeStructuredDiffPayload(getToolCallArguments(message))
     if (args) {
       return args

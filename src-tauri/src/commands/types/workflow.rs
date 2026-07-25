@@ -9,6 +9,7 @@ pub struct AgentPayload {
     pub description: Option<String>,
     pub role: Option<String>,
     pub parent_agent_id: Option<String>,
+    pub sub_agent_role: Option<String>,
     pub system_prompt: String,
     pub planning_prompt: Option<String>,
     pub image_recognition_prompt: Option<String>,
@@ -54,6 +55,7 @@ impl From<AgentPayload> for Agent {
             payload.max_contexts,
         );
         agent.mcp_tool_exposure = payload.mcp_tool_exposure;
+        agent.sub_agent_role = payload.sub_agent_role;
         agent
     }
 }

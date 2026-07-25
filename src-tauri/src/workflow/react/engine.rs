@@ -302,7 +302,7 @@ impl WorkflowExecutor {
             .filter(|msg| !msg.is_empty());
         match rejection_message {
             Some(message) => format!(
-                "Plan rejection reason from user:\n{}\n<SYSTEM_REMINDER>\nThe user rejected your plan. Carefully re-check the user's original request, your proposed plan, and the rejection reason above. You MUST seriously account for the user's rejection feedback before continuing. If you need more information to revise the plan, use the 'ask_user' tool to ask the user a focused question. Otherwise, revise and resubmit a complete plan with 'submit_plan.plan'.\n</SYSTEM_REMINDER>",
+                "Plan rejection reason from user:\n{}\n<SYSTEM_REMINDER>\nThe user rejected your plan. Carefully re-check the user's original request, your proposed plan, and the rejection reason above. You MUST seriously account for the user's rejection feedback before continuing. If you need more information to revise the plan, use the 'ask_user' tool to ask the user a focused question. Otherwise, revise and resubmit the complete `submit_plan.plan` and matching `submit_plan.acceptance_contract`.\n</SYSTEM_REMINDER>",
                 message
             ),
             None => "<SYSTEM_REMINDER>\nThe user rejected your plan but did not provide a rejection reason. Your next action MUST be to use the 'ask_user' tool to ask the user what they want changed or clarified in the plan. Do NOT guess the missing feedback, do NOT immediately resubmit another plan, and do NOT proceed to implementation until the user provides guidance and a revised plan is approved.\n</SYSTEM_REMINDER>".to_string(),
@@ -1011,7 +1011,7 @@ impl WorkflowExecutor {
         let child_agents_for_llm = main_store
             .read()
             .ok()
-            .and_then(|store| store.get_child_agents(&agent_config.id).ok())
+            .and_then(|store| store.get_delegatable_child_agents(&agent_config.id).ok())
             .unwrap_or_default();
 
         let mut executor = Self {
@@ -1739,7 +1739,11 @@ impl WorkflowExecutor {
                     .main_store
                     .read()
                     .ok()
-                    .and_then(|store| store.get_child_agents(&self.agent_config.id).ok())
+                    .and_then(|store| {
+                        store
+                            .get_delegatable_child_agents(&self.agent_config.id)
+                            .ok()
+                    })
                     .unwrap_or_default();
 
                 if !child_agents.is_empty() {
@@ -1899,21 +1903,32 @@ impl WorkflowExecutor {
                 )
             })?
             .to_string();
+        let acceptance_contract = parsed_args.get("acceptance_contract").cloned();
+        if let Some(contract) = acceptance_contract.as_ref() {
+            crate::tools::validate_acceptance_contract(contract).map_err(|error| {
+                WorkflowEngineError::General(format!(
+                    "Approved submit_plan has an invalid acceptance contract: {error}"
+                ))
+            })?;
+        }
 
         log::info!(
             "WorkflowExecutor {}: Plan approved, transitioning to Implementation phase",
             self.session_id
         );
 
-        self.activate_approved_plan(Some(tool_call_id), &plan).await
+        self.activate_approved_plan(Some(tool_call_id), &plan, acceptance_contract.as_ref())
+            .await
     }
 
     async fn activate_approved_plan(
         &mut self,
         tool_call_id: Option<&str>,
         approved_plan: &str,
+        acceptance_contract: Option<&Value>,
     ) -> Result<(), WorkflowEngineError> {
-        self.persist_approved_plan_anchor(&approved_plan).await?;
+        self.persist_approved_plan_anchor(approved_plan, acceptance_contract)
+            .await?;
 
         {
             let store = self.context.main_store.read().map_err(|error| {
@@ -1959,7 +1974,7 @@ impl WorkflowExecutor {
                 .await?;
         }
 
-        self.append_approved_plan_observation(tool_call_id, &approved_plan)
+        self.append_approved_plan_observation(tool_call_id, approved_plan, acceptance_contract)
             .await?;
         if let Some(tool_call_id) = tool_call_id.filter(|id| !id.trim().is_empty()) {
             self.record_approved_plan_tool_completion(tool_call_id)
@@ -2020,6 +2035,7 @@ impl WorkflowExecutor {
     async fn persist_approved_plan_anchor(
         &mut self,
         approved_plan: &str,
+        acceptance_contract: Option<&Value>,
     ) -> Result<(), WorkflowEngineError> {
         let todo_json = {
             let store = self.context.main_store.read().map_err(|e| {
@@ -2029,25 +2045,35 @@ impl WorkflowExecutor {
             serde_json::to_string_pretty(&todos).unwrap_or_else(|_| "[]".to_string())
         };
 
+        let acceptance_contract_text = acceptance_contract
+            .map(|contract| {
+                serde_json::to_string_pretty(contract).unwrap_or_else(|_| contract.to_string())
+            })
+            .unwrap_or_else(|| "Not available for this legacy approved plan.".to_string());
+        let mut metadata = json!({
+            "type": "summary",
+            "subtype": "approved_plan",
+            "plan_content": approved_plan,
+            "todo_content": todo_json.clone(),
+            "todo_scope": "pre_approval"
+        });
+        if let Some(contract) = acceptance_contract {
+            metadata["acceptance_contract"] = contract.clone();
+        }
+
         let _ = self
             .add_message_and_notify_internal(
                 "system".to_string(),
                 format!(
-                    "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## PRE-APPROVAL TODO SNAPSHOT\n{}",
-                    approved_plan, todo_json
+                    "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## ACCEPTANCE CONTRACT\n{}\n\n## PRE-APPROVAL TODO SNAPSHOT\n{}",
+                    approved_plan, acceptance_contract_text, todo_json
                 ),
                 None,
                 None,
                 None,
                 false,
                 None,
-                Some(json!({
-                    "type": "summary",
-                    "subtype": "approved_plan",
-                    "plan_content": approved_plan,
-                    "todo_content": todo_json,
-                    "todo_scope": "pre_approval"
-                })),
+                Some(metadata),
             )
             .await?;
         Ok(())
@@ -2057,6 +2083,7 @@ impl WorkflowExecutor {
         &mut self,
         tool_call_id: Option<&str>,
         approved_plan: &str,
+        acceptance_contract: Option<&Value>,
     ) -> Result<(), WorkflowEngineError> {
         let mut metadata = json!({
             "tool_name": TOOL_SUBMIT_PLAN,
@@ -2070,13 +2097,23 @@ impl WorkflowExecutor {
         if let Some(tool_call_id) = tool_call_id.filter(|id| !id.trim().is_empty()) {
             metadata["tool_call_id"] = json!(tool_call_id);
         }
+        if let Some(contract) = acceptance_contract {
+            metadata["acceptance_contract"] = contract.clone();
+        }
+
+        let acceptance_contract_text = acceptance_contract
+            .map(|contract| {
+                serde_json::to_string_pretty(contract).unwrap_or_else(|_| contract.to_string())
+            })
+            .unwrap_or_else(|| "Not available for this legacy approved plan.".to_string());
 
         let _ = self
             .add_message_and_notify_internal(
                 "tool".to_string(),
                 format!(
-                    "# Approved Plan\n\n{}\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
+                    "# Approved Plan\n\n{}\n\n## Acceptance Contract\n\n```json\n{}\n```\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
                     approved_plan,
+                    acceptance_contract_text,
                     super::prompts::APPROVED_PLAN_EXECUTION_REMINDER
                 ),
                 None,
@@ -3439,10 +3476,14 @@ impl WorkflowExecutor {
                                             } else {
                                                 val.clone()
                                             };
-                                            return parsed
+                                            let plan = parsed
                                                 .get("plan")
                                                 .and_then(|p| p.as_str())
-                                                .map(|s| s.to_string());
+                                                .map(str::to_string)?;
+                                            return Some((
+                                                plan,
+                                                parsed.get("acceptance_contract").cloned(),
+                                            ));
                                         }
                                     }
                                 }
@@ -3451,7 +3492,7 @@ impl WorkflowExecutor {
                         None
                     });
 
-                    if let Some(plan) = plan_content {
+                    if let Some((plan, acceptance_contract)) = plan_content {
                         log::info!(
                         "WorkflowExecutor {}: Plan found, executing atomic transition to Implementation phase",
                         self.session_id
@@ -3483,8 +3524,12 @@ impl WorkflowExecutor {
                                 })
                             });
 
-                        self.activate_approved_plan(submit_plan_tool_call_id.as_deref(), &plan)
-                            .await?;
+                        self.activate_approved_plan(
+                            submit_plan_tool_call_id.as_deref(),
+                            &plan,
+                            acceptance_contract.as_ref(),
+                        )
+                        .await?;
                         continue;
                     } else {
                         log::warn!(
@@ -7334,10 +7379,30 @@ mod recovery_tests {
             .await
             .expect("failed to add planning history");
 
+        let acceptance_contract = json!({
+            "acceptance_criteria": [{"id": "AC-1", "description": "Behavior is implemented"}],
+            "invariants": [],
+            "implementation_units": [{
+                "id": "U-1",
+                "description": "Edit the file",
+                "covers": ["AC-1"],
+                "depends_on": [],
+                "files": ["src/example.rs"]
+            }],
+            "verification_items": [{
+                "id": "V-1",
+                "description": "Run focused tests",
+                "covers": ["AC-1"],
+                "method": "focused test",
+                "expected_evidence": "test passes"
+            }],
+            "unresolved_blockers": []
+        });
         executor
             .activate_approved_plan(
                 Some("submit-plan-call"),
                 "1. Edit the file\n2. Run focused tests",
+                Some(&acceptance_contract),
             )
             .await
             .expect("approved plan transition should succeed");
@@ -7351,6 +7416,9 @@ mod recovery_tests {
         assert!(executor.context.ai_context_messages[1]
             .message
             .contains("<approved_plan>\n1. Edit the file\n2. Run focused tests\n</approved_plan>"));
+        assert!(executor.context.ai_context_messages[1]
+            .message
+            .contains("<acceptance_contract>"));
         assert!(observed_payloads
             .lock()
             .expect("payload lock")

@@ -19,7 +19,7 @@ use crate::workflow::react::file_preview::{
 };
 use crate::workflow::react::intelligence::ToolApprovalReview;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
-use crate::workflow::react::orchestrator::{spawn_call_sub_agent, FINAL_REVIEWER_BUILTIN_AGENT_ID};
+use crate::workflow::react::orchestrator::spawn_call_sub_agent;
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
 use crate::workflow::react::types::{
     GatewayPayload, PendingCompletionReport, StepType, WorkflowState,
@@ -464,6 +464,14 @@ impl WorkflowExecutor {
             })
             .collect::<Vec<_>>();
         let approved_plan = self.context.current_approved_plan_since_last_completion();
+        let acceptance_contract = self
+            .context
+            .messages_since_last_completion()
+            .into_iter()
+            .rev()
+            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
+            .and_then(|message| message.metadata)
+            .and_then(|metadata| metadata.get("acceptance_contract").cloned());
         let changed_files = self.review_payload_changed_files();
         let evidence_messages = self.context.messages_since_last_completion();
         let evidence = Self::build_final_review_evidence(&evidence_messages);
@@ -495,7 +503,7 @@ impl WorkflowExecutor {
                 Vec::new()
             };
         let mut payload = serde_json::Map::new();
-        payload.insert("review_type".to_string(), json!("final_code_review"));
+        payload.insert("review_type".to_string(), json!("final_review"));
         payload.insert("workflow_session_id".to_string(), json!(self.session_id));
         payload.insert("user_messages".to_string(), json!(user_messages));
         payload.insert("completion_report".to_string(), json!(completion_summary));
@@ -515,6 +523,9 @@ impl WorkflowExecutor {
                 payload.insert("approved_plan".to_string(), json!(approved_plan));
             }
         }
+        if let Some(acceptance_contract) = acceptance_contract {
+            payload.insert("acceptance_contract".to_string(), acceptance_contract);
+        }
         if !todo_status.is_empty() {
             payload.insert("todo_status".to_string(), json!(todo_status));
         }
@@ -528,14 +539,14 @@ impl WorkflowExecutor {
         let payload_text =
             serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
         format!(
-            "Review the parent workflow's completion package below. Perform an independent final review using your read-only code inspection tools.\n\n\
+            "Review the parent workflow's completion package below. Perform an independent final review using the read-only inspection tools configured for your domain.\n\n\
 Return the final verdict ONLY by calling `submit_result`.\n\
 - `submit_result.result` MUST be a JSON object with this schema:\n\
   {{\"approved\": boolean, \"summary\": string, \"findings\": [{{\"severity\": \"blocker|major|minor|info\", \"file\": string|null, \"detail\": string}}], \"required_fixes\": [string]}}\n\
 - You will also receive `previous_review_results`; use them to avoid repeating the same rejected reasoning unless the parent has actually addressed those findings.\n\
 - If the work should not be allowed to finish, set `approved` to false and provide concrete required fixes.\n\
 - If the work is acceptable, set `approved` to true and keep findings minimal.\n\
-- Do not edit files. Do not ask the parent to run `git diff`; inspect the code directly with read/search tools when needed.\n\n\
+- Do not modify the deliverable. Inspect relevant evidence directly with your available read/search tools when needed.\n\n\
 <final_review_package>\n{}\n</final_review_package>",
             payload_text
         )
@@ -554,15 +565,29 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 .read()
                 .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
             store
-                .get_agent(FINAL_REVIEWER_BUILTIN_AGENT_ID)
+                .get_child_agent_by_sub_agent_role(
+                    &self.agent_config.id,
+                    crate::db::agent::SUB_AGENT_ROLE_FINAL_REVIEWER,
+                )
                 .map_err(WorkflowEngineError::Db)?
                 .ok_or_else(|| {
                     WorkflowEngineError::General(format!(
-                        "Final reviewer agent '{}' not found",
-                        FINAL_REVIEWER_BUILTIN_AGENT_ID
+                        "No enabled final reviewer is configured for agent '{}'",
+                        self.agent_config.id
                     ))
                 })?
         };
+        let reviewer_model_configured = reviewer_agent
+            .models
+            .as_ref()
+            .and_then(|models| models.act.as_ref())
+            .is_some_and(|model| !model.model.trim().is_empty());
+        if !reviewer_model_configured {
+            return Err(WorkflowEngineError::General(format!(
+                "Final reviewer '{}' has no act model configured",
+                reviewer_agent.name
+            )));
+        }
         let review_prompt = self.build_final_review_prompt(
             &completion_summary,
             &completion_report_provenance,
@@ -1670,6 +1695,27 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
+        let acceptance_contract = args.get("acceptance_contract");
+        let contract_error = acceptance_contract
+            .ok_or_else(|| "acceptance_contract is required".to_string())
+            .and_then(crate::tools::validate_acceptance_contract)
+            .err();
+        if let Some(error) = contract_error {
+            return Ok(Some(ReinforcedResult {
+                content: format!(
+                    "<SYSTEM_REMINDER>Error: The `submit_plan.acceptance_contract` handoff is invalid: {error}. Reconcile the final AC/INV/U/V mappings, resolve all blockers, and call `submit_plan` again with both the complete `plan` and corrected `acceptance_contract`.</SYSTEM_REMINDER>"
+                ),
+                llm_content: None,
+                title: "SubmitPlan Error".to_string(),
+                summary: "Invalid acceptance contract".to_string(),
+                is_error: true,
+                error_type: Some("InvalidAcceptanceContract".into()),
+                display_type: "text".to_string(),
+                approval_status: None,
+                observation_kind: None,
+            }));
+        }
+
         self.handle_approval_interception(id, TOOL_SUBMIT_PLAN, args, None)
             .await
     }
@@ -2169,10 +2215,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     } else {
                         plan
                     };
-                    (
-                        preview.clone(),
-                        normalize_preview_details(serde_json::json!(preview)),
-                    )
+                    (preview, args.clone())
                 }
                 _ => {
                     let msg = format!(

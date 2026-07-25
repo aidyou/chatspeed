@@ -2,6 +2,7 @@ use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 
 pub struct AskUser;
 
@@ -105,6 +106,197 @@ impl ToolDefinition for AskUser {
 
 pub struct SubmitPlan;
 
+fn collect_contract_ids(
+    contract: &Value,
+    field: &str,
+    prefix: &str,
+    required: bool,
+) -> Result<HashSet<String>, String> {
+    let items = contract
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("acceptance_contract.{field} must be an array"))?;
+    if required && items.is_empty() {
+        return Err(format!(
+            "acceptance_contract.{field} must contain at least one item"
+        ));
+    }
+
+    let mut ids = HashSet::new();
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| value.starts_with(prefix) && value.len() > prefix.len())
+            .ok_or_else(|| format!("Each {field} item must have an ID starting with {prefix}"))?;
+        let description = item
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("{id} must have a non-empty description"))?;
+        let _ = description;
+        if !ids.insert(id.to_string()) {
+            return Err(format!("Duplicate acceptance contract ID: {id}"));
+        }
+    }
+    Ok(ids)
+}
+
+fn validate_contract_coverage(
+    contract: &Value,
+    field: &str,
+    known_requirements: &HashSet<String>,
+) -> Result<HashSet<String>, String> {
+    let items = contract
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("acceptance_contract.{field} must be an array"))?;
+    let mut covered = HashSet::new();
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown item");
+        let covers = item
+            .get("covers")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("{id}.covers must be an array"))?;
+        if covers.is_empty() {
+            return Err(format!("{id}.covers must not be empty"));
+        }
+        for reference in covers {
+            let reference = reference
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| format!("{id}.covers must contain only non-empty IDs"))?;
+            if !known_requirements.contains(reference) {
+                return Err(format!("{id} references unknown requirement {reference}"));
+            }
+            covered.insert(reference.to_string());
+        }
+    }
+    Ok(covered)
+}
+
+pub(crate) fn validate_acceptance_contract(contract: &Value) -> Result<(), String> {
+    if !contract.is_object() {
+        return Err("acceptance_contract must be an object".to_string());
+    }
+
+    let acceptance_criteria = collect_contract_ids(contract, "acceptance_criteria", "AC-", true)?;
+    let invariants = collect_contract_ids(contract, "invariants", "INV-", false)?;
+    let implementation_units = collect_contract_ids(contract, "implementation_units", "U-", true)?;
+    let _verification_items = collect_contract_ids(contract, "verification_items", "V-", true)?;
+
+    let mut known_requirements = acceptance_criteria.clone();
+    known_requirements.extend(invariants.iter().cloned());
+    let unit_coverage =
+        validate_contract_coverage(contract, "implementation_units", &known_requirements)?;
+    let verification_coverage =
+        validate_contract_coverage(contract, "verification_items", &known_requirements)?;
+
+    for requirement in &known_requirements {
+        if !unit_coverage.contains(requirement) {
+            return Err(format!(
+                "Requirement {requirement} is not covered by an implementation unit"
+            ));
+        }
+        if !verification_coverage.contains(requirement) {
+            return Err(format!(
+                "Requirement {requirement} is not covered by a verification item"
+            ));
+        }
+    }
+
+    let mut dependency_graph = HashMap::<String, HashSet<String>>::new();
+    for unit in contract["implementation_units"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let id = unit["id"].as_str().unwrap_or("unknown unit");
+        let dependencies = unit
+            .get("depends_on")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("{id}.depends_on must be an array"))?;
+        let files = unit
+            .get("files")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("{id}.files must be an array"))?;
+        if files.iter().any(|file| !file.is_string()) {
+            return Err(format!("{id}.files must contain only strings"));
+        }
+        let mut validated_dependencies = HashSet::new();
+        for dependency in dependencies {
+            let dependency = dependency
+                .as_str()
+                .ok_or_else(|| format!("{id}.depends_on must contain only unit IDs"))?;
+            if dependency == id || !implementation_units.contains(dependency) {
+                return Err(format!("{id} has invalid dependency {dependency}"));
+            }
+            validated_dependencies.insert(dependency.to_string());
+        }
+        dependency_graph.insert(id.to_string(), validated_dependencies);
+    }
+
+    while !dependency_graph.is_empty() {
+        let ready = dependency_graph
+            .iter()
+            .filter_map(|(id, dependencies)| dependencies.is_empty().then_some(id.clone()))
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            return Err(
+                "acceptance_contract implementation unit dependencies contain a cycle".to_string(),
+            );
+        }
+        for id in ready {
+            dependency_graph.remove(&id);
+            for dependencies in dependency_graph.values_mut() {
+                dependencies.remove(&id);
+            }
+        }
+    }
+
+    for verification in contract["verification_items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let id = verification["id"]
+            .as_str()
+            .unwrap_or("unknown verification item");
+        for field in ["method", "expected_evidence"] {
+            if verification
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            {
+                return Err(format!("{id}.{field} must be a non-empty string"));
+            }
+        }
+    }
+
+    let blockers = contract
+        .get("unresolved_blockers")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            "acceptance_contract.unresolved_blockers must be an explicit array".to_string()
+        })?;
+    if !blockers.is_empty() {
+        return Err(
+            "The plan cannot be submitted while acceptance_contract.unresolved_blockers is non-empty"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
 #[async_trait]
 impl ToolDefinition for SubmitPlan {
     fn name(&self) -> &str {
@@ -112,7 +304,7 @@ impl ToolDefinition for SubmitPlan {
     }
     fn description(&self) -> &str {
         "Submits a proposed plan for user review before implementation begins. \
-        The authoritative approval payload MUST be provided in the structured `plan` argument. Do not rely on surrounding assistant text as the plan source. \
+        The authoritative approval payload MUST include both the structured `plan` and `acceptance_contract` arguments. Do not rely on surrounding assistant text as the plan source. \
         The plan should be a detailed Markdown document outlining the research findings and implementation steps you intend to take. \
         Once submitted, the session will enter an 'Awaiting Approval' state where the user can review and approve your plan before you begin execution."
     }
@@ -129,9 +321,80 @@ impl ToolDefinition for SubmitPlan {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "plan": { "type": "string", "description": "The complete detailed Markdown plan that the user should approve. This field is required and is the only authoritative plan payload." }
+                    "plan": { "type": "string", "description": "The complete detailed Markdown plan that the user should approve." },
+                    "acceptance_contract": {
+                        "type": "object",
+                        "description": "Machine-validated handoff contract. Every AC and INV must be covered by at least one U and one V, and unresolved_blockers must be empty before submission.",
+                        "properties": {
+                            "acceptance_criteria": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "string", "pattern": "^AC-.+" },
+                                        "description": { "type": "string", "minLength": 1 }
+                                    },
+                                    "required": ["id", "description"],
+                                    "additionalProperties": false
+                                }
+                            },
+                            "invariants": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "string", "pattern": "^INV-.+" },
+                                        "description": { "type": "string", "minLength": 1 }
+                                    },
+                                    "required": ["id", "description"],
+                                    "additionalProperties": false
+                                }
+                            },
+                            "implementation_units": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "string", "pattern": "^U-.+" },
+                                        "description": { "type": "string", "minLength": 1 },
+                                        "covers": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^(AC|INV)-.+" } },
+                                        "depends_on": { "type": "array", "items": { "type": "string", "pattern": "^U-.+" } },
+                                        "files": { "type": "array", "items": { "type": "string" } }
+                                    },
+                                    "required": ["id", "description", "covers", "depends_on", "files"],
+                                    "additionalProperties": false
+                                }
+                            },
+                            "verification_items": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "string", "pattern": "^V-.+" },
+                                        "description": { "type": "string", "minLength": 1 },
+                                        "covers": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^(AC|INV)-.+" } },
+                                        "method": { "type": "string", "minLength": 1 },
+                                        "expected_evidence": { "type": "string", "minLength": 1 }
+                                    },
+                                    "required": ["id", "description", "covers", "method", "expected_evidence"],
+                                    "additionalProperties": false
+                                }
+                            },
+                            "unresolved_blockers": {
+                                "type": "array",
+                                "maxItems": 0,
+                                "description": "Must be an explicit empty array. Resolve blockers or ask the user before submitting."
+                            }
+                        },
+                        "required": ["acceptance_criteria", "invariants", "implementation_units", "verification_items", "unresolved_blockers"],
+                        "additionalProperties": false
+                    }
                 },
-                "required": ["plan"]
+                "required": ["plan", "acceptance_contract"],
+                "additionalProperties": false
             }),
             output_schema: None,
             disabled: false,
@@ -145,11 +408,16 @@ impl ToolDefinition for SubmitPlan {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| ToolError::InvalidParams("plan must be a non-empty string".into()))?;
+        let acceptance_contract = params.get("acceptance_contract").ok_or_else(|| {
+            ToolError::InvalidParams("acceptance_contract is required".to_string())
+        })?;
+        validate_acceptance_contract(acceptance_contract).map_err(ToolError::InvalidParams)?;
         Ok(ToolCallResult::success(
             Some("Plan submitted for review. Entering 'Awaiting Approval' state.".into()),
             Some(json!({
                 "status": "awaiting_approval",
-                "plan_length": plan.len()
+                "plan_length": plan.len(),
+                "acceptance_contract": acceptance_contract
             })),
         ))
     }
@@ -312,6 +580,36 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn valid_acceptance_contract() -> Value {
+        json!({
+            "acceptance_criteria": [
+                { "id": "AC-1", "description": "The requested behavior is observable" }
+            ],
+            "invariants": [
+                { "id": "INV-1", "description": "Existing behavior remains compatible" }
+            ],
+            "implementation_units": [
+                {
+                    "id": "U-1",
+                    "description": "Implement the behavior",
+                    "covers": ["AC-1", "INV-1"],
+                    "depends_on": [],
+                    "files": ["src/example.rs"]
+                }
+            ],
+            "verification_items": [
+                {
+                    "id": "V-1",
+                    "description": "Run the focused regression test",
+                    "covers": ["AC-1", "INV-1"],
+                    "method": "cargo test focused_test",
+                    "expected_evidence": "The focused test passes"
+                }
+            ],
+            "unresolved_blockers": []
+        })
+    }
+
     #[tokio::test]
     async fn test_ask_user() {
         let tool = AskUser;
@@ -335,6 +633,42 @@ mod tests {
 
         let result = tool.call(params).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn submit_plan_accepts_a_complete_traceable_contract() {
+        let tool = SubmitPlan;
+        let contract = valid_acceptance_contract();
+        let result = tool
+            .call(json!({
+                "plan": "# Detailed plan",
+                "acceptance_contract": contract
+            }))
+            .await
+            .expect("valid plan should be accepted");
+
+        assert_eq!(
+            result.structured_content.expect("structured result")["status"],
+            "awaiting_approval"
+        );
+    }
+
+    #[test]
+    fn acceptance_contract_rejects_uncovered_requirements_and_blockers() {
+        let mut uncovered = valid_acceptance_contract();
+        uncovered["verification_items"][0]["covers"] = json!(["AC-1"]);
+        assert!(validate_acceptance_contract(&uncovered)
+            .expect_err("uncovered invariant must fail")
+            .contains("INV-1"));
+
+        let mut blocked = valid_acceptance_contract();
+        blocked["unresolved_blockers"] = json!([{
+            "id": "B-1",
+            "description": "A user decision is still required"
+        }]);
+        assert!(validate_acceptance_contract(&blocked)
+            .expect_err("unresolved blocker must fail")
+            .contains("unresolved_blockers"));
     }
 
     #[tokio::test]

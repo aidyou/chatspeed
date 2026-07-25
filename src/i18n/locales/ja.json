@@ -254,6 +254,10 @@
       "skillEnabled": "Skills を有効化",
       "skillsHint": "選択した Skills のみがこのエージェントの workflow ランタイムに公開されます。",
       "skillsLabel": "スキル",
+      "subAgentRole": "サブエージェントの役割",
+      "subAgentRoleExplorer": "閲覧 / 調査",
+      "subAgentRoleFinalReviewer": "最終レビュー",
+      "subAgentRoleGeneral": "汎用",
       "systemPrompt": "システムプロンプト",
       "systemPromptRequired": "システムプロンプトを入力してください",
       "temperature": "温度",
@@ -861,8 +865,19 @@
   "workflow": {
     "allowedShellCommands": "許可された Shell コマンド",
     "approval": {
+      "acceptanceContract": "受け入れ契約",
+      "acceptanceCriteria": "受け入れ基準",
+      "covers": "対象",
+      "dependsOn": "依存先",
+      "expectedEvidence": "期待される証拠",
+      "files": "ファイル",
+      "implementationUnits": "実装単位",
+      "invariants": "保護する不変条件",
+      "method": "方法",
       "rejectionMessageLabel": "拒否理由",
-      "rejectionMessagePlaceholder": "この操作を実行したくない場合は理由を入力してください。"
+      "rejectionMessagePlaceholder": "この操作を実行したくない場合は理由を入力してください。",
+      "unresolvedBlockers": "未解決のブロッカー",
+      "verificationItems": "検証項目"
     },
     "approvalSound": "承認通知音",
     "approvePlan": "計画を承認",

@@ -254,6 +254,10 @@
       "skillEnabled": "Enable Skills",
       "skillsHint": "Only selected skills will be exposed to this agent's workflow runtime.",
       "skillsLabel": "Skills",
+      "subAgentRole": "Child Agent Responsibility",
+      "subAgentRoleExplorer": "Browse / Investigate",
+      "subAgentRoleFinalReviewer": "Final Reviewer",
+      "subAgentRoleGeneral": "General",
       "systemPrompt": "System Prompt",
       "systemPromptRequired": "Please enter system prompt",
       "temperature": "Temperature",
@@ -866,8 +870,19 @@
   "workflow": {
     "allowedShellCommands": "Allowed Shell Commands",
     "approval": {
+      "acceptanceContract": "Acceptance Contract",
+      "acceptanceCriteria": "Acceptance Criteria",
+      "covers": "Covers",
+      "dependsOn": "Depends on",
+      "expectedEvidence": "Expected evidence",
+      "files": "Files",
+      "implementationUnits": "Implementation Units",
+      "invariants": "Protected Invariants",
+      "method": "Method",
       "rejectionMessageLabel": "Rejection Note",
-      "rejectionMessagePlaceholder": "If you do not want this action to run, you can optionally explain why."
+      "rejectionMessagePlaceholder": "If you do not want this action to run, you can optionally explain why.",
+      "unresolvedBlockers": "Unresolved Blockers",
+      "verificationItems": "Verification Items"
     },
     "approvalSound": "Approval sound",
     "approvePlan": "Approve Plan",

@@ -13,7 +13,7 @@
           <MarkdownSimple :content="shellMarkdown" class-name="approval-markdown" />
         </div>
         <div v-else-if="isMarkdownAction" class="markdown-view">
-          <MarkdownSimple :content="detailPayload.detailsText" class-name="approval-markdown" />
+          <MarkdownSimple :content="markdownContent" class-name="approval-markdown" />
         </div>
         <pre v-else class="details-text">{{ detailPayload.detailsText }}</pre>
       </div>
@@ -58,6 +58,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownSimple from '@/components/workflow/MarkdownSimple.vue'
 import FilePreviewDiff from '@/components/workflow/FilePreviewDiff.vue'
+import { formatPlanApprovalMarkdown } from '@/composables/workflow/planApproval'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -98,7 +99,7 @@ const emit = defineEmits([
   'reject'
 ])
 
-useI18n()
+const { t } = useI18n()
 
 /**
  * Decode approval details that older records persisted as nested JSON strings.
@@ -186,6 +187,15 @@ const isMarkdownAction = computed(() => {
   }
   return isPlanApproval.value
 })
+
+const planMarkdown = computed(() => {
+  const details = detailsObject.value
+  return formatPlanApprovalMarkdown(details, t) || detailPayload.value.detailsText
+})
+
+const markdownContent = computed(() =>
+  isPlanApproval.value ? planMarkdown.value : detailPayload.value.detailsText
+)
 
 const filePath = computed(() => {
   if (!isEditAction.value) return ''

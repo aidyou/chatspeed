@@ -254,6 +254,10 @@
       "skillEnabled": "启用 Skills",
       "skillsHint": "只有被选中的 Skills 才会暴露给当前智能体的 workflow 运行时。",
       "skillsLabel": "技能",
+      "subAgentRole": "子智能体职责",
+      "subAgentRoleExplorer": "浏览 / 调查",
+      "subAgentRoleFinalReviewer": "终审",
+      "subAgentRoleGeneral": "通用",
       "systemPrompt": "系统提示词",
       "systemPromptRequired": "请输入系统提示词",
       "temperature": "温度",
@@ -866,8 +870,19 @@
   "workflow": {
     "allowedShellCommands": "允许的 Shell 命令",
     "approval": {
+      "acceptanceContract": "验收契约",
+      "acceptanceCriteria": "验收标准",
+      "covers": "覆盖",
+      "dependsOn": "依赖",
+      "expectedEvidence": "预期证据",
+      "files": "文件",
+      "implementationUnits": "实施单元",
+      "invariants": "保护性不变量",
+      "method": "方法",
       "rejectionMessageLabel": "拒绝说明",
-      "rejectionMessagePlaceholder": "如果你不希望执行这个操作，可以输入原因。"
+      "rejectionMessagePlaceholder": "如果你不希望执行这个操作，可以输入原因。",
+      "unresolvedBlockers": "未解决阻塞",
+      "verificationItems": "验证项"
     },
     "approvalSound": "审批提示音",
     "approvePlan": "批准计划",

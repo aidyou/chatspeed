@@ -254,6 +254,10 @@
       "skillEnabled": "Skills aktivieren",
       "skillsHint": "Nur ausgewählte Skills werden der Workflow-Laufzeit dieses Agenten bereitgestellt.",
       "skillsLabel": "Skills",
+      "subAgentRole": "Aufgabe des Unter-Agenten",
+      "subAgentRoleExplorer": "Durchsuchen / Untersuchen",
+      "subAgentRoleFinalReviewer": "Abschlusspruefung",
+      "subAgentRoleGeneral": "Allgemein",
       "systemPrompt": "System-Prompt",
       "systemPromptRequired": "Bitte geben Sie einen System-Prompt ein",
       "temperature": "Temperatur",
@@ -861,8 +865,19 @@
   "workflow": {
     "allowedShellCommands": "Erlaubte Shell-Befehle",
     "approval": {
+      "acceptanceContract": "Abnahmevertrag",
+      "acceptanceCriteria": "Abnahmekriterien",
+      "covers": "Deckt ab",
+      "dependsOn": "Abhaengig von",
+      "expectedEvidence": "Erwarteter Nachweis",
+      "files": "Dateien",
+      "implementationUnits": "Umsetzungseinheiten",
+      "invariants": "Geschuetzte Invarianten",
+      "method": "Methode",
       "rejectionMessageLabel": "Ablehnungsgrund",
-      "rejectionMessagePlaceholder": "Wenn du diesen Vorgang nicht ausführen möchtest, gib bitte einen Grund ein."
+      "rejectionMessagePlaceholder": "Wenn du diesen Vorgang nicht ausführen möchtest, gib bitte einen Grund ein.",
+      "unresolvedBlockers": "Ungeloeste Blocker",
+      "verificationItems": "Pruefpunkte"
     },
     "approvalSound": "Genehmigungston",
     "approvePlan": "Plan genehmigen",

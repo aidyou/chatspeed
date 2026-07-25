@@ -254,6 +254,10 @@
       "skillEnabled": "啟用 Skills",
       "skillsHint": "只有被選中的 Skills 才會暴露給目前智能體的 workflow 執行期。",
       "skillsLabel": "技能",
+      "subAgentRole": "子智能體職責",
+      "subAgentRoleExplorer": "瀏覽 / 調查",
+      "subAgentRoleFinalReviewer": "終審",
+      "subAgentRoleGeneral": "通用",
       "systemPrompt": "系統提示詞",
       "systemPromptRequired": "請輸入系統提示詞",
       "temperature": "溫度",
@@ -866,8 +870,19 @@
   "workflow": {
     "allowedShellCommands": "允許的 Shell 指令",
     "approval": {
+      "acceptanceContract": "驗收契約",
+      "acceptanceCriteria": "驗收標準",
+      "covers": "涵蓋",
+      "dependsOn": "依賴",
+      "expectedEvidence": "預期證據",
+      "files": "檔案",
+      "implementationUnits": "實施單元",
+      "invariants": "保護性不變量",
+      "method": "方法",
       "rejectionMessageLabel": "拒絕說明",
-      "rejectionMessagePlaceholder": "如果你不希望執行這個操作，可以輸入原因。"
+      "rejectionMessagePlaceholder": "如果你不希望執行這個操作，可以輸入原因。",
+      "unresolvedBlockers": "未解決阻塞",
+      "verificationItems": "驗證項"
     },
     "approvalSound": "審批提示音",
     "approvePlan": "批准計劃",

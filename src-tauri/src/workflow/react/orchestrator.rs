@@ -22,8 +22,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-pub const FINAL_REVIEWER_BUILTIN_AGENT_ID: &str = "builtin:final-code-reviewer";
-
 /// Represents different types of background tasks for unified management
 pub enum BackgroundTask {
     /// An autonomous sub-agent running its own ReAct loop
@@ -853,7 +851,13 @@ impl TaskTool {
     }
 
     pub fn with_child_agents(mut self, child_agents: Vec<Agent>) -> Self {
-        self.child_agents = child_agents;
+        self.child_agents = child_agents
+            .into_iter()
+            .filter(|agent| {
+                agent.sub_agent_role.as_deref()
+                    != Some(crate::db::agent::SUB_AGENT_ROLE_FINAL_REVIEWER)
+            })
+            .collect();
         self
     }
 }
@@ -1144,6 +1148,13 @@ impl ToolDefinition for TaskTool {
                 available_child_agents
             )));
         };
+        if child_agent.sub_agent_role.as_deref()
+            == Some(crate::db::agent::SUB_AGENT_ROLE_FINAL_REVIEWER)
+        {
+            return Err(ToolError::InvalidParams(
+                "Final reviewer agents are reserved for the runtime final review gate".to_string(),
+            ));
+        }
 
         // Use TSID for unique time-sorted IDs
         let task_id = format!(
@@ -2052,6 +2063,61 @@ mod tests {
         assert_eq!(metadata["ui_visibility"], "hide");
         assert_eq!(metadata["execution_mode"], "background");
         assert_eq!(metadata["result"]["result"], "projected result");
+    }
+
+    #[test]
+    fn task_tool_hides_runtime_reserved_final_reviewers() {
+        let (_dir, store) = test_store();
+        let factory: Arc<dyn SubAgentFactory> = Arc::new(DiagnosticMockFactory {
+            captured: Arc::new(Mutex::new(None)),
+        });
+        let mut explorer = crate::db::Agent::new(
+            "explorer".to_string(),
+            "Explorer".to_string(),
+            None,
+            Some("child".to_string()),
+            Some("parent".to_string()),
+            "Explore".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        explorer.sub_agent_role = Some(crate::db::agent::SUB_AGENT_ROLE_EXPLORER.to_string());
+        let mut reviewer = explorer.clone();
+        reviewer.id = "reviewer".to_string();
+        reviewer.name = "Final Reviewer".to_string();
+        reviewer.sub_agent_role = Some(crate::db::agent::SUB_AGENT_ROLE_FINAL_REVIEWER.to_string());
+
+        let tool = TaskTool::new(
+            factory,
+            store,
+            Arc::new(NoopGateway),
+            Arc::new(TsidGenerator::new(7).expect("failed to create tsid")),
+        )
+        .with_child_agents(vec![explorer, reviewer]);
+        let declaration = tool.tool_calling_spec();
+
+        assert_eq!(
+            declaration.input_schema["properties"]["child_agent_id"]["enum"],
+            json!(["explorer"])
+        );
+        assert_eq!(
+            declaration.input_schema["properties"]["child_agent_name"]["enum"],
+            json!(["Explorer"])
+        );
+        assert!(!declaration.description.contains("Final Reviewer"));
     }
 
     #[tokio::test]

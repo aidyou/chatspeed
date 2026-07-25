@@ -11,6 +11,16 @@ use serde::{Deserialize, Serialize};
 // Re-export ShellPolicyRule for backward compatibility
 pub use crate::tools::ShellPolicyRule;
 
+pub const SUB_AGENT_ROLE_EXPLORER: &str = "explorer";
+pub const SUB_AGENT_ROLE_FINAL_REVIEWER: &str = "final_reviewer";
+
+pub fn is_supported_sub_agent_role(role: &str) -> bool {
+    matches!(
+        role,
+        SUB_AGENT_ROLE_EXPLORER | SUB_AGENT_ROLE_FINAL_REVIEWER
+    )
+}
+
 /// Agent runtime configuration stored in workflow sessions
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -102,6 +112,8 @@ pub struct Agent {
     pub role: Option<String>,
     /// Parent agent ID when this agent is a child agent
     pub parent_agent_id: Option<String>,
+    /// Stable responsibility assigned to a child agent
+    pub sub_agent_role: Option<String>,
     /// System prompt for the agent
     pub system_prompt: String,
     /// Prompt for the planning phase
@@ -178,6 +190,7 @@ impl Agent {
             description,
             role,
             parent_agent_id,
+            sub_agent_role: None,
             system_prompt,
             planning_prompt,
             image_recognition_prompt,
@@ -299,6 +312,7 @@ impl From<&Row<'_>> for Agent {
                 .or_else(|| row.get::<_, String>("agent_type").ok())
                 .or_else(|| Some("primary".to_string())),
             parent_agent_id: row.get("parent_agent_id").ok(),
+            sub_agent_role: row.get("sub_agent_role").ok(),
             system_prompt: row.get("system_prompt").unwrap_or_default(),
             planning_prompt: row.get("planning_prompt").ok(),
             image_recognition_prompt: row.get("image_recognition_prompt").ok(),
@@ -370,14 +384,15 @@ impl MainStore {
 
         // Insert the agent
         tx.execute(
-            "INSERT INTO agents (id, name, description, role, parent_agent_id, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            "INSERT INTO agents (id, name, description, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             params![
                 agent.id,
                 agent.name,
                 agent.description,
                 agent.role.clone().unwrap_or_else(|| "primary".to_string()),
                 agent.parent_agent_id,
+                agent.sub_agent_role,
                 agent.system_prompt,
                 agent.planning_prompt,
                 agent.image_recognition_prompt,
@@ -461,32 +476,34 @@ impl MainStore {
                 description = ?2,
                 role = ?3,
                 parent_agent_id = ?4,
-                system_prompt = ?5,
-                planning_prompt = ?6,
-                image_recognition_prompt = ?7,
-                available_tools = ?8,
-                auto_approve = ?9,
-                models = ?10,
-                shell_policy = ?11,
-                allowed_paths = ?12,
-                final_audit = ?13,
-                approval_level = ?14,
-                skill_enabled = ?15,
-                selected_skills = ?16,
-                mcp_tool_exposure = ?17,
-                phase = ?18,
-                is_system = ?19,
-                disabled = ?20,
-                version = ?21,
-                sort_index = ?22,
-                max_contexts = ?23,
+                sub_agent_role = ?5,
+                system_prompt = ?6,
+                planning_prompt = ?7,
+                image_recognition_prompt = ?8,
+                available_tools = ?9,
+                auto_approve = ?10,
+                models = ?11,
+                shell_policy = ?12,
+                allowed_paths = ?13,
+                final_audit = ?14,
+                approval_level = ?15,
+                skill_enabled = ?16,
+                selected_skills = ?17,
+                mcp_tool_exposure = ?18,
+                phase = ?19,
+                is_system = ?20,
+                disabled = ?21,
+                version = ?22,
+                sort_index = ?23,
+                max_contexts = ?24,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?24",
+             WHERE id = ?25",
             params![
                 effective_name,
                 agent.description,
                 agent.role.clone().unwrap_or_else(|| "primary".to_string()),
                 agent.parent_agent_id,
+                agent.sub_agent_role,
                 agent.system_prompt,
                 agent.planning_prompt,
                 agent.image_recognition_prompt,
@@ -674,6 +691,48 @@ impl MainStore {
         Ok(agents)
     }
 
+    /// Gets child agents that may be selected through the general delegation tool.
+    pub fn get_delegatable_child_agents(
+        &self,
+        parent_agent_id: &str,
+    ) -> Result<Vec<Agent>, StoreError> {
+        self.get_child_agents(parent_agent_id).map(|agents| {
+            agents
+                .into_iter()
+                .filter(|agent| {
+                    agent.sub_agent_role.as_deref() != Some(SUB_AGENT_ROLE_FINAL_REVIEWER)
+                })
+                .collect()
+        })
+    }
+
+    /// Gets an enabled child agent by its stable responsibility within one parent.
+    pub fn get_child_agent_by_sub_agent_role(
+        &self,
+        parent_agent_id: &str,
+        sub_agent_role: &str,
+    ) -> Result<Option<Agent>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT * FROM agents
+             WHERE COALESCE(role, agent_type, 'primary') = 'child'
+               AND parent_agent_id = ?1
+               AND sub_agent_role = ?2
+               AND COALESCE(disabled, 0) = 0
+             LIMIT 1",
+        )?;
+
+        stmt.query_row(params![parent_agent_id, sub_agent_role], |row| {
+            Ok(Agent::from(row))
+        })
+        .optional()
+        .map_err(StoreError::from)
+    }
+
     /// Updates the persisted ordering for agents.
     pub fn update_agent_order(&self, agent_ids: Vec<String>) -> Result<(), StoreError> {
         let conn = self
@@ -712,6 +771,7 @@ mod tests {
                 "primary".to_string()
             }),
             parent_agent_id: parent_agent_id.map(ToString::to_string),
+            sub_agent_role: None,
             system_prompt: format!("System prompt for {}", name),
             planning_prompt: None,
             image_recognition_prompt: None,
@@ -773,6 +833,49 @@ mod tests {
             stored.mcp_tool_exposure,
             Some(serde_json::json!(["server__MCP__important_tool"]).to_string())
         );
+    }
+
+    #[test]
+    fn test_final_reviewers_are_parent_scoped_and_not_delegatable() {
+        let store = create_test_store();
+        store
+            .add_agent(&make_agent("parent-a", "Parent A", None))
+            .expect("failed to add parent A");
+        store
+            .add_agent(&make_agent("parent-b", "Parent B", None))
+            .expect("failed to add parent B");
+
+        let mut explorer = make_agent("explorer-a", "Explorer A", Some("parent-a"));
+        explorer.sub_agent_role = Some(SUB_AGENT_ROLE_EXPLORER.to_string());
+        store.add_agent(&explorer).expect("failed to add explorer");
+
+        let mut reviewer_a = make_agent("reviewer-a", "Reviewer A", Some("parent-a"));
+        reviewer_a.sub_agent_role = Some(SUB_AGENT_ROLE_FINAL_REVIEWER.to_string());
+        store
+            .add_agent(&reviewer_a)
+            .expect("failed to add reviewer A");
+
+        let mut reviewer_b = make_agent("reviewer-b", "Reviewer B", Some("parent-b"));
+        reviewer_b.sub_agent_role = Some(SUB_AGENT_ROLE_FINAL_REVIEWER.to_string());
+        store
+            .add_agent(&reviewer_b)
+            .expect("different parents should each allow one reviewer");
+
+        let delegatable = store
+            .get_delegatable_child_agents("parent-a")
+            .expect("failed to load delegatable children");
+        assert_eq!(delegatable.len(), 1);
+        assert_eq!(delegatable[0].id, "explorer-a");
+
+        let resolved = store
+            .get_child_agent_by_sub_agent_role("parent-a", SUB_AGENT_ROLE_FINAL_REVIEWER)
+            .expect("failed to resolve final reviewer")
+            .expect("reviewer A should resolve");
+        assert_eq!(resolved.id, "reviewer-a");
+
+        let mut duplicate = make_agent("reviewer-a-2", "Reviewer A 2", Some("parent-a"));
+        duplicate.sub_agent_role = Some(SUB_AGENT_ROLE_FINAL_REVIEWER.to_string());
+        assert!(store.add_agent(&duplicate).is_err());
     }
 
     #[test]

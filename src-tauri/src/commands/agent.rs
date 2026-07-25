@@ -9,7 +9,7 @@ use tauri::State;
 use crate::{
     ai::interaction::chat_completion::ChatState,
     builtin_agents::load_default_shell_policy_from_resources,
-    db::{Agent, MainStore},
+    db::{agent::is_supported_sub_agent_role, Agent, MainStore},
 };
 
 fn filter_tool_list_json(raw: Option<String>, blocked_tool: &str) -> Option<String> {
@@ -56,6 +56,16 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) {
     }
 
     let role = agent.role.as_deref();
+    if role != Some("child") {
+        agent.parent_agent_id = None;
+        agent.sub_agent_role = None;
+    } else {
+        agent.sub_agent_role = agent
+            .sub_agent_role
+            .take()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
     agent.available_tools =
         filter_git_inspection_tools_for_role(agent.available_tools.clone(), role);
     agent.auto_approve = filter_git_inspection_tools_for_role(agent.auto_approve.clone(), role);
@@ -91,6 +101,7 @@ pub async fn add_agent(
     agent.is_system = Some(false);
     agent.version = Some(agent.version.unwrap_or(0));
     sanitize_agent_for_persistence(&mut agent);
+    validate_sub_agent_role(&agent)?;
     let store = state.read().map_err(|e| e.to_string())?;
     let id = store.add_agent(&agent).map_err(|e| e.to_string())?;
     Ok(id)
@@ -111,6 +122,7 @@ pub async fn update_agent(
                 updated.description = existing.description.clone();
                 updated.role = existing.role.clone();
                 updated.parent_agent_id = existing.parent_agent_id.clone();
+                updated.sub_agent_role = existing.sub_agent_role.clone();
                 updated.system_prompt = existing.system_prompt.clone();
                 updated.planning_prompt = existing.planning_prompt.clone();
                 updated.is_system = existing.is_system;
@@ -132,9 +144,22 @@ pub async fn update_agent(
         };
     let mut effective_agent = effective_agent;
     sanitize_agent_for_persistence(&mut effective_agent);
+    validate_sub_agent_role(&effective_agent)?;
     store
         .update_agent(&effective_agent)
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn validate_sub_agent_role(agent: &Agent) -> Result<(), String> {
+    if agent.role.as_deref() == Some("child") && agent.parent_agent_id.is_none() {
+        return Err("Child agents must belong to a primary agent".to_string());
+    }
+    if let Some(role) = agent.sub_agent_role.as_deref() {
+        if !is_supported_sub_agent_role(role) {
+            return Err(format!("Unsupported sub-agent role: {role}"));
+        }
+    }
     Ok(())
 }
 

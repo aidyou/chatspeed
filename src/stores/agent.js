@@ -26,6 +26,7 @@ import { sendSyncState } from '@/libs/sync';
  * @property {number} maxContexts - The maximum context length.
  * @property {string[]} mcpToolExposure - MCP tool names exposed with full parameter schemas in workflows.
  * @property {string} approvalLevel - Approval level (default, smart, full).
+ * @property {string} subAgentRole - Stable responsibility of a child agent, or an empty string.
  */
 
 const label = getCurrentWebviewWindow().label;
@@ -78,6 +79,7 @@ const _transformFromBackend = (backendAgent) => {
     description: backendAgent.description,
     role: backendAgent.role || AGENT_ROLE.PRIMARY,
     parentAgentId: backendAgent.parent_agent_id || null,
+    subAgentRole: backendAgent.sub_agent_role || '',
     systemPrompt: backendAgent.system_prompt,
     planningPrompt: backendAgent.planning_prompt,
     imageRecognitionPrompt: backendAgent.image_recognition_prompt || '',
@@ -144,6 +146,9 @@ const _transformToBackend = (frontendAgent) => {
     description: frontendAgent.description?.trim() || '',
     role: frontendAgent.role || AGENT_ROLE.PRIMARY,
     parent_agent_id: frontendAgent.role === AGENT_ROLE.CHILD ? (frontendAgent.parentAgentId || null) : null,
+    sub_agent_role: frontendAgent.role === AGENT_ROLE.CHILD
+      ? (frontendAgent.subAgentRole || null)
+      : null,
     system_prompt: frontendAgent.systemPrompt.trim(),
     planning_prompt: frontendAgent.planningPrompt?.trim() || '',
     image_recognition_prompt: frontendAgent.imageRecognitionPrompt?.trim() || '',

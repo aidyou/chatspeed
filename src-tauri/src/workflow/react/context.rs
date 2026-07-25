@@ -487,17 +487,29 @@ impl ContextManager {
         let todo_scope = metadata
             .and_then(|meta| meta.get("todo_scope"))
             .and_then(|value| value.as_str());
+        let acceptance_contract = metadata
+            .and_then(|meta| meta.get("acceptance_contract"))
+            .map(|value| serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()));
+        let acceptance_contract = acceptance_contract
+            .map(|contract| {
+                format!(
+                    "\n<acceptance_contract>\n{}\n</acceptance_contract>",
+                    contract
+                )
+            })
+            .unwrap_or_default();
 
         if todo_scope == Some("pre_approval") {
             format!(
-                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
+                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>{}\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
                 plan,
+                acceptance_contract,
                 super::prompts::APPROVED_PLAN_EXECUTION_REMINDER
             )
         } else {
             format!(
-                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>\n<current_todo_list>\n{}\n</current_todo_list>",
-                plan, todos
+                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>{}\n<current_todo_list>\n{}\n</current_todo_list>",
+                plan, acceptance_contract, todos
             )
         }
     }

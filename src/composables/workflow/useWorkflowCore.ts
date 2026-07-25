@@ -24,8 +24,7 @@ import {
     isPendingApprovalEntryForTool,
     resolveWorkflowPhaseFromPlanningMode
 } from './messageProjectionRules'
-
-const FINAL_REVIEWER_BUILTIN_AGENT_ID = 'builtin:final-code-reviewer'
+import { AGENT_ROLE, SUB_AGENT_ROLE } from '@/constants/agent'
 
 /**
  * Composable for core workflow operations
@@ -81,7 +80,15 @@ export function useWorkflowCore({
     const canApprovePlan = computed(() => workflowStore.canApprovePlan)
     const isWaiting = computed(() => workflowStore.isWaiting)
     const isFinalReviewerConfigured = computed(() => {
-        const reviewer = agentStore.agents.find(agent => agent.id === FINAL_REVIEWER_BUILTIN_AGENT_ID)
+        const parentAgentId = selectedAgent.value?.id
+        if (!parentAgentId) {
+            return false
+        }
+        const reviewer = agentStore.agents.find(agent =>
+            agent.role === AGENT_ROLE.CHILD
+            && agent.parentAgentId === parentAgentId
+            && agent.subAgentRole === SUB_AGENT_ROLE.FINAL_REVIEWER
+        )
         if (!reviewer || reviewer.disabled) {
             return false
         }
@@ -92,7 +99,9 @@ export function useWorkflowCore({
             && actModel.id !== null
             && actModel.id !== undefined
     })
-    const canToggleFinalAuditMode = computed(() => isFinalReviewerConfigured.value)
+    const canToggleFinalAuditMode = computed(
+        () => finalAuditMode.value === 'on' || isFinalReviewerConfigured.value
+    )
 
     const isAwaitingApproval = computed(() => {
         return canApprovePlan.value

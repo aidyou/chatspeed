@@ -2,6 +2,7 @@ pub mod common;
 pub mod manager;
 pub mod v1;
 pub mod v10;
+pub mod v11;
 pub mod v2;
 pub mod v3;
 pub mod v4;

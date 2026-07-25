@@ -28,6 +28,8 @@ struct BuiltinAgentManifest {
     role: BuiltinAgentRole,
     #[serde(default)]
     parent_builtin_id: Option<String>,
+    #[serde(default)]
+    sub_agent_role: Option<String>,
     prompts: BuiltinAgentPrompts,
     #[serde(default)]
     config: BuiltinAgentConfig,
@@ -318,6 +320,7 @@ fn definition_to_agent(
             .parent_builtin_id
             .as_deref()
             .map(builtin_agent_db_id),
+        sub_agent_role: manifest.sub_agent_role.clone(),
         system_prompt: definition.system_prompt.clone(),
         planning_prompt: definition.planning_prompt.clone(),
         image_recognition_prompt: definition.image_recognition_prompt.clone(),
@@ -379,6 +382,7 @@ fn sync_single_builtin_agent(
             let mut updated = current;
             updated.role = desired.role;
             updated.parent_agent_id = desired.parent_agent_id;
+            updated.sub_agent_role = desired.sub_agent_role;
             updated.system_prompt = desired.system_prompt;
             updated.planning_prompt = desired.planning_prompt;
             updated.image_recognition_prompt = desired.image_recognition_prompt;
@@ -463,6 +467,7 @@ mod tests {
                 description: "updated description".to_string(),
                 role: BuiltinAgentRole::Child,
                 parent_builtin_id: Some("test-parent".to_string()),
+                sub_agent_role: Some("final_reviewer".to_string()),
                 prompts: BuiltinAgentPrompts {
                     system: "system.md".to_string(),
                     planning: Some("planning.md".to_string()),
@@ -497,6 +502,7 @@ mod tests {
         assert_eq!(updated.name, "User Child Name");
         assert_eq!(updated.description.as_deref(), Some("user description"));
         assert_eq!(updated.role.as_deref(), Some("child"));
+        assert_eq!(updated.sub_agent_role.as_deref(), Some("final_reviewer"));
         assert_eq!(
             updated.parent_agent_id.as_deref(),
             Some("builtin:test-parent")
@@ -556,6 +562,7 @@ mod tests {
                 description: String::new(),
                 role: BuiltinAgentRole::Child,
                 parent_builtin_id: None,
+                sub_agent_role: Some("explorer".to_string()),
                 prompts: BuiltinAgentPrompts {
                     system: "system.md".to_string(),
                     planning: None,
@@ -591,6 +598,7 @@ mod tests {
             .expect("load agent")
             .expect("agent exists");
         assert_eq!(created.disabled, Some(true));
+        assert_eq!(created.sub_agent_role.as_deref(), Some("explorer"));
         assert_eq!(
             created
                 .models

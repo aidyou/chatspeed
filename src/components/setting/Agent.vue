@@ -188,12 +188,29 @@
               v-model="agentForm.parentAgentId"
               style="width: 100%"
               filterable
+              @change="agentForm.subAgentRole = ''"
               :disabled="isSystemIdentityLocked">
               <el-option
                 v-for="agent in primaryAgentOptions"
                 :key="agent.id"
                 :label="agent.name"
                 :value="agent.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item
+            v-if="agentForm.role === AGENT_ROLE.CHILD"
+            :label="$t('settings.agent.subAgentRole')"
+            prop="subAgentRole">
+            <el-select
+              v-model="agentForm.subAgentRole"
+              style="width: 100%"
+              :disabled="isSystemIdentityLocked">
+              <el-option
+                v-for="option in SUB_AGENT_ROLE_OPTIONS"
+                :key="option.value"
+                :label="$t(option.labelKey)"
+                :disabled="isSubAgentRoleOccupied(option.value)"
+                :value="option.value" />
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.description')" prop="description">
@@ -582,7 +599,11 @@ import { useAgentStore } from '@/stores/agent'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { useSettingStore } from '@/stores/setting'
 import { useWorkflowStore } from '@/stores/workflow'
-import { AGENT_ROLE, AGENT_ROLE_OPTIONS } from '@/constants/agent'
+import {
+  AGENT_ROLE,
+  AGENT_ROLE_OPTIONS,
+  SUB_AGENT_ROLE_OPTIONS
+} from '@/constants/agent'
 
 const { t } = useI18n()
 
@@ -666,6 +687,7 @@ const defaultFormData = {
   description: '',
   role: AGENT_ROLE.PRIMARY,
   parentAgentId: null,
+  subAgentRole: '',
   isSystem: false,
   disabled: false,
   systemPrompt: '',
@@ -766,6 +788,16 @@ const primaryAgentOptions = computed(() => {
       agent.id !== editId.value
   )
 })
+
+const isSubAgentRoleOccupied = role => {
+  if (!role || !agentForm.value.parentAgentId) return false
+  return agents.value.some(
+    agent =>
+      agent.id !== editId.value &&
+      agent.parentAgentId === agentForm.value.parentAgentId &&
+      agent.subAgentRole === role
+  )
+}
 
 const compareAgentsByDisplayOrder = (a, b) => {
   const hasSortIndexA = typeof a.sortIndex === 'number'
@@ -1143,6 +1175,7 @@ const normalizeAgentFormForSave = form => {
     normalized.allowShell = false
   } else {
     normalized.parentAgentId = null
+    normalized.subAgentRole = ''
     normalized.shellPolicy = Array.isArray(normalized.shellPolicy)
       ? normalized.shellPolicy.filter(rule => rule.pattern && rule.pattern.trim() !== '')
       : []
@@ -1377,6 +1410,7 @@ const editAgent = async id => {
     agentForm.value.allowedPaths = []
     agentForm.value.role = AGENT_ROLE.PRIMARY
     agentForm.value.parentAgentId = null
+    agentForm.value.subAgentRole = ''
     agentForm.value.isSystem = false
     agentForm.value.disabled = false
     agentForm.value.allowShell = false
@@ -1403,6 +1437,7 @@ const copyAgent = async id => {
       id: null,
       isSystem: false,
       disabled: true,
+      subAgentRole: '',
       name: `${agentData.name}-Copy`
     }
     agentForm.value.allowShell = Array.isArray(agentForm.value.availableTools)
@@ -1634,6 +1669,7 @@ watch(
   role => {
     if (role !== AGENT_ROLE.CHILD) {
       agentForm.value.parentAgentId = null
+      agentForm.value.subAgentRole = ''
       agentForm.value.skillEnabled = true
       if (
         !Array.isArray(agentForm.value.selectedSkills) ||

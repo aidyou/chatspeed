@@ -254,6 +254,10 @@
       "skillEnabled": "Skills 활성화",
       "skillsHint": "선택한 Skills만 이 에이전트의 workflow 런타임에 노출됩니다.",
       "skillsLabel": "기술",
+      "subAgentRole": "하위 에이전트 역할",
+      "subAgentRoleExplorer": "탐색 / 조사",
+      "subAgentRoleFinalReviewer": "최종 검토",
+      "subAgentRoleGeneral": "일반",
       "systemPrompt": "시스템 프롬프트",
       "systemPromptRequired": "시스템 프롬프트를 입력하십시오",
       "temperature": "온도",
@@ -861,8 +865,19 @@
   "workflow": {
     "allowedShellCommands": "허용된 Shell 명령",
     "approval": {
+      "acceptanceContract": "인수 계약",
+      "acceptanceCriteria": "인수 기준",
+      "covers": "적용 범위",
+      "dependsOn": "종속 항목",
+      "expectedEvidence": "예상 증거",
+      "files": "파일",
+      "implementationUnits": "구현 단위",
+      "invariants": "보호 불변 조건",
+      "method": "방법",
       "rejectionMessageLabel": "거부 사유",
-      "rejectionMessagePlaceholder": "이 작업을 원하지 않으면 이유를 입력하세요."
+      "rejectionMessagePlaceholder": "이 작업을 원하지 않으면 이유를 입력하세요.",
+      "unresolvedBlockers": "해결되지 않은 차단 요소",
+      "verificationItems": "검증 항목"
     },
     "approvalSound": "승인 알림음",
     "approvePlan": "계획 승인",

@@ -254,6 +254,10 @@
       "skillEnabled": "Включить skills",
       "skillsHint": "Только выбранные skills будут доступны в workflow runtime этого агента.",
       "skillsLabel": "Skills",
+      "subAgentRole": "Роль подагента",
+      "subAgentRoleExplorer": "Просмотр / Исследование",
+      "subAgentRoleFinalReviewer": "Финальная проверка",
+      "subAgentRoleGeneral": "Общая",
       "systemPrompt": "Системная подсказка",
       "systemPromptRequired": "Пожалуйста, введите системную подсказку",
       "temperature": "Температура",
@@ -861,8 +865,19 @@
   "workflow": {
     "allowedShellCommands": "Разрешённые Shell-команды",
     "approval": {
+      "acceptanceContract": "Контракт приемки",
+      "acceptanceCriteria": "Критерии приемки",
+      "covers": "Покрывает",
+      "dependsOn": "Зависит от",
+      "expectedEvidence": "Ожидаемое подтверждение",
+      "files": "Файлы",
+      "implementationUnits": "Единицы реализации",
+      "invariants": "Защищаемые инварианты",
+      "method": "Метод",
       "rejectionMessageLabel": "Причина отказа",
-      "rejectionMessagePlaceholder": "Если вы не хотите выполнять это действие, укажите причину."
+      "rejectionMessagePlaceholder": "Если вы не хотите выполнять это действие, укажите причину.",
+      "unresolvedBlockers": "Нерешенные блокировки",
+      "verificationItems": "Пункты проверки"
     },
     "approvalSound": "Звук одобрения",
     "approvePlan": "Утвердить план",

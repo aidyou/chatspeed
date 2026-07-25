@@ -1523,6 +1523,7 @@ mod tests {
             description: None,
             role: None,
             parent_agent_id: None,
+            sub_agent_role: None,
             system_prompt: "System prompt".to_string(),
             planning_prompt: None,
             image_recognition_prompt: None,

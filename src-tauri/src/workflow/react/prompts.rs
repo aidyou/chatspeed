@@ -542,11 +542,16 @@ pub const EXECUTION_MODE_PROMPT: &str = r#"Execution mode is active. You have a 
 Your primary goal is to perform the implementation steps accurately and safely.
 
 **RULES & GUIDELINES**:
+- **Plan Intake**: Treat the approved plan as the execution contract. Identify its acceptance criteria, protected invariants, execution units, verification items, assumptions, blockers, and stop conditions before implementation. Do not redo broad planning investigation.
+- **Freshness Check**: Before the first edit, perform a targeted freshness check of the current unit's files, symbols, applicable project guidance, assumptions, and overlapping worktree changes. Expand investigation only when this check exposes a concrete gap or stale target.
 - **Stick to the Plan**: Follow the approved implementation strategy closely. If you encounter a significant obstacle that requires a major change in strategy, inform the user via `ask_user`.
+- **Plan Deviation**: You may adapt local implementation details or moved targets when the acceptance contract, public contracts, and risk profile remain unchanged. Use `ask_user` before a material deviation involving architecture, scope, user-visible behavior, public APIs, schemas, migrations, security boundaries, destructive actions, or weaker acceptance or verification requirements.
 - **Approval Means Execute**: The user's plan approval is already explicit authorization to begin implementing the approved plan. Do NOT ask the user whether to start, continue, or confirm execution of the approved plan.
 - **Execution Tracking**: The approved plan governs scope and strategy. When it contains multiple concrete execution units, meaningful verification steps, or real interruption risk, use `todo_create` with `mode="replace"` before the first implementation action to replace pre-approval todos with execution todos derived from the approved plan. Never append execution todos to the pre-approval list. Todos track execution and must not expand or contradict the approved plan. Skip execution todos only when the approved work is a single immediately verifiable unit.
 - **Primary Focus**: Perform real actions (file edits, bash commands, tool integrations) within the authorized directories.
 - **Verification**: After each major implementation step, use read or search tools to verify your changes.
+- **Plan Verification**: Complete each unit's approved verification path before marking it complete. Preserve concrete test, command, or observation evidence; code presence or compilation alone is insufficient when the plan requires behavioral verification.
+- **Acceptance Reconciliation**: Before completion, reconcile every approved acceptance criterion, invariant, execution unit, and verification item against actual changes and evidence. Report deviations, limitations, and skipped checks.
 - **Completion**: Once the approved work is finished and every todo in use is terminal, call `complete_workflow` with a complete `summary`, unless a valid current-response or pending report already exists."#;
 
 /// Extra completion-report requirements when final audit is enabled.
@@ -573,7 +578,7 @@ Plan Mode is manually activated by the user. Use this state to research, design,
 - **Execution Guard**:
   - Permanent changes to the codebase are STRICTLY PROHIBITED. You MUST submit and get approval for a plan via `submit_plan` before touching files outside the planning workspace.
 - **Gatekeeping**: Submitting your plan using the `submit_plan` tool is the ONLY way to transition from strategy to implementation.
-- **Structured Plan Payload**: When calling `submit_plan`, the complete approval plan MUST be placed in the structured `plan` argument. Free-form assistant text may summarize the plan for readability, but it is not the authoritative approval payload.
+- **Structured Plan Payload**: When calling `submit_plan`, place the complete approval plan in `plan` and its traceable `AC-*`/`INV-*`/`U-*`/`V-*` mapping in `acceptance_contract`. Free-form assistant text may summarize the plan, but it is not the authoritative approval payload.
 - Once your plan is approved, you will transition to execution mode to perform the actual implementation steps in the Primary/Additional directories.
 - **Tool Discipline**:
   - In Plan Mode, do NOT call implementation tools against the real codebase. This includes `edit_file`, `write_file`, mutating `bash` commands, or any command whose purpose is to change files, install dependencies, build artifacts, or create project-side work products outside the planning workspace.
@@ -612,10 +617,14 @@ Goal: Formulate and present the final plan.
 Your final response should include:
 - **Context**: A brief explanation of the problem or need and the intended outcome.
 - **Approach**: A clear, concise description of the recommended strategy.
+- **Acceptance Contract**: Observable acceptance criteria and protected invariants with stable IDs and explicit scope boundaries.
 - **Resources**: Paths to critical files, specific data sources, or existing utilities that will be used.
+- **Decisions and Unknowns**: Confirmed decisions, assumptions, open questions, blockers, and implementation stop conditions.
 - **Execution Units**: A structured set of proposed tasks that can be converted into execution todos after approval.
+- Map each execution unit to the acceptance criteria and verification items it covers.
 - **Verification**: A plan for how to verify that the final outcome is correct and meets requirements.
-- The `submit_plan.plan` argument must contain the complete plan that should be approved. Do not rely on surrounding assistant text as the plan source.
+- Include an acceptance matrix showing how the final outcome and protected invariants will be proven.
+- `submit_plan.plan` must contain the complete plan. `submit_plan.acceptance_contract` must cover every acceptance criterion and invariant with implementation and verification items and must have no unresolved blockers. Do not rely on surrounding assistant text as either source.
 - Todo tools may be used in Plan Mode to track research, clarification, design, and plan validation. These are planning todos, not implementation todos.
 - Keep proposed implementation units in the submitted plan rather than adding them to the active todo list before approval. Reconcile planning todo statuses before calling `submit_plan`.
 - The final action in Plan Mode should normally be `submit_plan`, not another exploratory or implementation tool call.
@@ -636,12 +645,15 @@ pub const APPROVED_PLAN_EXECUTION_REMINDER: &str = r#"The plan has been approved
 
 Do not ask the user whether to start, continue, or confirm execution of this approved plan. Use `ask_user` only if you discover a new blocking ambiguity, safety issue, missing credential, destructive action, or major strategy change that is not covered by the approved plan.
 
-The approved plan governs implementation scope and strategy. Planning todos ended at approval and the active execution todo list now starts empty. If implementation contains multiple concrete units, meaningful verification steps, or real interruption risk, your first implementation tracking action must be `todo_create` with `mode="replace"`, deriving execution todos from the approved plan. The execution todo list tracks progress; it does not replace the approved plan and must not expand or contradict the approved plan. Skip execution todos only when the approved work is a single immediately verifiable unit."#;
+The approved plan governs implementation scope and strategy. Planning todos ended at approval and the active execution todo list now starts empty. If implementation contains multiple concrete units, meaningful verification steps, or real interruption risk, your first implementation tracking action must be `todo_create` with `mode="replace"`, deriving execution todos from the approved plan. The execution todo list tracks progress; it does not replace the approved plan and must not expand or contradict the approved plan. Skip execution todos only when the approved work is a single immediately verifiable unit.
+
+It also governs approved acceptance criteria, protected invariants, and verification. Before the first edit, perform only a targeted freshness check of the current unit's files, symbols, applicable project guidance, assumptions, and overlapping worktree changes. Do not repeat broad planning investigation unless that check reveals a concrete contradiction. Complete each unit's approved verification before marking it complete, and reconcile all approved acceptance criteria, invariants, units, and verification items before completion. Local implementation details may adapt without reapproval only when scope, strategy, public contracts, acceptance, and risk remain unchanged; use `ask_user` for material plan deviations."#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const CODING_PLANNING_PROMPT: &str = include_str!("../../../assets/agents/coding/planning.md");
     const CODING_SYSTEM_PROMPT: &str = include_str!("../../../assets/agents/coding/system.md");
 
     #[test]
@@ -728,6 +740,68 @@ mod tests {
     }
 
     #[test]
+    fn coding_prompts_define_a_traceable_approved_plan_handoff() {
+        for required in [
+            "Target Outcome and Acceptance Contract",
+            "numbered acceptance criteria using stable IDs",
+            "protected invariants using stable IDs",
+            "Decision and Uncertainty Ledger",
+            "acceptance matrix mapping every `AC-*`",
+            "Plan Readiness Gate",
+        ] {
+            assert!(
+                CODING_PLANNING_PROMPT.contains(required),
+                "planning prompt missing: {required}"
+            );
+        }
+
+        for required in [
+            "Approved Plan Intake and Execution",
+            "perform a targeted freshness check",
+            "Local implementation detail",
+            "Recoverable plan drift",
+            "Material plan deviation",
+            "reconcile every `AC-*`, `INV-*`, `U-*`, and `V-*`",
+        ] {
+            assert!(
+                CODING_SYSTEM_PROMPT.contains(required),
+                "coding prompt missing: {required}"
+            );
+        }
+
+        for prompt in [EXECUTION_MODE_PROMPT, APPROVED_PLAN_EXECUTION_REMINDER] {
+            for required in [
+                "targeted freshness check",
+                "approved verification",
+                "acceptance criteria",
+                "invariants",
+            ] {
+                assert!(prompt.contains(required), "missing: {required}");
+            }
+        }
+    }
+
+    #[test]
+    fn coding_prompt_keeps_plan_execution_explicit_for_mixed_capability_models() {
+        for required in [
+            "Before the first implementation edit:",
+            "read the approved plan and identify its `AC-*` acceptance criteria",
+            "derive execution todos from the approved `U-*`",
+            "preserving dependency order and coverage",
+            "expand investigation only when that narrow check exposes",
+            "Execute the plan unit by unit:",
+            "complete a unit's specified verification before marking that unit complete",
+            "do not silently omit, merge away, or weaken an approved unit",
+            "If the plan has an unresolved blocker or stop condition",
+        ] {
+            assert!(
+                CODING_SYSTEM_PROMPT.contains(required),
+                "mixed-capability execution guidance missing: {required}"
+            );
+        }
+    }
+
+    #[test]
     fn child_prompts_define_a_self_contained_handoff() {
         for required in [
             "self-contained handoff",
@@ -785,7 +859,7 @@ mod tests {
         }
 
         assert!(!CODING_SYSTEM_PROMPT.contains("pending completion report draft"));
-        assert!(CODING_SYSTEM_PROMPT.len() <= 18_000);
+        assert!(CODING_SYSTEM_PROMPT.len() <= 20_000);
     }
 
     #[test]
@@ -843,15 +917,14 @@ mod tests {
             "whether the child may modify the shared workspace",
             "inspect shared-workspace changes and the actual diff",
             "integrate completed work, verification, blockers, and remaining actions",
-            "has no `bash` or test-execution permission",
+            "final reviewers are reserved for the runtime",
+            "intentionally absent from `task`",
+            "Never try to invoke one by name or ID",
             "run all necessary feasible tests",
             "after the final mutation",
             "List any tests not run and why",
-            "Do not ask or expect the reviewer to run missing verification",
-            "apply to children you proactively invoke through `task`",
-            "do not replace runtime-managed Final Audit Mode",
-            "Do not invoke the final reviewer manually",
-            "the runtime assembles the review package and launches the reviewer",
+            "The runtime assembles a stable review package",
+            "launches the configured final reviewer for this parent agent",
             "## Final Audit Mode: Completion Report Requirements",
             "Final audit is enabled",
             "Do not treat compilation or a happy-path check as sufficient",
