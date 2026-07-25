@@ -134,6 +134,17 @@ export const hasPendingToolObservationMessage = (messages = [], toolCallId) => {
   });
 };
 
+const hasToolApprovalStateMessage = (messages = [], toolCallId) => {
+  const normalizedToolCallId = String(toolCallId || '').trim();
+  if (!normalizedToolCallId) return false;
+
+  return messages.some((message) => {
+    const meta = normalizeObject(message?.metadata);
+    if (String(meta.tool_call_id || '').trim() !== normalizedToolCallId) return false;
+    return getToolApprovalState(message, meta) !== null;
+  });
+};
+
 const buildInlineApprovalEntry = ({
   currentWorkflowId,
   workflowTitle,
@@ -263,7 +274,7 @@ export const appendMissingPendingToolMessages = ({
 
   for (const pendingTool of pendingTools) {
     if (!pendingTool.toolCallId) continue;
-    if (hasPendingToolObservationMessage(nextMessages, pendingTool.toolCallId)) continue;
+    if (hasToolApprovalStateMessage(nextMessages, pendingTool.toolCallId)) continue;
 
     const summary =
       typeof getPendingSummary === 'function'

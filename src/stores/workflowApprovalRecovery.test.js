@@ -147,6 +147,38 @@ assert.deepEqual(
   'synthetic pending messages must carry canonical approval metadata'
 )
 
+const resolvedMessagesWithStaleContext = appendMissingPendingToolMessages({
+  messages: [
+    {
+      id: 63714,
+      sessionId: 'session-1',
+      role: 'tool',
+      metadata: {
+        tool_call_id: 'tool_571ae521',
+        tool_name: 'bash',
+        approval_status: 'approved',
+        execution_status: 'completed'
+      }
+    }
+  ],
+  sessionId: 'session-1',
+  executionContext,
+  getPendingSummary: () => 'Awaiting approval'
+})
+
+assert.equal(
+  resolvedMessagesWithStaleContext.filter(
+    message => message?.metadata?.tool_call_id === 'tool_571ae521'
+  ).length,
+  1,
+  'stale pending context must not synthesize a pending row after a durable resolved observation'
+)
+assert.equal(
+  resolvedMessagesWithStaleContext[0]?.metadata?.execution_status,
+  'completed',
+  'the durable resolved observation must remain authoritative during hydration'
+)
+
 assert.deepEqual(
   deriveInlinePendingApprovals({
     currentWorkflowId: 'session-1',
