@@ -13,13 +13,13 @@ pub fn proxy_group_list(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<Prox
 
 #[command]
 pub fn proxy_group_add(state: State<Arc<RwLock<MainStore>>>, item: ProxyGroup) -> Result<i64> {
-    let mut store = state.write()?;
+    let store = state.read()?;
     store.proxy_group_add(&item).map_err(AppError::Db)
 }
 
 #[command]
 pub fn proxy_group_update(state: State<Arc<RwLock<MainStore>>>, item: ProxyGroup) -> Result<()> {
-    let mut store = state.write()?;
+    let store = state.read()?;
     store.proxy_group_update(&item).map_err(AppError::Db)
 }
 
@@ -34,7 +34,7 @@ pub fn proxy_group_batch_update(
     injection_condition: Option<String>,
     prompt_replace: Option<Value>,
 ) -> Result<()> {
-    let mut store = state.write()?;
+    let store = state.read()?;
     store
         .proxy_group_batch_update(
             ids,
@@ -50,13 +50,13 @@ pub fn proxy_group_batch_update(
 
 #[command]
 pub fn proxy_group_delete(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
-    let mut store = state.write()?;
+    let store = state.read()?;
     store.proxy_group_delete(id).map_err(AppError::Db)
 }
 
 #[command]
 pub fn set_active_proxy_group(state: State<Arc<RwLock<MainStore>>>, name: String) -> Result<()> {
-    let mut store = state.write()?;
+    let store = state.read()?;
     store
         .set_config(
             crate::constants::CFG_ACTIVE_PROXY_GROUP,
