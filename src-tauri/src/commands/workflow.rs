@@ -2603,11 +2603,13 @@ pub async fn update_workflow_query(
     session_id: String,
     user_query: String,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    store
-        .update_workflow_query(&session_id, &user_query)
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    let runtime = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store.db_runtime().map_err(|e| e.to_string())?
+    };
+    MainStore::update_workflow_query_with_runtime(runtime, session_id, user_query)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
