@@ -831,6 +831,26 @@ mod tests {
     use crate::db::api_key_crypto::API_KEY_FILE_CONFIG_KEY;
     use serde_json::json;
 
+    #[tokio::test]
+    async fn checkpoint_resumes_runtime_submissions() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = MainStore::new(temp_dir.path().join("main.db")).unwrap();
+
+        store.checkpoint().unwrap();
+        store
+            .db_runtime()
+            .unwrap()
+            .write(|connection| {
+                connection.execute(
+                    "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
+                    ["checkpoint_resume", "true"],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
     #[test]
     fn atomic_restore_replaces_an_existing_database() {
         let temp_dir = tempfile::tempdir().unwrap();
