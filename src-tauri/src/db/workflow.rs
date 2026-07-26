@@ -171,6 +171,59 @@ pub struct WorkflowMessageWindow {
     pub hidden_completed_task_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowMessagePage {
+    pub messages: Vec<WorkflowMessage>,
+    pub before_message_id: Option<i64>,
+    pub hidden_message_count: usize,
+    pub hidden_completed_task_count: usize,
+}
+
+fn is_completed_workflow_task_boundary(message: &WorkflowMessage) -> bool {
+    if message.role != "tool" || message.is_error {
+        return false;
+    }
+    let Some(metadata) = message.metadata.as_ref() else {
+        return false;
+    };
+    let tool_name = metadata
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            metadata
+                .get("tool_call")
+                .and_then(|call| call.get("name"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            metadata
+                .get("tool_call")
+                .and_then(|call| call.get("function"))
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or_default();
+    if tool_name != "complete_workflow" {
+        return false;
+    }
+    let execution_status = metadata
+        .get("execution_status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let approval_status = metadata
+        .get("approval_status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let review_display_state = metadata
+        .get("review_display_state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    approval_status != "rejected"
+        && review_display_state != "final_review_rejected"
+        && (execution_status.is_empty() || execution_status == "completed")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowEfficiencyMetrics {
@@ -1496,6 +1549,191 @@ impl MainStore {
         })
     }
 
+    pub fn get_recent_workflow_message_page(
+        &self,
+        session_id: &str,
+        message_limit: usize,
+    ) -> Result<WorkflowMessagePage, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let newest_message_id: Option<i64> = conn.query_row(
+                "SELECT MAX(id) FROM workflow_messages WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )?;
+            let mut boundary_statement = conn.prepare(
+                "SELECT id, role, is_error, metadata FROM workflow_messages
+                 WHERE session_id = ?1
+                   AND role = 'tool'
+                   AND is_error = 0
+                   AND metadata LIKE '%complete_workflow%'
+                 ORDER BY id DESC",
+            )?;
+            let boundary_rows = boundary_statement.query_map(params![session_id], |row| {
+                let metadata = row
+                    .get::<_, Option<String>>(3)?
+                    .and_then(|value| serde_json::from_str(&value).ok());
+                Ok(WorkflowMessage {
+                    id: row.get(0)?,
+                    session_id: String::new(),
+                    role: row.get(1)?,
+                    message: String::new(),
+                    reasoning: None,
+                    message_kind: String::new(),
+                    message_subtype: None,
+                    segment_id: 0,
+                    source_event_type: None,
+                    metadata,
+                    attached_context: None,
+                    step_type: None,
+                    step_index: 0,
+                    is_error: row.get(2)?,
+                    error_type: None,
+                    created_at: None,
+                })
+            })?;
+            let mut completion_boundary_ids = Vec::new();
+            for message in boundary_rows {
+                let message = message?;
+                if is_completed_workflow_task_boundary(&message) {
+                    if let Some(id) = message.id {
+                        completion_boundary_ids.push(id);
+                    }
+                }
+            }
+
+            let latest_boundary_id = completion_boundary_ids.first().copied();
+            let has_active_messages = match (newest_message_id, latest_boundary_id) {
+                (Some(newest_id), Some(boundary_id)) => newest_id > boundary_id,
+                (Some(_), None) => true,
+                _ => false,
+            };
+            let lower_boundary_id = if has_active_messages {
+                latest_boundary_id
+            } else {
+                completion_boundary_ids.get(1).copied()
+            };
+            let hidden_completed_task_count = if has_active_messages {
+                completion_boundary_ids.len()
+            } else {
+                completion_boundary_ids.len().saturating_sub(1)
+            };
+            let limit = message_limit.max(1) as i64;
+
+            let total_message_count = conn.query_row(
+                "SELECT COUNT(*) FROM workflow_messages
+                 WHERE session_id = ?1 AND (?2 IS NULL OR id > ?2)",
+                params![session_id, lower_boundary_id],
+                |row| row.get::<_, i64>(0),
+            )? as usize;
+            let mut message_statement = conn.prepare(
+                "SELECT * FROM workflow_messages
+                 WHERE session_id = ?1 AND (?2 IS NULL OR id > ?2)
+                 ORDER BY id DESC
+                 LIMIT ?3",
+            )?;
+            let rows = message_statement
+                .query_map(params![session_id, lower_boundary_id, limit], |row| {
+                    Ok(WorkflowMessage::from(row))
+                })?;
+            let mut messages = rows.collect::<Result<Vec<_>, _>>()?;
+            messages.reverse();
+
+            Ok(WorkflowMessagePage {
+                before_message_id: messages.first().and_then(|message| message.id),
+                hidden_message_count: total_message_count.saturating_sub(messages.len()),
+                hidden_completed_task_count,
+                messages,
+            })
+        })
+    }
+
+    pub fn get_earlier_workflow_message_page(
+        &self,
+        session_id: &str,
+        before_message_id: i64,
+        message_limit: usize,
+    ) -> Result<WorkflowMessagePage, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut boundary_statement = conn.prepare(
+                "SELECT id, role, is_error, metadata FROM workflow_messages
+                 WHERE session_id = ?1
+                   AND id < ?2
+                   AND role = 'tool'
+                   AND is_error = 0
+                   AND metadata LIKE '%complete_workflow%'
+                 ORDER BY id DESC",
+            )?;
+            let boundary_rows =
+                boundary_statement.query_map(params![session_id, before_message_id], |row| {
+                    let metadata = row
+                        .get::<_, Option<String>>(3)?
+                        .and_then(|value| serde_json::from_str(&value).ok());
+                    Ok(WorkflowMessage {
+                        id: row.get(0)?,
+                        session_id: String::new(),
+                        role: row.get(1)?,
+                        message: String::new(),
+                        reasoning: None,
+                        message_kind: String::new(),
+                        message_subtype: None,
+                        segment_id: 0,
+                        source_event_type: None,
+                        metadata,
+                        attached_context: None,
+                        step_type: None,
+                        step_index: 0,
+                        is_error: row.get(2)?,
+                        error_type: None,
+                        created_at: None,
+                    })
+                })?;
+            let mut lower_boundary_id = None;
+            for message in boundary_rows {
+                let message = message?;
+                if is_completed_workflow_task_boundary(&message) {
+                    lower_boundary_id = message.id;
+                    break;
+                }
+            }
+            let limit = message_limit.max(1) as i64;
+
+            let total_message_count = conn.query_row(
+                "SELECT COUNT(*) FROM workflow_messages
+                 WHERE session_id = ?1
+                   AND id < ?2
+                   AND (?3 IS NULL OR id > ?3)",
+                params![session_id, before_message_id, lower_boundary_id],
+                |row| row.get::<_, i64>(0),
+            )? as usize;
+            let mut message_statement = conn.prepare(
+                "SELECT * FROM workflow_messages
+                 WHERE session_id = ?1
+                   AND id < ?2
+                   AND (?3 IS NULL OR id > ?3)
+                 ORDER BY id DESC
+                 LIMIT ?4",
+            )?;
+            let rows = message_statement.query_map(
+                params![session_id, before_message_id, lower_boundary_id, limit],
+                |row| Ok(WorkflowMessage::from(row)),
+            )?;
+            let mut messages = rows.collect::<Result<Vec<_>, _>>()?;
+            messages.reverse();
+
+            Ok(WorkflowMessagePage {
+                before_message_id: messages
+                    .first()
+                    .and_then(|message| message.id)
+                    .or(Some(before_message_id)),
+                hidden_message_count: total_message_count.saturating_sub(messages.len()),
+                hidden_completed_task_count: 0,
+                messages,
+            })
+        })
+    }
+
     pub fn get_workflow_message_window(
         &self,
         session_id: &str,
@@ -1504,49 +1742,6 @@ impl MainStore {
     ) -> Result<WorkflowMessageWindow, StoreError> {
         let session_id = session_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
-            let is_completed_task_boundary = |message: &WorkflowMessage| {
-                if message.role != "tool" || message.is_error {
-                    return false;
-                }
-                let Some(metadata) = message.metadata.as_ref() else {
-                    return false;
-                };
-                let tool_name = metadata
-                    .get("tool_name")
-                    .and_then(Value::as_str)
-                    .or_else(|| {
-                        metadata
-                            .get("tool_call")
-                            .and_then(|call| call.get("name"))
-                            .and_then(Value::as_str)
-                    })
-                    .or_else(|| {
-                        metadata
-                            .get("tool_call")
-                            .and_then(|call| call.get("function"))
-                            .and_then(|function| function.get("name"))
-                            .and_then(Value::as_str)
-                    })
-                    .unwrap_or_default();
-                if tool_name != "complete_workflow" {
-                    return false;
-                }
-                let execution_status = metadata
-                    .get("execution_status")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let approval_status = metadata
-                    .get("approval_status")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let review_display_state = metadata
-                    .get("review_display_state")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                approval_status != "rejected"
-                    && review_display_state != "final_review_rejected"
-                    && (execution_status.is_empty() || execution_status == "completed")
-            };
             let mut statement = conn.prepare(
                 "SELECT * FROM workflow_messages
                  WHERE session_id = ?1 AND (?2 IS NULL OR id < ?2)
@@ -1564,7 +1759,7 @@ impl MainStore {
             };
             for message in rows {
                 let message = message?;
-                if is_completed_task_boundary(&message) {
+                if is_completed_workflow_task_boundary(&message) {
                     if completion_count >= target_completion_count {
                         break;
                     }
@@ -1612,7 +1807,7 @@ impl MainStore {
                     })?;
                 let mut count = 0usize;
                 for message in rows {
-                    if is_completed_task_boundary(&message?) {
+                    if is_completed_workflow_task_boundary(&message?) {
                         count += 1;
                     }
                 }
@@ -2808,6 +3003,20 @@ mod tests {
         );
         assert_eq!(recent.hidden_completed_task_count, 2);
 
+        let recent_message_page = store
+            .get_recent_workflow_message_page("window-session", 200)
+            .expect("failed to load recent UI message page");
+        assert_eq!(
+            recent_message_page
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["active-task"]
+        );
+        assert_eq!(recent_message_page.hidden_message_count, 0);
+        assert_eq!(recent_message_page.hidden_completed_task_count, 3);
+
         let earlier = store
             .get_workflow_message_window("window-session", recent.before_message_id, 2)
             .expect("failed to load earlier window");
@@ -2871,6 +3080,81 @@ mod tests {
             .expect("failed to load completed-only window");
         assert_eq!(completed_window.messages.len(), 4);
         assert_eq!(completed_window.hidden_completed_task_count, 0);
+
+        let completed_message_page = store
+            .get_recent_workflow_message_page("completed-window", 200)
+            .expect("failed to load completed UI message page");
+        assert_eq!(
+            completed_message_page
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["completed-2-input", "completed-2-done"]
+        );
+        assert_eq!(completed_message_page.hidden_message_count, 0);
+        assert_eq!(completed_message_page.hidden_completed_task_count, 1);
+    }
+
+    #[test]
+    fn test_workflow_message_page_limits_long_active_task() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-message-page");
+        store
+            .create_workflow(
+                "message-page-session",
+                "Message page query",
+                "agent-message-page",
+                None,
+                None,
+            )
+            .expect("failed to create workflow");
+
+        for index in 1..=450 {
+            add_window_test_message(
+                &store,
+                "message-page-session",
+                &format!("active-message-{index}"),
+                false,
+            );
+        }
+
+        let recent = store
+            .get_recent_workflow_message_page("message-page-session", 200)
+            .expect("failed to load recent message page");
+        assert_eq!(recent.messages.len(), 200);
+        assert_eq!(recent.hidden_message_count, 250);
+        assert_eq!(recent.hidden_completed_task_count, 0);
+        assert_eq!(recent.messages[0].message, "active-message-251");
+        assert_eq!(recent.messages[199].message, "active-message-450");
+
+        let middle = store
+            .get_earlier_workflow_message_page(
+                "message-page-session",
+                recent
+                    .before_message_id
+                    .expect("recent page must expose a cursor"),
+                200,
+            )
+            .expect("failed to load middle message page");
+        assert_eq!(middle.messages.len(), 200);
+        assert_eq!(middle.hidden_message_count, 50);
+        assert_eq!(middle.messages[0].message, "active-message-51");
+        assert_eq!(middle.messages[199].message, "active-message-250");
+
+        let oldest = store
+            .get_earlier_workflow_message_page(
+                "message-page-session",
+                middle
+                    .before_message_id
+                    .expect("middle page must expose a cursor"),
+                200,
+            )
+            .expect("failed to load oldest message page");
+        assert_eq!(oldest.messages.len(), 50);
+        assert_eq!(oldest.hidden_message_count, 0);
+        assert_eq!(oldest.messages[0].message, "active-message-1");
+        assert_eq!(oldest.messages[49].message, "active-message-50");
     }
 
     #[test]

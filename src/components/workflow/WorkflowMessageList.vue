@@ -5,7 +5,16 @@
     :data-workflow-id="props.currentWorkflowId || null"
     @scroll.passive="handleScroll">
     <a
-      v-if="props.hiddenCompletedTaskGroupCount > 0"
+      v-if="props.hiddenEarlierMessageCount > 0"
+      class="history-window-indicator"
+      @click="revealEarlierMessages">
+      <cs name="double-arrow-down" class="cs-rotate" size="var(--cs-font-size-xs)" />
+      <span>{{ t('workflow.earlierMessages') }}</span>
+    </a>
+    <a
+      v-if="
+        props.hiddenEarlierMessageCount <= 0 && props.hiddenCompletedTaskGroupCount > 0
+      "
       class="history-window-indicator"
       @click="revealEarlierTaskGroup">
       <cs name="double-arrow-down" class="cs-rotate" size="var(--cs-font-size-xs)" />
@@ -894,6 +903,10 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  hiddenEarlierMessageCount: {
+    type: Number,
+    default: 0
+  },
   hiddenCompletedTaskGroupCount: {
     type: Number,
     default: 0
@@ -997,6 +1010,7 @@ const emit = defineEmits([
   'toggle-expand',
   'toggle-reasoning',
   'scroll-bottom',
+  'reveal-earlier-messages',
   'reveal-earlier-task-group',
   'approve-tool',
   'approve-all-tool',
@@ -1046,6 +1060,25 @@ const revealEarlierTaskGroup = () => {
 
   isRevealingEarlierTaskGroup.value = true
   emit('reveal-earlier-task-group', () => {
+    nextTick(() => {
+      if (container) {
+        const nextScrollHeight = container.scrollHeight
+        container.scrollTop = previousScrollTop + (nextScrollHeight - previousScrollHeight)
+      }
+      isRevealingEarlierTaskGroup.value = false
+    })
+  })
+}
+
+const revealEarlierMessages = () => {
+  if (isRevealingEarlierTaskGroup.value || props.hiddenEarlierMessageCount <= 0) return
+
+  const container = messagesRef.value
+  const previousScrollHeight = container?.scrollHeight || 0
+  const previousScrollTop = container?.scrollTop || 0
+
+  isRevealingEarlierTaskGroup.value = true
+  emit('reveal-earlier-messages', () => {
     nextTick(() => {
       if (container) {
         const nextScrollHeight = container.scrollHeight

@@ -5,9 +5,11 @@ import {
   excludeLeadingManualClearContextMarkers,
   getStructuredWorkflowToolName,
   hasOpenWorkflowTaskFrame,
+  isWorkflowManualClearContextMessage,
   mergeManualClearContextMarkersIntoPreviousGroups,
   normalizeVisibleCompletionReport,
   reconcileWorkflowTaskWindowState,
+  selectVisibleWorkflowMessageWindow,
   selectVisibleWorkflowTaskGroups
 } from './messageProjectionRules'
 import { useSubAgentSummaries } from './useSubAgentSummaries'
@@ -28,12 +30,14 @@ import {
  * Handles enhanced messages, tool formatting, and expansion states
  */
 const DEFAULT_VISIBLE_TASK_GROUPS = 1
+const DEFAULT_VISIBLE_TASK_MESSAGES = 200
 
 export function useWorkflowMessages(options = {}) {
   const { t } = useI18n()
   const workflowStore = useWorkflowStore()
   const visibleTaskGroupCount =
     options.visibleTaskGroupCount || ref(DEFAULT_VISIBLE_TASK_GROUPS)
+  const visibleTaskMessageCount = ref(DEFAULT_VISIBLE_TASK_MESSAGES)
 
   const expandedMessages = ref(new Set())
   const expandedReasonings = ref(new Set())
@@ -379,6 +383,50 @@ export function useWorkflowMessages(options = {}) {
       activeGroupId: activeGroup?.id || ''
     }
   })
+
+  const taskMessageWindowAnchor = computed(() => {
+    const state = taskWindowState.value
+    const activeMessage = state.activeMessages.find(
+      message => !isWorkflowManualClearContextMessage(message)
+    )
+    const latestCompletedMessages = state.completedGroups[state.completedGroups.length - 1]?.messages
+    const completedMessage = latestCompletedMessages?.find(
+      message => !isWorkflowManualClearContextMessage(message)
+    )
+    const anchorMessage = activeMessage || completedMessage
+    return anchorMessage ? getMessageIdentity(anchorMessage, 0) : ''
+  })
+
+  watch(
+    [() => workflowStore.currentWorkflowId, taskMessageWindowAnchor],
+    () => {
+      visibleTaskMessageCount.value = DEFAULT_VISIBLE_TASK_MESSAGES
+    },
+    { flush: 'sync' }
+  )
+
+  const visibleTaskMessageWindow = computed(() =>
+    selectVisibleWorkflowMessageWindow(
+      visibleTaskGroupsState.value.groups,
+      visibleTaskMessageCount.value
+    )
+  )
+
+  const loadedHiddenEarlierMessageCount = computed(
+    () => visibleTaskMessageWindow.value.hiddenMessageCount
+  )
+
+  const hiddenEarlierMessageCount = computed(
+    () =>
+      (workflowStore.hiddenEarlierMessageCount || 0) +
+      loadedHiddenEarlierMessageCount.value
+  )
+
+  const revealEarlierMessages = () => {
+    if (loadedHiddenEarlierMessageCount.value <= 0) return false
+    visibleTaskMessageCount.value += DEFAULT_VISIBLE_TASK_MESSAGES
+    return true
+  }
 
   const visibleCompletedTaskGroupCount = computed(() => {
     const hasOpenTaskFrame = hasOpenWorkflowTaskFrame(
@@ -1032,10 +1080,15 @@ export function useWorkflowMessages(options = {}) {
     void childAgentSummaryById.value
     void childAgentSummariesRevision.value
     void subAgentCompletionsRevision.value
-    const { groups, activeGroupId } = visibleTaskGroupsState.value
+    const { activeGroupId } = visibleTaskGroupsState.value
+    const { groups } = visibleTaskMessageWindow.value
     if (!groups.length) return []
 
-    const visibleGroupIds = new Set(groups.map(group => group.id))
+    const getCacheGroupId = group =>
+      group.id === activeGroupId
+        ? `${workflowStore.currentWorkflowId || 'workflow'}:active-message-window`
+        : group.id
+    const visibleGroupIds = new Set(groups.map(getCacheGroupId))
     for (const cachedGroupId of taskGroupCache.keys()) {
       if (!visibleGroupIds.has(cachedGroupId)) {
         taskGroupCache.delete(cachedGroupId)
@@ -1043,8 +1096,9 @@ export function useWorkflowMessages(options = {}) {
     }
 
     return groups.flatMap(group => {
+      const cacheGroupId = getCacheGroupId(group)
       const signature = buildTaskGroupSignature(group.messages)
-      const cachedEntry = taskGroupCache.get(group.id)
+      const cachedEntry = taskGroupCache.get(cacheGroupId)
 
       if (group.isCompleted && group.id !== activeGroupId && cachedEntry?.signature === signature) {
         const projectionRevision = `${childAgentSummariesRevision.value}|${subAgentCompletionsRevision.value}`
@@ -1057,7 +1111,7 @@ export function useWorkflowMessages(options = {}) {
         cachedEntry,
         enhanceRawMessages(group.messages, subAgentCompletionsById.value)
       )
-      taskGroupCache.set(group.id, {
+      taskGroupCache.set(cacheGroupId, {
         signature,
         summarySignature: `${childAgentSummariesRevision.value}|${subAgentCompletionsRevision.value}`,
         messages: enhanced.messages,
@@ -1796,7 +1850,9 @@ export function useWorkflowMessages(options = {}) {
     expandedMessages,
     expandedReasonings,
     enhancedMessages,
+    hiddenEarlierMessageCount,
     hiddenCompletedTaskGroupCount,
+    revealEarlierMessages,
     revealLoadedEarlierTaskGroup,
     lastAssistantMessage,
     toggleMessageExpand,

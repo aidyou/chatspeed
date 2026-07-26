@@ -132,6 +132,44 @@ export const selectVisibleWorkflowTaskGroups = (
   return activeGroup ? [...visibleCompletedGroups, activeGroup] : visibleCompletedGroups
 }
 
+/**
+ * Limit the message projection before expensive display enhancement and Vue rendering.
+ * Whole groups keep their original references so completed-group caches remain reusable.
+ */
+export const selectVisibleWorkflowMessageWindow = (groups = [], visibleMessageCount = 200) => {
+  const normalizedLimit = Math.max(0, Math.floor(Number(visibleMessageCount) || 0))
+  const totalMessageCount = groups.reduce(
+    (total, group) => total + (group?.messages?.length || 0),
+    0
+  )
+  let remainingHiddenCount = Math.max(0, totalMessageCount - normalizedLimit)
+  const visibleGroups = []
+
+  for (const group of groups) {
+    const messages = group?.messages || []
+    if (remainingHiddenCount >= messages.length) {
+      remainingHiddenCount -= messages.length
+      continue
+    }
+
+    if (remainingHiddenCount > 0) {
+      visibleGroups.push({
+        ...group,
+        messages: messages.slice(remainingHiddenCount)
+      })
+      remainingHiddenCount = 0
+      continue
+    }
+
+    visibleGroups.push(group)
+  }
+
+  return {
+    groups: visibleGroups,
+    hiddenMessageCount: Math.max(0, totalMessageCount - normalizedLimit)
+  }
+}
+
 export const reconcileWorkflowTaskWindowState = ({
   messages = [],
   workflowId = null,

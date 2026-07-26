@@ -999,6 +999,7 @@
     "deleteLastMessageDone": "Letzter Schritt gelöscht",
     "deleteLastMessageFailed": "Löschen des letzten Schritts fehlgeschlagen: {error}",
     "deleteLastMessageMissing": "Kein Schritt zum Löschen vorhanden",
+    "earlierMessages": "Frühere Nachrichten anzeigen",
     "earlierTasks": "{count} frühere abgeschlossene Aufgaben anzeigen",
     "edited": "Bearbeitet",
     "editWorkflowTitle": "Workflow-Titel bearbeiten",

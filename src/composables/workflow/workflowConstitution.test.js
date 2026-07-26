@@ -101,6 +101,14 @@ assert.doesNotMatch(
   'approval-submitted and running tools must join their continuous tool group'
 )
 
+const workflowMessagesProjection = readProjectFile('src/composables/workflow/useWorkflowMessages.ts')
+assert.match(workflowMessagesProjection, /isWorkflowManualClearContextMessage/)
+assert.doesNotMatch(
+  workflowMessagesProjection,
+  /\bisManualClearContextMessage\b/,
+  'the message composable must use the imported shared manual-clear projection rule'
+)
+
 const toolIcons = readProjectFile('src/composables/workflow/toolIcons.ts')
 assert.match(toolIcons, /isWorkflowMcpTool\(normalized\)\) return 'mcp'/)
 
@@ -165,6 +173,15 @@ assert.doesNotMatch(
 )
 assert.doesNotMatch(workflowCore, /confirmationWaiting|showConfirmationDialog/)
 const workflowStore = readProjectFile('src/stores/workflow.js')
+assert.match(workflowStore, /invokeWrapper\('get_earlier_workflow_message_page'/)
+assert.match(
+  workflowStore,
+  /hiddenEarlierMessageCount\.value = Number\(snapshot\.hiddenEarlierMessageCount\) \|\| 0/
+)
+assert.match(
+  workflowMessages,
+  /workflowStore\.hiddenEarlierMessageCount[\s\S]*loadedHiddenEarlierMessageCount\.value/
+)
 const clearContextEligibility = sourceSection(
   workflowStore,
   'const canClearContext = computed(() => {',

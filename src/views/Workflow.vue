@@ -177,6 +177,7 @@
             :key="currentWorkflowId || 'workflow-empty'"
             ref="messageListRef"
             :messages="enhancedMessages"
+            :hidden-earlier-message-count="hiddenEarlierMessageCount"
             :hidden-completed-task-group-count="hiddenCompletedTaskGroupCount"
             :is-running="isRunning"
             :queued-messages="workflowStore.messageQueue"
@@ -202,6 +203,7 @@
             :is-approval-submitting="isApprovalSubmitting"
             @toggle-expand="toggleMessageExpand"
             @toggle-reasoning="toggleReasoningExpand"
+            @reveal-earlier-messages="revealEarlierMessagesInTaskWindow"
             @reveal-earlier-task-group="revealEarlierTaskGroup"
             @submit-ask-user="submitAskUserResponse"
             @approve-tool="onApproveAction"
@@ -566,7 +568,9 @@ const {
   expandedMessages,
   expandedReasonings,
   enhancedMessages,
+  hiddenEarlierMessageCount,
   hiddenCompletedTaskGroupCount,
+  revealEarlierMessages,
   revealLoadedEarlierTaskGroup,
   lastAssistantMessage,
   toggleMessageExpand,
@@ -584,11 +588,28 @@ const {
 
 const revealEarlierTaskGroup = async done => {
   try {
-    if (revealLoadedEarlierTaskGroup()) return
+    if (revealLoadedEarlierTaskGroup()) {
+      revealEarlierMessages()
+      return
+    }
 
     const loaded = await workflowStore.loadEarlierTaskGroup()
     if (loaded) {
       visibleTaskGroupCount.value += 1
+      revealEarlierMessages()
+    }
+  } finally {
+    done?.()
+  }
+}
+
+const revealEarlierMessagesInTaskWindow = async done => {
+  try {
+    if (revealEarlierMessages()) return
+
+    const loaded = await workflowStore.loadEarlierMessages()
+    if (loaded) {
+      revealEarlierMessages()
     }
   } finally {
     done?.()

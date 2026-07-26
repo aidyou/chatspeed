@@ -42,6 +42,8 @@ use tauri::{AppHandle, Manager, State};
 #[cfg(test)]
 use rusqlite::params;
 
+const UI_WORKFLOW_MESSAGE_PAGE_SIZE: usize = 200;
+
 // ==========================================
 // 0. Helper Functions for @mentions
 // ==========================================
@@ -2407,27 +2409,32 @@ pub async fn get_workflow_snapshot(
     let main_store = state.inner().clone();
     let snapshot_store = main_store.clone();
     let snapshot_session_id = session_id.clone();
-    let (mut snapshot, message_window_before_id, hidden_completed_task_count) =
-        tokio::task::spawn_blocking(move || -> Result<_, String> {
-            let store = &*snapshot_store;
-            let mut workflow = store
-                .get_workflow_for_ui(&snapshot_session_id)
-                .map_err(|e| e.to_string())?;
-            let message_window = store
-                .get_workflow_message_window(&snapshot_session_id, None, 2)
-                .map_err(|e| e.to_string())?;
-            normalize_workflow_agent_config_in_memory(&store, &mut workflow)?;
-            Ok((
-                WorkflowSnapshot {
-                    workflow,
-                    messages: message_window.messages,
-                },
-                message_window.before_message_id,
-                message_window.hidden_completed_task_count,
-            ))
-        })
-        .await
-        .map_err(|e| format!("Failed to join workflow snapshot query: {e}"))??;
+    let (
+        mut snapshot,
+        message_window_before_id,
+        hidden_earlier_message_count,
+        hidden_completed_task_count,
+    ) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let store = &*snapshot_store;
+        let mut workflow = store
+            .get_workflow_for_ui(&snapshot_session_id)
+            .map_err(|e| e.to_string())?;
+        let message_page = store
+            .get_recent_workflow_message_page(&snapshot_session_id, UI_WORKFLOW_MESSAGE_PAGE_SIZE)
+            .map_err(|e| e.to_string())?;
+        normalize_workflow_agent_config_in_memory(&store, &mut workflow)?;
+        Ok((
+            WorkflowSnapshot {
+                workflow,
+                messages: message_page.messages,
+            },
+            message_page.before_message_id,
+            message_page.hidden_message_count,
+            message_page.hidden_completed_task_count,
+        ))
+    })
+    .await
+    .map_err(|e| format!("Failed to join workflow snapshot query: {e}"))??;
 
     // Phase 0-3 UI State Reconciliation: Add hasLiveSession field.
     // Reconcile terminal executors first so the frontend does not keep seeing
@@ -2479,6 +2486,10 @@ pub async fn get_workflow_snapshot(
             json!(message_window_before_id),
         );
         obj.insert(
+            "hiddenEarlierMessageCount".to_string(),
+            json!(hidden_earlier_message_count),
+        );
+        obj.insert(
             "hiddenCompletedTaskCount".to_string(),
             json!(hidden_completed_task_count),
         );
@@ -2499,6 +2510,38 @@ pub async fn get_workflow_snapshot(
     );
 
     Ok(snapshot_json)
+}
+
+#[tauri::command]
+pub async fn get_earlier_workflow_message_page(
+    state: State<'_, Arc<MainStore>>,
+    session_id: String,
+    before_message_id: i64,
+) -> Result<Value, String> {
+    let page = {
+        let store = &*state;
+        store
+            .get_earlier_workflow_message_page(
+                &session_id,
+                before_message_id,
+                UI_WORKFLOW_MESSAGE_PAGE_SIZE,
+            )
+            .map_err(|e| e.to_string())?
+    };
+    let merged_messages = merge_ui_workflow_messages(&page.messages);
+
+    log::debug!(
+        "[Workflow][session={}][command=get_earlier_workflow_message_page] loaded_messages={} hidden_messages={}",
+        session_id,
+        merged_messages.len(),
+        page.hidden_message_count
+    );
+
+    Ok(json!({
+        "messages": merged_messages,
+        "beforeMessageId": page.before_message_id,
+        "hiddenEarlierMessageCount": page.hidden_message_count,
+    }))
 }
 
 #[tauri::command]

@@ -1004,6 +1004,7 @@
     "deleteLastMessageDone": "Last step deleted",
     "deleteLastMessageFailed": "Failed to delete last step: {error}",
     "deleteLastMessageMissing": "No step available to delete",
+    "earlierMessages": "Show earlier messages",
     "earlierTasks": "Show {count} earlier completed tasks",
     "edited": "Edited",
     "editWorkflowTitle": "Edit Workflow Title",

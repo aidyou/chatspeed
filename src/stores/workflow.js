@@ -122,11 +122,33 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
+  const isCompletedWorkflowTaskBoundary = message => {
+    if (message?.role !== 'tool' || message?.isError || message?.is_error) return false;
+    const metadata = message?.metadata || {};
+    const toolName = String(
+      metadata.tool_name ||
+        metadata.tool_call?.name ||
+        metadata.tool_call?.function?.name ||
+        ''
+    ).toLowerCase();
+    if (toolName !== 'complete_workflow') return false;
+
+    const executionStatus = String(metadata.execution_status || '').toLowerCase();
+    const approvalStatus = String(metadata.approval_status || '').toLowerCase();
+    const reviewDisplayState = String(metadata.review_display_state || '').toLowerCase();
+    return (
+      approvalStatus !== 'rejected' &&
+      reviewDisplayState !== 'final_review_rejected' &&
+      (!executionStatus || executionStatus === 'completed')
+    );
+  };
+
   // ==================== Core State ====================
   const workflows = ref([]);
   const currentWorkflowId = ref(null);
   const messages = ref([]);
   const messageWindowBeforeId = ref(null);
+  const hiddenEarlierMessageCount = ref(0);
   const hiddenCompletedTaskCount = ref(0);
   const todoList = ref([]);
   const messageQueue = ref([]);
@@ -1229,6 +1251,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     // new id can initialize the new session with the previous session's groups.
     messages.value = [];
     messageWindowBeforeId.value = null;
+    hiddenEarlierMessageCount.value = 0;
     hiddenCompletedTaskCount.value = 0;
     currentWorkflowId.value = workflowId;
     lastTaskCompletion.value = null;
@@ -1282,6 +1305,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         getPendingSummary: toolName => getToolStatusSummary(toolName, 'pending', 'Awaiting approval')
       });
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
+      hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0;
       hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
       clearApprovalSubmissionsForSession(workflowId);
 
@@ -1442,6 +1466,24 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
     message = normalizeWorkflowMessage(message, currentWorkflowId.value);
 
+    const canStartNewTaskAfterPartialHistory =
+      message.role === 'user' &&
+      message.metadata?.queue_status !== 'queued' &&
+      hiddenEarlierMessageCount.value > 0;
+    const loadedCompletedTaskCount = canStartNewTaskAfterPartialHistory
+      ? messages.value.filter(isCompletedWorkflowTaskBoundary).length
+      : 0;
+    const startsNewTaskAfterPartialHistory =
+      canStartNewTaskAfterPartialHistory &&
+      (loadedCompletedTaskCount > 0 || lastTaskCompletion.value?.sessionId === currentWorkflowId.value);
+    if (startsNewTaskAfterPartialHistory) {
+      messages.value = [];
+      messageWindowBeforeId.value = message.id ?? null;
+      hiddenEarlierMessageCount.value = 0;
+      hiddenCompletedTaskCount.value += Math.max(1, loadedCompletedTaskCount);
+      lastTaskCompletion.value = null;
+    }
+
     if (message.role === 'user') {
       const queuedId = message.metadata?.queued_user_message_id;
       const queueStatus = message.metadata?.queue_status;
@@ -1516,12 +1558,32 @@ export const useWorkflowStore = defineStore('workflow', () => {
     });
 
     if (index !== -1) {
-      messages.value[index] = { ...messages.value[index], ...message };
+      const updatedMessage = { ...messages.value[index], ...message };
+      const previousMessage = messages.value[index - 1];
+      const nextMessage = messages.value[index + 1];
+      const remainsOrdered =
+        (!previousMessage || comparePersistedMessageOrder(previousMessage, updatedMessage) <= 0) &&
+        (!nextMessage || comparePersistedMessageOrder(updatedMessage, nextMessage) <= 0);
+
+      if (remainsOrdered) {
+        messages.value[index] = updatedMessage;
+      } else {
+        const nextMessages = [...messages.value];
+        nextMessages[index] = updatedMessage;
+        messages.value = nextMessages.sort(comparePersistedMessageOrder);
+      }
     } else {
-      messages.value.push(message);
+      const lastMessage = messages.value[messages.value.length - 1];
+      if (!lastMessage || comparePersistedMessageOrder(lastMessage, message) <= 0) {
+        messages.value.push(message);
+      } else {
+        messages.value = [...messages.value, message].sort(comparePersistedMessageOrder);
+      }
     }
 
-    messages.value = [...messages.value].sort(comparePersistedMessageOrder);
+    if (messageWindowBeforeId.value == null && message.id != null) {
+      messageWindowBeforeId.value = message.id;
+    }
 
     // 更新 Task Ledger
     if (taskLedgerEnabled.value) {
@@ -1726,6 +1788,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         getPendingSummary: toolName => getToolStatusSummary(toolName, 'pending', 'Awaiting approval')
       });
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
+      hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0;
       hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
 
       // 重建 Task Ledger
@@ -1735,6 +1798,33 @@ export const useWorkflowStore = defineStore('workflow', () => {
     } catch (err) {
       await _handleError(err);
     }
+  };
+
+  const loadEarlierMessages = async () => {
+    const workflowId = currentWorkflowId.value;
+    const beforeMessageId = messageWindowBeforeId.value;
+    const requestRevision = messageLoadRevision;
+    if (!workflowId || !beforeMessageId || hiddenEarlierMessageCount.value <= 0) return false;
+
+    const page = await invokeWrapper('get_earlier_workflow_message_page', {
+      sessionId: workflowId,
+      beforeMessageId
+    });
+    if (
+      currentWorkflowId.value !== workflowId ||
+      messageLoadRevision !== requestRevision ||
+      messageWindowBeforeId.value !== beforeMessageId
+    ) {
+      return false;
+    }
+
+    const earlierMessages = (page.messages || []).map(message =>
+      normalizeWorkflowMessage(message, workflowId)
+    );
+    messages.value = [...earlierMessages, ...messages.value];
+    messageWindowBeforeId.value = page.beforeMessageId ?? beforeMessageId;
+    hiddenEarlierMessageCount.value = Number(page.hiddenEarlierMessageCount) || 0;
+    return earlierMessages.length > 0;
   };
 
   const loadEarlierTaskGroup = async () => {
@@ -1760,6 +1850,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     );
     messages.value = [...earlierMessages, ...messages.value];
     messageWindowBeforeId.value = window.beforeMessageId ?? beforeMessageId;
+    hiddenEarlierMessageCount.value = 0;
     hiddenCompletedTaskCount.value = Number(window.hiddenCompletedTaskCount) || 0;
     return earlierMessages.length > 0;
   };
@@ -1774,6 +1865,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     persistLastSelectedWorkflowId('');
     messages.value = [];
     messageWindowBeforeId.value = null;
+    hiddenEarlierMessageCount.value = 0;
     hiddenCompletedTaskCount.value = 0;
     todoList.value = [];
     isRunning.value = false;
@@ -1813,6 +1905,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     currentWorkflowId,
     messages,
     messageWindowBeforeId,
+    hiddenEarlierMessageCount,
     hiddenCompletedTaskCount,
     todoList,
     messageQueue,
@@ -1910,6 +2003,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     updateWorkflowFinalAudit,
     updateWorkflowTitleLocal,
     loadMessages,
+    loadEarlierMessages,
     loadEarlierTaskGroup,
     clearCurrentWorkflow,
     resetWorkflowUiProjection,

@@ -14,6 +14,7 @@ import {
   normalizeVisibleCompletionReport,
   reconcileWorkflowTaskWindowState,
   resolveWorkflowPhaseFromPlanningMode,
+  selectVisibleWorkflowMessageWindow,
   selectVisibleWorkflowTaskGroups,
   shouldRenderSubAgentCard
 } from './messageProjectionRules.js'
@@ -362,6 +363,63 @@ assert.deepEqual(
   ).map(group => group.id),
   ['newer-completed-task'],
   'the default one-task window must show only the newest completed task'
+)
+
+const olderMessageGroup = {
+  id: 'older-message-group',
+  isCompleted: true,
+  messages: [{ id: 'message-1' }, { id: 'message-2' }]
+}
+const currentMessageGroup = {
+  id: 'current-message-group',
+  isCompleted: false,
+  messages: [{ id: 'message-3' }, { id: 'message-4' }, { id: 'message-5' }]
+}
+const threeMessageWindow = selectVisibleWorkflowMessageWindow(
+  [olderMessageGroup, currentMessageGroup],
+  3
+)
+assert.equal(threeMessageWindow.hiddenMessageCount, 2)
+assert.deepEqual(threeMessageWindow.groups, [currentMessageGroup])
+assert.equal(
+  threeMessageWindow.groups[0],
+  currentMessageGroup,
+  'fully visible groups must retain their identity for projection cache reuse'
+)
+
+const fourMessageWindow = selectVisibleWorkflowMessageWindow(
+  [olderMessageGroup, currentMessageGroup],
+  4
+)
+assert.equal(fourMessageWindow.hiddenMessageCount, 1)
+assert.deepEqual(
+  fourMessageWindow.groups.flatMap(group => group.messages.map(message => message.id)),
+  ['message-2', 'message-3', 'message-4', 'message-5'],
+  'the message window must retain the newest messages across task boundaries'
+)
+assert.equal(
+  fourMessageWindow.groups[1],
+  currentMessageGroup,
+  'groups after the sliced boundary must retain their identity'
+)
+
+const longRunningTaskMessages = Array.from({ length: 5000 }, (_, index) => ({
+  id: `long-task-message-${index + 1}`
+}))
+const longRunningTaskWindow = selectVisibleWorkflowMessageWindow(
+  [{ id: 'long-running-task', isCompleted: false, messages: longRunningTaskMessages }],
+  200
+)
+assert.equal(longRunningTaskWindow.hiddenMessageCount, 4800)
+assert.equal(longRunningTaskWindow.groups[0].messages.length, 200)
+assert.equal(
+  longRunningTaskWindow.groups[0].messages[0].id,
+  'long-task-message-4801',
+  'long-running tasks must only project the bounded newest-message window'
+)
+assert.equal(
+  longRunningTaskWindow.groups[0].messages[199].id,
+  'long-task-message-5000'
 )
 
 const createTaskWindowHarness = () => {
