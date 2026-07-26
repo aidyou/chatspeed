@@ -749,13 +749,21 @@
       }
     }
 
+    &.think {
+        margin-bottom: var(--cs-space-sm);
+
+         &.ai-content .reasoning-container{
+             margin-bottom: 0;
+         }
+    }
+
     &.observe {
       opacity: 0.9;
       font-size: 0.95em;
     }
 
     &.is-error {
-      margin: 12px 0;
+      margin: var(--cs-space) 0;
 
 
       .ai-content {
