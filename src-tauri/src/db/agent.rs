@@ -651,6 +651,23 @@ impl MainStore {
         Ok(agent)
     }
 
+    /// Gets all agents on a dedicated reader worker.
+    pub(crate) async fn get_all_agents_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+    ) -> Result<Vec<Agent>, StoreError> {
+        runtime
+            .read(|conn| {
+                let mut statement =
+                    conn.prepare("SELECT * FROM agents ORDER BY sort_index ASC, name")?;
+                let rows = statement.query_map([], |row| Ok(Agent::from(row)))?;
+                let agents = rows
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(StoreError::from)?;
+                Ok(agents)
+            })
+            .await
+    }
+
     /// Gets all agents
     pub fn get_all_agents(&self) -> Result<Vec<Agent>, StoreError> {
         let conn = self

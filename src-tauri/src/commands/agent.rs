@@ -194,9 +194,13 @@ pub async fn get_agent(
 pub async fn get_all_agents(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
 ) -> Result<Vec<Agent>, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    let agents = store.get_all_agents().map_err(|e| e.to_string())?;
-    Ok(agents)
+    let runtime = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store.db_runtime().map_err(|e| e.to_string())?
+    };
+    MainStore::get_all_agents_with_runtime(runtime)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
