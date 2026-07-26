@@ -334,6 +334,16 @@ impl MainStore {
         })
     }
 
+    /// Transitional shared-access compatibility while callers migrate from the outer store lock.
+    pub fn read(&self) -> Result<&Self, StoreError> {
+        Ok(self)
+    }
+
+    /// Transitional shared-access compatibility while callers migrate from the outer store lock.
+    pub fn write(&self) -> Result<&Self, StoreError> {
+        Ok(self)
+    }
+
     pub(crate) fn db_runtime(&self) -> Result<std::sync::Arc<DbRuntime>, StoreError> {
         self.runtime
             .lock()
