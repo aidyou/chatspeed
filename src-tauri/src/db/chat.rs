@@ -18,6 +18,35 @@ impl MainStore {
     ///
     /// # Errors
     /// Returns a `StoreError` if the database operation fails.
+    pub(crate) async fn get_conversation_by_id_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: i64,
+    ) -> Result<Conversation, StoreError> {
+        runtime
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT id, title, created_at, is_favorite FROM conversations WHERE id = ?",
+                    [id],
+                    |row| {
+                        Ok(Conversation {
+                            id: row.get("id")?,
+                            title: row.get("title")?,
+                            created_at: row.get("created_at")?,
+                            is_favorite: row.get("is_favorite")?,
+                        })
+                    },
+                )
+                .map_err(|error| {
+                    if error == rusqlite::Error::QueryReturnedNoRows {
+                        StoreError::NotFound(t!("db.conversation_not_found").to_string())
+                    } else {
+                        StoreError::from(error)
+                    }
+                })
+            })
+            .await
+    }
+
     pub fn get_conversation_by_id(&self, id: i64) -> Result<Conversation, StoreError> {
         let conn = self
             .conn
@@ -44,6 +73,27 @@ impl MainStore {
                 }
             })?;
         Ok(conversation)
+    }
+
+    pub(crate) async fn get_all_conversations_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+    ) -> Result<Vec<Conversation>, StoreError> {
+        runtime
+            .read(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT c.id, c.title, c.is_favorite, COALESCE(MAX(m.timestamp), c.created_at) AS active_time FROM conversations c LEFT JOIN messages m ON c.id = m.conversation_id GROUP BY c.id ORDER BY active_time DESC",
+                )?;
+                let rows = statement.query_map([], |row| {
+                    Ok(Conversation {
+                        id: row.get("id")?,
+                        title: row.get("title")?,
+                        created_at: row.get("active_time")?,
+                        is_favorite: row.get("is_favorite")?,
+                    })
+                })?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
     }
 
     // TODO: add pagination to get_all_conversations

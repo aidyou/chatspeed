@@ -61,9 +61,16 @@ use whatlang::detect;
 /// console.log(conversations);
 /// ```
 #[command]
-pub fn get_all_conversations(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<Conversation>> {
-    let main_store = state.read()?;
-    main_store.get_all_conversations().map_err(AppError::Db)
+pub async fn get_all_conversations(
+    state: State<'_, Arc<RwLock<MainStore>>>,
+) -> Result<Vec<Conversation>> {
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::get_all_conversations_with_runtime(runtime)
+        .await
+        .map_err(AppError::Db)
 }
 
 /// Get a conversation by ID
@@ -87,12 +94,17 @@ pub fn get_all_conversations(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec
 /// console.log(conversation);
 /// ```
 #[command]
-pub fn get_conversation_by_id(
-    state: State<Arc<RwLock<MainStore>>>,
+pub async fn get_conversation_by_id(
+    state: State<'_, Arc<RwLock<MainStore>>>,
     id: i64,
 ) -> Result<Conversation> {
-    let main_store = state.read()?;
-    main_store.get_conversation_by_id(id).map_err(AppError::Db)
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::get_conversation_by_id_with_runtime(runtime, id)
+        .await
+        .map_err(AppError::Db)
 }
 
 /// Add a new conversation
