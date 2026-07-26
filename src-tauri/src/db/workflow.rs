@@ -1105,6 +1105,62 @@ impl MainStore {
         Ok(workflows)
     }
 
+    pub(crate) async fn delete_workflow_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                let transaction = conn.transaction()?;
+                let tree_cte = "WITH RECURSIVE workflow_tree(id, depth) AS (
+                    SELECT id, 0 FROM workflows WHERE id = ?1
+                    UNION ALL
+                    SELECT workflows.id, workflow_tree.depth + 1
+                    FROM workflows
+                    JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+                )";
+                let workflow_ids = {
+                    let mut statement = transaction.prepare(&format!(
+                        "{tree_cte} SELECT id FROM workflow_tree ORDER BY depth DESC"
+                    ))?;
+                    let rows = statement
+                        .query_map(params![id], |row| row.get::<_, String>(0))?;
+                    let ids = rows.collect::<Result<Vec<_>, _>>()?;
+                    ids
+                };
+                for table in [
+                    "workflow_context_messages",
+                    "workflow_messages",
+                    "workflow_snapshots",
+                ] {
+                    transaction.execute(
+                        &format!(
+                            "{tree_cte} DELETE FROM {table} WHERE session_id IN (SELECT id FROM workflow_tree)"
+                        ),
+                        params![id],
+                    )?;
+                }
+                if let Err(error) = transaction.execute(
+                    &format!(
+                        "{tree_cte} DELETE FROM workflow_events WHERE session_id IN (SELECT id FROM workflow_tree)"
+                    ),
+                    params![id],
+                ) {
+                    log::error!(
+                        "[Workflow][session={}] Failed to delete workflow events (non-fatal, continuing): {}",
+                        id,
+                        error
+                    );
+                }
+                for workflow_id in workflow_ids {
+                    transaction.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+                }
+                transaction.commit()?;
+                Ok(())
+            })
+            .await
+    }
+
     pub fn delete_workflow(&self, id: &str) -> Result<(), StoreError> {
         let mut conn = self
             .conn
