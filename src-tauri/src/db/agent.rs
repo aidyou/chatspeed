@@ -767,6 +767,26 @@ impl MainStore {
         .map_err(StoreError::from)
     }
 
+    /// Updates the persisted ordering for agents on the writer worker.
+    pub(crate) async fn update_agent_order_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        agent_ids: Vec<String>,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                let transaction = conn.transaction()?;
+                for (index, id) in agent_ids.iter().enumerate() {
+                    transaction.execute(
+                        "UPDATE agents SET sort_index = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                        params![index as i64, id],
+                    )?;
+                }
+                transaction.commit()?;
+                Ok(())
+            })
+            .await
+    }
+
     /// Updates the persisted ordering for agents.
     pub fn update_agent_order(&self, agent_ids: Vec<String>) -> Result<(), StoreError> {
         let conn = self

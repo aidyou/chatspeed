@@ -212,11 +212,13 @@ pub async fn update_agent_order(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     agent_ids: Vec<String>,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    store
-        .update_agent_order(agent_ids)
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    let runtime = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store.db_runtime().map_err(|e| e.to_string())?
+    };
+    MainStore::update_agent_order_with_runtime(runtime, agent_ids)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 fn git_review_tool_metadata() -> Vec<Value> {
