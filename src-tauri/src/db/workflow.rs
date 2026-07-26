@@ -2214,6 +2214,35 @@ impl MainStore {
 
     // ExecutionContext Snapshot Operations
 
+    pub(crate) async fn get_execution_context_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        session_id: String,
+    ) -> Result<Option<ExecutionContext>, StoreError> {
+        runtime
+            .read(move |conn| {
+                let result: Option<String> = conn
+                    .query_row(
+                        "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
+                        params![session_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                match result {
+                    Some(context_json) => {
+                        let mut context: ExecutionContext = serde_json::from_str(&context_json)?;
+                        let _ = sanitize_wait_reason_for_runtime_state(
+                            &session_id,
+                            &context.state,
+                            &mut context.wait_reason,
+                        );
+                        Ok(Some(context))
+                    }
+                    None => Ok(None),
+                }
+            })
+            .await
+    }
+
     pub fn get_execution_context(
         &self,
         session_id: &str,

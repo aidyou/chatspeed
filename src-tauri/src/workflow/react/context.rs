@@ -425,15 +425,17 @@ impl ContextManager {
 
     /// Loads history from database, starting from the last summary if exists.
     pub async fn load_history(&mut self) -> Result<(), WorkflowEngineError> {
-        let (snapshot, execution_context) = {
+        let runtime = {
             let store = self.main_store.read().map_err(|e| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
             })?;
-            (
-                store.get_workflow_snapshot(&self.session_id)?,
-                store.get_execution_context(&self.session_id)?,
-            )
+            store.db_runtime()?
         };
+        let snapshot =
+            MainStore::get_workflow_snapshot_with_runtime(runtime.clone(), self.session_id.clone())
+                .await?;
+        let execution_context =
+            MainStore::get_execution_context_with_runtime(runtime, self.session_id.clone()).await?;
         self.messages = Self::rebuild_compacted_messages(&snapshot.messages, self.max_tokens);
         let transcript_segment_id = self
             .messages
