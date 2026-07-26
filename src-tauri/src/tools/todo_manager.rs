@@ -38,11 +38,16 @@ async fn get_db_todo_list(
     store: &Arc<std::sync::RwLock<MainStore>>,
     session_id: &str,
 ) -> Result<Vec<Value>, ToolError> {
-    let store = store
-        .read()
-        .map_err(|e| ToolError::ExecutionFailed(format!("DB Lock error: {}", e)))?;
-    let snapshot = store
-        .get_workflow_snapshot(session_id)
+    let runtime = {
+        let store = store
+            .read()
+            .map_err(|e| ToolError::ExecutionFailed(format!("DB Lock error: {}", e)))?;
+        store
+            .db_runtime()
+            .map_err(|e| ToolError::ExecutionFailed(format!("DB runtime error: {}", e)))?
+    };
+    let snapshot = MainStore::get_workflow_snapshot_with_runtime(runtime, session_id.to_string())
+        .await
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch workflow: {}", e)))?;
 
     let list_str = snapshot.workflow.todo_list.unwrap_or_else(|| "[]".into());

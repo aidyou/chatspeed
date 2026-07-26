@@ -1664,6 +1664,37 @@ impl MainStore {
         Ok(workflow)
     }
 
+    pub(crate) async fn get_workflow_snapshot_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+    ) -> Result<WorkflowSnapshot, StoreError> {
+        runtime
+            .read(move |conn| {
+                let mut workflow: Workflow = conn.query_row(
+                    "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE workflows.id = ?1",
+                    params![id],
+                    |row| Ok(Workflow::from(row)),
+                )?;
+                let snapshot_state_and_wait_reason: Option<(Option<String>, Option<String>)> = conn
+                    .query_row(
+                        "SELECT state, wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                        params![id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .ok();
+                workflow.wait_reason = snapshot_state_and_wait_reason.and_then(|(state, wait_reason)| {
+                    (state.as_deref() == Some("waiting")).then_some(wait_reason).flatten()
+                });
+                let mut statement = conn.prepare(
+                    "SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC",
+                )?;
+                let rows = statement.query_map(params![id], |row| Ok(WorkflowMessage::from(row)))?;
+                let messages = rows.collect::<Result<Vec<_>, _>>()?;
+                Ok(WorkflowSnapshot { workflow, messages })
+            })
+            .await
+    }
+
     pub fn get_workflow_snapshot(&self, id: &str) -> Result<WorkflowSnapshot, StoreError> {
         let workflow = self.get_workflow_for_ui(id)?;
         let conn = self
