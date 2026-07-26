@@ -60,27 +60,30 @@ use crate::error::{AppError, Result};
 /// });
 /// ```
 #[command]
-pub fn add_note(
-    state: State<Arc<RwLock<MainStore>>>,
+pub async fn add_note(
+    state: State<'_, Arc<RwLock<MainStore>>>,
     title: String,
     content: String,
     conversation_id: Option<i64>,
     message_id: Option<i64>,
-    tags: Vec<&str>,
+    tags: Vec<String>,
     metadata: Option<serde_json::Value>,
 ) -> Result<()> {
-    let mut main_store = state.write()?;
-    main_store
-        .add_note(
-            &title,
-            &content,
-            conversation_id,
-            message_id,
-            tags,
-            metadata,
-        )
-        .map_err(AppError::Db)?;
-
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::add_note_with_runtime(
+        runtime,
+        title,
+        content,
+        conversation_id,
+        message_id,
+        tags,
+        metadata,
+    )
+    .await
+    .map_err(AppError::Db)?;
     Ok(())
 }
 

@@ -53,6 +53,68 @@ pub struct NoteTag {
 }
 
 impl MainStore {
+    pub(crate) async fn add_note_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        title: String,
+        content: String,
+        conversation_id: Option<i64>,
+        message_id: Option<i64>,
+        tags: Vec<String>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<i64, StoreError> {
+        let content_hash = format!("{:x}", xxh32(content.as_bytes(), 0));
+        let metadata_json = metadata
+            .map(|value| serde_json::to_string(&value))
+            .transpose()
+            .map_err(|error| {
+                StoreError::JsonError(
+                    t!(
+                        "db.json_serialize_failed_metadata",
+                        error = error.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
+        let now = Utc::now().timestamp();
+        runtime
+            .write(move |conn| {
+                let exists = conn
+                    .query_row(
+                        "SELECT id FROM notes WHERE content_hash = ?1 AND (conversation_id = ?2 OR (?2 IS NULL AND conversation_id IS NULL)) AND (message_id = ?3 OR (?3 IS NULL AND message_id IS NULL)) AND deleted_at IS NULL LIMIT 1",
+                        params![content_hash, conversation_id, message_id],
+                        |_| Ok(true),
+                    )
+                    .optional()?;
+                if exists.unwrap_or(false) {
+                    return Err(StoreError::AlreadyExists(t!("chat.note_already_exists").into()));
+                }
+                let transaction = conn.transaction()?;
+                transaction.execute(
+                    "INSERT INTO notes (tags, title, content, content_hash, conversation_id, message_id, created_at, updated_at, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8)",
+                    params![tags.join(","), title, content, content_hash, conversation_id, message_id, now, metadata_json],
+                )?;
+                let note_id = transaction.last_insert_rowid();
+                for tag in tags {
+                    transaction.execute(
+                        "INSERT INTO note_tag_items (name, note_count, created_at) VALUES (?1, 1, ?2) ON CONFLICT(name) DO UPDATE SET note_count = note_count + 1",
+                        params![tag, now],
+                    )?;
+                    let tag_id: i64 = transaction.query_row(
+                        "SELECT id FROM note_tag_items WHERE name = ?1",
+                        params![tag],
+                        |row| row.get(0),
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO note_tag_relations (note_id, tag_id, created_at) VALUES (?1, ?2, ?3)",
+                        params![note_id, tag_id, now],
+                    )?;
+                }
+                transaction.commit()?;
+                Ok(note_id)
+            })
+            .await
+    }
+
     /// Creates a new note with the given title, content, and optional tags.
     ///
     /// # Arguments
