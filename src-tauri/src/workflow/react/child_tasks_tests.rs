@@ -9,10 +9,11 @@ use crate::workflow::react::types::{ExecutionContext, RuntimeState, WaitReason};
 use std::sync::Arc;
 use tempfile::tempdir;
 
-fn create_test_store() -> Arc<MainStore> {
+fn create_test_store() -> (tempfile::TempDir, Arc<MainStore>) {
     let dir = tempdir().expect("failed to create temp dir");
     let db_path = dir.path().join("test.db");
-    Arc::new(MainStore::new(&db_path).expect("failed to create store"))
+    let store = Arc::new(MainStore::new(&db_path).expect("failed to create store"));
+    (dir, store)
 }
 
 #[test]
@@ -100,7 +101,7 @@ fn test_p0_sub_agent_cancelled_triggers_parent_convergence() {
 
 #[test]
 fn test_p0_parent_knows_waiting_task_after_restart() {
-    let store = create_test_store();
+    let (_dir, store) = create_test_store();
 
     let mut ctx = ExecutionContext::new("parent_session".to_string());
     ctx.wait_reason = Some(WaitReason::SubAgent);

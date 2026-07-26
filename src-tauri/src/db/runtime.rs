@@ -1,19 +1,20 @@
 use crate::db::{CcproxyStat, StoreError};
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use rusqlite::{Connection, OpenFlags};
 use std::{
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc as std_mpsc, Arc,
     },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 
 const DEFAULT_READER_COUNT: usize = 2;
 const DEFAULT_QUEUE_CAPACITY: usize = 256;
+const DEFAULT_TELEMETRY_QUEUE_CAPACITY: usize = 1_000;
 const TELEMETRY_HIGH_WATER_WARNING: usize = 1_000;
 const SLOW_ENQUEUE_WARNING: Duration = Duration::from_millis(100);
 const SLOW_JOB_WARNING: Duration = Duration::from_millis(250);
@@ -81,19 +82,148 @@ enum WorkerMessage {
     Shutdown(oneshot::Sender<()>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MaintenanceMode {
+    Running,
+    Maintenance,
+    Closed,
+}
+
+#[derive(Debug)]
+struct MaintenanceState {
+    mode: MaintenanceMode,
+    active_jobs: usize,
+}
+
+#[derive(Debug)]
+struct MaintenanceGate {
+    state: Mutex<MaintenanceState>,
+    state_changed: Condvar,
+    async_state_changed: Notify,
+}
+
+impl MaintenanceGate {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(MaintenanceState {
+                mode: MaintenanceMode::Running,
+                active_jobs: 0,
+            }),
+            state_changed: Condvar::new(),
+            async_state_changed: Notify::new(),
+        }
+    }
+
+    async fn enter(self: &Arc<Self>) -> Result<JobPermit, StoreError> {
+        loop {
+            let state_changed = self.async_state_changed.notified();
+            tokio::pin!(state_changed);
+            state_changed.as_mut().enable();
+
+            {
+                let mut state = self.state.lock();
+                match state.mode {
+                    MaintenanceMode::Running => {
+                        state.active_jobs += 1;
+                        return Ok(JobPermit {
+                            gate: Arc::clone(self),
+                        });
+                    }
+                    MaintenanceMode::Closed => return Err(StoreError::RuntimeClosed),
+                    MaintenanceMode::Maintenance => {}
+                }
+            }
+
+            state_changed.await;
+        }
+    }
+
+    fn enter_blocking(self: &Arc<Self>) -> Result<JobPermit, StoreError> {
+        let mut state = self.state.lock();
+        loop {
+            match state.mode {
+                MaintenanceMode::Running => {
+                    state.active_jobs += 1;
+                    return Ok(JobPermit {
+                        gate: Arc::clone(self),
+                    });
+                }
+                MaintenanceMode::Closed => return Err(StoreError::RuntimeClosed),
+                MaintenanceMode::Maintenance => self.state_changed.wait(&mut state),
+            }
+        }
+    }
+
+    fn begin_maintenance(&self) -> Result<(), StoreError> {
+        let mut state = self.state.lock();
+        loop {
+            match state.mode {
+                MaintenanceMode::Running => {
+                    state.mode = MaintenanceMode::Maintenance;
+                    break;
+                }
+                MaintenanceMode::Maintenance => self.state_changed.wait(&mut state),
+                MaintenanceMode::Closed => return Err(StoreError::RuntimeClosed),
+            }
+        }
+        while state.active_jobs > 0 {
+            self.state_changed.wait(&mut state);
+        }
+        Ok(())
+    }
+
+    fn resume(&self) {
+        let mut state = self.state.lock();
+        if state.mode == MaintenanceMode::Maintenance {
+            state.mode = MaintenanceMode::Running;
+        }
+        drop(state);
+        self.state_changed.notify_all();
+        self.async_state_changed.notify_waiters();
+    }
+
+    fn close_and_wait(&self) {
+        let mut state = self.state.lock();
+        state.mode = MaintenanceMode::Closed;
+        self.state_changed.notify_all();
+        self.async_state_changed.notify_waiters();
+        while state.active_jobs > 0 {
+            self.state_changed.wait(&mut state);
+        }
+    }
+
+    fn leave(&self) {
+        let mut state = self.state.lock();
+        state.active_jobs = state.active_jobs.saturating_sub(1);
+        if state.active_jobs == 0 {
+            self.state_changed.notify_all();
+        }
+    }
+}
+
+struct JobPermit {
+    gate: Arc<MaintenanceGate>,
+}
+
+impl Drop for JobPermit {
+    fn drop(&mut self) {
+        self.gate.leave();
+    }
+}
+
 struct Worker {
     sender: mpsc::Sender<WorkerMessage>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 enum TelemetryMessage {
-    Stat(CcproxyStat),
-    Flush(oneshot::Sender<()>),
-    Shutdown(oneshot::Sender<()>),
+    Stat(CcproxyStat, JobPermit),
+    Flush(oneshot::Sender<Result<(), String>>),
+    Shutdown(oneshot::Sender<Result<(), String>>),
 }
 
 struct TelemetryIngress {
-    sender: std_mpsc::Sender<TelemetryMessage>,
+    sender: std_mpsc::SyncSender<TelemetryMessage>,
     pending: Arc<AtomicUsize>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
 }
@@ -106,10 +236,11 @@ impl TelemetryIngress {
             .map_err(|_| StoreError::RuntimeClosed)?;
         ack_receiver
             .blocking_recv()
-            .map_err(|_| StoreError::RuntimeClosed)
+            .map_err(|_| StoreError::RuntimeClosed)?
+            .map_err(StoreError::WorkerFailed)
     }
 
-    fn enqueue(&self, stat: CcproxyStat) -> Result<(), StoreError> {
+    fn enqueue(&self, stat: CcproxyStat, permit: JobPermit) -> Result<(), StoreError> {
         let pending = self.pending.fetch_add(1, Ordering::Relaxed) + 1;
         if pending == TELEMETRY_HIGH_WATER_WARNING {
             log::warn!(
@@ -117,44 +248,69 @@ impl TelemetryIngress {
                 TELEMETRY_HIGH_WATER_WARNING
             );
         }
-        if self.sender.send(TelemetryMessage::Stat(stat)).is_err() {
-            self.pending.fetch_sub(1, Ordering::Relaxed);
-            log::error!("CCProxy telemetry ingress is unavailable; statistic was not queued");
-            return Err(StoreError::RuntimeClosed);
+        match self.sender.send(TelemetryMessage::Stat(stat, permit)) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                self.pending.fetch_sub(1, Ordering::Relaxed);
+                log::error!("CCProxy telemetry ingress is unavailable; statistic was not queued");
+                Err(StoreError::RuntimeClosed)
+            }
         }
-        Ok(())
+    }
+
+    #[cfg(test)]
+    async fn flush(&self) -> Result<(), StoreError> {
+        let (ack_sender, ack_receiver) = oneshot::channel();
+        self.sender
+            .send(TelemetryMessage::Flush(ack_sender))
+            .map_err(|_| StoreError::RuntimeClosed)?;
+        ack_receiver
+            .await
+            .map_err(|_| StoreError::RuntimeClosed)?
+            .map_err(StoreError::WorkerFailed)
     }
 
     fn shutdown_blocking(&self) -> Result<(), StoreError> {
         let (ack_sender, ack_receiver) = oneshot::channel();
-        self.sender
+        let ack_result = self
+            .sender
             .send(TelemetryMessage::Shutdown(ack_sender))
-            .map_err(|_| StoreError::RuntimeClosed)?;
-        ack_receiver
-            .blocking_recv()
-            .map_err(|_| StoreError::RuntimeClosed)?;
-        if let Some(join_handle) = self.join_handle.lock().take() {
+            .map_err(|_| StoreError::RuntimeClosed)
+            .and_then(|_| {
+                ack_receiver
+                    .blocking_recv()
+                    .map_err(|_| StoreError::RuntimeClosed)?
+                    .map_err(StoreError::WorkerFailed)
+            });
+        let join_result = if let Some(join_handle) = self.join_handle.lock().take() {
             join_handle
                 .join()
-                .map_err(|_| StoreError::WorkerFailed("telemetry worker panicked".to_string()))?;
-        }
-        Ok(())
+                .map_err(|_| StoreError::WorkerFailed("telemetry worker panicked".to_string()))
+        } else {
+            Ok(())
+        };
+        ack_result.and(join_result)
     }
 
     #[cfg(test)]
     async fn shutdown(&self) -> Result<(), StoreError> {
         let (ack_sender, ack_receiver) = oneshot::channel();
-        self.sender
-            .send(TelemetryMessage::Shutdown(ack_sender))
-            .map_err(|_| StoreError::RuntimeClosed)?;
-        ack_receiver.await.map_err(|_| StoreError::RuntimeClosed)?;
-        if let Some(join_handle) = self.join_handle.lock().take() {
+        let ack_result = match self.sender.send(TelemetryMessage::Shutdown(ack_sender)) {
+            Ok(()) => ack_receiver
+                .await
+                .map_err(|_| StoreError::RuntimeClosed)
+                .and_then(|result| result.map_err(StoreError::WorkerFailed)),
+            Err(_) => Err(StoreError::RuntimeClosed),
+        };
+        let join_result = if let Some(join_handle) = self.join_handle.lock().take() {
             tokio::task::spawn_blocking(move || join_handle.join())
                 .await
                 .map_err(|error| StoreError::WorkerFailed(error.to_string()))?
-                .map_err(|_| StoreError::WorkerFailed("telemetry worker panicked".to_string()))?;
-        }
-        Ok(())
+                .map_err(|_| StoreError::WorkerFailed("telemetry worker panicked".to_string()))
+        } else {
+            Ok(())
+        };
+        ack_result.and(join_result)
     }
 }
 
@@ -217,13 +373,37 @@ pub struct DbRuntime {
     telemetry: TelemetryIngress,
     next_reader: AtomicUsize,
     metrics: Arc<DbRuntimeMetrics>,
-    accepting_jobs: AtomicBool,
+    maintenance_gate: Arc<MaintenanceGate>,
     is_memory: bool,
 }
 
 impl DbRuntime {
     pub fn open<P: AsRef<Path>>(db_path: P) -> Result<Self, StoreError> {
         Self::open_with_options(db_path, DEFAULT_READER_COUNT, DEFAULT_QUEUE_CAPACITY)
+    }
+
+    pub(crate) fn from_initialized_memory_connection(
+        connection: Connection,
+    ) -> Result<Self, StoreError> {
+        configure_writer_connection(&connection)?;
+        let metrics = Arc::new(DbRuntimeMetrics::default());
+        let writer = Self::spawn_worker(
+            "db-writer",
+            connection,
+            DEFAULT_QUEUE_CAPACITY,
+            Arc::clone(&metrics),
+            true,
+        )?;
+        let telemetry = Self::spawn_telemetry(writer.sender.clone(), Arc::clone(&metrics))?;
+        Ok(Self {
+            writer,
+            readers: Vec::new(),
+            telemetry,
+            next_reader: AtomicUsize::new(0),
+            metrics,
+            maintenance_gate: Arc::new(MaintenanceGate::new()),
+            is_memory: true,
+        })
     }
 
     fn open_with_options<P: AsRef<Path>>(
@@ -263,7 +443,7 @@ impl DbRuntime {
             telemetry,
             next_reader: AtomicUsize::new(0),
             metrics,
-            accepting_jobs: AtomicBool::new(true),
+            maintenance_gate: Arc::new(MaintenanceGate::new()),
             is_memory,
         })
     }
@@ -310,29 +490,33 @@ impl DbRuntime {
         writer_sender: mpsc::Sender<WorkerMessage>,
         metrics: Arc<DbRuntimeMetrics>,
     ) -> Result<TelemetryIngress, StoreError> {
-        let (sender, receiver) = std_mpsc::channel();
+        let (sender, receiver) = std_mpsc::sync_channel(DEFAULT_TELEMETRY_QUEUE_CAPACITY);
         let pending = Arc::new(AtomicUsize::new(0));
         let worker_pending = Arc::clone(&pending);
+        let worker_metrics = Arc::clone(&metrics);
         let join_handle = std::thread::Builder::new()
             .name("db-telemetry".to_string())
             .spawn(move || {
                 let mut batch = Vec::with_capacity(100);
-                let mut flush_ack = None;
-                let mut shutdown_ack = None;
+                let mut flush_acks = Vec::new();
+                let mut shutdown_acks = Vec::new();
+                let mut pending_error = None;
                 loop {
                     match receiver.recv_timeout(Duration::from_millis(25)) {
-                        Ok(TelemetryMessage::Stat(stat)) => batch.push(stat),
-                        Ok(TelemetryMessage::Flush(ack_sender)) => flush_ack = Some(ack_sender),
-                        Ok(TelemetryMessage::Shutdown(ack_sender)) => shutdown_ack = Some(ack_sender),
+                        Ok(TelemetryMessage::Stat(stat, permit)) => batch.push((stat, permit)),
+                        Ok(TelemetryMessage::Flush(ack_sender)) => flush_acks.push(ack_sender),
+                        Ok(TelemetryMessage::Shutdown(ack_sender)) => shutdown_acks.push(ack_sender),
                         Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                         Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
                     }
 
                     while batch.len() < 100 {
                         match receiver.try_recv() {
-                            Ok(TelemetryMessage::Stat(stat)) => batch.push(stat),
-                            Ok(TelemetryMessage::Flush(ack_sender)) => flush_ack = Some(ack_sender),
-                            Ok(TelemetryMessage::Shutdown(ack_sender)) => shutdown_ack = Some(ack_sender),
+                            Ok(TelemetryMessage::Stat(stat, permit)) => batch.push((stat, permit)),
+                            Ok(TelemetryMessage::Flush(ack_sender)) => flush_acks.push(ack_sender),
+                            Ok(TelemetryMessage::Shutdown(ack_sender)) => {
+                                shutdown_acks.push(ack_sender)
+                            }
                             Err(std_mpsc::TryRecvError::Empty) => break,
                             Err(std_mpsc::TryRecvError::Disconnected) => break,
                         }
@@ -344,9 +528,10 @@ impl DbRuntime {
                         let (result_sender, result_receiver) = oneshot::channel();
                         let job: DbJob = Box::new(move |connection| {
                             let started_at = Instant::now();
+                            let (stats, _permits): (Vec<_>, Vec<_>) = batch.into_iter().unzip();
                             let result = (|| -> Result<(), StoreError> {
                                 let transaction = connection.transaction()?;
-                                for stat in batch {
+                                for stat in stats {
                                     transaction.execute(
                                         "INSERT INTO ccproxy_stats (client_model, backend_model, provider_id, provider, protocol, tool_compat_mode, status_code, error_message, input_tokens, output_tokens, cache_tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                                         rusqlite::params![
@@ -387,23 +572,39 @@ impl DbRuntime {
                         worker_pending.fetch_sub(batch_size, Ordering::Relaxed);
                         match result {
                             Ok(()) => {
-                                metrics.telemetry_batches_completed.fetch_add(1, Ordering::Relaxed);
-                                metrics.telemetry_records_completed.fetch_add(batch_size as u64, Ordering::Relaxed);
+                                worker_metrics
+                                    .telemetry_batches_completed
+                                    .fetch_add(1, Ordering::Relaxed);
+                                worker_metrics
+                                    .telemetry_records_completed
+                                    .fetch_add(batch_size as u64, Ordering::Relaxed);
                                 log::debug!("Persisted CCProxy telemetry batch with {batch_size} records");
                             }
                             Err(error) => {
-                                metrics.failed_jobs.fetch_add(1, Ordering::Relaxed);
+                                worker_metrics.failed_jobs.fetch_add(1, Ordering::Relaxed);
                                 log::error!("Failed to persist CCProxy telemetry batch: {error}");
+                                if pending_error.is_none() {
+                                    pending_error = Some(error.to_string());
+                                }
                             }
                         }
                     }
 
-                    if let Some(ack_sender) = flush_ack.take() {
-                        let _ = ack_sender.send(());
-                    }
-                    if let Some(ack_sender) = shutdown_ack.take() {
-                        let _ = ack_sender.send(());
-                        break;
+                    if !flush_acks.is_empty() || !shutdown_acks.is_empty() {
+                        let should_shutdown = !shutdown_acks.is_empty();
+                        let result = match pending_error.take() {
+                            Some(error) => Err(error),
+                            None => Ok(()),
+                        };
+                        for ack_sender in flush_acks.drain(..) {
+                            let _ = ack_sender.send(result.clone());
+                        }
+                        for ack_sender in shutdown_acks.drain(..) {
+                            let _ = ack_sender.send(result.clone());
+                        }
+                        if should_shutdown {
+                            break;
+                        }
                     }
                 }
             })
@@ -448,12 +649,11 @@ impl DbRuntime {
         T: Send + 'static,
         F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
     {
-        if !self.accepting_jobs.load(Ordering::Acquire) {
-            return Err(StoreError::RuntimeMaintenance);
-        }
+        let permit = self.maintenance_gate.enter().await?;
         let (result_sender, result_receiver) = oneshot::channel();
         let metrics = Arc::clone(&self.metrics);
         let job: DbJob = Box::new(move |connection| {
+            let _permit = permit;
             let started_at = Instant::now();
             let result = operation(connection);
             if started_at.elapsed() >= SLOW_JOB_WARNING {
@@ -499,12 +699,13 @@ impl DbRuntime {
         T: Send + 'static,
         F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
     {
-        if require_running && !self.accepting_jobs.load(Ordering::Acquire) {
-            return Err(StoreError::RuntimeMaintenance);
-        }
+        let permit = require_running
+            .then(|| self.maintenance_gate.enter_blocking())
+            .transpose()?;
         let (result_sender, result_receiver) = std_mpsc::sync_channel(1);
         let metrics = Arc::clone(&self.metrics);
         let job: DbJob = Box::new(move |connection| {
+            let _permit = permit;
             let result = operation(connection);
             if result.is_err() {
                 metrics.failed_jobs.fetch_add(1, Ordering::Relaxed);
@@ -512,21 +713,30 @@ impl DbRuntime {
             let _ = result_sender.send(result);
         });
 
-        let sender = worker.sender.clone();
-        let (dispatch_sender, dispatch_receiver) = std_mpsc::sync_channel(1);
-        std::thread::spawn(move || {
-            let result = sender
+        let dispatch_and_wait = move || -> Result<T, StoreError> {
+            worker
+                .sender
                 .blocking_send(WorkerMessage::Job(job))
-                .map_err(|_| StoreError::RuntimeClosed);
-            let _ = dispatch_sender.send(result);
-        });
-        dispatch_receiver
-            .recv()
-            .map_err(|_| StoreError::RuntimeClosed)??;
-        self.observe_queue_depth(worker, is_writer);
-        result_receiver
-            .recv()
-            .map_err(|_| StoreError::RuntimeClosed)?
+                .map_err(|_| StoreError::RuntimeClosed)?;
+            self.observe_queue_depth(worker, is_writer);
+            result_receiver
+                .recv()
+                .map_err(|_| StoreError::RuntimeClosed)?
+        };
+
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(dispatch_and_wait)
+            }
+            Ok(_) => std::thread::scope(|scope| {
+                scope.spawn(dispatch_and_wait).join().map_err(|_| {
+                    StoreError::WorkerFailed(
+                        "blocking database dispatch thread panicked".to_string(),
+                    )
+                })?
+            }),
+            Err(_) => dispatch_and_wait(),
+        }
     }
 
     fn observe_queue_depth(&self, worker: &Worker, is_writer: bool) {
@@ -576,7 +786,7 @@ impl DbRuntime {
     }
 
     pub fn drain_for_maintenance(&self) -> Result<(), StoreError> {
-        self.accepting_jobs.store(false, Ordering::Release);
+        self.maintenance_gate.begin_maintenance()?;
         std::thread::scope(|scope| {
             scope.spawn(|| self.drain_blocking()).join().map_err(|_| {
                 StoreError::WorkerFailed("maintenance drain thread panicked".to_string())
@@ -585,10 +795,11 @@ impl DbRuntime {
     }
 
     pub fn resume_after_maintenance(&self) {
-        self.accepting_jobs.store(true, Ordering::Release);
+        self.maintenance_gate.resume();
     }
 
     pub fn shutdown_for_maintenance(&self) -> Result<(), StoreError> {
+        self.maintenance_gate.close_and_wait();
         std::thread::scope(|scope| {
             scope
                 .spawn(|| self.shutdown_blocking())
@@ -609,19 +820,27 @@ impl DbRuntime {
     }
 
     pub fn shutdown_blocking(&self) -> Result<(), StoreError> {
-        self.telemetry.flush_blocking()?;
-        self.telemetry.shutdown_blocking()?;
-        for reader in &self.readers {
-            reader.shutdown_blocking()?;
+        let mut first_error = self.telemetry.flush_blocking().err();
+        if let Err(error) = self.telemetry.shutdown_blocking() {
+            first_error.get_or_insert(error);
         }
-        self.writer.shutdown_blocking()
+        for reader in &self.readers {
+            if let Err(error) = reader.shutdown_blocking() {
+                first_error.get_or_insert(error);
+            }
+        }
+        if let Err(error) = self.writer.shutdown_blocking() {
+            first_error.get_or_insert(error);
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     pub fn enqueue_ccproxy_stat(&self, stat: CcproxyStat) -> Result<(), StoreError> {
-        if !self.accepting_jobs.load(Ordering::Acquire) {
-            return Err(StoreError::RuntimeMaintenance);
-        }
-        self.telemetry.enqueue(stat)?;
+        let permit = self.maintenance_gate.enter_blocking()?;
+        self.telemetry.enqueue(stat, permit)?;
         DbRuntimeMetrics::observe_high_water(
             &self.metrics.telemetry_pending_high_water,
             self.telemetry.pending.load(Ordering::Relaxed),
@@ -636,11 +855,23 @@ impl DbRuntime {
 
     #[cfg(test)]
     pub async fn shutdown(&self) -> Result<(), StoreError> {
-        self.telemetry.shutdown().await?;
-        for reader in &self.readers {
-            reader.shutdown().await?;
+        self.maintenance_gate.close_and_wait();
+        let mut first_error = self.telemetry.flush().await.err();
+        if let Err(error) = self.telemetry.shutdown().await {
+            first_error.get_or_insert(error);
         }
-        self.writer.shutdown().await
+        for reader in &self.readers {
+            if let Err(error) = reader.shutdown().await {
+                first_error.get_or_insert(error);
+            }
+        }
+        if let Err(error) = self.writer.shutdown().await {
+            first_error.get_or_insert(error);
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
@@ -676,7 +907,7 @@ fn configure_writer_connection(connection: &Connection) -> Result<(), StoreError
 
 #[cfg(test)]
 mod tests {
-    use super::DbRuntime;
+    use super::{DbRuntime, DbRuntimeMetrics, MaintenanceGate, TelemetryIngress};
     use crate::db::{CcproxyStat, StoreError};
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
@@ -810,7 +1041,7 @@ mod tests {
     #[tokio::test]
     async fn telemetry_batches_commit_before_shutdown() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let runtime = DbRuntime::open(temp_dir.path().join("runtime.db")).unwrap();
+        let runtime = Arc::new(DbRuntime::open(temp_dir.path().join("runtime.db")).unwrap());
         runtime
             .write(|connection| {
                 connection.execute(
@@ -853,12 +1084,11 @@ mod tests {
                 .unwrap();
         }
         runtime.drain_for_maintenance().unwrap();
-        assert!(matches!(
-            runtime.read(|_| Ok(())).await,
-            Err(StoreError::RuntimeMaintenance)
-        ));
-        assert!(matches!(
-            runtime.enqueue_ccproxy_stat(CcproxyStat {
+        let waiting_runtime = Arc::clone(&runtime);
+        let waiting_read = tokio::spawn(async move { waiting_runtime.read(|_| Ok(())).await });
+        let waiting_runtime = Arc::clone(&runtime);
+        let waiting_stat = tokio::task::spawn_blocking(move || {
+            waiting_runtime.enqueue_ccproxy_stat(CcproxyStat {
                 id: None,
                 client_model: "client".to_string(),
                 backend_model: "backend".to_string(),
@@ -872,27 +1102,117 @@ mod tests {
                 output_tokens: 0,
                 cache_tokens: 0,
                 request_at: None,
-            }),
-            Err(StoreError::RuntimeMaintenance)
-        ));
+            })
+        });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(!waiting_read.is_finished());
+        assert!(!waiting_stat.is_finished());
+        runtime.resume_after_maintenance();
+        waiting_read.await.unwrap().unwrap();
+        waiting_stat.await.unwrap().unwrap();
         let metrics = runtime.metrics();
-        assert_eq!(metrics.telemetry_records_completed, 3);
+        assert!(metrics.telemetry_records_completed >= 3);
         assert!(metrics.telemetry_batches_completed >= 1);
         runtime.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn telemetry_queue_applies_backpressure_when_full() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let metrics = Arc::new(DbRuntimeMetrics::default());
+        let gate = Arc::new(MaintenanceGate::new());
+        let ingress = Arc::new(TelemetryIngress {
+            sender,
+            pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            join_handle: parking_lot::Mutex::new(None),
+        });
+        let stat = || CcproxyStat {
+            id: None,
+            client_model: "client".to_string(),
+            backend_model: "backend".to_string(),
+            provider_id: Some(1),
+            provider: "provider".to_string(),
+            protocol: "openai".to_string(),
+            tool_compat_mode: 0,
+            status_code: 200,
+            error_message: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_tokens: 0,
+            request_at: None,
+        };
+
+        ingress
+            .enqueue(stat(), gate.enter_blocking().unwrap())
+            .unwrap();
+        let waiting_ingress = Arc::clone(&ingress);
+        let waiting_gate = Arc::clone(&gate);
+        let waiting_enqueue = std::thread::spawn(move || {
+            waiting_ingress.enqueue(stat(), waiting_gate.enter_blocking().unwrap())
+        });
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(!waiting_enqueue.is_finished());
+        drop(receiver.recv().unwrap());
+        waiting_enqueue.join().unwrap().unwrap();
+        drop(receiver.recv().unwrap());
+
+        assert_eq!(metrics.snapshot().failed_jobs, 0);
+    }
+
+    #[test]
+    fn maintenance_waits_for_jobs_that_already_hold_a_permit() {
+        let gate = Arc::new(MaintenanceGate::new());
+        let permit = gate.enter_blocking().unwrap();
+        let maintenance_gate = Arc::clone(&gate);
+        let maintenance = std::thread::spawn(move || maintenance_gate.begin_maintenance());
+
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(!maintenance.is_finished());
+        drop(permit);
+        maintenance.join().unwrap().unwrap();
+        gate.resume();
+        drop(gate.enter_blocking().unwrap());
+    }
+
+    #[test]
+    fn telemetry_persistence_failure_is_reported_by_drain() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let runtime = DbRuntime::open(temp_dir.path().join("runtime.db")).unwrap();
+        runtime
+            .enqueue_ccproxy_stat(CcproxyStat {
+                id: None,
+                client_model: "client".to_string(),
+                backend_model: "backend".to_string(),
+                provider_id: Some(1),
+                provider: "provider".to_string(),
+                protocol: "openai".to_string(),
+                tool_compat_mode: 0,
+                status_code: 200,
+                error_message: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                request_at: None,
+            })
+            .unwrap();
+
+        assert!(runtime.drain_for_maintenance().is_err());
+        runtime.resume_after_maintenance();
+        runtime.shutdown_for_maintenance().unwrap();
     }
 
     #[tokio::test]
     async fn maintenance_drain_waits_for_in_flight_reader_jobs() {
         let temp_dir = tempfile::tempdir().unwrap();
         let runtime = Arc::new(DbRuntime::open(temp_dir.path().join("runtime.db")).unwrap());
-        let (started_sender, started_receiver) = std::sync::mpsc::channel();
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
         let (release_sender, release_receiver) = std::sync::mpsc::channel();
         let reader_runtime = Arc::clone(&runtime);
         let reader = tokio::spawn(async move {
             reader_runtime
                 .read(move |_| {
-                    started_sender.send(()).map_err(|error| {
-                        StoreError::WorkerFailed(format!("reader start signal failed: {error}"))
+                    started_sender.send(()).map_err(|_| {
+                        StoreError::WorkerFailed("reader start receiver dropped".to_string())
                     })?;
                     release_receiver.recv().map_err(|error| {
                         StoreError::WorkerFailed(format!("reader release signal failed: {error}"))
@@ -901,9 +1221,10 @@ mod tests {
                 })
                 .await
         });
-        started_receiver
-            .recv_timeout(Duration::from_secs(1))
-            .expect("reader job should start");
+        tokio::time::timeout(Duration::from_secs(1), started_receiver)
+            .await
+            .expect("reader job should start within the timeout")
+            .expect("reader start sender should remain available");
 
         let drain_runtime = Arc::clone(&runtime);
         let drain = tokio::task::spawn_blocking(move || drain_runtime.drain_for_maintenance());

@@ -1656,12 +1656,13 @@ impl MainStore {
     ) -> Result<WorkflowSnapshot, StoreError> {
         runtime
             .read(move |conn| {
-                let mut workflow: Workflow = conn.query_row(
+                let transaction = conn.transaction()?;
+                let mut workflow: Workflow = transaction.query_row(
                     "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE workflows.id = ?1",
                     params![id],
                     |row| Ok(Workflow::from(row)),
                 )?;
-                let snapshot_state_and_wait_reason: Option<(Option<String>, Option<String>)> = conn
+                let snapshot_state_and_wait_reason: Option<(Option<String>, Option<String>)> = transaction
                     .query_row(
                         "SELECT state, wait_reason FROM workflow_snapshots WHERE session_id = ?1",
                         params![id],
@@ -1671,7 +1672,7 @@ impl MainStore {
                 workflow.wait_reason = snapshot_state_and_wait_reason.and_then(|(state, wait_reason)| {
                     (state.as_deref() == Some("waiting")).then_some(wait_reason).flatten()
                 });
-                let mut statement = conn.prepare(
+                let mut statement = transaction.prepare(
                     "SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC",
                 )?;
                 let rows = statement.query_map(params![id], |row| Ok(WorkflowMessage::from(row)))?;
@@ -1684,12 +1685,13 @@ impl MainStore {
     pub fn get_workflow_snapshot(&self, id: &str) -> Result<WorkflowSnapshot, StoreError> {
         let id = id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
-            let mut workflow: Workflow = conn.query_row(
+            let transaction = conn.transaction()?;
+            let mut workflow: Workflow = transaction.query_row(
                 "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE workflows.id = ?1",
                 params![id],
                 |row| Ok(Workflow::from(row)),
             )?;
-            let snapshot = conn
+            let snapshot = transaction
                 .query_row(
                     "SELECT state, wait_reason FROM workflow_snapshots WHERE session_id = ?1",
                     params![id],
@@ -1699,8 +1701,8 @@ impl MainStore {
             workflow.wait_reason = snapshot.and_then(|(state, wait_reason)| {
                 (state.as_deref() == Some("waiting")).then_some(wait_reason).flatten()
             });
-            let mut statement =
-                conn.prepare("SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC")?;
+            let mut statement = transaction
+                .prepare("SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC")?;
             let rows = statement.query_map(params![id], |row| Ok(WorkflowMessage::from(row)))?;
             Ok(WorkflowSnapshot {
                 workflow,
@@ -1715,8 +1717,9 @@ impl MainStore {
     ) -> Result<Option<&'static str>, StoreError> {
         let session_id = session_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
+            let transaction = conn.transaction()?;
             let messages = {
-                let mut statement = conn.prepare(
+                let mut statement = transaction.prepare(
                     "SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC",
                 )?;
                 let rows = statement
@@ -1724,7 +1727,7 @@ impl MainStore {
                 rows.collect::<Result<Vec<_>, _>>()?
             };
             let events = {
-                let mut statement = conn.prepare(
+                let mut statement = transaction.prepare(
                     "SELECT * FROM workflow_events WHERE session_id = ?1 ORDER BY id ASC",
                 )?;
                 let rows = statement.query_map(params![session_id], |row| {

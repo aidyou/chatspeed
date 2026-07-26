@@ -399,7 +399,9 @@ impl ContextManager {
                 .and_then(|metadata| metadata.get("execution_status"))
                 .and_then(|status| status.as_str());
 
-            return Self::is_complete_tool_call_batch_at(messages, boundary_idx)
+            let is_completed_task_boundary = Self::is_successful_completion_message(message);
+            return (is_completed_task_boundary
+                || Self::is_complete_tool_call_batch_at(messages, boundary_idx))
                 && approval_status != Some("pending")
                 && matches!(
                     execution_status,
@@ -3197,15 +3199,37 @@ mod tests {
 
         context
             .add_message(
+                "assistant".to_string(),
+                "Running shell command".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool-1",
+                        "type": "function",
+                        "function": { "name": "bash", "arguments": "{}" }
+                    }]
+                })),
+            )
+            .await
+            .expect("failed to add assistant tool call");
+
+        context
+            .add_message(
                 "tool".to_string(),
                 "FULL SHELL OUTPUT".to_string(),
                 None,
                 None,
                 Some(StepType::Observe),
-                2,
+                3,
                 false,
                 None,
                 Some(json!({
+                    "tool_call_id": "tool-1",
                     "tool_name": "bash",
                     "llm_content": "REDUCED SHELL OUTPUT"
                 })),

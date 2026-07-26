@@ -2559,6 +2559,7 @@ mod tests {
             .expect("completed snapshot should be retained");
         assert_eq!(snapshot.owner_session_id.as_deref(), Some("session_a"));
         assert!(snapshot.output_accessible);
+        drop(snapshot);
 
         COMPLETED_BACKGROUND_TASKS.remove(task_id);
         BACKGROUND_TASKS.remove(task_id);

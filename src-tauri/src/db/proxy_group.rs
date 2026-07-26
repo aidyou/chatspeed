@@ -71,6 +71,7 @@ impl MainStore {
                 "Name 'switch' is reserved for dynamic switching".to_string(),
             ));
         }
+        let _config_update_guard = self.config_update_lock.lock();
         let item = item.clone();
         let (id, groups) = self.db_runtime()?.write_blocking(move |conn| {
             let metadata = item
@@ -107,6 +108,7 @@ impl MainStore {
                 "Name 'switch' is reserved for dynamic switching".to_string(),
             ));
         }
+        let _config_update_guard = self.config_update_lock.lock();
         let item = item.clone();
         let groups = self.db_runtime()?.write_blocking(move |conn| {
             let metadata = item
@@ -148,6 +150,7 @@ impl MainStore {
         injection_condition: Option<String>,
         prompt_replace: Option<Value>,
     ) -> Result<(), StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         let groups = self.db_runtime()?.write_blocking(move |conn| {
             let tx = conn.transaction()?;
 
@@ -208,6 +211,7 @@ impl MainStore {
     }
 
     pub fn proxy_group_delete(&self, id: i64) -> Result<(), StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         let groups = self.db_runtime()?.write_blocking(move |conn| {
             conn.execute(
                 &format!("DELETE FROM {} WHERE id = ?1", PROXY_GROUP_TABLE),

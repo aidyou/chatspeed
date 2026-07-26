@@ -35,6 +35,7 @@ impl MainStore {
             ));
         }
 
+        let _config_update_guard = self.config_update_lock.lock();
         let key = key.to_string();
         let value = value.clone();
         self.db_runtime()?.write_blocking({
@@ -63,6 +64,7 @@ impl MainStore {
             ));
         }
 
+        let _config_update_guard = self.config_update_lock.lock();
         let key = key.to_string();
         self.db_runtime()?.write_blocking({
             let key = key.clone();
@@ -81,10 +83,14 @@ impl MainStore {
     }
 
     pub fn activate_api_key_file(&self, path: &Path) -> Result<(), StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         let path = path.to_path_buf();
-        self.db_runtime()?
-            .write_blocking(move |conn| activate_key_file(conn, &path))?;
-        self.reload_config()
+        let config = self.db_runtime()?.write_blocking(move |conn| {
+            activate_key_file(conn, &path)?;
+            Self::load_config(conn)
+        })?;
+        self.config.replace(config);
+        Ok(())
     }
 
     pub fn generate_and_activate_api_key_file(&self, path: &Path) -> Result<(), StoreError> {
@@ -128,6 +134,7 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<i64, StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -209,6 +216,7 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<(), StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -260,6 +268,7 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn update_ai_model_order(&self, model_ids: Vec<i64>) -> Result<(), StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         let models = self.db_runtime()?.write_blocking(move |conn| {
             for (index, id) in model_ids.iter().enumerate() {
                 conn.execute(
@@ -285,6 +294,7 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn delete_ai_model(&self, id: i64) -> Result<(), StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         let models = self.db_runtime()?.write_blocking(move |conn| {
             conn.execute("DELETE FROM ai_model WHERE id = ?", [id])?;
             Self::get_all_ai_models(conn)
@@ -318,6 +328,7 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<AiSkill, StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -376,6 +387,7 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<AiSkill, StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         if let Ok(old_logo) = self.get_skill_logo(id) {
             if !old_logo.is_empty() {
                 if logo.is_none() || logo.as_ref().map_or(true, |new_logo| new_logo != &old_logo) {
@@ -429,6 +441,7 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn update_ai_skill_order(&self, skill_ids: Vec<i64>) -> Result<(), StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         let skills = self.db_runtime()?.write_blocking(move |conn| {
             for (index, id) in skill_ids.iter().enumerate() {
                 conn.execute(
@@ -468,6 +481,7 @@ impl MainStore {
     /// # Errors
     /// Returns a `StoreError` if the database operation fails.
     pub fn delete_ai_skill(&self, id: i64) -> Result<(), StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         // delete the logo image if exists
         if let Ok(logo) = self.get_skill_logo(id) {
             if !logo.is_empty() {

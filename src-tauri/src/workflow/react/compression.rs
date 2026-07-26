@@ -483,17 +483,14 @@ impl ContextCompressor {
             if let Some(content) = parsed.get("content") {
                 match content {
                     serde_json::Value::String(text) => {
-                        let content = text.trim();
-                        if !content.is_empty() {
-                            return content.to_string();
-                        }
+                        return text.trim().to_string();
                     }
                     serde_json::Value::Object(_) => {
                         if let Ok(text) = serde_json::to_string_pretty(content) {
                             return text;
                         }
                     }
-                    _ => {}
+                    _ => return String::new(),
                 }
             }
 

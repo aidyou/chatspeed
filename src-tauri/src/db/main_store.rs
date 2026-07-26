@@ -1,12 +1,12 @@
 use crate::db::{error::StoreError, runtime::DbRuntime, ProxyGroup};
 
 use log::error;
-use parking_lot::RwLock;
+use parking_lot::{Condvar, Mutex as ParkingMutex, RwLock};
 use rusqlite::{params, Connection, OpenFlags, Result};
 
 use rust_i18n::t;
 use serde_json::Value;
-use std::{collections::HashMap, path::Path, sync::Mutex};
+use std::{collections::HashMap, path::Path, sync::Mutex as StdMutex};
 
 use super::{
     api_key_crypto::{decrypt_api_key, inspect_encryption_status},
@@ -276,13 +276,23 @@ impl ConfigCache {
 /// Manages unified storage for the application, including chat history and configuration.
 pub struct MainStore {
     pub(crate) config: ConfigCache,
-    runtime: Mutex<Option<std::sync::Arc<DbRuntime>>>,
-    runtime_path: Mutex<std::path::PathBuf>,
+    /// Serializes database-backed configuration snapshots with their cache publication.
+    pub(crate) config_update_lock: ParkingMutex<()>,
+    /// Serializes checkpoint and restore operations across the whole database runtime.
+    maintenance_lock: ParkingMutex<()>,
+    runtime: ParkingMutex<RuntimeSlot>,
+    runtime_changed: Condvar,
+    runtime_path: StdMutex<std::path::PathBuf>,
+}
+
+struct RuntimeSlot {
+    runtime: Option<std::sync::Arc<DbRuntime>>,
+    failure: Option<String>,
 }
 
 impl Drop for MainStore {
     fn drop(&mut self) {
-        let runtime = self.runtime.get_mut().ok().and_then(Option::take);
+        let runtime = self.runtime.get_mut().runtime.take();
         if let Some(runtime) = runtime {
             if let Err(error) = runtime.shutdown_for_maintenance() {
                 log::error!("Failed to drain database runtime during shutdown: {error}");
@@ -328,32 +338,48 @@ impl MainStore {
         })?;
         super::api_key_crypto::migrate_to_configured_key_if_available(&mut conn)?;
         let config = Self::load_config(&conn)?;
-        drop(conn);
-
-        let runtime = std::sync::Arc::new(DbRuntime::open(&db_path)?);
+        let runtime = if db_path == Path::new(":memory:") {
+            std::sync::Arc::new(DbRuntime::from_initialized_memory_connection(conn)?)
+        } else {
+            drop(conn);
+            std::sync::Arc::new(DbRuntime::open(&db_path)?)
+        };
         Ok(Self {
             config: ConfigCache::new(config),
-            runtime: Mutex::new(Some(runtime)),
-            runtime_path: Mutex::new(db_path),
+            config_update_lock: ParkingMutex::new(()),
+            maintenance_lock: ParkingMutex::new(()),
+            runtime: ParkingMutex::new(RuntimeSlot {
+                runtime: Some(runtime),
+                failure: None,
+            }),
+            runtime_changed: Condvar::new(),
+            runtime_path: StdMutex::new(db_path),
         })
     }
     pub(crate) fn db_runtime(&self) -> Result<std::sync::Arc<DbRuntime>, StoreError> {
-        self.runtime
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?
-            .as_ref()
-            .cloned()
-            .ok_or(StoreError::RuntimeMaintenance)
+        let mut slot = self.runtime.lock();
+        loop {
+            if let Some(runtime) = &slot.runtime {
+                return Ok(std::sync::Arc::clone(runtime));
+            }
+            if let Some(error) = &slot.failure {
+                return Err(StoreError::WorkerFailed(error.clone()));
+            }
+            self.runtime_changed.wait(&mut slot);
+        }
     }
 
     fn pause_runtime(&self) -> Result<(), StoreError> {
-        let runtime = self
-            .runtime
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?
-            .take();
+        let runtime = {
+            let mut slot = self.runtime.lock();
+            slot.failure = None;
+            slot.runtime.take()
+        };
         if let Some(runtime) = runtime {
-            runtime.shutdown_for_maintenance()?;
+            if let Err(error) = runtime.shutdown_for_maintenance() {
+                self.mark_runtime_failed(error.to_string());
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -361,15 +387,26 @@ impl MainStore {
     fn resume_runtime<P: AsRef<Path>>(&self, db_path: P) -> Result<(), StoreError> {
         let db_path = db_path.as_ref().to_path_buf();
         let runtime = std::sync::Arc::new(DbRuntime::open(&db_path)?);
-        *self
-            .runtime
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))? = Some(runtime);
+        {
+            let mut slot = self.runtime.lock();
+            slot.runtime = Some(runtime);
+            slot.failure = None;
+        }
+        self.runtime_changed.notify_all();
         *self
             .runtime_path
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))? = db_path;
         Ok(())
+    }
+
+    fn mark_runtime_failed(&self, error: String) {
+        let mut slot = self.runtime.lock();
+        if slot.runtime.is_none() {
+            slot.failure = Some(error);
+            drop(slot);
+            self.runtime_changed.notify_all();
+        }
     }
 
     /// Loads the configuration from the database.
@@ -384,7 +421,7 @@ impl MainStore {
     /// # Returns
     ///
     /// Returns a `Result` containing the `Config` struct if successful, or a `StoreError` if an error occurs.
-    fn load_config(conn: &Connection) -> Result<Config, StoreError> {
+    pub(crate) fn load_config(conn: &Connection) -> Result<Config, StoreError> {
         let settings = Self::get_all_config(conn)?;
         let api_key_status = inspect_encryption_status(conn)?;
         let api_keys_locked = api_key_status.is_locked();
@@ -412,6 +449,7 @@ impl MainStore {
     /// # Returns
     /// Returns a `Result` containing `()` if successful, or a `StoreError` if an error occurs.
     pub fn reload_config(&self) -> Result<(), StoreError> {
+        let _config_update_guard = self.config_update_lock.lock();
         let runtime = self.db_runtime()?;
         let config = runtime.write_blocking(|conn| {
             super::api_key_crypto::migrate_to_configured_key_if_available(conn)?;
@@ -424,6 +462,7 @@ impl MainStore {
     /// Performs a database checkpoint, flushing all WAL data to the main database file.
     /// This is critical before performing file-level backups in WAL mode.
     pub fn checkpoint(&self) -> Result<(), StoreError> {
+        let _maintenance_guard = self.maintenance_lock.lock();
         let runtime = self.db_runtime()?;
         let checkpoint_result = self.checkpoint_for_maintenance(&runtime);
         runtime.resume_after_maintenance();
@@ -505,6 +544,7 @@ impl MainStore {
         main_db_path: Q,
         machine_specific_keys: &[&str],
     ) -> Result<(), StoreError> {
+        let _maintenance_guard = self.maintenance_lock.lock();
         let temp_db_path = temp_db_path.as_ref();
         let main_db_path = main_db_path.as_ref();
         let mut preserved_configs = HashMap::new();
@@ -526,6 +566,7 @@ impl MainStore {
         super::DbBackup::cleanup_sqlite_temporaries(main_db_path);
 
         let restore_original = |store: &Self| -> Result<(), StoreError> {
+            store.pause_runtime()?;
             super::DbBackup::cleanup_sqlite_temporaries(main_db_path);
             if main_db_path.exists() {
                 std::fs::remove_file(main_db_path).map_err(|e| {
@@ -548,6 +589,7 @@ impl MainStore {
                 ),
                 None => format!("Failed to stage original database: {}", e),
             };
+            self.mark_runtime_failed(message.clone());
             StoreError::IoError(message)
         })?;
 
@@ -560,6 +602,7 @@ impl MainStore {
                 ),
                 None => format!("Failed to install restored database: {}", error),
             };
+            self.mark_runtime_failed(message.clone());
             return Err(StoreError::IoError(message));
         }
 
@@ -580,6 +623,7 @@ impl MainStore {
                 ),
                 None => format!("Failed to finalize restored database: {}", error),
             };
+            self.mark_runtime_failed(message.clone());
             return Err(StoreError::IoError(message));
         }
 
@@ -801,6 +845,7 @@ mod tests {
     use super::MainStore;
     use crate::db::api_key_crypto::API_KEY_FILE_CONFIG_KEY;
     use serde_json::json;
+    use std::sync::{Arc, Barrier};
 
     #[tokio::test]
     async fn checkpoint_resumes_runtime_submissions() {
@@ -820,6 +865,97 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn memory_store_runtime_reuses_the_initialized_schema() {
+        let store = MainStore::new(":memory:").unwrap();
+        let table_count = store
+            .db_runtime()
+            .unwrap()
+            .read_blocking(|connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'agents'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(crate::db::StoreError::from)
+            })
+            .unwrap();
+        assert_eq!(table_count, 1);
+    }
+
+    #[test]
+    fn runtime_lookup_waits_until_restore_publishes_a_replacement() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("main.db");
+        let store = Arc::new(MainStore::new(&db_path).unwrap());
+        store.pause_runtime().unwrap();
+
+        let waiting_store = Arc::clone(&store);
+        let waiting_lookup = std::thread::spawn(move || waiting_store.db_runtime());
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        assert!(!waiting_lookup.is_finished());
+
+        store.resume_runtime(&db_path).unwrap();
+        waiting_lookup.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn checkpoint_waits_for_the_exclusive_maintenance_lock() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(MainStore::new(temp_dir.path().join("main.db")).unwrap());
+        let waiting_store = Arc::clone(&store);
+        let maintenance_guard = store.maintenance_lock.lock();
+        let waiting_checkpoint = std::thread::spawn(move || waiting_store.checkpoint());
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        assert!(!waiting_checkpoint.is_finished());
+
+        drop(maintenance_guard);
+        waiting_checkpoint.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn concurrent_config_updates_keep_cache_in_sync_with_database() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(MainStore::new(temp_dir.path().join("main.db")).unwrap());
+        let barrier = Arc::new(Barrier::new(8));
+        let mut updates = Vec::new();
+
+        for worker in 0..8 {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            updates.push(std::thread::spawn(move || {
+                barrier.wait();
+                for iteration in 0..20 {
+                    store
+                        .set_config("concurrent_config", &json!([worker, iteration]))
+                        .unwrap();
+                }
+            }));
+        }
+
+        for update in updates {
+            update.join().unwrap();
+        }
+
+        let persisted = store
+            .db_runtime()
+            .unwrap()
+            .read_blocking(|conn| {
+                let value: String = conn.query_row(
+                    "SELECT value FROM config WHERE key = ?1",
+                    ["concurrent_config"],
+                    |row| row.get(0),
+                )?;
+                Ok(serde_json::from_str(&value)?)
+            })
+            .unwrap();
+        assert_eq!(
+            store.config.get_setting("concurrent_config"),
+            Some(persisted)
+        );
     }
 
     #[test]

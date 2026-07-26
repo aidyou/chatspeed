@@ -487,7 +487,7 @@ impl ToolDefinition for TodoGetTool {
 mod tests {
     use super::*;
     use crate::db::Agent;
-    use tempfile::NamedTempFile;
+    use tempfile::TempDir;
 
     #[test]
     fn single_item_bootstrap_warning_only_applies_to_first_single_todo() {
@@ -497,9 +497,9 @@ mod tests {
         assert!(single_item_bootstrap_reminder().contains("single direct step"));
     }
 
-    async fn setup_test_db() -> (Arc<MainStore>, String) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let db_path = temp_file.path().to_path_buf();
+    async fn setup_test_db() -> (TempDir, Arc<MainStore>, String) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("todo-manager.db");
         let store = MainStore::new(&db_path).unwrap();
         let store_arc = Arc::new(store);
         let session_id = "test_session".to_string();
@@ -514,21 +514,21 @@ mod tests {
                 Some("primary".to_string()),
                 None,
                 "System prompt".to_string(),
-                None, // planning_prompt
-                None, // image_recognition_prompt
-                None, // available_tools
-                None, // auto_approve
-                None, // models
-                None, // shell_policy
-                None, // allowed_paths
-                None, // final_audit
-                None, // approval_level
-                None, // skill_enabled
-                None, // selected_skills
-                None, // phase
-                None, // is_system
-                None, // disabled
-                None, // max_contexts
+                None,        // planning_prompt
+                None,        // image_recognition_prompt
+                None,        // available_tools
+                None,        // auto_approve
+                None,        // models
+                None,        // shell_policy
+                None,        // allowed_paths
+                None,        // final_audit
+                None,        // approval_level
+                None,        // skill_enabled
+                None,        // selected_skills
+                None,        // phase
+                Some(false), // is_system
+                Some(false), // disabled
+                None,        // max_contexts
             );
             store_guard.add_agent(&agent).unwrap();
             // Pass None for agent_config
@@ -537,12 +537,12 @@ mod tests {
                 .unwrap();
         }
 
-        (store_arc, session_id)
+        (temp_dir, store_arc, session_id)
     }
 
     #[tokio::test]
     async fn test_todo_workflow() {
-        let (store, session_id) = setup_test_db().await;
+        let (_temp_dir, store, session_id) = setup_test_db().await;
 
         // 1. Test Create
         let create_tool = TodoCreateTool {
@@ -620,7 +620,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_todo_get_not_found_includes_current_list() {
-        let (store, session_id) = setup_test_db().await;
+        let (_temp_dir, store, session_id) = setup_test_db().await;
 
         let create_tool = TodoCreateTool {
             session_id: session_id.clone(),
@@ -654,7 +654,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_todo_update_not_found_includes_current_list() {
-        let (store, session_id) = setup_test_db().await;
+        let (_temp_dir, store, session_id) = setup_test_db().await;
 
         let create_tool = TodoCreateTool {
             session_id: session_id.clone(),
@@ -688,7 +688,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_todo_update_rejects_invalid_status() {
-        let (store, session_id) = setup_test_db().await;
+        let (_temp_dir, store, session_id) = setup_test_db().await;
 
         let create_tool = TodoCreateTool {
             session_id: session_id.clone(),
