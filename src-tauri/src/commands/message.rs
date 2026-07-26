@@ -117,7 +117,7 @@ pub fn get_conversation_by_id(
 /// ```
 #[command]
 pub fn add_conversation(state: State<Arc<RwLock<MainStore>>>, title: String) -> Result<i64> {
-    let main_store = state.write()?;
+    let main_store = state.read()?;
     main_store.add_conversation(title).map_err(AppError::Db)
 }
 
@@ -149,7 +149,7 @@ pub fn update_conversation(
     title: Option<String>,
     is_favorite: Option<bool>,
 ) -> Result<()> {
-    let main_store = state.write()?;
+    let main_store = state.read()?;
     main_store
         .update_conversation(id, title, is_favorite)
         .map_err(AppError::Db)
@@ -177,7 +177,7 @@ pub fn update_conversation(
 /// ```
 #[command]
 pub fn delete_conversation(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
-    let main_store = state.write()?;
+    let main_store = state.read()?;
     main_store.delete_conversation(id).map_err(AppError::Db)
 }
 
@@ -257,7 +257,7 @@ pub fn add_message(
     content: String,
     metadata: Option<serde_json::Value>,
 ) -> Result<(i64, String)> {
-    let main_store = state.write()?;
+    let main_store = state.read()?;
 
     let mut final_content = content;
     // Only filter user messages
@@ -311,7 +311,7 @@ pub fn add_message(
 /// ```
 #[command]
 pub fn delete_message(state: State<Arc<RwLock<MainStore>>>, id: Vec<i64>) -> Result<()> {
-    let main_store = state.write()?;
+    let main_store = state.read()?;
     main_store.delete_message(id).map_err(AppError::Db)
 }
 /// Update the metadata of a message
@@ -340,7 +340,7 @@ pub fn update_message_metadata(
     id: i64,
     metadata: serde_json::Value,
 ) -> Result<()> {
-    let main_store = state.write()?;
+    let main_store = state.read()?;
     main_store
         .update_message_metadata(id, Some(metadata))
         .map_err(AppError::Db)
