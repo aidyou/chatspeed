@@ -116,9 +116,17 @@ pub fn get_conversation_by_id(
 /// console.log(`Added Conversation with ID: ${newConversationId}`);
 /// ```
 #[command]
-pub fn add_conversation(state: State<Arc<RwLock<MainStore>>>, title: String) -> Result<i64> {
-    let main_store = state.read()?;
-    main_store.add_conversation(title).map_err(AppError::Db)
+pub async fn add_conversation(
+    state: State<'_, Arc<RwLock<MainStore>>>,
+    title: String,
+) -> Result<i64> {
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::add_conversation_with_runtime(runtime, title)
+        .await
+        .map_err(AppError::Db)
 }
 
 /// Update conversation favorite status
@@ -143,15 +151,18 @@ pub fn add_conversation(state: State<Arc<RwLock<MainStore>>>, title: String) -> 
 /// console.log('Conversation favorite status updated successfully');
 /// ```
 #[command]
-pub fn update_conversation(
-    state: State<Arc<RwLock<MainStore>>>,
+pub async fn update_conversation(
+    state: State<'_, Arc<RwLock<MainStore>>>,
     id: i64,
     title: Option<String>,
     is_favorite: Option<bool>,
 ) -> Result<()> {
-    let main_store = state.read()?;
-    main_store
-        .update_conversation(id, title, is_favorite)
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::update_conversation_with_runtime(runtime, id, title, is_favorite)
+        .await
         .map_err(AppError::Db)
 }
 
@@ -176,9 +187,14 @@ pub fn update_conversation(
 /// console.log('Conversation deleted successfully');
 /// ```
 #[command]
-pub fn delete_conversation(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
-    let main_store = state.read()?;
-    main_store.delete_conversation(id).map_err(AppError::Db)
+pub async fn delete_conversation(state: State<'_, Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::delete_conversation_with_runtime(runtime, id)
+        .await
+        .map_err(AppError::Db)
 }
 
 /// Get messages for a conversation

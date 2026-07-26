@@ -153,6 +153,21 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    pub(crate) async fn add_conversation_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        title: String,
+    ) -> Result<i64, StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "INSERT INTO conversations (title,is_favorite, created_at) VALUES (?, 0, CURRENT_TIMESTAMP)",
+                    [title],
+                )?;
+                Ok(conn.last_insert_rowid())
+            })
+            .await
+    }
+
     pub fn add_conversation(&self, title: String) -> Result<i64, StoreError> {
         let conn = self
             .conn
@@ -176,6 +191,31 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    pub(crate) async fn update_conversation_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: i64,
+        title: Option<String>,
+        is_favorite: Option<bool>,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                if let Some(title) = title {
+                    conn.execute(
+                        "UPDATE conversations SET title = ? WHERE id = ?",
+                        params![title, id],
+                    )?;
+                }
+                if let Some(is_favorite) = is_favorite {
+                    conn.execute(
+                        "UPDATE conversations SET is_favorite = ? WHERE id = ?",
+                        params![if is_favorite { 1 } else { 0 }, id],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+    }
+
     pub fn update_conversation(
         &self,
         id: i64,
@@ -212,6 +252,18 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    pub(crate) async fn delete_conversation_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: i64,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute("DELETE FROM conversations WHERE id = ?", params![id])?;
+                Ok(())
+            })
+            .await
+    }
+
     pub fn delete_conversation(&self, id: i64) -> Result<(), StoreError> {
         let conn = self
             .conn
