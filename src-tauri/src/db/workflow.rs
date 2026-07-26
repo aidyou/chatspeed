@@ -1011,6 +1011,28 @@ impl MainStore {
         Ok(messages)
     }
 
+    pub(crate) async fn create_workflow_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        user_query: String,
+        agent_id: String,
+        agent_config: Option<String>,
+        parent_session_id: Option<String>,
+    ) -> Result<Workflow, StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "INSERT INTO workflows (id, parent_session_id, user_query, agent_id, agent_config, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![id, parent_session_id, user_query, agent_id, agent_config, "pending"],
+                )?;
+                conn.query_row("SELECT * FROM workflows WHERE id = ?1", params![id], |row| {
+                    Ok(Workflow::from(row))
+                })
+                .map_err(StoreError::from)
+            })
+            .await
+    }
+
     pub fn create_workflow(
         &self,
         id: &str,

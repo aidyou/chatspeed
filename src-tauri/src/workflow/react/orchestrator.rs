@@ -717,18 +717,24 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             max_contexts: agent_config.max_contexts,
         };
 
-        {
+        let runtime = {
             let store = self.main_store.read().map_err(|e| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
             })?;
-            store.create_workflow(
-                session_id,
-                task,
-                &agent_config.id,
-                Some(workflow_config.to_json()),
-                parent_session_id,
-            )?;
-            store.add_workflow_message(&WorkflowMessage {
+            store.db_runtime()?
+        };
+        MainStore::create_workflow_with_runtime(
+            runtime.clone(),
+            session_id.to_string(),
+            task.to_string(),
+            agent_config.id.clone(),
+            Some(workflow_config.to_json()),
+            parent_session_id.map(str::to_string),
+        )
+        .await?;
+        MainStore::add_workflow_message_with_runtime(
+            runtime,
+            WorkflowMessage {
                 id: None,
                 session_id: session_id.to_string(),
                 role: "user".to_string(),
@@ -749,8 +755,9 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 is_error: false,
                 error_type: None,
                 created_at: None,
-            })?;
-        }
+            },
+        )
+        .await?;
 
         let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(32);
         crate::workflow::react::manager::WorkflowManager::register_session_signal_tx(
