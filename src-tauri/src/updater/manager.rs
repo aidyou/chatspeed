@@ -110,7 +110,7 @@ impl UpdateManager {
     fn build_updater(&self) -> Result<tauri_plugin_updater::Updater> {
         let mut builder = self.app.updater_builder();
 
-        if let Some(main_store) = self.app.try_state::<Arc<std::sync::RwLock<MainStore>>>() {
+        if let Some(main_store) = self.app.try_state::<Arc<MainStore>>() {
             let store = main_store.read().map_err(|_| {
                 UpdateError::LockError("Failed to read MainStore state".to_string())
             })?;

@@ -27,7 +27,7 @@ use crate::constants::{
 use crate::db::MainStore;
 
 fn restore_managed_window_config(app: &AppHandle, window: &WebviewWindow) {
-    if let Some(main_store) = app.try_state::<Arc<std::sync::RwLock<MainStore>>>() {
+    if let Some(main_store) = app.try_state::<Arc<MainStore>>() {
         restore_window_config(window, main_store.inner().clone());
     } else {
         warn!(
@@ -626,10 +626,7 @@ pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
 /// # Arguments
 /// * `window` - The window to apply configuration to
 /// * `main_store` - The main store
-pub fn restore_window_config(
-    window: &WebviewWindow,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
-) {
+pub fn restore_window_config(window: &WebviewWindow, main_store: Arc<MainStore>) {
     let window_label = window.label();
 
     let mut current_window_size = window.outer_size().unwrap_or_else(|e| {

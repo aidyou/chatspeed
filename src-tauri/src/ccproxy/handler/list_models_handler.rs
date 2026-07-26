@@ -20,7 +20,7 @@ use crate::{
 /// Reads `chat_completion_proxy` from `MainStore`.
 pub async fn handle_list_models(
     group_name: Option<String>,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
 ) -> ProxyResult<Json<Value>> {
     let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
@@ -128,7 +128,7 @@ pub async fn handle_list_models(
 /// GET `/api/tags`
 pub async fn handle_ollama_tags(
     group_name: Option<String>,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
 ) -> ProxyResult<Json<Value>> {
     let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
@@ -284,7 +284,7 @@ fn determine_quantization_level(model_name: &str, provider: &str) -> String {
 /// Handles the `/v1beta/models` (list models) request for gemini.
 pub async fn handle_gemini_list_models(
     group_name: Option<String>,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
 ) -> ProxyResult<Json<Value>> {
     let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {

@@ -88,7 +88,7 @@ pub fn spawn_workflow_automation_scheduler(app: AppHandle) {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
 
             let now = normalize_datetime_for_db(Local::now());
-            let state = app.state::<Arc<std::sync::RwLock<MainStore>>>();
+            let state = app.state::<Arc<MainStore>>();
             let due_automations = {
                 let Ok(store) = state.read() else {
                     log::error!("[WorkflowAutomation][scheduler] Failed to acquire store");
@@ -110,7 +110,7 @@ pub fn spawn_workflow_automation_scheduler(app: AppHandle) {
             };
 
             for automation in due_automations {
-                let state = app.state::<Arc<std::sync::RwLock<MainStore>>>();
+                let state = app.state::<Arc<MainStore>>();
                 {
                     let Ok(store) = state.read() else {
                         log::error!("[WorkflowAutomation][scheduler] Failed to acquire store");
@@ -129,7 +129,7 @@ pub fn spawn_workflow_automation_scheduler(app: AppHandle) {
 
                 let result = run_automation_now(
                     app.clone(),
-                    app.state::<Arc<std::sync::RwLock<MainStore>>>(),
+                    app.state::<Arc<MainStore>>(),
                     app.state::<Arc<ChatState>>(),
                     app.state::<Arc<TsidGenerator>>(),
                     app.state::<Arc<TauriGateway>>(),

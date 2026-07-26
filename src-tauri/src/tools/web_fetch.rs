@@ -156,10 +156,7 @@ impl WebFetch {
     }
 
     fn get_proxy(&self) -> Result<WebFetchProxyConfig, ToolError> {
-        let main_store = self
-            .app_handle
-            .state::<std::sync::Arc<std::sync::RwLock<MainStore>>>()
-            .inner();
+        let main_store = self.app_handle.state::<std::sync::Arc<MainStore>>().inner();
         let store = main_store.read().map_err(|e| {
             ToolError::Store(t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())
         })?;

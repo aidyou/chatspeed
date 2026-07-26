@@ -183,7 +183,7 @@ impl ModelResolver {
     /// * The Actual model id
     /// ```
     pub async fn get_ai_model_by_alias(
-        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+        main_store_arc: Arc<MainStore>,
         proxy_alias: String,
         proxy_group: Option<&str>,
     ) -> ProxyResult<ProxyModel> {
@@ -482,7 +482,7 @@ impl ModelResolver {
     /// Atomically updates the key pool for an alias and selects a target for the current request.
     /// This method ensures that the rotator's key pool is always in sync with the current configuration.
     async fn update_global_key_pool(
-        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+        main_store_arc: Arc<MainStore>,
         proxy_alias: &str,
         proxy_group: Option<&str>,
     ) -> ProxyResult<(String, BackendModelTarget, AiModel)> {
@@ -578,7 +578,7 @@ impl ModelResolver {
 
     /// Get the list of backend targets corresponding to the model alias
     fn get_backend_targets(
-        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+        main_store_arc: Arc<MainStore>,
         proxy_alias: &str,
         proxy_group: Option<&str>,
     ) -> ProxyResult<(String, Vec<BackendModelTarget>)> {
@@ -617,7 +617,7 @@ impl ModelResolver {
 
     /// Get AI model details by provider_id
     fn get_ai_model_details(
-        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+        main_store_arc: Arc<MainStore>,
         provider_id: i64,
     ) -> ProxyResult<AiModel> {
         let store_guard = main_store_arc.read().map_err(|e| {
@@ -645,7 +645,7 @@ impl ModelResolver {
     /// For user-facing statistics, this means `client_model` in the database will show
     /// the backend model ID rather than a user-friendly alias.
     pub async fn get_ai_model_by_provider_and_model(
-        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+        main_store_arc: Arc<MainStore>,
         provider_id: i64,
         model_id: String,
     ) -> ProxyResult<ProxyModel> {
@@ -752,7 +752,7 @@ impl ModelResolver {
     }
 
     fn get_proxy_group(
-        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+        main_store_arc: Arc<MainStore>,
         group_name: &str,
     ) -> ProxyResult<ProxyGroup> {
         let store_guard = main_store_arc.read().map_err(|e| {
@@ -787,7 +787,7 @@ impl ModelResolver {
     }
 
     pub fn build_http_client(
-        main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+        main_store_arc: Arc<MainStore>,
         mut metadata: Option<serde_json::Value>,
     ) -> ProxyResult<Client> {
         let mut client_builder = Client::builder();

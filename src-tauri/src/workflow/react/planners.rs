@@ -92,7 +92,7 @@ impl ReActExecutor for PlanningExecutor {
 impl PlanningExecutor {
     pub fn new(
         session_id: String,
-        main_store: Arc<std::sync::RwLock<MainStore>>,
+        main_store: Arc<MainStore>,
         chat_state: Arc<ChatState>,
         gateway: Arc<dyn Gateway>,
         sub_agent_factory: Arc<dyn SubAgentFactory>,

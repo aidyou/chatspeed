@@ -93,7 +93,7 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) {
 
 #[tauri::command]
 pub async fn add_agent(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     tsid_generator: State<'_, Arc<crate::libs::tsid::TsidGenerator>>,
     mut agent: Agent,
 ) -> Result<String, String> {
@@ -108,10 +108,7 @@ pub async fn add_agent(
 }
 
 #[tauri::command]
-pub async fn update_agent(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    agent: Agent,
-) -> Result<(), String> {
+pub async fn update_agent(state: State<'_, Arc<MainStore>>, agent: Agent) -> Result<(), String> {
     let store = state.read().map_err(|e| e.to_string())?;
     let effective_agent =
         if let Some(existing) = store.get_agent(&agent.id).map_err(|e| e.to_string())? {
@@ -164,10 +161,7 @@ fn validate_sub_agent_role(agent: &Agent) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn delete_agent(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-    id: String,
-) -> Result<(), String> {
+pub async fn delete_agent(state: State<'_, Arc<MainStore>>, id: String) -> Result<(), String> {
     let store = state.read().map_err(|e| e.to_string())?;
     if store
         .get_agent(&id)
@@ -182,7 +176,7 @@ pub async fn delete_agent(
 
 #[tauri::command]
 pub async fn get_agent(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     id: String,
 ) -> Result<Option<Agent>, String> {
     let runtime = {
@@ -195,9 +189,7 @@ pub async fn get_agent(
 }
 
 #[tauri::command]
-pub async fn get_all_agents(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-) -> Result<Vec<Agent>, String> {
+pub async fn get_all_agents(state: State<'_, Arc<MainStore>>) -> Result<Vec<Agent>, String> {
     let runtime = {
         let store = state.read().map_err(|e| e.to_string())?;
         store.db_runtime().map_err(|e| e.to_string())?
@@ -209,7 +201,7 @@ pub async fn get_all_agents(
 
 #[tauri::command]
 pub async fn update_agent_order(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     agent_ids: Vec<String>,
 ) -> Result<(), String> {
     let runtime = {

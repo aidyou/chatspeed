@@ -458,7 +458,7 @@ impl MainStore {
     }
 
     fn restore_machine_specific_config(
-        &mut self,
+        &self,
         key: &str,
         value: Option<&Value>,
     ) -> Result<(), StoreError> {
@@ -490,7 +490,7 @@ impl MainStore {
     /// Reopens the database connection. This is useful during restoration when the physical file is replaced.
 
     /// Reopens the database connection. This is useful during restoration when the physical file is replaced.
-    pub fn reopen<P: AsRef<Path>>(&mut self, db_path: P) -> Result<(), StoreError> {
+    pub fn reopen<P: AsRef<Path>>(&self, db_path: P) -> Result<(), StoreError> {
         let db_path = db_path.as_ref().to_path_buf();
         self.pause_runtime()?;
 
@@ -525,7 +525,7 @@ impl MainStore {
     /// It preserves machine-specific configurations from the current database,
     /// replaces the physical file, and reloads everything.
     pub fn atomic_restore<P: AsRef<Path>, Q: AsRef<Path>>(
-        &mut self,
+        &self,
         temp_db_path: P,
         main_db_path: Q,
         machine_specific_keys: &[&str],
@@ -557,7 +557,7 @@ impl MainStore {
         }
         super::DbBackup::cleanup_sqlite_temporaries(main_db_path);
 
-        let restore_original = |store: &mut Self| -> Result<(), StoreError> {
+        let restore_original = |store: &Self| -> Result<(), StoreError> {
             {
                 let mut conn_guard = store
                     .conn

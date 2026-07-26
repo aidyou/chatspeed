@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tauri::AppHandle;
 
 const BUILTIN_AGENT_ID_PREFIX: &str = "builtin:";
@@ -611,7 +611,7 @@ mod tests {
 
 pub fn sync_builtin_agents_if_needed(
     app: &AppHandle,
-    main_store: Arc<RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
 ) -> Result<(), String> {
     let current_app_version = app.package_info().version.to_string();
 

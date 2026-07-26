@@ -113,7 +113,7 @@ fn mark_completed_task_consumed(task_id: &str) {
 }
 
 fn sync_sub_agent_completion_consumed(
-    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    main_store: &Arc<MainStore>,
     session_id: &str,
     task_id: &str,
 ) -> Result<(), WorkflowEngineError> {
@@ -145,7 +145,7 @@ fn sync_sub_agent_completion_consumed(
 }
 
 fn find_durable_sub_agent_completion(
-    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    main_store: &Arc<MainStore>,
     session_id: &str,
     task_id: &str,
 ) -> Result<Option<SubAgentCompletion>, WorkflowEngineError> {
@@ -164,7 +164,7 @@ fn find_durable_sub_agent_completion(
 }
 
 fn find_durable_completed_child_output(
-    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    main_store: &Arc<MainStore>,
     parent_session_id: &str,
     task_id: &str,
 ) -> Result<Option<String>, WorkflowEngineError> {
@@ -231,7 +231,7 @@ fn build_sub_agent_completion(
 }
 
 fn persist_sub_agent_completion(
-    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    main_store: &Arc<MainStore>,
     completion: SubAgentCompletion,
 ) -> Result<(), WorkflowEngineError> {
     let store = main_store
@@ -272,7 +272,7 @@ fn persist_sub_agent_completion(
 }
 
 fn persist_background_completion_projection(
-    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    main_store: &Arc<MainStore>,
     parent_session_id: &str,
     sub_agent_id: &str,
     result: &Value,
@@ -431,7 +431,7 @@ fn render_task_output(result: &Value) -> String {
 }
 
 fn append_sub_agent_event(
-    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    main_store: &Arc<MainStore>,
     event: WorkflowEvent,
 ) -> Result<(), WorkflowEngineError> {
     let store = main_store
@@ -617,7 +617,7 @@ pub trait SubAgentFactory: Send + Sync {
 
 /// The default factory used to spawn sub-agents within the ReAct system
 pub struct DefaultSubAgentFactory {
-    pub main_store: Arc<std::sync::RwLock<MainStore>>,
+    pub main_store: Arc<MainStore>,
     pub chat_state: Arc<ChatState>,
     pub gateway: Arc<dyn Gateway>,
     pub app_data_dir: PathBuf,
@@ -829,7 +829,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
 /// Task tool for spawning autonomous sub-agents (Full Spec Clone)
 pub struct TaskTool {
     executor_factory: Arc<dyn SubAgentFactory>,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
     gateway: Arc<dyn Gateway>,
     tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     parent_session_id: Option<String>,
@@ -839,7 +839,7 @@ pub struct TaskTool {
 impl TaskTool {
     pub fn new(
         factory: Arc<dyn SubAgentFactory>,
-        main_store: Arc<std::sync::RwLock<MainStore>>,
+        main_store: Arc<MainStore>,
         gateway: Arc<dyn Gateway>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     ) -> Self {
@@ -872,7 +872,7 @@ impl TaskTool {
 
 pub async fn spawn_call_sub_agent(
     executor_factory: Arc<dyn SubAgentFactory>,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
     _gateway: Arc<dyn Gateway>,
     tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     parent_session_id: String,
@@ -1499,11 +1499,11 @@ impl ToolDefinition for TaskTool {
 /// Tool to retrieve results from background tasks (Full Spec Clone)
 pub struct TaskOutputTool {
     session_id: String,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
 }
 
 impl TaskOutputTool {
-    pub fn new(session_id: String, main_store: Arc<std::sync::RwLock<MainStore>>) -> Self {
+    pub fn new(session_id: String, main_store: Arc<MainStore>) -> Self {
         Self {
             session_id,
             main_store,
@@ -1998,11 +1998,11 @@ mod tests {
         }
     }
 
-    fn test_store() -> (tempfile::TempDir, Arc<RwLock<MainStore>>) {
+    fn test_store() -> (tempfile::TempDir, Arc<MainStore>) {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("orchestrator_diagnostic_test.db");
         let store = MainStore::new(&db_path).expect("failed to create MainStore");
-        (dir, Arc::new(RwLock::new(store)))
+        (dir, Arc::new(store))
     }
 
     fn repo_root() -> PathBuf {
@@ -2884,9 +2884,8 @@ mod tests {
         eprintln!("diagnostic app_data_dir: {}", app_data_dir.display());
         eprintln!("diagnostic timeout: {}s", timeout_secs);
 
-        let main_store = Arc::new(RwLock::new(
-            MainStore::new(&db_path).expect("failed to open diagnostic MainStore"),
-        ));
+        let main_store =
+            Arc::new(MainStore::new(&db_path).expect("failed to open diagnostic MainStore"));
         let code_browse_agent = {
             let store = main_store.read().expect("store lock");
             store

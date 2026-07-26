@@ -4,7 +4,7 @@ use reqwest::header::HeaderMap;
 use rust_i18n::t;
 use serde::Deserialize;
 use serde_json::Value;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::ccproxy::{
     adapter::{
@@ -130,7 +130,7 @@ async fn direct_forward_responses(
     client_headers: HeaderMap,
     client_request_body: bytes::Bytes,
     proxy_model: ProxyModel,
-    main_store_arc: Arc<RwLock<MainStore>>,
+    main_store_arc: Arc<MainStore>,
     log_proxy_to_file: bool,
 ) -> ProxyResult<Response> {
     let message_id = get_msg_id();
@@ -247,7 +247,7 @@ pub async fn handle_responses(
     client_request_body: bytes::Bytes,
     group_name: Option<String>,
     tool_compat_mode: bool,
-    main_store_arc: Arc<RwLock<MainStore>>,
+    main_store_arc: Arc<MainStore>,
 ) -> ProxyResult<Response> {
     let message_id = get_msg_id();
     let log_org_to_file = if let Ok(store) = main_store_arc.read() {

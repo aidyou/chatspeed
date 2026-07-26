@@ -99,11 +99,11 @@ impl Sink for TauriSink {
 
 /// Sink that persists events and snapshots to the database.
 pub struct DBSink {
-    store: Arc<std::sync::RwLock<MainStore>>,
+    store: Arc<MainStore>,
 }
 
 impl DBSink {
-    pub fn new(store: Arc<std::sync::RwLock<MainStore>>) -> Self {
+    pub fn new(store: Arc<MainStore>) -> Self {
         Self { store }
     }
 
@@ -205,12 +205,10 @@ mod tests {
     use crate::workflow::react::types::RuntimeState;
     use tempfile::tempdir;
 
-    fn create_test_store() -> Arc<std::sync::RwLock<MainStore>> {
+    fn create_test_store() -> Arc<MainStore> {
         let dir = tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("test.db");
-        Arc::new(std::sync::RwLock::new(
-            MainStore::new(&db_path).expect("failed to create store"),
-        ))
+        Arc::new(MainStore::new(&db_path).expect("failed to create store"))
     }
 
     #[tokio::test]

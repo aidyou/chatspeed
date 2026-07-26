@@ -119,7 +119,7 @@ const SWITCH_MODE_PREFIX: &str = "switch";
 // A struct to hold the shared state, which is passed to all route handlers.
 pub struct SharedState {
     pub app_handle: tauri::AppHandle,
-    pub main_store: Arc<std::sync::RwLock<MainStore>>,
+    pub main_store: Arc<MainStore>,
     pub chat_state: Arc<ChatState>,
 }
 
@@ -821,7 +821,7 @@ fn ollama_api_routes() -> Router<Arc<SharedState>> {
 /// Defines all routes for the ccproxy module.
 pub async fn routes(
     app_handle: tauri::AppHandle,
-    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+    main_store_arc: Arc<MainStore>,
     chat_state: Arc<ChatState>,
 ) -> Router {
     let shared_state = Arc::new(SharedState {

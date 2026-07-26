@@ -25,7 +25,7 @@ pub async fn handle_direct_forward(
     client_request_body: bytes::Bytes,
     proxy_model: ProxyModel,
     is_streaming_request: bool,
-    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+    main_store_arc: Arc<MainStore>,
     log_proxy_to_file: bool,
 ) -> ProxyResult<Response> {
     let message_id = crate::ccproxy::helper::get_msg_id();

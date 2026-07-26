@@ -621,7 +621,7 @@ pub fn advance_automation_after_scheduler_tick(
 
 pub async fn run_automation_now(
     app: AppHandle,
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,

@@ -77,7 +77,7 @@ pub struct ChatState {
     pub tool_manager: Arc<ToolManager>,
     pub messages_history: Arc<Mutex<HashMap<String, Vec<Value>>>>,
     pub dispatcher_input_tx: Sender<Arc<ChatResponse>>,
-    pub main_store: Arc<std::sync::RwLock<MainStore>>,
+    pub main_store: Arc<MainStore>,
     /// Temporary keys for workflow sessions, mapping workflow_id -> key
     pub workflow_keys: Arc<DashMap<String, String>>,
     /// Session-level guard preventing duplicate workflow title generation tasks.
@@ -88,7 +88,7 @@ impl ChatState {
     pub fn new(
         channels: Arc<WindowChannels>,
         app_handle_option: Option<AppHandle>,
-        main_store: Arc<std::sync::RwLock<MainStore>>,
+        main_store: Arc<MainStore>,
     ) -> Arc<Self> {
         let (dispatcher_input_tx, dispatcher_input_rx) = mpsc::channel(256);
 
@@ -305,7 +305,7 @@ fn get_hf_base_url(input_url: Option<&str>, model: &str) -> Option<String> {
 /// # Returns
 /// * `Result<Vec<ModelDetails>, AiError>` - Ok with the list of models, Err with error message
 pub async fn list_models_async(
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
     api_protocol: String,
     api_url: Option<&str>,
     api_key: Option<&str>,

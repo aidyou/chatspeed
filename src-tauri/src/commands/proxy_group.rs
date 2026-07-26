@@ -1,31 +1,31 @@
 use crate::db::{MainStore, ProxyGroup};
 use serde_json::Value;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tauri::{command, State};
 
 use crate::error::{AppError, Result};
 
 #[command]
-pub fn proxy_group_list(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<ProxyGroup>> {
+pub fn proxy_group_list(state: State<Arc<MainStore>>) -> Result<Vec<ProxyGroup>> {
     let store = state.read()?;
     Ok(store.config.get_proxy_groups())
 }
 
 #[command]
-pub fn proxy_group_add(state: State<Arc<RwLock<MainStore>>>, item: ProxyGroup) -> Result<i64> {
+pub fn proxy_group_add(state: State<Arc<MainStore>>, item: ProxyGroup) -> Result<i64> {
     let store = state.read()?;
     store.proxy_group_add(&item).map_err(AppError::Db)
 }
 
 #[command]
-pub fn proxy_group_update(state: State<Arc<RwLock<MainStore>>>, item: ProxyGroup) -> Result<()> {
+pub fn proxy_group_update(state: State<Arc<MainStore>>, item: ProxyGroup) -> Result<()> {
     let store = state.read()?;
     store.proxy_group_update(&item).map_err(AppError::Db)
 }
 
 #[command]
 pub fn proxy_group_batch_update(
-    state: State<Arc<RwLock<MainStore>>>,
+    state: State<Arc<MainStore>>,
     ids: Vec<i64>,
     prompt_injection: Option<String>,
     prompt_text: Option<String>,
@@ -49,13 +49,13 @@ pub fn proxy_group_batch_update(
 }
 
 #[command]
-pub fn proxy_group_delete(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
+pub fn proxy_group_delete(state: State<Arc<MainStore>>, id: i64) -> Result<()> {
     let store = state.read()?;
     store.proxy_group_delete(id).map_err(AppError::Db)
 }
 
 #[command]
-pub fn set_active_proxy_group(state: State<Arc<RwLock<MainStore>>>, name: String) -> Result<()> {
+pub fn set_active_proxy_group(state: State<Arc<MainStore>>, name: String) -> Result<()> {
     let store = state.read()?;
     store
         .set_config(
@@ -66,7 +66,7 @@ pub fn set_active_proxy_group(state: State<Arc<RwLock<MainStore>>>, name: String
 }
 
 #[command]
-pub fn get_active_proxy_group(state: State<Arc<RwLock<MainStore>>>) -> Result<String> {
+pub fn get_active_proxy_group(state: State<Arc<MainStore>>) -> Result<String> {
     let store = state.read()?;
     Ok(store
         .config

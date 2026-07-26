@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{
     webview::PageLoadEvent, AppHandle, Emitter, EventId, Listener, Manager, WebviewUrl,
@@ -132,7 +132,7 @@ impl WebviewScraper {
             },
         );
 
-        let main_store = self.app_handle.state::<Arc<RwLock<MainStore>>>();
+        let main_store = self.app_handle.state::<Arc<MainStore>>();
         let debug_mode = if let Ok(store) = main_store.read() {
             store.get_config(CFG_SCRAPER_DEBUG_MODE, false)
         } else {

@@ -17,7 +17,7 @@ use std::sync::Arc;
 pub async fn authenticate_request(
     headers: HeaderMap,
     query: CcproxyQuery,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
     chat_state: Arc<ChatState>,
     is_local: bool,
 ) -> ProxyResult<()> {

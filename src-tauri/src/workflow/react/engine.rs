@@ -920,7 +920,7 @@ impl WorkflowExecutor {
 
     pub fn new(
         session_id: String,
-        main_store: Arc<std::sync::RwLock<MainStore>>,
+        main_store: Arc<MainStore>,
         chat_state: Arc<ChatState>,
         gateway: Arc<dyn Gateway>,
         sub_agent_factory: Arc<dyn SubAgentFactory>,
@@ -7283,7 +7283,7 @@ mod recovery_tests {
     use tokio::sync::{mpsc, Mutex};
 
     struct TerminalStatusGateway {
-        store: Arc<std::sync::RwLock<MainStore>>,
+        store: Arc<MainStore>,
         observed_status_tx: mpsc::UnboundedSender<String>,
     }
 
@@ -7368,11 +7368,11 @@ mod recovery_tests {
         }
     }
 
-    fn create_test_store() -> Arc<std::sync::RwLock<MainStore>> {
+    fn create_test_store() -> Arc<MainStore> {
         let dir = tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
-        Arc::new(std::sync::RwLock::new(store))
+        Arc::new(store)
     }
 
     #[tokio::test]

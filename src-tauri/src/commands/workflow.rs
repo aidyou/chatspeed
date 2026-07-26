@@ -94,7 +94,7 @@ fn release_workflow_title_generation(session_id: &str, chat_state: &ChatState) {
 fn spawn_workflow_title_generation_if_missing(
     session_id: String,
     user_query: String,
-    state: Arc<std::sync::RwLock<MainStore>>,
+    state: Arc<MainStore>,
     chat_state: Arc<ChatState>,
     gateway: Arc<TauriGateway>,
 ) -> Result<(), String> {
@@ -274,7 +274,7 @@ fn extract_completion_summary_from_tool_message(message: &WorkflowMessage) -> Op
 }
 
 fn rollback_workflow_agent_config(
-    state: &Arc<std::sync::RwLock<MainStore>>,
+    state: &Arc<MainStore>,
     session_id: &str,
     previous_config_json: &str,
 ) {
@@ -321,7 +321,7 @@ fn managed_status_blocks_tail_rewind(managed_status: Option<ManagedSessionStatus
 async fn inject_runtime_config_signal(
     gateway: &Arc<TauriGateway>,
     workflow_manager: &Arc<WorkflowManager>,
-    state: &Arc<std::sync::RwLock<MainStore>>,
+    state: &Arc<MainStore>,
     session_id: &str,
     previous_config_json: &str,
     signal: Value,
@@ -534,7 +534,7 @@ fn extract_first_json_object(raw: &str) -> Option<&str> {
 
 async fn classify_related_task_summary(
     chat_state: Arc<ChatState>,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
     session_id: &str,
     provider_id: i64,
     model_name: &str,
@@ -1651,7 +1651,7 @@ fn normalize_workflow_agent_config_in_memory(
 #[tauri::command]
 pub async fn create_workflow(
     tsid_generator: State<'_, Arc<TsidGenerator>>,
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
     request: CreateWorkflowRequest,
@@ -1721,9 +1721,7 @@ pub async fn create_workflow(
 }
 
 #[tauri::command]
-pub async fn list_workflows(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
-) -> Result<Vec<Workflow>, String> {
+pub async fn list_workflows(state: State<'_, Arc<MainStore>>) -> Result<Vec<Workflow>, String> {
     let runtime = {
         let store = state.read().map_err(|e| e.to_string())?;
         reconcile_interrupted_child_workflows(&store).map_err(|e| e.to_string())?;
@@ -1942,7 +1940,7 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
 
 #[tauri::command]
 pub async fn delete_workflow(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
@@ -1967,7 +1965,7 @@ pub async fn delete_workflow(
 
 #[tauri::command]
 pub async fn delete_last_workflow_message(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
@@ -2018,7 +2016,7 @@ fn effective_segment_id_from_snapshot(
 }
 
 async fn hydrate_execution_context_for_snapshot(
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
     session_id: &str,
     workflow_status: Option<&str>,
     execution_context: Option<ExecutionContext>,
@@ -2095,7 +2093,7 @@ async fn hydrate_execution_context_for_snapshot(
 }
 
 async fn begin_new_context_frame_for_cold_session(
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
     tsid_generator: Arc<TsidGenerator>,
     session_id: &str,
     previous_execution_context: Option<ExecutionContext>,
@@ -2175,7 +2173,7 @@ async fn begin_new_context_frame_for_cold_session(
 }
 
 async fn finalize_manual_clear_context_state(
-    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    main_store: &Arc<MainStore>,
     workflow_manager: &Arc<WorkflowManager>,
     gateway: &Arc<TauriGateway>,
     session_id: &str,
@@ -2208,7 +2206,7 @@ async fn finalize_manual_clear_context_state(
 
 #[tauri::command]
 pub async fn workflow_begin_new_context_frame(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     gateway: State<'_, Arc<TauriGateway>>,
@@ -2404,7 +2402,7 @@ pub async fn workflow_begin_new_context_frame(
 
 #[tauri::command]
 pub async fn get_workflow_snapshot(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<Value, String> {
@@ -2507,7 +2505,7 @@ pub async fn get_workflow_snapshot(
 
 #[tauri::command]
 pub async fn get_earlier_workflow_messages(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
     before_message_id: i64,
 ) -> Result<Value, String> {
@@ -2535,7 +2533,7 @@ pub async fn get_earlier_workflow_messages(
 
 #[tauri::command]
 pub async fn get_workflow_agent_config(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
 ) -> Result<Value, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -2545,7 +2543,7 @@ pub async fn get_workflow_agent_config(
 
 #[tauri::command]
 pub async fn add_workflow_message(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
     message: WorkflowMessage,
@@ -2573,7 +2571,7 @@ pub async fn add_workflow_message(
 
 #[tauri::command]
 pub async fn update_workflow_title(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
     title: String,
 ) -> Result<(), String> {
@@ -2588,7 +2586,7 @@ pub async fn update_workflow_title(
 
 #[tauri::command]
 pub async fn update_workflow_title_and_query(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
     title: String,
     user_query: String,
@@ -2604,7 +2602,7 @@ pub async fn update_workflow_title_and_query(
 
 #[tauri::command]
 pub async fn update_workflow_query(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
     user_query: String,
 ) -> Result<(), String> {
@@ -2619,7 +2617,7 @@ pub async fn update_workflow_query(
 
 #[tauri::command]
 pub async fn update_workflow_status(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
     status: String,
 ) -> Result<(), String> {
@@ -2796,7 +2794,7 @@ async fn try_resume_completed_live_session(
     related_task_summary: Option<&str>,
     gateway: &Arc<TauriGateway>,
     workflow_manager: &Arc<WorkflowManager>,
-    main_store: &Arc<std::sync::RwLock<MainStore>>,
+    main_store: &Arc<MainStore>,
 ) -> Result<bool, String> {
     if !workflow_manager.transition_session_status_if_current(
         session_id,
@@ -3136,10 +3134,7 @@ fn compat_is_resumable_snapshot_status_for_user_message(status: &str) -> bool {
         )
     )
 }
-fn restore_context_for_signal(
-    store: Arc<std::sync::RwLock<MainStore>>,
-    session_id: &str,
-) -> Option<ExecutionContext> {
+fn restore_context_for_signal(store: Arc<MainStore>, session_id: &str) -> Option<ExecutionContext> {
     match restore_execution_context(store, session_id) {
         RecoveryResult::SnapshotHit { context } | RecoveryResult::ReplayFallback { context } => {
             Some(context)
@@ -3234,7 +3229,7 @@ fn combine_attached_context(base: String, extra: Option<String>) -> String {
 #[tauri::command]
 pub async fn workflow_start(
     app: tauri::AppHandle,
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,
@@ -3718,7 +3713,7 @@ pub async fn workflow_start(
 #[tauri::command]
 pub async fn workflow_approve_plan(
     app: AppHandle,
-    main_store: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,
@@ -3780,7 +3775,7 @@ pub async fn workflow_approve_plan(
 #[tauri::command]
 pub async fn workflow_signal(
     app: tauri::AppHandle,
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,
@@ -4395,7 +4390,7 @@ pub async fn workflow_signal(
 
 #[tauri::command]
 pub async fn workflow_stop(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
@@ -4502,7 +4497,7 @@ pub async fn workflow_stop(
 
 #[tauri::command]
 pub async fn workflow_get_tasks(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
 ) -> Result<Vec<Value>, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -4513,7 +4508,7 @@ pub async fn workflow_get_tasks(
 
 #[tauri::command]
 pub async fn update_workflow_todo_list(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
     todo_list: String,
 ) -> Result<(), String> {
@@ -4709,7 +4704,7 @@ pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, Str
 
 #[tauri::command]
 pub async fn update_workflow_allowed_paths(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
@@ -4764,7 +4759,7 @@ pub async fn get_workflow_session_key(
 
 #[tauri::command]
 pub async fn update_workflow_final_audit(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
@@ -4809,7 +4804,7 @@ pub async fn update_workflow_final_audit(
 
 #[tauri::command]
 pub async fn update_workflow_auto_compress(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
@@ -4849,7 +4844,7 @@ pub async fn update_workflow_auto_compress(
 
 #[tauri::command]
 pub async fn update_workflow_model_config(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
@@ -4891,7 +4886,7 @@ pub async fn update_workflow_model_config(
 
 #[tauri::command]
 pub async fn update_workflow_skills_config(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
@@ -4934,7 +4929,7 @@ pub async fn update_workflow_skills_config(
 
 #[tauri::command]
 pub async fn update_workflow_approval_level(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
@@ -4974,7 +4969,7 @@ pub async fn update_workflow_approval_level(
 
 #[tauri::command]
 pub async fn update_workflow_phase(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
@@ -5014,7 +5009,7 @@ pub async fn update_workflow_phase(
 
 #[tauri::command]
 pub async fn update_workflow_agent_config(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
@@ -5059,7 +5054,7 @@ pub async fn update_workflow_agent_config(
 
 #[tauri::command]
 pub async fn update_workflow_agent_id(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     agent_id: String,
@@ -5123,7 +5118,7 @@ pub async fn update_workflow_agent_id(
 
 #[tauri::command]
 pub async fn get_auto_approved_tools(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
 ) -> Result<Vec<String>, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -5140,7 +5135,7 @@ pub async fn get_auto_approved_tools(
 
 #[tauri::command]
 pub async fn remove_auto_approved_tool(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
@@ -5187,7 +5182,7 @@ pub async fn remove_auto_approved_tool(
 
 #[tauri::command]
 pub async fn remove_shell_policy_item(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
@@ -5234,7 +5229,7 @@ pub async fn remove_shell_policy_item(
 
 #[tauri::command]
 pub async fn get_workflow_events(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
 ) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -5253,7 +5248,7 @@ pub async fn get_workflow_dispatcher_metrics(
 
 #[tauri::command]
 pub async fn get_workflow_efficiency_report(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     session_id: String,
 ) -> Result<WorkflowEfficiencyReport, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -6647,7 +6642,7 @@ mod tests {
     #[test]
     fn test_hydrate_execution_context_for_snapshot_recovers_tokens_without_snapshot() {
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-        let store = Arc::new(std::sync::RwLock::new(create_test_store()));
+        let store = Arc::new(create_test_store());
         let session_id = "snapshot-hydrate-context";
         {
             let store_guard = store.read().expect("failed to lock store");
@@ -6699,7 +6694,7 @@ mod tests {
     #[test]
     fn test_hydrate_execution_context_prefers_terminal_workflow_status() {
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-        let store = Arc::new(std::sync::RwLock::new(create_test_store()));
+        let store = Arc::new(create_test_store());
         let mut context = ExecutionContext::new("cancelled-snapshot".to_string());
         context.state = RuntimeState::Running;
         context.wait_reason = Some(WaitReason::Approval);

@@ -3,7 +3,7 @@ use super::webview_wrapper::WebviewScraper;
 use crate::constants::CFG_SCRAPER_DEBUG_MODE;
 use crate::db::MainStore;
 use anyhow::Result;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, EventId, Listener, Manager, WebviewWindow, Wry};
 use tokio::sync::{Mutex, Semaphore};
@@ -89,7 +89,7 @@ impl ScraperPool {
         // Create a new webview if the pool is empty
         let debug_mode = self
             .app_handle
-            .state::<Arc<RwLock<MainStore>>>()
+            .state::<Arc<MainStore>>()
             .read()
             .map(|store| store.get_config(CFG_SCRAPER_DEBUG_MODE, false))
             .unwrap_or(false);
@@ -132,7 +132,7 @@ impl ScraperPool {
 
         let debug_mode = self
             .app_handle
-            .state::<Arc<RwLock<MainStore>>>()
+            .state::<Arc<MainStore>>()
             .read()
             .map(|store| store.get_config(CFG_SCRAPER_DEBUG_MODE, false))
             .unwrap_or(false);

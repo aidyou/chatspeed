@@ -43,10 +43,7 @@ impl WebSearch {
         &self,
         provider: Option<String>,
     ) -> Result<(SearchFactory, SearchProviderName), ToolError> {
-        let main_store = self
-            .app_handle
-            .state::<Arc<std::sync::RwLock<MainStore>>>()
-            .inner();
+        let main_store = self.app_handle.state::<Arc<MainStore>>().inner();
         let store = main_store.read().map_err(|e| {
             ToolError::Store(t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())
         })?;
@@ -106,7 +103,7 @@ impl WebSearch {
     /// Get and check authentication for the search engine.
     pub fn get_and_check_auth(
         search_engine: &str,
-        main_store: Arc<std::sync::RwLock<MainStore>>,
+        main_store: Arc<MainStore>,
     ) -> Result<Auth, ToolError> {
         let store = main_store.read().map_err(|e| {
             ToolError::Store(t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())

@@ -35,7 +35,7 @@ fn single_item_bootstrap_reminder() -> String {
 
 /// Helper to get and set todo list in DB
 async fn get_db_todo_list(
-    store: &Arc<std::sync::RwLock<MainStore>>,
+    store: &Arc<MainStore>,
     session_id: &str,
 ) -> Result<Vec<Value>, ToolError> {
     let runtime = {
@@ -56,7 +56,7 @@ async fn get_db_todo_list(
 }
 
 async fn save_db_todo_list(
-    store: &Arc<std::sync::RwLock<MainStore>>,
+    store: &Arc<MainStore>,
     session_id: &str,
     list: Vec<Value>,
 ) -> Result<(), ToolError> {
@@ -77,7 +77,7 @@ async fn save_db_todo_list(
 
 pub struct TodoCreateTool {
     pub session_id: String,
-    pub main_store: Arc<std::sync::RwLock<MainStore>>,
+    pub main_store: Arc<MainStore>,
 }
 
 #[async_trait]
@@ -246,7 +246,7 @@ impl ToolDefinition for TodoCreateTool {
 
 pub struct TodoListTool {
     pub session_id: String,
-    pub main_store: Arc<std::sync::RwLock<MainStore>>,
+    pub main_store: Arc<MainStore>,
 }
 
 #[async_trait]
@@ -320,7 +320,7 @@ impl ToolDefinition for TodoListTool {
 
 pub struct TodoUpdateTool {
     pub session_id: String,
-    pub main_store: Arc<std::sync::RwLock<MainStore>>,
+    pub main_store: Arc<MainStore>,
 }
 
 #[async_trait]
@@ -426,7 +426,7 @@ impl ToolDefinition for TodoUpdateTool {
 
 pub struct TodoGetTool {
     pub session_id: String,
-    pub main_store: Arc<std::sync::RwLock<MainStore>>,
+    pub main_store: Arc<MainStore>,
 }
 
 #[async_trait]
@@ -491,7 +491,6 @@ impl ToolDefinition for TodoGetTool {
 mod tests {
     use super::*;
     use crate::db::Agent;
-    use std::sync::RwLock;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -502,11 +501,11 @@ mod tests {
         assert!(single_item_bootstrap_reminder().contains("single direct step"));
     }
 
-    async fn setup_test_db() -> (Arc<RwLock<MainStore>>, String) {
+    async fn setup_test_db() -> (Arc<MainStore>, String) {
         let temp_file = NamedTempFile::new().unwrap();
         let db_path = temp_file.path().to_path_buf();
         let store = MainStore::new(&db_path).unwrap();
-        let store_arc = Arc::new(RwLock::new(store));
+        let store_arc = Arc::new(store);
         let session_id = "test_session".to_string();
         let agent_id = "test_agent".to_string();
 

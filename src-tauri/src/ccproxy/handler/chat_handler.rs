@@ -267,7 +267,7 @@ pub(crate) async fn execute_unified_chat_request(
     message_id: String,
     log_org_to_file: bool,
     log_proxy_to_file: bool,
-    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+    main_store_arc: Arc<MainStore>,
     output_adapter: OutputAdapterEnum,
 ) -> ProxyResult<Response> {
     let full_url = get_provider_chat_full_url(
@@ -578,7 +578,7 @@ pub async fn handle_chat_completion(
     tool_compat_mode: bool,
     route_model_alias: String,
     generate_action: String,
-    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+    main_store_arc: Arc<MainStore>,
 ) -> ProxyResult<Response> {
     let protocol_string = chat_protocol.to_string();
     let message_id = get_msg_id();

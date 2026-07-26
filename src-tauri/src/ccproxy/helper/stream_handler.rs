@@ -25,7 +25,7 @@ pub async fn handle_streamed_response(
     output_adapter: impl OutputAdapter + Send + Sync + 'static,
     sse_status: Arc<RwLock<SseStatus>>,
     log_to_file: bool,
-    main_store_arc: Arc<std::sync::RwLock<MainStore>>,
+    main_store_arc: Arc<MainStore>,
     client_model: String,
     backend_model: String,
     provider_id: i64,

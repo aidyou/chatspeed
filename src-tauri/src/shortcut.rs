@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
@@ -38,7 +37,7 @@ use crate::{
 /// # Returns
 /// Returns a HashMap containing effective shortcut values used for registration.
 /// Missing configuration falls back to defaults, while empty strings remain empty to indicate disabled shortcuts.
-fn get_shortcuts(config_store: Arc<std::sync::RwLock<MainStore>>) -> HashMap<String, String> {
+fn get_shortcuts(config_store: Arc<MainStore>) -> HashMap<String, String> {
     let mut shortcuts = HashMap::new();
 
     for shortcut_key in SHORTCUT_KEYS {
@@ -86,7 +85,7 @@ pub fn get_default_shortcut(key: &str) -> Option<&'static str> {
     }
 }
 
-fn get_effective_shortcut(config_store: Arc<std::sync::RwLock<MainStore>>, key: &str) -> String {
+fn get_effective_shortcut(config_store: Arc<MainStore>, key: &str) -> String {
     if let Ok(c) = config_store.read() {
         if let Some(value) = c
             .config
@@ -249,7 +248,7 @@ fn register_shortcuts(
 /// # Returns
 /// Returns Ok(()) if registration is successful, or an error if registration fails
 pub fn register_desktop_shortcut(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let config_store = match app.try_state::<Arc<RwLock<MainStore>>>() {
+    let config_store = match app.try_state::<Arc<MainStore>>() {
         Some(store) => store,
         None => {
             log::warn!("MainStore not available yet during shortcut registration");
@@ -285,7 +284,7 @@ pub fn update_shortcut(
         new_shortcut
     );
 
-    let config_store = app.state::<Arc<RwLock<MainStore>>>();
+    let config_store = app.state::<Arc<MainStore>>();
     let shortcuts = get_shortcuts(config_store.inner().clone());
     let shortcut_manager = app.global_shortcut();
 

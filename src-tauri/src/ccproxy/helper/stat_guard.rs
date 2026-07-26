@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 pub struct StreamStatGuard {
     pub log_recorder: Arc<Mutex<StreamLogRecorder>>,
     pub sse_status: Arc<RwLock<SseStatus>>,
-    pub main_store: Arc<std::sync::RwLock<MainStore>>,
+    pub main_store: Arc<MainStore>,
     pub client_model: String,
     pub backend_model: String,
     pub provider_id: i64,

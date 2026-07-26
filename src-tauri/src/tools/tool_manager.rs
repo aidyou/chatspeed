@@ -178,9 +178,7 @@ impl ToolManager {
         self: Arc<Self>, // Changed to take Arc<Self>
         app_handle: AppHandle,
     ) -> Result<(), ToolError> {
-        let main_store = app_handle
-            .state::<Arc<std::sync::RwLock<MainStore>>>()
-            .inner();
+        let main_store = app_handle.state::<Arc<MainStore>>().inner();
 
         // =================================================
         // Built-in tools
@@ -290,7 +288,7 @@ impl ToolManager {
 
     pub async fn register_available_mcp_tools(
         self: Arc<Self>, // Changed to take Arc<Self>
-        main_store: Arc<std::sync::RwLock<MainStore>>,
+        main_store: Arc<MainStore>,
     ) -> Result<(), ToolError> {
         // Collect MCP configurations first to release the lock on main_store
         let mcp_configs_to_process: Vec<_> = {

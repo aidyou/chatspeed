@@ -287,12 +287,12 @@ struct PreparedToolCalls {
 pub struct OpenAIChat {
     stop_flag: Arc<Mutex<bool>>,
     client: DefaultApiClient,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
 }
 
 impl OpenAIChat {
     /// Creates a new instance of OpenAIChat
-    pub fn new(main_store: Arc<std::sync::RwLock<MainStore>>) -> Self {
+    pub fn new(main_store: Arc<MainStore>) -> Self {
         Self {
             stop_flag: Arc::new(Mutex::new(false)),
             client: DefaultApiClient::new(ErrorFormat::OpenAI),

@@ -47,7 +47,7 @@ static INIT: Once = Once::new();
 /// * `Result<(), String>` - Returns `Ok(())` on success, or an error message on failure.
 pub async fn start_http_server(
     app: &AppHandle,
-    main_store: Arc<std::sync::RwLock<MainStore>>,
+    main_store: Arc<MainStore>,
     chat_state: Arc<ChatState>,
 ) -> Result<(), String> {
     log::info!("start_http_server function entered.");

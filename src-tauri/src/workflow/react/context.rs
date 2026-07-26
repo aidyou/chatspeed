@@ -17,7 +17,7 @@ const CONTEXT_PRESSURE_COMPRESSION_THRESHOLD: f64 = 0.75;
 /// ContextManager manages durable transcript history plus the AI-only context projection cache.
 pub struct ContextManager {
     pub session_id: String,
-    pub main_store: Arc<std::sync::RwLock<MainStore>>,
+    pub main_store: Arc<MainStore>,
     pub max_tokens: usize,
     pub messages: Vec<WorkflowMessage>,
     pub ai_context_messages: Vec<WorkflowAiContextMessage>,
@@ -407,7 +407,7 @@ impl ContextManager {
 
     pub fn new(
         session_id: String,
-        main_store: Arc<std::sync::RwLock<MainStore>>,
+        main_store: Arc<MainStore>,
         max_tokens: usize,
         tsid_generator: Arc<TsidGenerator>,
     ) -> Self {
@@ -1361,16 +1361,16 @@ mod tests {
     };
     use crate::workflow::react::types::{ExecutionContext, StepType};
     use serde_json::json;
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
 
-    fn setup_store() -> (tempfile::TempDir, Arc<RwLock<MainStore>>) {
+    fn setup_store() -> (tempfile::TempDir, Arc<MainStore>) {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("context_compression_test.db");
         let store = MainStore::new(&db_path).expect("failed to create MainStore");
-        (dir, Arc::new(RwLock::new(store)))
+        (dir, Arc::new(store))
     }
 
-    fn insert_workflow(store: &Arc<RwLock<MainStore>>, session_id: &str) {
+    fn insert_workflow(store: &Arc<MainStore>, session_id: &str) {
         let agent = Agent::new(
             "test-agent".to_string(),
             "Compression Test Agent".to_string(),

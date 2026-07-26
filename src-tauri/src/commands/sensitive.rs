@@ -1,13 +1,11 @@
 use crate::db::MainStore;
 use crate::error::{AppError, Result};
 use crate::sensitive::manager::{FilterManager, SensitiveConfig};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
-pub fn get_sensitive_config(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
-) -> Result<SensitiveConfig> {
+pub fn get_sensitive_config(main_store: State<'_, Arc<MainStore>>) -> Result<SensitiveConfig> {
     let store = main_store
         .read()
         .map_err(|e| AppError::Db(crate::db::StoreError::IoError(e.to_string())))?;
@@ -16,10 +14,10 @@ pub fn get_sensitive_config(
 
 #[tauri::command]
 pub fn update_sensitive_config(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     config: SensitiveConfig,
 ) -> Result<()> {
-    let mut store = main_store
+    let store = main_store
         .write()
         .map_err(|e| AppError::Db(crate::db::StoreError::IoError(e.to_string())))?;
 

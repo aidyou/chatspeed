@@ -28,10 +28,7 @@
 //! ```
 
 use serde_json::{json, Value};
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, sync::Arc};
 use tauri::{command, Emitter, Manager, State};
 
 use crate::constants::CFG_INTERFACE_LANGUAGE;
@@ -61,9 +58,7 @@ use whatlang::detect;
 /// console.log(conversations);
 /// ```
 #[command]
-pub async fn get_all_conversations(
-    state: State<'_, Arc<RwLock<MainStore>>>,
-) -> Result<Vec<Conversation>> {
+pub async fn get_all_conversations(state: State<'_, Arc<MainStore>>) -> Result<Vec<Conversation>> {
     let runtime = {
         let main_store = state.read()?;
         main_store.db_runtime().map_err(AppError::Db)?
@@ -95,7 +90,7 @@ pub async fn get_all_conversations(
 /// ```
 #[command]
 pub async fn get_conversation_by_id(
-    state: State<'_, Arc<RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     id: i64,
 ) -> Result<Conversation> {
     let runtime = {
@@ -128,10 +123,7 @@ pub async fn get_conversation_by_id(
 /// console.log(`Added Conversation with ID: ${newConversationId}`);
 /// ```
 #[command]
-pub async fn add_conversation(
-    state: State<'_, Arc<RwLock<MainStore>>>,
-    title: String,
-) -> Result<i64> {
+pub async fn add_conversation(state: State<'_, Arc<MainStore>>, title: String) -> Result<i64> {
     let runtime = {
         let main_store = state.read()?;
         main_store.db_runtime().map_err(AppError::Db)?
@@ -164,7 +156,7 @@ pub async fn add_conversation(
 /// ```
 #[command]
 pub async fn update_conversation(
-    state: State<'_, Arc<RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     id: i64,
     title: Option<String>,
     is_favorite: Option<bool>,
@@ -199,7 +191,7 @@ pub async fn update_conversation(
 /// console.log('Conversation deleted successfully');
 /// ```
 #[command]
-pub async fn delete_conversation(state: State<'_, Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
+pub async fn delete_conversation(state: State<'_, Arc<MainStore>>, id: i64) -> Result<()> {
     let runtime = {
         let main_store = state.read()?;
         main_store.db_runtime().map_err(AppError::Db)?
@@ -232,7 +224,7 @@ pub async fn delete_conversation(state: State<'_, Arc<RwLock<MainStore>>>, id: i
 #[command]
 pub async fn get_messages_for_conversation(
     window: tauri::Window,
-    state: State<'_, Arc<RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     conversation_id: i64,
     window_label: Option<String>,
 ) -> Result<()> {
@@ -281,14 +273,14 @@ pub async fn get_messages_for_conversation(
 /// ```
 #[command]
 pub async fn add_message(
-    state: State<'_, Arc<RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     filter_manager: State<'_, FilterManager>,
     conversation_id: i64,
     role: String,
     content: String,
     metadata: Option<serde_json::Value>,
 ) -> Result<(i64, String)> {
-    let (runtime, mut final_content) = {
+    let (runtime, final_content) = {
         let main_store = state.read()?;
         let mut final_content = content;
         if role == "user" {
@@ -351,7 +343,7 @@ pub async fn add_message(
 /// console.log('Message deleted successfully');
 /// ```
 #[command]
-pub async fn delete_message(state: State<'_, Arc<RwLock<MainStore>>>, id: Vec<i64>) -> Result<()> {
+pub async fn delete_message(state: State<'_, Arc<MainStore>>, id: Vec<i64>) -> Result<()> {
     let runtime = {
         let main_store = state.read()?;
         main_store.db_runtime().map_err(AppError::Db)?
@@ -382,7 +374,7 @@ pub async fn delete_message(state: State<'_, Arc<RwLock<MainStore>>>, id: Vec<i6
 /// console.log('Message metadata updated successfully');
 #[command]
 pub async fn update_message_metadata(
-    state: State<'_, Arc<RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     id: i64,
     metadata: serde_json::Value,
 ) -> Result<()> {

@@ -25,7 +25,7 @@
 //! ```
 
 use crate::db::{MainStore, Note, NoteTag};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tauri::{command, State};
 
 use crate::error::{AppError, Result};
@@ -61,7 +61,7 @@ use crate::error::{AppError, Result};
 /// ```
 #[command]
 pub async fn add_note(
-    state: State<'_, Arc<RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     title: String,
     content: String,
     conversation_id: Option<i64>,
@@ -107,7 +107,7 @@ pub async fn add_note(
 /// console.log(tags);
 /// ```
 #[command]
-pub async fn get_tags(state: State<'_, Arc<RwLock<MainStore>>>) -> Result<Vec<NoteTag>> {
+pub async fn get_tags(state: State<'_, Arc<MainStore>>) -> Result<Vec<NoteTag>> {
     let runtime = {
         let main_store = state.read()?;
         main_store.db_runtime().map_err(AppError::Db)?
@@ -138,10 +138,7 @@ pub async fn get_tags(state: State<'_, Arc<RwLock<MainStore>>>) -> Result<Vec<No
 /// console.log(notes);
 /// ```
 #[command]
-pub async fn get_notes(
-    state: State<'_, Arc<RwLock<MainStore>>>,
-    tag_id: Option<i64>,
-) -> Result<Vec<Note>> {
+pub async fn get_notes(state: State<'_, Arc<MainStore>>, tag_id: Option<i64>) -> Result<Vec<Note>> {
     let runtime = {
         let main_store = state.read()?;
         main_store.db_runtime().map_err(AppError::Db)?
@@ -172,7 +169,7 @@ pub async fn get_notes(
 /// console.log(note);
 /// ```
 #[command]
-pub async fn get_note(state: State<'_, Arc<RwLock<MainStore>>>, id: i64) -> Result<Note> {
+pub async fn get_note(state: State<'_, Arc<MainStore>>, id: i64) -> Result<Note> {
     let runtime = {
         let main_store = state.read()?;
         main_store.db_runtime().map_err(AppError::Db)?
@@ -203,7 +200,7 @@ pub async fn get_note(state: State<'_, Arc<RwLock<MainStore>>>, id: i64) -> Resu
 /// console.log('Note deleted successfully');
 /// ```
 #[command]
-pub async fn delete_note(state: State<'_, Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
+pub async fn delete_note(state: State<'_, Arc<MainStore>>, id: i64) -> Result<()> {
     let runtime = {
         let main_store = state.read()?;
         main_store.db_runtime().map_err(AppError::Db)?
@@ -234,10 +231,7 @@ pub async fn delete_note(state: State<'_, Arc<RwLock<MainStore>>>, id: i64) -> R
 /// console.log('Found matching notes:', notes);
 /// ```
 #[command]
-pub async fn search_notes(
-    state: State<'_, Arc<RwLock<MainStore>>>,
-    kw: String,
-) -> Result<Vec<Note>> {
+pub async fn search_notes(state: State<'_, Arc<MainStore>>, kw: String) -> Result<Vec<Note>> {
     let runtime = {
         let main_store = state.read()?;
         main_store.db_runtime().map_err(AppError::Db)?

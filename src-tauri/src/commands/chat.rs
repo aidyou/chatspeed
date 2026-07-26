@@ -213,7 +213,7 @@ fn filter_single_text(
 }
 
 pub fn setup_chat_proxy(
-    main_state: Arc<std::sync::RwLock<MainStore>>,
+    main_state: Arc<MainStore>,
     metadata: &mut Option<Value>,
 ) -> crate::error::Result<()> {
     // If the proxy type is http, get the proxy server and username/password from the config
@@ -267,7 +267,7 @@ pub fn setup_chat_proxy(
 
 #[tauri::command]
 pub async fn list_models(
-    main_state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    main_state: State<'_, Arc<MainStore>>,
     api_protocol: String,
     api_url: Option<&str>,
     api_key: Option<&str>,

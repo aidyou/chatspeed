@@ -13,7 +13,7 @@ pub struct ShowRequest {
 
 /// Handles the `/api/show` request for ollama.
 pub async fn handle_ollama_show(
-    _main_store: Arc<std::sync::RwLock<MainStore>>,
+    _main_store: Arc<MainStore>,
     Json(payload): Json<ShowRequest>,
 ) -> ProxyResult<Json<Value>> {
     let _model_name = payload.model;

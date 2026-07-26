@@ -410,10 +410,7 @@ fn parse_wait_reason(s: &str) -> Option<WaitReason> {
 
 /// Restore ExecutionContext for a session.
 /// Priority: snapshot first, event replay fallback, safe-failed state on error.
-pub fn restore_execution_context(
-    main_store: Arc<std::sync::RwLock<MainStore>>,
-    session_id: &str,
-) -> RecoveryResult {
+pub fn restore_execution_context(main_store: Arc<MainStore>, session_id: &str) -> RecoveryResult {
     let snapshot_result = {
         let store = match main_store.read() {
             Ok(s) => s,
@@ -483,10 +480,7 @@ pub fn restore_execution_context(
     }
 }
 
-fn replay_from_events(
-    main_store: Arc<std::sync::RwLock<MainStore>>,
-    session_id: &str,
-) -> RecoveryResult {
+fn replay_from_events(main_store: Arc<MainStore>, session_id: &str) -> RecoveryResult {
     log::info!(
         "[Workflow][session={}] workflow.replay.start - beginning event replay",
         session_id
@@ -1127,14 +1121,14 @@ mod tests {
         use super::*;
         use crate::db::MainStore;
         use crate::workflow::react::events::WorkflowEvent;
-        use std::sync::{Arc, RwLock};
+        use std::sync::Arc;
         use tempfile::tempdir;
 
-        fn create_test_store() -> Arc<RwLock<MainStore>> {
+        fn create_test_store() -> Arc<MainStore> {
             let dir = tempdir().expect("failed to create temp dir");
             let db_path = dir.path().join("replay_integration_test.db");
             let store = MainStore::new(db_path).expect("failed to create MainStore");
-            Arc::new(RwLock::new(store))
+            Arc::new(store)
         }
 
         #[test]

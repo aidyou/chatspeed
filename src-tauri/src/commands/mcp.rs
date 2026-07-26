@@ -25,10 +25,7 @@ use crate::{
     mcp::McpError,
 };
 use rust_i18n::t;
-use std::{
-    collections::HashSet,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashSet, sync::Arc};
 use tauri::State;
 
 /// Get all MCP servers
@@ -53,7 +50,7 @@ use tauri::State;
 /// ```
 #[tauri::command]
 pub async fn list_mcp_servers(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
 ) -> Result<Vec<Mcp>> {
     // First, get the MCPs from the main_store.
@@ -153,7 +150,7 @@ fn check_form(name: &str, config: &McpServerConfig) -> Result<()> {
 /// ```
 #[tauri::command]
 pub async fn add_mcp_server(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     name: String,
     description: String,
@@ -234,7 +231,7 @@ pub async fn add_mcp_server(
 /// ```
 #[tauri::command]
 pub async fn update_mcp_server(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
     name: &str,
@@ -316,7 +313,7 @@ pub async fn update_mcp_server(
 /// ```
 #[tauri::command]
 pub async fn delete_mcp_server(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<()> {
@@ -373,7 +370,7 @@ pub async fn delete_mcp_server(
 /// ```
 #[tauri::command]
 pub async fn enable_mcp_server(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<()> {
@@ -484,7 +481,7 @@ pub async fn enable_mcp_server(
 /// ```
 #[tauri::command]
 pub async fn disable_mcp_server(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<()> {
@@ -565,7 +562,7 @@ pub async fn disable_mcp_server(
 
 #[tauri::command]
 pub async fn restart_mcp_server(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<()> {
@@ -686,7 +683,7 @@ pub async fn restart_mcp_server(
 #[tauri::command]
 pub async fn refresh_mcp_server(
     chat_state: State<'_, Arc<ChatState>>,
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     id: i64,
 ) -> Result<()> {
     {
@@ -773,7 +770,7 @@ pub async fn refresh_mcp_server(
 /// ```
 #[tauri::command]
 pub async fn get_mcp_server_tools(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
 ) -> Result<Vec<MCPToolDeclaration>> {
@@ -793,7 +790,7 @@ pub async fn get_mcp_server_tools(
 
 #[tauri::command]
 pub async fn update_mcp_tool_status(
-    main_store: State<'_, Arc<RwLock<MainStore>>>,
+    main_store: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     id: i64,
     tool_name: &str,

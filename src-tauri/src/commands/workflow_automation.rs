@@ -15,7 +15,7 @@ use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub async fn workflow_automation_list(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
 ) -> Result<Vec<WorkflowAutomation>, String> {
     let store = state.read().map_err(|e| e.to_string())?;
     store.list_workflow_automations().map_err(|e| e.to_string())
@@ -23,7 +23,7 @@ pub async fn workflow_automation_list(
 
 #[tauri::command]
 pub async fn workflow_automation_get(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     id: String,
 ) -> Result<Option<WorkflowAutomation>, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -35,7 +35,7 @@ pub async fn workflow_automation_get(
 #[tauri::command]
 pub async fn workflow_automation_save(
     tsid_generator: State<'_, Arc<TsidGenerator>>,
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     request: WorkflowAutomationRequest,
 ) -> Result<WorkflowAutomation, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -44,7 +44,7 @@ pub async fn workflow_automation_save(
 
 #[tauri::command]
 pub async fn workflow_automation_delete(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     id: String,
 ) -> Result<(), String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -55,7 +55,7 @@ pub async fn workflow_automation_delete(
 
 #[tauri::command]
 pub async fn workflow_automation_set_enabled(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     id: String,
     enabled: bool,
 ) -> Result<(), String> {
@@ -65,7 +65,7 @@ pub async fn workflow_automation_set_enabled(
 
 #[tauri::command]
 pub async fn workflow_automation_list_runs(
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     automation_id: String,
 ) -> Result<Vec<WorkflowAutomationRun>, String> {
     let store = state.read().map_err(|e| e.to_string())?;
@@ -77,7 +77,7 @@ pub async fn workflow_automation_list_runs(
 #[tauri::command]
 pub async fn workflow_automation_run_now(
     app: AppHandle,
-    state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
+    state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     gateway: State<'_, Arc<TauriGateway>>,

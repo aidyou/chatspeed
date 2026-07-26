@@ -1,6 +1,6 @@
 use axum::response::Response;
 use reqwest::header::HeaderMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
@@ -109,7 +109,7 @@ pub async fn handle_embedding(
     client_request_body: bytes::Bytes,
     group_name: Option<String>,
     route_model_alias: String,
-    store_arc: Arc<RwLock<MainStore>>,
+    store_arc: Arc<MainStore>,
 ) -> Result<Response, CCProxyError> {
     if chat_protocol == ChatProtocol::Claude {
         return Err(CCProxyError::InvalidProtocolError(

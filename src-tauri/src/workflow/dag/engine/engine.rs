@@ -14,7 +14,6 @@ use crate::workflow::{
 
 /// Workflow engine for managing and executing workflows
 pub struct WorkflowEngine {
-    // main_store: Arc<RwLock<MainStore>>,
     // chat_state: Arc<ChatState>,
     /// Function manager for handling function operations
     tool_manager: Arc<ToolManager>,

@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tauri::Manager;
 
 use crate::{commands::window::quit_window, db::MainStore};
@@ -12,7 +12,7 @@ use crate::{commands::window::quit_window, db::MainStore};
 /// # Returns
 /// - `Result<(), String>`: A result indicating the success or failure of the operation
 pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<(), String> {
-    let main_store = match app.try_state::<Arc<RwLock<MainStore>>>() {
+    let main_store = match app.try_state::<Arc<MainStore>>() {
         Some(store) => store,
         None => {
             log::warn!("MainStore not available yet during tray creation");

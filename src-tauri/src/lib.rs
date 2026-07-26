@@ -31,7 +31,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
-use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -463,7 +462,7 @@ pub async fn run() -> crate::error::Result<()> {
                 let window_label = window.label();
                 if window_label == "main" || window_label == "assistant" ||
                     window_label == "workflow" || window_label == "proxy_switcher" {
-                    if let Some(config_state) = window.try_state::<Arc<RwLock<MainStore>>>() {
+                    if let Some(config_state) = window.try_state::<Arc<MainStore>>() {
                         let window_size = get_saved_window_size(config_state.inner().clone(), window_label).unwrap_or_default();
                         if (window_size.width != size.width as f64
                             || window_size.height != size.height as f64)
@@ -474,7 +473,7 @@ pub async fn run() -> crate::error::Result<()> {
                             // Convert physical size to logical size.
                             let logical_size = size.to_logical(scale_factor);
                             // Store the window size when the user resizes it to remember for the next startup.
-                            if let Ok(mut store) = config_state.write() {
+                            if let Ok(store) = config_state.write() {
                                 if let Err(e) = store.set_window_size(WindowSize {
                                     width: logical_size.width,
                                     height: logical_size.height,
@@ -493,7 +492,7 @@ pub async fn run() -> crate::error::Result<()> {
 
                 if window.label() == "main" {
                     // Save the main window position when it is moved.
-                    if let Some(config_store) = window.try_state::<Arc<RwLock<MainStore>>>() {
+                    if let Some(config_store) = window.try_state::<Arc<MainStore>>() {
                         save_window_position(
                             window,
                             &config_store,
@@ -504,7 +503,7 @@ pub async fn run() -> crate::error::Result<()> {
                     }
                 } else if window.label() == "workflow" {
                     // Save the workflow window position when it is moved.
-                    if let Some(config_store) = window.try_state::<Arc<RwLock<MainStore>>>() {
+                    if let Some(config_store) = window.try_state::<Arc<MainStore>>() {
                         save_window_position(
                             window,
                             &config_store,
@@ -631,7 +630,7 @@ pub async fn run() -> crate::error::Result<()> {
             let main_store = match main_store_res {
                 Ok(store) => {
                     println!("✓ Database initialized successfully");
-                    Arc::new(RwLock::new(store))
+                    Arc::new(store)
                 },
                 Err(e) => {
                     eprintln!("========================================");
@@ -646,7 +645,7 @@ pub async fn run() -> crate::error::Result<()> {
                     match fallback_res {
                         Ok(s) => {
                             eprintln!("WARNING: Using in-memory database. All data will be lost on exit!");
-                            Arc::new(RwLock::new(s))
+                            Arc::new(s)
                         },
                         Err(fe) => {
                             eprintln!("========================================");
@@ -886,10 +885,7 @@ pub async fn run() -> crate::error::Result<()> {
 ///
 /// # Returns
 /// A tuple containing the saved window width and height.
-fn get_saved_window_size(
-    config_store: Arc<RwLock<MainStore>>,
-    window_label: &str,
-) -> Option<WindowSize> {
+fn get_saved_window_size(config_store: Arc<MainStore>, window_label: &str) -> Option<WindowSize> {
     if let Ok(c) = config_store.read() {
         let key = if window_label == "main" {
             CFG_WINDOW_SIZE
@@ -915,7 +911,7 @@ fn get_saved_window_size(
 ///
 /// # Returns
 /// A tuple containing the saved window x and y positions.
-fn get_saved_window_position(config_store: &Arc<RwLock<MainStore>>) -> Option<MainWindowPosition> {
+fn get_saved_window_position(config_store: &Arc<MainStore>) -> Option<MainWindowPosition> {
     if let Ok(c) = config_store.read() {
         c.get_config(CFG_WINDOW_POSITION, Some(MainWindowPosition::default()))
     } else {
@@ -930,9 +926,7 @@ fn get_saved_window_position(config_store: &Arc<RwLock<MainStore>>) -> Option<Ma
 ///
 /// # Returns
 /// A tuple containing the saved window x and y positions.
-fn get_saved_workflow_window_position(
-    config_store: &Arc<RwLock<MainStore>>,
-) -> Option<MainWindowPosition> {
+fn get_saved_workflow_window_position(config_store: &Arc<MainStore>) -> Option<MainWindowPosition> {
     if let Ok(c) = config_store.read() {
         c.get_config(
             CFG_WORKFLOW_WINDOW_POSITION,
@@ -953,13 +947,13 @@ fn get_saved_workflow_window_position(
 /// - `save_pos`: Function to save the position for this window type
 fn save_window_position<F, G>(
     window: &tauri::Window,
-    config_store: &Arc<RwLock<MainStore>>,
+    config_store: &Arc<MainStore>,
     current_position: &tauri::PhysicalPosition<i32>,
     get_saved_pos: F,
     save_pos: G,
 ) where
-    F: FnOnce(&Arc<RwLock<MainStore>>) -> Option<MainWindowPosition>,
-    G: FnOnce(&mut MainStore, MainWindowPosition) -> std::result::Result<(), db::StoreError>,
+    F: FnOnce(&Arc<MainStore>) -> Option<MainWindowPosition>,
+    G: FnOnce(&MainStore, MainWindowPosition) -> std::result::Result<(), db::StoreError>,
 {
     let old_pos = get_saved_pos(config_store);
     let screen_name = get_screen_name(window);
@@ -999,8 +993,8 @@ fn save_window_position<F, G>(
             x: current_position.x,
             y: current_position.y,
         };
-        if let Ok(mut store) = config_store.write() {
-            if let Err(e) = save_pos(&mut store, pos) {
+        if let Ok(store) = config_store.read() {
+            if let Err(e) = save_pos(&store, pos) {
                 error!("Failed to save window position: {}", e);
             }
         }

@@ -9,12 +9,10 @@ use crate::workflow::react::types::{ExecutionContext, RuntimeState, WaitReason};
 use std::sync::Arc;
 use tempfile::tempdir;
 
-fn create_test_store() -> Arc<std::sync::RwLock<MainStore>> {
+fn create_test_store() -> Arc<MainStore> {
     let dir = tempdir().expect("failed to create temp dir");
     let db_path = dir.path().join("test.db");
-    Arc::new(std::sync::RwLock::new(
-        MainStore::new(&db_path).expect("failed to create store"),
-    ))
+    Arc::new(MainStore::new(&db_path).expect("failed to create store"))
 }
 
 #[test]
