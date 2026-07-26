@@ -216,6 +216,38 @@ impl MainStore {
         Ok(note_id)
     }
 
+    pub(crate) async fn delete_note_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        note_id: i64,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                let transaction = conn.transaction()?;
+                let tag_ids = {
+                    let mut statement = transaction.prepare(
+                        "SELECT tag_id FROM note_tag_relations WHERE note_id = ?1",
+                    )?;
+                    let rows = statement.query_map(params![note_id], |row| row.get::<_, i64>(0))?;
+                    rows.collect::<Result<Vec<_>, _>>()?
+                };
+                for tag_id in tag_ids {
+                    transaction.execute(
+                        "UPDATE note_tag_items SET note_count = note_count - 1 WHERE id = ?1 AND note_count > 0",
+                        params![tag_id],
+                    )?;
+                }
+                transaction.execute(
+                    "DELETE FROM note_tag_relations WHERE note_id = ?1",
+                    params![note_id],
+                )?;
+                transaction.execute("DELETE FROM note_tag_items WHERE note_count = 0", [])?;
+                transaction.execute("DELETE FROM notes WHERE id = ?1", params![note_id])?;
+                transaction.commit()?;
+                Ok(())
+            })
+            .await
+    }
+
     /// Deletes a note and updates the associated tag counts.
     ///
     /// # Arguments

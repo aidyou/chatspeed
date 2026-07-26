@@ -203,9 +203,14 @@ pub async fn get_note(state: State<'_, Arc<RwLock<MainStore>>>, id: i64) -> Resu
 /// console.log('Note deleted successfully');
 /// ```
 #[command]
-pub fn delete_note(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
-    let mut main_store = state.write()?;
-    main_store.delete_note(id).map_err(AppError::Db)
+pub async fn delete_note(state: State<'_, Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::delete_note_with_runtime(runtime, id)
+        .await
+        .map_err(AppError::Db)
 }
 
 /// Search notes
