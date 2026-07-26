@@ -549,3 +549,57 @@ impl MainStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn runtime_chat_message_crud_preserves_committed_visibility() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = MainStore::new(temp_dir.path().join("chat.db")).unwrap();
+        let runtime = store.db_runtime().unwrap();
+
+        let conversation_id = MainStore::add_conversation_with_runtime(
+            runtime.clone(),
+            "Runtime conversation".to_string(),
+        )
+        .await
+        .unwrap();
+        let message_id = MainStore::add_message_with_runtime(
+            runtime.clone(),
+            conversation_id,
+            "user".to_string(),
+            "Persisted content".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        MainStore::update_message_metadata_with_runtime(
+            runtime.clone(),
+            message_id,
+            Some(serde_json::json!({ "source": "runtime" })),
+        )
+        .await
+        .unwrap();
+        let messages =
+            MainStore::get_messages_for_conversation_with_runtime(runtime.clone(), conversation_id)
+                .await
+                .unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, Some(message_id));
+        assert_eq!(
+            messages[0].metadata,
+            Some(serde_json::json!({ "source": "runtime" }))
+        );
+
+        MainStore::delete_message_with_runtime(runtime, vec![message_id])
+            .await
+            .unwrap();
+        let remaining = store
+            .get_messages_for_conversation(conversation_id)
+            .unwrap();
+        assert!(remaining.is_empty());
+    }
+}
