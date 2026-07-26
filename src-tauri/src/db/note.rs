@@ -203,6 +203,43 @@ impl MainStore {
         Ok(())
     }
 
+    /// Gets a note by its ID on a dedicated reader worker.
+    pub(crate) async fn get_note_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        note_id: i64,
+    ) -> Result<Note, StoreError> {
+        runtime
+            .read(move |conn| {
+                let mut statement = conn.prepare("SELECT * FROM notes WHERE id = ?1")?;
+                statement
+                    .query_row(params![note_id], |row| {
+                        let metadata_str: Option<String> = row.get("metadata")?;
+                        let metadata =
+                            metadata_str.and_then(|value| serde_json::from_str(&value).ok());
+                        Ok(Note {
+                            id: row.get("id")?,
+                            tags: row
+                                .get::<_, Option<String>>("tags")?
+                                .unwrap_or_default()
+                                .split(',')
+                                .filter(|value| !value.is_empty())
+                                .map(ToString::to_string)
+                                .collect(),
+                            title: row.get("title")?,
+                            content: row.get("content")?,
+                            content_hash: row.get("content_hash")?,
+                            conversation_id: row.get("conversation_id")?,
+                            message_id: row.get("message_id")?,
+                            created_at: row.get("created_at")?,
+                            updated_at: row.get("updated_at")?,
+                            metadata,
+                        })
+                    })
+                    .map_err(StoreError::from)
+            })
+            .await
+    }
+
     /// Gets a note by its ID.
     ///
     /// # Arguments

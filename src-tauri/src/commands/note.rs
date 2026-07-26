@@ -156,9 +156,14 @@ pub fn get_notes(state: State<Arc<RwLock<MainStore>>>, tag_id: Option<i64>) -> R
 /// console.log(note);
 /// ```
 #[command]
-pub fn get_note(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<Note> {
-    let main_store = state.read()?;
-    main_store.get_note(id).map_err(AppError::Db)
+pub async fn get_note(state: State<'_, Arc<RwLock<MainStore>>>, id: i64) -> Result<Note> {
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::get_note_with_runtime(runtime, id)
+        .await
+        .map_err(AppError::Db)
 }
 
 /// Delete a note
