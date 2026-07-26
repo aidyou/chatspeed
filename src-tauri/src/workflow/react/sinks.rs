@@ -107,21 +107,27 @@ impl DBSink {
         Self { store }
     }
 
-    fn append_event_sync(&self, event: &WorkflowEvent) -> Result<i64, WorkflowEngineError> {
-        let store = self.store.read().map_err(|e| {
-            WorkflowEngineError::Db(crate::db::StoreError::LockError(e.to_string()))
-        })?;
-        store
-            .append_workflow_event(event)
+    async fn append_event(&self, event: WorkflowEvent) -> Result<i64, WorkflowEngineError> {
+        let runtime = {
+            let store = self.store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::StoreError::LockError(e.to_string()))
+            })?;
+            store.db_runtime().map_err(WorkflowEngineError::Db)?
+        };
+        MainStore::append_workflow_event_with_runtime(runtime, event)
+            .await
             .map_err(WorkflowEngineError::Db)
     }
 
-    fn upsert_context_sync(&self, ctx: &ExecutionContext) -> Result<(), WorkflowEngineError> {
-        let store = self.store.read().map_err(|e| {
-            WorkflowEngineError::Db(crate::db::StoreError::LockError(e.to_string()))
-        })?;
-        store
-            .upsert_execution_context(ctx)
+    async fn upsert_context(&self, ctx: ExecutionContext) -> Result<(), WorkflowEngineError> {
+        let runtime = {
+            let store = self.store.read().map_err(|e| {
+                WorkflowEngineError::Db(crate::db::StoreError::LockError(e.to_string()))
+            })?;
+            store.db_runtime().map_err(WorkflowEngineError::Db)?
+        };
+        MainStore::upsert_execution_context_with_runtime(runtime, ctx)
+            .await
             .map_err(WorkflowEngineError::Db)
     }
 }
@@ -140,7 +146,7 @@ impl Sink for DBSink {
     async fn accept(&self, envelope: EventEnvelope) -> Result<(), WorkflowEngineError> {
         match envelope.event {
             DispatchEvent::Audit { event } => {
-                self.append_event_sync(&event)?;
+                self.append_event(event.clone()).await?;
                 log::info!(
                     "[DBSink] audit event written - session={}, type={:?}",
                     event.session_id,
@@ -149,7 +155,7 @@ impl Sink for DBSink {
                 Ok(())
             }
             DispatchEvent::Snapshot { context } => {
-                self.upsert_context_sync(&context)?;
+                self.upsert_context(context.clone()).await?;
                 log::info!(
                     "[DBSink] snapshot written - session={}, state={:?}",
                     context.session_id,
@@ -171,7 +177,7 @@ impl Sink for DBSink {
                 };
 
                 if let Some(event) = event {
-                    self.append_event_sync(&event)?;
+                    self.append_event(event).await?;
                     log::info!(
                         "[DBSink] terminal event written - session={}, state={}",
                         session_id,

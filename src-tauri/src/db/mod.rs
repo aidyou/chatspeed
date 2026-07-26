@@ -7,6 +7,7 @@ pub mod chat;
 pub mod config;
 pub mod error;
 pub mod main_store;
+pub mod runtime;
 // pub mod plugin;
 mod ccproxy;
 mod mcp;

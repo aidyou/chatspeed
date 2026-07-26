@@ -2020,6 +2020,35 @@ impl MainStore {
         }
     }
 
+    pub(crate) async fn upsert_execution_context_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        ctx: ExecutionContext,
+    ) -> Result<(), StoreError> {
+        let context_json = serde_json::to_string(&ctx)?;
+        let state_str = ctx.state.to_string();
+        let wait_reason_str = ctx.wait_reason.as_ref().map(|reason| reason.to_string());
+        let sub_agent_sessions_json = serde_json::to_string(&ctx.sub_agent_sessions)?;
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO workflow_snapshots
+                     (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+                    params![
+                        ctx.session_id,
+                        context_json,
+                        ctx.version,
+                        state_str,
+                        wait_reason_str,
+                        ctx.waiting_on_sub_agent_id,
+                        sub_agent_sessions_json,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
     pub fn upsert_execution_context(&self, ctx: &ExecutionContext) -> Result<(), StoreError> {
         let conn = self
             .conn
@@ -2058,6 +2087,24 @@ impl MainStore {
     }
 
     // Workflow Event Operations
+
+    pub(crate) async fn append_workflow_event_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        event: WorkflowEvent,
+    ) -> Result<i64, StoreError> {
+        let event_type = event.event_type.as_str().to_string();
+        let event_data = serde_json::to_string(&event.event_data)?;
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "INSERT INTO workflow_events (session_id, event_type, event_version, event_data)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![event.session_id, event_type, event.version, event_data],
+                )?;
+                Ok(conn.last_insert_rowid())
+            })
+            .await
+    }
 
     pub fn append_workflow_event(&self, event: &WorkflowEvent) -> Result<i64, StoreError> {
         let conn = self

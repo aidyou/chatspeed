@@ -32,6 +32,15 @@ pub enum StoreError {
     #[error("{0}")]
     Query(String),
 
+    #[error("Database runtime is closed")]
+    RuntimeClosed,
+
+    #[error("Database runtime is in maintenance mode")]
+    RuntimeMaintenance,
+
+    #[error("Database worker failed: {0}")]
+    WorkerFailed(String),
+
     /// Error variant for Tauri-related errors.
     #[error("{0}")]
     TauriError(String),

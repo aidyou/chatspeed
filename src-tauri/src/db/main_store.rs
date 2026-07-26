@@ -1,4 +1,4 @@
-use crate::db::{error::StoreError, ProxyGroup};
+use crate::db::{error::StoreError, runtime::DbRuntime, ProxyGroup};
 
 use log::error;
 use rusqlite::{params, Connection, OpenFlags, Result};
@@ -191,6 +191,8 @@ impl Config {
 pub struct MainStore {
     pub(crate) conn: Mutex<Connection>,
     pub(crate) config: Config,
+    runtime: Mutex<Option<std::sync::Arc<DbRuntime>>>,
+    runtime_path: Mutex<std::path::PathBuf>,
 }
 
 impl MainStore {
@@ -207,6 +209,7 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database connection or initialization fails.
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, StoreError> {
+        let db_path = db_path.as_ref().to_path_buf();
         let mut conn = Connection::open(&db_path).map_err(|e| {
             let err = t!("db.failed_to_open_db_connection", error = e.to_string()).to_string();
             log::error!("{}", err);
@@ -237,7 +240,52 @@ impl MainStore {
             Self::load_config(&locked_conn)?
         };
 
-        Ok(Self { conn, config })
+        let runtime = std::sync::Arc::new(DbRuntime::open(&db_path)?);
+        Ok(Self {
+            conn,
+            config,
+            runtime: Mutex::new(Some(runtime)),
+            runtime_path: Mutex::new(db_path),
+        })
+    }
+
+    pub(crate) fn db_runtime(&self) -> Result<std::sync::Arc<DbRuntime>, StoreError> {
+        self.runtime
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?
+            .as_ref()
+            .cloned()
+            .ok_or(StoreError::RuntimeMaintenance)
+    }
+
+    fn drain_runtime(&self) -> Result<(), StoreError> {
+        self.db_runtime()?.drain_for_maintenance()
+    }
+
+    fn pause_runtime(&self) -> Result<(), StoreError> {
+        let runtime = self
+            .runtime
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))?
+            .take();
+        if let Some(runtime) = runtime {
+            runtime.shutdown_for_maintenance()?;
+        }
+        Ok(())
+    }
+
+    fn resume_runtime<P: AsRef<Path>>(&self, db_path: P) -> Result<(), StoreError> {
+        let db_path = db_path.as_ref().to_path_buf();
+        let runtime = std::sync::Arc::new(DbRuntime::open(&db_path)?);
+        *self
+            .runtime
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))? = Some(runtime);
+        *self
+            .runtime_path
+            .lock()
+            .map_err(|e| StoreError::LockError(e.to_string()))? = db_path;
+        Ok(())
     }
 
     /// Loads the configuration from the database.
@@ -297,6 +345,7 @@ impl MainStore {
     /// Performs a database checkpoint, flushing all WAL data to the main database file.
     /// This is critical before performing file-level backups in WAL mode.
     pub fn checkpoint(&self) -> Result<(), StoreError> {
+        self.drain_runtime()?;
         let conn = self
             .conn
             .lock()
@@ -348,12 +397,9 @@ impl MainStore {
 
     /// Reopens the database connection. This is useful during restoration when the physical file is replaced.
     pub fn reopen<P: AsRef<Path>>(&mut self, db_path: P) -> Result<(), StoreError> {
-        let mut conn_guard = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        let db_path = db_path.as_ref().to_path_buf();
+        self.pause_runtime()?;
 
-        // 1. Open new connection
         let mut new_conn = Connection::open_with_flags(
             &db_path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -365,20 +411,20 @@ impl MainStore {
                 t!("db.failed_to_open_db_connection", error = e.to_string()).to_string(),
             )
         })?;
-
-        // 2. Enable WAL mode
         let _ = new_conn.query_row("PRAGMA journal_mode=WAL;", [], |_| Ok(()));
         let _ = new_conn.execute("PRAGMA synchronous=NORMAL;", []);
         let _ = new_conn.execute("PRAGMA foreign_keys=ON;", []);
         let _ = new_conn.busy_timeout(std::time::Duration::from_secs(5));
-
-        // 3. Initialize/Migrate if needed (safety check)
         Self::init_db(&mut new_conn)?;
 
-        // 4. Replace the connection inside the mutex
-        *conn_guard = new_conn;
-
-        Ok(())
+        {
+            let mut conn_guard = self
+                .conn
+                .lock()
+                .map_err(|e| StoreError::LockError(e.to_string()))?;
+            *conn_guard = new_conn;
+        }
+        self.resume_runtime(&db_path)
     }
 
     /// Performs a rollback-safe restoration of the database.
@@ -400,6 +446,7 @@ impl MainStore {
         }
 
         self.checkpoint()?;
+        self.pause_runtime()?;
         let rollback_path = main_db_path
             .with_extension(format!("restore-backup-{}", uuid::Uuid::new_v4().simple()));
 

@@ -254,6 +254,8 @@ pub async fn run() -> crate::error::Result<()> {
             delete_ccproxy_stats,
             get_ccproxy_daily_stats,
             get_ccproxy_grouped_stats,
+            get_ccproxy_grouped_stats_by_date_range,
+            get_ccproxy_today_cost_stats,
             get_ccproxy_provider_stats_by_date,
             get_ccproxy_error_stats_by_date,
             get_ccproxy_model_usage_stats,

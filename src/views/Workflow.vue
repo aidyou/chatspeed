@@ -390,6 +390,7 @@ const workflowSidebarActiveTab = ref('history')
 const lastHistoryWorkflowId = ref(null)
 const todayCostAmount = ref(0)
 const todayCostRefreshTimer = ref(null)
+const isRefreshingTodayCost = ref(false)
 const pricingMaps = computed(() => buildPricingMaps(modelStore.providers))
 const shouldShowTodayCostStats = computed(() => Boolean(settingStore.settings.showTodayCostStats))
 const todayCostTitle = computed(() => formatCurrencyCompact(todayCostAmount.value))
@@ -420,20 +421,54 @@ const calculateTodayCost = rows => {
 }
 
 const refreshTodayCost = async () => {
-  if (!shouldShowTodayCostStats.value) {
-    todayCostAmount.value = 0
+  if (!shouldShowTodayCostStats.value || document.visibilityState !== 'visible' || isRefreshingTodayCost.value) {
     return
   }
 
+  isRefreshingTodayCost.value = true
   try {
-    const today = getLocalDateString(new Date())
-    const rows = await invokeWrapper('get_ccproxy_grouped_stats', { days: 0 })
-    todayCostAmount.value = calculateTodayCost((rows || []).filter(row => row.date === today))
+    const rows = await invokeWrapper('get_ccproxy_today_cost_stats')
+    todayCostAmount.value = calculateTodayCost(rows)
   } catch (error) {
     console.error('Failed to refresh workflow today cost stats:', error)
+  } finally {
+    isRefreshingTodayCost.value = false
   }
 }
 
+const stopTodayCostRefresh = () => {
+  if (todayCostRefreshTimer.value) {
+    clearTimeout(todayCostRefreshTimer.value)
+    todayCostRefreshTimer.value = null
+  }
+}
+
+const scheduleTodayCostRefresh = () => {
+  stopTodayCostRefresh()
+  if (!shouldShowTodayCostStats.value || document.visibilityState !== 'visible') return
+  todayCostRefreshTimer.value = setTimeout(async () => {
+    await refreshTodayCost()
+    scheduleTodayCostRefresh()
+  }, 5000)
+}
+
+const startTodayCostRefresh = () => {
+  if (!shouldShowTodayCostStats.value) {
+    todayCostAmount.value = 0
+    stopTodayCostRefresh()
+    return
+  }
+  void refreshTodayCost()
+  scheduleTodayCostRefresh()
+}
+
+const handleTodayCostVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    startTodayCostRefresh()
+  } else {
+    stopTodayCostRefresh()
+  }
+}
 const openProxyStats = async () => {
   try {
     localStorage.setItem(
@@ -447,26 +482,6 @@ const openProxyStats = async () => {
   } catch (error) {
     console.error('Failed to open proxy stats window:', error)
   }
-}
-
-const stopTodayCostRefresh = () => {
-  if (todayCostRefreshTimer.value) {
-    clearInterval(todayCostRefreshTimer.value)
-    todayCostRefreshTimer.value = null
-  }
-}
-
-const startTodayCostRefresh = () => {
-  stopTodayCostRefresh()
-  if (!shouldShowTodayCostStats.value) {
-    todayCostAmount.value = 0
-    return
-  }
-
-  void refreshTodayCost()
-  todayCostRefreshTimer.value = setInterval(() => {
-    void refreshTodayCost()
-  }, 5000)
 }
 
 const showPlanningModeToggle = computed(() => true)
@@ -2182,6 +2197,7 @@ onMounted(async () => {
   }
 
   windowStore.initWorkflowWindowAlwaysOnTop()
+  document.addEventListener('visibilitychange', handleTodayCostVisibilityChange)
   window.addEventListener('keydown', onGlobalKeyDown)
   window.addEventListener('resize', updateMaxWidth)
   startTodayCostRefresh()
@@ -2195,6 +2211,7 @@ onBeforeUnmount(() => {
     unlistenWorkflowEvents.value()
   }
   unlistenFocusInput.value?.()
+  document.removeEventListener('visibilitychange', handleTodayCostVisibilityChange)
   window.removeEventListener('keydown', onGlobalKeyDown)
   window.removeEventListener('resize', updateMaxWidth)
   stopTodayCostRefresh()

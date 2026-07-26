@@ -415,6 +415,7 @@ const filterByChecked = ref(false)
 const saveTimer = ref(null)
 const serverStatsToday = ref({})
 const serverStatsTimer = ref(null)
+const isRefreshingServerStats = ref(false)
 const activeTrendProxyKey = ref('')
 const activeTrendProxy = ref(null)
 const trendDrawerVisible = ref(false)
@@ -637,9 +638,14 @@ const calculateServerStatsFromRows = (rows, proxyAlias, providerFilter = '') => 
   )
 }
 
+const shouldRefreshServerStats = () =>
+  activeTab.value === 'servers' && document.visibilityState === 'visible' && hasChatCompletionProxy.value
+
 const refreshTodayServerStats = async () => {
-  const today = getLocalDateString(new Date())
+  if (!shouldRefreshServerStats() || isRefreshingServerStats.value) return
+  isRefreshingServerStats.value = true
   try {
+    const today = getLocalDateString(new Date())
     const rows = await invokeWrapper('get_ccproxy_provider_stats_by_date', { date: today })
     const nextStats = {}
     sortedProxyServerGroups.value.forEach(group => {
@@ -650,16 +656,38 @@ const refreshTodayServerStats = async () => {
     serverStatsToday.value = nextStats
   } catch (error) {
     console.error('Failed to refresh proxy switcher server stats:', error)
+  } finally {
+    isRefreshingServerStats.value = false
   }
 }
 
-const startServerStatsRefresh = () => {
+const stopServerStatsRefresh = () => {
   if (serverStatsTimer.value) {
-    clearInterval(serverStatsTimer.value)
+    clearTimeout(serverStatsTimer.value)
+    serverStatsTimer.value = null
   }
-  serverStatsTimer.value = setInterval(() => {
-    refreshTodayServerStats()
+}
+
+const scheduleServerStatsRefresh = () => {
+  stopServerStatsRefresh()
+  if (!shouldRefreshServerStats()) return
+  serverStatsTimer.value = setTimeout(async () => {
+    await refreshTodayServerStats()
+    scheduleServerStatsRefresh()
   }, 5000)
+}
+
+const startServerStatsRefresh = () => {
+  void refreshTodayServerStats()
+  scheduleServerStatsRefresh()
+}
+
+const handleDocumentVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    startServerStatsRefresh()
+  } else {
+    stopServerStatsRefresh()
+  }
 }
 
 const destroyTrendChart = () => {
@@ -769,9 +797,17 @@ const loadTrendPopoverData = async proxy => {
       return
     }
 
-    const dailyRows = await Promise.all(
-      dates.map(date => invokeWrapper('get_ccproxy_provider_stats_by_date', { date }))
-    )
+    const dailyRowsByDate = new Map()
+    const rangeRows = await invokeWrapper('get_ccproxy_grouped_stats_by_date_range', {
+      startDate: dates[dates.length - 1],
+      endDate: dates[0]
+    })
+    ;(rangeRows || []).forEach(row => {
+      const rows = dailyRowsByDate.get(row.date) || []
+      rows.push(row)
+      dailyRowsByDate.set(row.date, rows)
+    })
+    const dailyRows = dates.map(date => dailyRowsByDate.get(date) || [])
 
     const providerOptionsMap = new Map()
     dailyRows.flat().forEach(row => {
@@ -1132,13 +1168,19 @@ watch(
 
 watch(activeTab, tab => {
   const normalizedTab = normalizeProxySwitcherTab(tab)
-  if (route.query.tab === normalizedTab) return
-  router.replace({
-    query: {
-      ...route.query,
-      tab: normalizedTab
-    }
-  })
+  if (route.query.tab !== normalizedTab) {
+    router.replace({
+      query: {
+        ...route.query,
+        tab: normalizedTab
+      }
+    })
+  }
+  if (normalizedTab === 'servers') {
+    startServerStatsRefresh()
+  } else {
+    stopServerStatsRefresh()
+  }
 })
 
 watch(
@@ -1176,13 +1218,15 @@ watch(
 
 onUnmounted(() => {
   if (saveTimer.value) clearTimeout(saveTimer.value)
-  if (serverStatsTimer.value) clearInterval(serverStatsTimer.value)
+  stopServerStatsRefresh()
+  document.removeEventListener('visibilitychange', handleDocumentVisibilityChange)
   window.removeEventListener('storage', handleTargetTabStorage)
   destroyTrendChart()
 })
 
 onMounted(async () => {
   consumeStoredTargetTab()
+  document.addEventListener('visibilitychange', handleDocumentVisibilityChange)
   window.addEventListener('storage', handleTargetTabStorage)
   await proxyGroupStore.getList()
   settingStore.updateSettingStore()

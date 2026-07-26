@@ -532,7 +532,7 @@ const destroyTrendChart = tabName => {
 }
 
 const scheduleNextRefresh = () => {
-  if (!autoRefreshEnabled.value) {
+  if (!autoRefreshEnabled.value || document.visibilityState !== 'visible') {
     refreshTimer = null
     return
   }
@@ -557,10 +557,22 @@ const startRefreshTimer = () => {
     clearTimeout(refreshTimer)
     refreshTimer = null
   }
-  if (!autoRefreshEnabled.value) {
+  if (!autoRefreshEnabled.value || document.visibilityState !== 'visible') {
     return
   }
   scheduleNextRefresh()
+}
+
+const handleDocumentVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    if (autoRefreshEnabled.value) {
+      fetchDailyStats(true)
+      startRefreshTimer()
+    }
+  } else if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
 }
 
 const formatTokens = val => {
@@ -1475,10 +1487,12 @@ watch(
 )
 
 onMounted(() => {
+  document.addEventListener('visibilitychange', handleDocumentVisibilityChange)
   fetchDailyStats()
 })
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleDocumentVisibilityChange)
   if (refreshTimer) clearTimeout(refreshTimer)
   if (modelBarChart) modelBarChart.destroy()
   if (modelCostBarChart) modelCostBarChart.destroy()
