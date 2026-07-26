@@ -47,7 +47,7 @@ src-tauri/
 | Pattern | Reason |
 |---------|--------|
 | Direct window creation in IPC | Deadlock on Windows; emit events instead |
-| Multiple DB connections | SQLite lock conflicts; use single MainStore |
+| Unmanaged database connections | SQLite lock conflicts; database work must use the MainStore/DbRuntime facade. The runtime-owned single writer and controlled readers are allowed. |
 | Hardcoded locale strings | Must use `t!` macro |
 
 ## KEY DEPENDENCIES
