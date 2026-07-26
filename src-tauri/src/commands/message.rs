@@ -265,42 +265,52 @@ pub fn get_messages_for_conversation(
 /// console.log(`Added Message with ID: ${newMessageId}`);
 /// ```
 #[command]
-pub fn add_message(
-    state: State<Arc<RwLock<MainStore>>>,
+pub async fn add_message(
+    state: State<'_, Arc<RwLock<MainStore>>>,
     filter_manager: State<'_, FilterManager>,
     conversation_id: i64,
     role: String,
     content: String,
     metadata: Option<serde_json::Value>,
 ) -> Result<(i64, String)> {
-    let main_store = state.read()?;
+    let (runtime, mut final_content) = {
+        let main_store = state.read()?;
+        let mut final_content = content;
+        if role == "user" {
+            let sensitive_config: SensitiveConfig =
+                main_store.get_config("sensitive_config", SensitiveConfig::default());
 
-    let mut final_content = content;
-    // Only filter user messages
-    if role == "user" {
-        let sensitive_config: SensitiveConfig =
-            main_store.get_config("sensitive_config", SensitiveConfig::default());
+            if sensitive_config.enabled {
+                let interface_lang: String =
+                    main_store.get_config(CFG_INTERFACE_LANGUAGE, "en".to_string());
 
-        if sensitive_config.enabled {
-            let interface_lang: String =
-                main_store.get_config(CFG_INTERFACE_LANGUAGE, "en".to_string());
+                let lang_info = detect(&final_content);
+                let detected_code = if let Some(info) = lang_info {
+                    lang_to_iso_639_1(&info.lang().code()).unwrap_or("en")
+                } else {
+                    "en"
+                };
+                let languages = vec![detected_code, interface_lang.as_str()];
 
-            let lang_info = detect(&final_content);
-            let detected_code = if let Some(info) = lang_info {
-                lang_to_iso_639_1(&info.lang().code()).unwrap_or("en")
-            } else {
-                "en"
-            };
-            let languages = vec![detected_code, interface_lang.as_str()];
-
-            final_content =
-                filter_manager.filter_text(&final_content, &languages, &sensitive_config);
+                final_content =
+                    filter_manager.filter_text(&final_content, &languages, &sensitive_config);
+            }
         }
-    }
+        (
+            main_store.db_runtime().map_err(AppError::Db)?,
+            final_content,
+        )
+    };
 
-    let id = main_store
-        .add_message(conversation_id, role, final_content.clone(), metadata)
-        .map_err(AppError::Db)?;
+    let id = MainStore::add_message_with_runtime(
+        runtime,
+        conversation_id,
+        role,
+        final_content.clone(),
+        metadata,
+    )
+    .await
+    .map_err(AppError::Db)?;
 
     Ok((id, final_content))
 }
@@ -326,9 +336,14 @@ pub fn add_message(
 /// console.log('Message deleted successfully');
 /// ```
 #[command]
-pub fn delete_message(state: State<Arc<RwLock<MainStore>>>, id: Vec<i64>) -> Result<()> {
-    let main_store = state.read()?;
-    main_store.delete_message(id).map_err(AppError::Db)
+pub async fn delete_message(state: State<'_, Arc<RwLock<MainStore>>>, id: Vec<i64>) -> Result<()> {
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::delete_message_with_runtime(runtime, id)
+        .await
+        .map_err(AppError::Db)
 }
 /// Update the metadata of a message
 ///
@@ -351,14 +366,17 @@ pub fn delete_message(state: State<Arc<RwLock<MainStore>>>, id: Vec<i64>) -> Res
 /// await invoke('update_message_metadata', { id: 1, metadata: { contextClear: true } });
 /// console.log('Message metadata updated successfully');
 #[command]
-pub fn update_message_metadata(
-    state: State<Arc<RwLock<MainStore>>>,
+pub async fn update_message_metadata(
+    state: State<'_, Arc<RwLock<MainStore>>>,
     id: i64,
     metadata: serde_json::Value,
 ) -> Result<()> {
-    let main_store = state.read()?;
-    main_store
-        .update_message_metadata(id, Some(metadata))
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::update_message_metadata_with_runtime(runtime, id, Some(metadata))
+        .await
         .map_err(AppError::Db)
 }
 

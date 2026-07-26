@@ -290,6 +290,36 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    pub(crate) async fn add_message_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        conversation_id: i64,
+        role: String,
+        content: String,
+        metadata: Option<Value>,
+    ) -> Result<i64, StoreError> {
+        let metadata_json = metadata
+            .map(|value| serde_json::to_string(&value))
+            .transpose()
+            .map_err(|error| {
+                StoreError::JsonError(
+                    t!(
+                        "db.json_serialize_failed_metadata",
+                        error = error.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "INSERT INTO messages (conversation_id, role, content, metadata, timestamp) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    rusqlite::params![conversation_id, role, content, metadata_json],
+                )?;
+                Ok(conn.last_insert_rowid())
+            })
+            .await
+    }
+
     pub fn add_message(
         &self,
         conversation_id: i64,
@@ -330,6 +360,26 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    pub(crate) async fn delete_message_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        ids: Vec<i64>,
+    ) -> Result<(), StoreError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        runtime
+            .write(move |conn| {
+                let placeholders = std::iter::repeat("?")
+                    .take(ids.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!("DELETE FROM messages WHERE id IN ({placeholders})");
+                conn.execute(&sql, rusqlite::params_from_iter(ids))?;
+                Ok(())
+            })
+            .await
+    }
+
     pub fn delete_message(&self, id: Vec<i64>) -> Result<(), StoreError> {
         if id.is_empty() {
             return Ok(());
@@ -359,6 +409,34 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    pub(crate) async fn update_message_metadata_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: i64,
+        metadata: Option<Value>,
+    ) -> Result<(), StoreError> {
+        let metadata_json = metadata
+            .map(|value| serde_json::to_string(&value))
+            .transpose()
+            .map_err(|error| {
+                StoreError::JsonError(
+                    t!(
+                        "db.json_serialize_failed_metadata",
+                        error = error.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "UPDATE messages SET metadata = ? WHERE id = ?",
+                    rusqlite::params![metadata_json, id],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
     pub fn update_message_metadata(
         &self,
         id: i64,
