@@ -163,7 +163,7 @@ pub async fn add_mcp_server(
     check_form(&name, &config)?;
 
     let mcp_data = {
-        let mut store_guard = main_store.write()?;
+        let store_guard = main_store.read()?;
         store_guard.add_mcp(name, description, config.clone(), disabled)?
     };
 
@@ -250,7 +250,7 @@ pub async fn update_mcp_server(
     };
 
     {
-        let mut store_guard = main_store.write()?;
+        let store_guard = main_store.read()?;
         store_guard.update_mcp(id, name, description, config.clone(), disabled)?;
     }
 
@@ -327,7 +327,7 @@ pub async fn delete_mcp_server(
     };
 
     {
-        let mut store_guard = main_store.write()?;
+        let store_guard = main_store.read()?;
         store_guard.delete_mcp(id)?;
     }
 
@@ -425,7 +425,7 @@ pub async fn enable_mcp_server(
     }
 
     {
-        let mut store_guard = main_store.write()?;
+        let store_guard = main_store.read()?;
         store_guard.change_mcp_status(id, false)?;
     }
 
@@ -531,7 +531,7 @@ pub async fn disable_mcp_server(
     };
 
     {
-        let mut store_guard = main_store.write()?;
+        let store_guard = main_store.read()?;
         store_guard.change_mcp_status(id, true)?;
     }
 
@@ -800,7 +800,7 @@ pub async fn update_mcp_tool_status(
     disabled: bool,
 ) -> Result<Mcp> {
     let mcp = {
-        let mut store_guard = main_store.write()?;
+        let store_guard = main_store.read()?;
         let mut mcp = store_guard.config.get_mcp_by_id(id)?;
 
         let disabled_tools = mcp.config.disabled_tools.get_or_insert_with(HashSet::new);
