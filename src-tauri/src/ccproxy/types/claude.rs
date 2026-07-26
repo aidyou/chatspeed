@@ -484,9 +484,9 @@ mod tests {
         // Test case that was failing: content as array of objects with text and type
         let json = serde_json::json!([{"text":"Hello world","type":"text"}]);
         let result: Result<String, _> = serde_json::from_value(json);
-        assert!(result.is_ok());
-        // Note: this test won't work as expected because from_value doesn't use our custom deserializer
-        // We'll test through the actual ToolResult struct instead
+        assert!(result.is_err());
+        // `from_value::<String>` does not use the ToolResult content deserializer.
+        // The actual ToolResult structure is covered below.
 
         // Test simple string case with from_value
         let json = serde_json::json!("Simple string");
