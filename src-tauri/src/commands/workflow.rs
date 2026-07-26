@@ -2547,11 +2547,13 @@ pub async fn add_workflow_message(
     gateway: State<'_, Arc<TauriGateway>>,
     message: WorkflowMessage,
 ) -> Result<i64, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    let res = store
-        .add_workflow_message(&message)
+    let runtime = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store.db_runtime().map_err(|e| e.to_string())?
+    };
+    let res = MainStore::add_workflow_message_with_runtime(runtime, message.clone())
+        .await
         .map_err(|e| e.to_string())?;
-    drop(store);
 
     if should_treat_as_title_source(&message) {
         let _ = spawn_workflow_title_generation_if_missing(
