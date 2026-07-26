@@ -65,7 +65,7 @@ impl MainStore {
         Ok(items)
     }
 
-    pub fn proxy_group_add(&mut self, item: &ProxyGroup) -> Result<i64, StoreError> {
+    pub fn proxy_group_add(&self, item: &ProxyGroup) -> Result<i64, StoreError> {
         if item.name.to_lowercase() == "switch" {
             return Err(StoreError::InvalidData(
                 "Name 'switch' is reserved for dynamic switching".to_string(),
@@ -99,7 +99,7 @@ impl MainStore {
         Ok(id)
     }
 
-    pub fn proxy_group_update(&mut self, item: &ProxyGroup) -> Result<(), StoreError> {
+    pub fn proxy_group_update(&self, item: &ProxyGroup) -> Result<(), StoreError> {
         if item.name.to_lowercase() == "switch" {
             return Err(StoreError::InvalidData(
                 "Name 'switch' is reserved for dynamic switching".to_string(),
@@ -136,7 +136,7 @@ impl MainStore {
     }
 
     pub fn proxy_group_batch_update(
-        &mut self,
+        &self,
         ids: Vec<i64>,
         prompt_injection: Option<String>,
         prompt_text: Option<String>,
@@ -217,7 +217,7 @@ impl MainStore {
         Ok(())
     }
 
-    pub fn proxy_group_delete(&mut self, id: i64) -> Result<(), StoreError> {
+    pub fn proxy_group_delete(&self, id: i64) -> Result<(), StoreError> {
         let conn = self
             .conn
             .lock()

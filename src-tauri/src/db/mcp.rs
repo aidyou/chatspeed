@@ -88,7 +88,7 @@ impl MainStore {
     /// - JSON serialization fails
     /// - SQL execution fails
     pub fn add_mcp(
-        &mut self,
+        &self,
         name: String,
         description: String,
         config: McpServerConfig,
@@ -135,7 +135,7 @@ impl MainStore {
     /// - JSON serialization fails
     /// - SQL execution fails
     pub fn update_mcp(
-        &mut self,
+        &self,
         id: i64,
         name: &str,
         description: &str,
@@ -181,7 +181,7 @@ impl MainStore {
     /// Returns `StoreError` if:
     /// - SQL execution fails
     /// - Transaction commit fails
-    pub fn delete_mcp(&mut self, id: i64) -> Result<(), StoreError> {
+    pub fn delete_mcp(&self, id: i64) -> Result<(), StoreError> {
         let conn = self
             .conn
             .lock()
@@ -202,7 +202,7 @@ impl MainStore {
     ///
     /// # Returns
     /// Returns `Result` with unit type `()` on success, or `StoreError` on failure
-    pub fn change_mcp_status(&mut self, id: i64, disabled: bool) -> Result<Mcp, StoreError> {
+    pub fn change_mcp_status(&self, id: i64, disabled: bool) -> Result<Mcp, StoreError> {
         let conn = self
             .conn
             .lock()
