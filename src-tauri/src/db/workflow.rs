@@ -1909,6 +1909,22 @@ impl MainStore {
         Ok(())
     }
 
+    pub(crate) async fn update_workflow_title_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        title: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "UPDATE workflows SET title = ?1, updated_at = CASE WHEN title IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                    params![title, id],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
     pub fn update_workflow_title(&self, id: &str, title: &str) -> Result<(), StoreError> {
         let conn = self
             .conn
@@ -1925,6 +1941,23 @@ impl MainStore {
             params![title, id],
         )?;
         Ok(())
+    }
+
+    pub(crate) async fn update_workflow_title_and_query_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        title: String,
+        user_query: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "UPDATE workflows SET title = ?1, user_query = ?2, updated_at = CASE WHEN title IS NOT ?1 OR user_query IS NOT ?2 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?3",
+                    params![title, user_query, id],
+                )?;
+                Ok(())
+            })
+            .await
     }
 
     pub fn update_workflow_title_and_query(

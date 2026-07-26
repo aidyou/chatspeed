@@ -2572,11 +2572,13 @@ pub async fn update_workflow_title(
     session_id: String,
     title: String,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    store
-        .update_workflow_title(&session_id, &title)
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    let runtime = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store.db_runtime().map_err(|e| e.to_string())?
+    };
+    MainStore::update_workflow_title_with_runtime(runtime, session_id, title)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2586,11 +2588,13 @@ pub async fn update_workflow_title_and_query(
     title: String,
     user_query: String,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    store
-        .update_workflow_title_and_query(&session_id, &title, &user_query)
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    let runtime = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store.db_runtime().map_err(|e| e.to_string())?
+    };
+    MainStore::update_workflow_title_and_query_with_runtime(runtime, session_id, title, user_query)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
