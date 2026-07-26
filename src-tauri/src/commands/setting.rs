@@ -128,7 +128,7 @@ pub fn set_config(
     let should_refresh_tray = crate::shortcut::is_shortcut_key(key);
 
     {
-        let mut config_store = state.write()?;
+        let config_store = state.read()?;
 
         let result = if value.is_null() {
             config_store.delete_config(key).map_err(AppError::Db)
@@ -161,7 +161,7 @@ pub fn set_config(
 /// Reload the configuration from the database
 #[command]
 pub fn reload_config(state: State<Arc<RwLock<MainStore>>>) -> Result<()> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
     config_store.reload_config().map_err(AppError::Db)
 }
 
@@ -180,7 +180,7 @@ pub fn activate_api_key_file(
     state: State<Arc<RwLock<MainStore>>>,
     path: String,
 ) -> Result<ApiKeyEncryptionStatus> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
     config_store
         .activate_api_key_file(Path::new(&path))
         .map_err(AppError::Db)?;
@@ -194,7 +194,7 @@ pub fn generate_api_key_file(
     state: State<Arc<RwLock<MainStore>>>,
     path: String,
 ) -> Result<ApiKeyEncryptionStatus> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
     config_store
         .generate_and_activate_api_key_file(Path::new(&path))
         .map_err(AppError::Db)?;
@@ -303,7 +303,7 @@ pub fn add_ai_model(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiModel> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
 
     // First add the model to get the ID
     let id = config_store
@@ -390,7 +390,7 @@ pub fn update_ai_model(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiModel> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
 
     config_store
         .update_ai_model(
@@ -440,7 +440,7 @@ pub fn update_ai_model_order(
     state: State<Arc<RwLock<MainStore>>>,
     model_ids: Vec<i64>,
 ) -> Result<()> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
     config_store
         .update_ai_model_order(model_ids)
         .map_err(AppError::Db)
@@ -468,7 +468,7 @@ pub fn update_ai_model_order(
 /// ```
 #[command]
 pub fn delete_ai_model(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
     config_store.delete_ai_model(id).map_err(AppError::Db)
 }
 
@@ -550,7 +550,7 @@ pub fn add_ai_skill(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiSkill> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
 
     let logo_url = if let Some(logo) = logo {
         upload_logo(logo)?
@@ -594,7 +594,7 @@ pub fn update_ai_skill(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiSkill> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
 
     let logo_url = if let Some(logo) = logo {
         upload_logo(logo)?
@@ -622,7 +622,7 @@ pub fn update_ai_skill_order(
     state: State<Arc<RwLock<MainStore>>>,
     skill_ids: Vec<i64>,
 ) -> Result<()> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
     config_store
         .update_ai_skill_order(skill_ids)
         .map_err(AppError::Db)
@@ -650,7 +650,7 @@ pub fn update_ai_skill_order(
 /// ```
 #[command]
 pub fn delete_ai_skill(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<()> {
-    let mut config_store = state.write()?;
+    let config_store = state.read()?;
     config_store.delete_ai_skill(id).map_err(AppError::Db)
 }
 
