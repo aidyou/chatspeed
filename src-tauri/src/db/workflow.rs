@@ -1060,6 +1060,20 @@ impl MainStore {
         Ok(workflow)
     }
 
+    pub(crate) async fn list_workflows_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+    ) -> Result<Vec<Workflow>, StoreError> {
+        runtime
+            .read(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE parent_session_id IS NULL AND id NOT LIKE 'subagent\\_%' ESCAPE '\\' AND id NOT LIKE 'task\\_%' ESCAPE '\\' ORDER BY updated_at DESC, created_at DESC",
+                )?;
+                let rows = statement.query_map([], |row| Ok(Workflow::from(row)))?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            })
+            .await
+    }
+
     pub fn list_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
         let conn = self
             .conn
