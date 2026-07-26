@@ -283,6 +283,42 @@ impl MainStore {
         Ok(note)
     }
 
+    pub(crate) async fn get_notes_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        tag_id: Option<i64>,
+    ) -> Result<Vec<Note>, StoreError> {
+        runtime
+            .read(move |conn| {
+                let sql = if tag_id.is_some() {
+                    "SELECT n.* FROM notes n INNER JOIN note_tag_relations r ON n.id = r.note_id WHERE r.tag_id = ?1 AND n.deleted_at IS NULL ORDER BY n.created_at DESC"
+                } else {
+                    "SELECT * FROM notes WHERE deleted_at IS NULL ORDER BY created_at DESC"
+                };
+                let mut statement = conn.prepare(sql)?;
+                let map_note = |row: &rusqlite::Row| -> SqliteResult<Note> {
+                    let metadata_str: Option<String> = row.get("metadata")?;
+                    Ok(Note {
+                        id: row.get("id")?,
+                        title: row.get("title")?,
+                        content: row.get("content")?,
+                        content_hash: row.get("content_hash")?,
+                        conversation_id: row.get("conversation_id")?,
+                        message_id: row.get("message_id")?,
+                        created_at: row.get("created_at")?,
+                        updated_at: row.get("updated_at")?,
+                        tags: row.get::<_, Option<String>>("tags")?.unwrap_or_default().split(',').filter(|tag| !tag.is_empty()).map(ToString::to_string).collect(),
+                        metadata: metadata_str.and_then(|value| serde_json::from_str(&value).ok()),
+                    })
+                };
+                let rows = match tag_id {
+                    Some(tag_id) => statement.query_map(params![tag_id], map_note)?,
+                    None => statement.query_map([], map_note)?,
+                };
+                Ok(rows.collect::<SqliteResult<Vec<_>>>()?)
+            })
+            .await
+    }
+
     /// Retrieves a list of notes, optionally filtered by tag.
     ///
     /// # Arguments

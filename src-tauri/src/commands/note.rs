@@ -130,9 +130,17 @@ pub fn get_tags(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<NoteTag>> {
 /// console.log(notes);
 /// ```
 #[command]
-pub fn get_notes(state: State<Arc<RwLock<MainStore>>>, tag_id: Option<i64>) -> Result<Vec<Note>> {
-    let main_store = state.read()?;
-    main_store.get_notes(tag_id).map_err(AppError::Db)
+pub async fn get_notes(
+    state: State<'_, Arc<RwLock<MainStore>>>,
+    tag_id: Option<i64>,
+) -> Result<Vec<Note>> {
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::get_notes_with_runtime(runtime, tag_id)
+        .await
+        .map_err(AppError::Db)
 }
 
 /// Get a note by ID
