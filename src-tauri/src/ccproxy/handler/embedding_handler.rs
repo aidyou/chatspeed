@@ -168,11 +168,8 @@ pub async fn handle_embedding(
     }
 
     // Get retry configuration from settings
-    let max_retries = if let Ok(store) = store_arc.read() {
-        store.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT)
-    } else {
-        CFG_CCPROXY_RETRY_ON_429_DEFAULT
-    };
+    let max_retries =
+        store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
     let retry_config = RetryConfig::from_settings(max_retries);
 
     // Send request with retry support for 429 status code
@@ -216,24 +213,22 @@ pub async fn handle_embedding(
         .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
     // Record stats
-    if let Ok(store) = store_arc.read() {
-        let _ = store.record_ccproxy_stat(CcproxyStat {
-            id: None,
-            client_model: proxy_alias,
-            backend_model: proxy_model.model.clone(),
-            provider_id: Some(proxy_model.provider_id),
-            provider: proxy_model.provider.clone(),
-            protocol: chat_protocol.to_string(),
-            tool_compat_mode: 0,
-            status_code: status_code.as_u16() as i32,
-            error_message: None,
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_tokens: 0,
-            request_at: Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
-        });
-    } else {
-        log::error!("Failed to acquire store lock for recording ccproxy stats");
+    if let Err(error) = store_arc.record_ccproxy_stat(CcproxyStat {
+        id: None,
+        client_model: proxy_alias,
+        backend_model: proxy_model.model.clone(),
+        provider_id: Some(proxy_model.provider_id),
+        provider: proxy_model.provider.clone(),
+        protocol: chat_protocol.to_string(),
+        tool_compat_mode: 0,
+        status_code: status_code.as_u16() as i32,
+        error_message: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_tokens: 0,
+        request_at: Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+    }) {
+        log::error!("Failed to enqueue CCProxy embedding statistic: {error}");
     }
     Ok(final_response)
 }

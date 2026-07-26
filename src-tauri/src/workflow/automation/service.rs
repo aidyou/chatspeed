@@ -630,7 +630,7 @@ pub async fn run_automation_now(
     automation_id: String,
 ) -> Result<WorkflowAutomationRunNowResult, String> {
     let automation = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store
             .get_workflow_automation(&automation_id)
             .map_err(|e| e.to_string())?
@@ -640,7 +640,7 @@ pub async fn run_automation_now(
     let scheduled_for = normalize_datetime_for_db(Local::now());
 
     let run = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store
             .add_workflow_automation_run(&WorkflowAutomationRunInsert {
                 id: run_id.clone(),
@@ -659,7 +659,7 @@ pub async fn run_automation_now(
     let shell_result = match execute_pre_workflow_shell(&automation).await {
         Ok(result) => result,
         Err(error) => {
-            let store = state.read().map_err(|e| e.to_string())?;
+            let store = &*state;
             if let Err(update_error) = store.update_workflow_automation_run_failed(&run_id, &error)
             {
                 log::error!(
@@ -680,7 +680,7 @@ pub async fn run_automation_now(
             .filter(|_| automation.continuous_context);
 
         if let Some(session_id) = existing_session_id {
-            let store = state.read().map_err(|e| e.to_string())?;
+            let store = &*state;
             let exists = store
                 .get_workflow(&session_id)
                 .map_err(|e| e.to_string())?
@@ -696,7 +696,7 @@ pub async fn run_automation_now(
     };
 
     let workflow_exists = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store
             .get_workflow(&workflow_session_id)
             .map_err(|e| e.to_string())?
@@ -704,7 +704,7 @@ pub async fn run_automation_now(
     };
 
     if !workflow_exists {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store
             .create_workflow(
                 &workflow_session_id,
@@ -743,7 +743,7 @@ pub async fn run_automation_now(
     ]);
 
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store
             .update_workflow_automation_run_after_start(
                 &automation.id,
@@ -776,7 +776,7 @@ pub async fn run_automation_now(
     )
     .await
     {
-        let store = state_after_start.read().map_err(|e| e.to_string())?;
+        let store = &*state_after_start;
         if let Err(update_error) = store.update_workflow_automation_run_failed(&run_id, &error) {
             log::error!(
                 "[WorkflowAutomation][automation={}][run={}] Failed to mark run failed after start error: {}",

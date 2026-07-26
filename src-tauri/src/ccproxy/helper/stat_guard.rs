@@ -30,55 +30,54 @@ impl Drop for StreamStatGuard {
             }
         };
 
-        if let Ok(store) = self.main_store.read() {
-            let (est_input, est_output) = if let Ok(status) = self.sse_status.read() {
-                (
-                    status.estimated_input_tokens,
-                    status.estimated_output_tokens,
-                )
-            } else {
-                (0.0, 0.0)
-            };
+        let store = &self.main_store;
+        let (est_input, est_output) = if let Ok(status) = self.sse_status.read() {
+            (
+                status.estimated_input_tokens,
+                status.estimated_output_tokens,
+            )
+        } else {
+            (0.0, 0.0)
+        };
 
-            let final_input = if input > 0 {
-                input
-            } else {
-                est_input.ceil() as u64
-            };
-            let final_output = if output > 0 {
-                output
-            } else {
-                est_output.ceil() as u64
-            };
+        let final_input = if input > 0 {
+            input
+        } else {
+            est_input.ceil() as u64
+        };
+        let final_output = if output > 0 {
+            output
+        } else {
+            est_output.ceil() as u64
+        };
 
-            // Only record if we actually processed some tokens or input
-            if final_input > 0 || final_output > 0 {
-                #[cfg(debug_assertions)]
-                log::debug!(
-                    "StreamStatGuard dropped. Recording stat: provider='{}', model='{}', tokens={}/{}/{}",
-                    &self.provider,
-                    &self.backend_model,
-                    final_input,
-                    final_output,
-                    cache
-                );
+        // Only record if we actually processed some tokens or input
+        if final_input > 0 || final_output > 0 {
+            #[cfg(debug_assertions)]
+            log::debug!(
+                "StreamStatGuard dropped. Recording stat: provider='{}', model='{}', tokens={}/{}/{}",
+                &self.provider,
+                &self.backend_model,
+                final_input,
+                final_output,
+                cache
+            );
 
-                let _ = store.record_ccproxy_stat(CcproxyStat {
-                    id: None,
-                    client_model: self.client_model.clone(),
-                    backend_model: self.backend_model.clone(),
-                    provider_id: Some(self.provider_id),
-                    provider: self.provider.clone(),
-                    protocol: self.protocol.clone(),
-                    tool_compat_mode: if self.tool_compat_mode { 1 } else { 0 },
-                    status_code: 200,
-                    error_message: None,
-                    input_tokens: final_input as i64,
-                    output_tokens: final_output as i64,
-                    cache_tokens: cache as i64,
-                    request_at: None,
-                });
-            }
+            let _ = store.record_ccproxy_stat(CcproxyStat {
+                id: None,
+                client_model: self.client_model.clone(),
+                backend_model: self.backend_model.clone(),
+                provider_id: Some(self.provider_id),
+                provider: self.provider.clone(),
+                protocol: self.protocol.clone(),
+                tool_compat_mode: if self.tool_compat_mode { 1 } else { 0 },
+                status_code: 200,
+                error_message: None,
+                input_tokens: final_input as i64,
+                output_tokens: final_output as i64,
+                cache_tokens: cache as i64,
+                request_at: None,
+            });
         }
     }
 }

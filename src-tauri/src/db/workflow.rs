@@ -922,78 +922,65 @@ impl MainStore {
         &self,
         session_id: &str,
     ) -> Result<WorkflowEfficiencyReport, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let root_workflow: Workflow = conn.query_row(
-            "SELECT * FROM workflows WHERE id = ?1",
-            params![session_id],
-            |row| Ok(Workflow::from(row)),
-        )?;
-
-        let mut stmt = conn.prepare(
-            "WITH RECURSIVE workflow_tree AS (
-                SELECT *
-                FROM workflows
-                WHERE id = ?1
-                UNION ALL
-                SELECT workflows.*
-                FROM workflows
-                JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
-            )
-            SELECT *
-            FROM workflow_tree
-            ORDER BY CASE WHEN id = ?1 THEN 0 ELSE 1 END, created_at ASC, id ASC",
-        )?;
-        let rows = stmt.query_map(params![session_id], |row| Ok(Workflow::from(row)))?;
-
-        let mut reports = Vec::new();
-        for row in rows {
-            let workflow = row?;
-            let messages = self.list_workflow_messages_for_session_locked(
-                &conn,
-                workflow.id.as_deref().unwrap_or_default(),
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let root_workflow: Workflow = conn.query_row(
+                "SELECT * FROM workflows WHERE id = ?1",
+                params![session_id],
+                |row| Ok(Workflow::from(row)),
             )?;
-            let metrics = compute_efficiency_metrics(&messages);
-            reports.push(WorkflowEfficiencySessionReport {
-                session_id: workflow.id.clone().unwrap_or_default(),
-                parent_session_id: workflow.parent_session_id.clone(),
-                title: workflow.title.clone(),
-                user_query: workflow.user_query.clone(),
-                status: workflow.status.clone(),
-                metrics,
-            });
-        }
-
-        let main_agent = reports
-            .iter()
-            .find(|report| report.session_id == session_id)
-            .cloned()
-            .unwrap_or_else(|| WorkflowEfficiencySessionReport {
-                session_id: session_id.to_string(),
-                parent_session_id: root_workflow.parent_session_id.clone(),
-                title: root_workflow.title.clone(),
-                user_query: root_workflow.user_query.clone(),
-                status: root_workflow.status.clone(),
-                metrics: WorkflowEfficiencyMetrics::default(),
-            });
-
-        let sub_agents = reports
-            .into_iter()
-            .filter(|report| report.session_id != session_id)
-            .collect();
-
-        Ok(WorkflowEfficiencyReport {
-            root_session_id: session_id.to_string(),
-            main_agent,
-            sub_agents,
+            let mut statement = conn.prepare(
+                "WITH RECURSIVE workflow_tree AS (
+                    SELECT * FROM workflows WHERE id = ?1
+                    UNION ALL
+                    SELECT workflows.* FROM workflows
+                    JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+                )
+                SELECT * FROM workflow_tree
+                ORDER BY CASE WHEN id = ?1 THEN 0 ELSE 1 END, created_at ASC, id ASC",
+            )?;
+            let rows = statement.query_map(params![session_id], |row| Ok(Workflow::from(row)))?;
+            let mut reports = Vec::new();
+            for workflow in rows {
+                let workflow = workflow?;
+                let messages = Self::list_workflow_messages_for_session(
+                    conn,
+                    workflow.id.as_deref().unwrap_or_default(),
+                )?;
+                reports.push(WorkflowEfficiencySessionReport {
+                    session_id: workflow.id.clone().unwrap_or_default(),
+                    parent_session_id: workflow.parent_session_id.clone(),
+                    title: workflow.title.clone(),
+                    user_query: workflow.user_query.clone(),
+                    status: workflow.status.clone(),
+                    metrics: compute_efficiency_metrics(&messages),
+                });
+            }
+            let main_agent = reports
+                .iter()
+                .find(|report| report.session_id == session_id)
+                .cloned()
+                .unwrap_or_else(|| WorkflowEfficiencySessionReport {
+                    session_id: session_id.clone(),
+                    parent_session_id: root_workflow.parent_session_id.clone(),
+                    title: root_workflow.title.clone(),
+                    user_query: root_workflow.user_query.clone(),
+                    status: root_workflow.status.clone(),
+                    metrics: WorkflowEfficiencyMetrics::default(),
+                });
+            let sub_agents = reports
+                .into_iter()
+                .filter(|report| report.session_id != session_id)
+                .collect();
+            Ok(WorkflowEfficiencyReport {
+                root_session_id: session_id,
+                main_agent,
+                sub_agents,
+            })
         })
     }
 
-    fn list_workflow_messages_for_session_locked(
-        &self,
+    fn list_workflow_messages_for_session(
         conn: &rusqlite::Connection,
         session_id: &str,
     ) -> Result<Vec<WorkflowMessage>, StoreError> {
@@ -1041,23 +1028,20 @@ impl MainStore {
         agent_config: Option<String>,
         parent_session_id: Option<&str>,
     ) -> Result<Workflow, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        conn.execute(
-            "INSERT INTO workflows (id, parent_session_id, user_query, agent_id, agent_config, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, parent_session_id, user_query, agent_id, agent_config, "pending"],
-        )?;
-
-        let workflow: Workflow = conn.query_row(
-            "SELECT * FROM workflows WHERE id = ?1",
-            params![id],
-            |row| Ok(Workflow::from(row)),
-        )?;
-
-        Ok(workflow)
+        let id = id.to_string();
+        let user_query = user_query.to_string();
+        let agent_id = agent_id.to_string();
+        let parent_session_id = parent_session_id.map(ToString::to_string);
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "INSERT INTO workflows (id, parent_session_id, user_query, agent_id, agent_config, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, parent_session_id, user_query, agent_id, agent_config, "pending"],
+            )?;
+            conn.query_row("SELECT * FROM workflows WHERE id = ?1", params![id], |row| {
+                Ok(Workflow::from(row))
+            })
+            .map_err(StoreError::from)
+        })
     }
 
     pub(crate) async fn list_workflows_with_runtime(
@@ -1074,49 +1058,28 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn list_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT workflows.*,
-                    EXISTS(
-                        SELECT 1
-                        FROM workflow_automation_runs
-                        WHERE workflow_session_id = workflows.id
-                    ) AS is_automation_run
-             FROM workflows
-             WHERE parent_session_id IS NULL
-               AND id NOT LIKE 'subagent\\_%' ESCAPE '\\'
-               AND id NOT LIKE 'task\\_%' ESCAPE '\\'
-             ORDER BY updated_at DESC, created_at DESC",
-        )?;
-        let rows = stmt.query_map([], |row| Ok(Workflow::from(row)))?;
-        let mut workflows = Vec::new();
-        for row in rows {
-            workflows.push(row?);
-        }
-        Ok(workflows)
+        self.db_runtime()?.read_blocking(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE parent_session_id IS NULL AND id NOT LIKE 'subagent\\_%' ESCAPE '\\' AND id NOT LIKE 'task\\_%' ESCAPE '\\' ORDER BY updated_at DESC, created_at DESC",
+            )?;
+            let rows = statement.query_map([], |row| Ok(Workflow::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
     }
 
     pub fn list_nonterminal_child_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT * FROM workflows
-             WHERE parent_session_id IS NOT NULL
-               AND LOWER(status) NOT IN ('completed', 'error', 'failed', 'cancelled')
-             ORDER BY created_at ASC",
-        )?;
-        let rows = stmt.query_map([], |row| Ok(Workflow::from(row)))?;
-        let mut workflows = Vec::new();
-        for row in rows {
-            workflows.push(row?);
-        }
-        Ok(workflows)
+        self.db_runtime()?.read_blocking(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflows
+                 WHERE parent_session_id IS NOT NULL
+                   AND LOWER(status) NOT IN ('completed', 'error', 'failed', 'cancelled')
+                 ORDER BY created_at ASC",
+            )?;
+            let rows = statement.query_map([], |row| Ok(Workflow::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
     }
 
     pub(crate) async fn delete_workflow_with_runtime(
@@ -1175,124 +1138,89 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn delete_workflow(&self, id: &str) -> Result<(), StoreError> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let tx = conn.transaction()?;
-        let workflow_tree_cte = "WITH RECURSIVE workflow_tree(id, depth) AS (
-            SELECT id, 0 FROM workflows WHERE id = ?1
-            UNION ALL
-            SELECT workflows.id, workflow_tree.depth + 1
-            FROM workflows
-            JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
-        )";
-        let workflow_ids = {
-            let mut stmt = tx.prepare(&format!(
-                "{workflow_tree_cte} SELECT id FROM workflow_tree ORDER BY depth DESC"
-            ))?;
-            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
-            let mut ids = Vec::new();
-            for row in rows {
-                ids.push(row?);
+        let id = id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let transaction = conn.transaction()?;
+            let tree_cte = "WITH RECURSIVE workflow_tree(id, depth) AS (
+                SELECT id, 0 FROM workflows WHERE id = ?1
+                UNION ALL
+                SELECT workflows.id, workflow_tree.depth + 1
+                FROM workflows JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+            )";
+            let workflow_ids = {
+                let mut statement = transaction.prepare(&format!(
+                    "{tree_cte} SELECT id FROM workflow_tree ORDER BY depth DESC"
+                ))?;
+                let rows = statement.query_map(params![id], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for table in [
+                "workflow_context_messages",
+                "workflow_messages",
+                "workflow_snapshots",
+            ] {
+                transaction.execute(
+                    &format!(
+                        "{tree_cte} DELETE FROM {table} WHERE session_id IN (SELECT id FROM workflow_tree)"
+                    ),
+                    params![id],
+                )?;
             }
-            ids
-        };
-
-        for table in [
-            "workflow_context_messages",
-            "workflow_messages",
-            "workflow_snapshots",
-        ] {
-            tx.execute(
+            if let Err(error) = transaction.execute(
                 &format!(
-                    "{workflow_tree_cte} DELETE FROM {table} WHERE session_id IN (SELECT id FROM workflow_tree)"
+                    "{tree_cte} DELETE FROM workflow_events WHERE session_id IN (SELECT id FROM workflow_tree)"
                 ),
                 params![id],
-            )?;
-        }
-
-        // workflow_events is an audit/secondary table. If it is corrupted (e.g.,
-        // "database disk image is malformed"), do not block the workflow deletion.
-        // Log the error and continue so the primary workflow data still gets cleaned up.
-        if let Err(e) = tx.execute(
-            &format!(
-                "{workflow_tree_cte} DELETE FROM workflow_events WHERE session_id IN (SELECT id FROM workflow_tree)"
-            ),
-            params![id],
-        ) {
-            log::error!(
-                "[Workflow][session={}] Failed to delete workflow events (non-fatal, continuing): {}",
-                id,
-                e
-            );
-        }
-
-        // Delete child workflow rows before their parent to satisfy parent_session_id FK.
-        for workflow_id in workflow_ids {
-            tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
-        }
-
-        tx.commit()?;
-        Ok(())
+            ) {
+                log::error!(
+                    "[Workflow][session={id}] Failed to delete workflow events (non-fatal, continuing): {error}"
+                );
+            }
+            for workflow_id in workflow_ids {
+                transaction.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+            }
+            transaction.commit()?;
+            Ok(())
+        })
     }
 
     pub fn delete_last_message(&self, session_id: &str) -> Result<bool, StoreError> {
-        let (agent_config, messages, events) = {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| StoreError::LockError(e.to_string()))?;
-
+        let session_id = session_id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
             let workflow_row: Option<(Option<String>,)> = conn
                 .query_row(
-                    "SELECT agent_config
-                     FROM workflows
-                     WHERE id = ?1",
+                    "SELECT agent_config FROM workflows WHERE id = ?1",
                     params![session_id],
                     |row| Ok((row.get(0)?,)),
                 )
                 .optional()?;
-
             let Some((agent_config,)) = workflow_row else {
                 return Ok(false);
             };
-
-            let messages: Vec<WorkflowMessage> = {
-                let mut message_stmt = conn.prepare(
-                    "SELECT * FROM workflow_messages
-                     WHERE session_id = ?1
-                     ORDER BY id ASC",
+            let messages = {
+                let mut statement = conn.prepare(
+                    "SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC",
                 )?;
-                let mapped = message_stmt
-                    .query_map(params![session_id], |row| Ok(WorkflowMessage::from(row)))?
-                    .collect::<Result<Vec<_>, _>>()?;
-                mapped
+                let rows = statement.query_map(params![session_id], |row| {
+                    Ok(WorkflowMessage::from(row))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
             };
-
             if messages.is_empty() {
                 return Ok(false);
             }
-
-            let events: Vec<WorkflowEventRecord> = {
-                let mut event_stmt = conn.prepare(
+            let events = {
+                let mut statement = conn.prepare(
                     "SELECT id, session_id, event_type, event_version, event_data, created_at
-                     FROM workflow_events
-                     WHERE session_id = ?1
-                     ORDER BY id ASC",
+                     FROM workflow_events WHERE session_id = ?1 ORDER BY id ASC",
                 )?;
-                let mapped = event_stmt
-                    .query_map(params![session_id], |row| {
-                        Ok(WorkflowEventRecord::from(row))
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
-                mapped
+                let rows = statement.query_map(params![session_id], |row| {
+                    Ok(WorkflowEventRecord::from(row))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
             };
-
-            (agent_config, messages, events)
-        };
 
         let Some(plan) = determine_tail_rewind_plan(&messages, &events) else {
             return Ok(false);
@@ -1332,7 +1260,16 @@ impl MainStore {
         let updated_agent_config = update_agent_config_phase(agent_config.as_deref(), plan.phase)?;
         let preserve_manual_clear_context = plan.kind == "manual_clear_context";
         let current_execution_context = if preserve_manual_clear_context {
-            self.get_execution_context(session_id)?
+            let context_json = conn
+                .query_row(
+                    "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
+                    params![session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            context_json
+                .map(|context_json| serde_json::from_str(&context_json))
+                .transpose()?
         } else {
             None
         };
@@ -1350,7 +1287,7 @@ impl MainStore {
             None
         } else {
             let mut rebuilt_context =
-                replay_events_to_execution_context(session_id, &remaining_events)
+                replay_events_to_execution_context(&session_id, &remaining_events)
                     .map_err(|error| StoreError::InvalidData(error.to_string()))?;
             rebuilt_context.current_segment_id = remaining_segment_id;
 
@@ -1375,10 +1312,6 @@ impl MainStore {
             ))
         };
 
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let tx = conn.transaction()?;
 
         if preserve_manual_clear_context {
@@ -1467,7 +1400,7 @@ impl MainStore {
                 let restored_context = restore_execution_context_from_manual_clear_marker(
                     deleted_manual_clear_marker.as_ref(),
                     current_execution_context.as_ref(),
-                    session_id,
+                    &session_id,
                     remaining_segment_id,
                     &remaining_context_messages,
                 );
@@ -1560,6 +1493,7 @@ impl MainStore {
 
         tx.commit()?;
         Ok(true)
+        })
     }
 
     pub fn get_workflow_message_window(
@@ -1568,170 +1502,152 @@ impl MainStore {
         before_message_id: Option<i64>,
         initial_visible_group_count: usize,
     ) -> Result<WorkflowMessageWindow, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let mut stmt = conn.prepare(
-            "SELECT * FROM workflow_messages
-             WHERE session_id = ?1 AND (?2 IS NULL OR id < ?2)
-             ORDER BY id DESC",
-        )?;
-        let message_rows = stmt.query_map(params![session_id, before_message_id], |row| {
-            Ok(WorkflowMessage::from(row))
-        })?;
-
-        let is_completed_task_boundary = |message: &WorkflowMessage| {
-            if message.role != "tool" || message.is_error {
-                return false;
-            }
-            let Some(metadata) = message.metadata.as_ref() else {
-                return false;
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let is_completed_task_boundary = |message: &WorkflowMessage| {
+                if message.role != "tool" || message.is_error {
+                    return false;
+                }
+                let Some(metadata) = message.metadata.as_ref() else {
+                    return false;
+                };
+                let tool_name = metadata
+                    .get("tool_name")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        metadata
+                            .get("tool_call")
+                            .and_then(|call| call.get("name"))
+                            .and_then(Value::as_str)
+                    })
+                    .or_else(|| {
+                        metadata
+                            .get("tool_call")
+                            .and_then(|call| call.get("function"))
+                            .and_then(|function| function.get("name"))
+                            .and_then(Value::as_str)
+                    })
+                    .unwrap_or_default();
+                if tool_name != "complete_workflow" {
+                    return false;
+                }
+                let execution_status = metadata
+                    .get("execution_status")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let approval_status = metadata
+                    .get("approval_status")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let review_display_state = metadata
+                    .get("review_display_state")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                approval_status != "rejected"
+                    && review_display_state != "final_review_rejected"
+                    && (execution_status.is_empty() || execution_status == "completed")
             };
-            let tool_name = metadata
-                .get("tool_name")
-                .and_then(Value::as_str)
-                .or_else(|| {
-                    metadata
-                        .get("tool_call")
-                        .and_then(|tool_call| tool_call.get("name"))
-                        .and_then(Value::as_str)
-                })
-                .or_else(|| {
-                    metadata
-                        .get("tool_call")
-                        .and_then(|tool_call| tool_call.get("function"))
-                        .and_then(|function| function.get("name"))
-                        .and_then(Value::as_str)
-                })
-                .unwrap_or_default();
-            if tool_name != "complete_workflow" {
-                return false;
-            }
-            let execution_status = metadata
-                .get("execution_status")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let approval_status = metadata
-                .get("approval_status")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let review_display_state = metadata
-                .get("review_display_state")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-
-            approval_status != "rejected"
-                && review_display_state != "final_review_rejected"
-                && (execution_status.is_empty() || execution_status == "completed")
-        };
-
-        let mut messages_desc = Vec::new();
-        let mut completion_count = 0usize;
-        let mut target_completion_count = if before_message_id.is_some() {
-            1
-        } else {
-            initial_visible_group_count.max(1)
-        };
-
-        for row in message_rows {
-            let message = row?;
-            if is_completed_task_boundary(&message) {
-                if completion_count >= target_completion_count {
-                    break;
-                }
-                if before_message_id.is_none() && completion_count == 0 && !messages_desc.is_empty()
-                {
-                    target_completion_count = initial_visible_group_count.saturating_sub(1).max(1);
-                }
-                completion_count += 1;
-            }
-            messages_desc.push(message);
-        }
-
-        messages_desc.reverse();
-        let before_message_id = messages_desc.first().and_then(|message| message.id);
-        let hidden_completed_task_count = if let Some(oldest_message_id) = before_message_id {
-            let mut count_stmt = conn.prepare(
-                "SELECT metadata, role, is_error FROM workflow_messages
-                 WHERE session_id = ?1 AND id < ?2
-                 ORDER BY id ASC",
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflow_messages
+                 WHERE session_id = ?1 AND (?2 IS NULL OR id < ?2)
+                 ORDER BY id DESC",
             )?;
-            let rows = count_stmt.query_map(params![session_id, oldest_message_id], |row| {
-                let metadata_text: Option<String> = row.get(0)?;
-                let role: String = row.get(1)?;
-                let is_error: bool = row.get(2)?;
-                Ok(WorkflowMessage {
-                    id: None,
-                    session_id: String::new(),
-                    role,
-                    message: String::new(),
-                    reasoning: None,
-                    message_kind: String::new(),
-                    message_subtype: None,
-                    segment_id: 0,
-                    source_event_type: None,
-                    metadata: metadata_text.and_then(|value| serde_json::from_str(&value).ok()),
-                    attached_context: None,
-                    step_type: None,
-                    step_index: 0,
-                    is_error,
-                    error_type: None,
-                    created_at: None,
-                })
+            let rows = statement.query_map(params![session_id, before_message_id], |row| {
+                Ok(WorkflowMessage::from(row))
             })?;
-            let mut count = 0usize;
-            for row in rows {
-                if is_completed_task_boundary(&row?) {
-                    count += 1;
+            let mut messages = Vec::new();
+            let mut completion_count = 0usize;
+            let mut target_completion_count = if before_message_id.is_some() {
+                1
+            } else {
+                initial_visible_group_count.max(1)
+            };
+            for message in rows {
+                let message = message?;
+                if is_completed_task_boundary(&message) {
+                    if completion_count >= target_completion_count {
+                        break;
+                    }
+                    if before_message_id.is_none() && completion_count == 0 && !messages.is_empty()
+                    {
+                        target_completion_count =
+                            initial_visible_group_count.saturating_sub(1).max(1);
+                    }
+                    completion_count += 1;
                 }
+                messages.push(message);
             }
-            count
-        } else {
-            0
-        };
-
-        Ok(WorkflowMessageWindow {
-            messages: messages_desc,
-            before_message_id,
-            hidden_completed_task_count,
+            messages.reverse();
+            let next_before_message_id = messages.first().and_then(|message| message.id);
+            let hidden_completed_task_count = if let Some(oldest_message_id) =
+                next_before_message_id
+            {
+                let mut count_statement = conn.prepare(
+                    "SELECT metadata, role, is_error FROM workflow_messages
+                     WHERE session_id = ?1 AND id < ?2
+                     ORDER BY id ASC",
+                )?;
+                let rows =
+                    count_statement.query_map(params![session_id, oldest_message_id], |row| {
+                        Ok(WorkflowMessage {
+                            id: None,
+                            session_id: String::new(),
+                            role: row.get(1)?,
+                            message: String::new(),
+                            reasoning: None,
+                            message_kind: String::new(),
+                            message_subtype: None,
+                            segment_id: 0,
+                            source_event_type: None,
+                            metadata: row
+                                .get::<_, Option<String>>(0)?
+                                .and_then(|value| serde_json::from_str(&value).ok()),
+                            attached_context: None,
+                            step_type: None,
+                            step_index: 0,
+                            is_error: row.get(2)?,
+                            error_type: None,
+                            created_at: None,
+                        })
+                    })?;
+                let mut count = 0usize;
+                for message in rows {
+                    if is_completed_task_boundary(&message?) {
+                        count += 1;
+                    }
+                }
+                count
+            } else {
+                0
+            };
+            Ok(WorkflowMessageWindow {
+                messages,
+                before_message_id: next_before_message_id,
+                hidden_completed_task_count,
+            })
         })
     }
 
     pub fn get_workflow_for_ui(&self, id: &str) -> Result<Workflow, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let mut workflow: Workflow = conn.query_row(
-            "SELECT workflows.*,
-                    EXISTS(
-                        SELECT 1
-                        FROM workflow_automation_runs
-                        WHERE workflow_session_id = workflows.id
-                    ) AS is_automation_run
-             FROM workflows
-             WHERE workflows.id = ?1",
-            params![id],
-            |row| Ok(Workflow::from(row)),
-        )?;
-        let snapshot_state_and_wait_reason: Option<(Option<String>, Option<String>)> = conn
-            .query_row(
-                "SELECT state, wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+        let id = id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut workflow: Workflow = conn.query_row(
+                "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE workflows.id = ?1",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .ok();
-        workflow.wait_reason = snapshot_state_and_wait_reason.and_then(|(state, wait_reason)| {
-            if state.as_deref() == Some("waiting") {
-                wait_reason
-            } else {
-                None
-            }
-        });
-        Ok(workflow)
+                |row| Ok(Workflow::from(row)),
+            )?;
+            let snapshot = conn
+                .query_row(
+                    "SELECT state, wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                    params![id],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .ok();
+            workflow.wait_reason = snapshot.and_then(|(state, wait_reason)| {
+                (state.as_deref() == Some("waiting")).then_some(wait_reason).flatten()
+            });
+            Ok(workflow)
+        })
     }
 
     pub(crate) async fn get_workflow_snapshot_with_runtime(
@@ -1766,66 +1682,71 @@ impl MainStore {
     }
 
     pub fn get_workflow_snapshot(&self, id: &str) -> Result<WorkflowSnapshot, StoreError> {
-        let workflow = self.get_workflow_for_ui(id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let mut stmt =
-            conn.prepare("SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC")?;
-        let messages_iter = stmt.query_map(params![id], |row| Ok(WorkflowMessage::from(row)))?;
-        let mut messages = Vec::new();
-        for msg in messages_iter {
-            messages.push(msg?);
-        }
-
-        Ok(WorkflowSnapshot { workflow, messages })
+        let id = id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut workflow: Workflow = conn.query_row(
+                "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE workflows.id = ?1",
+                params![id],
+                |row| Ok(Workflow::from(row)),
+            )?;
+            let snapshot = conn
+                .query_row(
+                    "SELECT state, wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                    params![id],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .ok();
+            workflow.wait_reason = snapshot.and_then(|(state, wait_reason)| {
+                (state.as_deref() == Some("waiting")).then_some(wait_reason).flatten()
+            });
+            let mut statement =
+                conn.prepare("SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC")?;
+            let rows = statement.query_map(params![id], |row| Ok(WorkflowMessage::from(row)))?;
+            Ok(WorkflowSnapshot {
+                workflow,
+                messages: rows.collect::<Result<Vec<_>, _>>()?,
+            })
+        })
     }
 
     pub fn get_tail_rewind_kind(
         &self,
         session_id: &str,
     ) -> Result<Option<&'static str>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let mut message_stmt =
-            conn.prepare("SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC")?;
-        let message_rows =
-            message_stmt.query_map(params![session_id], |row| Ok(WorkflowMessage::from(row)))?;
-        let mut messages = Vec::new();
-        for row in message_rows {
-            messages.push(row?);
-        }
-
-        let mut event_stmt =
-            conn.prepare("SELECT * FROM workflow_events WHERE session_id = ?1 ORDER BY id ASC")?;
-        let event_rows = event_stmt.query_map(params![session_id], |row| {
-            Ok(WorkflowEventRecord::from(row))
-        })?;
-        let mut events = Vec::new();
-        for row in event_rows {
-            events.push(row?);
-        }
-
-        Ok(determine_tail_rewind_plan(&messages, &events).map(|plan| plan.kind))
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let messages = {
+                let mut statement = conn.prepare(
+                    "SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC",
+                )?;
+                let rows = statement
+                    .query_map(params![session_id], |row| Ok(WorkflowMessage::from(row)))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            let events = {
+                let mut statement = conn.prepare(
+                    "SELECT * FROM workflow_events WHERE session_id = ?1 ORDER BY id ASC",
+                )?;
+                let rows = statement.query_map(params![session_id], |row| {
+                    Ok(WorkflowEventRecord::from(row))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            Ok(determine_tail_rewind_plan(&messages, &events).map(|plan| plan.kind))
+        })
     }
 
     pub fn get_workflow(&self, id: &str) -> Result<Option<Workflow>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        conn.query_row(
-            "SELECT * FROM workflows WHERE id = ?1",
-            params![id],
-            |row| Ok(Workflow::from(row)),
-        )
-        .optional()
-        .map_err(StoreError::from)
+        let id = id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT * FROM workflows WHERE id = ?1",
+                params![id],
+                |row| Ok(Workflow::from(row)),
+            )
+            .optional()
+            .map_err(StoreError::from)
+        })
     }
 
     pub(crate) async fn add_workflow_message_with_runtime(
@@ -1854,46 +1775,31 @@ impl MainStore {
         &self,
         msg: &WorkflowMessage,
     ) -> Result<WorkflowMessage, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let metadata_json = msg
-            .metadata
-            .as_ref()
-            .map(|m| serde_json::to_string(m).unwrap_or_default());
-
-        conn.execute(
-            "INSERT INTO workflow_messages (session_id, role, message, reasoning, message_kind, message_subtype, segment_id, source_event_type, metadata, attached_context, step_type, step_index, is_error, error_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-            params![
-                msg.session_id,
-                msg.role,
-                msg.message,
-                msg.reasoning,
-                msg.message_kind,
-                msg.message_subtype,
-                msg.segment_id,
-                msg.source_event_type,
-                metadata_json,
-                msg.attached_context,
-                msg.step_type,
-                msg.step_index,
-                if msg.is_error { 1 } else { 0 },
-                msg.error_type,
-            ],
-        )?;
-
-        conn.execute(
-            "UPDATE workflows SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
-            params![msg.session_id],
-        )?;
-
-        let id = conn.last_insert_rowid();
-        let mut new_msg = msg.clone();
-        new_msg.id = Some(id);
-        Ok(new_msg)
+        let msg = msg.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let metadata_json = msg
+                .metadata
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?;
+            conn.execute(
+                "INSERT INTO workflow_messages (session_id, role, message, reasoning, message_kind, message_subtype, segment_id, source_event_type, metadata, attached_context, step_type, step_index, is_error, error_type)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    msg.session_id, msg.role, msg.message, msg.reasoning, msg.message_kind,
+                    msg.message_subtype, msg.segment_id, msg.source_event_type, metadata_json,
+                    msg.attached_context, msg.step_type, msg.step_index,
+                    if msg.is_error { 1 } else { 0 }, msg.error_type,
+                ],
+            )?;
+            conn.execute(
+                "UPDATE workflows SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+                params![msg.session_id],
+            )?;
+            let mut persisted = msg;
+            persisted.id = Some(conn.last_insert_rowid());
+            Ok(persisted)
+        })
     }
 
     pub fn update_workflow_message_metadata(
@@ -1901,55 +1807,32 @@ impl MainStore {
         message_id: i64,
         metadata: &Value,
     ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let metadata_json = serde_json::to_string(metadata).unwrap_or_default();
-
-        conn.execute(
-            "UPDATE workflow_messages SET metadata = ?1 WHERE id = ?2",
-            params![metadata_json, message_id],
-        )?;
-
-        Ok(())
+        let metadata_json = serde_json::to_string(metadata)?;
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflow_messages SET metadata = ?1 WHERE id = ?2",
+                params![metadata_json, message_id],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn add_workflow_ai_context_message(
         &self,
         msg: &WorkflowAiContextMessage,
     ) -> Result<WorkflowAiContextMessage, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let metadata_json = msg
-            .metadata
-            .as_ref()
-            .map(|m| serde_json::to_string(m).unwrap_or_default());
-
-        conn.execute(
-            "INSERT INTO workflow_context_messages (session_id, segment_id, role, message, reasoning, message_kind, message_subtype, metadata, source_message_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                msg.session_id,
-                msg.segment_id,
-                msg.role,
-                msg.message,
-                msg.reasoning,
-                msg.message_kind,
-                msg.message_subtype,
-                metadata_json,
-                msg.source_message_id,
-            ],
-        )?;
-
-        let id = conn.last_insert_rowid();
-        let mut new_msg = msg.clone();
-        new_msg.id = Some(id);
-        Ok(new_msg)
+        let msg = msg.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let metadata_json = msg.metadata.as_ref().map(serde_json::to_string).transpose()?;
+            conn.execute(
+                "INSERT INTO workflow_context_messages (session_id, segment_id, role, message, reasoning, message_kind, message_subtype, metadata, source_message_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![msg.session_id, msg.segment_id, msg.role, msg.message, msg.reasoning, msg.message_kind, msg.message_subtype, metadata_json, msg.source_message_id],
+            )?;
+            let mut persisted = msg;
+            persisted.id = Some(conn.last_insert_rowid());
+            Ok(persisted)
+        })
     }
 
     pub fn delete_workflow_ai_context_segment(
@@ -1957,17 +1840,14 @@ impl MainStore {
         session_id: &str,
         segment_id: i32,
     ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        conn.execute(
-            "DELETE FROM workflow_context_messages WHERE session_id = ?1 AND segment_id = ?2",
-            params![session_id, segment_id],
-        )?;
-
-        Ok(())
+        let session_id = session_id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "DELETE FROM workflow_context_messages WHERE session_id = ?1 AND segment_id = ?2",
+                params![session_id, segment_id],
+            )?;
+            Ok(())
+        })
     }
 
     pub(crate) async fn update_workflow_status_with_runtime(
@@ -1993,21 +1873,18 @@ impl MainStore {
     }
 
     pub fn update_workflow_status(&self, id: &str, status: &str) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflows
-             SET status = ?1,
-                 updated_at = CASE
-                     WHEN status IS NOT ?1 THEN CURRENT_TIMESTAMP
-                     ELSE updated_at
-                 END
-             WHERE id = ?2",
-            params![status, id],
-        )?;
-        Ok(())
+        let id = id.to_string();
+        let status = status.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows
+                 SET status = ?1,
+                     updated_at = CASE WHEN status IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END
+                 WHERE id = ?2",
+                params![status, id],
+            )?;
+            Ok(())
+        })
     }
 
     pub(crate) async fn update_workflow_title_with_runtime(
@@ -2027,21 +1904,15 @@ impl MainStore {
     }
 
     pub fn update_workflow_title(&self, id: &str, title: &str) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflows
-             SET title = ?1,
-                 updated_at = CASE
-                     WHEN title IS NOT ?1 THEN CURRENT_TIMESTAMP
-                     ELSE updated_at
-                 END
-             WHERE id = ?2",
-            params![title, id],
-        )?;
-        Ok(())
+        let id = id.to_string();
+        let title = title.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows SET title = ?1, updated_at = CASE WHEN title IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                params![title, id],
+            )?;
+            Ok(())
+        })
     }
 
     pub(crate) async fn update_workflow_title_and_query_with_runtime(
@@ -2061,30 +1932,6 @@ impl MainStore {
             .await
     }
 
-    pub fn update_workflow_title_and_query(
-        &self,
-        id: &str,
-        title: &str,
-        user_query: &str,
-    ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflows
-             SET title = ?1,
-                 user_query = ?2,
-                 updated_at = CASE
-                     WHEN title IS NOT ?1 OR user_query IS NOT ?2 THEN CURRENT_TIMESTAMP
-                     ELSE updated_at
-                 END
-             WHERE id = ?3",
-            params![title, user_query, id],
-        )?;
-        Ok(())
-    }
-
     pub(crate) async fn update_workflow_query_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -2102,21 +1949,15 @@ impl MainStore {
     }
 
     pub fn update_workflow_query(&self, id: &str, user_query: &str) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflows
-             SET user_query = ?1,
-                 updated_at = CASE
-                     WHEN user_query IS NOT ?1 THEN CURRENT_TIMESTAMP
-                     ELSE updated_at
-                 END
-             WHERE id = ?2",
-            params![user_query, id],
-        )?;
-        Ok(())
+        let id = id.to_string();
+        let user_query = user_query.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows SET user_query = ?1, updated_at = CASE WHEN user_query IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                params![user_query, id],
+            )?;
+            Ok(())
+        })
     }
 
     pub(crate) async fn update_workflow_todo_list_with_runtime(
@@ -2135,22 +1976,17 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn update_workflow_todo_list(&self, id: &str, todo_list: &str) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflows
-             SET todo_list = ?1,
-                 updated_at = CASE
-                     WHEN todo_list IS NOT ?1 THEN CURRENT_TIMESTAMP
-                     ELSE updated_at
-                 END
-             WHERE id = ?2",
-            params![todo_list, id],
-        )?;
-        Ok(())
+        let id = id.to_string();
+        let todo_list = todo_list.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows SET todo_list = ?1, updated_at = CASE WHEN todo_list IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                params![todo_list, id],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn update_workflow_agent_config(
@@ -2158,58 +1994,44 @@ impl MainStore {
         id: &str,
         agent_config: &str,
     ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflows
-             SET agent_config = ?1,
-                 updated_at = CASE
-                     WHEN agent_config IS NOT ?1 THEN CURRENT_TIMESTAMP
-                     ELSE updated_at
-                 END
-             WHERE id = ?2",
-            params![agent_config, id],
-        )?;
-        Ok(())
+        let id = id.to_string();
+        let agent_config = agent_config.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows SET agent_config = ?1, updated_at = CASE WHEN agent_config IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                params![agent_config, id],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn update_workflow_agent_id(&self, id: &str, agent_id: &str) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflows
-             SET agent_id = ?1,
-                 updated_at = CASE
-                     WHEN agent_id IS NOT ?1 THEN CURRENT_TIMESTAMP
-                     ELSE updated_at
-                 END
-             WHERE id = ?2",
-            params![agent_id, id],
-        )?;
-        Ok(())
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows SET agent_id = ?1, updated_at = CASE WHEN agent_id IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                params![agent_id, id],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn get_todo_list_for_workflow(&self, id: &str) -> Result<Vec<Value>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let todo_list_str: Option<String> = conn
-            .query_row(
-                "SELECT todo_list FROM workflows WHERE id = ?1",
-                params![id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-
-        Ok(todo_list_str
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default())
+        let id = id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let todo_list = conn
+                .query_row(
+                    "SELECT todo_list FROM workflows WHERE id = ?1",
+                    params![id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
+            Ok(todo_list
+                .and_then(|value| serde_json::from_str(&value).ok())
+                .unwrap_or_default())
+        })
     }
 
     // ExecutionContext Snapshot Operations
@@ -2218,38 +2040,26 @@ impl MainStore {
         &self,
         session_id: &str,
     ) -> Result<Option<ExecutionContext>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let result: Option<String> = conn
-            .query_row(
-                "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-
-        match result {
-            Some(context_json) => {
-                let mut ctx: ExecutionContext = serde_json::from_str(&context_json)?;
-                let _ = sanitize_wait_reason_for_runtime_state(
-                    session_id,
-                    &ctx.state,
-                    &mut ctx.wait_reason,
-                );
-                log::info!(
-                    "[Workflow][session={}] snapshot.read - state={:?}, wait_reason={:?}, pending_tools={}",
-                    session_id,
-                    ctx.state,
-                    ctx.wait_reason,
-                    ctx.pending_tools.len()
-                );
-                Ok(Some(ctx))
-            }
-            None => Ok(None),
-        }
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let context_json = conn
+                .query_row(
+                    "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
+                    params![session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let Some(context_json) = context_json else { return Ok(None); };
+            let mut context: ExecutionContext = serde_json::from_str(&context_json)?;
+            let _ = sanitize_wait_reason_for_runtime_state(
+                &session_id, &context.state, &mut context.wait_reason,
+            );
+            log::info!(
+                "[Workflow][session={}] snapshot.read - state={:?}, wait_reason={:?}, pending_tools={}",
+                session_id, context.state, context.wait_reason, context.pending_tools.len()
+            );
+            Ok(Some(context))
+        })
     }
 
     pub(crate) async fn upsert_execution_context_with_runtime(
@@ -2282,40 +2092,27 @@ impl MainStore {
     }
 
     pub fn upsert_execution_context(&self, ctx: &ExecutionContext) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let context_json = serde_json::to_string(ctx)?;
-        let state_str = ctx.state.to_string();
-        let wait_reason_str = ctx.wait_reason.as_ref().map(|wr| wr.to_string());
-        let sub_agent_sessions_json = serde_json::to_string(&ctx.sub_agent_sessions)?;
-
-        conn.execute(
-            "INSERT OR REPLACE INTO workflow_snapshots
-             (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
-            params![
-                ctx.session_id,
-                context_json,
-                ctx.version,
-                state_str,
-                wait_reason_str,
-                ctx.waiting_on_sub_agent_id.clone(),
-                sub_agent_sessions_json,
-            ],
-        )?;
-
-        log::info!(
-            "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}",
-            ctx.session_id,
-            ctx.state,
-            ctx.wait_reason,
-            ctx.pending_tools.len()
-        );
-
-        Ok(())
+        let ctx = ctx.clone();
+        let context_json = serde_json::to_string(&ctx)?;
+        let state = ctx.state.to_string();
+        let wait_reason = ctx.wait_reason.as_ref().map(ToString::to_string);
+        let sub_agent_sessions = serde_json::to_string(&ctx.sub_agent_sessions)?;
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_snapshots
+                 (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+                params![
+                    ctx.session_id, context_json, ctx.version, state, wait_reason,
+                    ctx.waiting_on_sub_agent_id, sub_agent_sessions,
+                ],
+            )?;
+            log::info!(
+                "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}",
+                ctx.session_id, ctx.state, ctx.wait_reason, ctx.pending_tools.len()
+            );
+            Ok(())
+        })
     }
 
     // Workflow Event Operations
@@ -2339,84 +2136,61 @@ impl MainStore {
     }
 
     pub fn append_workflow_event(&self, event: &WorkflowEvent) -> Result<i64, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let event_type_str = event.event_type.as_str().to_string();
-        let event_data_str = serde_json::to_string(&event.event_data)?;
-
-        conn.execute(
-            "INSERT INTO workflow_events (session_id, event_type, event_version, event_data)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
+        let event = event.clone();
+        let event_type = event.event_type.as_str().to_string();
+        let event_data = serde_json::to_string(&event.event_data)?;
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "INSERT INTO workflow_events (session_id, event_type, event_version, event_data)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![event.session_id, event_type, event.version, event_data],
+            )?;
+            let event_id = conn.last_insert_rowid();
+            log::info!(
+                "[Workflow][session={}] event.append - type={:?}, event_id={}",
                 event.session_id,
-                event_type_str,
-                event.version,
-                event_data_str
-            ],
-        )?;
-
-        let event_id = conn.last_insert_rowid();
-
-        log::info!(
-            "[Workflow][session={}] event.append - type={:?}, event_id={}",
-            event.session_id,
-            event.event_type,
-            event_id
-        );
-
-        Ok(event_id)
+                event.event_type,
+                event_id
+            );
+            Ok(event_id)
+        })
     }
 
     pub fn list_workflow_events(
         &self,
         session_id: &str,
     ) -> Result<Vec<WorkflowEventRecord>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let mut stmt = conn.prepare(
-            "SELECT id, session_id, event_type, event_version, event_data, created_at
-             FROM workflow_events
-             WHERE session_id = ?1
-             ORDER BY id ASC",
-        )?;
-
-        let rows = stmt.query_map(params![session_id], |row| {
-            Ok(WorkflowEventRecord::from(row))
-        })?;
-
-        let mut events = Vec::new();
-        for row in rows {
-            events.push(row?);
-        }
-
-        log::info!(
-            "[Workflow][session={}] event.list - count={}",
-            session_id,
-            events.len()
-        );
-
-        Ok(events)
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT id, session_id, event_type, event_version, event_data, created_at
+                 FROM workflow_events
+                 WHERE session_id = ?1
+                 ORDER BY id ASC",
+            )?;
+            let rows = statement.query_map(params![session_id], |row| {
+                Ok(WorkflowEventRecord::from(row))
+            })?;
+            let events = rows.collect::<Result<Vec<_>, _>>()?;
+            log::info!(
+                "[Workflow][session={}] event.list - count={}",
+                session_id,
+                events.len()
+            );
+            Ok(events)
+        })
     }
 
     pub fn get_last_event_id(&self, session_id: &str) -> Result<Option<i64>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let result: Option<i64> = conn.query_row(
-            "SELECT MAX(id) FROM workflow_events WHERE session_id = ?1",
-            params![session_id],
-            |row| row.get::<_, Option<i64>>(0),
-        )?;
-
-        Ok(result)
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT MAX(id) FROM workflow_events WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map_err(StoreError::from)
+        })
     }
 }
 
@@ -2720,15 +2494,16 @@ mod tests {
     use crate::workflow::react::types::{PendingTool, RuntimeState, WaitReason};
     use tempfile::tempdir;
 
-    fn create_test_store() -> MainStore {
+    fn create_test_store() -> (tempfile::TempDir, MainStore) {
         let dir = tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("workflow_phase4_test.db");
-        MainStore::new(db_path).expect("failed to create MainStore")
+        let store = MainStore::new(db_path).expect("failed to create MainStore");
+        (dir, store)
     }
 
     #[test]
     fn get_execution_context_clears_stale_wait_reason_for_non_waiting_state() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "snapshot-stale-wait-reason";
         seed_agent(&store, "agent-test");
         store
@@ -2753,7 +2528,7 @@ mod tests {
 
     #[test]
     fn get_workflow_for_ui_ignores_stale_wait_reason_for_non_waiting_snapshot() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "workflow-ui-stale-wait-reason";
         seed_agent(&store, "agent-test");
         store
@@ -2775,27 +2550,52 @@ mod tests {
     }
 
     fn seed_agent(store: &MainStore, agent_id: &str) {
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for agent seed");
-        conn.execute(
-            "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                agent_id,
-                format!("Agent Test {}", agent_id),
-                "You are a test agent.",
-                "autonomous",
-                20
-            ],
-        )
-        .expect("failed to seed agent");
+        let agent_id = agent_id.to_string();
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(move |conn| {
+                conn.execute(
+                    "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        agent_id,
+                        format!("Agent Test {}", agent_id),
+                        "You are a test agent.",
+                        "autonomous",
+                        20
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("failed to seed agent");
+    }
+
+    fn seed_automation_run(store: &MainStore) {
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(|conn| {
+                conn.execute(
+                    "INSERT INTO workflow_automations
+                     (id, title, agent_id, allowed_paths, schedule_kind, schedule_config, enabled)
+                     VALUES (?1, ?2, ?3, '[]', 'daily', '{}', 1)",
+                    params!["automation-1", "Automation", "agent-main"],
+                )?;
+                conn.execute(
+                    "INSERT INTO workflow_automation_runs
+                     (id, automation_id, workflow_session_id, status, scheduled_for)
+                     VALUES (?1, ?2, ?3, 'running', '2026-06-27 10:00:00')",
+                    params!["run-1", "automation-1", "automation-session"],
+                )?;
+                Ok(())
+            })
+            .expect("failed to seed automation run");
     }
 
     #[test]
     fn approval_recovery_authority_comes_from_execution_context_not_transcript() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "approval-recovery-authority";
         seed_agent(&store, "agent-test");
         store
@@ -2970,7 +2770,7 @@ mod tests {
 
     #[test]
     fn test_workflow_message_window_loads_recent_and_earlier_complete_tasks() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         seed_agent(&store, "agent-window");
         store
             .create_workflow("window-session", "Window query", "agent-window", None, None)
@@ -3104,24 +2904,25 @@ mod tests {
 
     #[test]
     fn test_snapshot_hydrates_legacy_manual_clear_context_text() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         seed_agent(&store, "agent-main");
         store
             .create_workflow("legacy-session", "Legacy query", "agent-main", None, None)
             .expect("failed to create legacy workflow");
 
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for legacy message seed");
-        conn.execute(
-            "INSERT INTO workflow_messages
-             (session_id, role, message, message_kind, segment_id, step_index, is_error)
-             VALUES (?1, 'system', 'MANUAL_CLEAR_CONTEXT', 'message', 1, 0, 0)",
-            params!["legacy-session"],
-        )
-        .expect("failed to insert legacy manual clear-context message");
-        drop(conn);
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(|conn| {
+                conn.execute(
+                    "INSERT INTO workflow_messages
+                     (session_id, role, message, message_kind, segment_id, step_index, is_error)
+                     VALUES (?1, 'system', 'MANUAL_CLEAR_CONTEXT', 'message', 1, 0, 0)",
+                    params!["legacy-session"],
+                )?;
+                Ok(())
+            })
+            .expect("failed to insert legacy manual clear-context message");
 
         let snapshot = store
             .get_workflow_snapshot("legacy-session")
@@ -3141,28 +2942,25 @@ mod tests {
 
     #[test]
     fn test_workflow_events_table_and_index_exist_after_migration() {
-        let store = create_test_store();
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for schema check");
-
-        let table_exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_events'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("failed to query workflow_events table existence");
+        let (_temp_dir, store) = create_test_store();
+        let (table_exists, index_exists) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(|conn| {
+                let table_exists: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_events'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let index_exists: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_workflow_events_session_id_id'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((table_exists, index_exists))
+            })
+            .expect("failed to inspect workflow_events schema");
         assert_eq!(table_exists, 1, "workflow_events table should exist");
-
-        let index_exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_workflow_events_session_id_id'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("failed to query workflow_events index existence");
         assert_eq!(
             index_exists, 1,
             "idx_workflow_events_session_id_id index should exist"
@@ -3171,28 +2969,25 @@ mod tests {
 
     #[test]
     fn test_memory_candidates_table_and_index_exist_after_migration() {
-        let store = create_test_store();
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for schema check");
-
-        let table_exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'memory_candidates'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("failed to query memory_candidates table existence");
+        let (_temp_dir, store) = create_test_store();
+        let (table_exists, index_exists) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(|conn| {
+                let table_exists: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'memory_candidates'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let index_exists: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_candidates_unique_content'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((table_exists, index_exists))
+            })
+            .expect("failed to inspect memory_candidates schema");
         assert_eq!(table_exists, 1, "memory_candidates table should exist");
-
-        let index_exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_candidates_unique_content'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("failed to query memory_candidates unique index existence");
         assert_eq!(
             index_exists, 1,
             "memory candidate unique index should exist"
@@ -3201,15 +2996,15 @@ mod tests {
 
     #[test]
     fn test_append_workflow_event_returns_error_when_table_missing() {
-        let store = create_test_store();
-        {
-            let conn = store
-                .conn
-                .lock()
-                .expect("failed to lock db connection for table drop");
-            conn.execute("DROP TABLE workflow_events", [])
-                .expect("failed to drop workflow_events table");
-        }
+        let (_temp_dir, store) = create_test_store();
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(|conn| {
+                conn.execute("DROP TABLE workflow_events", [])?;
+                Ok(())
+            })
+            .expect("failed to drop workflow_events table");
 
         let event = WorkflowEvent::workflow_started(
             "session-append-fail".to_string(),
@@ -3224,7 +3019,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_last_event_id_aligns_with_event_tail_for_key_states() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-last-event-align";
 
         let started =
@@ -3300,7 +3095,7 @@ mod tests {
 
     #[test]
     fn test_list_workflows_excludes_child_workflows() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         seed_agent(&store, "agent-parent");
         seed_agent(&store, "agent-child");
 
@@ -3340,7 +3135,7 @@ mod tests {
 
     #[test]
     fn test_list_workflows_marks_automation_runs() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         seed_agent(&store, "agent-main");
 
         store
@@ -3356,25 +3151,7 @@ mod tests {
             )
             .expect("failed to create automation workflow");
 
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for automation marker test");
-        conn.execute(
-            "INSERT INTO workflow_automations
-             (id, title, agent_id, allowed_paths, schedule_kind, schedule_config, enabled)
-             VALUES (?1, ?2, ?3, '[]', 'daily', '{}', 1)",
-            params!["automation-1", "Automation", "agent-main"],
-        )
-        .expect("failed to insert automation");
-        conn.execute(
-            "INSERT INTO workflow_automation_runs
-             (id, automation_id, workflow_session_id, status, scheduled_for)
-             VALUES (?1, ?2, ?3, 'running', '2026-06-27 10:00:00')",
-            params!["run-1", "automation-1", "automation-session"],
-        )
-        .expect("failed to insert automation run");
-        drop(conn);
+        seed_automation_run(&store);
 
         let workflows = store
             .list_workflows()
@@ -3395,7 +3172,7 @@ mod tests {
 
     #[test]
     fn test_get_workflow_snapshot_marks_automation_runs() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         seed_agent(&store, "agent-main");
 
         store
@@ -3408,25 +3185,7 @@ mod tests {
             )
             .expect("failed to create automation workflow");
 
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for snapshot automation marker test");
-        conn.execute(
-            "INSERT INTO workflow_automations
-             (id, title, agent_id, allowed_paths, schedule_kind, schedule_config, enabled)
-             VALUES (?1, ?2, ?3, '[]', 'daily', '{}', 1)",
-            params!["automation-1", "Automation", "agent-main"],
-        )
-        .expect("failed to insert automation");
-        conn.execute(
-            "INSERT INTO workflow_automation_runs
-             (id, automation_id, workflow_session_id, status, scheduled_for)
-             VALUES (?1, ?2, ?3, 'running', '2026-06-27 10:00:00')",
-            params!["run-1", "automation-1", "automation-session"],
-        )
-        .expect("failed to insert automation run");
-        drop(conn);
+        seed_automation_run(&store);
 
         let snapshot = store
             .get_workflow_snapshot("automation-session")
@@ -3437,7 +3196,7 @@ mod tests {
 
     #[test]
     fn test_delete_workflow_removes_sub_agent_descendants() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         seed_agent(&store, "agent-parent");
         seed_agent(&store, "agent-child");
 
@@ -3454,74 +3213,77 @@ mod tests {
             )
             .expect("failed to create child workflow");
 
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for delete assertions");
-        for session_id in ["parent-session", "subagent-child"] {
-            conn.execute(
-                "INSERT INTO workflow_messages (session_id, role, message) VALUES (?1, 'user', 'message')",
-                params![session_id],
-            )
-            .expect("failed to insert workflow message");
-            conn.execute(
-                "INSERT INTO workflow_context_messages (session_id, segment_id, role, message, source_message_id)
-                 VALUES (?1, 1, 'user', 'context', last_insert_rowid())",
-                params![session_id],
-            )
-            .expect("failed to insert workflow context message");
-            conn.execute(
-                "INSERT INTO workflow_snapshots (session_id, context_json, version)
-                 VALUES (?1, '{}', '1')",
-                params![session_id],
-            )
-            .expect("failed to insert workflow snapshot");
-            conn.execute(
-                "INSERT INTO workflow_events (session_id, event_type, event_version, event_data)
-                 VALUES (?1, 'test', '1', '{}')",
-                params![session_id],
-            )
-            .expect("failed to insert workflow event");
-        }
-        drop(conn);
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(|conn| {
+                for session_id in ["parent-session", "subagent-child"] {
+                    conn.execute(
+                        "INSERT INTO workflow_messages (session_id, role, message) VALUES (?1, 'user', 'message')",
+                        params![session_id],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO workflow_context_messages (session_id, segment_id, role, message, source_message_id)
+                         VALUES (?1, 1, 'user', 'context', last_insert_rowid())",
+                        params![session_id],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO workflow_snapshots (session_id, context_json, version)
+                         VALUES (?1, '{}', '1')",
+                        params![session_id],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO workflow_events (session_id, event_type, event_version, event_data)
+                         VALUES (?1, 'test', '1', '{}')",
+                        params![session_id],
+                    )?;
+                }
+                Ok(())
+            })
+            .expect("failed to seed workflow descendants");
 
         store
             .delete_workflow("parent-session")
             .expect("failed to recursively delete workflow tree");
 
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for delete assertions");
-        let workflow_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM workflows WHERE id IN ('parent-session', 'subagent-child')",
-                [],
-                |row| row.get(0),
-            )
-            .expect("failed to count deleted workflows");
-        assert_eq!(workflow_count, 0, "workflow records should be deleted");
-
-        for table in [
-            "workflow_messages",
-            "workflow_context_messages",
-            "workflow_snapshots",
-            "workflow_events",
-        ] {
-            let count: i64 = conn
-                .query_row(
-                    &format!("SELECT COUNT(1) FROM {table} WHERE session_id IN ('parent-session', 'subagent-child')"),
+        let (workflow_count, related_counts) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(|conn| {
+                let workflow_count: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM workflows WHERE id IN ('parent-session', 'subagent-child')",
                     [],
                     |row| row.get(0),
-                )
-                .expect("failed to count deleted workflow records");
+                )?;
+                let related_counts = [
+                    "workflow_messages",
+                    "workflow_context_messages",
+                    "workflow_snapshots",
+                    "workflow_events",
+                ]
+                .into_iter()
+                .map(|table| {
+                    conn.query_row::<i64, _, _>(
+                        &format!("SELECT COUNT(1) FROM {table} WHERE session_id IN ('parent-session', 'subagent-child')"),
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map(|count| (table, count))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+                Ok((workflow_count, related_counts))
+            })
+            .expect("failed to count deleted workflow records");
+        assert_eq!(workflow_count, 0, "workflow records should be deleted");
+
+        for (table, count) in related_counts {
             assert_eq!(count, 0, "{table} records should be deleted");
         }
     }
 
     #[test]
     fn test_get_workflow_efficiency_report_splits_main_and_sub_agents() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         seed_agent(&store, "agent-main");
         seed_agent(&store, "agent-child");
 
@@ -3742,7 +3504,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_rewinds_trailing_user_message_and_rebuilds_snapshot() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-workflow-message";
         seed_agent(&store, "agent-test");
 
@@ -3944,38 +3706,32 @@ mod tests {
             .iter()
             .all(|message| message.id != trailing_user_message.id));
 
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for assertions");
-
-        let context_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM workflow_context_messages WHERE session_id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .expect("failed to count context messages");
+        let session_id_for_query = session_id.to_string();
+        let (context_count, event_count, status) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(move |conn| {
+                let context_count: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM workflow_context_messages WHERE session_id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let event_count: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM workflow_events WHERE session_id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let status: String = conn.query_row(
+                    "SELECT status FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                Ok((context_count, event_count, status))
+            })
+            .expect("failed to inspect workflow records");
         assert_eq!(context_count, 0);
-
-        let event_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM workflow_events WHERE session_id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .expect("failed to count events");
         assert_eq!(event_count, 3);
-
-        let status: String = conn
-            .query_row(
-                "SELECT status FROM workflows WHERE id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .expect("failed to read workflow status");
         assert_eq!(status, "awaiting_approval");
-        drop(conn);
 
         let restored = store
             .get_execution_context(session_id)
@@ -3988,7 +3744,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_rewinds_continuation_state_to_prior_completion() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-continuation-after-completion";
         seed_agent(&store, "agent-test");
 
@@ -4090,7 +3846,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_rewinds_answered_ask_user_in_two_steps() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-answered-ask-user";
         seed_agent(&store, "agent-test");
 
@@ -4276,7 +4032,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_rewinds_unanswered_ask_user_batch_after_stop() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-unanswered-ask-user-stop";
         seed_agent(&store, "agent-test");
 
@@ -4407,7 +4163,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_rewinds_pending_submit_plan_to_planning() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-pending-submit-plan";
         seed_agent(&store, "agent-test");
 
@@ -4516,25 +4272,25 @@ mod tests {
         assert_eq!(restored.state, RuntimeState::Running);
         assert_eq!(restored.wait_reason, None);
 
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for assertions");
-        let status: String = conn
-            .query_row(
-                "SELECT status FROM workflows WHERE id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .expect("failed to load workflow status");
+        let session_id_for_query = session_id.to_string();
+        let (status, agent_config) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(move |conn| {
+                let status: String = conn.query_row(
+                    "SELECT status FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let agent_config: String = conn.query_row(
+                    "SELECT agent_config FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                Ok((status, agent_config))
+            })
+            .expect("failed to inspect workflow state");
         assert_eq!(status, "thinking");
-        let agent_config: String = conn
-            .query_row(
-                "SELECT agent_config FROM workflows WHERE id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .expect("failed to load agent_config");
         assert_eq!(
             serde_json::from_str::<Value>(&agent_config)
                 .expect("agent config should be valid json")["phase"]
@@ -4545,7 +4301,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_rewinds_pending_approval_tool_to_running() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-pending-approval-tool";
         seed_agent(&store, "agent-test");
 
@@ -4700,7 +4456,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_rewinds_completed_tool_to_running() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-completed-tool";
         seed_agent(&store, "agent-test");
 
@@ -4839,7 +4595,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_deletes_completed_approved_tool_unit() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-approved-tool";
         seed_agent(&store, "agent-test");
 
@@ -5046,7 +4802,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_deletes_approved_tool_waiting_execution_unit() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-approved-tool-waiting-execution";
         seed_agent(&store, "agent-test");
 
@@ -5206,7 +4962,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_rewinds_tail_in_two_steps_after_plan_approval() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-approved-plan-tail";
         seed_agent(&store, "agent-test");
 
@@ -5496,25 +5252,25 @@ mod tests {
         assert_eq!(second_context.wait_reason, Some(WaitReason::Approval));
         assert_eq!(second_context.pending_tools.len(), 1);
 
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for final assertions");
-        let status: String = conn
-            .query_row(
-                "SELECT status FROM workflows WHERE id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .expect("failed to load final workflow status");
+        let session_id_for_query = session_id.to_string();
+        let (status, agent_config) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(move |conn| {
+                let status: String = conn.query_row(
+                    "SELECT status FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let agent_config: String = conn.query_row(
+                    "SELECT agent_config FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                Ok((status, agent_config))
+            })
+            .expect("failed to inspect final workflow state");
         assert_eq!(status, "awaiting_approval");
-        let agent_config: String = conn
-            .query_row(
-                "SELECT agent_config FROM workflows WHERE id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .expect("failed to load final agent config");
         assert_eq!(
             serde_json::from_str::<Value>(&agent_config)
                 .expect("agent config should be valid json")["phase"]
@@ -5525,7 +5281,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_workflow_message_deletes_manual_clear_context_marker_only() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "session-delete-last-manual-clear-context";
         seed_agent(&store, "agent-test");
 
@@ -5653,33 +5409,31 @@ mod tests {
             vec!["sub-agent-1".to_string(), "sub-agent-2".to_string()]
         );
 
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for assertions");
-        let status: String = conn
-            .query_row(
-                "SELECT status FROM workflows WHERE id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .expect("failed to read workflow status");
+        let session_id_for_query = session_id.to_string();
+        let (status, wait_reason, preserved_context_rows) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(move |conn| {
+                let status: String = conn.query_row(
+                    "SELECT status FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let wait_reason: Option<String> = conn.query_row(
+                    "SELECT wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let preserved_context_rows: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM workflow_context_messages WHERE session_id = ?1 AND segment_id = 1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                Ok((status, wait_reason, preserved_context_rows))
+            })
+            .expect("failed to inspect rebuilt workflow state");
         assert_eq!(status, execution_context_to_workflow_status(&rebuilt));
-        let wait_reason: Option<String> = conn
-            .query_row(
-                "SELECT wait_reason FROM workflow_snapshots WHERE session_id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .expect("failed to read workflow wait_reason");
         assert_eq!(wait_reason.as_deref(), Some("approval"));
-        let preserved_context_rows: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM workflow_context_messages WHERE session_id = ?1 AND segment_id = 1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .expect("failed to count preserved context rows");
         assert_eq!(preserved_context_rows, 1);
     }
 }

@@ -178,11 +178,8 @@ async fn direct_forward_responses(
         .headers(reqwest_headers)
         .body(modified_body);
 
-    let max_retries = if let Ok(store) = main_store_arc.read() {
-        store.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT)
-    } else {
-        CFG_CCPROXY_RETRY_ON_429_DEFAULT
-    };
+    let max_retries =
+        main_store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
     let retry_config = RetryConfig::from_settings(max_retries);
     let target_response = send_with_retry(onward_request_builder, &retry_config).await?;
 
@@ -220,7 +217,8 @@ async fn direct_forward_responses(
         Some(String::from_utf8_lossy(&body_bytes).to_string())
     };
 
-    if let Ok(store) = main_store_arc.read() {
+    {
+        let store = main_store_arc.as_ref();
         let _ = store.record_ccproxy_stat(CcproxyStat {
             id: None,
             client_model: proxy_model.client_alias.clone(),
@@ -243,23 +241,15 @@ async fn direct_forward_responses(
 
 pub async fn handle_responses(
     client_headers: HeaderMap,
-    client_query: CcproxyQuery,
+    _client_query: CcproxyQuery,
     client_request_body: bytes::Bytes,
     group_name: Option<String>,
     tool_compat_mode: bool,
     main_store_arc: Arc<MainStore>,
 ) -> ProxyResult<Response> {
     let message_id = get_msg_id();
-    let log_org_to_file = if let Ok(store) = main_store_arc.read() {
-        store.get_config(CFG_CCPROXY_LOG_TO_FILE, false)
-    } else {
-        client_query.debug.unwrap_or(false)
-    };
-    let log_proxy_to_file = if let Ok(store) = main_store_arc.read() {
-        store.get_config(CFG_CCPROXY_LOG_PROXY_TO_FILE, false)
-    } else {
-        false
-    };
+    let log_org_to_file = main_store_arc.get_config(CFG_CCPROXY_LOG_TO_FILE, false);
+    let log_proxy_to_file = main_store_arc.get_config(CFG_CCPROXY_LOG_PROXY_TO_FILE, false);
 
     let routing_request: OpenAIResponsesRoutingRequest =
         serde_json::from_slice(&client_request_body).map_err(|e| {

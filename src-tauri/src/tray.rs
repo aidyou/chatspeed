@@ -25,7 +25,8 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         note_window_visible_shortcut,
         proxy_switcher_window_visible_shortcut,
         workflow_window_visible_shortcut,
-    ) = if let Ok(c) = main_store.read() {
+    ) = {
+        let c = main_store.inner().as_ref();
         (
             c.config
                 .get_setting(crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT)
@@ -77,34 +78,6 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
                     .unwrap_or_default()
                     .to_string()
                 }),
-        )
-    } else {
-        (
-            crate::shortcut::get_default_shortcut(
-                crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
-            )
-            .unwrap_or_default()
-            .to_string(),
-            crate::shortcut::get_default_shortcut(
-                crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
-            )
-            .unwrap_or_default()
-            .to_string(),
-            crate::shortcut::get_default_shortcut(
-                crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
-            )
-            .unwrap_or_default()
-            .to_string(),
-            crate::shortcut::get_default_shortcut(
-                crate::constants::CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
-            )
-            .unwrap_or_default()
-            .to_string(),
-            crate::shortcut::get_default_shortcut(
-                crate::constants::CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
-            )
-            .unwrap_or_default()
-            .to_string(),
         )
     };
 

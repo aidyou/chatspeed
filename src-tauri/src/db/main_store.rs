@@ -215,6 +215,7 @@ impl ConfigCache {
         self.inner.read().get_ai_models()
     }
 
+    #[cfg(test)]
     pub fn api_keys_locked(&self) -> bool {
         self.inner.read().api_keys_locked
     }
@@ -274,10 +275,20 @@ impl ConfigCache {
 
 /// Manages unified storage for the application, including chat history and configuration.
 pub struct MainStore {
-    pub(crate) conn: Mutex<Connection>,
     pub(crate) config: ConfigCache,
     runtime: Mutex<Option<std::sync::Arc<DbRuntime>>>,
     runtime_path: Mutex<std::path::PathBuf>,
+}
+
+impl Drop for MainStore {
+    fn drop(&mut self) {
+        let runtime = self.runtime.get_mut().ok().and_then(Option::take);
+        if let Some(runtime) = runtime {
+            if let Err(error) = runtime.shutdown_for_maintenance() {
+                log::error!("Failed to drain database runtime during shutdown: {error}");
+            }
+        }
+    }
 }
 
 impl MainStore {
@@ -316,34 +327,16 @@ impl MainStore {
             StoreError::Query(err)
         })?;
         super::api_key_crypto::migrate_to_configured_key_if_available(&mut conn)?;
-
-        let conn = Mutex::new(conn);
-        let config = {
-            let locked_conn = conn
-                .lock()
-                .map_err(|e| StoreError::LockError(e.to_string()))?;
-            Self::load_config(&locked_conn)?
-        };
+        let config = Self::load_config(&conn)?;
+        drop(conn);
 
         let runtime = std::sync::Arc::new(DbRuntime::open(&db_path)?);
         Ok(Self {
-            conn,
             config: ConfigCache::new(config),
             runtime: Mutex::new(Some(runtime)),
             runtime_path: Mutex::new(db_path),
         })
     }
-
-    /// Transitional shared-access compatibility while callers migrate from the outer store lock.
-    pub fn read(&self) -> Result<&Self, StoreError> {
-        Ok(self)
-    }
-
-    /// Transitional shared-access compatibility while callers migrate from the outer store lock.
-    pub fn write(&self) -> Result<&Self, StoreError> {
-        Ok(self)
-    }
-
     pub(crate) fn db_runtime(&self) -> Result<std::sync::Arc<DbRuntime>, StoreError> {
         self.runtime
             .lock()
@@ -419,18 +412,13 @@ impl MainStore {
     /// # Returns
     /// Returns a `Result` containing `()` if successful, or a `StoreError` if an error occurs.
     pub fn reload_config(&self) -> Result<(), StoreError> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        super::api_key_crypto::migrate_to_configured_key_if_available(&mut conn)?;
-        match Self::load_config(&conn) {
-            Ok(config) => {
-                self.config.replace(config);
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
+        let runtime = self.db_runtime()?;
+        let config = runtime.write_blocking(|conn| {
+            super::api_key_crypto::migrate_to_configured_key_if_available(conn)?;
+            Self::load_config(conn)
+        })?;
+        self.config.replace(config);
+        Ok(())
     }
 
     /// Performs a database checkpoint, flushing all WAL data to the main database file.
@@ -444,17 +432,10 @@ impl MainStore {
 
     fn checkpoint_for_maintenance(&self, runtime: &DbRuntime) -> Result<(), StoreError> {
         runtime.drain_for_maintenance()?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let _ = conn
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE);", [], |_| Ok(()))
-            .map_err(|e| {
-                log::error!("Failed to checkpoint database: {}", e);
-                StoreError::from(e)
-            })?;
-        Ok(())
+        runtime.checkpoint_for_maintenance().map_err(|error| {
+            log::error!("Failed to checkpoint database: {error}");
+            error
+        })
     }
 
     fn restore_machine_specific_config(
@@ -469,22 +450,22 @@ impl MainStore {
             };
         }
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        match value {
-            Some(value) => {
-                conn.execute(
-                    "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
-                    params![key, value.to_string()],
-                )?;
+        let key = key.to_string();
+        let value = value.cloned();
+        self.db_runtime()?.write_blocking(move |conn| {
+            match value {
+                Some(value) => {
+                    conn.execute(
+                        "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
+                        params![key, value.to_string()],
+                    )?;
+                }
+                None => {
+                    conn.execute("DELETE FROM config WHERE key = ?1", [key])?;
+                }
             }
-            None => {
-                conn.execute("DELETE FROM config WHERE key = ?1", [key])?;
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Reopens the database connection. This is useful during restoration when the physical file is replaced.
@@ -511,13 +492,7 @@ impl MainStore {
         let _ = new_conn.busy_timeout(std::time::Duration::from_secs(5));
         Self::init_db(&mut new_conn)?;
 
-        {
-            let mut conn_guard = self
-                .conn
-                .lock()
-                .map_err(|e| StoreError::LockError(e.to_string()))?;
-            *conn_guard = new_conn;
-        }
+        drop(new_conn);
         self.resume_runtime(&db_path)
     }
 
@@ -548,23 +523,9 @@ impl MainStore {
         let rollback_path = main_db_path
             .with_extension(format!("restore-backup-{}", uuid::Uuid::new_v4().simple()));
 
-        {
-            let mut conn_guard = self
-                .conn
-                .lock()
-                .map_err(|e| StoreError::LockError(e.to_string()))?;
-            *conn_guard = Connection::open_in_memory()?;
-        }
         super::DbBackup::cleanup_sqlite_temporaries(main_db_path);
 
         let restore_original = |store: &Self| -> Result<(), StoreError> {
-            {
-                let mut conn_guard = store
-                    .conn
-                    .lock()
-                    .map_err(|e| StoreError::LockError(e.to_string()))?;
-                *conn_guard = Connection::open_in_memory()?;
-            }
             super::DbBackup::cleanup_sqlite_temporaries(main_db_path);
             if main_db_path.exists() {
                 std::fs::remove_file(main_db_path).map_err(|e| {
@@ -866,12 +827,12 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let main_path = temp_dir.path().join("main.db");
         let staged_path = temp_dir.path().join("staged.db");
-        let mut main_store = MainStore::new(&main_path).unwrap();
+        let main_store = MainStore::new(&main_path).unwrap();
         main_store
             .set_config("restore_test", &json!("original"))
             .unwrap();
 
-        let mut staged_store = MainStore::new(&staged_path).unwrap();
+        let staged_store = MainStore::new(&staged_path).unwrap();
         staged_store
             .set_config("restore_test", &json!("restored"))
             .unwrap();
@@ -893,7 +854,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let main_path = temp_dir.path().join("main.db");
         let missing_staged_path = temp_dir.path().join("missing.db");
-        let mut main_store = MainStore::new(&main_path).unwrap();
+        let main_store = MainStore::new(&main_path).unwrap();
         main_store
             .set_config("restore_test", &json!("original"))
             .unwrap();
@@ -915,7 +876,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("main.db");
         let key_path = temp_dir.path().join("api-key.csk");
-        let mut store = MainStore::new(&db_path).unwrap();
+        let store = MainStore::new(&db_path).unwrap();
         store
             .add_ai_model(
                 "Provider".to_string(),
@@ -947,7 +908,7 @@ mod tests {
         let main_path = temp_dir.path().join("main.db");
         let staged_path = temp_dir.path().join("staged.db");
         let key_path = temp_dir.path().join("api-key.csk");
-        let mut main_store = MainStore::new(&main_path).unwrap();
+        let main_store = MainStore::new(&main_path).unwrap();
         main_store
             .generate_and_activate_api_key_file(&key_path)
             .unwrap();

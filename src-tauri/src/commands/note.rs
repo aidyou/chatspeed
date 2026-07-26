@@ -70,7 +70,7 @@ pub async fn add_note(
     metadata: Option<serde_json::Value>,
 ) -> Result<()> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::add_note_with_runtime(
@@ -109,7 +109,7 @@ pub async fn add_note(
 #[command]
 pub async fn get_tags(state: State<'_, Arc<MainStore>>) -> Result<Vec<NoteTag>> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::get_tags_with_runtime(runtime)
@@ -140,7 +140,7 @@ pub async fn get_tags(state: State<'_, Arc<MainStore>>) -> Result<Vec<NoteTag>> 
 #[command]
 pub async fn get_notes(state: State<'_, Arc<MainStore>>, tag_id: Option<i64>) -> Result<Vec<Note>> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::get_notes_with_runtime(runtime, tag_id)
@@ -171,7 +171,7 @@ pub async fn get_notes(state: State<'_, Arc<MainStore>>, tag_id: Option<i64>) ->
 #[command]
 pub async fn get_note(state: State<'_, Arc<MainStore>>, id: i64) -> Result<Note> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::get_note_with_runtime(runtime, id)
@@ -202,7 +202,7 @@ pub async fn get_note(state: State<'_, Arc<MainStore>>, id: i64) -> Result<Note>
 #[command]
 pub async fn delete_note(state: State<'_, Arc<MainStore>>, id: i64) -> Result<()> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::delete_note_with_runtime(runtime, id)
@@ -233,7 +233,7 @@ pub async fn delete_note(state: State<'_, Arc<MainStore>>, id: i64) -> Result<()
 #[command]
 pub async fn search_notes(state: State<'_, Arc<MainStore>>, kw: String) -> Result<Vec<Note>> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::search_notes_with_runtime(runtime, kw)

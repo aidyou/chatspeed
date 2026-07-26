@@ -35,18 +35,20 @@ impl MainStore {
             ));
         }
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        if let Err(e) = conn.execute(
-            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
-            [key, &value.to_string()],
-        ) {
-            error!("Failed to set config for key '{}': {}", key, e);
-            return Err(StoreError::from(e));
-        }
-        self.config.update_setting(key, value.clone());
+        let key = key.to_string();
+        let value = value.clone();
+        self.db_runtime()?.write_blocking({
+            let key = key.clone();
+            let value = value.to_string();
+            move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
+                    [key, value],
+                )?;
+                Ok(())
+            }
+        })?;
+        self.config.update_setting(&key, value);
         Ok(())
     }
 
@@ -61,34 +63,27 @@ impl MainStore {
             ));
         }
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        if let Err(e) = conn.execute("DELETE FROM config WHERE key = ?", [key]) {
-            error!("Failed to delete config for key '{}': {}", key, e);
-            return Err(StoreError::from(e));
-        }
-        self.config.delete_setting(key);
+        let key = key.to_string();
+        self.db_runtime()?.write_blocking({
+            let key = key.clone();
+            move |conn| {
+                conn.execute("DELETE FROM config WHERE key = ?", [key])?;
+                Ok(())
+            }
+        })?;
+        self.config.delete_setting(&key);
         Ok(())
     }
 
     pub fn api_key_encryption_status(&self) -> Result<ApiKeyEncryptionStatus, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        inspect_encryption_status(&conn)
+        self.db_runtime()?
+            .read_blocking(|conn| inspect_encryption_status(conn))
     }
 
     pub fn activate_api_key_file(&self, path: &Path) -> Result<(), StoreError> {
-        {
-            let mut conn = self
-                .conn
-                .lock()
-                .map_err(|e| StoreError::LockError(e.to_string()))?;
-            activate_key_file(&mut conn, path)?;
-        }
+        let path = path.to_path_buf();
+        self.db_runtime()?
+            .write_blocking(move |conn| activate_key_file(conn, &path))?;
         self.reload_config()
     }
 
@@ -133,23 +128,6 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<i64, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let max_sort_index: i32 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(sort_index), -1) FROM ai_model",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| {
-                error!("Failed to get max sort_index: {}", e);
-                e
-            })?;
-
-        let new_sort_index = max_sort_index + 1;
-        let encrypted_api_key = encrypt_api_key(&conn, &api_key)?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -158,46 +136,50 @@ impl MainStore {
                     t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
                 )
             })?;
-
-        conn.execute(
-            "INSERT INTO ai_model (
-                    name, models, default_model, api_protocol, base_url, api_key,
-                    max_tokens, temperature, top_p, top_k, sort_index, disabled,
-                    is_default, is_official, official_id, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                name,
-                serde_json::to_string(&models)
-                    .map_err(|e| {
+        let (id, cached_models) = self.db_runtime()?.write_blocking(move |conn| {
+            let max_sort_index: i32 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(sort_index), -1) FROM ai_model",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| {
+                    error!("Failed to get max sort_index: {e}");
+                    e
+                })?;
+            let encrypted_api_key = encrypt_api_key(conn, &api_key)?;
+            conn.execute(
+                "INSERT INTO ai_model (
+                        name, models, default_model, api_protocol, base_url, api_key,
+                        max_tokens, temperature, top_p, top_k, sort_index, disabled,
+                        is_default, is_official, official_id, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    name,
+                    serde_json::to_string(&models).map_err(|e| {
                         error!("Failed to serialize models: {:?}, err: {}", &models, e);
                         e
-                    })
-                    .unwrap_or_default(),
-                default_model,
-                api_protocol,
-                base_url,
-                encrypted_api_key,
-                max_tokens,
-                temperature,
-                top_p,
-                top_k,
-                new_sort_index,
-                disabled,
-                false,
-                false,
-                "",
-                metadata_str,
-            ),
-        )
-        .map_err(|e| {
-            error!("Failed to add AI model: {}", e);
-            e
+                    })?,
+                    default_model,
+                    api_protocol,
+                    base_url,
+                    encrypted_api_key,
+                    max_tokens,
+                    temperature,
+                    top_p,
+                    top_k,
+                    max_sort_index + 1,
+                    disabled,
+                    false,
+                    false,
+                    "",
+                    metadata_str,
+                ),
+            )?;
+            Ok((conn.last_insert_rowid(), Self::get_all_ai_models(conn)?))
         })?;
-
-        if let Ok(models) = Self::get_all_ai_models(&conn) {
-            self.config.set_ai_models(models);
-        }
-        Ok(conn.last_insert_rowid())
+        self.config.set_ai_models(cached_models);
+        Ok(id)
     }
 
     /// Updates an existing AI model in the database.
@@ -227,11 +209,6 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let encrypted_api_key = encrypt_api_key(&conn, &api_key)?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -240,35 +217,34 @@ impl MainStore {
                     t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
                 )
             })?;
-
-        conn.execute(
-            "UPDATE ai_model SET name = ?, models = ?, default_model = ?, api_protocol = ?,
-             base_url = ?, api_key = ?, max_tokens = ?, temperature = ?, top_p = ?,
-             top_k = ?, disabled = ?, metadata = ? WHERE id = ?",
-            (
-                name,
-                serde_json::to_string(&models)
-                    .map_err(|e| {
+        let cached_models = self.db_runtime()?.write_blocking(move |conn| {
+            let encrypted_api_key = encrypt_api_key(conn, &api_key)?;
+            conn.execute(
+                "UPDATE ai_model SET name = ?, models = ?, default_model = ?, api_protocol = ?,
+                 base_url = ?, api_key = ?, max_tokens = ?, temperature = ?, top_p = ?,
+                 top_k = ?, disabled = ?, metadata = ? WHERE id = ?",
+                (
+                    name,
+                    serde_json::to_string(&models).map_err(|e| {
                         error!("Failed to serialize models: {:?}, err: {}", &models, e);
                         e
-                    })
-                    .unwrap_or_default(),
-                default_model,
-                api_protocol,
-                base_url,
-                encrypted_api_key,
-                max_tokens,
-                temperature,
-                top_p,
-                top_k,
-                disabled,
-                metadata_str,
-                id,
-            ),
-        )?;
-        if let Ok(models) = Self::get_all_ai_models(&conn) {
-            self.config.set_ai_models(models);
-        }
+                    })?,
+                    default_model,
+                    api_protocol,
+                    base_url,
+                    encrypted_api_key,
+                    max_tokens,
+                    temperature,
+                    top_p,
+                    top_k,
+                    disabled,
+                    metadata_str,
+                    id,
+                ),
+            )?;
+            Self::get_all_ai_models(conn)
+        })?;
+        self.config.set_ai_models(cached_models);
         Ok(())
     }
 
@@ -284,19 +260,16 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn update_ai_model_order(&self, model_ids: Vec<i64>) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        for (index, id) in model_ids.iter().enumerate() {
-            conn.execute(
-                "UPDATE ai_model SET sort_index = ? WHERE id = ?",
-                (index as i64, id),
-            )?;
-        }
-        if let Ok(models) = Self::get_all_ai_models(&conn) {
-            self.config.set_ai_models(models);
-        }
+        let models = self.db_runtime()?.write_blocking(move |conn| {
+            for (index, id) in model_ids.iter().enumerate() {
+                conn.execute(
+                    "UPDATE ai_model SET sort_index = ? WHERE id = ?",
+                    (index as i64, id),
+                )?;
+            }
+            Self::get_all_ai_models(conn)
+        })?;
+        self.config.set_ai_models(models);
         Ok(())
     }
 
@@ -312,14 +285,11 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn delete_ai_model(&self, id: i64) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute("DELETE FROM ai_model WHERE id = ?", [id])?;
-        if let Ok(models) = Self::get_all_ai_models(&conn) {
-            self.config.set_ai_models(models);
-        }
+        let models = self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute("DELETE FROM ai_model WHERE id = ?", [id])?;
+            Self::get_all_ai_models(conn)
+        })?;
+        self.config.set_ai_models(models);
         Ok(())
     }
 
@@ -348,18 +318,6 @@ impl MainStore {
         disabled: bool,
         metadata: Option<Value>,
     ) -> Result<AiSkill, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        // Get the current maximum sort_index
-        let max_sort_index: i32 = conn.query_row(
-            "SELECT COALESCE(MAX(sort_index), -1) FROM ai_skill",
-            [],
-            |row| row.get(0),
-        )?;
-
-        let new_sort_index = max_sort_index + 1;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -368,27 +326,29 @@ impl MainStore {
                     t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
                 )
             })?;
-
-        conn.execute(
-            "INSERT INTO ai_skill ( name, icon, logo, prompt, sort_index, disabled, metadata)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                name,
-                icon,
-                logo,
-                prompt,
-                new_sort_index,
-                disabled,
-                metadata_str,
-            ),
-        )?;
-
-        let last_id = conn.last_insert_rowid();
-        if let Ok(skills) = Self::get_all_ai_skills(&conn) {
-            self.config.set_ai_skills(skills);
-        }
-
-        self.config.get_ai_skill_by_id(last_id)
+        let (id, skills) = self.db_runtime()?.write_blocking(move |conn| {
+            let max_sort_index: i32 = conn.query_row(
+                "SELECT COALESCE(MAX(sort_index), -1) FROM ai_skill",
+                [],
+                |row| row.get(0),
+            )?;
+            conn.execute(
+                "INSERT INTO ai_skill (name, icon, logo, prompt, sort_index, disabled, metadata)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    name,
+                    icon,
+                    logo,
+                    prompt,
+                    max_sort_index + 1,
+                    disabled,
+                    metadata_str,
+                ),
+            )?;
+            Ok((conn.last_insert_rowid(), Self::get_all_ai_skills(conn)?))
+        })?;
+        self.config.set_ai_skills(skills);
+        self.config.get_ai_skill_by_id(id)
     }
 
     /// Updates an existing AI skill in the database.
@@ -437,10 +397,6 @@ impl MainStore {
             }
         }
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let metadata_str = metadata
             .map(|m| serde_json::to_string(&m))
             .transpose()
@@ -449,15 +405,15 @@ impl MainStore {
                     t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
                 )
             })?;
-
-        conn.execute(
-            "UPDATE ai_skill SET name = ?, icon = ?, logo = ?, prompt = ?, disabled = ?, metadata = ?
-             WHERE id = ?",
-            (name,icon, logo,  prompt, disabled, metadata_str, id),
-        )?;
-        if let Ok(skills) = Self::get_all_ai_skills(&conn) {
-            self.config.set_ai_skills(skills);
-        }
+        let skills = self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE ai_skill SET name = ?, icon = ?, logo = ?, prompt = ?, disabled = ?, metadata = ?
+                 WHERE id = ?",
+                (name, icon, logo, prompt, disabled, metadata_str, id),
+            )?;
+            Self::get_all_ai_skills(conn)
+        })?;
+        self.config.set_ai_skills(skills);
         self.config.get_ai_skill_by_id(id)
     }
 
@@ -473,19 +429,16 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn update_ai_skill_order(&self, skill_ids: Vec<i64>) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        for (index, id) in skill_ids.iter().enumerate() {
-            conn.execute(
-                "UPDATE ai_skill SET sort_index = ? WHERE id = ?",
-                (index as i64, id),
-            )?;
-        }
-        if let Ok(skills) = Self::get_all_ai_skills(&conn) {
-            self.config.set_ai_skills(skills);
-        }
+        let skills = self.db_runtime()?.write_blocking(move |conn| {
+            for (index, id) in skill_ids.iter().enumerate() {
+                conn.execute(
+                    "UPDATE ai_skill SET sort_index = ? WHERE id = ?",
+                    (index as i64, id),
+                )?;
+            }
+            Self::get_all_ai_skills(conn)
+        })?;
+        self.config.set_ai_skills(skills);
         Ok(())
     }
 
@@ -497,15 +450,12 @@ impl MainStore {
     /// # Returns
     /// The logo of the AI skill.
     pub fn get_skill_logo(&self, id: i64) -> Result<String, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        return conn
-            .query_row("SELECT logo FROM ai_skill WHERE id = ?", [id], |row| {
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row("SELECT logo FROM ai_skill WHERE id = ?", [id], |row| {
                 row.get::<_, String>(0)
             })
-            .map_err(|e| StoreError::from(e));
+            .map_err(StoreError::from)
+        })
     }
 
     /// Deletes an AI skill from the database.
@@ -538,14 +488,11 @@ impl MainStore {
             }
         }
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute("DELETE FROM ai_skill WHERE id = ?", [id])?;
-        if let Ok(skills) = Self::get_all_ai_skills(&conn) {
-            self.config.set_ai_skills(skills);
-        }
+        let skills = self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute("DELETE FROM ai_skill WHERE id = ?", [id])?;
+            Self::get_all_ai_skills(conn)
+        })?;
+        self.config.set_ai_skills(skills);
         Ok(())
     }
 

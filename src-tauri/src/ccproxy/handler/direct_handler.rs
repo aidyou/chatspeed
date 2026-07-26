@@ -133,11 +133,8 @@ pub async fn handle_direct_forward(
         .body(modified_body);
 
     // Get retry configuration from settings
-    let max_retries = if let Ok(store) = main_store_arc.read() {
-        store.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT)
-    } else {
-        CFG_CCPROXY_RETRY_ON_429_DEFAULT
-    };
+    let max_retries =
+        main_store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
     let retry_config = RetryConfig::from_settings(max_retries);
 
     // Persist direct-forward backend failures even when body logging is disabled so upstream
@@ -180,7 +177,8 @@ pub async fn handle_direct_forward(
 
         // Record error for non-streaming direct forward
         let error_msg = String::from_utf8_lossy(&error_body_bytes).to_string();
-        if let Ok(store) = main_store_arc.read() {
+        {
+            let store = main_store_arc.as_ref();
             let _ = store.record_ccproxy_stat(CcproxyStat {
                 id: None,
                 client_model: proxy_model.client_alias.clone(),
@@ -296,7 +294,8 @@ pub async fn handle_direct_forward(
 
         // Record statistics for non-streaming direct forward
         if status_code.is_success() {
-            if let Ok(store) = main_store_arc.read() {
+            {
+                let store = main_store_arc.as_ref();
                 // For direct forward, we try a simple extraction of tokens from the JSON body
                 let body_json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
                 let (input, output, cache) =

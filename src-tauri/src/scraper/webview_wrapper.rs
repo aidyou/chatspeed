@@ -133,11 +133,7 @@ impl WebviewScraper {
         );
 
         let main_store = self.app_handle.state::<Arc<MainStore>>();
-        let debug_mode = if let Ok(store) = main_store.read() {
-            store.get_config(CFG_SCRAPER_DEBUG_MODE, false)
-        } else {
-            false
-        };
+        let debug_mode = main_store.get_config(CFG_SCRAPER_DEBUG_MODE, false);
 
         if debug_mode {
             let webview_clone = webview.clone();

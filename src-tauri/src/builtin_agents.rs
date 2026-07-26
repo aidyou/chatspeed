@@ -633,7 +633,7 @@ pub fn sync_builtin_agents_if_needed(
         return Ok(());
     }
 
-    let store = main_store.read().map_err(|e| e.to_string())?;
+    let store = &*main_store;
     for definition in &definitions {
         sync_single_builtin_agent(&store, definition, default_shell_policy.as_ref())?;
     }

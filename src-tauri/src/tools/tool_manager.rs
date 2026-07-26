@@ -185,14 +185,7 @@ impl ToolManager {
         // =================================================
 
         // Register search tool
-        let search_engine = main_store
-            .read()
-            .map_err(|e| {
-                ToolError::Store(
-                    t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-                )
-            })?
-            .get_config(CFG_SEARCH_ENGINE, "bing".to_string());
+        let search_engine = main_store.get_config(CFG_SEARCH_ENGINE, "bing".to_string());
         if !search_engine.is_empty() {
             let ws = crate::tools::WebSearch::new(app_handle.clone());
             self.register_tool(ws).await?;
@@ -292,10 +285,7 @@ impl ToolManager {
     ) -> Result<(), ToolError> {
         // Collect MCP configurations first to release the lock on main_store
         let mcp_configs_to_process: Vec<_> = {
-            let main_store_guard = main_store.read().map_err(|e| {
-                ToolError::Store(t!("db.failed_to_lock_main_store", error = e).to_string())
-            })?;
-            main_store_guard
+            main_store
                 .config
                 .get_mcps()
                 .into_iter()

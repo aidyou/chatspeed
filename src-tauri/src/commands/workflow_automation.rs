@@ -17,7 +17,7 @@ use tauri::{AppHandle, State};
 pub async fn workflow_automation_list(
     state: State<'_, Arc<MainStore>>,
 ) -> Result<Vec<WorkflowAutomation>, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     store.list_workflow_automations().map_err(|e| e.to_string())
 }
 
@@ -26,7 +26,7 @@ pub async fn workflow_automation_get(
     state: State<'_, Arc<MainStore>>,
     id: String,
 ) -> Result<Option<WorkflowAutomation>, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     store
         .get_workflow_automation(&id)
         .map_err(|e| e.to_string())
@@ -38,7 +38,7 @@ pub async fn workflow_automation_save(
     state: State<'_, Arc<MainStore>>,
     request: WorkflowAutomationRequest,
 ) -> Result<WorkflowAutomation, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     save_automation(tsid_generator.inner(), &store, request)
 }
 
@@ -47,7 +47,7 @@ pub async fn workflow_automation_delete(
     state: State<'_, Arc<MainStore>>,
     id: String,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     store
         .delete_workflow_automation(&id)
         .map_err(|e| e.to_string())
@@ -59,7 +59,7 @@ pub async fn workflow_automation_set_enabled(
     id: String,
     enabled: bool,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     set_automation_enabled(&store, &id, enabled)
 }
 
@@ -68,7 +68,7 @@ pub async fn workflow_automation_list_runs(
     state: State<'_, Arc<MainStore>>,
     automation_id: String,
 ) -> Result<Vec<WorkflowAutomationRun>, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     store
         .list_workflow_automation_runs(&automation_id)
         .map_err(|e| e.to_string())

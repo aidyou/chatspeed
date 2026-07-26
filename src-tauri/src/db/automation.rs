@@ -175,147 +175,128 @@ impl MainStore {
     }
 
     pub fn list_workflow_automations(&self) -> Result<Vec<WorkflowAutomation>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT * FROM workflow_automations
-             ORDER BY updated_at DESC, created_at DESC",
-        )?;
-        let rows = stmt.query_map([], |row| Ok(WorkflowAutomation::from(row)))?;
-        let mut automations = Vec::new();
-        for row in rows {
-            automations.push(row?);
-        }
-        Ok(automations)
+        self.db_runtime()?.read_blocking(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflow_automations
+                 ORDER BY updated_at DESC, created_at DESC",
+            )?;
+            let rows = statement.query_map([], |row| Ok(WorkflowAutomation::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
     }
 
     pub fn get_workflow_automation(
         &self,
         id: &str,
     ) -> Result<Option<WorkflowAutomation>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let mut stmt = conn.prepare("SELECT * FROM workflow_automations WHERE id = ?1")?;
-        let mut rows = stmt.query(params![id])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some(WorkflowAutomation::from(row)))
-        } else {
-            Ok(None)
-        }
+        let id = id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT * FROM workflow_automations WHERE id = ?1",
+                params![id],
+                |row| Ok(WorkflowAutomation::from(row)),
+            )
+            .optional()
+            .map_err(StoreError::from)
+        })
     }
 
     pub fn upsert_workflow_automation(
         &self,
         automation: &WorkflowAutomationUpsert,
     ) -> Result<WorkflowAutomation, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "INSERT INTO workflow_automations
-             (id, title, prompt, prompt_file_path, agent_id, agent_config, allowed_paths,
-              shell_config, schedule_kind, schedule_config, continuous_context,
-              current_workflow_session_id, self_review, enabled, next_run_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-             ON CONFLICT(id) DO UPDATE SET
-                title = excluded.title,
-                prompt = excluded.prompt,
-                prompt_file_path = excluded.prompt_file_path,
-                agent_id = excluded.agent_id,
-                agent_config = excluded.agent_config,
-                allowed_paths = excluded.allowed_paths,
-                shell_config = excluded.shell_config,
-                schedule_kind = excluded.schedule_kind,
-                schedule_config = excluded.schedule_config,
-                continuous_context = excluded.continuous_context,
-                current_workflow_session_id = excluded.current_workflow_session_id,
-                self_review = excluded.self_review,
-                enabled = excluded.enabled,
-                next_run_at = excluded.next_run_at,
-                updated_at = CURRENT_TIMESTAMP",
-            params![
-                automation.id,
-                automation.title,
-                automation.prompt,
-                automation.prompt_file_path,
-                automation.agent_id,
-                automation.agent_config,
-                automation.allowed_paths,
-                automation.shell_config,
-                automation.schedule_kind,
-                automation.schedule_config,
-                automation.continuous_context as i64,
-                automation.current_workflow_session_id,
-                automation.self_review as i64,
-                automation.enabled as i64,
-                automation.next_run_at,
-            ],
-        )?;
-
-        conn.query_row(
-            "SELECT * FROM workflow_automations WHERE id = ?1",
-            params![automation.id],
-            |row| Ok(WorkflowAutomation::from(row)),
-        )
-        .map_err(StoreError::from)
+        let automation = automation.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "INSERT INTO workflow_automations
+                 (id, title, prompt, prompt_file_path, agent_id, agent_config, allowed_paths,
+                  shell_config, schedule_kind, schedule_config, continuous_context,
+                  current_workflow_session_id, self_review, enabled, next_run_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                 ON CONFLICT(id) DO UPDATE SET
+                    title = excluded.title,
+                    prompt = excluded.prompt,
+                    prompt_file_path = excluded.prompt_file_path,
+                    agent_id = excluded.agent_id,
+                    agent_config = excluded.agent_config,
+                    allowed_paths = excluded.allowed_paths,
+                    shell_config = excluded.shell_config,
+                    schedule_kind = excluded.schedule_kind,
+                    schedule_config = excluded.schedule_config,
+                    continuous_context = excluded.continuous_context,
+                    current_workflow_session_id = excluded.current_workflow_session_id,
+                    self_review = excluded.self_review,
+                    enabled = excluded.enabled,
+                    next_run_at = excluded.next_run_at,
+                    updated_at = CURRENT_TIMESTAMP",
+                params![
+                    automation.id,
+                    automation.title,
+                    automation.prompt,
+                    automation.prompt_file_path,
+                    automation.agent_id,
+                    automation.agent_config,
+                    automation.allowed_paths,
+                    automation.shell_config,
+                    automation.schedule_kind,
+                    automation.schedule_config,
+                    automation.continuous_context as i64,
+                    automation.current_workflow_session_id,
+                    automation.self_review as i64,
+                    automation.enabled as i64,
+                    automation.next_run_at,
+                ],
+            )?;
+            conn.query_row(
+                "SELECT * FROM workflow_automations WHERE id = ?1",
+                params![automation.id],
+                |row| Ok(WorkflowAutomation::from(row)),
+            )
+            .map_err(StoreError::from)
+        })
     }
 
     pub fn delete_workflow_automation(&self, id: &str) -> Result<(), StoreError> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let tx = conn.transaction()?;
-        let mut workflow_ids = {
-            let mut stmt = tx.prepare(
-                "SELECT DISTINCT workflow_session_id
-                 FROM workflow_automation_runs
-                 WHERE automation_id = ?1 AND workflow_session_id IS NOT NULL",
-            )?;
-            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
-            let mut ids = Vec::new();
-            for row in rows {
-                ids.push(row?);
+        let id = id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let transaction = conn.transaction()?;
+            let mut workflow_ids = {
+                let mut statement = transaction.prepare(
+                    "SELECT DISTINCT workflow_session_id
+                     FROM workflow_automation_runs
+                     WHERE automation_id = ?1 AND workflow_session_id IS NOT NULL",
+                )?;
+                let rows = statement.query_map(params![id], |row| row.get::<_, String>(0))?;
+                let ids = rows.collect::<Result<Vec<_>, _>>()?;
+                ids
+            };
+            if let Some(current_workflow_id) = transaction
+                .query_row(
+                    "SELECT current_workflow_session_id FROM workflow_automations WHERE id = ?1",
+                    params![id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten()
+            {
+                workflow_ids.push(current_workflow_id);
             }
-            ids
-        };
-        if let Some(current_workflow_session_id) = tx
-            .query_row(
-                "SELECT current_workflow_session_id
-                 FROM workflow_automations
-                 WHERE id = ?1",
+            let mut seen = HashSet::new();
+            workflow_ids.retain(|workflow_id| seen.insert(workflow_id.clone()));
+            transaction.execute(
+                "DELETE FROM workflow_automation_runs WHERE automation_id = ?1",
                 params![id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten()
-        {
-            workflow_ids.push(current_workflow_session_id);
-        }
-
-        let mut seen_workflow_ids = HashSet::new();
-        workflow_ids.retain(|workflow_id| seen_workflow_ids.insert(workflow_id.clone()));
-
-        tx.execute(
-            "DELETE FROM workflow_automation_runs WHERE automation_id = ?1",
-            params![id],
-        )?;
-
-        for workflow_id in &workflow_ids {
-            Self::delete_workflow_tree_tx(&tx, workflow_id)?;
-        }
-
-        tx.execute(
-            "DELETE FROM workflow_automations WHERE id = ?1",
-            params![id],
-        )?;
-        tx.commit()?;
-        Ok(())
+            )?;
+            for workflow_id in &workflow_ids {
+                Self::delete_workflow_tree_tx(&transaction, workflow_id)?;
+            }
+            transaction.execute(
+                "DELETE FROM workflow_automations WHERE id = ?1",
+                params![id],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
     }
 
     pub fn set_workflow_automation_enabled(
@@ -324,17 +305,16 @@ impl MainStore {
         enabled: bool,
         next_run_at: Option<String>,
     ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflow_automations
-             SET enabled = ?2, next_run_at = ?3, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1",
-            params![id, enabled as i64, next_run_at],
-        )?;
-        Ok(())
+        let id = id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflow_automations
+                 SET enabled = ?2, next_run_at = ?3, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1",
+                params![id, enabled as i64, next_run_at],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn update_workflow_automation_run_after_start(
@@ -345,24 +325,29 @@ impl MainStore {
         scheduled_for: &str,
         current_workflow_session_id: Option<&str>,
     ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflow_automations
-             SET last_run_at = ?2, current_workflow_session_id = ?3, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1",
-            params![automation_id, scheduled_for, current_workflow_session_id],
-        )?;
-        conn.execute(
-            "UPDATE workflow_automation_runs
-             SET workflow_session_id = ?2, status = 'running', started_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1",
-            params![run_id, workflow_session_id],
-        )?;
-        Ok(())
+        let automation_id = automation_id.to_string();
+        let run_id = run_id.to_string();
+        let workflow_session_id = workflow_session_id.to_string();
+        let scheduled_for = scheduled_for.to_string();
+        let current_workflow_session_id = current_workflow_session_id.map(ToString::to_string);
+        self.db_runtime()?.write_blocking(move |conn| {
+            let transaction = conn.transaction()?;
+            transaction.execute(
+                "UPDATE workflow_automations
+                 SET last_run_at = ?2, current_workflow_session_id = ?3, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1",
+                params![automation_id, scheduled_for, current_workflow_session_id],
+            )?;
+            transaction.execute(
+                "UPDATE workflow_automation_runs
+                 SET workflow_session_id = ?2, status = 'running', started_at = CURRENT_TIMESTAMP,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1",
+                params![run_id, workflow_session_id],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
     }
 
     pub fn update_workflow_automation_run_failed(
@@ -370,74 +355,67 @@ impl MainStore {
         run_id: &str,
         error: &str,
     ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE workflow_automation_runs
-             SET status = 'failed', finished_at = CURRENT_TIMESTAMP, error = ?2,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1",
-            params![run_id, error],
-        )?;
-        Ok(())
+        let run_id = run_id.to_string();
+        let error = error.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflow_automation_runs
+                 SET status = 'failed', finished_at = CURRENT_TIMESTAMP, error = ?2,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1",
+                params![run_id, error],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn add_workflow_automation_run(
         &self,
         run: &WorkflowAutomationRunInsert,
     ) -> Result<WorkflowAutomationRun, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "INSERT INTO workflow_automation_runs
-             (id, automation_id, workflow_session_id, status, scheduled_for,
-              started_at, finished_at, error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                run.id,
-                run.automation_id,
-                run.workflow_session_id,
-                run.status,
-                run.scheduled_for,
-                run.started_at,
-                run.finished_at,
-                run.error,
-            ],
-        )?;
-
-        conn.query_row(
-            "SELECT * FROM workflow_automation_runs WHERE id = ?1",
-            params![run.id],
-            |row| Ok(WorkflowAutomationRun::from(row)),
-        )
-        .map_err(StoreError::from)
+        let run = run.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "INSERT INTO workflow_automation_runs
+                 (id, automation_id, workflow_session_id, status, scheduled_for,
+                  started_at, finished_at, error)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    run.id,
+                    run.automation_id,
+                    run.workflow_session_id,
+                    run.status,
+                    run.scheduled_for,
+                    run.started_at,
+                    run.finished_at,
+                    run.error,
+                ],
+            )?;
+            conn.query_row(
+                "SELECT * FROM workflow_automation_runs WHERE id = ?1",
+                params![run.id],
+                |row| Ok(WorkflowAutomationRun::from(row)),
+            )
+            .map_err(StoreError::from)
+        })
     }
 
     pub fn list_workflow_automation_runs(
         &self,
         automation_id: &str,
     ) -> Result<Vec<WorkflowAutomationRun>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT * FROM workflow_automation_runs
-             WHERE automation_id = ?1
-             ORDER BY created_at DESC",
-        )?;
-        let rows = stmt.query_map(params![automation_id], |row| {
-            Ok(WorkflowAutomationRun::from(row))
-        })?;
-        let mut runs = Vec::new();
-        for row in rows {
-            runs.push(row?);
-        }
-        Ok(runs)
+        let automation_id = automation_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflow_automation_runs
+                 WHERE automation_id = ?1
+                 ORDER BY created_at DESC",
+            )?;
+            let rows = statement.query_map(params![automation_id], |row| {
+                Ok(WorkflowAutomationRun::from(row))
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
     }
 }
 
@@ -449,34 +427,38 @@ mod tests {
     use crate::db::StoreError;
     use tempfile::tempdir;
 
-    fn create_test_store() -> MainStore {
+    fn create_test_store() -> (tempfile::TempDir, MainStore) {
         let dir = tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("automation_test.db");
-        MainStore::new(db_path).expect("failed to create MainStore")
+        let store = MainStore::new(db_path).expect("failed to create MainStore");
+        (dir, store)
     }
 
     fn seed_agent(store: &MainStore, id: &str) {
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for agent seed");
-        conn.execute(
-            "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                id,
-                format!("Agent {}", id),
-                "You are a test agent.",
-                "autonomous",
-                20
-            ],
-        )
-        .expect("failed to seed agent");
+        let id = id.to_string();
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(move |conn| {
+                conn.execute(
+                    "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        id,
+                        format!("Agent {}", id),
+                        "You are a test agent.",
+                        "autonomous",
+                        20
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("failed to seed agent");
     }
 
     #[test]
     fn test_delete_workflow_automation_removes_associated_workflows() -> Result<(), StoreError> {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         seed_agent(&store, "agent-main");
         seed_agent(&store, "agent-child");
 

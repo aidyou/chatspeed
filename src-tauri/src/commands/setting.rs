@@ -33,7 +33,7 @@
 
 use crate::constants::*;
 use crate::db::api_key_crypto::{ApiKeyEncryptionStatus, API_KEY_FILE_CONFIG_KEY};
-use crate::db::{AiModel, AiSkill, MainStore, ModelConfig, StoreError};
+use crate::db::{AiModel, AiSkill, MainStore, ModelConfig};
 use crate::db::{BackupConfig, DbBackup};
 use crate::libs::fs::{self, get_file_name};
 use crate::tray::create_tray;
@@ -88,7 +88,7 @@ pub struct RestoreSettingResponse {
 /// ```
 #[command]
 pub fn get_all_config(state: State<Arc<MainStore>>) -> Result<HashMap<String, Value>> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     let mut settings = config_store.config.settings();
     settings.insert(
         "httpServer".to_string(),
@@ -128,7 +128,7 @@ pub fn set_config(
     let should_refresh_tray = crate::shortcut::is_shortcut_key(key);
 
     {
-        let config_store = state.read()?;
+        let config_store = &*state;
 
         let result = if value.is_null() {
             config_store.delete_config(key).map_err(AppError::Db)
@@ -161,7 +161,7 @@ pub fn set_config(
 /// Reload the configuration from the database
 #[command]
 pub fn reload_config(state: State<Arc<MainStore>>) -> Result<()> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store.reload_config().map_err(AppError::Db)
 }
 
@@ -169,7 +169,7 @@ pub fn reload_config(state: State<Arc<MainStore>>) -> Result<()> {
 pub fn get_api_key_encryption_status(
     state: State<Arc<MainStore>>,
 ) -> Result<ApiKeyEncryptionStatus> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store
         .api_key_encryption_status()
         .map_err(AppError::Db)
@@ -180,7 +180,7 @@ pub fn activate_api_key_file(
     state: State<Arc<MainStore>>,
     path: String,
 ) -> Result<ApiKeyEncryptionStatus> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store
         .activate_api_key_file(Path::new(&path))
         .map_err(AppError::Db)?;
@@ -194,7 +194,7 @@ pub fn generate_api_key_file(
     state: State<Arc<MainStore>>,
     path: String,
 ) -> Result<ApiKeyEncryptionStatus> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store
         .generate_and_activate_api_key_file(Path::new(&path))
         .map_err(AppError::Db)?;
@@ -219,7 +219,7 @@ pub fn generate_api_key_file(
 /// * `Result<AiModel, String>` - The AI model or an error message
 #[command]
 pub fn get_ai_model_by_id(state: State<Arc<MainStore>>, id: i64) -> Result<AiModel> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store
         .config
         .get_ai_model_by_id(id)
@@ -247,7 +247,7 @@ pub fn get_ai_model_by_id(state: State<Arc<MainStore>>, id: i64) -> Result<AiMod
 /// ```
 #[command]
 pub fn get_all_ai_models(state: State<Arc<MainStore>>) -> Result<Vec<AiModel>> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store.config.get_ai_models().map_err(AppError::Db)
 }
 
@@ -303,7 +303,7 @@ pub fn add_ai_model(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiModel> {
-    let config_store = state.read()?;
+    let config_store = &*state;
 
     // First add the model to get the ID
     let id = config_store
@@ -390,7 +390,7 @@ pub fn update_ai_model(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiModel> {
-    let config_store = state.read()?;
+    let config_store = &*state;
 
     config_store
         .update_ai_model(
@@ -437,7 +437,7 @@ pub fn update_ai_model(
 /// console.log('AI Model order updated successfully');
 #[command]
 pub fn update_ai_model_order(state: State<Arc<MainStore>>, model_ids: Vec<i64>) -> Result<()> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store
         .update_ai_model_order(model_ids)
         .map_err(AppError::Db)
@@ -465,7 +465,7 @@ pub fn update_ai_model_order(state: State<Arc<MainStore>>, model_ids: Vec<i64>) 
 /// ```
 #[command]
 pub fn delete_ai_model(state: State<Arc<MainStore>>, id: i64) -> Result<()> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store.delete_ai_model(id).map_err(AppError::Db)
 }
 
@@ -485,7 +485,7 @@ pub fn delete_ai_model(state: State<Arc<MainStore>>, id: i64) -> Result<()> {
 /// * `Result<AiSkill, String>` - The AI skill or an error message
 #[command]
 pub fn get_ai_skill_by_id(state: State<Arc<MainStore>>, id: i64) -> Result<AiSkill> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store
         .config
         .get_ai_skill_by_id(id)
@@ -513,7 +513,7 @@ pub fn get_ai_skill_by_id(state: State<Arc<MainStore>>, id: i64) -> Result<AiSki
 /// ```
 #[command]
 pub fn get_all_ai_skills(state: State<Arc<MainStore>>) -> Result<Vec<AiSkill>> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     Ok(config_store.config.get_ai_skills())
 }
 
@@ -547,7 +547,7 @@ pub fn add_ai_skill(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiSkill> {
-    let config_store = state.read()?;
+    let config_store = &*state;
 
     let logo_url = if let Some(logo) = logo {
         upload_logo(logo)?
@@ -591,7 +591,7 @@ pub fn update_ai_skill(
     disabled: bool,
     metadata: Option<Value>,
 ) -> Result<AiSkill> {
-    let config_store = state.read()?;
+    let config_store = &*state;
 
     let logo_url = if let Some(logo) = logo {
         upload_logo(logo)?
@@ -616,7 +616,7 @@ pub fn update_ai_skill(
 /// * `Result<(), String>` - Ok if successful or an error message
 #[command]
 pub fn update_ai_skill_order(state: State<Arc<MainStore>>, skill_ids: Vec<i64>) -> Result<()> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store
         .update_ai_skill_order(skill_ids)
         .map_err(AppError::Db)
@@ -644,7 +644,7 @@ pub fn update_ai_skill_order(state: State<Arc<MainStore>>, skill_ids: Vec<i64>) 
 /// ```
 #[command]
 pub fn delete_ai_skill(state: State<Arc<MainStore>>, id: i64) -> Result<()> {
-    let config_store = state.read()?;
+    let config_store = &*state;
     config_store.delete_ai_skill(id).map_err(AppError::Db)
 }
 
@@ -772,9 +772,7 @@ pub async fn backup_setting(
     // 1. Ensure all data is flushed from WAL to the main DB file before copying.
     // This is critical when WAL mode is enabled.
     {
-        let store = state
-            .read()
-            .map_err(|e| AppError::Db(StoreError::LockError(e.to_string())))?;
+        let store = state.inner().as_ref();
         store.checkpoint().map_err(AppError::Db)?;
     }
 
@@ -851,9 +849,7 @@ pub async fn restore_setting(
     // 4. Perform atomic database restoration. The temporary file removes itself if
     // restoration fails before ownership transfers to the destination database.
     {
-        let config_store = state
-            .read()
-            .map_err(|e| AppError::Db(StoreError::LockError(e.to_string())))?;
+        let config_store = state.inner().as_ref();
         config_store
             .atomic_restore(&temp_db_file, &main_db_path, &machine_specific_keys)
             .map_err(AppError::Db)?;

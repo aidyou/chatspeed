@@ -39,9 +39,7 @@ async fn get_db_todo_list(
     session_id: &str,
 ) -> Result<Vec<Value>, ToolError> {
     let runtime = {
-        let store = store
-            .read()
-            .map_err(|e| ToolError::ExecutionFailed(format!("DB Lock error: {}", e)))?;
+        let store = store.as_ref();
         store
             .db_runtime()
             .map_err(|e| ToolError::ExecutionFailed(format!("DB runtime error: {}", e)))?
@@ -61,9 +59,7 @@ async fn save_db_todo_list(
     list: Vec<Value>,
 ) -> Result<(), ToolError> {
     let runtime = {
-        let store = store
-            .read()
-            .map_err(|e| ToolError::ExecutionFailed(format!("DB Lock error: {}", e)))?;
+        let store = store.as_ref();
         store
             .db_runtime()
             .map_err(|e| ToolError::ExecutionFailed(format!("DB runtime error: {}", e)))?
@@ -510,7 +506,7 @@ mod tests {
         let agent_id = "test_agent".to_string();
 
         {
-            let store_guard = store_arc.read().unwrap();
+            let store_guard = store_arc.as_ref();
             let agent = Agent::new(
                 agent_id.clone(),
                 "Test Agent".to_string(),

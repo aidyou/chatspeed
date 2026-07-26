@@ -493,6 +493,7 @@ let costLineChart = null
 let requestsDualAxisChart = null
 let refreshTimer = null
 let isRefreshing = false
+let isUnmounted = false
 
 const syncVisibleTrendChartSize = async tabName => {
   await nextTick()
@@ -532,23 +533,13 @@ const destroyTrendChart = tabName => {
 }
 
 const scheduleNextRefresh = () => {
-  if (!autoRefreshEnabled.value || document.visibilityState !== 'visible') {
+  if (isUnmounted || !autoRefreshEnabled.value || document.visibilityState !== 'visible') {
     refreshTimer = null
     return
   }
   refreshTimer = setTimeout(async () => {
-    if (isRefreshing) {
-      // Previous refresh still in progress, try again later
-      scheduleNextRefresh()
-      return
-    }
-    isRefreshing = true
-    try {
-      await fetchDailyStats(true)
-    } finally {
-      isRefreshing = false
-      scheduleNextRefresh()
-    }
+    await fetchDailyStats(true)
+    scheduleNextRefresh()
   }, 10000)
 }
 
@@ -822,6 +813,11 @@ const getProtocolTextColor = protocol => {
 }
 
 const fetchDailyStats = async (isAutoRefresh = false) => {
+  if (isUnmounted || isRefreshing || (isAutoRefresh && document.visibilityState !== 'visible')) {
+    return
+  }
+
+  isRefreshing = true
   if (isAutoRefresh === false) {
     startRefreshTimer()
     loading.value = true
@@ -855,6 +851,7 @@ const fetchDailyStats = async (isAutoRefresh = false) => {
     if (isAutoRefresh === false) {
       loading.value = false
     }
+    isRefreshing = false
   }
 }
 
@@ -1492,6 +1489,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  isUnmounted = true
   document.removeEventListener('visibilitychange', handleDocumentVisibilityChange)
   if (refreshTimer) clearTimeout(refreshTimer)
   if (modelBarChart) modelBarChart.destroy()

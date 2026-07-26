@@ -648,7 +648,8 @@ pub fn restore_window_config(window: &WebviewWindow, main_store: Arc<MainStore>)
         }
     });
 
-    if let Ok(c) = main_store.read() {
+    {
+        let c = main_store.as_ref();
         // restore window size
         // For the main window, use the existing CFG_WINDOW_SIZE
         // For the assistant window, use the new CFG_ASSISTANT_WINDOW_SIZE

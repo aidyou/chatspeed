@@ -356,11 +356,7 @@ impl IntelligenceManager {
         user_query: &str,
     ) -> Result<String, WorkflowEngineError> {
         let (provider_id, model_name) = {
-            let store = self
-                .chat_state
-                .main_store
-                .read()
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let store = self.chat_state.main_store.as_ref();
             let gen_model_config: serde_json::Value =
                 store.get_config("conversation_title_gen_model", serde_json::json!({}));
 
@@ -476,11 +472,7 @@ impl IntelligenceManager {
         };
 
         if !final_title.is_empty() {
-            let store = self
-                .chat_state
-                .main_store
-                .write()
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let store = self.chat_state.main_store.as_ref();
             let _ = store.update_workflow_title(&self.session_id, &final_title);
         }
 

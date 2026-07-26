@@ -332,11 +332,8 @@ pub(crate) async fn execute_unified_chat_request(
 
     onward_request_builder = onward_request_builder.headers(final_headers);
 
-    let max_retries = if let Ok(store) = main_store_arc.read() {
-        store.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT)
-    } else {
-        CFG_CCPROXY_RETRY_ON_429_DEFAULT
-    };
+    let max_retries =
+        main_store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
     let retry_config = RetryConfig::from_settings(max_retries);
 
     let target_response = match send_with_retry(onward_request_builder, &retry_config).await {
@@ -354,7 +351,8 @@ pub(crate) async fn execute_unified_chat_request(
                 log::info!(target: "ccproxy_logger", "[ERROR] Backend request failed before receiving a response, protocol: {}, model: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, message);
             }
 
-            if let Ok(store) = main_store_arc.read() {
+            {
+                let store = main_store_arc.as_ref();
                 let _ = store.record_ccproxy_stat(CcproxyStat {
                     id: None,
                     client_model: proxy_model.client_alias.clone(),
@@ -421,7 +419,8 @@ pub(crate) async fn execute_unified_chat_request(
         }
         let message_content = unified_error.message.clone();
 
-        if let Ok(store) = main_store_arc.read() {
+        {
+            let store = main_store_arc.as_ref();
             let _ = store.record_ccproxy_stat(CcproxyStat {
                 id: None,
                 client_model: proxy_model.client_alias.clone(),
@@ -511,7 +510,8 @@ pub(crate) async fn execute_unified_chat_request(
             .await
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
-        if let Ok(store) = main_store_arc.read() {
+        {
+            let store = main_store_arc.as_ref();
             log::info!(
                 "Recording ccproxy stats for non-streaming response: model={}, provider={}",
                 &proxy_model.model,
@@ -572,7 +572,7 @@ pub(crate) async fn execute_unified_chat_request(
 pub async fn handle_chat_completion(
     chat_protocol: ChatProtocol,
     client_headers: HeaderMap,
-    client_query: CcproxyQuery,
+    _client_query: CcproxyQuery,
     client_request_body: bytes::Bytes,
     group_name: Option<String>,
     tool_compat_mode: bool,
@@ -583,16 +583,8 @@ pub async fn handle_chat_completion(
     let protocol_string = chat_protocol.to_string();
     let message_id = get_msg_id();
 
-    let log_org_to_file = if let Ok(store) = main_store_arc.read() {
-        store.get_config(CFG_CCPROXY_LOG_TO_FILE, false)
-    } else {
-        client_query.debug.unwrap_or(false)
-    };
-    let log_proxy_to_file = if let Ok(store) = main_store_arc.read() {
-        store.get_config(CFG_CCPROXY_LOG_PROXY_TO_FILE, false)
-    } else {
-        false
-    };
+    let log_org_to_file = main_store_arc.get_config(CFG_CCPROXY_LOG_TO_FILE, false);
+    let log_proxy_to_file = main_store_arc.get_config(CFG_CCPROXY_LOG_PROXY_TO_FILE, false);
 
     let proxy_model = if let Some(provider_id) = client_headers
         .get("x-cs-provider-id")

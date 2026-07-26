@@ -411,24 +411,7 @@ fn parse_wait_reason(s: &str) -> Option<WaitReason> {
 /// Restore ExecutionContext for a session.
 /// Priority: snapshot first, event replay fallback, safe-failed state on error.
 pub fn restore_execution_context(main_store: Arc<MainStore>, session_id: &str) -> RecoveryResult {
-    let snapshot_result = {
-        let store = match main_store.read() {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!(
-                    "[Workflow][session={}] workflow.restore.failed - cannot acquire store lock: {}",
-                    session_id,
-                    e
-                );
-                return RecoveryResult::SafeFailed {
-                    error: RecoveryError::DatabaseError(crate::db::error::StoreError::LockError(
-                        e.to_string(),
-                    )),
-                };
-            }
-        };
-        store.get_execution_context(session_id)
-    };
+    let snapshot_result = main_store.get_execution_context(session_id);
 
     match snapshot_result {
         Ok(Some(ctx)) => {
@@ -486,37 +469,19 @@ fn replay_from_events(main_store: Arc<MainStore>, session_id: &str) -> RecoveryR
         session_id
     );
 
-    let events = {
-        let store = match main_store.read() {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!(
-                    "[Workflow][session={}] workflow.replay.failed - cannot acquire store lock: {}",
-                    session_id,
-                    e
-                );
-                return RecoveryResult::SafeFailed {
-                    error: RecoveryError::DatabaseError(crate::db::error::StoreError::LockError(
-                        e.to_string(),
-                    )),
-                };
-            }
-        };
-
-        match store.list_workflow_events(session_id) {
-            Ok(events) => events,
-            Err(e) => {
-                log::error!(
-                    "[Workflow][session={}] workflow.replay.failed - cannot load events: {}",
-                    session_id,
-                    e
-                );
-                return RecoveryResult::SafeFailed {
-                    error: RecoveryError::ReplayFailed {
-                        reason: format!("Cannot load events: {}", e),
-                    },
-                };
-            }
+    let events = match main_store.list_workflow_events(session_id) {
+        Ok(events) => events,
+        Err(e) => {
+            log::error!(
+                "[Workflow][session={}] workflow.replay.failed - cannot load events: {}",
+                session_id,
+                e
+            );
+            return RecoveryResult::SafeFailed {
+                error: RecoveryError::ReplayFailed {
+                    reason: format!("Cannot load events: {}", e),
+                },
+            };
         }
     };
 
@@ -1124,16 +1089,16 @@ mod tests {
         use std::sync::Arc;
         use tempfile::tempdir;
 
-        fn create_test_store() -> Arc<MainStore> {
+        fn create_test_store() -> (tempfile::TempDir, Arc<MainStore>) {
             let dir = tempdir().expect("failed to create temp dir");
             let db_path = dir.path().join("replay_integration_test.db");
             let store = MainStore::new(db_path).expect("failed to create MainStore");
-            Arc::new(store)
+            (dir, Arc::new(store))
         }
 
         #[test]
         fn test_restore_snapshot_hit() {
-            let store = create_test_store();
+            let (_temp_dir, store) = create_test_store();
             let session_id = "snapshot-hit-session";
 
             // Write snapshot
@@ -1149,13 +1114,13 @@ mod tests {
             });
 
             {
-                let s = store.read().unwrap();
+                let s = store.as_ref();
                 s.upsert_execution_context(&ctx).unwrap();
             }
 
             // Write some events too (should be ignored when snapshot exists)
             {
-                let s = store.read().unwrap();
+                let s = store.as_ref();
                 let e1 =
                     WorkflowEvent::workflow_started(session_id.to_string(), "agent".to_string());
                 s.append_workflow_event(&e1).unwrap();
@@ -1176,12 +1141,12 @@ mod tests {
 
         #[test]
         fn test_restore_snapshot_miss_fallback_to_replay() {
-            let store = create_test_store();
+            let (_temp_dir, store) = create_test_store();
             let session_id = "snapshot-miss-session";
 
             // Don't write snapshot, only write events
             {
-                let s = store.read().unwrap();
+                let s = store.as_ref();
                 let e1 =
                     WorkflowEvent::workflow_started(session_id.to_string(), "agent".to_string());
                 s.append_workflow_event(&e1).unwrap();
@@ -1220,7 +1185,7 @@ mod tests {
 
         #[test]
         fn test_restore_version_mismatch_fallback_to_replay() {
-            let store = create_test_store();
+            let (_temp_dir, store) = create_test_store();
             let session_id = "version-mismatch-session";
 
             // Write snapshot with old version
@@ -1229,13 +1194,13 @@ mod tests {
             ctx.version = "0.9.0".to_string(); // Old version
 
             {
-                let s = store.read().unwrap();
+                let s = store.as_ref();
                 s.upsert_execution_context(&ctx).unwrap();
             }
 
             // Write events that represent the actual state
             {
-                let s = store.read().unwrap();
+                let s = store.as_ref();
                 let e1 =
                     WorkflowEvent::workflow_started(session_id.to_string(), "agent".to_string());
                 s.append_workflow_event(&e1).unwrap();
@@ -1262,24 +1227,27 @@ mod tests {
 
         #[test]
         fn test_restore_replay_failed_safe_state() {
-            let store = create_test_store();
+            let (_temp_dir, store) = create_test_store();
             let session_id = "replay-failed-session";
 
             // Write malformed events directly to DB (missing required data)
-            {
-                let s = store.read().unwrap();
-                let conn = s.conn.lock().unwrap();
-                conn.execute(
-                    "INSERT INTO workflow_events (session_id, event_type, event_version, event_data, created_at)
-                     VALUES (?1, ?2, ?3, ?4, datetime('now'))",
-                    rusqlite::params![
-                        session_id,
-                        "state_changed",
-                        "1.0.0",
-                        r#"{"from_state": "pending"}"#
-                    ],
-                ).unwrap();
-            }
+            store
+                .db_runtime()
+                .expect("failed to obtain database runtime")
+                .write_blocking(move |conn| {
+                    conn.execute(
+                        "INSERT INTO workflow_events (session_id, event_type, event_version, event_data, created_at)
+                         VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+                        rusqlite::params![
+                            session_id,
+                            "state_changed",
+                            "1.0.0",
+                            r#"{"from_state": "pending"}"#
+                        ],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
 
             // Restore should fail safely
             let result = restore_execution_context(store.clone(), session_id);
@@ -1295,7 +1263,7 @@ mod tests {
 
         #[test]
         fn test_restore_no_events_safe_state() {
-            let store = create_test_store();
+            let (_temp_dir, store) = create_test_store();
             let session_id = "no-events-session";
 
             // Don't write snapshot or events
@@ -1312,12 +1280,12 @@ mod tests {
 
         #[test]
         fn test_restore_terminal_states() {
-            let store = create_test_store();
+            let (_temp_dir, store) = create_test_store();
             let session_id = "terminal-session";
 
             // Write events ending in completed
             {
-                let s = store.read().unwrap();
+                let s = store.as_ref();
                 let e1 =
                     WorkflowEvent::workflow_started(session_id.to_string(), "agent".to_string());
                 s.append_workflow_event(&e1).unwrap();
@@ -1343,11 +1311,11 @@ mod tests {
 
         #[test]
         fn test_restore_cancelled_state() {
-            let store = create_test_store();
+            let (_temp_dir, store) = create_test_store();
             let session_id = "cancelled-session";
 
             {
-                let s = store.read().unwrap();
+                let s = store.as_ref();
                 let e1 =
                     WorkflowEvent::workflow_started(session_id.to_string(), "agent".to_string());
                 s.append_workflow_event(&e1).unwrap();
@@ -1369,11 +1337,11 @@ mod tests {
 
         #[test]
         fn test_restore_failed_state() {
-            let store = create_test_store();
+            let (_temp_dir, store) = create_test_store();
             let session_id = "failed-session";
 
             {
-                let s = store.read().unwrap();
+                let s = store.as_ref();
                 let e1 =
                     WorkflowEvent::workflow_started(session_id.to_string(), "agent".to_string());
                 s.append_workflow_event(&e1).unwrap();
@@ -1401,12 +1369,12 @@ mod tests {
 
         #[test]
         fn test_reducer_field_completeness() {
-            let store = create_test_store();
+            let (_temp_dir, store) = create_test_store();
             let session_id = "field-complete-session";
 
             // Write a complex event chain
             {
-                let s = store.read().unwrap();
+                let s = store.as_ref();
                 let e1 = WorkflowEvent::workflow_started(
                     session_id.to_string(),
                     "agent-001".to_string(),

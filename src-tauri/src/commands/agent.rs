@@ -102,14 +102,14 @@ pub async fn add_agent(
     agent.version = Some(agent.version.unwrap_or(0));
     sanitize_agent_for_persistence(&mut agent);
     validate_sub_agent_role(&agent)?;
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     let id = store.add_agent(&agent).map_err(|e| e.to_string())?;
     Ok(id)
 }
 
 #[tauri::command]
 pub async fn update_agent(state: State<'_, Arc<MainStore>>, agent: Agent) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     let effective_agent =
         if let Some(existing) = store.get_agent(&agent.id).map_err(|e| e.to_string())? {
             if existing.is_system.unwrap_or(false) {
@@ -162,7 +162,7 @@ fn validate_sub_agent_role(agent: &Agent) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn delete_agent(state: State<'_, Arc<MainStore>>, id: String) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     if store
         .get_agent(&id)
         .map_err(|e| e.to_string())?
@@ -180,7 +180,7 @@ pub async fn get_agent(
     id: String,
 ) -> Result<Option<Agent>, String> {
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store.db_runtime().map_err(|e| e.to_string())?
     };
     MainStore::get_agent_with_runtime(runtime, id)
@@ -191,7 +191,7 @@ pub async fn get_agent(
 #[tauri::command]
 pub async fn get_all_agents(state: State<'_, Arc<MainStore>>) -> Result<Vec<Agent>, String> {
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store.db_runtime().map_err(|e| e.to_string())?
     };
     MainStore::get_all_agents_with_runtime(runtime)
@@ -205,7 +205,7 @@ pub async fn update_agent_order(
     agent_ids: Vec<String>,
 ) -> Result<(), String> {
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store.db_runtime().map_err(|e| e.to_string())?
     };
     MainStore::update_agent_order_with_runtime(runtime, agent_ids)

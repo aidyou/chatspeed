@@ -108,12 +108,9 @@ fn test_p0_parent_knows_waiting_task_after_restart() {
     ctx.waiting_on_sub_agent_id = Some("subagent_1".to_string());
     ctx.sub_agent_sessions = vec!["subagent_1".to_string(), "subagent_2".to_string()];
 
-    let store_guard = store.write().unwrap();
-    store_guard.upsert_execution_context(&ctx).unwrap();
-    drop(store_guard);
+    store.upsert_execution_context(&ctx).unwrap();
 
-    let store_guard = store.read().unwrap();
-    let loaded = store_guard.get_execution_context("parent_session").unwrap();
+    let loaded = store.get_execution_context("parent_session").unwrap();
 
     assert!(loaded.is_some());
     let loaded_ctx = loaded.unwrap();

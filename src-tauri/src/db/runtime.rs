@@ -8,12 +8,15 @@ use std::{
         mpsc as std_mpsc, Arc,
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, oneshot};
 
 const DEFAULT_READER_COUNT: usize = 2;
 const DEFAULT_QUEUE_CAPACITY: usize = 256;
+const TELEMETRY_HIGH_WATER_WARNING: usize = 1_000;
+const SLOW_ENQUEUE_WARNING: Duration = Duration::from_millis(100);
+const SLOW_JOB_WARNING: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Default)]
 pub struct DbRuntimeMetrics {
@@ -27,6 +30,7 @@ pub struct DbRuntimeMetrics {
     failed_jobs: AtomicU64,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DbRuntimeMetricsSnapshot {
     pub write_queue_high_water: usize,
@@ -55,6 +59,7 @@ impl DbRuntimeMetrics {
         }
     }
 
+    #[cfg(test)]
     pub fn snapshot(&self) -> DbRuntimeMetricsSnapshot {
         DbRuntimeMetricsSnapshot {
             write_queue_high_water: self.write_queue_high_water.load(Ordering::Relaxed),
@@ -105,9 +110,16 @@ impl TelemetryIngress {
     }
 
     fn enqueue(&self, stat: CcproxyStat) -> Result<(), StoreError> {
-        self.pending.fetch_add(1, Ordering::Relaxed);
+        let pending = self.pending.fetch_add(1, Ordering::Relaxed) + 1;
+        if pending == TELEMETRY_HIGH_WATER_WARNING {
+            log::warn!(
+                "CCProxy telemetry backlog reached {} records; persistence is lagging",
+                TELEMETRY_HIGH_WATER_WARNING
+            );
+        }
         if self.sender.send(TelemetryMessage::Stat(stat)).is_err() {
             self.pending.fetch_sub(1, Ordering::Relaxed);
+            log::error!("CCProxy telemetry ingress is unavailable; statistic was not queued");
             return Err(StoreError::RuntimeClosed);
         }
         Ok(())
@@ -129,6 +141,7 @@ impl TelemetryIngress {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn shutdown(&self) -> Result<(), StoreError> {
         let (ack_sender, ack_receiver) = oneshot::channel();
         self.sender
@@ -175,6 +188,7 @@ impl Worker {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn shutdown(&self) -> Result<(), StoreError> {
         let (ack_sender, ack_receiver) = oneshot::channel();
         self.sender
@@ -277,6 +291,7 @@ impl DbRuntime {
                             }
                         }
                         WorkerMessage::Shutdown(ack_sender) => {
+                            log::debug!("Database worker is shutting down");
                             let _ = ack_sender.send(());
                             break;
                         }
@@ -328,6 +343,7 @@ impl DbRuntime {
                         let batch_size = batch.len();
                         let (result_sender, result_receiver) = oneshot::channel();
                         let job: DbJob = Box::new(move |connection| {
+                            let started_at = Instant::now();
                             let result = (|| -> Result<(), StoreError> {
                                 let transaction = connection.transaction()?;
                                 for stat in batch {
@@ -351,6 +367,13 @@ impl DbRuntime {
                                 transaction.commit()?;
                                 Ok(())
                             })();
+                            if started_at.elapsed() >= SLOW_JOB_WARNING {
+                                log::warn!(
+                                    "CCProxy telemetry batch SQL job took {} ms for {} records",
+                                    started_at.elapsed().as_millis(),
+                                    batch_size
+                                );
+                            }
                             let _ = result_sender.send(result);
                         });
                         let result = writer_sender
@@ -366,6 +389,7 @@ impl DbRuntime {
                             Ok(()) => {
                                 metrics.telemetry_batches_completed.fetch_add(1, Ordering::Relaxed);
                                 metrics.telemetry_records_completed.fetch_add(batch_size as u64, Ordering::Relaxed);
+                                log::debug!("Persisted CCProxy telemetry batch with {batch_size} records");
                             }
                             Err(error) => {
                                 metrics.failed_jobs.fetch_add(1, Ordering::Relaxed);
@@ -430,6 +454,57 @@ impl DbRuntime {
         let (result_sender, result_receiver) = oneshot::channel();
         let metrics = Arc::clone(&self.metrics);
         let job: DbJob = Box::new(move |connection| {
+            let started_at = Instant::now();
+            let result = operation(connection);
+            if started_at.elapsed() >= SLOW_JOB_WARNING {
+                let worker_kind = if is_writer { "writer" } else { "reader" };
+                log::warn!(
+                    "Database {worker_kind} job took {} ms",
+                    started_at.elapsed().as_millis()
+                );
+            }
+            if result.is_err() {
+                metrics.failed_jobs.fetch_add(1, Ordering::Relaxed);
+            }
+            let _ = result_sender.send(result);
+        });
+
+        let enqueue_started_at = Instant::now();
+        worker
+            .sender
+            .send(WorkerMessage::Job(job))
+            .await
+            .map_err(|_| StoreError::RuntimeClosed)?;
+        if enqueue_started_at.elapsed() >= SLOW_ENQUEUE_WARNING {
+            let worker_kind = if is_writer { "writer" } else { "reader" };
+            log::warn!(
+                "Database {worker_kind} queue enqueue waited {} ms",
+                enqueue_started_at.elapsed().as_millis()
+            );
+        }
+        self.observe_queue_depth(worker, is_writer);
+        result_receiver
+            .await
+            .map_err(|_| StoreError::RuntimeClosed)?
+    }
+
+    fn execute_blocking<T, F>(
+        &self,
+        worker: &Worker,
+        operation: F,
+        is_writer: bool,
+        require_running: bool,
+    ) -> Result<T, StoreError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
+    {
+        if require_running && !self.accepting_jobs.load(Ordering::Acquire) {
+            return Err(StoreError::RuntimeMaintenance);
+        }
+        let (result_sender, result_receiver) = std_mpsc::sync_channel(1);
+        let metrics = Arc::clone(&self.metrics);
+        let job: DbJob = Box::new(move |connection| {
             let result = operation(connection);
             if result.is_err() {
                 metrics.failed_jobs.fetch_add(1, Ordering::Relaxed);
@@ -437,20 +512,67 @@ impl DbRuntime {
             let _ = result_sender.send(result);
         });
 
-        worker
-            .sender
-            .send(WorkerMessage::Job(job))
-            .await
-            .map_err(|_| StoreError::RuntimeClosed)?;
+        let sender = worker.sender.clone();
+        let (dispatch_sender, dispatch_receiver) = std_mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let result = sender
+                .blocking_send(WorkerMessage::Job(job))
+                .map_err(|_| StoreError::RuntimeClosed);
+            let _ = dispatch_sender.send(result);
+        });
+        dispatch_receiver
+            .recv()
+            .map_err(|_| StoreError::RuntimeClosed)??;
+        self.observe_queue_depth(worker, is_writer);
+        result_receiver
+            .recv()
+            .map_err(|_| StoreError::RuntimeClosed)?
+    }
+
+    fn observe_queue_depth(&self, worker: &Worker, is_writer: bool) {
         let queue_depth = worker.sender.max_capacity() - worker.sender.capacity();
         if is_writer {
             DbRuntimeMetrics::observe_high_water(&self.metrics.write_queue_high_water, queue_depth);
         } else {
             DbRuntimeMetrics::observe_high_water(&self.metrics.read_queue_high_water, queue_depth);
         }
-        result_receiver
-            .await
-            .map_err(|_| StoreError::RuntimeClosed)?
+    }
+
+    /// Runs a write job on the dedicated writer and blocks only the caller, never the worker pool.
+    pub fn write_blocking<T, F>(&self, operation: F) -> Result<T, StoreError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
+    {
+        self.execute_blocking(&self.writer, operation, true, true)
+    }
+
+    /// Runs a read job on a dedicated reader and blocks only the caller, never the worker pool.
+    pub fn read_blocking<T, F>(&self, operation: F) -> Result<T, StoreError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
+    {
+        let worker = if self.is_memory {
+            &self.writer
+        } else {
+            let index = self.next_reader.fetch_add(1, Ordering::Relaxed) % self.readers.len();
+            &self.readers[index]
+        };
+        self.execute_blocking(worker, operation, self.is_memory, true)
+    }
+
+    /// Runs an exclusive checkpoint after the caller has entered maintenance mode.
+    pub fn checkpoint_for_maintenance(&self) -> Result<(), StoreError> {
+        self.execute_blocking(
+            &self.writer,
+            |connection| {
+                connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+                Ok(())
+            },
+            true,
+            false,
+        )
     }
 
     pub fn drain_for_maintenance(&self) -> Result<(), StoreError> {
@@ -479,7 +601,11 @@ impl DbRuntime {
 
     pub fn drain_blocking(&self) -> Result<(), StoreError> {
         self.telemetry.flush_blocking()?;
-        self.writer.barrier_blocking()
+        self.writer.barrier_blocking()?;
+        for reader in &self.readers {
+            reader.barrier_blocking()?;
+        }
+        Ok(())
     }
 
     pub fn shutdown_blocking(&self) -> Result<(), StoreError> {
@@ -503,10 +629,12 @@ impl DbRuntime {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn metrics(&self) -> DbRuntimeMetricsSnapshot {
         self.metrics.snapshot()
     }
 
+    #[cfg(test)]
     pub async fn shutdown(&self) -> Result<(), StoreError> {
         self.telemetry.shutdown().await?;
         for reader in &self.readers {
@@ -629,6 +757,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn blocking_facade_dispatches_sql_to_the_writer_from_tokio() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let runtime = DbRuntime::open(temp_dir.path().join("runtime.db")).unwrap();
+        let worker_name = runtime
+            .write_blocking(|connection| {
+                connection.execute("CREATE TABLE records (value TEXT NOT NULL)", [])?;
+                Ok(std::thread::current()
+                    .name()
+                    .unwrap_or_default()
+                    .to_string())
+            })
+            .unwrap();
+        assert_eq!(worker_name, "db-writer");
+        let count = runtime.read_blocking(|connection| {
+            connection.execute("INSERT INTO records (value) VALUES ('saved')", [])?;
+            Ok(
+                connection.query_row("SELECT COUNT(*) FROM records", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+            )
+        });
+        assert!(count.is_err(), "reader connections must remain query-only");
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn memory_database_reads_share_the_writer_connection() {
         let runtime = DbRuntime::open(":memory:").unwrap();
         runtime
@@ -724,6 +878,46 @@ mod tests {
         let metrics = runtime.metrics();
         assert_eq!(metrics.telemetry_records_completed, 3);
         assert!(metrics.telemetry_batches_completed >= 1);
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn maintenance_drain_waits_for_in_flight_reader_jobs() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let runtime = Arc::new(DbRuntime::open(temp_dir.path().join("runtime.db")).unwrap());
+        let (started_sender, started_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let reader_runtime = Arc::clone(&runtime);
+        let reader = tokio::spawn(async move {
+            reader_runtime
+                .read(move |_| {
+                    started_sender.send(()).map_err(|error| {
+                        StoreError::WorkerFailed(format!("reader start signal failed: {error}"))
+                    })?;
+                    release_receiver.recv().map_err(|error| {
+                        StoreError::WorkerFailed(format!("reader release signal failed: {error}"))
+                    })?;
+                    Ok(())
+                })
+                .await
+        });
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("reader job should start");
+
+        let drain_runtime = Arc::clone(&runtime);
+        let drain = tokio::task::spawn_blocking(move || drain_runtime.drain_for_maintenance());
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(
+            !drain.is_finished(),
+            "maintenance must wait for the active reader before checkpointing"
+        );
+
+        release_sender
+            .send(())
+            .expect("reader release receiver should remain available");
+        reader.await.unwrap().unwrap();
+        drain.await.unwrap().unwrap();
         runtime.shutdown().await.unwrap();
     }
 

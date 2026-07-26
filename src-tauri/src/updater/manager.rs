@@ -111,9 +111,7 @@ impl UpdateManager {
         let mut builder = self.app.updater_builder();
 
         if let Some(main_store) = self.app.try_state::<Arc<MainStore>>() {
-            let store = main_store.read().map_err(|_| {
-                UpdateError::LockError("Failed to read MainStore state".to_string())
-            })?;
+            let store = main_store.as_ref();
 
             let proxy_type = store.get_config("proxy_type", "none".to_string());
             match proxy_type.as_str() {

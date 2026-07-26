@@ -94,27 +94,19 @@ impl MainStore {
         config: McpServerConfig,
         disabled: bool,
     ) -> Result<Mcp, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
         let config_json = serde_json::to_string(&config).map_err(|e| {
             StoreError::JsonError(
                 t!("db.json_serialize_failed_mcp_config", error = e.to_string()).to_string(),
             )
         })?;
-
-        conn.execute(
-            "INSERT INTO mcp (name, description, config, disabled) VALUES (?1, ?2, ?3, ?4)",
-            params![name, description, config_json, disabled],
-        )?;
-
-        let id = conn.last_insert_rowid();
-        if let Ok(mcp) = Self::get_all_mcps(&conn) {
-            self.config.set_mcps(mcp);
-        }
-
+        let (id, mcps) = self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "INSERT INTO mcp (name, description, config, disabled) VALUES (?1, ?2, ?3, ?4)",
+                params![name, description, config_json, disabled],
+            )?;
+            Ok((conn.last_insert_rowid(), Self::get_all_mcps(conn)?))
+        })?;
+        self.config.set_mcps(mcps);
         self.config.get_mcp_by_id(id)
     }
 
@@ -142,30 +134,26 @@ impl MainStore {
         config: McpServerConfig,
         disable: bool,
     ) -> Result<Mcp, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
+        let name = name.to_string();
+        let description = description.to_string();
         let config_json = serde_json::to_string(&config).map_err(|e| {
             StoreError::JsonError(
                 t!("db.json_serialize_failed_mcp_config", error = e.to_string()).to_string(),
             )
         })?;
-
-        conn.execute(
-            "UPDATE mcp SET
-                name = ?,
-                description = ?,
-                config = ?,
-                disabled = ?
-             WHERE id = ?",
-            params![name, description, config_json, disable, id],
-        )?;
-
-        if let Ok(mcp) = Self::get_all_mcps(&conn) {
-            self.config.set_mcps(mcp);
-        }
-
+        let mcps = self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE mcp SET
+                    name = ?,
+                    description = ?,
+                    config = ?,
+                    disabled = ?
+                 WHERE id = ?",
+                params![name, description, config_json, disable, id],
+            )?;
+            Self::get_all_mcps(conn)
+        })?;
+        self.config.set_mcps(mcps);
         self.config.get_mcp_by_id(id)
     }
 
@@ -182,15 +170,11 @@ impl MainStore {
     /// - SQL execution fails
     /// - Transaction commit fails
     pub fn delete_mcp(&self, id: i64) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute("DELETE FROM mcp WHERE id = ?", params![id])?;
-
-        if let Ok(mcp) = Self::get_all_mcps(&conn) {
-            self.config.set_mcps(mcp);
-        }
+        let mcps = self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute("DELETE FROM mcp WHERE id = ?", params![id])?;
+            Self::get_all_mcps(conn)
+        })?;
+        self.config.set_mcps(mcps);
         Ok(())
     }
 
@@ -203,19 +187,14 @@ impl MainStore {
     /// # Returns
     /// Returns `Result` with unit type `()` on success, or `StoreError` on failure
     pub fn change_mcp_status(&self, id: i64, disabled: bool) -> Result<Mcp, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "UPDATE mcp SET disabled =? WHERE id =?",
-            params![disabled, id],
-        )?;
-
-        if let Ok(mcp) = Self::get_all_mcps(&conn) {
-            self.config.set_mcps(mcp);
-        }
-
+        let mcps = self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE mcp SET disabled =? WHERE id =?",
+                params![disabled, id],
+            )?;
+            Self::get_all_mcps(conn)
+        })?;
+        self.config.set_mcps(mcps);
         self.config.get_mcp_by_id(id)
     }
 }

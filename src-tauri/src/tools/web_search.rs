@@ -44,9 +44,7 @@ impl WebSearch {
         provider: Option<String>,
     ) -> Result<(SearchFactory, SearchProviderName), ToolError> {
         let main_store = self.app_handle.state::<Arc<MainStore>>().inner();
-        let store = main_store.read().map_err(|e| {
-            ToolError::Store(t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())
-        })?;
+        let store = main_store.as_ref();
 
         let search_engine =
             provider.unwrap_or_else(|| store.get_config(CFG_SEARCH_ENGINE, "bing".to_string()));
@@ -105,9 +103,7 @@ impl WebSearch {
         search_engine: &str,
         main_store: Arc<MainStore>,
     ) -> Result<Auth, ToolError> {
-        let store = main_store.read().map_err(|e| {
-            ToolError::Store(t!("db.failed_to_lock_main_store", error = e.to_string()).to_string())
-        })?;
+        let store = main_store.as_ref();
         let provider_name = SearchProviderName::from_str(search_engine)
             .map_err(|e| ToolError::Initialization(e))?;
         let auth = match provider_name {

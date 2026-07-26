@@ -90,9 +90,7 @@ impl ScraperPool {
         let debug_mode = self
             .app_handle
             .state::<Arc<MainStore>>()
-            .read()
-            .map(|store| store.get_config(CFG_SCRAPER_DEBUG_MODE, false))
-            .unwrap_or(false);
+            .get_config(CFG_SCRAPER_DEBUG_MODE, false);
 
         if let Some(mut resource) = pool.pop() {
             resource.last_used = Instant::now();
@@ -133,9 +131,7 @@ impl ScraperPool {
         let debug_mode = self
             .app_handle
             .state::<Arc<MainStore>>()
-            .read()
-            .map(|store| store.get_config(CFG_SCRAPER_DEBUG_MODE, false))
-            .unwrap_or(false);
+            .get_config(CFG_SCRAPER_DEBUG_MODE, false);
 
         // Only navigate to blank page in debug mode or when pool is full
         // This preserves the performance benefit of webview pooling

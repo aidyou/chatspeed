@@ -477,31 +477,30 @@ impl WorkflowExecutor {
         let evidence = Self::build_final_review_evidence(&evidence_messages);
         let previous_review_results = self.review_payload_previous_results();
         let todo_status =
-            if let Ok(store) = self.context.main_store.read() {
-                store
-                    .get_todo_list_for_workflow(&self.session_id)
-                    .ok()
-                    .map(|todos| {
-                        todos
-                            .into_iter()
-                            .map(|todo| {
-                                let todo_id = todo["id"].as_str().unwrap_or_default().to_string();
-                                let status =
-                                    todo_status_overrides.get(&todo_id).cloned().unwrap_or_else(
-                                        || todo["status"].as_str().unwrap_or_default().to_string(),
-                                    );
-                                json!({
-                                    "id": todo_id,
-                                    "subject": todo["subject"].as_str().unwrap_or_default(),
-                                    "status": status
-                                })
+            self.context
+                .main_store
+                .get_todo_list_for_workflow(&self.session_id)
+                .ok()
+                .map(|todos| {
+                    todos
+                        .into_iter()
+                        .map(|todo| {
+                            let todo_id = todo["id"].as_str().unwrap_or_default().to_string();
+                            let status = todo_status_overrides
+                                .get(&todo_id)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    todo["status"].as_str().unwrap_or_default().to_string()
+                                });
+                            json!({
+                                "id": todo_id,
+                                "subject": todo["subject"].as_str().unwrap_or_default(),
+                                "status": status
                             })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
         let mut payload = serde_json::Map::new();
         payload.insert("review_type".to_string(), json!("final_review"));
         payload.insert("workflow_session_id".to_string(), json!(self.session_id));
@@ -559,11 +558,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         todo_status_overrides: &HashMap<String, String>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         let reviewer_agent = {
-            let store = self
-                .context
-                .main_store
-                .read()
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let store = self.context.main_store.as_ref();
             store
                 .get_child_agent_by_sub_agent_role(
                     &self.agent_config.id,
@@ -1719,9 +1714,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         let auto_approve_plan = self
             .context
             .main_store
-            .read()
+            .get_workflow_snapshot(&self.session_id)
             .ok()
-            .and_then(|store| store.get_workflow_snapshot(&self.session_id).ok())
             .and_then(|snapshot| snapshot.workflow.agent_config)
             .and_then(|config| crate::db::agent::AgentConfig::from_json(&config))
             .and_then(|config| config.auto_approve_plan)
@@ -1903,35 +1897,38 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 .and_then(|message| message.id);
         }
 
-        if let Ok(store) = self.context.main_store.read() {
-            if let Ok(todos) = store.get_todo_list_for_workflow(&self.session_id) {
-                let active_tasks: Vec<String> = todos
-                    .iter()
-                    .filter(|t| {
-                        let todo_id = t["id"].as_str().unwrap_or("");
-                        let s = todo_status_overrides
-                            .get(todo_id)
-                            .map(String::as_str)
-                            .unwrap_or_else(|| t["status"].as_str().unwrap_or(""));
-                        s == "pending" || s == "in_progress"
-                    })
-                    .map(|t| {
-                        let todo_id = t["id"].as_str().unwrap_or("?");
-                        let status = todo_status_overrides
-                            .get(todo_id)
-                            .map(String::as_str)
-                            .unwrap_or_else(|| t["status"].as_str().unwrap_or("?"));
-                        format!(
-                            "[{}] {} (ID: {})",
-                            status,
-                            t["subject"].as_str().unwrap_or("Untitled"),
-                            todo_id
-                        )
-                    })
-                    .collect();
+        if let Ok(todos) = self
+            .context
+            .main_store
+            .get_todo_list_for_workflow(&self.session_id)
+        {
+            let active_tasks: Vec<String> = todos
+                .iter()
+                .filter(|t| {
+                    let todo_id = t["id"].as_str().unwrap_or("");
+                    let s = todo_status_overrides
+                        .get(todo_id)
+                        .map(String::as_str)
+                        .unwrap_or_else(|| t["status"].as_str().unwrap_or(""));
+                    s == "pending" || s == "in_progress"
+                })
+                .map(|t| {
+                    let todo_id = t["id"].as_str().unwrap_or("?");
+                    let status = todo_status_overrides
+                        .get(todo_id)
+                        .map(String::as_str)
+                        .unwrap_or_else(|| t["status"].as_str().unwrap_or("?"));
+                    format!(
+                        "[{}] {} (ID: {})",
+                        status,
+                        t["subject"].as_str().unwrap_or("Untitled"),
+                        todo_id
+                    )
+                })
+                .collect();
 
-                if !active_tasks.is_empty() {
-                    return Ok(Some(ReinforcedResult {
+            if !active_tasks.is_empty() {
+                return Ok(Some(ReinforcedResult {
                         content: format!("<SYSTEM_REMINDER>Block: You still have active tasks: {}. Do NOT retry complete_workflow yet. Do NOT call sub_agent_output for call-mode sub-agents; their results are delivered directly as observations. You MUST either complete these todos, or mark them as 'failed' or 'data_missing' if they cannot be fulfilled, before calling complete_workflow.</SYSTEM_REMINDER>", active_tasks.join(", ")),
                         llm_content: None,
                         title: "Tasks Pending".to_string(),
@@ -1942,7 +1939,6 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                         approval_status: None,
                         observation_kind: None,
                     }));
-                }
             }
         }
 

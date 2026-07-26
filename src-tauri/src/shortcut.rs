@@ -86,14 +86,12 @@ pub fn get_default_shortcut(key: &str) -> Option<&'static str> {
 }
 
 fn get_effective_shortcut(config_store: Arc<MainStore>, key: &str) -> String {
-    if let Ok(c) = config_store.read() {
-        if let Some(value) = c
-            .config
-            .get_setting(key)
-            .and_then(|value| value.as_str().map(ToString::to_string))
-        {
-            return value;
-        }
+    if let Some(value) = config_store
+        .config
+        .get_setting(key)
+        .and_then(|value| value.as_str().map(ToString::to_string))
+    {
+        return value;
     }
 
     get_default_shortcut(key).unwrap_or("").to_string()

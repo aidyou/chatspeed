@@ -473,13 +473,15 @@ pub async fn run() -> crate::error::Result<()> {
                             // Convert physical size to logical size.
                             let logical_size = size.to_logical(scale_factor);
                             // Store the window size when the user resizes it to remember for the next startup.
-                            if let Ok(store) = config_state.write() {
-                                if let Err(e) = store.set_window_size(WindowSize {
+                            let store = config_state.inner().as_ref();
+                            if let Err(e) = store.set_window_size(
+                                WindowSize {
                                     width: logical_size.width,
                                     height: logical_size.height,
-                                }, window_label) {
-                                    error!("Failed to set window size: {}", e);
-                                }
+                                },
+                                window_label,
+                            ) {
+                                error!("Failed to set window size: {}", e);
                             }
                         }
                     }
@@ -671,7 +673,8 @@ pub async fn run() -> crate::error::Result<()> {
             }
 
             // Setup language and reconcile OS-managed settings with persisted preferences.
-            if let Ok(c) = main_store.clone().read() {
+            {
+                let c = main_store.as_ref();
                 let user_lang =
                     c.get_config(CFG_INTERFACE_LANGUAGE, libs::lang::get_system_locale());
                 if !user_lang.is_empty() {
@@ -818,11 +821,7 @@ pub async fn run() -> crate::error::Result<()> {
                 });
 
                 // 4. Update check (2 minutes later, non-critical)
-                let auto_update = if let Ok(c) = main_store_clone.read() {
-                    c.get_config(CFG_AUTO_UPDATE, true)
-                } else {
-                    true
-                };
+                let auto_update = main_store_clone.get_config(CFG_AUTO_UPDATE, true);
 
                 if auto_update {
                     tokio::time::sleep(std::time::Duration::from_secs(120)).await;
@@ -886,22 +885,18 @@ pub async fn run() -> crate::error::Result<()> {
 /// # Returns
 /// A tuple containing the saved window width and height.
 fn get_saved_window_size(config_store: Arc<MainStore>, window_label: &str) -> Option<WindowSize> {
-    if let Ok(c) = config_store.read() {
-        let key = if window_label == "main" {
-            CFG_WINDOW_SIZE
-        } else if window_label == "assistant" {
-            CFG_ASSISTANT_WINDOW_SIZE
-        } else if window_label == "workflow" {
-            CFG_WORKFLOW_WINDOW_SIZE
-        } else if window_label == "proxy_switcher" {
-            CFG_PROXY_SWITCHER_WINDOW_SIZE
-        } else {
-            return None;
-        };
-        c.get_config(key, Some(WindowSize::default()))
+    let key = if window_label == "main" {
+        CFG_WINDOW_SIZE
+    } else if window_label == "assistant" {
+        CFG_ASSISTANT_WINDOW_SIZE
+    } else if window_label == "workflow" {
+        CFG_WORKFLOW_WINDOW_SIZE
+    } else if window_label == "proxy_switcher" {
+        CFG_PROXY_SWITCHER_WINDOW_SIZE
     } else {
-        None
-    }
+        return None;
+    };
+    config_store.get_config(key, Some(WindowSize::default()))
 }
 
 /// Get the saved window position from the configuration
@@ -912,11 +907,7 @@ fn get_saved_window_size(config_store: Arc<MainStore>, window_label: &str) -> Op
 /// # Returns
 /// A tuple containing the saved window x and y positions.
 fn get_saved_window_position(config_store: &Arc<MainStore>) -> Option<MainWindowPosition> {
-    if let Ok(c) = config_store.read() {
-        c.get_config(CFG_WINDOW_POSITION, Some(MainWindowPosition::default()))
-    } else {
-        None
-    }
+    config_store.get_config(CFG_WINDOW_POSITION, Some(MainWindowPosition::default()))
 }
 
 /// Get the saved workflow window position from the configuration
@@ -927,14 +918,10 @@ fn get_saved_window_position(config_store: &Arc<MainStore>) -> Option<MainWindow
 /// # Returns
 /// A tuple containing the saved window x and y positions.
 fn get_saved_workflow_window_position(config_store: &Arc<MainStore>) -> Option<MainWindowPosition> {
-    if let Ok(c) = config_store.read() {
-        c.get_config(
-            CFG_WORKFLOW_WINDOW_POSITION,
-            Some(MainWindowPosition::default()),
-        )
-    } else {
-        None
-    }
+    config_store.get_config(
+        CFG_WORKFLOW_WINDOW_POSITION,
+        Some(MainWindowPosition::default()),
+    )
 }
 
 /// Helper function to save window position for main and workflow windows
@@ -993,10 +980,8 @@ fn save_window_position<F, G>(
             x: current_position.x,
             y: current_position.y,
         };
-        if let Ok(store) = config_store.read() {
-            if let Err(e) = save_pos(&store, pos) {
-                error!("Failed to save window position: {}", e);
-            }
+        if let Err(e) = save_pos(config_store.as_ref(), pos) {
+            error!("Failed to save window position: {}", e);
         }
     }
 }

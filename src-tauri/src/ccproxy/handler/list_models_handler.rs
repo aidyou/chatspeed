@@ -24,10 +24,8 @@ pub async fn handle_list_models(
 ) -> ProxyResult<Json<Value>> {
     let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
-        let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> = main_store
-            .read()
-            .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?
-            .get_config("chat_completion_proxy", HashMap::new());
+        let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> =
+            main_store.get_config("chat_completion_proxy", HashMap::new());
 
         cfg.get(group)
             .cloned()
@@ -40,9 +38,7 @@ pub async fn handle_list_models(
 
     let keys = config.keys().cloned().collect::<Vec<String>>();
     let mut models_info: HashMap<String, (i32, String)> = HashMap::new();
-    let store = main_store
-        .read()
-        .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?;
+    let store = main_store.as_ref();
 
     for (alias, target) in config.into_iter() {
         // If the alias has already been processed and added to `models_info`, skip it.
@@ -132,10 +128,8 @@ pub async fn handle_ollama_tags(
 ) -> ProxyResult<Json<Value>> {
     let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
-        let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> = main_store
-            .read()
-            .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?
-            .get_config("chat_completion_proxy", HashMap::new());
+        let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> =
+            main_store.get_config("chat_completion_proxy", HashMap::new());
 
         cfg.get(group)
             .cloned()
@@ -148,9 +142,7 @@ pub async fn handle_ollama_tags(
 
     let keys = config.keys().cloned().collect::<Vec<String>>();
     let mut models: HashMap<String, (i32, String)> = HashMap::new();
-    let store = main_store
-        .read()
-        .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?;
+    let store = main_store.as_ref();
 
     for (alias, target) in config.into_iter() {
         // If the alias has already been processed and added to `models`, skip it.
@@ -288,10 +280,8 @@ pub async fn handle_gemini_list_models(
 ) -> ProxyResult<Json<Value>> {
     let group = group_name.as_deref().unwrap_or("default");
     let config: HashMap<String, Vec<BackendModelTarget>> = {
-        let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> = main_store
-            .read()
-            .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?
-            .get_config("chat_completion_proxy", HashMap::new());
+        let cfg: HashMap<String, HashMap<String, Vec<BackendModelTarget>>> =
+            main_store.get_config("chat_completion_proxy", HashMap::new());
 
         cfg.get(group)
             .cloned()
@@ -304,9 +294,7 @@ pub async fn handle_gemini_list_models(
 
     let keys = config.keys().cloned().collect::<Vec<String>>();
     let mut models: HashMap<String, (i32, String)> = HashMap::new();
-    let store = main_store
-        .read()
-        .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?;
+    let store = main_store.as_ref();
 
     for (alias, target) in config.into_iter() {
         if models.contains_key(&alias) {

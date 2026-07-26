@@ -107,7 +107,7 @@ fn spawn_workflow_title_generation_if_missing(
     }
 
     let should_generate_title = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store
             .get_workflow_snapshot(&session_id)
             .ok()
@@ -127,7 +127,7 @@ fn spawn_workflow_title_generation_if_missing(
     }
 
     let (provider_id, model_name) = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         let workflow = store
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?
@@ -278,9 +278,7 @@ fn rollback_workflow_agent_config(
     session_id: &str,
     previous_config_json: &str,
 ) {
-    if let Ok(store) = state.read() {
-        let _ = store.update_workflow_agent_config(session_id, previous_config_json);
-    }
+    let _ = state.update_workflow_agent_config(session_id, previous_config_json);
 }
 
 fn can_defer_runtime_config_signal_for_completed_session(signal_type: &str) -> bool {
@@ -1657,7 +1655,7 @@ pub async fn create_workflow(
     request: CreateWorkflowRequest,
 ) -> Result<String, String> {
     let (agent, runtime) = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         let agent = store
             .get_agent(&request.agent_id)
             .map_err(|e| e.to_string())?
@@ -1723,7 +1721,7 @@ pub async fn create_workflow(
 #[tauri::command]
 pub async fn list_workflows(state: State<'_, Arc<MainStore>>) -> Result<Vec<Workflow>, String> {
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         reconcile_interrupted_child_workflows(&store).map_err(|e| e.to_string())?;
         store.db_runtime().map_err(|e| e.to_string())?
     };
@@ -1955,7 +1953,7 @@ pub async fn delete_workflow(
     .await;
 
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store.db_runtime().map_err(|e| e.to_string())?
     };
     MainStore::delete_workflow_with_runtime(runtime, session_id)
@@ -1979,7 +1977,7 @@ pub async fn delete_last_workflow_message(
     )
     .await;
 
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     store
         .delete_last_message(&session_id)
         .map_err(|e| e.to_string())
@@ -2164,7 +2162,7 @@ async fn begin_new_context_frame_for_cold_session(
     execution_context.current_context_tokens = Some(context.current_token_estimate());
     execution_context.max_context_tokens = Some(context.max_tokens);
 
-    let store = main_store.read().map_err(|e| e.to_string())?;
+    let store = &*main_store;
     store
         .upsert_execution_context(&execution_context)
         .map_err(|e| e.to_string())?;
@@ -2179,7 +2177,7 @@ async fn finalize_manual_clear_context_state(
     session_id: &str,
 ) -> Result<(), String> {
     {
-        let store = main_store.read().map_err(|error| error.to_string())?;
+        let store = &*main_store;
         persist_pending_workflow_state(&store, session_id)?;
     }
 
@@ -2218,7 +2216,7 @@ pub async fn workflow_begin_new_context_frame(
     let tsid_generator = tsid_generator.inner().clone();
 
     let snapshot = {
-        let store = main_store.read().map_err(|e| e.to_string())?;
+        let store = &*main_store;
         store
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?
@@ -2241,7 +2239,7 @@ pub async fn workflow_begin_new_context_frame(
         .is_some_and(ContextManager::is_manual_clear_context_message)
     {
         {
-            let store = main_store.read().map_err(|e| e.to_string())?;
+            let store = &*main_store;
             sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
         }
         finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
@@ -2309,7 +2307,7 @@ pub async fn workflow_begin_new_context_frame(
         }
 
         {
-            let store = main_store.read().map_err(|e| e.to_string())?;
+            let store = &*main_store;
             sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
         }
 
@@ -2322,7 +2320,7 @@ pub async fn workflow_begin_new_context_frame(
         }
 
         let (marker_message, segment_id, current_context_tokens, max_context_tokens) = {
-            let store = main_store.read().map_err(|e| e.to_string())?;
+            let store = &*main_store;
             let marker_message = store
                 .get_workflow_snapshot(&session_id)
                 .map_err(|e| e.to_string())?
@@ -2363,7 +2361,7 @@ pub async fn workflow_begin_new_context_frame(
     }
 
     {
-        let store = main_store.read().map_err(|e| e.to_string())?;
+        let store = &*main_store;
         sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
     }
 
@@ -2375,7 +2373,7 @@ pub async fn workflow_begin_new_context_frame(
     )
     .await?;
     let current_context = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store
             .get_execution_context(&session_id)
             .map_err(|e| e.to_string())?
@@ -2411,7 +2409,7 @@ pub async fn get_workflow_snapshot(
     let snapshot_session_id = session_id.clone();
     let (mut snapshot, message_window_before_id, hidden_completed_task_count) =
         tokio::task::spawn_blocking(move || -> Result<_, String> {
-            let store = snapshot_store.read().map_err(|e| e.to_string())?;
+            let store = &*snapshot_store;
             let mut workflow = store
                 .get_workflow_for_ui(&snapshot_session_id)
                 .map_err(|e| e.to_string())?;
@@ -2447,7 +2445,7 @@ pub async fn get_workflow_snapshot(
     let (snapshot, execution_context, tail_rewind_kind) =
         tokio::task::spawn_blocking(move || -> Result<_, String> {
             {
-                let store = reconciliation_store.read().map_err(|e| e.to_string())?;
+                let store = &*reconciliation_store;
                 normalize_snapshot_after_live_reconciliation(
                     &store,
                     &reconciliation_session_id,
@@ -2460,7 +2458,7 @@ pub async fn get_workflow_snapshot(
                 &reconciliation_session_id,
             );
             let tail_rewind_kind = {
-                let store = reconciliation_store.read().map_err(|e| e.to_string())?;
+                let store = &*reconciliation_store;
                 store
                     .get_tail_rewind_kind(&reconciliation_session_id)
                     .map_err(|e| e.to_string())?
@@ -2510,7 +2508,7 @@ pub async fn get_earlier_workflow_messages(
     before_message_id: i64,
 ) -> Result<Value, String> {
     let window = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store
             .get_workflow_message_window(&session_id, Some(before_message_id), 1)
             .map_err(|e| e.to_string())?
@@ -2536,7 +2534,7 @@ pub async fn get_workflow_agent_config(
     state: State<'_, Arc<MainStore>>,
     session_id: String,
 ) -> Result<Value, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     let config_json = raw_workflow_agent_config_json(&store, &session_id)?;
     serde_json::from_str::<Value>(&config_json).map_err(|e| e.to_string())
 }
@@ -2549,7 +2547,7 @@ pub async fn add_workflow_message(
     message: WorkflowMessage,
 ) -> Result<i64, String> {
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store.db_runtime().map_err(|e| e.to_string())?
     };
     let res = MainStore::add_workflow_message_with_runtime(runtime, message.clone())
@@ -2576,7 +2574,7 @@ pub async fn update_workflow_title(
     title: String,
 ) -> Result<(), String> {
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store.db_runtime().map_err(|e| e.to_string())?
     };
     MainStore::update_workflow_title_with_runtime(runtime, session_id, title)
@@ -2592,7 +2590,7 @@ pub async fn update_workflow_title_and_query(
     user_query: String,
 ) -> Result<(), String> {
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store.db_runtime().map_err(|e| e.to_string())?
     };
     MainStore::update_workflow_title_and_query_with_runtime(runtime, session_id, title, user_query)
@@ -2607,7 +2605,7 @@ pub async fn update_workflow_query(
     user_query: String,
 ) -> Result<(), String> {
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store.db_runtime().map_err(|e| e.to_string())?
     };
     MainStore::update_workflow_query_with_runtime(runtime, session_id, user_query)
@@ -2622,7 +2620,7 @@ pub async fn update_workflow_status(
     status: String,
 ) -> Result<(), String> {
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store.db_runtime().map_err(|e| e.to_string())?
     };
     MainStore::update_workflow_status_with_runtime(runtime, session_id, status)
@@ -2871,9 +2869,10 @@ async fn try_resume_completed_live_session(
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
-                if let Ok(store) = main_store_for_spawn.read() {
-                    let _ = persist_cancelled_workflow_state(&store, &session_id_for_spawn);
-                }
+                let _ = persist_cancelled_workflow_state(
+                    main_store_for_spawn.as_ref(),
+                    &session_id_for_spawn,
+                );
                 let _ = manager_for_spawn
                     .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
                 let _ = gateway_for_spawn
@@ -3259,7 +3258,7 @@ pub async fn workflow_start(
     let planning_mode = planning_mode.unwrap_or(false);
 
     if initial_prompt.is_some() {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        let store = &*main_store_arc;
         let workflow = store
             .get_workflow(&session_id)
             .map_err(|e| e.to_string())?
@@ -3278,7 +3277,7 @@ pub async fn workflow_start(
         workflow_status,
         existing_messages,
     ) = {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        let store = &*main_store_arc;
         let snapshot = store
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?;
@@ -3334,7 +3333,7 @@ pub async fn workflow_start(
     }
 
     let mut agent_config = {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        let store = &*main_store_arc;
         store
             .get_agent(&agent_id)
             .map_err(|e| e.to_string())?
@@ -3342,7 +3341,7 @@ pub async fn workflow_start(
     };
     // Load agent_config JSON for easier access to overrides like 'phase'
     let agent_config_json: Value = {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        let store = &*main_store_arc;
         if let Ok(snapshot) = store.get_workflow_snapshot(&session_id) {
             snapshot
                 .workflow
@@ -3606,9 +3605,10 @@ pub async fn workflow_start(
         let mut guard = shared_executor.lock().await;
         if let Err(e) = guard.run_loop().await {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
-                if let Ok(store) = main_store_for_spawn.read() {
-                    let _ = persist_cancelled_workflow_state(&store, &session_id_for_spawn);
-                }
+                let _ = persist_cancelled_workflow_state(
+                    main_store_for_spawn.as_ref(),
+                    &session_id_for_spawn,
+                );
                 let _ = manager_for_spawn
                     .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Cancelled);
                 log::info!(
@@ -3806,7 +3806,7 @@ pub async fn workflow_signal(
     let gateway_arc = gateway.inner().clone();
     let main_store_arc = state.inner().clone();
     let workflow_snapshot = {
-        let store = main_store_arc.read().map_err(|e| e.to_string())?;
+        let store = &*main_store_arc;
         store
             .get_workflow_snapshot(&session_id)
             .map_err(|e| e.to_string())?
@@ -4397,7 +4397,7 @@ pub async fn workflow_stop(
     session_id: String,
 ) -> Result<(), String> {
     let previous_status = {
-        let store = state.inner().read().map_err(|e| e.to_string())?;
+        let store = &**state.inner();
         store
             .get_workflow_snapshot(&session_id)
             .map(|snapshot| snapshot.workflow.status)
@@ -4429,7 +4429,7 @@ pub async fn workflow_stop(
                 )
                 .await;
             {
-                let store = state.inner().read().map_err(|e| e.to_string())?;
+                let store = &**state.inner();
                 store
                     .update_workflow_status(&session_id, &WorkflowState::Stopping.to_string())
                     .map_err(|e| e.to_string())?;
@@ -4459,9 +4459,7 @@ pub async fn workflow_stop(
                 let mut guard = executor.lock().await;
                 guard.set_state(WorkflowState::Cancelled);
             }
-            if let Ok(store) = state.inner().read() {
-                let _ = persist_cancelled_workflow_state(&store, &session_id);
-            }
+            let _ = persist_cancelled_workflow_state(state.inner().as_ref(), &session_id);
             let _ = workflow_manager
                 .update_session_status(&session_id, ManagedSessionStatus::Cancelled);
             let _ = gateway_arc
@@ -4487,9 +4485,9 @@ pub async fn workflow_stop(
             Err(e.to_string())
         }
         Err(e) => {
-            if let Ok(store) = state.inner().read() {
-                let _ = store.update_workflow_status(&session_id, &previous_status);
-            }
+            let _ = state
+                .inner()
+                .update_workflow_status(&session_id, &previous_status);
             Err(e.to_string())
         }
     }
@@ -4500,7 +4498,7 @@ pub async fn workflow_get_tasks(
     state: State<'_, Arc<MainStore>>,
     session_id: String,
 ) -> Result<Vec<Value>, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     store
         .get_todo_list_for_workflow(&session_id)
         .map_err(|e| e.to_string())
@@ -4513,7 +4511,7 @@ pub async fn update_workflow_todo_list(
     todo_list: String,
 ) -> Result<(), String> {
     let runtime = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store.db_runtime().map_err(|e| e.to_string())?
     };
     MainStore::update_workflow_todo_list_with_runtime(runtime, session_id, todo_list)
@@ -4713,12 +4711,12 @@ pub async fn update_workflow_allowed_paths(
     let runtime_paths: Vec<String> =
         serde_json::from_value(allowed_paths.clone()).map_err(|e| e.to_string())?;
     let previous_config_json = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         raw_workflow_agent_config_json(&store, &session_id)?
     };
 
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.allowed_paths = Some(runtime_paths.clone());
@@ -4766,11 +4764,11 @@ pub async fn update_workflow_final_audit(
     final_audit: bool,
 ) -> Result<(), String> {
     let previous_config_json = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.final_audit = Some(final_audit);
@@ -4811,11 +4809,11 @@ pub async fn update_workflow_auto_compress(
     auto_compress: bool,
 ) -> Result<(), String> {
     let previous_config_json = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.auto_compress = Some(auto_compress);
@@ -4851,11 +4849,11 @@ pub async fn update_workflow_model_config(
     configs: Value,
 ) -> Result<(), String> {
     let previous_config_json = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         let mut agent_config =
             serde_json::from_str::<Value>(&raw_workflow_agent_config_json(&store, &session_id)?)
                 .unwrap_or(json!({}));
@@ -4894,11 +4892,11 @@ pub async fn update_workflow_skills_config(
     selected_skills: Vec<String>,
 ) -> Result<(), String> {
     let previous_config_json = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.skill_enabled = Some(skill_enabled);
@@ -4936,11 +4934,11 @@ pub async fn update_workflow_approval_level(
     approval_level: String,
 ) -> Result<(), String> {
     let previous_config_json = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.approval_level = Some(approval_level.clone());
@@ -4976,11 +4974,11 @@ pub async fn update_workflow_phase(
     phase: String,
 ) -> Result<(), String> {
     let previous_config_json = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         raw_workflow_agent_config_json(&store, &session_id)?
     };
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
         config.phase = Some(phase.clone());
@@ -5016,7 +5014,7 @@ pub async fn update_workflow_agent_config(
     agent_config: String,
 ) -> Result<(), String> {
     let previous_config_json = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         raw_workflow_agent_config_json(&store, &session_id)?
     };
 
@@ -5028,7 +5026,7 @@ pub async fn update_workflow_agent_config(
         serde_json::to_value(&normalized_config).map_err(|e| e.to_string())?;
 
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         store
             .update_workflow_agent_config(&session_id, &normalized_config_json)
             .map_err(|e| e.to_string())?;
@@ -5059,7 +5057,7 @@ pub async fn update_workflow_agent_id(
     session_id: String,
     agent_id: String,
 ) -> Result<String, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
 
     let agent = store
         .get_agent(&agent_id)
@@ -5121,7 +5119,7 @@ pub async fn get_auto_approved_tools(
     state: State<'_, Arc<MainStore>>,
     session_id: String,
 ) -> Result<Vec<String>, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     let mut config = store
         .get_workflow(&session_id)
         .map_err(|e| e.to_string())?
@@ -5142,13 +5140,13 @@ pub async fn remove_auto_approved_tool(
     tool_name: String,
 ) -> Result<(), String> {
     let previous_config_json = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         raw_workflow_agent_config_json(&store, &session_id)?
     };
 
     // Update database first
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
 
         let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
@@ -5189,13 +5187,13 @@ pub async fn remove_shell_policy_item(
     pattern: String,
 ) -> Result<(), String> {
     let previous_config_json = {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
         raw_workflow_agent_config_json(&store, &session_id)?
     };
 
     // Update database first
     {
-        let store = state.read().map_err(|e| e.to_string())?;
+        let store = &*state;
 
         let mut config = raw_workflow_agent_config(&store, &session_id)?;
 
@@ -5232,7 +5230,7 @@ pub async fn get_workflow_events(
     state: State<'_, Arc<MainStore>>,
     session_id: String,
 ) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     store
         .list_workflow_events(&session_id)
         .map_err(|e| e.to_string())
@@ -5251,7 +5249,7 @@ pub async fn get_workflow_efficiency_report(
     state: State<'_, Arc<MainStore>>,
     session_id: String,
 ) -> Result<WorkflowEfficiencyReport, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let store = &*state;
     store
         .get_workflow_efficiency_report(&session_id)
         .map_err(|e| e.to_string())
@@ -5263,29 +5261,49 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    fn create_test_store() -> MainStore {
+    struct TestStore {
+        _temp_dir: tempfile::TempDir,
+        store: MainStore,
+    }
+
+    impl std::ops::Deref for TestStore {
+        type Target = MainStore;
+
+        fn deref(&self) -> &Self::Target {
+            &self.store
+        }
+    }
+
+    fn create_test_store() -> TestStore {
         let dir = tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("workflow_commands_test.db");
-        MainStore::new(db_path).expect("failed to create MainStore")
+        let store = MainStore::new(db_path).expect("failed to create MainStore");
+        TestStore {
+            _temp_dir: dir,
+            store,
+        }
     }
 
     fn seed_agent(store: &MainStore, agent_id: &str) {
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for agent seed");
-        conn.execute(
-            "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                agent_id,
-                "Agent Test",
-                "You are a test agent.",
-                "autonomous",
-                20
-            ],
-        )
-        .expect("failed to seed agent");
+        let agent_id = agent_id.to_string();
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(move |conn| {
+                conn.execute(
+                    "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        agent_id,
+                        "Agent Test",
+                        "You are a test agent.",
+                        "autonomous",
+                        20
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("failed to seed agent");
     }
 
     #[test]
@@ -6093,46 +6111,46 @@ mod tests {
         let session_id = "task-boundary-tool-sync";
         seed_agent(&store, "agent-test");
 
-        {
-            let conn = store
-                .conn
-                .lock()
-                .expect("failed to lock db connection for agent update");
-            conn.execute(
-                "UPDATE agents
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(|conn| {
+                conn.execute(
+                    "UPDATE agents
                  SET available_tools = ?1, auto_approve = ?2, mcp_tool_exposure = ?3,
                      shell_policy = ?4
                  WHERE id = ?5",
-                params![
-                    serde_json::to_string(&vec![
-                        "read_file",
-                        "server__MCP__new_tool",
-                        crate::tools::TOOL_BASH
-                    ])
-                    .expect("serialize Agent available tools"),
-                    serde_json::to_string(&vec![
-                        "server__MCP__new_tool",
-                        "server__MCP__removed_tool"
-                    ])
-                    .expect("serialize Agent auto approve"),
-                    serde_json::to_string(&vec![
-                        "server__MCP__new_tool",
-                        "server__MCP__removed_tool"
-                    ])
-                    .expect("serialize Agent MCP exposure"),
-                    serde_json::to_string(&vec![crate::tools::ShellPolicyRule {
-                        pattern: "^git status$".to_string(),
-                        decision: crate::tools::ShellDecision::Review(
-                            "Review repository state".to_string(),
-                        ),
-                        description: None,
-                    }])
-                    .expect("serialize Agent shell policy"),
-                    "agent-test"
-                ],
-            )
+                    params![
+                        serde_json::to_string(&vec![
+                            "read_file",
+                            "server__MCP__new_tool",
+                            crate::tools::TOOL_BASH
+                        ])
+                        .expect("serialize Agent available tools"),
+                        serde_json::to_string(&vec![
+                            "server__MCP__new_tool",
+                            "server__MCP__removed_tool"
+                        ])
+                        .expect("serialize Agent auto approve"),
+                        serde_json::to_string(&vec![
+                            "server__MCP__new_tool",
+                            "server__MCP__removed_tool"
+                        ])
+                        .expect("serialize Agent MCP exposure"),
+                        serde_json::to_string(&vec![crate::tools::ShellPolicyRule {
+                            pattern: "^git status$".to_string(),
+                            decision: crate::tools::ShellDecision::Review(
+                                "Review repository state".to_string(),
+                            ),
+                            description: None,
+                        }])
+                        .expect("serialize Agent shell policy"),
+                        "agent-test"
+                    ],
+                )?;
+                Ok(())
+            })
             .expect("failed to update Agent tool config");
-        }
 
         let stale_config = AgentConfig {
             allowed_paths: Some(vec!["/workflow".to_string()]),
@@ -6642,10 +6660,11 @@ mod tests {
     #[test]
     fn test_hydrate_execution_context_for_snapshot_recovers_tokens_without_snapshot() {
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-        let store = Arc::new(create_test_store());
+        let TestStore { _temp_dir, store } = create_test_store();
+        let store = Arc::new(store);
         let session_id = "snapshot-hydrate-context";
         {
-            let store_guard = store.read().expect("failed to lock store");
+            let store_guard = store.as_ref();
             seed_agent(&store_guard, "agent-test");
             store_guard
                 .create_workflow(session_id, "Initial query", "agent-test", None, None)
@@ -6694,7 +6713,8 @@ mod tests {
     #[test]
     fn test_hydrate_execution_context_prefers_terminal_workflow_status() {
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-        let store = Arc::new(create_test_store());
+        let TestStore { _temp_dir, store } = create_test_store();
+        let store = Arc::new(store);
         let mut context = ExecutionContext::new("cancelled-snapshot".to_string());
         context.state = RuntimeState::Running;
         context.wait_reason = Some(WaitReason::Approval);

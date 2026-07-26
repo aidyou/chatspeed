@@ -55,7 +55,7 @@ pub async fn list_mcp_servers(
 ) -> Result<Vec<Mcp>> {
     // First, get the MCPs from the main_store.
     let mut mcps = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard.config.get_mcps()
     };
 
@@ -160,7 +160,7 @@ pub async fn add_mcp_server(
     check_form(&name, &config)?;
 
     let mcp_data = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard.add_mcp(name, description, config.clone(), disabled)?
     };
 
@@ -242,17 +242,17 @@ pub async fn update_mcp_server(
     check_form(&name, &config)?;
 
     let previous_server_name = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard.config.get_mcp_by_id(id)?.name
     };
 
     {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard.update_mcp(id, name, description, config.clone(), disabled)?;
     }
 
     let updated_mcp = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard.config.get_mcp_by_id(id)?
     };
 
@@ -318,13 +318,13 @@ pub async fn delete_mcp_server(
     id: i64,
 ) -> Result<()> {
     let mcp_name = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         let mcp = store_guard.config.get_mcp_by_id(id)?;
         mcp.name.clone()
     };
 
     {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard.delete_mcp(id)?;
     }
 
@@ -384,7 +384,7 @@ pub async fn enable_mcp_server(
     }
 
     let server_info = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard
             .config
             .get_mcp_by_id(id)
@@ -422,7 +422,7 @@ pub async fn enable_mcp_server(
     }
 
     {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard.change_mcp_status(id, false)?;
     }
 
@@ -495,7 +495,7 @@ pub async fn disable_mcp_server(
     }
 
     let server_info = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard
             .config
             .get_mcp_by_id(id)
@@ -528,7 +528,7 @@ pub async fn disable_mcp_server(
     };
 
     {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard.change_mcp_status(id, true)?;
     }
 
@@ -576,7 +576,7 @@ pub async fn restart_mcp_server(
     }
 
     let server_info = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard
             .config
             .get_mcp_by_id(id)
@@ -623,28 +623,22 @@ pub async fn restart_mcp_server(
         }
 
         let config_to_start: Option<McpServerConfig> = {
-            let store_guard = main_store_clone.read().map_err(|e| {
-                AppError::Db(crate::db::StoreError::LockError(
-                    t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-                ))
-            });
-            match store_guard {
-                Ok(guard) => match guard.config.get_mcp_by_id(id) {
-                    Ok(mcp) => {
-                        if mcp.disabled {
-                            log::info!("MCP server '{}' was disabled before it could be restarted. Aborting restart.", server_name);
-                            None
-                        } else {
-                            Some(mcp.config)
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to get MCP config for id {} during restart: {}. Aborting restart.", id, e);
+            let guard = main_store_clone.as_ref();
+            match guard.config.get_mcp_by_id(id) {
+                Ok(mcp) => {
+                    if mcp.disabled {
+                        log::info!("MCP server '{}' was disabled before it could be restarted. Aborting restart.", server_name);
                         None
+                    } else {
+                        Some(mcp.config)
                     }
-                },
+                }
                 Err(e) => {
-                    log::error!("Failed to lock main_store during restart: {}", e);
+                    log::error!(
+                        "Failed to get MCP config for id {} during restart: {}. Aborting restart.",
+                        id,
+                        e
+                    );
                     None
                 }
             }
@@ -696,7 +690,7 @@ pub async fn refresh_mcp_server(
     }
 
     let server_info = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         store_guard
             .config
             .get_mcp_by_id(id)
@@ -775,7 +769,7 @@ pub async fn get_mcp_server_tools(
     id: i64,
 ) -> Result<Vec<MCPToolDeclaration>> {
     let mcp_name = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         let mcp = store_guard.config.get_mcp_by_id(id)?;
         mcp.name.clone()
     };
@@ -797,7 +791,7 @@ pub async fn update_mcp_tool_status(
     disabled: bool,
 ) -> Result<Mcp> {
     let mcp = {
-        let store_guard = main_store.read()?;
+        let store_guard = &*main_store;
         let mut mcp = store_guard.config.get_mcp_by_id(id)?;
 
         let disabled_tools = mcp.config.disabled_tools.get_or_insert_with(HashSet::new);

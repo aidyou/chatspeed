@@ -11,13 +11,14 @@ use crate::{
     db::{AiModel, MainStore, ProxyGroup},
 };
 use reqwest::Client;
-use rust_i18n::t;
 use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr, sync::Arc, vec};
 
 #[derive(Deserialize)]
 pub struct CcproxyQuery {
     pub key: Option<String>,
+    // Axum deserializes this external compatibility parameter without a Rust field read.
+    #[allow(dead_code)]
     pub debug: Option<bool>,
 }
 
@@ -582,11 +583,7 @@ impl ModelResolver {
         proxy_alias: &str,
         proxy_group: Option<&str>,
     ) -> ProxyResult<(String, Vec<BackendModelTarget>)> {
-        let store_guard = main_store_arc.read().map_err(|e| {
-            CCProxyError::StoreLockError(
-                t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-            )
-        })?;
+        let store_guard = main_store_arc.as_ref();
 
         let proxy_config: ChatCompletionProxyConfig =
             store_guard.get_config(CFG_CHAT_COMPLETION_PROXY, HashMap::new());
@@ -620,11 +617,7 @@ impl ModelResolver {
         main_store_arc: Arc<MainStore>,
         provider_id: i64,
     ) -> ProxyResult<AiModel> {
-        let store_guard = main_store_arc.read().map_err(|e| {
-            CCProxyError::StoreLockError(
-                t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-            )
-        })?;
+        let store_guard = main_store_arc.as_ref();
 
         store_guard
             .config
@@ -755,11 +748,7 @@ impl ModelResolver {
         main_store_arc: Arc<MainStore>,
         group_name: &str,
     ) -> ProxyResult<ProxyGroup> {
-        let store_guard = main_store_arc.read().map_err(|e| {
-            CCProxyError::StoreLockError(
-                t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-            )
-        })?;
+        let store_guard = main_store_arc.as_ref();
 
         store_guard
             .config

@@ -883,9 +883,7 @@ impl WorkflowExecutor {
         }
 
         if let Some((message_id, metadata)) = persisted_update {
-            let store = self.context.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.context.main_store.as_ref();
             store.update_workflow_message_metadata(message_id, &metadata)?;
         }
 
@@ -1009,9 +1007,8 @@ impl WorkflowExecutor {
         };
 
         let child_agents_for_llm = main_store
-            .read()
+            .get_delegatable_child_agents(&agent_config.id)
             .ok()
-            .and_then(|store| store.get_delegatable_child_agents(&agent_config.id).ok())
             .unwrap_or_default();
 
         let mut executor = Self {
@@ -1142,17 +1139,7 @@ impl WorkflowExecutor {
 
     async fn dispatch_sub_agent_progress(&self) {
         let parent_session_id = {
-            let store = match self.context.main_store.read() {
-                Ok(store) => store,
-                Err(e) => {
-                    log::warn!(
-                        "[Workflow][session={}][phase=sub_agent_progress] Cannot read store: {}",
-                        self.session_id,
-                        e
-                    );
-                    return;
-                }
-            };
+            let store = self.context.main_store.as_ref();
 
             match store.get_workflow_snapshot(&self.session_id) {
                 Ok(snapshot) => snapshot.workflow.parent_session_id,
@@ -1297,11 +1284,7 @@ impl WorkflowExecutor {
         // Load current state and the latest persisted workflow config from database.
         {
             let snapshot = {
-                let store = self
-                    .context
-                    .main_store
-                    .read()
-                    .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+                let store = self.context.main_store.as_ref();
                 store.get_workflow_snapshot(&self.session_id).ok()
             };
             if let Some(snapshot) = snapshot {
@@ -1323,23 +1306,25 @@ impl WorkflowExecutor {
         // Sync TODO list on initialization
         let _ = self.sync_todo_list().await;
 
-        if let Ok(store) = self.context.main_store.read() {
-            if let Ok(Some(context)) = store.get_execution_context(&self.session_id) {
-                self.sub_agent_id = context.waiting_on_sub_agent_id.clone();
-                self.sub_agent_sessions = context.sub_agent_sessions.clone();
-                self.pending_sub_agent_completions = context.pending_sub_agent_completions.clone();
-                self.pending_final_review = context.pending_final_review.clone();
-                self.pending_completion_reports = context.pending_completion_reports.clone();
-                self.removed_queued_user_message_ids = context
-                    .removed_queued_user_message_ids
-                    .iter()
-                    .cloned()
-                    .collect();
-                restore_stashed_user_message_tombstones(
-                    &self.session_id,
-                    &context.removed_queued_user_message_ids,
-                );
-            }
+        if let Ok(Some(context)) = self
+            .context
+            .main_store
+            .get_execution_context(&self.session_id)
+        {
+            self.sub_agent_id = context.waiting_on_sub_agent_id.clone();
+            self.sub_agent_sessions = context.sub_agent_sessions.clone();
+            self.pending_sub_agent_completions = context.pending_sub_agent_completions.clone();
+            self.pending_final_review = context.pending_final_review.clone();
+            self.pending_completion_reports = context.pending_completion_reports.clone();
+            self.removed_queued_user_message_ids = context
+                .removed_queued_user_message_ids
+                .iter()
+                .cloned()
+                .collect();
+            restore_stashed_user_message_tombstones(
+                &self.session_id,
+                &context.removed_queued_user_message_ids,
+            );
         }
 
         if let Some(last_msg) = self.context.messages.last() {
@@ -1488,8 +1473,6 @@ impl WorkflowExecutor {
                 let title = self
                     .context
                     .main_store
-                    .read()
-                    .map_err(|e| WorkflowEngineError::General(e.to_string()))?
                     .get_workflow_snapshot(&self.session_id)
                     .ok()
                     .and_then(|snapshot| snapshot.workflow.title);
@@ -1743,13 +1726,8 @@ impl WorkflowExecutor {
                 let child_agents = self
                     .context
                     .main_store
-                    .read()
+                    .get_delegatable_child_agents(&self.agent_config.id)
                     .ok()
-                    .and_then(|store| {
-                        store
-                            .get_delegatable_child_agents(&self.agent_config.id)
-                            .ok()
-                    })
                     .unwrap_or_default();
 
                 if !child_agents.is_empty() {
@@ -1971,9 +1949,7 @@ impl WorkflowExecutor {
             .await?;
 
         let runtime = {
-            let store = self.context.main_store.read().map_err(|error| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(error.to_string()))
-            })?;
+            let store = self.context.main_store.as_ref();
             store.db_runtime()?
         };
         MainStore::update_workflow_todo_list_with_runtime(
@@ -1996,7 +1972,8 @@ impl WorkflowExecutor {
             .await?;
 
         let mut updated_agent_config: Option<Value> = None;
-        if let Ok(store) = self.context.main_store.write() {
+        {
+            let store = self.context.main_store.as_ref();
             if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
                 let mut agent_config: Value = snapshot
                     .workflow
@@ -2096,9 +2073,7 @@ impl WorkflowExecutor {
         approval_source: &str,
     ) -> Result<(), WorkflowEngineError> {
         let todo_json = {
-            let store = self.context.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.context.main_store.as_ref();
             let todos = store.get_todo_list_for_workflow(&self.session_id)?;
             serde_json::to_string_pretty(&todos).unwrap_or_else(|_| "[]".to_string())
         };
@@ -2645,13 +2620,11 @@ impl WorkflowExecutor {
                                                     Vec<crate::tools::ShellPolicyRule>,
                                                 > = None;
                                                 if !wildcard_patterns.is_empty() {
-                                                    if let Ok(store) =
-                                                        self.context.main_store.write()
+                                                    let store = self.context.main_store.as_ref();
+                                                    if let Ok(snapshot) = store
+                                                        .get_workflow_snapshot(&self.session_id)
                                                     {
-                                                        if let Ok(snapshot) = store
-                                                            .get_workflow_snapshot(&self.session_id)
-                                                        {
-                                                            let mut agent_config: serde_json::Value =
+                                                        let mut agent_config: serde_json::Value =
                                                             snapshot
                                                                 .workflow
                                                                 .agent_config
@@ -2660,34 +2633,32 @@ impl WorkflowExecutor {
                                                                 })
                                                                 .unwrap_or(serde_json::json!({}));
 
-                                                            let existing_policy =
+                                                        let existing_policy =
                                                             Self::read_agent_config_shell_policy(
                                                                 &agent_config,
                                                             );
 
-                                                            let updated_policy =
+                                                        let updated_policy =
                                                             Self::build_shell_policy_with_patterns(
                                                                 &existing_policy,
                                                                 &wildcard_patterns,
                                                             );
 
-                                                            Self::write_agent_config_shell_policy(
-                                                                &mut agent_config,
-                                                                &updated_policy,
-                                                            );
+                                                        Self::write_agent_config_shell_policy(
+                                                            &mut agent_config,
+                                                            &updated_policy,
+                                                        );
 
-                                                            if let Ok(config_str) =
-                                                                serde_json::to_string(&agent_config)
-                                                            {
-                                                                let _ = store
-                                                                    .update_workflow_agent_config(
-                                                                        &self.session_id,
-                                                                        &config_str,
-                                                                    );
-                                                            }
-                                                            shell_policy_payload =
-                                                                Some(updated_policy);
+                                                        if let Ok(config_str) =
+                                                            serde_json::to_string(&agent_config)
+                                                        {
+                                                            let _ = store
+                                                                .update_workflow_agent_config(
+                                                                    &self.session_id,
+                                                                    &config_str,
+                                                                );
                                                         }
+                                                        shell_policy_payload = Some(updated_policy);
                                                     }
                                                 }
                                                 if let Some(policy) = shell_policy_payload {
@@ -2728,7 +2699,8 @@ impl WorkflowExecutor {
                                             );
                                             }
 
-                                            if let Ok(store) = self.context.main_store.write() {
+                                            {
+                                                let store = self.context.main_store.as_ref();
                                                 if let Ok(snapshot) =
                                                     store.get_workflow_snapshot(&self.session_id)
                                                 {
@@ -3153,7 +3125,8 @@ impl WorkflowExecutor {
                                             Vec<crate::tools::ShellPolicyRule>,
                                         > = None;
                                         if !wildcard_patterns.is_empty() {
-                                            if let Ok(store) = self.context.main_store.write() {
+                                            {
+                                                let store = self.context.main_store.as_ref();
                                                 if let Ok(snapshot) =
                                                     store.get_workflow_snapshot(&self.session_id)
                                                 {
@@ -3230,7 +3203,8 @@ impl WorkflowExecutor {
                                     );
                                     }
 
-                                    if let Ok(store) = self.context.main_store.write() {
+                                    {
+                                        let store = self.context.main_store.as_ref();
                                         if let Ok(snapshot) =
                                             store.get_workflow_snapshot(&self.session_id)
                                         {
@@ -3847,9 +3821,8 @@ impl WorkflowExecutor {
                     let todos_are_terminal = self
                         .context
                         .main_store
-                        .read()
+                        .get_todo_list_for_workflow(&self.session_id)
                         .ok()
-                        .and_then(|store| store.get_todo_list_for_workflow(&self.session_id).ok())
                         .is_some_and(|todos| {
                             !todos.is_empty() && self.completion_report_capture_allowed(&todos)
                         });
@@ -4048,9 +4021,8 @@ impl WorkflowExecutor {
                     let completion_report_capture_allowed = self
                         .context
                         .main_store
-                        .read()
+                        .get_todo_list_for_workflow(&self.session_id)
                         .ok()
-                        .and_then(|store| store.get_todo_list_for_workflow(&self.session_id).ok())
                         .is_some_and(|todos| self.completion_report_capture_allowed(&todos));
                     if !self.is_child_agent_workflow()
                         && completion_report_capture_allowed
@@ -5210,13 +5182,11 @@ impl WorkflowExecutor {
             .get_primary_root()
             .map(|p| p.to_path_buf());
         if name.starts_with("todo_") {
-            let todos = if let Ok(store) = self.context.main_store.read() {
-                store
-                    .get_todo_list_for_workflow(&self.session_id)
-                    .unwrap_or_default()
-            } else {
-                vec![]
-            };
+            let todos = self
+                .context
+                .main_store
+                .get_todo_list_for_workflow(&self.session_id)
+                .unwrap_or_default();
             Ok(ObservationReinforcer::reinforce_with_context(
                 tool_call,
                 &result,
@@ -5741,11 +5711,7 @@ impl WorkflowExecutor {
         // state; publishing first can let that refresh restore the previous running status. A
         // failed write must leave the transition unapplied and invisible to all observers.
         {
-            let store = self
-                .context
-                .main_store
-                .read()
-                .map_err(|error| WorkflowEngineError::General(error.to_string()))?;
+            let store = self.context.main_store.as_ref();
             store
                 .update_workflow_status(&self.session_id, &new_state.to_string())
                 .map_err(WorkflowEngineError::Db)?;
@@ -5896,11 +5862,7 @@ impl WorkflowExecutor {
             }
         }
 
-        let store = self
-            .context
-            .main_store
-            .read()
-            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+        let store = self.context.main_store.as_ref();
         store
             .append_workflow_event(event)
             .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
@@ -6317,9 +6279,8 @@ impl WorkflowExecutor {
         let snapshot_config_json = self
             .context
             .main_store
-            .read()
+            .get_workflow_snapshot(&self.session_id)
             .ok()
-            .and_then(|store| store.get_workflow_snapshot(&self.session_id).ok())
             .and_then(|snapshot| snapshot.workflow.agent_config);
 
         let Some(config_json) = snapshot_config_json else {
@@ -6374,7 +6335,8 @@ impl WorkflowExecutor {
     }
 
     fn persist_workflow_agent_config_value(&self, key: &str, value: Value) {
-        if let Ok(store) = self.context.main_store.write() {
+        {
+            let store = self.context.main_store.as_ref();
             if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
                 let mut agent_config: serde_json::Value = snapshot
                     .workflow
@@ -6474,7 +6436,8 @@ impl WorkflowExecutor {
                     "WorkflowExecutor {}: Updating model configuration",
                     self.session_id
                 );
-                if let Ok(store) = self.context.main_store.write() {
+                {
+                    let store = self.context.main_store.as_ref();
                     if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
                         let mut agent_config: serde_json::Value = snapshot
                             .workflow
@@ -6517,7 +6480,8 @@ impl WorkflowExecutor {
                 selected_skills.len()
             );
 
-            if let Ok(store) = self.context.main_store.write() {
+            {
+                let store = self.context.main_store.as_ref();
                 if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
                     let mut agent_config: serde_json::Value = snapshot
                         .workflow
@@ -6540,9 +6504,8 @@ impl WorkflowExecutor {
             let updated_agent_config = self
                 .context
                 .main_store
-                .read()
+                .get_workflow_snapshot(&self.session_id)
                 .ok()
-                .and_then(|store| store.get_workflow_snapshot(&self.session_id).ok())
                 .and_then(|snapshot| snapshot.workflow.agent_config)
                 .and_then(|s| serde_json::from_str::<Value>(&s).ok());
 
@@ -6574,7 +6537,8 @@ impl WorkflowExecutor {
                 );
                 self.agent_config.final_audit = Some(audit);
                 self.llm_processor.agent_config.final_audit = Some(audit);
-                if let Ok(store) = self.context.main_store.write() {
+                {
+                    let store = self.context.main_store.as_ref();
                     if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
                         let mut agent_config: serde_json::Value = snapshot
                             .workflow
@@ -6859,11 +6823,7 @@ impl WorkflowExecutor {
         &self,
         queued_user_message_id: &str,
     ) -> Result<bool, WorkflowEngineError> {
-        let store = self
-            .context
-            .main_store
-            .read()
-            .map_err(|error| WorkflowEngineError::General(error.to_string()))?;
+        let store = self.context.main_store.as_ref();
         let snapshot = store
             .get_workflow_snapshot(&self.session_id)
             .map_err(WorkflowEngineError::Db)?;
@@ -7050,11 +7010,7 @@ impl WorkflowExecutor {
 
     async fn sync_todo_list(&self) -> Result<(), WorkflowEngineError> {
         let todos = {
-            let store = self
-                .context
-                .main_store
-                .read()
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let store = self.context.main_store.as_ref();
             store.get_todo_list_for_workflow(&self.session_id)?
         };
         self.dispatch_ui_payload(GatewayPayload::SyncTodo {
@@ -7113,7 +7069,7 @@ impl WorkflowExecutor {
         provider_id: i64,
         model_name: &str,
     ) -> Option<ModelConfig> {
-        let store = self.context.main_store.read().ok()?;
+        let store = self.context.main_store.as_ref();
 
         if provider_id == 0 {
             // Proxy mode: parse "group@alias"
@@ -7212,21 +7168,13 @@ impl WorkflowExecutor {
                     self.session_id,
                     e
                 );
-                let store = self
-                    .context
-                    .main_store
-                    .read()
-                    .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+                let store = self.context.main_store.as_ref();
                 store
                     .upsert_execution_context(&ctx)
                     .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
             }
         } else {
-            let store = self
-                .context
-                .main_store
-                .read()
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            let store = self.context.main_store.as_ref();
             store
                 .upsert_execution_context(&ctx)
                 .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
@@ -7248,11 +7196,7 @@ impl WorkflowExecutor {
         &self,
         ctx: &mut ExecutionContext,
     ) -> Result<(), WorkflowEngineError> {
-        let store = self
-            .context
-            .main_store
-            .read()
-            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+        let store = self.context.main_store.as_ref();
         ctx.last_event_id = store
             .get_last_event_id(&self.session_id)
             .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
@@ -7303,8 +7247,6 @@ mod recovery_tests {
             ) {
                 let status = self
                     .store
-                    .read()
-                    .map_err(|error| WorkflowEngineError::General(error.to_string()))?
                     .get_workflow(session_id)
                     .map_err(WorkflowEngineError::Db)?
                     .map(|workflow| workflow.status)
@@ -7368,16 +7310,16 @@ mod recovery_tests {
         }
     }
 
-    fn create_test_store() -> Arc<MainStore> {
+    fn create_test_store() -> (tempfile::TempDir, Arc<MainStore>) {
         let dir = tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
-        Arc::new(store)
+        (dir, Arc::new(store))
     }
 
     #[tokio::test]
     async fn approved_plan_transition_starts_a_clean_execution_phase() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "approved-plan-clean-execution";
         let agent = Agent::new(
             "approved-plan-agent".to_string(),
@@ -7403,7 +7345,7 @@ mod recovery_tests {
             None,
         );
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .add_agent(&agent)
                 .expect("failed to add test agent");
@@ -7526,7 +7468,7 @@ mod recovery_tests {
                 } if tool_call_id == "submit-plan-call" && tool_name == TOOL_SUBMIT_PLAN
             )));
 
-        let store_guard = store.read().expect("store lock");
+        let store_guard = store.as_ref();
         assert!(store_guard
             .get_todo_list_for_workflow(session_id)
             .expect("failed to read execution todos")
@@ -7544,7 +7486,7 @@ mod recovery_tests {
 
     #[tokio::test]
     async fn automatic_plan_approval_uses_structured_pending_plan_and_skips_confirmation() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "automatic-plan-approval";
         let agent = Agent::new(
             "automatic-plan-agent".to_string(),
@@ -7575,7 +7517,7 @@ mod recovery_tests {
             ..crate::db::agent::AgentConfig::default()
         };
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .add_agent(&agent)
                 .expect("failed to add test agent");
@@ -7664,8 +7606,6 @@ mod recovery_tests {
         assert_eq!(pending[0].tool_name, TOOL_SUBMIT_PLAN);
         assert_eq!(pending[0].arguments, tool_args);
         let persisted_pending = store
-            .read()
-            .expect("store lock")
             .get_execution_context(session_id)
             .expect("failed to read automatic approval snapshot")
             .expect("automatic approval snapshot should exist")
@@ -7733,7 +7673,7 @@ mod recovery_tests {
 
     #[tokio::test]
     async fn repeated_empty_completion_rejections_trigger_loop_protection() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "repeated-empty-completion";
         let agent = Agent::new(
             "completion-loop-agent".to_string(),
@@ -7759,7 +7699,7 @@ mod recovery_tests {
             None,
         );
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .add_agent(&agent)
                 .expect("failed to add test agent");
@@ -7827,7 +7767,7 @@ mod recovery_tests {
 
     #[tokio::test]
     async fn queued_user_message_is_persisted_once_before_completion() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "queued-user-message-once";
         let agent = Agent::new(
             "queued-user-message-agent".to_string(),
@@ -7853,7 +7793,7 @@ mod recovery_tests {
             None,
         );
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .add_agent(&agent)
                 .expect("failed to add test agent");
@@ -7943,8 +7883,6 @@ mod recovery_tests {
             .expect("empty queue should not flush again"));
 
         let snapshot = store
-            .read()
-            .expect("store lock")
             .get_workflow_snapshot(session_id)
             .expect("failed to read workflow snapshot");
         let queued_messages = snapshot
@@ -7965,7 +7903,7 @@ mod recovery_tests {
 
     #[tokio::test]
     async fn terminal_state_is_persisted_before_completed_state_is_published() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "terminal-status-order";
         let agent = Agent::new(
             "terminal-status-agent".to_string(),
@@ -7991,7 +7929,7 @@ mod recovery_tests {
             None,
         );
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .add_agent(&agent)
                 .expect("failed to add test agent");
@@ -8042,7 +7980,7 @@ mod recovery_tests {
 
     #[tokio::test]
     async fn terminal_state_is_not_published_when_status_persistence_fails() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "terminal-status-write-failure";
         let agent = Agent::new(
             "terminal-status-failure-agent".to_string(),
@@ -8068,7 +8006,7 @@ mod recovery_tests {
             None,
         );
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .add_agent(&agent)
                 .expect("failed to add test agent");
@@ -8102,19 +8040,21 @@ mod recovery_tests {
         executor.dispatcher = None;
         executor.state = WorkflowState::Executing;
 
-        {
-            let store_guard = store.read().expect("store lock");
-            let conn = store_guard.conn.lock().expect("database lock");
-            conn.execute_batch(
-                "CREATE TRIGGER fail_terminal_status_update
-                 BEFORE UPDATE OF status ON workflows
-                 WHEN NEW.id = 'terminal-status-write-failure'
-                 BEGIN
-                     SELECT RAISE(FAIL, 'injected status persistence failure');
-                 END;",
-            )
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(|conn| {
+                conn.execute_batch(
+                    "CREATE TRIGGER fail_terminal_status_update
+                     BEFORE UPDATE OF status ON workflows
+                     WHEN NEW.id = 'terminal-status-write-failure'
+                     BEGIN
+                         SELECT RAISE(FAIL, 'injected status persistence failure');
+                     END;",
+                )?;
+                Ok(())
+            })
             .expect("failed to install status failure trigger");
-        }
 
         let result = executor.update_state(WorkflowState::Completed).await;
 
@@ -8127,8 +8067,6 @@ mod recovery_tests {
             "completed state must not be published after persistence failure"
         );
         let events = store
-            .read()
-            .expect("store lock")
             .list_workflow_events(session_id)
             .expect("failed to read workflow events");
         assert!(
@@ -8243,24 +8181,26 @@ mod recovery_tests {
 
     #[test]
     fn test_replay_failed_produces_safe_failed_result() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let session_id = "replay-failed-test";
 
-        {
-            let s = store.read().unwrap();
-            let conn = s.conn.lock().unwrap();
-            conn.execute(
-                "INSERT INTO workflow_events (session_id, event_type, event_version, event_data, created_at)
-                 VALUES (?1, ?2, ?3, ?4, datetime('now'))",
-                rusqlite::params![
-                    session_id,
-                    "state_changed",
-                    "1.0.0",
-                    r#"{"from_state": "pending"}"#
-                ],
-            )
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(move |conn| {
+                conn.execute(
+                    "INSERT INTO workflow_events (session_id, event_type, event_version, event_data, created_at)
+                     VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+                    rusqlite::params![
+                        session_id,
+                        "state_changed",
+                        "1.0.0",
+                        r#"{"from_state": "pending"}"#
+                    ],
+                )?;
+                Ok(())
+            })
             .unwrap();
-        }
 
         let result =
             crate::workflow::react::replay::restore_execution_context(store.clone(), session_id);

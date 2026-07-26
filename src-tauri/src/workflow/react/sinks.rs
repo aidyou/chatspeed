@@ -109,9 +109,7 @@ impl DBSink {
 
     async fn append_event(&self, event: WorkflowEvent) -> Result<i64, WorkflowEngineError> {
         let runtime = {
-            let store = self.store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.store.as_ref();
             store.db_runtime().map_err(WorkflowEngineError::Db)?
         };
         MainStore::append_workflow_event_with_runtime(runtime, event)
@@ -121,9 +119,7 @@ impl DBSink {
 
     async fn upsert_context(&self, ctx: ExecutionContext) -> Result<(), WorkflowEngineError> {
         let runtime = {
-            let store = self.store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.store.as_ref();
             store.db_runtime().map_err(WorkflowEngineError::Db)?
         };
         MainStore::upsert_execution_context_with_runtime(runtime, ctx)
@@ -205,15 +201,16 @@ mod tests {
     use crate::workflow::react::types::RuntimeState;
     use tempfile::tempdir;
 
-    fn create_test_store() -> Arc<MainStore> {
+    fn create_test_store() -> (tempfile::TempDir, Arc<MainStore>) {
         let dir = tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("test.db");
-        Arc::new(MainStore::new(&db_path).expect("failed to create store"))
+        let store = Arc::new(MainStore::new(&db_path).expect("failed to create store"));
+        (dir, store)
     }
 
     #[tokio::test]
     async fn test_db_sink_writes_audit_events() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let sink = DBSink::new(store.clone());
 
         let event =
@@ -222,7 +219,7 @@ mod tests {
         let envelope = EventEnvelope::new(DispatchEvent::Audit { event });
         sink.accept(envelope).await.unwrap();
 
-        let store_read = store.read().unwrap();
+        let store_read = store.as_ref();
         let events = store_read.list_workflow_events("test-session").unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "workflow_started");
@@ -230,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_db_sink_writes_snapshots() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let sink = DBSink::new(store.clone());
 
         let mut ctx = ExecutionContext::new("test-session".to_string());
@@ -239,7 +236,7 @@ mod tests {
         let envelope = EventEnvelope::new(DispatchEvent::Snapshot { context: ctx });
         sink.accept(envelope).await.unwrap();
 
-        let store_read = store.read().unwrap();
+        let store_read = store.as_ref();
         let loaded = store_read.get_execution_context("test-session").unwrap();
         assert!(loaded.is_some());
         let loaded = loaded.unwrap();

@@ -297,6 +297,10 @@ impl ContextManager {
 
         let compressed_until_id = self.messages[target_completion_idx].id?;
 
+        if !Self::is_safe_pressure_compression_boundary(&self.messages, target_completion_idx) {
+            return None;
+        }
+
         let start_idx = Self::latest_summary_index(&self.messages).unwrap_or(0);
 
         if start_idx > target_completion_idx {
@@ -321,7 +325,71 @@ impl ContextManager {
         total
     }
 
-    fn is_safe_pressure_compression_boundary(message: &WorkflowMessage) -> bool {
+    fn is_complete_tool_call_batch_at(messages: &[WorkflowMessage], boundary_idx: usize) -> bool {
+        let Some(boundary_message) = messages.get(boundary_idx) else {
+            return false;
+        };
+        if boundary_message.role != "tool" {
+            return false;
+        }
+
+        let Some(assistant_idx) = (0..boundary_idx)
+            .rev()
+            .find(|index| messages[*index].role == "assistant")
+        else {
+            return false;
+        };
+
+        let assistant_tool_call_ids = messages[assistant_idx]
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("tool_calls"))
+            .and_then(|tool_calls| tool_calls.as_array())
+            .map(|tool_calls| {
+                tool_calls
+                    .iter()
+                    .filter_map(|tool_call| {
+                        tool_call
+                            .get("id")
+                            .and_then(|value| value.as_str())
+                            .or_else(|| {
+                                tool_call
+                                    .get("tool_call_id")
+                                    .and_then(|value| value.as_str())
+                            })
+                            .map(str::to_string)
+                    })
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        if assistant_tool_call_ids.is_empty() {
+            return false;
+        }
+
+        let resolved_tool_call_ids = messages[assistant_idx + 1..=boundary_idx]
+            .iter()
+            .filter(|message| message.role == "tool")
+            .filter_map(|message| {
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_call_id"))
+                    .and_then(|value| value.as_str())
+            })
+            .collect::<HashSet<_>>();
+
+        assistant_tool_call_ids
+            .iter()
+            .all(|tool_call_id| resolved_tool_call_ids.contains(tool_call_id.as_str()))
+    }
+
+    fn is_safe_pressure_compression_boundary(
+        messages: &[WorkflowMessage],
+        boundary_idx: usize,
+    ) -> bool {
+        let Some(message) = messages.get(boundary_idx) else {
+            return false;
+        };
         if message.role == "tool" {
             let metadata = message.metadata.as_ref();
             let approval_status = metadata
@@ -331,7 +399,8 @@ impl ContextManager {
                 .and_then(|metadata| metadata.get("execution_status"))
                 .and_then(|status| status.as_str());
 
-            return approval_status != Some("pending")
+            return Self::is_complete_tool_call_batch_at(messages, boundary_idx)
+                && approval_status != Some("pending")
                 && matches!(
                     execution_status,
                     None | Some("completed" | "failed" | "rejected" | "interrupted")
@@ -367,7 +436,7 @@ impl ContextManager {
             retained_tokens += Self::estimate_workflow_message_tokens(&self.messages[index]);
             let boundary_idx = index.saturating_sub(1);
             if boundary_idx >= start_idx
-                && Self::is_safe_pressure_compression_boundary(&self.messages[boundary_idx])
+                && Self::is_safe_pressure_compression_boundary(&self.messages, boundary_idx)
             {
                 fallback_boundary_idx.get_or_insert(boundary_idx);
                 if retained_tokens <= retained_token_budget {
@@ -426,9 +495,7 @@ impl ContextManager {
     /// Loads history from database, starting from the last summary if exists.
     pub async fn load_history(&mut self) -> Result<(), WorkflowEngineError> {
         let (snapshot, execution_context) = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.main_store.as_ref();
             (
                 store.get_workflow_snapshot(&self.session_id)?,
                 store.get_execution_context(&self.session_id)?,
@@ -537,15 +604,13 @@ impl ContextManager {
     }
 
     fn should_preserve_unpaired_tool_projection(
-        role: &str,
-        metadata: Option<&serde_json::Value>,
+        _role: &str,
+        _metadata: Option<&serde_json::Value>,
         _is_error: bool,
     ) -> bool {
-        if role != "tool" {
-            return false;
-        }
-
-        metadata.and_then(|meta| meta.get("llm_content")).is_some()
+        // A provider function-output item is invalid without the assistant function call it
+        // resolves. `llm_content` changes the rendered content, not that protocol invariant.
+        false
     }
 
     fn is_transient_runtime_reminder(message: &WorkflowMessage) -> bool {
@@ -981,9 +1046,7 @@ impl ContextManager {
         self.ai_context_messages.clear();
 
         if persist {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.main_store.as_ref();
             store.delete_workflow_ai_context_segment(&self.session_id, segment_id)?;
             for message in projection {
                 let persisted = store.add_workflow_ai_context_message(&message)?;
@@ -1008,9 +1071,7 @@ impl ContextManager {
         step_index: i32,
     ) -> Result<(), WorkflowEngineError> {
         let previous_execution_context = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.main_store.as_ref();
             store.get_execution_context(&self.session_id)?
         };
         let previous_segment_id = self.current_segment_id;
@@ -1055,9 +1116,7 @@ impl ContextManager {
         };
 
         let persisted_marker = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.main_store.as_ref();
             store.add_workflow_message(&marker)?
         };
 
@@ -1195,9 +1254,7 @@ impl ContextManager {
             .normalize_classification();
 
             let runtime = {
-                let store = self.main_store.read().map_err(|e| {
-                    WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-                })?;
+                let store = self.main_store.as_ref();
                 store.db_runtime()?
             };
             MainStore::add_workflow_message_with_runtime(runtime, msg).await?
@@ -1256,9 +1313,7 @@ impl ContextManager {
 
         // Persist summary
         let persisted_summary = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.main_store.as_ref();
             store.add_workflow_message(&summary_msg)?
         };
 
@@ -1395,7 +1450,7 @@ mod tests {
             Some(4096),  // max_contexts
         );
 
-        let store_guard = store.write().expect("lock poisoned");
+        let store_guard = store.as_ref();
         store_guard
             .add_agent(&agent)
             .expect("failed to create agent");
@@ -1544,8 +1599,6 @@ mod tests {
             .expect("compression should persist");
 
         let snapshot = store
-            .read()
-            .expect("lock poisoned")
             .get_workflow_snapshot(session_id)
             .expect("failed to load snapshot");
 
@@ -1653,8 +1706,6 @@ mod tests {
             .expect("load history should succeed");
 
         let snapshot = store
-            .read()
-            .expect("lock poisoned")
             .get_workflow_snapshot(session_id)
             .expect("failed to load snapshot");
 
@@ -1706,7 +1757,7 @@ mod tests {
             .expect("failed to add assistant message");
 
         {
-            let store_guard = store.read().expect("lock poisoned");
+            let store_guard = store.as_ref();
             let mut execution_context = ExecutionContext::new(session_id.to_string());
             execution_context.state = crate::workflow::react::types::RuntimeState::Running;
             execution_context.current_segment_id = 3;
@@ -1715,15 +1766,17 @@ mod tests {
                 .expect("failed to persist execution context");
         }
 
-        {
-            let store_guard = store.read().expect("lock poisoned");
-            let conn = store_guard.conn.lock().expect("db lock poisoned");
-            conn.execute(
-                "DELETE FROM workflow_context_messages WHERE session_id = ?1",
-                rusqlite::params![session_id],
-            )
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(move |conn| {
+                conn.execute(
+                    "DELETE FROM workflow_context_messages WHERE session_id = ?1",
+                    rusqlite::params![session_id],
+                )?;
+                Ok(())
+            })
             .expect("failed to clear ai cache");
-        }
 
         let mut restored = ContextManager::new(
             session_id.to_string(),
@@ -1745,14 +1798,16 @@ mod tests {
             "rebuilt AI cache should adopt the recovered current segment id"
         );
 
-        let store_guard = store.read().expect("lock poisoned");
-        let conn = store_guard.conn.lock().expect("db lock poisoned");
-        let persisted_segment_id: i32 = conn
-            .query_row(
-                "SELECT MAX(segment_id) FROM workflow_context_messages WHERE session_id = ?1",
-                rusqlite::params![session_id],
-                |row| row.get(0),
-            )
+        let persisted_segment_id = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT MAX(segment_id) FROM workflow_context_messages WHERE session_id = ?1",
+                    rusqlite::params![session_id],
+                    |row| row.get::<_, i32>(0),
+                )?)
+            })
             .expect("failed to read persisted ai cache segment id");
         assert_eq!(persisted_segment_id, 3);
     }
@@ -2422,11 +2477,17 @@ mod tests {
                 1,
                 false,
                 None,
-                Some(json!({ "tool_calls": [{ "id": "tool-1", "function": { "name": "read_file" } }] })),
+                Some(json!({ "tool_calls": [
+                    { "id": "tool-1", "function": { "name": "read_file" } },
+                    { "id": "tool-2", "function": { "name": "read_file" } },
+                    { "id": "tool-3", "function": { "name": "read_file" } },
+                    { "id": "tool-4", "function": { "name": "read_file" } },
+                    { "id": "tool-5", "function": { "name": "grep" } }
+                ] })),
             )
             .await
             .expect("failed to add tool call");
-        let tool_result = context
+        let _first_tool_result = context
             .add_message(
                 "tool".to_string(),
                 "tool result".to_string(),
@@ -2440,6 +2501,46 @@ mod tests {
             )
             .await
             .expect("failed to add tool result")
+            .0;
+        for tool_call_id in ["tool-2", "tool-3", "tool-4"] {
+            context
+                .add_message(
+                    "tool".to_string(),
+                    format!("result for {tool_call_id}"),
+                    None,
+                    None,
+                    Some(StepType::Observe),
+                    1,
+                    false,
+                    None,
+                    Some(json!({
+                        "tool_call_id": tool_call_id,
+                        "tool_name": "read_file",
+                        "execution_status": "completed"
+                    })),
+                )
+                .await
+                .expect("failed to add batched tool result");
+        }
+        let tool_result = context
+            .add_message(
+                "tool".to_string(),
+                "final tool result".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                1,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool-5",
+                    "tool_name": "grep",
+                    "execution_status": "completed",
+                    "llm_content": "provider-visible final tool result"
+                })),
+            )
+            .await
+            .expect("failed to add final batched tool result")
             .0;
         let _ = context
             .add_message(
@@ -3505,7 +3606,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_messages_for_llm_drops_orphan_tool_messages() {
+    async fn get_messages_for_llm_drops_orphan_tool_messages_even_with_llm_content() {
         let (_dir, store) = setup_store();
         insert_workflow(&store, "orphan_tool_projection");
         let mut context = ContextManager::new(
@@ -3557,7 +3658,8 @@ mod tests {
                 None,
                 Some(json!({
                     "tool_call_id": "tool_late",
-                    "tool_name": "read_file"
+                    "tool_name": "read_file",
+                    "llm_content": "This result must not be sent without its tool call."
                 })),
             )
             .await

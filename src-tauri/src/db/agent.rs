@@ -343,296 +343,183 @@ impl From<&Row<'_>> for Agent {
 }
 
 impl MainStore {
-    /// Adds a new agent to the database
+    /// Adds a new agent to the database.
     pub fn add_agent(&self, agent: &Agent) -> Result<String, StoreError> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let tx = conn.transaction()?;
-
-        // Check for name uniqueness
-        let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM agents WHERE name = ?1",
-            params![&agent.name],
-            |row| row.get(0),
-        )?;
-
-        if count > 0 {
-            return Err(StoreError::Query(
-                t!("db.agent_name_exists", name = &agent.name).to_string(),
-            ));
-        }
-
-        let new_sort_index: i32 = tx.query_row(
-            "SELECT COALESCE(MAX(sort_index), -1) FROM agents",
-            [],
-            |row| row.get(0),
-        )?;
-
-        // Serialize JSON fields
-        let models_json = agent
-            .models
-            .as_ref()
-            .map(|m| serde_json::to_string(m).ok())
-            .flatten();
-        let available_tools_json = agent.available_tools.as_ref().cloned();
-        let auto_approve_json = agent.auto_approve.as_ref().cloned();
-        let shell_policy_json = agent.shell_policy.as_ref().cloned();
-        let allowed_paths_json = agent.allowed_paths.as_ref().cloned();
-        let selected_skills_json = agent.selected_skills.as_ref().cloned();
-        let mcp_tool_exposure_json = agent.mcp_tool_exposure.as_ref().cloned();
-
-        // Insert the agent
-        tx.execute(
-            "INSERT INTO agents (id, name, description, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
-            params![
-                agent.id,
-                agent.name,
-                agent.description,
-                agent.role.clone().unwrap_or_else(|| "primary".to_string()),
-                agent.parent_agent_id,
-                agent.sub_agent_role,
-                agent.system_prompt,
-                agent.planning_prompt,
-                agent.image_recognition_prompt,
-                available_tools_json,
-                auto_approve_json,
-                models_json,
-                shell_policy_json,
-                allowed_paths_json,
-                agent.final_audit,
-                agent.approval_level,
-                agent.skill_enabled,
-                selected_skills_json,
-                mcp_tool_exposure_json,
-                agent.phase,
-                agent.is_system,
-                agent.disabled,
-                agent.version.unwrap_or(0),
-                agent.sort_index.unwrap_or(new_sort_index + 1),
-                agent.max_contexts,
-            ],
-        )?;
-        tx.commit()?;
-
-        Ok(agent.id.clone())
+        let agent = agent.clone();
+        let id = agent.id.clone();
+        let name_exists_error = t!("db.agent_name_exists", name = &agent.name).to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let transaction = conn.transaction()?;
+            let count: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM agents WHERE name = ?1",
+                params![&agent.name],
+                |row| row.get(0),
+            )?;
+            if count > 0 {
+                return Err(StoreError::Query(name_exists_error));
+            }
+            let sort_index: i32 = transaction.query_row(
+                "SELECT COALESCE(MAX(sort_index), -1) FROM agents",
+                [],
+                |row| row.get(0),
+            )?;
+            let models = agent.models.as_ref().and_then(|models| serde_json::to_string(models).ok());
+            transaction.execute(
+                "INSERT INTO agents (id, name, description, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+                params![
+                    agent.id, agent.name, agent.description,
+                    agent.role.unwrap_or_else(|| "primary".to_string()),
+                    agent.parent_agent_id, agent.sub_agent_role, agent.system_prompt,
+                    agent.planning_prompt, agent.image_recognition_prompt, agent.available_tools,
+                    agent.auto_approve, models, agent.shell_policy, agent.allowed_paths,
+                    agent.final_audit, agent.approval_level, agent.skill_enabled,
+                    agent.selected_skills, agent.mcp_tool_exposure, agent.phase,
+                    agent.is_system, agent.disabled, agent.version.unwrap_or(0),
+                    agent.sort_index.unwrap_or(sort_index + 1), agent.max_contexts,
+                ],
+            )?;
+            transaction.commit()?;
+            Ok(id)
+        })
     }
 
-    /// Updates an existing agent in the database
+    /// Updates an existing agent in the database.
     pub fn update_agent(&self, agent: &Agent) -> Result<(), StoreError> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let tx = conn.transaction()?;
-
-        let existing_agent: Option<Agent> = {
-            let mut stmt = tx.prepare("SELECT * FROM agents WHERE id = ?1")?;
-            stmt.query_row(params![&agent.id], |row| Ok(Agent::from(row)))
-                .optional()?
-        };
-        let persisted_name = existing_agent.as_ref().and_then(|current| {
-            current
-                .is_system
-                .filter(|v| *v)
-                .map(|_| current.name.clone())
-        });
-        let persisted_sort_index = existing_agent
-            .as_ref()
-            .and_then(|current| current.sort_index);
-        let effective_name = persisted_name.unwrap_or_else(|| agent.name.clone());
-
-        // Check for name uniqueness on other agents
-        let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM agents WHERE name = ?1 AND id != ?2",
-            params![&effective_name, &agent.id],
-            |row| row.get(0),
-        )?;
-
-        if count > 0 {
-            return Err(StoreError::Query(
-                t!("db.agent_name_exists", name = &agent.name).to_string(),
-            ));
-        }
-
-        // Serialize JSON fields
-        let models_json = agent
-            .models
-            .as_ref()
-            .map(|m| serde_json::to_string(m).ok())
-            .flatten();
-        let available_tools_json = agent.available_tools.as_ref().cloned();
-        let auto_approve_json = agent.auto_approve.as_ref().cloned();
-        let shell_policy_json = agent.shell_policy.as_ref().cloned();
-        let allowed_paths_json = agent.allowed_paths.as_ref().cloned();
-        let selected_skills_json = agent.selected_skills.as_ref().cloned();
-        let mcp_tool_exposure_json = agent.mcp_tool_exposure.as_ref().cloned();
-
-        // Update the agent
-        tx.execute(
-            "UPDATE agents SET
-                name = ?1,
-                description = ?2,
-                role = ?3,
-                parent_agent_id = ?4,
-                sub_agent_role = ?5,
-                system_prompt = ?6,
-                planning_prompt = ?7,
-                image_recognition_prompt = ?8,
-                available_tools = ?9,
-                auto_approve = ?10,
-                models = ?11,
-                shell_policy = ?12,
-                allowed_paths = ?13,
-                final_audit = ?14,
-                approval_level = ?15,
-                skill_enabled = ?16,
-                selected_skills = ?17,
-                mcp_tool_exposure = ?18,
-                phase = ?19,
-                is_system = ?20,
-                disabled = ?21,
-                version = ?22,
-                sort_index = ?23,
-                max_contexts = ?24,
-                updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?25",
-            params![
-                effective_name,
-                agent.description,
-                agent.role.clone().unwrap_or_else(|| "primary".to_string()),
-                agent.parent_agent_id,
-                agent.sub_agent_role,
-                agent.system_prompt,
-                agent.planning_prompt,
-                agent.image_recognition_prompt,
-                available_tools_json,
-                auto_approve_json,
-                models_json,
-                shell_policy_json,
-                allowed_paths_json,
-                agent.final_audit,
-                agent.approval_level,
-                agent.skill_enabled,
-                selected_skills_json,
-                mcp_tool_exposure_json,
-                agent.phase,
-                agent.is_system,
-                agent.disabled,
-                agent.version.unwrap_or(0),
-                agent.sort_index.or(persisted_sort_index),
-                agent.max_contexts,
-                agent.id,
-            ],
-        )?;
-
-        tx.commit()?;
-
-        Ok(())
+        let agent = agent.clone();
+        let duplicate_name_error = t!("db.agent_name_exists", name = &agent.name).to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let transaction = conn.transaction()?;
+            let existing_agent = {
+                let mut statement = transaction.prepare("SELECT * FROM agents WHERE id = ?1")?;
+                statement
+                    .query_row(params![&agent.id], |row| Ok(Agent::from(row)))
+                    .optional()?
+            };
+            let effective_name = existing_agent
+                .as_ref()
+                .and_then(|current| {
+                    current
+                        .is_system
+                        .filter(|value| *value)
+                        .map(|_| current.name.clone())
+                })
+                .unwrap_or_else(|| agent.name.clone());
+            let persisted_sort_index = existing_agent.and_then(|current| current.sort_index);
+            let count: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM agents WHERE name = ?1 AND id != ?2",
+                params![&effective_name, &agent.id],
+                |row| row.get(0),
+            )?;
+            if count > 0 {
+                return Err(StoreError::Query(duplicate_name_error));
+            }
+            let models = agent
+                .models
+                .as_ref()
+                .and_then(|models| serde_json::to_string(models).ok());
+            transaction.execute(
+                "UPDATE agents SET
+                    name = ?1, description = ?2, role = ?3, parent_agent_id = ?4,
+                    sub_agent_role = ?5, system_prompt = ?6, planning_prompt = ?7,
+                    image_recognition_prompt = ?8, available_tools = ?9, auto_approve = ?10,
+                    models = ?11, shell_policy = ?12, allowed_paths = ?13, final_audit = ?14,
+                    approval_level = ?15, skill_enabled = ?16, selected_skills = ?17,
+                    mcp_tool_exposure = ?18, phase = ?19, is_system = ?20, disabled = ?21,
+                    version = ?22, sort_index = ?23, max_contexts = ?24,
+                    updated_at = CURRENT_TIMESTAMP WHERE id = ?25",
+                params![
+                    effective_name,
+                    agent.description,
+                    agent.role.unwrap_or_else(|| "primary".to_string()),
+                    agent.parent_agent_id,
+                    agent.sub_agent_role,
+                    agent.system_prompt,
+                    agent.planning_prompt,
+                    agent.image_recognition_prompt,
+                    agent.available_tools,
+                    agent.auto_approve,
+                    models,
+                    agent.shell_policy,
+                    agent.allowed_paths,
+                    agent.final_audit,
+                    agent.approval_level,
+                    agent.skill_enabled,
+                    agent.selected_skills,
+                    agent.mcp_tool_exposure,
+                    agent.phase,
+                    agent.is_system,
+                    agent.disabled,
+                    agent.version.unwrap_or(0),
+                    agent.sort_index.or(persisted_sort_index),
+                    agent.max_contexts,
+                    agent.id,
+                ],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
     }
 
-    /// Deletes an agent from the database
+    /// Deletes an agent from the database.
     pub fn delete_agent(&self, id: &str) -> Result<(), StoreError> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let tx = conn.transaction()?;
-
-        let agent_ids = {
-            let mut stmt = tx.prepare(
-                "WITH RECURSIVE agent_tree(id, depth) AS (
-                    SELECT id, 0 FROM agents WHERE id = ?1
-                    UNION ALL
-                    SELECT agents.id, agent_tree.depth + 1
-                    FROM agents
-                    JOIN agent_tree ON agents.parent_agent_id = agent_tree.id
-                )
-                SELECT id FROM agent_tree ORDER BY depth DESC",
-            )?;
-            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
-            let mut ids = Vec::new();
-            for row in rows {
-                ids.push(row?);
+        let id = id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let transaction = conn.transaction()?;
+            let agent_ids = {
+                let mut statement = transaction.prepare(
+                    "WITH RECURSIVE agent_tree(id, depth) AS (
+                        SELECT id, 0 FROM agents WHERE id = ?1
+                        UNION ALL
+                        SELECT agents.id, agent_tree.depth + 1
+                        FROM agents JOIN agent_tree ON agents.parent_agent_id = agent_tree.id
+                    ) SELECT id FROM agent_tree ORDER BY depth DESC",
+                )?;
+                let rows = statement.query_map(params![id], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            if agent_ids.is_empty() {
+                transaction.commit()?;
+                return Ok(());
             }
-            ids
-        };
-
-        if agent_ids.is_empty() {
-            tx.commit()?;
-            return Ok(());
-        }
-
-        let workflow_ids = {
-            let mut stmt = tx.prepare(
-                "WITH RECURSIVE agent_tree(id) AS (
-                    SELECT id FROM agents WHERE id = ?1
-                    UNION ALL
-                    SELECT agents.id
-                    FROM agents
-                    JOIN agent_tree ON agents.parent_agent_id = agent_tree.id
-                ),
-                workflow_tree(id, depth) AS (
-                    SELECT id, 0
-                    FROM workflows
-                    WHERE agent_id IN (SELECT id FROM agent_tree)
-                    UNION ALL
-                    SELECT workflows.id, workflow_tree.depth + 1
-                    FROM workflows
-                    JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
-                )
-                SELECT id
-                FROM workflow_tree
-                GROUP BY id
-                ORDER BY MAX(depth) DESC",
-            )?;
-            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
-            let mut ids = Vec::new();
-            for row in rows {
-                ids.push(row?);
+            let workflow_ids = {
+                let mut statement = transaction.prepare(
+                    "WITH RECURSIVE agent_tree(id) AS (
+                        SELECT id FROM agents WHERE id = ?1
+                        UNION ALL
+                        SELECT agents.id FROM agents JOIN agent_tree ON agents.parent_agent_id = agent_tree.id
+                    ), workflow_tree(id, depth) AS (
+                        SELECT id, 0 FROM workflows WHERE agent_id IN (SELECT id FROM agent_tree)
+                        UNION ALL
+                        SELECT workflows.id, workflow_tree.depth + 1
+                        FROM workflows JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+                    ) SELECT id FROM workflow_tree GROUP BY id ORDER BY MAX(depth) DESC",
+                )?;
+                let rows = statement.query_map(params![id], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for workflow_id in &workflow_ids {
+                transaction.execute("DELETE FROM workflow_context_messages WHERE session_id = ?1", params![workflow_id])?;
+                transaction.execute("DELETE FROM workflow_messages WHERE session_id = ?1", params![workflow_id])?;
+                transaction.execute("DELETE FROM workflow_snapshots WHERE session_id = ?1", params![workflow_id])?;
+                if let Err(error) = transaction.execute(
+                    "DELETE FROM workflow_events WHERE session_id = ?1",
+                    params![workflow_id],
+                ) {
+                    log::error!(
+                        "[Agent][id={id}] Failed to delete workflow events for session {workflow_id} (non-fatal, continuing): {error}"
+                    );
+                }
             }
-            ids
-        };
-
-        for workflow_id in &workflow_ids {
-            tx.execute(
-                "DELETE FROM workflow_context_messages WHERE session_id = ?1",
-                params![workflow_id],
-            )?;
-            tx.execute(
-                "DELETE FROM workflow_messages WHERE session_id = ?1",
-                params![workflow_id],
-            )?;
-            tx.execute(
-                "DELETE FROM workflow_snapshots WHERE session_id = ?1",
-                params![workflow_id],
-            )?;
-            if let Err(e) = tx.execute(
-                "DELETE FROM workflow_events WHERE session_id = ?1",
-                params![workflow_id],
-            ) {
-                log::error!(
-                    "[Agent][id={}] Failed to delete workflow events for session {} (non-fatal, continuing): {}",
-                    id,
-                    workflow_id,
-                    e
-                );
+            for workflow_id in &workflow_ids {
+                transaction.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
             }
-        }
-
-        for workflow_id in &workflow_ids {
-            tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
-        }
-
-        for agent_id in &agent_ids {
-            tx.execute("DELETE FROM agents WHERE id = ?1", params![agent_id])?;
-        }
-
-        tx.commit()?;
-
-        Ok(())
+            for agent_id in &agent_ids {
+                transaction.execute("DELETE FROM agents WHERE id = ?1", params![agent_id])?;
+            }
+            transaction.commit()?;
+            Ok(())
+        })
     }
 
     /// Gets an agent by ID on a dedicated reader worker.
@@ -653,18 +540,14 @@ impl MainStore {
 
     /// Gets an agent by ID
     pub fn get_agent(&self, id: &str) -> Result<Option<Agent>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let mut stmt = conn.prepare("SELECT * FROM agents WHERE id = ?1")?;
-
-        let agent = stmt
-            .query_row(params![id], |row| Ok(Agent::from(row)))
-            .optional()?;
-
-        Ok(agent)
+        let id = id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row("SELECT * FROM agents WHERE id = ?1", params![id], |row| {
+                Ok(Agent::from(row))
+            })
+            .optional()
+            .map_err(StoreError::from)
+        })
     }
 
     /// Gets all agents on a dedicated reader worker.
@@ -686,43 +569,28 @@ impl MainStore {
 
     /// Gets all agents
     pub fn get_all_agents(&self) -> Result<Vec<Agent>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let mut stmt = conn.prepare(
-            "SELECT * FROM agents
-             ORDER BY sort_index ASC, name",
-        )?;
-
-        let agents = stmt
-            .query_map(params![], |row| Ok(Agent::from(row)))?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(agents)
+        self.db_runtime()?.read_blocking(|conn| {
+            let mut statement =
+                conn.prepare("SELECT * FROM agents ORDER BY sort_index ASC, name")?;
+            let rows = statement.query_map([], |row| Ok(Agent::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
     }
 
     /// Gets child agents owned by the specified primary agent.
     pub fn get_child_agents(&self, parent_agent_id: &str) -> Result<Vec<Agent>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let mut stmt = conn.prepare(
-            "SELECT * FROM agents
-             WHERE COALESCE(role, agent_type, 'primary') = 'child'
-               AND parent_agent_id = ?1
-               AND COALESCE(disabled, 0) = 0
-             ORDER BY sort_index ASC, name",
-        )?;
-
-        let agents = stmt
-            .query_map(params![parent_agent_id], |row| Ok(Agent::from(row)))?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(agents)
+        let parent_agent_id = parent_agent_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT * FROM agents
+                 WHERE COALESCE(role, agent_type, 'primary') = 'child'
+                   AND parent_agent_id = ?1
+                   AND COALESCE(disabled, 0) = 0
+                 ORDER BY sort_index ASC, name",
+            )?;
+            let rows = statement.query_map(params![parent_agent_id], |row| Ok(Agent::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
     }
 
     /// Gets child agents that may be selected through the general delegation tool.
@@ -746,25 +614,22 @@ impl MainStore {
         parent_agent_id: &str,
         sub_agent_role: &str,
     ) -> Result<Option<Agent>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        let mut stmt = conn.prepare(
-            "SELECT * FROM agents
-             WHERE COALESCE(role, agent_type, 'primary') = 'child'
-               AND parent_agent_id = ?1
-               AND sub_agent_role = ?2
-               AND COALESCE(disabled, 0) = 0
-             LIMIT 1",
-        )?;
-
-        stmt.query_row(params![parent_agent_id, sub_agent_role], |row| {
-            Ok(Agent::from(row))
+        let parent_agent_id = parent_agent_id.to_string();
+        let sub_agent_role = sub_agent_role.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT * FROM agents
+                 WHERE COALESCE(role, agent_type, 'primary') = 'child'
+                   AND parent_agent_id = ?1
+                   AND sub_agent_role = ?2
+                   AND COALESCE(disabled, 0) = 0
+                 LIMIT 1",
+                params![parent_agent_id, sub_agent_role],
+                |row| Ok(Agent::from(row)),
+            )
+            .optional()
+            .map_err(StoreError::from)
         })
-        .optional()
-        .map_err(StoreError::from)
     }
 
     /// Updates the persisted ordering for agents on the writer worker.
@@ -786,21 +651,6 @@ impl MainStore {
             })
             .await
     }
-
-    /// Updates the persisted ordering for agents.
-    pub fn update_agent_order(&self, agent_ids: Vec<String>) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        for (index, id) in agent_ids.iter().enumerate() {
-            conn.execute(
-                "UPDATE agents SET sort_index = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-                params![index as i64, id],
-            )?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -808,10 +658,11 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    fn create_test_store() -> MainStore {
+    fn create_test_store() -> (tempfile::TempDir, MainStore) {
         let dir = tempdir().expect("failed to create temp dir");
         let db_path = dir.path().join("agent_test.db");
-        MainStore::new(db_path).expect("failed to create MainStore")
+        let store = MainStore::new(db_path).expect("failed to create MainStore");
+        (dir, store)
     }
 
     fn make_agent(id: &str, name: &str, parent_agent_id: Option<&str>) -> Agent {
@@ -852,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_add_agent_defaults_version_to_zero() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let agent = make_agent("agent-primary", "Primary Agent", None);
 
         store
@@ -872,7 +723,7 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_exposure_persists_with_agent() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         let mut agent = make_agent("agent-mcp", "MCP Agent", None);
         agent.mcp_tool_exposure =
             Some(serde_json::json!(["server__MCP__important_tool"]).to_string());
@@ -891,7 +742,7 @@ mod tests {
 
     #[test]
     fn test_final_reviewers_are_parent_scoped_and_not_delegatable() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
         store
             .add_agent(&make_agent("parent-a", "Parent A", None))
             .expect("failed to add parent A");
@@ -934,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_delete_agent_removes_descendant_workflows_before_agents() {
-        let store = create_test_store();
+        let (_temp_dir, store) = create_test_store();
 
         store
             .add_agent(&make_agent("agent-primary", "Primary Agent", None))
@@ -970,24 +821,23 @@ mod tests {
             .delete_agent("agent-primary")
             .expect("failed to delete agent tree");
 
-        let conn = store
-            .conn
-            .lock()
-            .expect("failed to lock db connection for delete assertion");
-        let remaining_agents: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM agents WHERE id IN ('agent-primary', 'agent-child')",
-                [],
-                |row| row.get(0),
-            )
-            .expect("failed to count remaining agents");
-        let remaining_workflows: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM workflows WHERE id IN ('workflow-parent', 'workflow-child')",
-                [],
-                |row| row.get(0),
-            )
-            .expect("failed to count remaining workflows");
+        let (remaining_agents, remaining_workflows) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(|conn| {
+                let remaining_agents: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM agents WHERE id IN ('agent-primary', 'agent-child')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let remaining_workflows: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM workflows WHERE id IN ('workflow-parent', 'workflow-child')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((remaining_agents, remaining_workflows))
+            })
+            .expect("failed to count remaining records");
 
         assert_eq!(remaining_agents, 0, "agent tree should be deleted");
         assert_eq!(

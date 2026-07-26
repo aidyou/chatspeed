@@ -6,9 +6,7 @@ use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 pub fn get_sensitive_config(main_store: State<'_, Arc<MainStore>>) -> Result<SensitiveConfig> {
-    let store = main_store
-        .read()
-        .map_err(|e| AppError::Db(crate::db::StoreError::IoError(e.to_string())))?;
+    let store = main_store.inner().as_ref();
     Ok(store.get_config("sensitive_config", SensitiveConfig::default()))
 }
 
@@ -17,9 +15,7 @@ pub fn update_sensitive_config(
     main_store: State<'_, Arc<MainStore>>,
     config: SensitiveConfig,
 ) -> Result<()> {
-    let store = main_store
-        .write()
-        .map_err(|e| AppError::Db(crate::db::StoreError::IoError(e.to_string())))?;
+    let store = main_store.inner().as_ref();
 
     // Convert config to Value for storage
     let config_value = serde_json::to_value(&config).map_err(|e| AppError::General {

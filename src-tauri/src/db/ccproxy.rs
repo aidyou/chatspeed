@@ -140,6 +140,71 @@ fn query_grouped_stats(
     Ok(stats)
 }
 
+fn query_daily_stats(
+    conn: &rusqlite::Connection,
+    range: Option<(String, String)>,
+) -> Result<Vec<serde_json::Value>, StoreError> {
+    let sql = format!(
+        "WITH filtered_stats AS (
+            SELECT * FROM ccproxy_stats{}
+         ), daily_stats AS (
+            SELECT
+                DATE(request_at, 'localtime') AS date,
+                COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
+                COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+                COALESCE(SUM(cache_tokens), 0) AS total_cache_tokens,
+                COUNT(DISTINCT provider) AS provider_count,
+                COUNT(*) FILTER (WHERE status_code != 200) AS error_count,
+                COUNT(*) AS total_request_count
+            FROM filtered_stats
+            GROUP BY date
+         ), ranked_models AS (
+            SELECT
+                DATE(request_at, 'localtime') AS date,
+                client_model,
+                ROW_NUMBER() OVER (
+                    PARTITION BY DATE(request_at, 'localtime')
+                    ORDER BY COUNT(*) DESC, client_model ASC
+                ) AS rank
+            FROM filtered_stats
+            GROUP BY date, client_model
+         )
+         SELECT
+            daily_stats.date,
+            daily_stats.total_input_tokens,
+            daily_stats.total_output_tokens,
+            daily_stats.total_cache_tokens,
+            daily_stats.provider_count,
+            daily_stats.error_count,
+            COALESCE(ranked_models.client_model, '-'),
+            daily_stats.total_request_count
+         FROM daily_stats
+         LEFT JOIN ranked_models
+            ON ranked_models.date = daily_stats.date AND ranked_models.rank = 1
+         ORDER BY daily_stats.date DESC",
+        range_where_clause(range.as_ref())
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| StoreError::Query(e.to_string()))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(range_params(range)), |row| {
+            Ok(serde_json::json!({
+                "date": row.get::<_, String>(0)?,
+                "totalInputTokens": row.get::<_, i64>(1).unwrap_or(0),
+                "totalOutputTokens": row.get::<_, i64>(2).unwrap_or(0),
+                "totalCacheTokens": row.get::<_, i64>(3).unwrap_or(0),
+                "providerCount": row.get::<_, u32>(4).unwrap_or(0),
+                "errorCount": row.get::<_, u32>(5).unwrap_or(0),
+                "topProvider": row.get::<_, String>(6).unwrap_or_else(|_| "-".to_string()),
+                "totalRequestCount": row.get::<_, u32>(7).unwrap_or(0),
+            }))
+        })
+        .map_err(|e| StoreError::Query(e.to_string()))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| StoreError::Query(e.to_string()))
+}
+
 fn query_provider_stats_by_date(
     conn: &rusqlite::Connection,
     date: &str,
@@ -204,263 +269,134 @@ impl MainStore {
     /// `proxy_model.model` for `backend_model` to ensure consistent statistics.
     /// See `CcproxyStat` struct documentation for details.
     pub fn record_ccproxy_stat(&self, stat: CcproxyStat) -> Result<(), StoreError> {
-        self.db_runtime()?.enqueue_ccproxy_stat(stat)
-    }
-
-    /// Retrieves daily proxy statistics for a specific date range.
-    /// Returns a list of daily summaries.
-    pub fn get_ccproxy_daily_stats(&self, days: i32) -> Result<Vec<serde_json::Value>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let range = stats_range_for_days(days)?;
-        let sql = format!(
-            "WITH filtered_stats AS (
-                SELECT * FROM ccproxy_stats{}
-             ), daily_stats AS (
-                SELECT
-                    DATE(request_at, 'localtime') AS date,
-                    COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
-                    COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
-                    COALESCE(SUM(cache_tokens), 0) AS total_cache_tokens,
-                    COUNT(DISTINCT provider) AS provider_count,
-                    COUNT(*) FILTER (WHERE status_code != 200) AS error_count,
-                    COUNT(*) AS total_request_count
-                FROM filtered_stats
-                GROUP BY date
-             ), ranked_models AS (
-                SELECT
-                    DATE(request_at, 'localtime') AS date,
-                    client_model,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY DATE(request_at, 'localtime')
-                        ORDER BY COUNT(*) DESC, client_model ASC
-                    ) AS rank
-                FROM filtered_stats
-                GROUP BY date, client_model
-             )
-             SELECT
-                daily_stats.date,
-                daily_stats.total_input_tokens,
-                daily_stats.total_output_tokens,
-                daily_stats.total_cache_tokens,
-                daily_stats.provider_count,
-                daily_stats.error_count,
-                COALESCE(ranked_models.client_model, '-'),
-                daily_stats.total_request_count
-             FROM daily_stats
-             LEFT JOIN ranked_models
-                ON ranked_models.date = daily_stats.date AND ranked_models.rank = 1
-             ORDER BY daily_stats.date DESC",
-            range_where_clause(range.as_ref())
-        );
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(range_params(range)), |row| {
-                Ok(serde_json::json!({
-                    "date": row.get::<_, String>(0)?,
-                    "totalInputTokens": row.get::<_, i64>(1).unwrap_or(0),
-                    "totalOutputTokens": row.get::<_, i64>(2).unwrap_or(0),
-                    "totalCacheTokens": row.get::<_, i64>(3).unwrap_or(0),
-                    "providerCount": row.get::<_, u32>(4).unwrap_or(0),
-                    "errorCount": row.get::<_, u32>(5).unwrap_or(0),
-                    "topProvider": row.get::<_, String>(6).unwrap_or_else(|_| "-".to_string()),
-                    "totalRequestCount": row.get::<_, u32>(7).unwrap_or(0),
-                }))
-            })
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-
-        let mut stats = Vec::new();
-        for row in rows {
-            stats.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
+        let result = self.db_runtime()?.enqueue_ccproxy_stat(stat);
+        if let Err(error) = &result {
+            log::error!("Failed to enqueue CCProxy statistic: {error}");
         }
-        Ok(stats)
+        result
     }
 
-    /// Deletes proxy statistics older than a certain number of days.
-    /// If days is -1, deletes all statistics.
-    pub fn delete_ccproxy_stats(&self, days: i32) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let range = stats_range_for_days(days)?;
-
-        match range {
-            None => conn.execute("DELETE FROM ccproxy_stats", params![]),
-            Some((start_at, _)) => conn.execute(
-                "DELETE FROM ccproxy_stats WHERE request_at < ?1",
-                params![start_at],
-            ),
-        }
-        .map_err(|e| StoreError::Query(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Aggregates backend model usage for a specific day range.
-    pub fn get_ccproxy_model_usage_stats(
-        &self,
+    pub(crate) async fn get_ccproxy_daily_stats_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         days: i32,
     ) -> Result<Vec<serde_json::Value>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let range = stats_range_for_days(days)?;
-        let sql = format!(
-            "SELECT backend_model, COUNT(*) AS count
-             FROM ccproxy_stats{}
-             GROUP BY backend_model
-             ORDER BY count DESC",
-            range_where_clause(range.as_ref())
-        );
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(range_params(range)), |row| {
+        runtime
+            .read(move |conn| query_daily_stats(conn, range))
+            .await
+    }
+
+    pub(crate) async fn delete_ccproxy_stats_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        days: i32,
+    ) -> Result<(), StoreError> {
+        let range = stats_range_for_days(days)?;
+        runtime
+            .write(move |conn| {
+                match range {
+                    None => conn.execute("DELETE FROM ccproxy_stats", params![]),
+                    Some((start_at, _)) => conn.execute(
+                        "DELETE FROM ccproxy_stats WHERE request_at < ?1",
+                        params![start_at],
+                    ),
+                }
+                .map_err(|e| StoreError::Query(e.to_string()))?;
+                Ok(())
+            })
+            .await
+    }
+
+    pub(crate) async fn get_ccproxy_model_usage_stats_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        days: i32,
+    ) -> Result<Vec<serde_json::Value>, StoreError> {
+        let range = stats_range_for_days(days)?;
+        runtime
+            .read(move |conn| {
+            let sql = format!(
+                "SELECT backend_model, COUNT(*) AS count FROM ccproxy_stats{} GROUP BY backend_model ORDER BY count DESC",
+                range_where_clause(range.as_ref())
+            );
+            let mut statement = conn.prepare(&sql)?;
+            let rows = statement.query_map(rusqlite::params_from_iter(range_params(range)), |row| {
                 Ok(serde_json::json!({
                     "type": row.get::<_, String>(0)?,
                     "value": row.get::<_, u32>(1)?,
                 }))
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
             })
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-
-        let mut stats = Vec::new();
-        for row in rows {
-            stats.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
-        }
-        Ok(stats)
+            .await
     }
 
-    /// Aggregates backend model token usage for a specific day range.
-    pub fn get_ccproxy_model_token_usage_stats(
-        &self,
+    pub(crate) async fn get_ccproxy_model_token_usage_stats_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         days: i32,
     ) -> Result<Vec<serde_json::Value>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let range = stats_range_for_days(days)?;
-        let sql = format!(
-            "SELECT backend_model, SUM(input_tokens + output_tokens) AS total_tokens
-             FROM ccproxy_stats{}
-             GROUP BY backend_model
-             ORDER BY total_tokens DESC",
-            range_where_clause(range.as_ref())
-        );
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(range_params(range)), |row| {
+        runtime
+            .read(move |conn| {
+            let sql = format!(
+                "SELECT backend_model, SUM(input_tokens + output_tokens) AS total_tokens FROM ccproxy_stats{} GROUP BY backend_model ORDER BY total_tokens DESC",
+                range_where_clause(range.as_ref())
+            );
+            let mut statement = conn.prepare(&sql)?;
+            let rows = statement.query_map(rusqlite::params_from_iter(range_params(range)), |row| {
                 Ok(serde_json::json!({
                     "type": row.get::<_, String>(0)?,
                     "value": row.get::<_, i64>(1).unwrap_or(0),
                 }))
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
             })
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-
-        let mut stats = Vec::new();
-        for row in rows {
-            stats.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
-        }
-        Ok(stats)
+            .await
     }
 
-    /// Aggregates provider token usage for a specific day range.
-    pub fn get_ccproxy_provider_token_usage_stats(
-        &self,
+    pub(crate) async fn get_ccproxy_provider_token_usage_stats_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         days: i32,
     ) -> Result<Vec<serde_json::Value>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let range = stats_range_for_days(days)?;
-        let sql = format!(
-            "SELECT COALESCE(provider, '-') AS provider, SUM(input_tokens + output_tokens) AS total_tokens
-             FROM ccproxy_stats{}
-             GROUP BY provider
-             ORDER BY total_tokens DESC",
-            range_where_clause(range.as_ref())
-        );
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(range_params(range)), |row| {
+        runtime
+            .read(move |conn| {
+            let sql = format!(
+                "SELECT COALESCE(provider, '-') AS provider, SUM(input_tokens + output_tokens) AS total_tokens FROM ccproxy_stats{} GROUP BY provider ORDER BY total_tokens DESC",
+                range_where_clause(range.as_ref())
+            );
+            let mut statement = conn.prepare(&sql)?;
+            let rows = statement.query_map(rusqlite::params_from_iter(range_params(range)), |row| {
                 Ok(serde_json::json!({
                     "type": row.get::<_, String>(0)?,
                     "value": row.get::<_, i64>(1).unwrap_or(0),
                 }))
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
             })
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-
-        let mut stats = Vec::new();
-        for row in rows {
-            stats.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
-        }
-        Ok(stats)
+            .await
     }
 
-    /// Aggregates error code distribution for a specific day range.
-    pub fn get_ccproxy_error_distribution_stats(
-        &self,
+    pub(crate) async fn get_ccproxy_error_distribution_stats_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         days: i32,
     ) -> Result<Vec<serde_json::Value>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
         let range = stats_range_for_days(days)?;
-        let sql = format!(
-            "SELECT CAST(status_code AS TEXT) AS code, COUNT(*) AS count
-             FROM ccproxy_stats{}{}
-             GROUP BY code
-             ORDER BY count DESC",
-            range_where_clause(range.as_ref()),
-            if range.is_some() {
-                " AND status_code != 200"
-            } else {
-                " WHERE status_code != 200"
-            }
-        );
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(range_params(range)), |row| {
+        runtime
+            .read(move |conn| {
+            let sql = format!(
+                "SELECT CAST(status_code AS TEXT) AS code, COUNT(*) AS count FROM ccproxy_stats{}{} GROUP BY code ORDER BY count DESC",
+                range_where_clause(range.as_ref()),
+                if range.is_some() { " AND status_code != 200" } else { " WHERE status_code != 200" }
+            );
+            let mut statement = conn.prepare(&sql)?;
+            let rows = statement.query_map(rusqlite::params_from_iter(range_params(range)), |row| {
                 Ok(serde_json::json!({
                     "type": row.get::<_, String>(0)?,
                     "value": row.get::<_, u32>(1)?,
                 }))
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
             })
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-
-        let mut stats = Vec::new();
-        for row in rows {
-            stats.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
-        }
-        Ok(stats)
-    }
-
-    /// Retrieves detailed statistics per provider, model, protocol and mode for a specific date.
-    pub fn get_ccproxy_provider_stats_by_date(
-        &self,
-        date: &str,
-    ) -> Result<Vec<serde_json::Value>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        query_provider_stats_by_date(&conn, date)
+            .await
     }
 
     pub(crate) async fn get_ccproxy_provider_stats_by_date_with_runtime(
@@ -472,16 +408,6 @@ impl MainStore {
             .await
     }
 
-    /// Retrieves grouped proxy statistics for a date range.
-    ///
-    /// The result is grouped by date, provider, backend model, protocol and tool compatibility mode.
-    pub fn get_ccproxy_grouped_stats(
-        &self,
-        days: i32,
-    ) -> Result<Vec<serde_json::Value>, StoreError> {
-        self.get_ccproxy_grouped_stats_for_range(stats_range_for_days(days)?)
-    }
-
     pub(crate) async fn get_ccproxy_grouped_stats_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         days: i32,
@@ -490,28 +416,6 @@ impl MainStore {
         runtime
             .read(move |connection| query_grouped_stats(connection, range))
             .await
-    }
-
-    /// Retrieves grouped proxy statistics for an explicit UTC half-open range.
-    pub fn get_ccproxy_grouped_stats_for_range(
-        &self,
-        range: Option<(String, String)>,
-    ) -> Result<Vec<serde_json::Value>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        query_grouped_stats(&conn, range)
-    }
-
-    /// Retrieves grouped statistics covering a local-date range in one query.
-    pub fn get_ccproxy_grouped_stats_by_date_range(
-        &self,
-        start_date: &str,
-        end_date: &str,
-    ) -> Result<Vec<serde_json::Value>, StoreError> {
-        let range = stats_range_for_date_range(start_date, end_date)?;
-        self.get_ccproxy_grouped_stats_for_range(Some(range))
     }
 
     pub(crate) async fn get_ccproxy_grouped_stats_by_date_range_with_runtime(
@@ -525,14 +429,6 @@ impl MainStore {
             .await
     }
 
-    /// Retrieves only the provider/model token groups needed to calculate today's cost.
-    pub fn get_ccproxy_today_cost_stats(&self) -> Result<Vec<serde_json::Value>, StoreError> {
-        self.get_ccproxy_grouped_stats_for_range(Some(stats_range_for_local_dates(
-            Local::now().date_naive(),
-            Local::now().date_naive() + Duration::days(1),
-        )?))
-    }
-
     /// Executes the narrow today-cost aggregation on a dedicated reader worker.
     pub(crate) async fn get_ccproxy_today_cost_stats_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
@@ -544,64 +440,51 @@ impl MainStore {
             .await
     }
 
-    pub fn get_ccproxy_error_stats_by_date(
-        &self,
-        date: &str,
+    pub(crate) async fn get_ccproxy_error_stats_by_date_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        date: String,
         client_model: Option<String>,
         backend_model: Option<String>,
     ) -> Result<Vec<serde_json::Value>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let (start_at, end_at) = stats_range_for_local_date(date)?;
-
-        let mut sql = "SELECT
-                status_code,
-                error_message,
-                COUNT(*) AS error_count
-             FROM ccproxy_stats
-             WHERE request_at >= ?1 AND request_at < ?2 AND status_code != 200"
-            .to_string();
-        let mut params_vec = vec![start_at, end_at];
-        let mut param_idx = 3;
-
-        if let Some(client_model) = client_model {
-            sql.push_str(&format!(" AND client_model = ?{param_idx}"));
-            params_vec.push(client_model);
-            param_idx += 1;
-        }
-        if let Some(backend_model) = backend_model {
-            sql.push_str(&format!(" AND backend_model = ?{param_idx}"));
-            params_vec.push(backend_model);
-        }
-        sql.push_str(" GROUP BY status_code, error_message ORDER BY error_count DESC");
-
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(params_vec), |row| {
-                Ok(serde_json::json!({
-                    "statusCode": row.get::<_, i32>(0)?,
-                    "errorMessage": row.get::<_, Option<String>>(1)?,
-                    "errorCount": row.get::<_, u32>(2)?,
-                }))
+        runtime
+            .read(move |conn| {
+                let (start_at, end_at) = stats_range_for_local_date(&date)?;
+                let mut sql = "SELECT status_code, error_message, COUNT(*) AS error_count
+                 FROM ccproxy_stats
+                 WHERE request_at >= ?1 AND request_at < ?2 AND status_code != 200"
+                    .to_string();
+                let mut values = vec![start_at, end_at];
+                let mut parameter_index = 3;
+                if let Some(client_model) = client_model {
+                    sql.push_str(&format!(" AND client_model = ?{parameter_index}"));
+                    values.push(client_model);
+                    parameter_index += 1;
+                }
+                if let Some(backend_model) = backend_model {
+                    sql.push_str(&format!(" AND backend_model = ?{parameter_index}"));
+                    values.push(backend_model);
+                }
+                sql.push_str(" GROUP BY status_code, error_message ORDER BY error_count DESC");
+                let mut statement = conn.prepare(&sql)?;
+                let rows = statement.query_map(rusqlite::params_from_iter(values), |row| {
+                    Ok(serde_json::json!({
+                        "statusCode": row.get::<_, i32>(0)?,
+                        "errorMessage": row.get::<_, Option<String>>(1)?,
+                        "errorCount": row.get::<_, u32>(2)?,
+                    }))
+                })?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
             })
-            .map_err(|e| StoreError::Query(e.to_string()))?;
-
-        let mut stats = Vec::new();
-        for row in rows {
-            stats.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
-        }
-        Ok(stats)
+            .await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{stats_range_for_days, stats_range_for_local_date};
+    use super::{stats_range_for_days, stats_range_for_local_date, stats_range_for_local_dates};
+    use chrono::{Duration, Local, TimeZone, Utc};
     use rusqlite::Connection;
+    use std::time::Instant;
 
     #[test]
     fn rejects_invalid_statistics_ranges() {
@@ -637,5 +520,96 @@ mod tests {
             )
             .unwrap();
         assert!(plan.contains("idx_ccproxy_stats_request_at"));
+    }
+
+    #[test]
+    #[ignore = "records reproducible 100k/500k/1m query-plan and latency evidence"]
+    fn statistics_range_benchmark_reports_indexed_query_evidence() {
+        const SAMPLE_SIZES: [usize; 3] = [100_000, 500_000, 1_000_000];
+        let end_date = Local::now().date_naive();
+        let start_date = end_date - Duration::days(6);
+        let (start_at, end_at) =
+            stats_range_for_local_dates(start_date, end_date + Duration::days(1))
+                .expect("benchmark date range should be valid");
+
+        for sample_size in SAMPLE_SIZES {
+            let connection = Connection::open_in_memory().expect("benchmark database should open");
+            connection
+                .execute_batch(
+                    "CREATE TABLE ccproxy_stats (request_at TEXT NOT NULL);
+                     CREATE INDEX idx_ccproxy_stats_request_at
+                        ON ccproxy_stats(request_at DESC);",
+                )
+                .expect("benchmark schema should initialize");
+
+            let seed_start = Instant::now();
+            let transaction = connection
+                .unchecked_transaction()
+                .expect("benchmark seed transaction should open");
+            {
+                let mut statement = transaction
+                    .prepare("INSERT INTO ccproxy_stats (request_at) VALUES (?1)")
+                    .expect("benchmark insert statement should prepare");
+                for index in 0..sample_size {
+                    let local_date = end_date - Duration::days((index % 365) as i64);
+                    let local_noon = Local
+                        .from_local_datetime(
+                            &local_date
+                                .and_hms_opt(12, 0, 0)
+                                .expect("noon should be a valid local time"),
+                        )
+                        .earliest()
+                        .expect("local noon should resolve across DST");
+                    statement
+                        .execute([local_noon
+                            .with_timezone(&Utc)
+                            .format("%Y-%m-%d %H:%M:%S")
+                            .to_string()])
+                        .expect("benchmark row should insert");
+                }
+            }
+            transaction.commit().expect("benchmark seed should commit");
+
+            let plan = connection
+                .query_row(
+                    "EXPLAIN QUERY PLAN
+                     SELECT COUNT(*) FROM ccproxy_stats
+                     WHERE request_at >= ?1 AND request_at < ?2",
+                    [&start_at, &end_at],
+                    |row| row.get::<_, String>(3),
+                )
+                .expect("benchmark query plan should be available");
+            assert!(plan.contains("idx_ccproxy_stats_request_at"));
+
+            let old_start = Instant::now();
+            let old_count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM ccproxy_stats
+                     WHERE DATE(request_at, 'localtime') >= ?1
+                       AND DATE(request_at, 'localtime') <= ?2",
+                    [start_date.to_string(), end_date.to_string()],
+                    |row| row.get(0),
+                )
+                .expect("legacy benchmark query should succeed");
+            let old_elapsed = old_start.elapsed();
+
+            let indexed_start = Instant::now();
+            let indexed_count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM ccproxy_stats WHERE request_at >= ?1 AND request_at < ?2",
+                    [&start_at, &end_at],
+                    |row| row.get(0),
+                )
+                .expect("indexed benchmark query should succeed");
+            let indexed_elapsed = indexed_start.elapsed();
+            assert_eq!(old_count, indexed_count);
+
+            println!(
+                "ccproxy range benchmark: rows={sample_size}, seed_ms={}, old_date_ms={}, indexed_range_ms={}, matched_rows={indexed_count}, plan={plan}",
+                seed_start.elapsed().as_millis(),
+                old_elapsed.as_millis(),
+                indexed_elapsed.as_millis(),
+            );
+        }
     }
 }

@@ -47,35 +47,6 @@ impl MainStore {
             .await
     }
 
-    #[cfg(test)]
-    pub fn get_conversation_by_id(&self, id: i64) -> Result<Conversation, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let conversation = conn
-            .query_row(
-                "SELECT id, title, created_at, is_favorite FROM conversations WHERE id = ?",
-                [id],
-                |row| {
-                    Ok(Conversation {
-                        id: row.get("id")?,
-                        title: row.get("title")?,
-                        created_at: row.get("created_at")?,
-                        is_favorite: row.get("is_favorite")?,
-                    })
-                },
-            )
-            .map_err(|e| {
-                if e == rusqlite::Error::QueryReturnedNoRows {
-                    StoreError::NotFound(t!("db.conversation_not_found").to_string())
-                } else {
-                    StoreError::from(e)
-                }
-            })?;
-        Ok(conversation)
-    }
-
     pub(crate) async fn get_all_conversations_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
     ) -> Result<Vec<Conversation>, StoreError> {
@@ -95,43 +66,6 @@ impl MainStore {
                 Ok(rows.collect::<Result<Vec<_>, _>>()?)
             })
             .await
-    }
-
-    // TODO: add pagination to get_all_conversations
-    /// Retrieves all conversation topics from the database.
-    ///
-    /// # Returns
-    ///
-    /// A vector of `Conversation` instances.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `StoreError` if the database operation fails.
-    #[cfg(test)]
-    pub fn get_all_conversations(&self) -> Result<Vec<Conversation>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.title, c.is_favorite, 
-                    COALESCE(MAX(m.timestamp), c.created_at) as active_time 
-             FROM conversations c 
-             LEFT JOIN messages m ON c.id = m.conversation_id 
-             GROUP BY c.id 
-             ORDER BY active_time DESC",
-        )?;
-        let conversations = stmt.query_map([], |row| {
-            Ok(Conversation {
-                id: row.get("id")?,
-                title: row.get("title")?,
-                created_at: row.get("active_time")?,
-                is_favorite: row.get("is_favorite")?,
-            })
-        })?;
-        conversations
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
     }
 
     /// Retrieves all messages for a specific conversation.
@@ -189,43 +123,35 @@ impl MainStore {
         &self,
         conversation_id: i64,
     ) -> Result<Vec<Message>, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, timestamp, metadata
-             FROM messages WHERE conversation_id = ? order by id asc",
-        )?;
-
-        let messages = stmt.query_map([conversation_id], |row| {
-            let metadata_str: Option<String> = row.get("metadata")?;
-            let metadata = metadata_str.and_then(|s| {
-                serde_json::from_str(&s)
-                    .map_err(|e| {
-                        log::warn!(
-                            "Failed to parse metadata JSON for message: {}, error: {}",
-                            s,
-                            e
-                        );
-                        e
-                    })
-                    .ok()
-            });
-
-            Ok(Message {
-                id: row.get("id")?,
-                conversation_id: row.get("conversation_id")?,
-                role: row.get("role")?,
-                content: row.get("content")?,
-                timestamp: row.get("timestamp")?,
-                metadata,
-            })
-        })?;
-
-        messages
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT id, conversation_id, role, content, timestamp, metadata FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+            )?;
+            let rows = statement.query_map([conversation_id], |row| {
+                let metadata_text: Option<String> = row.get("metadata")?;
+                let metadata = metadata_text.and_then(|value| {
+                    serde_json::from_str(&value)
+                        .map_err(|error| {
+                            log::warn!(
+                                "Failed to parse metadata JSON for message: {}, error: {}",
+                                value,
+                                error
+                            );
+                            error
+                        })
+                        .ok()
+                });
+                Ok(Message {
+                    id: row.get("id")?,
+                    conversation_id: row.get("conversation_id")?,
+                    role: row.get("role")?,
+                    content: row.get("content")?,
+                    timestamp: row.get("timestamp")?,
+                    metadata,
+                })
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
     }
 
     /// Adds a new conversation to the database.
@@ -256,19 +182,6 @@ impl MainStore {
                 Ok(conn.last_insert_rowid())
             })
             .await
-    }
-
-    #[cfg(test)]
-    pub fn add_conversation(&self, title: String) -> Result<i64, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute(
-            "INSERT INTO conversations (title,is_favorite, created_at) VALUES (?, 0, CURRENT_TIMESTAMP)",
-            [title],
-        )?;
-        Ok(conn.last_insert_rowid())
     }
 
     /// Updates the favorite status of a conversation.
@@ -307,32 +220,6 @@ impl MainStore {
             .await
     }
 
-    #[cfg(test)]
-    pub fn update_conversation(
-        &self,
-        id: i64,
-        title: Option<String>,
-        is_favorite: Option<bool>,
-    ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        if let Some(title) = title {
-            conn.execute(
-                "UPDATE conversations SET title = ? WHERE id = ?",
-                params![title, id],
-            )?;
-        }
-        if let Some(is_favorite) = is_favorite {
-            conn.execute(
-                "UPDATE conversations SET is_favorite = ? WHERE id = ?",
-                params![if is_favorite { 1 } else { 0 }, id],
-            )?;
-        }
-        Ok(())
-    }
-
     /// Deletes a conversation from the database.
     ///
     /// Removes the record with the specified ID from the `conversations` table.
@@ -354,16 +241,6 @@ impl MainStore {
                 Ok(())
             })
             .await
-    }
-
-    #[cfg(test)]
-    pub fn delete_conversation(&self, id: i64) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        conn.execute("DELETE FROM conversations WHERE id = ?", params![id])?;
-        Ok(())
     }
 
     /// Adds a new message to the database.
@@ -413,36 +290,6 @@ impl MainStore {
             .await
     }
 
-    #[cfg(test)]
-    pub fn add_message(
-        &self,
-        conversation_id: i64,
-        role: String,
-        content: String,
-        metadata: Option<Value>,
-    ) -> Result<i64, StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let metadata_str = metadata
-            .map(|m| serde_json::to_string(&m))
-            .transpose()
-            .map_err(|e| {
-                StoreError::JsonError(
-                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
-                )
-            })?;
-
-        conn.execute(
-            "INSERT INTO messages (conversation_id, role, content, metadata, timestamp)
-             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
-            rusqlite::params![conversation_id, role, content, metadata_str],
-        )?;
-
-        Ok(conn.last_insert_rowid())
-    }
-
     /// Deletes messages from the database.
     ///
     /// Removes the records with the specified IDs from the `messages` table.
@@ -472,26 +319,6 @@ impl MainStore {
                 Ok(())
             })
             .await
-    }
-
-    #[cfg(test)]
-    pub fn delete_message(&self, id: Vec<i64>) -> Result<(), StoreError> {
-        if id.is_empty() {
-            return Ok(());
-        }
-
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        // Create placeholders for the IN clause (?, ?, ? ...)
-        let placeholders: Vec<String> = id.iter().map(|_| "?".to_string()).collect();
-        let placeholder_str = placeholders.join(",");
-
-        let sql = format!("DELETE FROM messages WHERE id IN ({})", placeholder_str);
-        conn.execute(&sql, rusqlite::params_from_iter(id))?;
-        Ok(())
     }
 
     /// Updates the metadata of a message.
@@ -530,32 +357,6 @@ impl MainStore {
                 Ok(())
             })
             .await
-    }
-
-    #[cfg(test)]
-    pub fn update_message_metadata(
-        &self,
-        id: i64,
-        metadata: Option<Value>,
-    ) -> Result<(), StoreError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))?;
-        let metadata_str = metadata
-            .map(|m| serde_json::to_string(&m))
-            .transpose()
-            .map_err(|e| {
-                StoreError::JsonError(
-                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
-                )
-            })?;
-
-        conn.execute(
-            "UPDATE messages SET metadata = ? WHERE id = ?",
-            rusqlite::params![metadata_str, id],
-        )?;
-        Ok(())
     }
 }
 

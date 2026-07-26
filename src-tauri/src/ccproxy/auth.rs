@@ -100,10 +100,8 @@ pub async fn authenticate_request(
         }
     }
 
-    let proxy_keys: ChatCompletionProxyKeysConfig = main_store
-        .read()
-        .map_err(|e| CCProxyError::StoreLockError(e.to_string()))?
-        .get_config("chat_completion_proxy_keys", vec![]);
+    let proxy_keys: ChatCompletionProxyKeysConfig =
+        main_store.get_config("chat_completion_proxy_keys", vec![]);
 
     if proxy_keys.is_empty() {
         log::warn!("Proxy authentication: 'chat_completion_proxy_keys' is configured but the list is empty.");

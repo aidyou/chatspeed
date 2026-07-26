@@ -150,17 +150,10 @@ pub async fn start_http_server(
 
     // 0. Initialize the global proxy address from DB before starting the server task
     {
-        let (initial_port, _initial_listen) = if let Ok(store) = main_store.read() {
-            (
-                store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT),
-                store.get_config(CFG_CCPROXY_LISTEN, CFG_CCPROXY_LISTEN_DEFAULT.to_string()),
-            )
-        } else {
-            (
-                CFG_CCPROXY_PORT_DEFAULT,
-                CFG_CCPROXY_LISTEN_DEFAULT.to_string(),
-            )
-        };
+        let (initial_port, _initial_listen) = (
+            main_store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT),
+            main_store.get_config(CFG_CCPROXY_LISTEN, CFG_CCPROXY_LISTEN_DEFAULT.to_string()),
+        );
         *CHAT_COMPLETION_PROXY.write() = format!("http://127.0.0.1:{}", initial_port);
     }
 
@@ -170,17 +163,10 @@ pub async fn start_http_server(
         .await
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit for AI requests
         .layer(cors); // Apply CORS to the ccproxy routes
-    let (server_port, server_listen) = if let Ok(store) = main_store.read() {
-        (
-            store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT),
-            store.get_config(CFG_CCPROXY_LISTEN, CFG_CCPROXY_LISTEN_DEFAULT.to_string()),
-        )
-    } else {
-        (
-            CFG_CCPROXY_PORT_DEFAULT,
-            CFG_CCPROXY_LISTEN_DEFAULT.to_string(),
-        )
-    };
+    let (server_port, server_listen) = (
+        main_store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT),
+        main_store.get_config(CFG_CCPROXY_LISTEN, CFG_CCPROXY_LISTEN_DEFAULT.to_string()),
+    );
 
     // Start chat completion proxy server with retry mechanism
     let ccproxy_shutdown_rx = shutdown_tx.subscribe();

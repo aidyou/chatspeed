@@ -60,7 +60,7 @@ use whatlang::detect;
 #[command]
 pub async fn get_all_conversations(state: State<'_, Arc<MainStore>>) -> Result<Vec<Conversation>> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::get_all_conversations_with_runtime(runtime)
@@ -94,7 +94,7 @@ pub async fn get_conversation_by_id(
     id: i64,
 ) -> Result<Conversation> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::get_conversation_by_id_with_runtime(runtime, id)
@@ -125,7 +125,7 @@ pub async fn get_conversation_by_id(
 #[command]
 pub async fn add_conversation(state: State<'_, Arc<MainStore>>, title: String) -> Result<i64> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::add_conversation_with_runtime(runtime, title)
@@ -162,7 +162,7 @@ pub async fn update_conversation(
     is_favorite: Option<bool>,
 ) -> Result<()> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::update_conversation_with_runtime(runtime, id, title, is_favorite)
@@ -193,7 +193,7 @@ pub async fn update_conversation(
 #[command]
 pub async fn delete_conversation(state: State<'_, Arc<MainStore>>, id: i64) -> Result<()> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::delete_conversation_with_runtime(runtime, id)
@@ -230,7 +230,7 @@ pub async fn get_messages_for_conversation(
 ) -> Result<()> {
     let label = window_label.unwrap_or(window.label().to_string());
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     let messages = MainStore::get_messages_for_conversation_with_runtime(runtime, conversation_id)
@@ -281,7 +281,7 @@ pub async fn add_message(
     metadata: Option<serde_json::Value>,
 ) -> Result<(i64, String)> {
     let (runtime, final_content) = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         let mut final_content = content;
         if role == "user" {
             let sensitive_config: SensitiveConfig =
@@ -345,7 +345,7 @@ pub async fn add_message(
 #[command]
 pub async fn delete_message(state: State<'_, Arc<MainStore>>, id: Vec<i64>) -> Result<()> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::delete_message_with_runtime(runtime, id)
@@ -379,7 +379,7 @@ pub async fn update_message_metadata(
     metadata: serde_json::Value,
 ) -> Result<()> {
     let runtime = {
-        let main_store = state.read()?;
+        let main_store = &*state;
         main_store.db_runtime().map_err(AppError::Db)?
     };
     MainStore::update_message_metadata_with_runtime(runtime, id, Some(metadata))

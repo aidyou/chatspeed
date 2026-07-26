@@ -133,11 +133,11 @@ pub struct SharedState {
 fn resolve_group_name(state: &Arc<SharedState>, group_name: Option<String>) -> Option<String> {
     if let Some(g) = group_name {
         if g == SWITCH_MODE_PREFIX {
-            state.main_store.read().ok().and_then(|store| {
-                store
-                    .get_config(CFG_ACTIVE_PROXY_GROUP, "default".to_string())
-                    .into()
-            })
+            Some(
+                state
+                    .main_store
+                    .get_config(CFG_ACTIVE_PROXY_GROUP, "default".to_string()),
+            )
         } else {
             Some(g)
         }

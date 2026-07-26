@@ -238,14 +238,14 @@ pub fn setup_chat_proxy(
         // If proxy type is "bySetting", get it from config
         // if proxy_type is "bySetting", get proxy type from config
         if proxy_type == "bySetting" {
-            let config_store = main_state.read()?;
+            let config_store = &*main_state;
             proxy_type = config_store.get_config("proxy_type", "none".to_string());
             if let Some(md_obj) = md.as_object_mut() {
                 md_obj.insert("proxyType".to_string(), json!(proxy_type));
             }
         }
         if proxy_type == "http" {
-            let config_store = main_state.read()?;
+            let config_store = &*main_state;
             let proxy_server = config_store.get_config("proxy_server", String::new());
             if !proxy_server.is_empty() {
                 if let Some(obj) = md.as_object_mut() {
@@ -364,10 +364,7 @@ pub async fn chat_completion(
 
     // Sensitive Data Filtering
     let (sensitive_config, interface_lang): (SensitiveConfig, String) = {
-        let store = chat_state
-            .main_store
-            .read()
-            .map_err(|e| AppError::Db(crate::db::StoreError::IoError(e.to_string())))?;
+        let store = chat_state.main_store.as_ref();
         (
             store.get_config("sensitive_config", SensitiveConfig::default()),
             store.get_config(CFG_INTERFACE_LANGUAGE, "en".to_string()),

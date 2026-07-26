@@ -117,9 +117,7 @@ fn sync_sub_agent_completion_consumed(
     session_id: &str,
     task_id: &str,
 ) -> Result<(), WorkflowEngineError> {
-    let store = main_store
-        .read()
-        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    let store = main_store.as_ref();
     let Some(mut context) = store
         .get_execution_context(session_id)
         .map_err(WorkflowEngineError::Db)?
@@ -149,9 +147,7 @@ fn find_durable_sub_agent_completion(
     session_id: &str,
     task_id: &str,
 ) -> Result<Option<SubAgentCompletion>, WorkflowEngineError> {
-    let store = main_store
-        .read()
-        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    let store = main_store.as_ref();
     Ok(store
         .get_execution_context(session_id)
         .map_err(WorkflowEngineError::Db)?
@@ -168,9 +164,7 @@ fn find_durable_completed_child_output(
     parent_session_id: &str,
     task_id: &str,
 ) -> Result<Option<String>, WorkflowEngineError> {
-    let store = main_store
-        .read()
-        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    let store = main_store.as_ref();
     let Some(workflow) = store
         .get_workflow(task_id)
         .map_err(WorkflowEngineError::Db)?
@@ -234,9 +228,7 @@ fn persist_sub_agent_completion(
     main_store: &Arc<MainStore>,
     completion: SubAgentCompletion,
 ) -> Result<(), WorkflowEngineError> {
-    let store = main_store
-        .read()
-        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    let store = main_store.as_ref();
     let mut context = store
         .get_execution_context(&completion.parent_session_id)
         .map_err(WorkflowEngineError::Db)?
@@ -277,9 +269,7 @@ fn persist_background_completion_projection(
     sub_agent_id: &str,
     result: &Value,
 ) -> Result<(), WorkflowEngineError> {
-    let store = main_store
-        .read()
-        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    let store = main_store.as_ref();
     let segment_id = store
         .get_execution_context(parent_session_id)
         .map_err(WorkflowEngineError::Db)?
@@ -434,9 +424,7 @@ fn append_sub_agent_event(
     main_store: &Arc<MainStore>,
     event: WorkflowEvent,
 ) -> Result<(), WorkflowEngineError> {
-    let store = main_store
-        .read()
-        .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+    let store = main_store.as_ref();
     store
         .append_workflow_event(&event)
         .map_err(WorkflowEngineError::Db)?;
@@ -635,9 +623,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         parent_session_id: Option<&str>,
     ) -> Result<Arc<Mutex<dyn ReActExecutor>>, WorkflowEngineError> {
         let mut agent_config = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.main_store.as_ref();
             store.get_agent(agent_id)?.ok_or_else(|| {
                 WorkflowEngineError::General(format!("Agent config {} not found", agent_id))
             })?
@@ -647,9 +633,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         agent_config.auto_approve = filter_sub_agent_tool_ids(agent_config.auto_approve.as_deref());
 
         let inherited_allowed_paths = if let Some(parent_session_id) = parent_session_id {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.main_store.as_ref();
             store
                 .get_workflow_snapshot(parent_session_id)
                 .ok()
@@ -718,9 +702,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         };
 
         let runtime = {
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
+            let store = self.main_store.as_ref();
             store.db_runtime()?
         };
         MainStore::create_workflow_with_runtime(
@@ -1847,7 +1829,7 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::path::PathBuf;
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
     use tokio::sync::{mpsc, Mutex};
 
     struct NoopGateway;
@@ -2039,7 +2021,7 @@ mod tests {
             None,
         );
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard.add_agent(&agent).expect("failed to add agent");
             store_guard
                 .create_workflow("projection-parent", "test", &agent.id, None, None)
@@ -2059,8 +2041,6 @@ mod tests {
         .expect("failed to persist background completion projection");
 
         let messages = store
-            .read()
-            .expect("store lock")
             .get_workflow_snapshot("projection-parent")
             .expect("failed to load snapshot")
             .messages;
@@ -2246,7 +2226,7 @@ mod tests {
         COMPLETED_BACKGROUND_TASKS.remove(task_id);
         let (_dir, store) = test_store();
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .upsert_execution_context(&ExecutionContext {
                     session_id: "session_a".to_string(),
@@ -2299,7 +2279,7 @@ mod tests {
         assert!(snapshot_consumed);
 
         let context_consumed = {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .get_execution_context("session_a")
                 .expect("failed to get execution context")
@@ -2403,7 +2383,7 @@ mod tests {
         BACKGROUND_TASKS.remove(task_id);
         let (_dir, store) = test_store();
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             let agent = crate::db::Agent::new(
                 "agent-test".to_string(),
                 "Test Agent".to_string(),
@@ -2501,7 +2481,7 @@ mod tests {
         COMPLETED_BACKGROUND_TASKS.remove(task_id);
         let (_dir, store) = test_store();
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .upsert_execution_context(&ExecutionContext {
                     session_id: "session_a".to_string(),
@@ -2613,7 +2593,7 @@ mod tests {
         );
         let parent_session_id = "diagnostic_parent_session";
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .add_agent(&parent_agent)
                 .expect("failed to create parent agent");
@@ -2793,7 +2773,7 @@ mod tests {
         };
 
         {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .add_agent(&parent_agent)
                 .expect("failed to add parent agent");
@@ -2832,7 +2812,7 @@ mod tests {
             .expect("failed to create child executor");
 
         let snapshot = {
-            let store_guard = store.read().expect("store lock");
+            let store_guard = store.as_ref();
             store_guard
                 .get_workflow_snapshot(child_session_id)
                 .expect("failed to read child snapshot")
@@ -2887,7 +2867,7 @@ mod tests {
         let main_store =
             Arc::new(MainStore::new(&db_path).expect("failed to open diagnostic MainStore"));
         let code_browse_agent = {
-            let store = main_store.read().expect("store lock");
+            let store = main_store.as_ref();
             store
                 .get_agent("0q0xff0pm0400")
                 .expect("failed to query Code Browse agent")
@@ -2936,7 +2916,7 @@ mod tests {
             ..AgentConfig::default()
         };
         {
-            let store = main_store.read().expect("store lock");
+            let store = main_store.as_ref();
             store
                 .add_agent(&parent_agent)
                 .expect("failed to create diagnostic parent agent");

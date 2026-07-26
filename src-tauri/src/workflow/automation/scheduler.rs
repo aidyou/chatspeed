@@ -89,42 +89,29 @@ pub fn spawn_workflow_automation_scheduler(app: AppHandle) {
 
             let now = normalize_datetime_for_db(Local::now());
             let state = app.state::<Arc<MainStore>>();
-            let due_automations = {
-                let Ok(store) = state.read() else {
-                    log::error!("[WorkflowAutomation][scheduler] Failed to acquire store");
+            let due_automations = match state.list_workflow_automations() {
+                Ok(items) => items
+                    .into_iter()
+                    .filter(|item| automation_is_due(item, &now))
+                    .collect::<Vec<_>>(),
+                Err(error) => {
+                    log::error!(
+                        "[WorkflowAutomation][scheduler] Failed to list automations: {}",
+                        error
+                    );
                     continue;
-                };
-                match store.list_workflow_automations() {
-                    Ok(items) => items
-                        .into_iter()
-                        .filter(|item| automation_is_due(item, &now))
-                        .collect::<Vec<_>>(),
-                    Err(error) => {
-                        log::error!(
-                            "[WorkflowAutomation][scheduler] Failed to list automations: {}",
-                            error
-                        );
-                        continue;
-                    }
                 }
             };
 
             for automation in due_automations {
                 let state = app.state::<Arc<MainStore>>();
-                {
-                    let Ok(store) = state.read() else {
-                        log::error!("[WorkflowAutomation][scheduler] Failed to acquire store");
-                        continue;
-                    };
-                    if let Err(error) = advance_automation_after_scheduler_tick(&store, &automation)
-                    {
-                        log::error!(
-                            "[WorkflowAutomation][automation={}][scheduler] Failed to advance schedule: {}",
-                            automation.id,
-                            error
-                        );
-                        continue;
-                    }
+                if let Err(error) = advance_automation_after_scheduler_tick(&state, &automation) {
+                    log::error!(
+                        "[WorkflowAutomation][automation={}][scheduler] Failed to advance schedule: {}",
+                        automation.id,
+                        error
+                    );
+                    continue;
                 }
 
                 let result = run_automation_now(

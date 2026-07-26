@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use reqwest::Response;
-use rust_i18n::t;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -1221,7 +1220,7 @@ impl AiChatTrait for OpenAIChat {
                 .and_then(|extra| extra.get("functionCall"))
                 .and_then(|value| value.as_bool());
             let proxy_function_call = proxy_group.as_ref().and_then(|group| {
-                let store = self.main_store.read().ok()?;
+                let store = self.main_store.as_ref();
                 let proxy_config: crate::ccproxy::ChatCompletionProxyConfig =
                     store.get_config(crate::constants::CFG_CHAT_COMPLETION_PROXY, HashMap::new());
                 let target = proxy_config.get(group)?.get(&final_model)?.first()?;
@@ -1247,26 +1246,6 @@ impl AiChatTrait for OpenAIChat {
             }
         } else {
             self.main_store
-                .read()
-                .map_err(|e| {
-                    let err = AiError::InitFailed(
-                        t!("db.failed_to_lock_main_store", error = e.to_string()).to_string(),
-                    );
-                    let error_payload = JsonErrorPayload {
-                        status: 500,
-                        message: &err.to_string(),
-                    };
-                    let chunk =
-                        serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
-                    callback(ChatResponse::new_with_arc(
-                        chat_id.clone(),
-                        chunk,
-                        MessageType::Error,
-                        metadata.as_ref().and_then(|m| m.to_value()),
-                        Some(FinishReason::Error),
-                    ));
-                    err
-                })?
                 .config
                 .get_ai_model_by_id(provider_id)
                 .map_err(|e| {
