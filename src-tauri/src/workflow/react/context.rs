@@ -399,9 +399,7 @@ impl ContextManager {
                 .and_then(|metadata| metadata.get("execution_status"))
                 .and_then(|status| status.as_str());
 
-            let is_completed_task_boundary = Self::is_successful_completion_message(message);
-            return (is_completed_task_boundary
-                || Self::is_complete_tool_call_batch_at(messages, boundary_idx))
+            return Self::is_complete_tool_call_batch_at(messages, boundary_idx)
                 && approval_status != Some("pending")
                 && matches!(
                     execution_status,
@@ -626,7 +624,6 @@ impl ContextManager {
                 RuntimeObservationType::NoToolCall
                     | RuntimeObservationType::InvalidToolCall
                     | RuntimeObservationType::LoopDetected
-                    | RuntimeObservationType::StepBudgetWarning
                     | RuntimeObservationType::GenericReminder
             )
         );
@@ -2584,6 +2581,148 @@ mod tests {
                 "pressure compression must not cut an {execution_status} tool exchange"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn compression_does_not_split_completion_from_remaining_tool_batch() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-atomic-tool-batch-compression-test";
+        insert_workflow(&store, session_id);
+
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store,
+            128,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Complete the task after inspecting all files".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message");
+        context
+            .add_message(
+                "assistant".to_string(),
+                "Inspecting files and completing the task".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                1,
+                false,
+                None,
+                Some(json!({ "tool_calls": [
+                    { "id": "tool-1", "function": { "name": "read_file" } },
+                    { "id": "tool-2", "function": { "name": "read_file" } },
+                    { "id": "tool-3", "function": { "name": "read_file" } },
+                    { "id": "tool-4", "function": { "name": TOOL_COMPLETE_WORKFLOW } },
+                    { "id": "tool-5", "function": { "name": "grep" } }
+                ] })),
+            )
+            .await
+            .expect("failed to add assistant tool batch");
+
+        for tool_call_id in ["tool-1", "tool-2", "tool-3"] {
+            context
+                .add_message(
+                    "tool".to_string(),
+                    format!("result for {tool_call_id}"),
+                    None,
+                    None,
+                    Some(StepType::Observe),
+                    1,
+                    false,
+                    None,
+                    Some(json!({
+                        "tool_call_id": tool_call_id,
+                        "tool_name": "read_file",
+                        "execution_status": "completed"
+                    })),
+                )
+                .await
+                .expect("failed to add tool result");
+        }
+
+        let completion = context
+            .add_message(
+                "tool".to_string(),
+                TASK_FINISHED.to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                1,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool-4",
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
+                    "execution_status": "completed"
+                })),
+            )
+            .await
+            .expect("failed to add completion result")
+            .0;
+
+        assert!(
+            !ContextManager::is_safe_pressure_compression_boundary(
+                &context.messages,
+                context.messages.len() - 1
+            ),
+            "a completion result must not make a partial assistant tool batch compressible"
+        );
+
+        context
+            .add_message(
+                "tool".to_string(),
+                "full grep output".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                1,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool-5",
+                    "tool_name": "grep",
+                    "execution_status": "completed",
+                    "llm_content": "reduced grep output"
+                })),
+            )
+            .await
+            .expect("failed to add final tool result");
+
+        context
+            .compress(
+                "<state_snapshot>compressed partial batch</state_snapshot>".to_string(),
+                2,
+                completion.id.expect("completion id missing"),
+            )
+            .await
+            .expect("failed to create incident-shaped compression summary");
+
+        let llm_messages = context.get_messages_for_llm();
+        assert!(
+            llm_messages.iter().all(|message| message.role != "tool"),
+            "the retained tail must not include an orphaned tool result"
+        );
+        assert!(
+            llm_messages.iter().all(|message| message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_calls"))
+                .and_then(|tool_calls| tool_calls.as_array())
+                .is_none_or(Vec::is_empty)),
+            "the projected context must not contain unresolved assistant tool calls"
+        );
     }
 
     #[tokio::test]

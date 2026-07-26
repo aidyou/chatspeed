@@ -919,6 +919,38 @@ async fn send_tool_stream(gateway: &dyn Gateway, session_id: &str, tool_id: &str
         .await;
 }
 
+struct ResultOnlyShellGateway<'a> {
+    inner: &'a dyn Gateway,
+}
+
+impl<'a> ResultOnlyShellGateway<'a> {
+    fn new(inner: &'a dyn Gateway) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl Gateway for ResultOnlyShellGateway<'_> {
+    async fn send(
+        &self,
+        session_id: &str,
+        payload: GatewayPayload,
+    ) -> Result<(), WorkflowEngineError> {
+        if matches!(&payload, GatewayPayload::ToolStream { .. }) {
+            return Ok(());
+        }
+        self.inner.send(session_id, payload).await
+    }
+
+    async fn inject_input(
+        &self,
+        session_id: &str,
+        input: String,
+    ) -> Result<(), WorkflowEngineError> {
+        self.inner.inject_input(session_id, input).await
+    }
+}
+
 fn format_tool_stream_output(
     last_stream_name: Option<&str>,
     stream_name: &'static str,
@@ -1467,7 +1499,7 @@ impl ShellExecute {
             .and_then(|guard| guard.get_primary_root().map(|path| path.to_path_buf()))
     }
 
-    /// Execute command with real-time output streaming to frontend
+    /// Execute a command while capturing stdout and stderr concurrently.
     async fn call_with_streaming(
         &self,
         command_str: &str,
@@ -1476,9 +1508,10 @@ impl ShellExecute {
     ) -> NativeToolResult {
         use std::process::Stdio;
 
-        let gateway = self.gateway.as_ref().ok_or(ToolError::ExecutionFailed(
+        let configured_gateway = self.gateway.as_ref().ok_or(ToolError::ExecutionFailed(
             "Gateway not configured for streaming".to_string(),
         ))?;
+        let gateway = ResultOnlyShellGateway::new(configured_gateway.as_ref());
         let session_id = self.session_id.as_ref().ok_or(ToolError::ExecutionFailed(
             "Session ID not configured for streaming".to_string(),
         ))?;
@@ -1505,7 +1538,7 @@ impl ShellExecute {
                     plan,
                     timeout_ms,
                     working_dir,
-                    gateway.as_ref(),
+                    &gateway,
                     session_id,
                     &tool_id,
                 )
@@ -1517,7 +1550,8 @@ impl ShellExecute {
             command
                 .args(["/C", command_str])
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
             if let Some(dir) = &working_dir {
                 command.current_dir(dir);
             }
@@ -1529,7 +1563,9 @@ impl ShellExecute {
             command
                 .args(["-c", command_str])
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            configure_process_group(&mut command);
             if let Some(dir) = &working_dir {
                 command.current_dir(dir);
             }
@@ -1537,6 +1573,7 @@ impl ShellExecute {
                 .spawn()
                 .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?
         };
+        let mut process_guard = StageProcessGuard::new(&child);
 
         let stdout = child.stdout.take().ok_or(ToolError::ExecutionFailed(
             "Failed to capture stdout".to_string(),
@@ -1566,7 +1603,7 @@ impl ShellExecute {
             let timeout_remaining =
                 timeout_ms.saturating_sub(start_time.elapsed().as_millis() as u64);
             if timeout_remaining == 0 {
-                let _ = child.kill().await;
+                terminate_stage_process(&mut child, &mut process_guard).await;
                 return Err(ToolError::ExecutionFailed(format!(
                     "Command timed out after {}ms",
                     timeout_ms
@@ -1619,6 +1656,7 @@ impl ShellExecute {
                                 },
                             )
                             .await;
+                        process_guard.disarm();
                         return Ok(build_shell_tool_result(
                             command_str,
                             exit_code,
@@ -1791,6 +1829,7 @@ impl ShellExecute {
                                     },
                                 )
                                 .await;
+                            process_guard.disarm();
                             return Ok(build_shell_tool_result(
                                 command_str,
                                 exit_code,
@@ -2463,7 +2502,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn safe_compound_streaming_uses_one_tool_id_and_short_circuits() {
+    async fn safe_compound_with_gateway_returns_result_without_stream_events() {
         let temp_root = tempdir().unwrap();
         let project_root = temp_root.path().canonicalize().unwrap();
         initialize_test_git_repository(&project_root);
@@ -2486,24 +2525,48 @@ mod tests {
         assert_eq!(structured["stages"][2]["executed"].as_bool(), Some(false));
 
         let streams = gateway.streams.lock().unwrap().clone();
-        assert!(!streams.is_empty());
-        assert!(streams
-            .iter()
-            .all(|(tool_id, _)| tool_id == "tool-safe-compound"));
-        let combined = streams
-            .iter()
-            .map(|(_, output)| output.as_str())
-            .collect::<String>();
-        assert!(combined.contains("Stage 1: /bin/echo first"));
-        assert!(combined.contains("Stage 2: /usr/bin/false"));
-        assert!(!combined.contains("Stage 3: git status --short"));
-        assert_eq!(combined.matches("Exit code: 1").count(), 1);
+        assert!(
+            streams.is_empty(),
+            "bash must return only its terminal result and emit no live stream events"
+        );
 
         let model_path = structured["persisted_output"]["path"]
             .as_str()
             .expect("persisted path missing");
         let physical_path = crate::libs::ai_temp::resolve_ai_temp_path(Path::new(model_path));
         std::fs::remove_file(physical_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn simple_command_with_gateway_returns_full_result_without_stream_events() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let gateway = Arc::new(RecordingGateway::default());
+        let shell = test_shell_execute(project_root)
+            .with_gateway(gateway.clone(), "test-session".to_string());
+
+        let result = shell
+            .call(json!({
+                "command": "/usr/bin/printf 'first\\nsecond\\n'",
+                "timeout": 10_000,
+                crate::constants::INTERNAL_PARAM_TOOL_CALL_ID: "tool-simple-command",
+            }))
+            .await
+            .expect("simple command should complete");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+
+        assert_eq!(structured["exit_code"].as_i64(), Some(0));
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm content missing");
+        assert!(llm_content.contains("first\nsecond"));
+        assert!(
+            gateway.streams.lock().unwrap().is_empty(),
+            "bash must not emit live stream events for simple commands"
+        );
     }
 
     #[cfg(unix)]
@@ -2608,6 +2671,29 @@ mod tests {
         let result = shell
             .call(json!({
                 "command": "sh spawn-child.sh && git status --short",
+                "timeout": 150,
+            }))
+            .await;
+
+        assert!(
+            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.contains("timed out after 150ms"))
+        );
+        assert_recorded_child_stopped(&project_root).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn simple_command_timeout_kills_the_process_group() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        write_long_running_child_script(&project_root);
+        let gateway = Arc::new(RecordingGateway::default());
+        let shell = test_shell_execute(project_root.clone())
+            .with_gateway(gateway, "test-session".to_string());
+
+        let result = shell
+            .call(json!({
+                "command": "sh spawn-child.sh",
                 "timeout": 150,
             }))
             .await;

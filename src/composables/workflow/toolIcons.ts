@@ -1,4 +1,4 @@
-import { getWorkflowToolFamily } from './toolClassification'
+import { getWorkflowToolFamily, isWorkflowMcpTool } from './toolClassification'
 
 const DIRECT_ICON_NAMES = new Set([
   'list_dir',
@@ -20,6 +20,8 @@ export function resolveWorkflowToolIcon(toolName: string, fallback = 'tool'): st
     .trim()
     .toLowerCase()
   if (!normalized) return fallback
+
+  if (isWorkflowMcpTool(normalized)) return 'mcp'
 
   if (DIRECT_ICON_NAMES.has(normalized)) {
     return normalized

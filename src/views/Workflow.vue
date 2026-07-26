@@ -796,6 +796,7 @@ const {
   activeModelName,
   canToggleFinalAuditMode,
   pendingApprovalList,
+  isWorkflowBeingDeleted,
   getPendingApprovalEntry,
   clearPendingApprovalEntry,
   upsertPendingApprovalEntry,
@@ -1783,23 +1784,37 @@ const currentInlinePendingApprovalIds = computed(
   () => workflowStore.currentInlinePendingApprovalIds
 )
 const globalPendingApprovalList = computed(() => {
-  const activeSessionId = currentWorkflowId.value
+  const existingWorkflowIds = new Set(workflows.value.map(workflow => workflow?.id).filter(Boolean))
+  const activeSessionId = existingWorkflowIds.has(currentWorkflowId.value)
+    ? currentWorkflowId.value
+    : null
   const backgroundEntries = pendingApprovalList.value.filter(
-    entry => entry.sessionId !== activeSessionId && ['approval', 'ask_user'].includes(entry?.kind)
+    entry =>
+      existingWorkflowIds.has(entry?.sessionId) &&
+      !isWorkflowBeingDeleted(entry?.sessionId) &&
+      entry.sessionId !== activeSessionId &&
+      ['approval', 'ask_user'].includes(entry?.kind)
   )
   const currentEntries = workflowStore.currentInlinePendingApprovals
     .map(entry => ({
       ...entry,
       kind: 'approval'
     }))
-    .filter(entry => entry?.kind === 'approval')
+    .filter(
+      entry =>
+        entry?.kind === 'approval' &&
+        activeSessionId &&
+        !isWorkflowBeingDeleted(activeSessionId)
+    )
 
   const currentStatus = String(currentWorkflow.value?.status || '').toLowerCase()
   const currentWaitReason = String(
     waitReason.value || currentWorkflow.value?.waitReason || ''
   ).toLowerCase()
   const currentAskUserEntry =
-    activeSessionId && (currentStatus === 'awaiting_user' || currentWaitReason === 'user_input')
+    activeSessionId &&
+    !isWorkflowBeingDeleted(activeSessionId) &&
+    (currentStatus === 'awaiting_user' || currentWaitReason === 'user_input')
       ? [
           {
             key: `${activeSessionId}:awaiting_user`,

@@ -51,8 +51,6 @@ use crate::workflow::react::{
     },
 };
 
-/// Default maximum ReAct steps before the agent is forced to conclude.
-const DEFAULT_MAX_STEPS: usize = 60;
 const ALWAYS_ENABLED_SKILL_NAME: &str = "help";
 
 /// Unified interface for ReAct executors (Planners and Runners).
@@ -101,8 +99,6 @@ pub struct WorkflowExecutor {
     pub agent_config: Agent,
     pub state: WorkflowState,
     pub current_step: usize,
-    /// Hard upper bound on ReAct iterations to prevent infinite loops.
-    pub max_steps: usize,
     pub consecutive_no_tool_calls: u32,
     pub auto_approve: HashSet<String>,
     pub signal_rx: Option<tokio::sync::mpsc::Receiver<String>>,
@@ -519,14 +515,9 @@ impl WorkflowExecutor {
             .unwrap_or(128000)
     }
 
-    fn effective_max_steps(agent_config: &Agent, phase: &ExecutionPhase) -> usize {
-        (Self::effective_context_limit(agent_config, phase) / 2000).clamp(20, 200)
-    }
-
     fn sync_runtime_limits(&mut self) {
         self.context.max_tokens =
             Self::effective_context_limit(&self.agent_config, &self.policy.phase);
-        self.max_steps = Self::effective_max_steps(&self.agent_config, &self.policy.phase);
     }
 
     fn sync_runtime_models_from_agent_config(&mut self) {
@@ -974,7 +965,6 @@ impl WorkflowExecutor {
         let path_guard_clone = path_guard.clone();
 
         let max_contexts = Self::effective_context_limit(&agent_config, &policy.phase);
-        let max_steps = Self::effective_max_steps(&agent_config, &policy.phase);
 
         let mut auto_approve = HashSet::new();
         if let Some(s) = &agent_config.auto_approve {
@@ -1057,7 +1047,6 @@ impl WorkflowExecutor {
             agent_config,
             state: WorkflowState::Pending,
             current_step: 0,
-            max_steps,
             consecutive_no_tool_calls: 0,
             auto_approve,
             signal_rx,
@@ -2915,7 +2904,6 @@ impl WorkflowExecutor {
                                 wait_reason_enum
                             );
                                 self.current_step = 0;
-                                self.max_steps += DEFAULT_MAX_STEPS;
                                 self.update_state(WorkflowState::Thinking).await?;
                                 continue;
                             }
@@ -3413,7 +3401,6 @@ impl WorkflowExecutor {
                                     wait_reason_enum
                                 );
                                     self.current_step = 0;
-                                    self.max_steps += DEFAULT_MAX_STEPS;
                                     self.update_state(WorkflowState::Thinking).await?;
                                 }
                                 WorkflowSignal::CompressionReady {
@@ -3584,83 +3571,11 @@ impl WorkflowExecutor {
 
                 self.current_step += 1;
                 log::info!(
-                    "[Workflow][session={}][step] Step {}/{}, approval_level={:?}",
+                    "[Workflow][session={}][step] Step {}, approval_level={:?}",
                     self.session_id,
                     self.current_step,
-                    self.max_steps,
                     self.policy.approval_level
                 );
-
-                // --- Max-step budget guard ---
-                if self.current_step > self.max_steps {
-                    log::warn!(
-                    "WorkflowExecutor {}: Reached max steps ({}). Asking user for continuation.",
-                    self.session_id,
-                    self.max_steps
-                );
-
-                    // In Full approval mode, auto-extend the step budget
-                    if self.policy.approval_level
-                        == crate::workflow::react::policy::ApprovalLevel::Full
-                    {
-                        log::info!(
-                            "WorkflowExecutor {}: Auto-extending step budget in Full approval mode",
-                            self.session_id
-                        );
-                        self.max_steps += DEFAULT_MAX_STEPS;
-                        self.context
-                        .add_message(
-                            "user".to_string(),
-                            format!(
-                                "<SYSTEM_REMINDER>STEP BUDGET AUTO-EXTENDED: Full approval mode detected. \
-                                Step budget has been increased by {}. Current step: {}/{}.</SYSTEM_REMINDER>",
-                                DEFAULT_MAX_STEPS, self.current_step, self.max_steps
-                            ),
-                            None,
-                            None,
-                            Some(StepType::Observe),
-                            self.current_step as i32,
-                            false,
-                            None,
-                            None,
-                        )
-                        .await?;
-                    } else {
-                        // In other approval modes, enter confirmation waiting
-                        // The unified waiting loop will handle Continue/Stop signals
-                        log::info!(
-                        "WorkflowExecutor {}: Step budget exhausted ({}/{}), entering confirmation waiting",
-                        self.session_id,
-                        self.current_step,
-                        self.max_steps
-                    );
-                        self.update_state(WorkflowState::Paused).await?;
-                        continue;
-                    }
-                } else if self.current_step == (self.max_steps * 4 / 5) {
-                    // 80% warning — give the LLM a chance to wrap up gracefully
-                    self.context
-                        .add_message(
-                            "user".to_string(),
-                            format!(
-                                "<SYSTEM_REMINDER>STEP BUDGET WARNING: You are at step {} of {}. \
-                            Only {} steps remain. Start wrapping up: complete your most critical \
-                            pending tasks and prepare a final answer. Avoid starting new research \
-                            threads.</SYSTEM_REMINDER>",
-                                self.current_step,
-                                self.max_steps,
-                                self.max_steps - self.current_step
-                            ),
-                            None,
-                            None,
-                            Some(StepType::Observe),
-                            self.current_step as i32,
-                            false,
-                            None,
-                            None,
-                        )
-                        .await?;
-                }
 
                 self.update_state(WorkflowState::Thinking).await?;
 
@@ -3695,7 +3610,6 @@ impl WorkflowExecutor {
                         chat_interface,
                         self.gateway.clone(),
                         available_tools,
-                        self.max_steps,
                         &self.policy,
                         &mut signal_rx,
                         false, // allow brief reasoning-only turns; runtime still converges via tool observations and completion tools
@@ -4050,30 +3964,20 @@ impl WorkflowExecutor {
                             invalid_tool_call_error
                         ))
                     } else if self.consecutive_no_tool_calls >= NO_TOOL_STRONG_REMINDER_THRESHOLD {
-                        let remaining = self.max_steps.saturating_sub(self.current_step);
                         Some(if self.is_child_agent_workflow() {
                             format!(
-                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. Do not repeat or rewrite a visible final result. Call `submit_result` now with the full result and summary in its arguments. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
-                                self.consecutive_no_tool_calls,
-                                self.current_step,
-                                self.max_steps,
-                                remaining
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. Do not repeat or rewrite a visible final result. Call `submit_result` now with the full result and summary in its arguments.</SYSTEM_REMINDER>",
+                                self.consecutive_no_tool_calls
                             )
                         } else if !self.pending_completion_reports.is_empty() {
                             format!(
-                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. The runtime retained the valid report from your preceding response. Emit no visible text and call `complete_workflow({{}})` exactly once with no `summary`. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
-                                self.consecutive_no_tool_calls,
-                                self.current_step,
-                                self.max_steps,
-                                remaining
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. The runtime retained the valid report from your preceding response. Emit no visible text and call `complete_workflow({{}})` exactly once with no `summary`.</SYSTEM_REMINDER>",
+                                self.consecutive_no_tool_calls
                             )
                         } else {
                             format!(
-                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. No completion report is pending. Choose one concrete work tool, or if the task is complete call `complete_workflow` exactly once with a complete non-empty `summary`. Step budget: {}/{} used, {} remaining.</SYSTEM_REMINDER>",
-                                self.consecutive_no_tool_calls,
-                                self.current_step,
-                                self.max_steps,
-                                remaining
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. No completion report is pending. Choose one concrete work tool, or if the task is complete call `complete_workflow` exactly once with a complete non-empty `summary`.</SYSTEM_REMINDER>",
+                                self.consecutive_no_tool_calls
                             )
                         })
                     } else if self.consecutive_no_tool_calls >= NO_TOOL_MEDIUM_REMINDER_THRESHOLD {
@@ -6328,7 +6232,6 @@ impl WorkflowExecutor {
 
         self.context.max_tokens =
             Self::effective_context_limit(&self.agent_config, &self.policy.phase);
-        self.max_steps = Self::effective_max_steps(&self.agent_config, &self.policy.phase);
         self.rebuild_auto_approve_from_agent_config();
         self.sync_runtime_models_from_agent_config();
         Ok(())
@@ -7131,7 +7034,8 @@ impl WorkflowExecutor {
             wait_reason,
             current_segment_id: self.context.current_segment_id,
             current_step: self.current_step,
-            max_steps: self.max_steps,
+            // Kept as a zeroed compatibility field for snapshots written by older builds.
+            max_steps: 0,
             pending_tools,
             last_action_summary: self
                 .context

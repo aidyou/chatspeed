@@ -82,6 +82,27 @@ assert.match(
   messageList,
   /isWorkflowMessagePendingApproval\(message, pendingApprovalIdSet\.value\)/
 )
+const toolGroupProjection = sourceSection(
+  messageList,
+  'const isToolWaitingApproval',
+  'const visibleMessages'
+)
+assert.match(toolGroupProjection, /isWorkflowMcpTool\(toolName\)/)
+assert.match(toolGroupProjection, /tool_group_kind: 'mcp_tools'/)
+assert.match(toolGroupProjection, /icon: 'mcp'/)
+assert.match(toolGroupProjection, /tool_group_kind: 'mixed_tools'/)
+assert.match(
+  toolGroupProjection,
+  /while \(nextIndex < messages\.length && getCollapsibleToolGroupKind\(messages\[nextIndex\]\)\)/
+)
+assert.doesNotMatch(
+  sourceSection(messageList, 'const isToolWaitingApproval', 'const isCollapsibleReadOnlyToolMessage'),
+  /approval_submitted/,
+  'approval-submitted and running tools must join their continuous tool group'
+)
+
+const toolIcons = readProjectFile('src/composables/workflow/toolIcons.ts')
+assert.match(toolIcons, /isWorkflowMcpTool\(normalized\)\) return 'mcp'/)
 
 const workflowView = readProjectFile('src/views/Workflow.vue')
 const workflowInputArea = readProjectFile('src/components/workflow/WorkflowInputArea.vue')
@@ -121,6 +142,28 @@ assert.doesNotMatch(
   /visibleTaskGroupCount\.value\s*=\s*DEFAULT_VISIBLE_TASK_GROUPS/,
   'normal task transitions must preserve the history window explicitly expanded by the user'
 )
+const workflowSidebar = readProjectFile('src/components/workflow/WorkflowSidebar.vue')
+const compactWorkflowProjection = sourceSection(
+  workflowSidebar,
+  'const compactActiveWorkflows',
+  'const filteredAutomations'
+)
+assert.match(compactWorkflowProjection, /props\.workflows\.filter/)
+assert.match(compactWorkflowProjection, /props\.workflows[\s\S]*\.slice\(0, 5\)/)
+assert.doesNotMatch(
+  compactWorkflowProjection,
+  /filteredWorkflows\.value/,
+  'compact mode must ignore expanded-mode search and directory filters'
+)
+
+const reactEngine = readProjectFile('src-tauri/src/workflow/react/engine.rs')
+assert.doesNotMatch(reactEngine, /DEFAULT_MAX_STEPS|STEP BUDGET|max-step budget|self\.max_steps/)
+assert.doesNotMatch(
+  reactEngine,
+  /Step budget:/,
+  'runtime reminders must not pressure the model with a removed step limit'
+)
+assert.doesNotMatch(workflowCore, /confirmationWaiting|showConfirmationDialog/)
 const workflowStore = readProjectFile('src/stores/workflow.js')
 const clearContextEligibility = sourceSection(
   workflowStore,
@@ -179,11 +222,22 @@ const deleteWorkflow = sourceSection(
 assert.match(deleteWorkflow, /await invokeWrapper\('delete_workflow', \{ sessionId: id \}\)/)
 assert.match(deleteWorkflow, /clearPendingApprovalEntries\(id\)/)
 assert.match(deleteWorkflow, /backgroundStateListeners\.delete\(id\)/)
+assert.match(deleteWorkflow, /setWorkflowDeleting\(id, true\)/)
+assert.match(deleteWorkflow, /backendDeleteCompleted = true/)
+assert.match(deleteWorkflow, /if \(!backendDeleteCompleted\)/)
+assert.ok(
+  deleteWorkflow.indexOf('setWorkflowDeleting(id, true)') <
+    deleteWorkflow.indexOf("await invokeWrapper('delete_workflow'"),
+  'deleting a workflow must block late approval events before invoking backend deletion'
+)
 assert.ok(
   deleteWorkflow.indexOf('clearPendingApprovalEntries(id)') <
     deleteWorkflow.indexOf('await workflowStore.loadWorkflows()'),
   'deleting a workflow must clear its background reminder cache before refreshing the sidebar'
 )
+assert.match(workflowCore, /if \(isWorkflowBeingDeleted\(sessionId\)\) return/)
+assert.match(workflowView, /existingWorkflowIds\.has\(entry\?\.sessionId\)/)
+assert.match(workflowView, /!isWorkflowBeingDeleted\(entry\?\.sessionId\)/)
 
 const classification = readProjectFile('src/composables/workflow/toolClassification.js')
 assert.doesNotMatch(classification, /startsWith\s*\(/)

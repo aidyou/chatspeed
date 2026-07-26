@@ -13,6 +13,9 @@ export const WORKFLOW_SUB_AGENT_TOOL_NAMES = Object.freeze([
   'sub_agent_stop'
 ])
 
+export const WORKFLOW_MCP_TOOL_NAME_SEPARATOR = '__mcp__'
+export const WORKFLOW_MCP_LOADER_TOOL_NAME = 'mcp_tool_load'
+
 const TODO_TOOL_NAMES = new Set(WORKFLOW_TODO_TOOL_NAMES)
 const SUB_AGENT_TOOL_NAMES = new Set(WORKFLOW_SUB_AGENT_TOOL_NAMES)
 
@@ -22,6 +25,14 @@ const normalizeToolName = toolName =>
     .toLowerCase()
 
 export const isWorkflowTodoTool = toolName => TODO_TOOL_NAMES.has(normalizeToolName(toolName))
+
+export const isWorkflowMcpTool = toolName => {
+  const normalized = normalizeToolName(toolName)
+  return (
+    normalized === WORKFLOW_MCP_LOADER_TOOL_NAME ||
+    normalized.includes(WORKFLOW_MCP_TOOL_NAME_SEPARATOR)
+  )
+}
 
 export const getWorkflowToolFamily = toolName => {
   const normalized = normalizeToolName(toolName)

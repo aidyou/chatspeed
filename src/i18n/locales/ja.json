@@ -992,8 +992,6 @@
     "commandSettingsDesc": "設定ウィンドウを開く",
     "commandSkillsConfigDesc": "ワークフロー Skills 設定を開く",
     "completionSound": "完了通知音",
-    "confirmationTitle": "確認",
-    "confirmationWaiting": "ステップ上限に達しました。続行しますか？",
     "confirmDeleteWorkflow": "このワークフローを削除してもよろしいですか？この操作は元に戻せません。",
     "continue": "続行",
     "deleteLastMessage": "最後のステップを削除",
@@ -1018,6 +1016,11 @@
       "commands": "{count} 個のコマンド",
       "editVerb": "編集",
       "explorationTitle": "探索",
+      "explorations": "{count} 回の探索",
+      "filesChanged": "{count} 個のファイル変更",
+      "mcpCalls": "{count} 回の MCP 呼び出し",
+      "mcpTitle": "MCP 呼び出し",
+      "mixedTitle": "ツール操作",
       "mutationTitle": "ファイル変更",
       "mutations": "{count} 件の変更",
       "readVerb": "読む",
@@ -1038,6 +1041,7 @@
         "pending": "保留中",
         "viewed": "表示済み"
       },
+      "todoUpdates": "{count} 回のタスク更新",
       "writeVerb": "書き込む"
     },
     "finalAuditTooltip": "タスク完了前に AI が自動的に品質レビューを実行します",

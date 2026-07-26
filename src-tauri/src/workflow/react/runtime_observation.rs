@@ -18,7 +18,6 @@ pub enum RuntimeObservationType {
     InvalidToolCall,
     LoopDetected,
     TurnBlockedPostponed,
-    StepBudgetWarning,
     SkillActivated,
     FileContextAttached,
     GenericReminder,

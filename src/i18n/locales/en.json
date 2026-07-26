@@ -997,8 +997,6 @@
     "commandSettingsDesc": "Open settings window",
     "commandSkillsConfigDesc": "Open workflow skills settings",
     "completionSound": "Completion sound",
-    "confirmationTitle": "Confirmation Required",
-    "confirmationWaiting": "Step budget exhausted. Do you want to continue?",
     "confirmDeleteWorkflow": "Are you sure you want to delete this workflow? This action cannot be undone.",
     "continue": "Continue",
     "deleteLastMessage": "Delete last step",
@@ -1023,6 +1021,11 @@
       "commands": "{count} commands",
       "editVerb": "Edit",
       "explorationTitle": "Exploration",
+      "explorations": "{count} explorations",
+      "filesChanged": "{count} files changed",
+      "mcpCalls": "{count} MCP calls",
+      "mcpTitle": "MCP calls",
+      "mixedTitle": "Tool activity",
       "mutationTitle": "File changes",
       "mutations": "{count} changes",
       "readVerb": "Read",
@@ -1043,6 +1046,7 @@
         "pending": "Pending",
         "viewed": "Viewed"
       },
+      "todoUpdates": "{count} task updates",
       "writeVerb": "Write"
     },
     "finalAuditTooltip": "AI automatically performs quality review before task completion",

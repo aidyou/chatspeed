@@ -992,8 +992,6 @@
     "commandSettingsDesc": "Открыть окно настроек",
     "commandSkillsConfigDesc": "Открыть настройки Skills рабочего процесса",
     "completionSound": "Звук завершения",
-    "confirmationTitle": "Подтверждение",
-    "confirmationWaiting": "Шаги исчерпаны. Продолжить?",
     "confirmDeleteWorkflow": "Вы уверены, что хотите удалить этот рабочий процесс? Это действие нельзя отменить.",
     "continue": "Продолжить",
     "deleteLastMessage": "Удалить последний шаг",
@@ -1018,6 +1016,11 @@
       "commands": "{count} команд",
       "editVerb": "Изменить",
       "explorationTitle": "Исследование",
+      "explorations": "Исследований: {count}",
+      "filesChanged": "Изменено файлов: {count}",
+      "mcpCalls": "Вызовов MCP: {count}",
+      "mcpTitle": "Вызовы MCP",
+      "mixedTitle": "Операции инструментов",
       "mutationTitle": "Изменения файлов",
       "mutations": "{count} изменений",
       "readVerb": "Прочитать",
@@ -1038,6 +1041,7 @@
         "pending": "Ожидает",
         "viewed": "Просмотрено"
       },
+      "todoUpdates": "Обновлений задач: {count}",
       "writeVerb": "Записать"
     },
     "finalAuditTooltip": "ИИ автоматически выполняет проверку качества перед завершением задачи",

@@ -877,6 +877,7 @@ import {
   shouldRenderSubAgentCard
 } from '@/composables/workflow/messageProjectionRules'
 import { normalizeShellCommandForDisplay } from '@/composables/workflow/toolDisplay'
+import { isWorkflowMcpTool } from '@/composables/workflow/toolClassification'
 import ApprovalDialog from './ApprovalDialog.vue'
 import FilePreviewDiff from './FilePreviewDiff.vue'
 import MarkdownSimple from './MarkdownSimple.vue'
@@ -1575,12 +1576,8 @@ const buildReadOnlyToolSummary = messages => {
 
 const isToolWaitingApproval = message => {
   const executionStatus = String(message?.metadata?.execution_status || '').toLowerCase()
-  return isApprovalPending(message) || executionStatus === 'approval_submitted'
-}
-
-const isToolStillRunning = message => {
-  const executionStatus = String(message?.metadata?.execution_status || '').toLowerCase()
-  return executionStatus === 'running' || executionStatus === 'approval_submitted'
+  if (executionStatus && executionStatus !== 'pending_approval') return false
+  return isApprovalPending(message) || executionStatus === 'pending_approval'
 }
 
 const isCollapsibleReadOnlyToolMessage = message => {
@@ -1589,7 +1586,7 @@ const isCollapsibleReadOnlyToolMessage = message => {
   if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName) || TODO_TOOL_NAMES.has(toolName)) {
     return false
   }
-  if (isToolWaitingApproval(message) || isToolStillRunning(message)) return false
+  if (isToolWaitingApproval(message)) return false
   return getReadOnlyToolCategory(toolName) !== null
 }
 
@@ -1597,7 +1594,7 @@ const isCollapsibleTodoToolMessage = message => {
   if (message?.role !== 'tool') return false
   const toolName = getMessageToolName(message)
   if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName)) return false
-  if (isToolWaitingApproval(message) || isToolStillRunning(message)) return false
+  if (isToolWaitingApproval(message)) return false
   return TODO_TOOL_NAMES.has(toolName)
 }
 
@@ -1605,7 +1602,7 @@ const isCollapsibleCommandToolMessage = message => {
   if (message?.role !== 'tool') return false
   const toolName = getMessageToolName(message)
   if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName)) return false
-  if (isToolWaitingApproval(message) || isToolStillRunning(message)) return false
+  if (isToolWaitingApproval(message)) return false
   return COLLAPSIBLE_COMMAND_TOOL_NAMES.has(toolName)
 }
 
@@ -1613,8 +1610,24 @@ const isCollapsibleMutationToolMessage = message => {
   if (message?.role !== 'tool') return false
   const toolName = getMessageToolName(message)
   if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName)) return false
-  if (isToolWaitingApproval(message) || isToolStillRunning(message)) return false
+  if (isToolWaitingApproval(message)) return false
   return COLLAPSIBLE_MUTATION_TOOL_NAMES.has(toolName)
+}
+
+const isCollapsibleMcpToolMessage = message => {
+  if (message?.role !== 'tool') return false
+  const toolName = getMessageToolName(message)
+  if (!toolName || isToolWaitingApproval(message)) return false
+  return isWorkflowMcpTool(toolName)
+}
+
+const getCollapsibleToolGroupKind = message => {
+  if (isCollapsibleReadOnlyToolMessage(message)) return 'readonly_tools'
+  if (isCollapsibleTodoToolMessage(message)) return 'todo_tools'
+  if (isCollapsibleCommandToolMessage(message)) return 'command_tools'
+  if (isCollapsibleMutationToolMessage(message)) return 'mutation_tools'
+  if (isCollapsibleMcpToolMessage(message)) return 'mcp_tools'
+  return null
 }
 
 const getTodoStatusLabel = status => {
@@ -1716,6 +1729,53 @@ const buildMutationToolSummary = messages => {
     .join(' · ')
 }
 
+const getMcpToolPreview = message => {
+  const display = message?.toolDisplay || {}
+  const label = [display.action, display.target].filter(Boolean).join(' ')
+  return truncateToolGroupText(label || getMessageToolName(message), 60)
+}
+
+const buildMcpToolSummary = messages =>
+  messages.map(getMcpToolPreview).filter(Boolean).slice(0, 3).join(' · ')
+
+const countMutationFiles = messages => {
+  const paths = new Set(
+    messages
+      .map(message => getMutationToolPreviewData(message).path)
+      .filter(Boolean)
+  )
+  return paths.size || messages.length
+}
+
+const buildMixedToolSummary = (messages, kinds) => {
+  const summaryParts = []
+  if (kinds.has('readonly_tools')) {
+    summaryParts.push(buildReadOnlyToolSummary(messages.filter(isCollapsibleReadOnlyToolMessage)))
+  }
+  if (kinds.has('mutation_tools')) {
+    summaryParts.push(buildMutationToolSummary(messages.filter(isCollapsibleMutationToolMessage)))
+  }
+  if (kinds.has('command_tools')) {
+    const commands = messages
+      .filter(isCollapsibleCommandToolMessage)
+      .map(getBashCommandPreview)
+      .filter(Boolean)
+      .slice(0, 3)
+    if (commands.length > 0) {
+      summaryParts.push(`${t('workflow.toolGroups.runVerb')} ${commands.join(', ')}`)
+    }
+  }
+  if (kinds.has('mcp_tools')) {
+    summaryParts.push(buildMcpToolSummary(messages.filter(isCollapsibleMcpToolMessage)))
+  }
+  if (kinds.has('todo_tools')) {
+    summaryParts.push(
+      messages.filter(isCollapsibleTodoToolMessage).map(getTodoToolStatusText).filter(Boolean).join('  ')
+    )
+  }
+  return summaryParts.filter(Boolean).join(' · ')
+}
+
 const buildReadOnlyToolGroupMessage = (messages, index) => {
   let readCount = 0
   let searchCount = 0
@@ -1811,64 +1871,98 @@ const buildMutationToolGroupMessage = (messages, index) => ({
   groupedTools: messages
 })
 
+const buildMcpToolGroupMessage = (messages, index) => ({
+  ...messages[0],
+  role: 'assistant',
+  displayId: getCollapsedToolGroupExpandId(messages, index, 'mcp_tools'),
+  metadata: {
+    ...(messages[0]?.metadata || {}),
+    message_kind: 'tool_group',
+    tool_group_kind: 'mcp_tools'
+  },
+  groupDisplay: {
+    icon: 'mcp',
+    action: t('workflow.toolGroups.mcpTitle'),
+    target: t('workflow.toolGroups.mcpCalls', { count: messages.length }),
+    summary: buildMcpToolSummary(messages)
+  },
+  groupedTools: messages
+})
+
+const buildMixedToolGroupMessage = (messages, index, kinds) => {
+  const targetParts = []
+  const readonlyMessages = messages.filter(isCollapsibleReadOnlyToolMessage)
+  const mutationMessages = messages.filter(isCollapsibleMutationToolMessage)
+  const commandMessages = messages.filter(isCollapsibleCommandToolMessage)
+  const mcpMessages = messages.filter(isCollapsibleMcpToolMessage)
+  const todoMessages = messages.filter(isCollapsibleTodoToolMessage)
+
+  if (readonlyMessages.length > 0) {
+    targetParts.push(t('workflow.toolGroups.explorations', { count: readonlyMessages.length }))
+  }
+  if (mutationMessages.length > 0) {
+    targetParts.push(
+      t('workflow.toolGroups.filesChanged', { count: countMutationFiles(mutationMessages) })
+    )
+  }
+  if (commandMessages.length > 0) {
+    targetParts.push(t('workflow.toolGroups.commands', { count: commandMessages.length }))
+  }
+  if (mcpMessages.length > 0) {
+    targetParts.push(t('workflow.toolGroups.mcpCalls', { count: mcpMessages.length }))
+  }
+  if (todoMessages.length > 0) {
+    targetParts.push(t('workflow.toolGroups.todoUpdates', { count: todoMessages.length }))
+  }
+
+  return {
+    ...messages[0],
+    role: 'assistant',
+    displayId: getCollapsedToolGroupExpandId(messages, index, 'mixed_tools'),
+    metadata: {
+      ...(messages[0]?.metadata || {}),
+      message_kind: 'tool_group',
+      tool_group_kind: 'mixed_tools'
+    },
+    groupDisplay: {
+      icon: 'tool',
+      action: t('workflow.toolGroups.mixedTitle'),
+      target: targetParts.join(' · '),
+      summary: buildMixedToolSummary(messages, kinds)
+    },
+    groupedTools: messages
+  }
+}
+
+const buildToolGroupMessage = (messages, index) => {
+  const kinds = new Set(messages.map(getCollapsibleToolGroupKind).filter(Boolean))
+  if (kinds.size > 1) return buildMixedToolGroupMessage(messages, index, kinds)
+
+  const [kind] = kinds
+  if (kind === 'readonly_tools') return buildReadOnlyToolGroupMessage(messages, index)
+  if (kind === 'todo_tools') return buildTodoToolGroupMessage(messages, index)
+  if (kind === 'command_tools') return buildCommandToolGroupMessage(messages, index)
+  if (kind === 'mutation_tools') return buildMutationToolGroupMessage(messages, index)
+  if (kind === 'mcp_tools') return buildMcpToolGroupMessage(messages, index)
+  return messages[0]
+}
+
 const collapseToolMessageGroups = messages => {
   const collapsed = []
 
   for (let index = 0; index < messages.length; ) {
     const current = messages[index]
 
-    if (isCollapsibleReadOnlyToolMessage(current)) {
+    if (getCollapsibleToolGroupKind(current)) {
       const group = [current]
       let nextIndex = index + 1
 
-      while (nextIndex < messages.length && isCollapsibleReadOnlyToolMessage(messages[nextIndex])) {
+      while (nextIndex < messages.length && getCollapsibleToolGroupKind(messages[nextIndex])) {
         group.push(messages[nextIndex])
         nextIndex += 1
       }
 
-      collapsed.push(group.length > 1 ? buildReadOnlyToolGroupMessage(group, index) : current)
-      index = nextIndex
-      continue
-    }
-
-    if (isCollapsibleTodoToolMessage(current)) {
-      const group = [current]
-      let nextIndex = index + 1
-
-      while (nextIndex < messages.length && isCollapsibleTodoToolMessage(messages[nextIndex])) {
-        group.push(messages[nextIndex])
-        nextIndex += 1
-      }
-
-      collapsed.push(group.length > 1 ? buildTodoToolGroupMessage(group, index) : current)
-      index = nextIndex
-      continue
-    }
-
-    if (isCollapsibleCommandToolMessage(current)) {
-      const group = [current]
-      let nextIndex = index + 1
-
-      while (nextIndex < messages.length && isCollapsibleCommandToolMessage(messages[nextIndex])) {
-        group.push(messages[nextIndex])
-        nextIndex += 1
-      }
-
-      collapsed.push(group.length > 1 ? buildCommandToolGroupMessage(group, index) : current)
-      index = nextIndex
-      continue
-    }
-
-    if (isCollapsibleMutationToolMessage(current)) {
-      const group = [current]
-      let nextIndex = index + 1
-
-      while (nextIndex < messages.length && isCollapsibleMutationToolMessage(messages[nextIndex])) {
-        group.push(messages[nextIndex])
-        nextIndex += 1
-      }
-
-      collapsed.push(group.length > 1 ? buildMutationToolGroupMessage(group, index) : current)
+      collapsed.push(group.length > 1 ? buildToolGroupMessage(group, index) : current)
       index = nextIndex
       continue
     }

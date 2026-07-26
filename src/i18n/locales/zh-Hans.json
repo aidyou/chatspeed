@@ -997,8 +997,6 @@
     "commandSettingsDesc": "打开设置窗口",
     "commandSkillsConfigDesc": "打开工作流技能设置",
     "completionSound": "完成提示音",
-    "confirmationTitle": "需要确认",
-    "confirmationWaiting": "步数已耗尽，是否继续执行？",
     "confirmDeleteWorkflow": "确定要删除这个工作流吗？此操作无法撤销。",
     "continue": "继续执行",
     "deleteLastMessage": "删除最后一步",
@@ -1023,6 +1021,11 @@
       "commands": "{count} 个命令",
       "editVerb": "Edit",
       "explorationTitle": "探索",
+      "explorations": "探索 {count} 次",
+      "filesChanged": "修改 {count} 个文件",
+      "mcpCalls": "MCP 调用 {count} 次",
+      "mcpTitle": "MCP 调用",
+      "mixedTitle": "工具操作",
       "mutationTitle": "文件修改",
       "mutations": "{count} 处修改",
       "readVerb": "Read",
@@ -1043,6 +1046,7 @@
         "pending": "待处理",
         "viewed": "已查看"
       },
+      "todoUpdates": "更新任务 {count} 次",
       "writeVerb": "Write"
     },
     "finalAuditTooltip": "任务结束前由 AI 自动进行质量审核",

@@ -60,6 +60,7 @@ export function useWorkflowCore({
     const unlistenWorkflowEvents = ref(null)
     const backgroundStateListeners = new Map<string, () => void>()
     const pendingApprovalEntries = ref({})
+    const deletingWorkflowIds = ref(new Set<string>())
     const modelSelectorVisible = ref(false)
     const modelSelectorTab = ref('act')
     const modelSelectorMode = ref('provider')
@@ -118,6 +119,7 @@ export function useWorkflowCore({
         return entries
             .filter((entry) => {
                 if (!entry) return false
+                if (deletingWorkflowIds.value.has(entry.sessionId)) return false
                 if (entry.id !== 'awaiting_approval') return true
                 return !sessionsWithConcreteApprovals.has(entry.sessionId)
             })
@@ -548,8 +550,21 @@ export function useWorkflowCore({
         pendingApprovalEntries.value = {}
     }
 
+    const setWorkflowDeleting = (sessionId: string, deleting: boolean) => {
+        const nextIds = new Set(deletingWorkflowIds.value)
+        if (deleting) {
+            nextIds.add(sessionId)
+        } else {
+            nextIds.delete(sessionId)
+        }
+        deletingWorkflowIds.value = nextIds
+    }
+
+    const isWorkflowBeingDeleted = (sessionId: string) =>
+        !!sessionId && deletingWorkflowIds.value.has(sessionId)
+
     const upsertPendingApprovalEntry = (sessionId, payload = {}) => {
-        if (!sessionId) return
+        if (!sessionId || isWorkflowBeingDeleted(sessionId)) return
 
         const workflow = workflows.value.find((item) => item.id === sessionId)
         const workflowTitle = workflow?.title || workflow?.userQuery || t('workflow.untitled')
@@ -718,7 +733,7 @@ export function useWorkflowCore({
     }
 
     const reconcileApprovalEntriesFromExecutionContext = (sessionId, workflow) => {
-        if (!sessionId) return
+        if (!sessionId || isWorkflowBeingDeleted(sessionId)) return
 
         const pendingTools = getExecutionContextPendingTools(workflow)
         const pendingToolIds = new Set(
@@ -802,6 +817,7 @@ export function useWorkflowCore({
             workflows.value
                 .filter((workflow) => {
                     if (!workflow?.id) return false
+                    if (isWorkflowBeingDeleted(workflow.id)) return false
                     if (workflow.id === activeSessionId) return false
                     const status = String(workflow.status || '').toLowerCase()
                     return status && !TERMINAL_STATUSES.includes(status)
@@ -826,6 +842,7 @@ export function useWorkflowCore({
             const eventName = `workflow://event/${sessionId}`
             const unlisten = await listen(eventName, (event) => {
                 safeExecute(() => {
+                    if (isWorkflowBeingDeleted(sessionId)) return
                     const payload = event.payload
                     if (!payload?.type) return
 
@@ -883,11 +900,22 @@ export function useWorkflowCore({
                 }, undefined, `backgroundWorkflowState:${sessionId}`)
             })
 
+            if (isWorkflowBeingDeleted(sessionId)) {
+                unlisten()
+                continue
+            }
+
             backgroundStateListeners.set(sessionId, unlisten)
         }
 
         for (const workflow of workflows.value) {
-            if (!workflow?.id || workflow.id === activeSessionId) continue
+            if (
+                !workflow?.id ||
+                workflow.id === activeSessionId ||
+                isWorkflowBeingDeleted(workflow.id)
+            ) {
+                continue
+            }
 
             const statusLower = String(workflow.status || '').toLowerCase()
             const waitReasonValue = workflow.waitReason || null
@@ -969,11 +997,6 @@ export function useWorkflowCore({
                         if ((payload.state || '').toLowerCase() === WORKFLOW_STATUSES.COMPLETED) {
                             playCompletionSound()
                         }
-                    }
-
-                    // Check for confirmation waiting
-                    if (payload.state === WORKFLOW_STATUSES.PAUSED && payload.wait_reason === WORKFLOW_WAIT_REASONS.CONFIRMATION) {
-                        showConfirmationDialog()
                     }
 
                     // If we move out of Thinking/Executing, reset the parser
@@ -1303,10 +1326,6 @@ export function useWorkflowCore({
                 clearPendingApprovalEntries(id)
             }
 
-            if (status === WORKFLOW_STATUSES.PAUSED && workflowStore.waitReason === WORKFLOW_WAIT_REASONS.CONFIRMATION && workflowStore.hasLiveSession) {
-                showConfirmationDialog()
-            }
-
             // Initialize settings from workflow's agentConfig or fallback to agent defaults
             const config = workflowStore.currentWorkflow.agentConfig || {}
             syncWorkflowUiControlsFromConfig(config)
@@ -1315,45 +1334,6 @@ export function useWorkflowCore({
         // Scroll to bottom after switching workflow (force scroll)
         nextTick(() => {
             scrollToBottom(true)
-        })
-    }
-
-    const showConfirmationDialog = async () => {
-        ElMessageBox.confirm(t('workflow.confirmationWaiting'), t('workflow.confirmationTitle'), {
-            confirmButtonText: t('workflow.continue'),
-            cancelButtonText: t('workflow.stop'),
-            type: 'warning',
-            showClose: false,
-            closeOnClickModal: false,
-            closeOnPressEscape: false
-        }).then(async () => {
-            console.log('[Workflow] User chose to continue')
-            const signal = JSON.stringify({ type: SIGNAL_TYPES.CONTINUE })
-            try {
-                await invokeWrapper('workflow_signal', {
-                    sessionId: currentWorkflowId.value,
-                    signal
-                })
-            } catch (error) {
-                console.error('Failed to send continue signal:', error)
-            }
-        }).catch(async () => {
-            console.log('[Workflow] User chose to stop')
-            // Immediately update UI state
-            workflowStore.setRunning(false)
-            clearRetryTimer()
-            resetChatState()
-            workflowStore.setNotification('', 'info')
-
-            const signal = JSON.stringify({ type: SIGNAL_TYPES.STOP })
-            try {
-                await invokeWrapper('workflow_signal', {
-                    sessionId: currentWorkflowId.value,
-                    signal
-                })
-            } catch (error) {
-                console.error('Failed to send stop signal:', error)
-            }
         })
     }
 
@@ -1863,15 +1843,20 @@ export function useWorkflowCore({
                 background: 'var(--cs-bg-color-opacity)'
             })
 
+            setWorkflowDeleting(id, true)
+            clearPendingApprovalEntries(id)
+            const backgroundListener = backgroundStateListeners.get(id)
+            if (backgroundListener) {
+                backgroundListener()
+                backgroundStateListeners.delete(id)
+            }
+            let backendDeleteCompleted = false
+
             try {
                 await invokeWrapper('delete_workflow', { sessionId: id })
+                backendDeleteCompleted = true
 
                 clearPendingApprovalEntries(id)
-                const backgroundListener = backgroundStateListeners.get(id)
-                if (backgroundListener) {
-                    backgroundListener()
-                    backgroundStateListeners.delete(id)
-                }
 
                 // If deleting the current workflow, clear it
                 if (id === currentWorkflowId.value) {
@@ -1896,8 +1881,17 @@ export function useWorkflowCore({
                 showMessage(t('common.deleteSuccess'), 'success')
             } catch (error) {
                 console.error('Failed to delete workflow:', error)
+                if (!backendDeleteCompleted) {
+                    setWorkflowDeleting(id, false)
+                    syncBackgroundStateListeners().catch((syncError) => {
+                        console.warn('[Workflow] Failed to restore workflow listeners after delete failure:', syncError)
+                    })
+                }
                 showMessage(t('common.operationFailed', { error: String(error) }), 'error')
             } finally {
+                if (!backendDeleteCompleted) {
+                    setWorkflowDeleting(id, false)
+                }
                 loadingInstance.close()
             }
         })
@@ -2033,6 +2027,7 @@ export function useWorkflowCore({
         canToggleFinalAuditMode,
         isAwaitingApproval,
         pendingApprovalList,
+        isWorkflowBeingDeleted,
         getPendingApprovalEntry,
         clearPendingApprovalEntry,
         upsertPendingApprovalEntry,

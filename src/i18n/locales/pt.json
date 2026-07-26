@@ -992,8 +992,6 @@
     "commandSettingsDesc": "Abrir janela de configurações",
     "commandSkillsConfigDesc": "Abrir configurações de Skills do fluxo de trabalho",
     "completionSound": "Som de conclusão",
-    "confirmationTitle": "Confirmação",
-    "confirmationWaiting": "Limite de passos atingido. Continuar?",
     "confirmDeleteWorkflow": "Tem certeza de que deseja excluir este fluxo de trabalho? Esta ação não pode ser desfeita.",
     "continue": "Continuar",
     "deleteLastMessage": "Excluir a última etapa",
@@ -1018,6 +1016,11 @@
       "commands": "{count} comandos",
       "editVerb": "Editar",
       "explorationTitle": "Exploração",
+      "explorations": "{count} explorações",
+      "filesChanged": "{count} arquivos alterados",
+      "mcpCalls": "{count} chamadas MCP",
+      "mcpTitle": "Chamadas MCP",
+      "mixedTitle": "Atividade das ferramentas",
       "mutationTitle": "Alterações de arquivo",
       "mutations": "{count} alterações",
       "readVerb": "Ler",
@@ -1038,6 +1041,7 @@
         "pending": "Pendente",
         "viewed": "Visualizada"
       },
+      "todoUpdates": "{count} atualizações de tarefas",
       "writeVerb": "Escrever"
     },
     "finalAuditTooltip": "A IA realiza automaticamente uma revisão de qualidade antes de concluir a tarefa",

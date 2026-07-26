@@ -992,8 +992,6 @@
     "commandSettingsDesc": "Einstellungsfenster öffnen",
     "commandSkillsConfigDesc": "Workflow-Skill-Einstellungen öffnen",
     "completionSound": "Abschlusston",
-    "confirmationTitle": "Bestätigung",
-    "confirmationWaiting": "Schritte aufgebraucht. Fortfahren?",
     "confirmDeleteWorkflow": "Sind Sie sicher, dass Sie diesen Workflow löschen möchten? Diese Aktion kann nicht rückgängig gemacht werden.",
     "continue": "Fortsetzen",
     "deleteLastMessage": "Letzten Schritt löschen",
@@ -1018,6 +1016,11 @@
       "commands": "{count} Befehle",
       "editVerb": "Bearbeiten",
       "explorationTitle": "Erkundung",
+      "explorations": "{count} Erkundungen",
+      "filesChanged": "{count} Dateien geändert",
+      "mcpCalls": "{count} MCP-Aufrufe",
+      "mcpTitle": "MCP-Aufrufe",
+      "mixedTitle": "Werkzeugaktivität",
       "mutationTitle": "Dateiänderungen",
       "mutations": "{count} Änderungen",
       "readVerb": "Lesen",
@@ -1038,6 +1041,7 @@
         "pending": "Ausstehend",
         "viewed": "Angezeigt"
       },
+      "todoUpdates": "{count} Aufgabenaktualisierungen",
       "writeVerb": "Schreiben"
     },
     "finalAuditTooltip": "Qualitätsprüfung durch KI vor Aufgabenabschluss",

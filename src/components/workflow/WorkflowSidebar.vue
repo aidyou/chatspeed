@@ -517,13 +517,13 @@ const filteredWorkflows = computed(() => {
 })
 
 const compactActiveWorkflows = computed(() =>
-  filteredWorkflows.value.filter((workflow) =>
+  props.workflows.filter((workflow) =>
     !stoppedStatuses.has(String(workflow.status || '').toLowerCase())
   )
 )
 
 const compactRecentWorkflows = computed(() =>
-  filteredWorkflows.value
+  props.workflows
     .filter((workflow) => stoppedStatuses.has(String(workflow.status || '').toLowerCase()))
     .slice(0, 5)
 )
