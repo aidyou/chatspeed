@@ -218,16 +218,19 @@ pub async fn delete_conversation(state: State<'_, Arc<RwLock<MainStore>>>, id: i
 /// console.log(messages);
 /// ```
 #[command]
-pub fn get_messages_for_conversation(
+pub async fn get_messages_for_conversation(
     window: tauri::Window,
-    state: State<Arc<RwLock<MainStore>>>,
+    state: State<'_, Arc<RwLock<MainStore>>>,
     conversation_id: i64,
     window_label: Option<String>,
 ) -> Result<()> {
     let label = window_label.unwrap_or(window.label().to_string());
-    let main_store = state.read()?;
-    let messages = main_store
-        .get_messages_for_conversation(conversation_id)
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    let messages = MainStore::get_messages_for_conversation_with_runtime(runtime, conversation_id)
+        .await
         .map_err(AppError::Db)?;
 
     let app = window.app_handle();

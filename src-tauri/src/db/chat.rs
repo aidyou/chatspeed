@@ -95,6 +95,43 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    pub(crate) async fn get_messages_for_conversation_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        conversation_id: i64,
+    ) -> Result<Vec<Message>, StoreError> {
+        runtime
+            .read(move |conn| {
+                let mut statement = conn.prepare(
+                    "SELECT id, conversation_id, role, content, timestamp, metadata FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+                )?;
+                let rows = statement.query_map([conversation_id], |row| {
+                    let metadata_text: Option<String> = row.get("metadata")?;
+                    let metadata = metadata_text.and_then(|value| {
+                        serde_json::from_str(&value)
+                            .map_err(|error| {
+                                log::warn!(
+                                    "Failed to parse metadata JSON for message: {}, error: {}",
+                                    value,
+                                    error
+                                );
+                                error
+                            })
+                            .ok()
+                    });
+                    Ok(Message {
+                        id: row.get("id")?,
+                        conversation_id: row.get("conversation_id")?,
+                        role: row.get("role")?,
+                        content: row.get("content")?,
+                        timestamp: row.get("timestamp")?,
+                        metadata,
+                    })
+                })?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+    }
+
     pub fn get_messages_for_conversation(
         &self,
         conversation_id: i64,
