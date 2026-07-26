@@ -1847,6 +1847,28 @@ impl MainStore {
         Ok(())
     }
 
+    pub(crate) async fn update_workflow_status_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        status: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "UPDATE workflows
+                     SET status = ?1,
+                         updated_at = CASE
+                             WHEN status IS NOT ?1 THEN CURRENT_TIMESTAMP
+                             ELSE updated_at
+                         END
+                     WHERE id = ?2",
+                    params![status, id],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
     pub fn update_workflow_status(&self, id: &str, status: &str) -> Result<(), StoreError> {
         let conn = self
             .conn

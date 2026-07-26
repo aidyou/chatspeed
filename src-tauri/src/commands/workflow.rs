@@ -2609,11 +2609,13 @@ pub async fn update_workflow_status(
     session_id: String,
     status: String,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    store
-        .update_workflow_status(&session_id, &status)
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    let runtime = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store.db_runtime().map_err(|e| e.to_string())?
+    };
+    MainStore::update_workflow_status_with_runtime(runtime, session_id, status)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ==========================================
