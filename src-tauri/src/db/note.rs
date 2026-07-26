@@ -444,6 +444,26 @@ impl MainStore {
         Ok(notes)
     }
 
+    pub(crate) async fn get_tags_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+    ) -> Result<Vec<NoteTag>, StoreError> {
+        runtime
+            .read(|conn| {
+                let mut statement =
+                    conn.prepare("SELECT * FROM note_tag_items ORDER BY name ASC")?;
+                let rows = statement.query_map([], |row| {
+                    Ok(NoteTag {
+                        id: row.get("id")?,
+                        name: row.get("name")?,
+                        note_count: row.get("note_count")?,
+                        created_at: row.get("created_at")?,
+                    })
+                })?;
+                Ok(rows.collect::<SqliteResult<Vec<_>>>()?)
+            })
+            .await
+    }
+
     /// Retrieves a list of all tags that have associated notes.
     ///
     /// # Returns

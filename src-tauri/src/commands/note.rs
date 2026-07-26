@@ -104,9 +104,14 @@ pub fn add_note(
 /// console.log(tags);
 /// ```
 #[command]
-pub fn get_tags(state: State<Arc<RwLock<MainStore>>>) -> Result<Vec<NoteTag>> {
-    let main_store = state.read()?;
-    main_store.get_tags().map_err(AppError::Db)
+pub async fn get_tags(state: State<'_, Arc<RwLock<MainStore>>>) -> Result<Vec<NoteTag>> {
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::get_tags_with_runtime(runtime)
+        .await
+        .map_err(AppError::Db)
 }
 
 /// Get notes by tag ID
