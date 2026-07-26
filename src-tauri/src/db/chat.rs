@@ -47,6 +47,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn get_conversation_by_id(&self, id: i64) -> Result<Conversation, StoreError> {
         let conn = self
             .conn
@@ -106,6 +107,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    #[cfg(test)]
     pub fn get_all_conversations(&self) -> Result<Vec<Conversation>, StoreError> {
         let conn = self
             .conn
@@ -182,6 +184,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn get_messages_for_conversation(
         &self,
         conversation_id: i64,
@@ -255,6 +258,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn add_conversation(&self, title: String) -> Result<i64, StoreError> {
         let conn = self
             .conn
@@ -303,6 +307,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn update_conversation(
         &self,
         id: i64,
@@ -351,6 +356,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn delete_conversation(&self, id: i64) -> Result<(), StoreError> {
         let conn = self
             .conn
@@ -407,6 +413,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn add_message(
         &self,
         conversation_id: i64,
@@ -467,6 +474,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn delete_message(&self, id: Vec<i64>) -> Result<(), StoreError> {
         if id.is_empty() {
             return Ok(());
@@ -524,6 +532,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(test)]
     pub fn update_message_metadata(
         &self,
         id: i64,
