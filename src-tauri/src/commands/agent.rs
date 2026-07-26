@@ -185,9 +185,13 @@ pub async fn get_agent(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
     id: String,
 ) -> Result<Option<Agent>, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    let agent = store.get_agent(&id).map_err(|e| e.to_string())?;
-    Ok(agent)
+    let runtime = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store.db_runtime().map_err(|e| e.to_string())?
+    };
+    MainStore::get_agent_with_runtime(runtime, id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

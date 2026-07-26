@@ -635,6 +635,22 @@ impl MainStore {
         Ok(())
     }
 
+    /// Gets an agent by ID on a dedicated reader worker.
+    pub(crate) async fn get_agent_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+    ) -> Result<Option<Agent>, StoreError> {
+        runtime
+            .read(move |conn| {
+                conn.query_row("SELECT * FROM agents WHERE id = ?1", params![id], |row| {
+                    Ok(Agent::from(row))
+                })
+                .optional()
+                .map_err(StoreError::from)
+            })
+            .await
+    }
+
     /// Gets an agent by ID
     pub fn get_agent(&self, id: &str) -> Result<Option<Agent>, StoreError> {
         let conn = self
