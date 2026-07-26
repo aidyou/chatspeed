@@ -4512,9 +4512,12 @@ pub async fn update_workflow_todo_list(
     session_id: String,
     todo_list: String,
 ) -> Result<(), String> {
-    let store = state.read().map_err(|e| e.to_string())?;
-    store
-        .update_workflow_todo_list(&session_id, &todo_list)
+    let runtime = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        store.db_runtime().map_err(|e| e.to_string())?
+    };
+    MainStore::update_workflow_todo_list_with_runtime(runtime, session_id, todo_list)
+        .await
         .map_err(|e| e.to_string())
 }
 

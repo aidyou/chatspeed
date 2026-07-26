@@ -1970,12 +1970,18 @@ impl WorkflowExecutor {
         self.persist_approved_plan_anchor(approved_plan, acceptance_contract, approval_source)
             .await?;
 
-        {
+        let runtime = {
             let store = self.context.main_store.read().map_err(|error| {
                 WorkflowEngineError::Db(crate::db::error::StoreError::LockError(error.to_string()))
             })?;
-            store.update_workflow_todo_list(&self.session_id, "[]")?;
-        }
+            store.db_runtime()?
+        };
+        MainStore::update_workflow_todo_list_with_runtime(
+            runtime,
+            self.session_id.clone(),
+            "[]".to_string(),
+        )
+        .await?;
         self.sync_todo_list().await?;
         self.pending_completion_reports.clear();
         self.next_llm_runtime_reminder = None;

@@ -55,13 +55,18 @@ async fn save_db_todo_list(
     session_id: &str,
     list: Vec<Value>,
 ) -> Result<(), ToolError> {
-    let store = store
-        .read()
-        .map_err(|e| ToolError::ExecutionFailed(format!("DB Lock error: {}", e)))?;
+    let runtime = {
+        let store = store
+            .read()
+            .map_err(|e| ToolError::ExecutionFailed(format!("DB Lock error: {}", e)))?;
+        store
+            .db_runtime()
+            .map_err(|e| ToolError::ExecutionFailed(format!("DB runtime error: {}", e)))?
+    };
     let list_str = serde_json::to_string(&list)
         .map_err(|e| ToolError::ExecutionFailed(format!("Serialize error: {}", e)))?;
-    store
-        .update_workflow_todo_list(session_id, &list_str)
+    MainStore::update_workflow_todo_list_with_runtime(runtime, session_id.to_string(), list_str)
+        .await
         .map_err(|e| ToolError::ExecutionFailed(format!("DB Update error: {}", e)))
 }
 

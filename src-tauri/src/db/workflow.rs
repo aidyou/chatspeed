@@ -2018,6 +2018,22 @@ impl MainStore {
         Ok(())
     }
 
+    pub(crate) async fn update_workflow_todo_list_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        todo_list: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "UPDATE workflows SET todo_list = ?1, updated_at = CASE WHEN todo_list IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                    params![todo_list, id],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
     pub fn update_workflow_todo_list(&self, id: &str, todo_list: &str) -> Result<(), StoreError> {
         let conn = self
             .conn
