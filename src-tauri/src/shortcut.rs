@@ -88,8 +88,12 @@ pub fn get_default_shortcut(key: &str) -> Option<&'static str> {
 
 fn get_effective_shortcut(config_store: Arc<std::sync::RwLock<MainStore>>, key: &str) -> String {
     if let Ok(c) = config_store.read() {
-        if let Some(value) = c.config.get_setting(key).and_then(|value| value.as_str()) {
-            return value.to_string();
+        if let Some(value) = c
+            .config
+            .get_setting(key)
+            .and_then(|value| value.as_str().map(ToString::to_string))
+        {
+            return value;
         }
     }
 

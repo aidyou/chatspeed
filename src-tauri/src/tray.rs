@@ -29,8 +29,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         (
             c.config
                 .get_setting(crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT)
-                .and_then(|value| value.as_str())
-                .map(ToString::to_string)
+                .and_then(|value| value.as_str().map(ToString::to_string))
                 .unwrap_or_else(|| {
                     crate::shortcut::get_default_shortcut(
                         crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
@@ -40,8 +39,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
                 }),
             c.config
                 .get_setting(crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT)
-                .and_then(|value| value.as_str())
-                .map(ToString::to_string)
+                .and_then(|value| value.as_str().map(ToString::to_string))
                 .unwrap_or_else(|| {
                     crate::shortcut::get_default_shortcut(
                         crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
@@ -51,8 +49,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
                 }),
             c.config
                 .get_setting(crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT)
-                .and_then(|value| value.as_str())
-                .map(ToString::to_string)
+                .and_then(|value| value.as_str().map(ToString::to_string))
                 .unwrap_or_else(|| {
                     crate::shortcut::get_default_shortcut(
                         crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
@@ -62,8 +59,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
                 }),
             c.config
                 .get_setting(crate::constants::CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT)
-                .and_then(|value| value.as_str())
-                .map(ToString::to_string)
+                .and_then(|value| value.as_str().map(ToString::to_string))
                 .unwrap_or_else(|| {
                     crate::shortcut::get_default_shortcut(
                         crate::constants::CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
@@ -73,8 +69,7 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
                 }),
             c.config
                 .get_setting(crate::constants::CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT)
-                .and_then(|value| value.as_str())
-                .map(ToString::to_string)
+                .and_then(|value| value.as_str().map(ToString::to_string))
                 .unwrap_or_else(|| {
                     crate::shortcut::get_default_shortcut(
                         crate::constants::CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,

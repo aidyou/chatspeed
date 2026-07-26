@@ -28,7 +28,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn set_config(&mut self, key: &str, value: &Value) -> Result<(), StoreError> {
+    pub fn set_config(&self, key: &str, value: &Value) -> Result<(), StoreError> {
         if matches!(key, API_KEY_ENCRYPTION_CONFIG_KEY | API_KEY_FILE_CONFIG_KEY) {
             return Err(StoreError::InvalidData(
                 "The API key encryption key cannot be updated".to_string(),
@@ -54,7 +54,7 @@ impl MainStore {
     ///
     /// # Arguments
     /// * `key` - The key of the configuration item to delete.
-    pub fn delete_config(&mut self, key: &str) -> Result<(), StoreError> {
+    pub fn delete_config(&self, key: &str) -> Result<(), StoreError> {
         if matches!(key, API_KEY_ENCRYPTION_CONFIG_KEY | API_KEY_FILE_CONFIG_KEY) {
             return Err(StoreError::InvalidData(
                 "The API key encryption key cannot be deleted".to_string(),
@@ -69,7 +69,7 @@ impl MainStore {
             error!("Failed to delete config for key '{}': {}", key, e);
             return Err(StoreError::from(e));
         }
-        self.config.settings.remove(key);
+        self.config.delete_setting(key);
         Ok(())
     }
 
@@ -81,7 +81,7 @@ impl MainStore {
         inspect_encryption_status(&conn)
     }
 
-    pub fn activate_api_key_file(&mut self, path: &Path) -> Result<(), StoreError> {
+    pub fn activate_api_key_file(&self, path: &Path) -> Result<(), StoreError> {
         {
             let mut conn = self
                 .conn
@@ -92,7 +92,7 @@ impl MainStore {
         self.reload_config()
     }
 
-    pub fn generate_and_activate_api_key_file(&mut self, path: &Path) -> Result<(), StoreError> {
+    pub fn generate_and_activate_api_key_file(&self, path: &Path) -> Result<(), StoreError> {
         generate_key_file(path)?;
         self.activate_api_key_file(path)
     }
@@ -119,7 +119,7 @@ impl MainStore {
     /// # Errors
     /// Returns a `StoreError` if the database operation fails
     pub fn add_ai_model(
-        &mut self,
+        &self,
         name: String,
         models: Vec<ModelConfig>,
         default_model: String,
@@ -212,7 +212,7 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn update_ai_model(
-        &mut self,
+        &self,
         id: i64,
         name: String,
         models: Vec<ModelConfig>,
@@ -283,7 +283,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn update_ai_model_order(&mut self, model_ids: Vec<i64>) -> Result<(), StoreError> {
+    pub fn update_ai_model_order(&self, model_ids: Vec<i64>) -> Result<(), StoreError> {
         let conn = self
             .conn
             .lock()
@@ -311,7 +311,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn delete_ai_model(&mut self, id: i64) -> Result<(), StoreError> {
+    pub fn delete_ai_model(&self, id: i64) -> Result<(), StoreError> {
         let conn = self
             .conn
             .lock()
@@ -340,7 +340,7 @@ impl MainStore {
     /// # Errors
     /// Returns a `StoreError` if the database operation fails.
     pub fn add_ai_skill(
-        &mut self,
+        &self,
         name: String,
         icon: Option<String>,
         logo: Option<String>,
@@ -407,7 +407,7 @@ impl MainStore {
     ///
     /// Returns a `StoreError` if the database operation fails.
     pub fn update_ai_skill(
-        &mut self,
+        &self,
         id: i64,
         name: String,
         icon: Option<String>,
@@ -472,7 +472,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn update_ai_skill_order(&mut self, skill_ids: Vec<i64>) -> Result<(), StoreError> {
+    pub fn update_ai_skill_order(&self, skill_ids: Vec<i64>) -> Result<(), StoreError> {
         let conn = self
             .conn
             .lock()
@@ -496,7 +496,7 @@ impl MainStore {
     ///
     /// # Returns
     /// The logo of the AI skill.
-    pub fn get_skill_logo(&mut self, id: i64) -> Result<String, StoreError> {
+    pub fn get_skill_logo(&self, id: i64) -> Result<String, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -517,7 +517,7 @@ impl MainStore {
     ///
     /// # Errors
     /// Returns a `StoreError` if the database operation fails.
-    pub fn delete_ai_skill(&mut self, id: i64) -> Result<(), StoreError> {
+    pub fn delete_ai_skill(&self, id: i64) -> Result<(), StoreError> {
         // delete the logo image if exists
         if let Ok(logo) = self.get_skill_logo(id) {
             if !logo.is_empty() {
@@ -559,11 +559,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn set_window_size(
-        &mut self,
-        size: WindowSize,
-        window_label: &str,
-    ) -> Result<(), StoreError> {
+    pub fn set_window_size(&self, size: WindowSize, window_label: &str) -> Result<(), StoreError> {
         let key = if window_label == "main" {
             crate::constants::CFG_WINDOW_SIZE
         } else if window_label == "assistant" {
@@ -587,7 +583,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn save_window_position(&mut self, pos: MainWindowPosition) -> Result<(), StoreError> {
+    pub fn save_window_position(&self, pos: MainWindowPosition) -> Result<(), StoreError> {
         self.set_config(CFG_WINDOW_POSITION, &serde_json::json!(pos))?;
         Ok(())
     }
@@ -600,10 +596,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
-    pub fn save_workflow_window_position(
-        &mut self,
-        pos: MainWindowPosition,
-    ) -> Result<(), StoreError> {
+    pub fn save_workflow_window_position(&self, pos: MainWindowPosition) -> Result<(), StoreError> {
         self.set_config(
             crate::constants::CFG_WORKFLOW_WINDOW_POSITION,
             &serde_json::json!(pos),

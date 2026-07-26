@@ -1,6 +1,7 @@
 use crate::db::{error::StoreError, runtime::DbRuntime, ProxyGroup};
 
 use log::error;
+use parking_lot::RwLock;
 use rusqlite::{params, Connection, OpenFlags, Result};
 
 use rust_i18n::t;
@@ -187,10 +188,94 @@ impl Config {
     }
 }
 
+pub struct ConfigCache {
+    inner: RwLock<Config>,
+}
+
+impl ConfigCache {
+    fn new(config: Config) -> Self {
+        Self {
+            inner: RwLock::new(config),
+        }
+    }
+
+    pub fn get_setting(&self, key: &str) -> Option<Value> {
+        self.inner.read().get_setting(key).cloned()
+    }
+
+    pub fn settings(&self) -> HashMap<String, Value> {
+        self.inner.read().settings.clone()
+    }
+
+    pub fn get_ai_model_by_id(&self, id: i64) -> Result<AiModel, StoreError> {
+        self.inner.read().get_ai_model_by_id(id)
+    }
+
+    pub fn get_ai_models(&self) -> Result<Vec<AiModel>, StoreError> {
+        self.inner.read().get_ai_models()
+    }
+
+    pub fn api_keys_locked(&self) -> bool {
+        self.inner.read().api_keys_locked
+    }
+
+    pub fn get_ai_skill_by_id(&self, id: i64) -> Result<AiSkill, StoreError> {
+        self.inner.read().get_ai_skill_by_id(id)
+    }
+
+    pub fn get_ai_skills(&self) -> Vec<AiSkill> {
+        self.inner.read().get_ai_skills()
+    }
+
+    pub fn get_mcps(&self) -> Vec<Mcp> {
+        self.inner.read().get_mcps()
+    }
+
+    pub fn get_mcp_by_id(&self, id: i64) -> Result<Mcp, StoreError> {
+        self.inner.read().get_mcp_by_id(id)
+    }
+
+    pub fn get_proxy_groups(&self) -> Vec<ProxyGroup> {
+        self.inner.read().get_proxy_groups()
+    }
+
+    pub fn get_proxy_group_by_name(&self, name: &str) -> Result<ProxyGroup, StoreError> {
+        self.inner.read().get_proxy_group_by_name(name)
+    }
+
+    pub(crate) fn update_setting(&self, key: &str, value: Value) {
+        self.inner.write().update_setting(key, value);
+    }
+
+    pub(crate) fn delete_setting(&self, key: &str) {
+        self.inner.write().settings.remove(key);
+    }
+
+    pub(crate) fn set_ai_models(&self, models: Vec<AiModel>) {
+        self.inner.write().set_ai_models(models);
+    }
+
+    pub(crate) fn set_ai_skills(&self, skills: Vec<AiSkill>) {
+        self.inner.write().set_ai_skills(skills);
+    }
+
+    pub(crate) fn set_mcps(&self, mcps: Vec<Mcp>) {
+        self.inner.write().set_mcps(mcps);
+    }
+
+    pub(crate) fn set_proxy_groups(&self, groups: Vec<ProxyGroup>) {
+        self.inner.write().set_proxy_groups(groups);
+    }
+
+    pub(crate) fn replace(&self, config: Config) {
+        *self.inner.write() = config;
+    }
+}
+
 /// Manages unified storage for the application, including chat history and configuration.
 pub struct MainStore {
     pub(crate) conn: Mutex<Connection>,
-    pub(crate) config: Config,
+    pub(crate) config: ConfigCache,
     runtime: Mutex<Option<std::sync::Arc<DbRuntime>>>,
     runtime_path: Mutex<std::path::PathBuf>,
 }
@@ -243,7 +328,7 @@ impl MainStore {
         let runtime = std::sync::Arc::new(DbRuntime::open(&db_path)?);
         Ok(Self {
             conn,
-            config,
+            config: ConfigCache::new(config),
             runtime: Mutex::new(Some(runtime)),
             runtime_path: Mutex::new(db_path),
         })
@@ -327,7 +412,7 @@ impl MainStore {
     ///
     /// # Returns
     /// Returns a `Result` containing `()` if successful, or a `StoreError` if an error occurs.
-    pub fn reload_config(&mut self) -> Result<(), StoreError> {
+    pub fn reload_config(&self) -> Result<(), StoreError> {
         let mut conn = self
             .conn
             .lock()
@@ -335,7 +420,7 @@ impl MainStore {
         super::api_key_crypto::migrate_to_configured_key_if_available(&mut conn)?;
         match Self::load_config(&conn) {
             Ok(config) => {
-                self.config = config;
+                self.config.replace(config);
                 Ok(())
             }
             Err(e) => Err(e),
@@ -765,7 +850,7 @@ mod tests {
 
         assert_eq!(
             main_store.config.get_setting("restore_test"),
-            Some(&json!("restored"))
+            Some(json!("restored"))
         );
         assert!(!staged_path.exists());
     }
@@ -785,7 +870,7 @@ mod tests {
             .is_err());
         assert_eq!(
             main_store.config.get_setting("restore_test"),
-            Some(&json!("original"))
+            Some(json!("original"))
         );
         main_store
             .set_config("restore_test_after_failure", &json!(true))
@@ -819,7 +904,7 @@ mod tests {
         std::fs::remove_file(&key_path).unwrap();
 
         let reopened = MainStore::new(&db_path).unwrap();
-        assert!(reopened.config.api_keys_locked);
+        assert!(reopened.config.api_keys_locked());
         assert!(reopened.config.get_ai_models().is_err());
     }
 
@@ -842,7 +927,7 @@ mod tests {
 
         assert_eq!(
             main_store.config.get_setting(API_KEY_FILE_CONFIG_KEY),
-            Some(&json!(key_path
+            Some(json!(key_path
                 .canonicalize()
                 .unwrap()
                 .display()

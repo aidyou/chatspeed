@@ -71,7 +71,6 @@ pub fn get_active_proxy_group(state: State<Arc<RwLock<MainStore>>>) -> Result<St
     Ok(store
         .config
         .get_setting(crate::constants::CFG_ACTIVE_PROXY_GROUP)
-        .and_then(|v| v.as_str())
-        .unwrap_or("default")
-        .to_string())
+        .and_then(|value| value.as_str().map(ToString::to_string))
+        .unwrap_or_else(|| "default".to_string()))
 }

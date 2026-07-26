@@ -89,7 +89,7 @@ pub struct RestoreSettingResponse {
 #[command]
 pub fn get_all_config(state: State<Arc<RwLock<MainStore>>>) -> Result<HashMap<String, Value>> {
     let config_store = state.read()?;
-    let mut settings = config_store.config.settings.clone();
+    let mut settings = config_store.config.settings();
     settings.insert(
         "httpServer".to_string(),
         Value::String(get_static_var(&HTTP_SERVER)),
