@@ -462,6 +462,10 @@ impl DbRuntime {
         })
     }
 
+    pub fn resume_after_maintenance(&self) {
+        self.accepting_jobs.store(true, Ordering::Release);
+    }
+
     pub fn shutdown_for_maintenance(&self) -> Result<(), StoreError> {
         std::thread::scope(|scope| {
             scope

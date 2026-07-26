@@ -343,10 +343,6 @@ impl MainStore {
             .ok_or(StoreError::RuntimeMaintenance)
     }
 
-    fn drain_runtime(&self) -> Result<(), StoreError> {
-        self.db_runtime()?.drain_for_maintenance()
-    }
-
     fn pause_runtime(&self) -> Result<(), StoreError> {
         let runtime = self
             .runtime
@@ -430,21 +426,24 @@ impl MainStore {
     /// Performs a database checkpoint, flushing all WAL data to the main database file.
     /// This is critical before performing file-level backups in WAL mode.
     pub fn checkpoint(&self) -> Result<(), StoreError> {
-        self.drain_runtime()?;
+        let runtime = self.db_runtime()?;
+        let checkpoint_result = self.checkpoint_for_maintenance(&runtime);
+        runtime.resume_after_maintenance();
+        checkpoint_result
+    }
+
+    fn checkpoint_for_maintenance(&self, runtime: &DbRuntime) -> Result<(), StoreError> {
+        runtime.drain_for_maintenance()?;
         let conn = self
             .conn
             .lock()
             .map_err(|e| StoreError::LockError(e.to_string()))?;
-
-        // PRAGMA wal_checkpoint returns rows, so we use query_row to handle it correctly.
-        // TRUNCATE ensures the WAL file is actually integrated and reduced in size.
         let _ = conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE);", [], |_| Ok(()))
             .map_err(|e| {
                 log::error!("Failed to checkpoint database: {}", e);
                 StoreError::from(e)
             })?;
-
         Ok(())
     }
 
@@ -530,7 +529,11 @@ impl MainStore {
             }
         }
 
-        self.checkpoint()?;
+        let runtime = self.db_runtime()?;
+        if let Err(error) = self.checkpoint_for_maintenance(&runtime) {
+            runtime.resume_after_maintenance();
+            return Err(error);
+        }
         self.pause_runtime()?;
         let rollback_path = main_db_path
             .with_extension(format!("restore-backup-{}", uuid::Uuid::new_v4().simple()));
