@@ -1656,7 +1656,15 @@ pub async fn create_workflow(
     gateway: State<'_, Arc<TauriGateway>>,
     request: CreateWorkflowRequest,
 ) -> Result<String, String> {
-    let store = state.read().map_err(|e| e.to_string())?;
+    let (agent, runtime) = {
+        let store = state.read().map_err(|e| e.to_string())?;
+        let agent = store
+            .get_agent(&request.agent_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Agent {} not found", request.agent_id))?;
+        let runtime = store.db_runtime().map_err(|e| e.to_string())?;
+        (agent, runtime)
+    };
 
     // Always use TSID for new workflow sessions
     let session_id = tsid_generator.generate().map_err(|e| e.to_string())?;
@@ -1666,12 +1674,6 @@ pub async fn create_workflow(
         session_id,
         request.agent_id
     );
-
-    // Get agent to construct initial agent_config
-    let agent = store
-        .get_agent(&request.agent_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Agent {} not found", request.agent_id))?;
 
     if agent.role.as_deref() == Some("child") {
         return Err("Child agents cannot be used as top-level workflow agents".to_string());
@@ -1684,15 +1686,16 @@ pub async fn create_workflow(
     // Use empty string for user_query if not provided (new workflow creation)
     let user_query = request.user_query.as_deref().unwrap_or("");
 
-    store
-        .create_workflow(
-            &session_id,
-            user_query,
-            &request.agent_id,
-            Some(agent_config_json),
-            None,
-        )
-        .map_err(|e| e.to_string())?;
+    MainStore::create_workflow_with_runtime(
+        runtime,
+        session_id.clone(),
+        user_query.to_string(),
+        request.agent_id.clone(),
+        Some(agent_config_json),
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     // Generate and store session key for proxy authentication
     let session_key = format!("sk-{}", uuid::Uuid::new_v4());
