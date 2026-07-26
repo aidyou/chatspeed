@@ -131,7 +131,7 @@ impl MainStore {
     /// # Errors
     /// Returns a `StoreError` if any database operation fails.
     pub fn add_note(
-        &mut self,
+        &self,
         title: &str,
         content: &str,
         conversation_id: Option<i64>,
@@ -256,7 +256,7 @@ impl MainStore {
     ///
     /// # Errors
     /// Returns a `StoreError` if any database operation fails.
-    pub fn delete_note(&mut self, note_id: i64) -> Result<(), StoreError> {
+    pub fn delete_note(&self, note_id: i64) -> Result<(), StoreError> {
         let mut conn = self
             .conn
             .lock()
