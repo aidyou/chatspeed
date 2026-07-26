@@ -566,6 +566,18 @@ mod tests {
         )
         .await
         .unwrap();
+        let conversations = MainStore::get_all_conversations_with_runtime(runtime.clone())
+            .await
+            .unwrap();
+        assert!(conversations
+            .iter()
+            .any(|conversation| conversation.id == Some(conversation_id)));
+        let conversation =
+            MainStore::get_conversation_by_id_with_runtime(runtime.clone(), conversation_id)
+                .await
+                .unwrap();
+        assert_eq!(conversation.title, "Runtime conversation");
+
         let message_id = MainStore::add_message_with_runtime(
             runtime.clone(),
             conversation_id,
