@@ -1705,6 +1705,28 @@ impl MainStore {
         .map_err(StoreError::from)
     }
 
+    pub(crate) async fn add_workflow_message_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        msg: WorkflowMessage,
+    ) -> Result<WorkflowMessage, StoreError> {
+        let metadata_json = msg
+            .metadata
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "INSERT INTO workflow_messages (id, session_id, role, message, reasoning, message_kind, message_subtype, segment_id, source_event_type, metadata, attached_context, step_type, step_index, is_error, error_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    params![msg.id, msg.session_id, msg.role, msg.message, msg.reasoning, msg.message_kind, msg.message_subtype, msg.segment_id, msg.source_event_type, metadata_json, msg.attached_context, msg.step_type, msg.step_index, if msg.is_error { 1 } else { 0 }, msg.error_type],
+                )?;
+                conn.execute("UPDATE workflows SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1", params![msg.session_id])?;
+                Ok(msg)
+            })
+            .await
+    }
+
     pub fn add_workflow_message(
         &self,
         msg: &WorkflowMessage,

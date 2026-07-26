@@ -1194,10 +1194,13 @@ impl ContextManager {
             }
             .normalize_classification();
 
-            let store = self.main_store.read().map_err(|e| {
-                WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
-            })?;
-            store.add_workflow_message(&msg)?
+            let runtime = {
+                let store = self.main_store.read().map_err(|e| {
+                    WorkflowEngineError::Db(crate::db::error::StoreError::LockError(e.to_string()))
+                })?;
+                store.db_runtime()?
+            };
+            MainStore::add_workflow_message_with_runtime(runtime, msg).await?
         };
 
         self.messages.push(persisted.clone());
