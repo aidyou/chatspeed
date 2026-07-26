@@ -1725,7 +1725,7 @@ pub async fn list_workflows(
     state: State<'_, Arc<std::sync::RwLock<MainStore>>>,
 ) -> Result<Vec<Workflow>, String> {
     let runtime = {
-        let store = state.write().map_err(|e| e.to_string())?;
+        let store = state.read().map_err(|e| e.to_string())?;
         reconcile_interrupted_child_workflows(&store).map_err(|e| e.to_string())?;
         store.db_runtime().map_err(|e| e.to_string())?
     };
