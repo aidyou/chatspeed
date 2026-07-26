@@ -406,6 +406,42 @@ impl MainStore {
     /// let store = MainStore::new()?;
     /// let notes = store.search_notes("keyword")?;
     /// ```
+    pub(crate) async fn search_notes_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        keyword: String,
+    ) -> Result<Vec<Note>, StoreError> {
+        runtime
+            .read(move |conn| {
+                let mut statement = conn.prepare(
+                    "SELECT n.* FROM notes n WHERE n.title LIKE ?1 ORDER BY n.updated_at DESC",
+                )?;
+                let pattern = format!("%{}%", keyword);
+                let rows = statement.query_map(params![pattern], |row| {
+                    let metadata_text: Option<String> = row.get("metadata")?;
+                    Ok(Note {
+                        id: row.get("id")?,
+                        title: row.get("title")?,
+                        content: row.get("content")?,
+                        content_hash: row.get("content_hash")?,
+                        conversation_id: row.get("conversation_id")?,
+                        message_id: row.get("message_id")?,
+                        created_at: row.get("created_at")?,
+                        updated_at: row.get("updated_at")?,
+                        tags: row
+                            .get::<_, Option<String>>("tags")?
+                            .unwrap_or_default()
+                            .split(',')
+                            .filter(|tag| !tag.is_empty())
+                            .map(ToString::to_string)
+                            .collect(),
+                        metadata: metadata_text.and_then(|value| serde_json::from_str(&value).ok()),
+                    })
+                })?;
+                Ok(rows.collect::<SqliteResult<Vec<_>>>()?)
+            })
+            .await
+    }
+
     pub fn search_notes(&self, kw: &str) -> Result<Vec<Note>, StoreError> {
         let conn = self
             .conn

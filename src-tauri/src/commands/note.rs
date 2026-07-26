@@ -226,7 +226,15 @@ pub fn delete_note(state: State<Arc<RwLock<MainStore>>>, id: i64) -> Result<()> 
 /// console.log('Found matching notes:', notes);
 /// ```
 #[command]
-pub fn search_notes(state: State<Arc<RwLock<MainStore>>>, kw: &str) -> Result<Vec<Note>> {
-    let main_store = state.read()?;
-    main_store.search_notes(kw).map_err(AppError::Db)
+pub async fn search_notes(
+    state: State<'_, Arc<RwLock<MainStore>>>,
+    kw: String,
+) -> Result<Vec<Note>> {
+    let runtime = {
+        let main_store = state.read()?;
+        main_store.db_runtime().map_err(AppError::Db)?
+    };
+    MainStore::search_notes_with_runtime(runtime, kw)
+        .await
+        .map_err(AppError::Db)
 }
