@@ -4,7 +4,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::{
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc as std_mpsc, Arc,
     },
     thread::JoinHandle,
@@ -203,6 +203,7 @@ pub struct DbRuntime {
     telemetry: TelemetryIngress,
     next_reader: AtomicUsize,
     metrics: Arc<DbRuntimeMetrics>,
+    accepting_jobs: AtomicBool,
     is_memory: bool,
 }
 
@@ -248,6 +249,7 @@ impl DbRuntime {
             telemetry,
             next_reader: AtomicUsize::new(0),
             metrics,
+            accepting_jobs: AtomicBool::new(true),
             is_memory,
         })
     }
@@ -422,6 +424,9 @@ impl DbRuntime {
         T: Send + 'static,
         F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
     {
+        if !self.accepting_jobs.load(Ordering::Acquire) {
+            return Err(StoreError::RuntimeMaintenance);
+        }
         let (result_sender, result_receiver) = oneshot::channel();
         let metrics = Arc::clone(&self.metrics);
         let job: DbJob = Box::new(move |connection| {
@@ -449,6 +454,7 @@ impl DbRuntime {
     }
 
     pub fn drain_for_maintenance(&self) -> Result<(), StoreError> {
+        self.accepting_jobs.store(false, Ordering::Release);
         std::thread::scope(|scope| {
             scope.spawn(|| self.drain_blocking()).join().map_err(|_| {
                 StoreError::WorkerFailed("maintenance drain thread panicked".to_string())
@@ -482,6 +488,9 @@ impl DbRuntime {
     }
 
     pub fn enqueue_ccproxy_stat(&self, stat: CcproxyStat) -> Result<(), StoreError> {
+        if !self.accepting_jobs.load(Ordering::Acquire) {
+            return Err(StoreError::RuntimeMaintenance);
+        }
         self.telemetry.enqueue(stat)?;
         DbRuntimeMetrics::observe_high_water(
             &self.metrics.telemetry_pending_high_water,
@@ -536,7 +545,7 @@ fn configure_writer_connection(connection: &Connection) -> Result<(), StoreError
 #[cfg(test)]
 mod tests {
     use super::DbRuntime;
-    use crate::db::CcproxyStat;
+    use crate::db::{CcproxyStat, StoreError};
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
@@ -686,17 +695,28 @@ mod tests {
                 .unwrap();
         }
         runtime.drain_for_maintenance().unwrap();
-        let count = runtime
-            .read(|connection| {
-                Ok(
-                    connection.query_row("SELECT COUNT(*) FROM ccproxy_stats", [], |row| {
-                        row.get::<_, i64>(0)
-                    })?,
-                )
-            })
-            .await
-            .unwrap();
-        assert_eq!(count, 3);
+        assert!(matches!(
+            runtime.read(|_| Ok(())).await,
+            Err(StoreError::RuntimeMaintenance)
+        ));
+        assert!(matches!(
+            runtime.enqueue_ccproxy_stat(CcproxyStat {
+                id: None,
+                client_model: "client".to_string(),
+                backend_model: "backend".to_string(),
+                provider_id: Some(1),
+                provider: "provider".to_string(),
+                protocol: "openai".to_string(),
+                tool_compat_mode: 0,
+                status_code: 200,
+                error_message: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                request_at: None,
+            }),
+            Err(StoreError::RuntimeMaintenance)
+        ));
         let metrics = runtime.metrics();
         assert_eq!(metrics.telemetry_records_completed, 3);
         assert!(metrics.telemetry_batches_completed >= 1);
