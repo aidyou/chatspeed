@@ -39,7 +39,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
@@ -48,7 +48,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -60,7 +60,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Cache vcpkg
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             vcpkg_installed
@@ -146,12 +146,12 @@ jobs:
           # echo "VCPKGRS_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET" >> $env:GITHUB_ENV
 
       - name: setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           run_install: false
 
       - name: Install Node and Cache pnpm Dependencies
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: 'pnpm'
@@ -163,7 +163,7 @@ jobs:
         run: pnpm build
 
       - name: Tauri build
-        uses: tauri-apps/tauri-action@v0.5.22
+        uses: tauri-apps/tauri-action@v0.6.2
         env:
           NODE_OPTIONS: "--max_old_space_size=4096"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -173,7 +173,7 @@ jobs:
           args: --target ${{ matrix.target }} --bundles nsis
 
       - name: Upload Windows Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-${{ matrix.target == 'x86_64-pc-windows-msvc' && 'x86_64' || 'aarch64' }}
           path: |
@@ -193,7 +193,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
@@ -202,7 +202,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -214,7 +214,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Cache vcpkg
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             vcpkg_installed
@@ -234,6 +234,7 @@ jobs:
 
       - name: Install dependencies (macOS)
         run: |
+          brew untap aws/tap 2>/dev/null || true
           brew list sqlite3 || brew install sqlite3
           if ! brew list bzip2 &>/dev/null;
             then
@@ -246,12 +247,12 @@ jobs:
           echo "PKG_CONFIG_PATH=$(brew --prefix sqlite3)/lib/pkgconfig:$BZIP2_PREFIX/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           run_install: false
 
       - name: Install Node and Cache pnpm Dependencies
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: 'pnpm'
@@ -263,7 +264,7 @@ jobs:
         run: pnpm build
 
       - name: Tauri build
-        uses: tauri-apps/tauri-action@v0.5.22
+        uses: tauri-apps/tauri-action@v0.6.2
         env:
           NODE_OPTIONS: "--max_old_space_size=4096"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -273,7 +274,7 @@ jobs:
           args: --target ${{ matrix.target }}  --bundles dmg
 
       - name: Upload macOS Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-${{ matrix.target == 'aarch64-apple-darwin' && 'aarch64' || 'x86_64' }}
           path: |
@@ -296,7 +297,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
@@ -305,7 +306,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -317,7 +318,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Cache vcpkg
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             vcpkg_installed
@@ -357,12 +358,12 @@ jobs:
           fi
 
       - name: setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           run_install: false
 
       - name: Install Node and Cache pnpm Dependencies
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: 'pnpm'
@@ -374,7 +375,7 @@ jobs:
         run: pnpm build
 
       - name: Tauri build
-        uses: tauri-apps/tauri-action@v0.5.22
+        uses: tauri-apps/tauri-action@v0.6.2
         env:
           NODE_OPTIONS: "--max_old_space_size=4096"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -420,28 +421,28 @@ jobs:
           done
 
       - name: Upload package-specific Linux updater manifests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-${{ matrix.arch }}-updater-manifests
           path: updater-manifests/latest-*.json
           retention-days: 30
 
       - name: Upload Linux DEB Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-${{ matrix.arch }}-deb
           path: src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
           retention-days: 30
 
       - name: Upload Linux RPM Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-${{ matrix.arch }}-rpm
           path: src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
           retention-days: 30
 
       - name: Upload Linux AppImage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-${{ matrix.arch }}-appimage
           path: src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
