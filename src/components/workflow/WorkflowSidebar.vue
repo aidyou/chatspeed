@@ -482,6 +482,15 @@ watch(
 )
 
 watch(
+  () => props.sidebarCollapsed,
+  collapsed => {
+    if (collapsed) {
+      selectedPrimaryRootFilter.value = ''
+    }
+  }
+)
+
+watch(
   () => [selectedPrimaryRootFilter.value, props.currentWorkflowId, props.workflows],
   () => {
     if (!selectedPrimaryRootFilter.value) return
