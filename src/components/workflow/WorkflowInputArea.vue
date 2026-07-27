@@ -103,10 +103,52 @@
               :disabled="false"
               @update:model-value="$emit('update-selected-agent', $event)" />
           </div>
-          <div class="selector-wrap model-selector-trigger" @click="$emit('open-model-selector')">
-            <span class="model-name">{{ activeModelName }}</span>
-            <cs name="arrow-down" size="12px" />
-          </div>
+          <el-popover
+            v-model:visible="modelSelectorOpen"
+            placement="top-start"
+            :width="320"
+            trigger="click"
+            popper-class="workflow-model-selector-popover">
+            <template #reference>
+              <button type="button" class="selector-wrap model-selector-trigger">
+                <span class="model-name">{{ activeModelName }}</span>
+                <cs name="arrow-down" size="12px" />
+              </button>
+            </template>
+            <div class="workflow-model-selector">
+              <template v-for="(group, groupIndex) in modelOptions" :key="group.key">
+                <div v-if="groupIndex > 0" class="model-option-divider" />
+                <div class="model-option-group-label">{{ group.label }}</div>
+                <div
+                  v-for="option in group.models"
+                  :key="option.key"
+                  class="model-option"
+                  :class="{ active: option.selected }"
+                  role="button"
+                  tabindex="0"
+                  @click="selectModel(option)"
+                  @keydown.enter.prevent="selectModel(option)"
+                  @keydown.space.prevent="selectModel(option)">
+                  <span class="model-option-main">
+                    <span class="model-option-name">{{ option.name }}</span>
+                    <cs v-if="option.selected" name="check" size="14px" />
+                  </span>
+                  <span v-if="option.supportsThinking" class="model-thinking-budget" @click.stop>
+                    <span class="model-thinking-label">{{ $t('settings.model.thinkingLevel') }}</span>
+                    <button
+                      v-for="level in thinkingLevelOptions"
+                      :key="level.value"
+                      type="button"
+                      class="thinking-level-option"
+                      :class="{ active: option.thinkingLevel === level.value }"
+                      @click.stop="updateThinkingLevel(option, level.value)">
+                      {{ $t(level.label) }}
+                    </button>
+                  </span>
+                </div>
+              </template>
+            </div>
+          </el-popover>
 
           <div class="icons">
             <el-dropdown
@@ -129,6 +171,12 @@
                     <cs name="skill" size="14px" class="dropdown-icon" />
                     <span class="dropdown-content">
                       <span class="dropdown-text">{{ $t('workflow.skillsConfigTitle') }}</span>
+                    </span>
+                  </el-dropdown-item>
+                  <el-dropdown-item command="modelConfig" divided>
+                    <cs name="setting" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-text">{{ $t('settings.model.modelConfig') }}</span>
                     </span>
                   </el-dropdown-item>
                   <el-dropdown-item
@@ -488,8 +536,16 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useModelStore } from '@/stores/model'
+import { useSettingStore } from '@/stores/setting'
+import { createLatestModelConfigSaver } from '@/composables/workflow/modelConfigPersistence'
+import {
+  buildCurrentModelOptions,
+  getModelConfigForOption,
+  resolveActiveModelConfig
+} from '@/composables/workflow/modelConfigSelection'
 import AgentSelector from './AgentSelector.vue'
 import StatusNotifier from './StatusNotifier.vue'
 
@@ -537,6 +593,10 @@ const props = defineProps({
   activeModelName: {
     type: String,
     default: 'Select Model'
+  },
+  saveModelConfig: {
+    type: Function,
+    required: true
   },
   showPlanningModeToggle: {
     type: Boolean,
@@ -671,6 +731,128 @@ import { showMessage } from '@/libs/util'
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
 const agentStore = useAgentStore()
+const modelStore = useModelStore()
+const settingStore = useSettingStore()
+const modelSelectorOpen = ref(false)
+const modelConfigDraft = ref(null)
+
+const THINKING_LEVEL_TO_BUDGET = {
+  low: 1024,
+  medium: 2048,
+  high: 4096,
+  max: 8192
+}
+const thinkingLevelOptions = [
+  { value: 'low', label: 'settings.model.reasoningLow' },
+  { value: 'medium', label: 'settings.model.reasoningMedium' },
+  { value: 'high', label: 'settings.model.reasoningHigh' },
+  { value: 'max', label: 'settings.model.reasoningMax' }
+]
+
+const defaultModelConfig = () => ({
+  id: '',
+  model: '',
+  temperature: -0.1,
+  thinking: { type: 'disabled' },
+  contextSize: 128000,
+  maxTokens: 0
+})
+const cloneModelConfig = model => ({ ...defaultModelConfig(), ...(model || {}) })
+const getAgentModelConfigs = () => ({
+  plan: props.selectedAgent?.planModel,
+  act: props.selectedAgent?.actModel,
+  utility: props.selectedAgent?.utilityModel,
+  vision: props.selectedAgent?.visionModel
+})
+const sourceModelConfigs = computed(() => {
+  const models = props.currentWorkflow?.agentConfig?.models || getAgentModelConfigs()
+  return {
+    plan: cloneModelConfig(models.plan),
+    act: cloneModelConfig(models.act),
+    utility: cloneModelConfig(models.utility),
+    vision: cloneModelConfig(models.vision)
+  }
+})
+const effectiveModelConfigs = computed(() => modelConfigDraft.value || sourceModelConfigs.value)
+const modelConfigScope = computed(() =>
+  props.currentWorkflowId ? `workflow:${props.currentWorkflowId}` : `agent:${props.selectedAgent?.id || ''}`
+)
+const modelConfigActivation = ref(0)
+const modelConfigTarget = computed(() =>
+  props.currentWorkflowId
+    ? { type: 'workflow', sessionId: props.currentWorkflowId }
+    : { type: 'agent', agentId: props.selectedAgent?.id || '' }
+)
+const activeModelKey = computed(() => (props.planningMode ? 'plan' : 'act'))
+const activeModelConfig = computed(() =>
+  resolveActiveModelConfig(effectiveModelConfigs.value, props.planningMode)
+)
+const modelOptions = computed(() =>
+  buildCurrentModelOptions({
+    currentConfig: activeModelConfig.value,
+    modelStore,
+    settings: settingStore.settings
+  })
+)
+const updateActiveModelConfigs = configs => {
+  const scope = modelConfigScope.value
+  const activation = modelConfigActivation.value
+  modelConfigDraft.value = configs
+  latestModelConfigSaver.submit({
+    scope,
+    activation,
+    target: { ...modelConfigTarget.value },
+    configs
+  })
+}
+const latestModelConfigSaver = createLatestModelConfigSaver({
+  save: submission => props.saveModelConfig(submission),
+  onSuccess: submission => {
+    if (
+      submission.scope === modelConfigScope.value &&
+      submission.activation === modelConfigActivation.value
+    ) {
+      modelConfigDraft.value = null
+    }
+  },
+  onFailure: submission => {
+    if (
+      submission.scope === modelConfigScope.value &&
+      submission.activation === modelConfigActivation.value
+    ) {
+      modelConfigDraft.value = null
+    }
+  }
+})
+const selectModel = option => {
+  const configs = { ...effectiveModelConfigs.value }
+  configs[activeModelKey.value] = getModelConfigForOption(option, activeModelConfig.value)
+  updateActiveModelConfigs(configs)
+}
+const updateThinkingLevel = (option, level) => {
+  const configs = { ...effectiveModelConfigs.value }
+  const currentConfig = activeModelConfig.value
+  const selectedConfig =
+    currentConfig.id === option.id && currentConfig.model === option.model
+      ? { ...currentConfig }
+      : getModelConfigForOption(option, currentConfig)
+  selectedConfig.thinking = {
+    type: 'enabled',
+    budgetTokens: THINKING_LEVEL_TO_BUDGET[level] || THINKING_LEVEL_TO_BUDGET.low
+  }
+  configs[activeModelKey.value] = selectedConfig
+  updateActiveModelConfigs(configs)
+}
+
+watch(
+  modelConfigScope,
+  scope => {
+    modelConfigActivation.value = latestModelConfigSaver.invalidateScope(scope)
+    modelConfigDraft.value = null
+  },
+  { immediate: true }
+)
+
 const defaultShellPolicies = ref([])
 const isImportingShellPolicies = ref(false)
 const newShellCommandPattern = ref('')
@@ -915,6 +1097,12 @@ const handleQuickActionCommand = command => {
   if (command === 'skillsConfig') {
     quickActionsDropdownRef.value?.handleClose?.()
     emit('open-skills-selector')
+    return
+  }
+
+  if (command === 'modelConfig') {
+    quickActionsDropdownRef.value?.handleClose?.()
+    emit('open-model-selector')
     return
   }
 

@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-stop:before {
+  content: "\e6a2";
+}
+
 .cs-at:before {
   content: "\e81e";
 }
@@ -537,10 +541,6 @@
 
 .cs-ai-baai:before {
   content: "\e619";
-}
-
-.cs-stop:before {
-  content: "\e637";
 }
 
 .cs-loading:before {

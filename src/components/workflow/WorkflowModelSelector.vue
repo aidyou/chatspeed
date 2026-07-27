@@ -146,10 +146,12 @@ const defaultModelConfig = () => ({
 const THINKING_LEVEL_TO_BUDGET = {
   low: 1024,
   medium: 2048,
-  high: 4096
+  high: 4096,
+  max: 8192
 }
 const thinkingLevelFromBudget = (budget) => {
   const normalized = Number(budget) || 0
+  if (normalized > 4096) return 'max'
   if (normalized > 2048) return 'high'
   if (normalized > 1024) return 'medium'
   return 'low'
@@ -159,7 +161,8 @@ const isThinkingEnabled = thinking => String(thinking?.type || '').toLowerCase()
 const workflowThinkingLevelOptions = [
   { value: 'low', label: 'settings.model.reasoningLow' },
   { value: 'medium', label: 'settings.model.reasoningMedium' },
-  { value: 'high', label: 'settings.model.reasoningHigh' }
+  { value: 'high', label: 'settings.model.reasoningHigh' },
+  { value: 'max', label: 'settings.model.reasoningMax' }
 ]
 
 const agentModels = reactive({

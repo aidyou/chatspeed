@@ -232,6 +232,7 @@
           :show-planning-mode-toggle="showPlanningModeToggle"
           :can-toggle-planning-mode="canTogglePlanningMode"
           :active-model-name="activeModelName"
+          :save-model-config="onModelConfigSave"
           :planning-mode="planningMode"
           :auto-approve-plan="autoApprovePlan"
           :can-toggle-auto-approve-plan="canTogglePlanningMode"

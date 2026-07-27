@@ -44,6 +44,19 @@ fn deepseek_reasoning_enabled(body_json: &Value) -> bool {
         .is_some_and(|value| value > 0)
 }
 
+fn normalize_deepseek_reasoning_effort(body_json: &mut Value) {
+    let Some(reasoning_effort) = body_json
+        .get_mut("reasoning_effort")
+        .and_then(|value| value.as_str().map(str::to_owned))
+    else {
+        return;
+    };
+
+    if reasoning_effort.eq_ignore_ascii_case("xhigh") {
+        body_json["reasoning_effort"] = Value::String("max".to_string());
+    }
+}
+
 fn normalize_deepseek_reasoning_replay(body_json: &mut Value) {
     if !deepseek_reasoning_enabled(body_json) {
         return;
@@ -131,6 +144,7 @@ pub fn preprocess_client_request_body(
             }
         }
 
+        normalize_deepseek_reasoning_effort(&mut body_json);
         normalize_deepseek_reasoning_replay(&mut body_json);
     }
 
@@ -184,6 +198,27 @@ mod tests {
             stop: Vec::new(),
             tool_compat_mode: None,
         }
+    }
+
+    #[test]
+    fn preprocess_deepseek_maps_xhigh_reasoning_effort_to_max() {
+        let body = json!({
+            "model": "deepseek-v4-flash",
+            "thinking": { "type": "enabled" },
+            "reasoning_effort": "xhigh",
+            "messages": [{ "role": "user", "content": "start" }]
+        });
+
+        let processed = preprocess_client_request_body(
+            Bytes::from(body.to_string()),
+            &ChatProtocol::OpenAI,
+            &deepseek_proxy_model(),
+        )
+        .expect("preprocess should succeed");
+        let processed_json: serde_json::Value =
+            serde_json::from_slice(&processed).expect("processed body should be valid json");
+
+        assert_eq!(processed_json["reasoning_effort"], "max");
     }
 
     #[test]

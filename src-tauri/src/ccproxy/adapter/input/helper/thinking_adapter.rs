@@ -129,7 +129,7 @@ pub fn effort_from_budget_tokens(budget_tokens: Option<i32>) -> Option<String> {
     } else if budget <= 4096 {
         "high"
     } else {
-        "max"
+        "xhigh"
     };
 
     Some(effort.to_string())
@@ -318,7 +318,7 @@ mod tests {
         );
         assert_eq!(
             effort_from_budget_tokens(Some(4097)).as_deref(),
-            Some("max")
+            Some("xhigh")
         );
     }
 

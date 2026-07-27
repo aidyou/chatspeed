@@ -24,6 +24,7 @@ import {
     isPendingApprovalEntryForTool,
     resolveWorkflowPhaseFromPlanningMode
 } from './messageProjectionRules'
+import { formatActiveModelName } from './modelConfigSelection'
 import { AGENT_ROLE, SUB_AGENT_ROLE } from '@/constants/agent'
 
 /**
@@ -172,56 +173,30 @@ export function useWorkflowCore({
     }
 
     const activeModelName = computed(() => {
-        const tab = planningMode.value ? 'plan' : 'act'
         const workflow =
             workflowStore.currentWorkflow ||
             (workflowStore.workflows.length > 0 ? workflowStore.workflows[0] : null)
-
-        let providerId = null
-        let modelName = null
-
-        if (workflow && workflow.agentConfig && workflow.agentConfig.models) {
-            const models = workflow.agentConfig.models
-            const model = planningMode.value ? models.plan || models.act : models.act
-            if (model) {
-                providerId = model.id
-                modelName = model.model
-            }
+        const workflowModels = workflow?.agentConfig?.models
+        const agentModels = {
+            plan: selectedAgent.value?.planModel,
+            act: selectedAgent.value?.actModel
         }
+        const modelName =
+            formatActiveModelName({
+                models: workflowModels,
+                planningMode: planningMode.value,
+                modelStore
+            }) ||
+            formatActiveModelName({
+                models: agentModels,
+                planningMode: planningMode.value,
+                modelStore
+            })
 
-        if (!modelName && selectedAgent.value) {
-            const fallbackModel =
-                tab === 'plan'
-                    ? selectedAgent.value.planModel || selectedAgent.value.actModel
-                    : selectedAgent.value.actModel || selectedAgent.value.planModel
-            if (fallbackModel) {
-                providerId = fallbackModel.id
-                modelName = fallbackModel.model
-            }
-        }
-
-        // Handle proxy models (providerId === 0)
-        if (providerId === 0 && modelName) {
-            // Proxy model format: "group@alias" or just "alias" (default group)
-            if (modelName.includes('@')) {
-                const [group, alias] = modelName.split('@')
-                return `${alias} (${group})`
-            }
-            return modelName
-        }
-
-        // Handle regular models
-        if (providerId && modelName) {
-            const provider = modelStore.getModelProviderById(providerId)
-            if (provider) {
-                const model = provider.models.find((m) => m.id === modelName)
-                if (model) return model.name
-            }
-            return modelName
-        }
-
-        if (selectedAgent.value) return selectedAgent.value.name
-        return 'Select Model'
+        if (modelName) return modelName
+        const planPrefix = planningMode.value ? 'Plan/' : ''
+        if (selectedAgent.value) return `${planPrefix}${selectedAgent.value.name}`
+        return `${planPrefix}Select Model`
     })
 
     const canSwitchWorkflow = computed(() => {
@@ -1762,25 +1737,35 @@ export function useWorkflowCore({
         modelSelectorVisible.value = true
     }
 
-    const onModelConfigSave = async (configs) => {
-        console.log('Saving model config:', configs)
+    const onModelConfigSave = async (submission) => {
+        const hasTarget = submission && typeof submission === 'object' && submission.target
+        const configs = hasTarget ? submission.configs : submission
+        const target = hasTarget
+            ? submission.target
+            : currentWorkflowId.value
+              ? { type: 'workflow', sessionId: currentWorkflowId.value }
+              : { type: 'agent', agentId: selectedAgent.value?.id || '' }
+
         try {
-            // 1. If we have an active workflow session, update workflow's agent_config
-            if (currentWorkflowId.value) {
+            if (target.type === 'workflow' && target.sessionId) {
                 await invokeWrapper('update_workflow_model_config', {
-                    sessionId: currentWorkflowId.value,
+                    sessionId: target.sessionId,
                     configs
                 })
-                const nextConfig = {
-                    ...getCurrentWorkflowAgentConfig(),
-                    models: configs
+                if (currentWorkflowId.value === target.sessionId) {
+                    const nextConfig = {
+                        ...getCurrentWorkflowAgentConfig(),
+                        models: configs
+                    }
+                    applyWorkflowConfigToLocalStore(nextConfig)
+                    syncWorkflowUiControlsFromConfig(nextConfig)
                 }
-                applyWorkflowConfigToLocalStore(nextConfig)
-                syncWorkflowUiControlsFromConfig(nextConfig)
-            } else if (selectedAgent.value) {
-                // 2. No active workflow - update agent's default config
+            } else if (target.type === 'agent' && target.agentId) {
+                const targetAgent = agentStore.agents.find((agent) => agent.id === target.agentId)
+                if (!targetAgent) return false
+
                 const updatedAgent = {
-                    ...selectedAgent.value,
+                    ...targetAgent,
                     planModel: configs.plan,
                     actModel: configs.act,
                     utilityModel: configs.utility,
@@ -1788,16 +1773,31 @@ export function useWorkflowCore({
                 }
 
                 await agentStore.saveAgent(updatedAgent)
-                await agentStore.fetchAgents()
-                selectedAgent.value =
-                    agentStore.agents.find((a) => a.id === updatedAgent.id) || updatedAgent
+                if (selectedAgent.value?.id === updatedAgent.id) {
+                    selectedAgent.value = updatedAgent
+                }
+                try {
+                    await agentStore.fetchAgents()
+                    if (selectedAgent.value?.id === updatedAgent.id) {
+                        selectedAgent.value =
+                            agentStore.agents.find((agent) => agent.id === updatedAgent.id) || updatedAgent
+                    }
+                } catch (refreshError) {
+                    console.warn('Failed to refresh agents after saving model config:', refreshError)
+                }
+            } else {
+                return false
             }
 
             showMessage(t('common.saveSuccess'), 'success')
+            return true
         } catch (error) {
             console.error('Failed to save model config:', error)
-            await refreshCurrentWorkflowUiConfig()
+            if (target.type === 'workflow' && currentWorkflowId.value === target.sessionId) {
+                await refreshCurrentWorkflowUiConfig()
+            }
             showMessage(t('common.saveFailed'), 'error')
+            return false
         }
     }
 

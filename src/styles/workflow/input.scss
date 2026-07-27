@@ -334,6 +334,9 @@ footer.input-container {
                     }
 
                     &.model-selector-trigger {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: var(--cs-space-xs);
                         cursor: pointer;
                         font-size: var(--cs-font-size);
                         color:var(--cs-text-color-secondary);
@@ -413,6 +416,96 @@ footer.input-container {
         .cs {
             color: var(--cs-color-primary);
             transform: rotate(0deg);
+        }
+    }
+}
+
+// Workflow model selector popover
+.workflow-model-selector-popover {
+    padding: 0 !important;
+
+    .workflow-model-selector {
+        max-height: 360px;
+        overflow-y: auto;
+        padding: var(--cs-space-xs);
+    }
+
+    .model-option-group-label {
+        padding: var(--cs-space-xs) var(--cs-space-sm);
+        color: var(--cs-text-color-secondary);
+        font-size: var(--cs-font-size-xs, 11px);
+        font-weight: 600;
+    }
+
+    .model-option-divider {
+        height: 1px;
+        margin: var(--cs-space-xs) 0;
+        background: var(--cs-border-color);
+    }
+
+    .model-option {
+        display: flex;
+        flex-direction: column;
+        gap: var(--cs-space-xs);
+        padding: var(--cs-space-xs) var(--cs-space-sm);
+        border-radius: var(--cs-border-radius-sm);
+        cursor: pointer;
+        outline: none;
+
+        &:hover,
+        &:focus-visible,
+        &.active {
+            background: var(--cs-hover-bg-color);
+        }
+
+        &:focus-visible {
+            box-shadow: 0 0 0 2px var(--el-color-primary-light-5);
+        }
+    }
+
+    .model-option-main,
+    .model-thinking-budget {
+        display: flex;
+        align-items: center;
+        gap: var(--cs-space-xs);
+    }
+
+    .model-option-main {
+        justify-content: space-between;
+    }
+
+    .model-option-name {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--cs-text-color-primary);
+        font-size: var(--cs-font-size-sm);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .model-thinking-budget {
+        flex-wrap: wrap;
+        color: var(--cs-text-color-secondary);
+        font-size: var(--cs-font-size-xs, 11px);
+    }
+
+    .model-thinking-label {
+        margin-right: var(--cs-space-xs);
+    }
+
+    .thinking-level-option {
+        padding: 1px 6px;
+        border: 0;
+        border-radius: var(--cs-border-radius-sm);
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font-size: inherit;
+
+        &:hover,
+        &.active {
+            background: var(--el-color-primary-light-9);
+            color: var(--el-color-primary);
         }
     }
 }
