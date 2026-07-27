@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 
 import {
   appendMissingPendingToolMessages,
+  clearExecutionContextPendingTools,
   deriveInlinePendingApprovals,
   detectApprovalRecoveryDrift,
-  resolveExecutionContextPendingTool
+  resolveExecutionContextPendingTool,
+  upsertExecutionContextPendingTool
 } from './workflowApprovalRecovery.js'
 
 const approvalWaitingStatuses = ['awaiting_approval', 'awaiting_auto_approval']
@@ -29,6 +31,32 @@ assert.deepEqual(
   resolveExecutionContextPendingTool(executionContext, 'tool_571ae521')?.pendingTools,
   [],
   'a structured resolution event must remove its tool from the live execution-context cache'
+)
+
+assert.deepEqual(
+  clearExecutionContextPendingTools(executionContext)?.pendingTools,
+  [],
+  'leaving approval wait must clear stale pending tools even if a resolution event was missed'
+)
+
+assert.deepEqual(
+  upsertExecutionContextPendingTool(null, {
+    toolCallId: 'tool_live',
+    toolName: 'bash',
+    arguments: { command: 'pwd' },
+    details: { command: 'pwd' },
+    displayType: 'text'
+  })?.pendingTools,
+  [
+    {
+      toolCallId: 'tool_live',
+      toolName: 'bash',
+      arguments: { command: 'pwd' },
+      details: { command: 'pwd' },
+      displayType: 'text'
+    }
+  ],
+  'a live approval request must normalize immediately into the structured pending-tool cache'
 )
 
 const historicalMessages = [
@@ -77,6 +105,55 @@ assert.deepEqual(inlineApprovals[0].details, {
   command: 'sqlite3 workflow.db',
   description: 'Inspect workflow state'
 })
+
+const staleTranscriptApproval = deriveInlinePendingApprovals({
+  currentWorkflowId: 'session-1',
+  workflowTitle: 'Approval recovery',
+  status: 'awaiting_approval',
+  waitReason: 'approval',
+  executionContext,
+  messages: [
+    {
+      sessionId: 'session-1',
+      role: 'tool',
+      metadata: {
+        tool_call_id: 'tool_stale',
+        tool_name: 'bash',
+        approval_status: 'pending',
+        execution_status: 'pending_approval'
+      }
+    }
+  ],
+  approvalWaitingStatuses
+})
+
+assert.deepEqual(
+  staleTranscriptApproval.map(approval => approval.toolCallId),
+  ['tool_571ae521'],
+  'message-only stale approvals must not expand the authoritative pending-tool set'
+)
+
+const multipleStructuredApprovals = deriveInlinePendingApprovals({
+  currentWorkflowId: 'session-multiple',
+  workflowTitle: 'Multiple approvals',
+  status: 'awaiting_approval',
+  waitReason: 'approval',
+  executionContext: {
+    wait_reason: 'approval',
+    pending_tools: [
+      { tool_call_id: 'tool_a', tool_name: 'bash' },
+      { tool_call_id: 'tool_b', tool_name: 'write_file' }
+    ]
+  },
+  messages: [],
+  approvalWaitingStatuses
+})
+
+assert.deepEqual(
+  multipleStructuredApprovals.map(approval => approval.toolCallId),
+  ['tool_a', 'tool_b'],
+  'all genuinely pending structured tools must remain available for bulk approval'
+)
 
 const legacyTitleOnlyApproval = deriveInlinePendingApprovals({
   currentWorkflowId: 'session-legacy',

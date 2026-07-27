@@ -59,6 +59,7 @@ export function useWorkflowCore({
     const settingStore = useSettingStore()
 
     const unlistenWorkflowEvents = ref(null)
+    let workflowEventSetupRevision = 0
     const backgroundStateListeners = new Map<string, () => void>()
     const pendingApprovalEntries = ref({})
     const deletingWorkflowIds = ref(new Set<string>())
@@ -269,24 +270,27 @@ export function useWorkflowCore({
         }
     }
 
-    const refreshCurrentWorkflowUiConfig = async () => {
-        if (!currentWorkflowId.value) return
+    const refreshCurrentWorkflowUiConfig = async (sessionId = currentWorkflowId.value) => {
+        if (!sessionId) return
         try {
             const config = await invokeWrapper('get_workflow_agent_config', {
-                sessionId: currentWorkflowId.value
+                sessionId
             })
 
-            applyWorkflowConfigToLocalStore(config)
-            syncWorkflowUiControlsFromConfig(config)
-            workflowStore.setShellPolicy(config.shellPolicy || [])
-            workflowStore.setAutoApprovedTools(config.autoApprove || [])
+            applyWorkflowConfigToLocalStore(config, sessionId)
+            if (currentWorkflowId.value === sessionId) {
+                syncWorkflowUiControlsFromConfig(config)
+                workflowStore.setShellPolicy(config.shellPolicy || [])
+                workflowStore.setAutoApprovedTools(config.autoApprove || [])
+            }
         } catch (refreshError) {
             console.warn('Failed to refresh workflow config after update error:', refreshError)
         }
     }
 
-    const applyWorkflowConfigToLocalStore = (nextConfig) => {
-        const workflowIndex = workflowStore.workflows.findIndex((w) => w.id === currentWorkflowId.value)
+    const applyWorkflowConfigToLocalStore = (nextConfig, sessionId = currentWorkflowId.value) => {
+        if (!sessionId) return
+        const workflowIndex = workflowStore.workflows.findIndex((w) => w.id === sessionId)
         if (workflowIndex === -1) return
 
         const existingConfig = workflowStore.workflows[workflowIndex].agentConfig || {}
@@ -297,7 +301,7 @@ export function useWorkflowCore({
 
         if (
             workflowStore.currentWorkflow &&
-            workflowStore.currentWorkflow.id === currentWorkflowId.value
+            workflowStore.currentWorkflow.id === sessionId
         ) {
             workflowStore.currentWorkflow.agentConfig = {
                 ...(workflowStore.currentWorkflow.agentConfig || {}),
@@ -358,56 +362,60 @@ export function useWorkflowCore({
         }, {})
     }
 
-    const persistCurrentWorkflowUiConfigBeforeStart = async () => {
-        if (!currentWorkflowId.value) return
-        const nextConfig = mergeLocalUiOverrides(getCurrentWorkflowAgentConfig())
+    const persistCurrentWorkflowUiConfigBeforeStart = async (
+        sessionId = currentWorkflowId.value,
+        nextConfig = mergeLocalUiOverrides(getCurrentWorkflowAgentConfig())
+    ) => {
+        if (!sessionId) return
 
         await invokeWrapper('update_workflow_agent_config', {
-            sessionId: currentWorkflowId.value,
+            sessionId,
             agentConfig: JSON.stringify(nextConfig)
         })
 
-        applyWorkflowConfigToLocalStore(nextConfig)
+        applyWorkflowConfigToLocalStore(nextConfig, sessionId)
     }
 
     // Unified function to update workflow config
     const updateWorkflowConfig = async (key, value) => {
-        if (!currentWorkflowId.value) return
+        const sessionId = currentWorkflowId.value
+        if (!sessionId) return
+        const workflowStatus = currentWorkflow.value?.status
 
         try {
             if (key === 'approvalLevel') {
                 await invokeWrapper('update_workflow_approval_level', {
-                    sessionId: currentWorkflowId.value,
+                    sessionId,
                     approvalLevel: value
                 })
-                applyWorkflowConfigToLocalStore({ [key]: value })
+                applyWorkflowConfigToLocalStore({ [key]: value }, sessionId)
                 return
             }
 
             if (key === 'finalAudit') {
                 await invokeWrapper('update_workflow_final_audit', {
-                    sessionId: currentWorkflowId.value,
+                    sessionId,
                     finalAudit: !!value
                 })
-                applyWorkflowConfigToLocalStore({ [key]: !!value })
+                applyWorkflowConfigToLocalStore({ [key]: !!value }, sessionId)
                 return
             }
 
             if (key === 'autoCompress') {
                 await invokeWrapper('update_workflow_auto_compress', {
-                    sessionId: currentWorkflowId.value,
+                    sessionId,
                     autoCompress: !!value
                 })
-                applyWorkflowConfigToLocalStore({ [key]: !!value })
+                applyWorkflowConfigToLocalStore({ [key]: !!value }, sessionId)
                 return
             }
 
             if (key === 'phase') {
                 await invokeWrapper('update_workflow_phase', {
-                    sessionId: currentWorkflowId.value,
+                    sessionId,
                     phase: value
                 })
-                applyWorkflowConfigToLocalStore({ [key]: value })
+                applyWorkflowConfigToLocalStore({ [key]: value }, sessionId)
                 return
             }
 
@@ -416,27 +424,26 @@ export function useWorkflowCore({
             agentConfig[key] = value
 
             await invokeWrapper('update_workflow_agent_config', {
-                sessionId: currentWorkflowId.value,
+                sessionId,
                 agentConfig: JSON.stringify(agentConfig)
             })
 
             // 2. Signal engine if workflow is active, including structured waiting states.
-            const status = currentWorkflow.value?.status
             if (
                 signalMapping[key] &&
-                status &&
+                workflowStatus &&
                 [
                     WORKFLOW_STATUSES.THINKING,
                     WORKFLOW_STATUSES.EXECUTING,
                     WORKFLOW_STATUSES.PAUSED,
                     WORKFLOW_STATUSES.AWAITING_USER,
                     WORKFLOW_STATUSES.AWAITING_APPROVAL
-                ].includes(status)
+                ].includes(workflowStatus)
             ) {
                 try {
                     const signalType = toSignalType(key)
                     await invokeWrapper('workflow_signal', {
-                        sessionId: currentWorkflowId.value,
+                        sessionId,
                         signal: JSON.stringify({
                             type: signalType,
                             [key]: value
@@ -448,10 +455,10 @@ export function useWorkflowCore({
             }
 
             // 3. Update local workflow store state (don't call selectWorkflow to avoid recursion)
-            applyWorkflowConfigToLocalStore({ [key]: value })
+            applyWorkflowConfigToLocalStore({ [key]: value }, sessionId)
         } catch (error) {
             console.error(`Failed to update ${key}:`, error)
-            await refreshCurrentWorkflowUiConfig()
+            await refreshCurrentWorkflowUiConfig(sessionId)
         }
     }
 
@@ -487,17 +494,20 @@ export function useWorkflowCore({
     }
 
     const flushDeferredQueuedMessages = async () => {
-        if (!currentWorkflowId.value) return
+        const activeSessionId = currentWorkflowId.value
+        if (!activeSessionId) return
         if (BLOCKING_WAIT_REASONS.includes(waitReason.value)) return
         if (!workflowStore.messageQueue?.length) return
 
         const shouldRetryUnacknowledged = !hasLiveSession.value
-        const deferred = workflowStore.messageQueue.filter((item) =>
-            shouldRetryUnacknowledged ? !item.acknowledged : !item.sent
+        const deferred = workflowStore.messageQueue.filter(
+            (item) =>
+                item.sessionId === activeSessionId &&
+                (shouldRetryUnacknowledged ? !item.acknowledged : !item.sent)
         )
         for (const item of deferred) {
             try {
-                await sendUserMessageSignal(currentWorkflowId.value, item.content, item.id, {
+                await sendUserMessageSignal(activeSessionId, item.content, item.id, {
                     attachedContext: item.attachedContext,
                     metadata: item.metadata
                 })
@@ -627,6 +637,14 @@ export function useWorkflowCore({
         summary: t('workflow.awaitingApproval'),
         approval_status: 'pending',
         execution_status: 'pending_approval'
+    })
+
+    const normalizeConfirmPendingTool = (payload = {}) => ({
+        toolCallId: String(payload.id || '').trim(),
+        toolName: String(payload.tool_name || '').trim(),
+        arguments: payload.arguments ?? null,
+        details: payload.details ?? null,
+        displayType: String(payload.display_type || '').trim()
     })
 
     const upsertPendingApprovalMessage = (sessionId, payload = {}) => {
@@ -822,6 +840,10 @@ export function useWorkflowCore({
                     if (!payload?.type) return
 
                     if (payload.type === 'confirm') {
+                        workflowStore.upsertPendingTool(
+                            sessionId,
+                            normalizeConfirmPendingTool(payload)
+                        )
                         showBackgroundApprovalNotification(sessionId, payload)
                         return
                     }
@@ -846,7 +868,12 @@ export function useWorkflowCore({
                     )
 
                     const statusLower = String(payload.state || '').toLowerCase()
-                    const isApprovalWaiting = payload.wait_reason === WORKFLOW_WAIT_REASONS.APPROVAL
+                    const isApprovalWaiting =
+                        payload.wait_reason === WORKFLOW_WAIT_REASONS.APPROVAL ||
+                        [
+                            WORKFLOW_STATUSES.AWAITING_APPROVAL,
+                            WORKFLOW_STATUSES.AWAITING_AUTO_APPROVAL
+                        ].includes(statusLower)
                     const isAwaitingUser = payload.wait_reason === WORKFLOW_WAIT_REASONS.USER_INPUT
 
                     if (isAwaitingUser) {
@@ -856,6 +883,7 @@ export function useWorkflowCore({
                     }
 
                     if (!isApprovalWaiting) {
+                        workflowStore.clearPendingTools(sessionId)
                         clearPendingApprovalEntries(sessionId, 'approval')
                     }
                     if (TERMINAL_STATUSES.includes(statusLower)) {
@@ -924,6 +952,7 @@ export function useWorkflowCore({
      * Phase 9: UI exceptions must be degradable, cannot block workflow execution
      */
     const setupWorkflowEvents = async (sessionId) => {
+        const setupRevision = ++workflowEventSetupRevision
         // Update current session ID for event isolation
         currentSessionId.value = sessionId
 
@@ -933,7 +962,7 @@ export function useWorkflowCore({
         }
 
         const eventName = `workflow://event/${sessionId}`
-        unlistenWorkflowEvents.value = await listen(eventName, (event) => {
+        const unlisten = await listen(eventName, (event) => {
             // Phase 9: Session isolation check - ignore events from non-current sessions
             if (currentSessionId.value !== sessionId) {
                 console.warn(`[Workflow] Ignoring event from non-active session: ${sessionId}`)
@@ -981,10 +1010,16 @@ export function useWorkflowCore({
                         }, 500)
                     }
 
-                    const isApprovalWaiting = payload.wait_reason === WORKFLOW_WAIT_REASONS.APPROVAL
+                    const isApprovalWaiting =
+                        payload.wait_reason === WORKFLOW_WAIT_REASONS.APPROVAL ||
+                        [
+                            WORKFLOW_STATUSES.AWAITING_APPROVAL,
+                            WORKFLOW_STATUSES.AWAITING_AUTO_APPROVAL
+                        ].includes(String(payload.state || '').toLowerCase())
                     if (isApprovalWaiting) {
                         reconcileApprovalEntriesFromExecutionContext(sessionId, workflowStore.currentWorkflow)
                     } else {
+                        workflowStore.clearPendingTools(sessionId)
                         clearPendingApprovalEntries(sessionId)
                         flushDeferredQueuedMessages().catch((error) => {
                             console.warn('Failed to flush deferred queue after state update:', error)
@@ -1024,6 +1059,10 @@ export function useWorkflowCore({
                 } else if (payload.type === 'confirm') {
                     markSessionLiveFromNonTerminalEvent()
                     workflowStore.clearApprovalSubmission(sessionId, payload.id)
+                    workflowStore.upsertPendingTool(
+                        sessionId,
+                        normalizeConfirmPendingTool(payload)
+                    )
                     upsertPendingApprovalEntry(sessionId, payload)
                     upsertPendingApprovalMessage(sessionId, payload)
                     playApprovalNotificationSound()
@@ -1174,7 +1213,14 @@ export function useWorkflowCore({
             }, undefined, `workflowEvent:${event.payload?.type || 'unknown'}`)
         })
 
+        if (setupRevision !== workflowEventSetupRevision || currentSessionId.value !== sessionId) {
+            unlisten()
+            return false
+        }
+
+        unlistenWorkflowEvents.value = unlisten
         await syncBackgroundStateListeners()
+        return true
     }
 
     /**
@@ -1238,6 +1284,9 @@ export function useWorkflowCore({
             showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
             return
         }
+        if (workflowStore.currentWorkflowId !== id || currentSessionId.value !== id) {
+            return
+        }
 
         if (workflowStore.currentWorkflow) {
             const agent = agentStore.agents.find((a) => a.id === workflowStore.currentWorkflow.agentId)
@@ -1246,7 +1295,12 @@ export function useWorkflowCore({
             }
 
             // Setup event listeners for the existing session (always setup, even if no agent)
-            await setupWorkflowEvents(id)
+            if (!(await setupWorkflowEvents(id))) {
+                return
+            }
+            if (workflowStore.currentWorkflowId !== id || currentSessionId.value !== id) {
+                return
+            }
 
             const status = workflowStore.currentWorkflow?.status?.toLowerCase()
             const pendingApprovalRequest = workflowStore.pendingApprovalRequest
@@ -1313,7 +1367,13 @@ export function useWorkflowCore({
     }
 
     const startNewWorkflow = async (prompt, options = {}) => {
-        if (!selectedAgent.value) {
+        const originSessionId = currentWorkflowId.value
+        const originWorkflow = workflowStore.currentWorkflow
+        const originAgent = selectedAgent.value
+        const originPlanningMode = planningMode.value
+        const originAutoApprovePlan = autoApprovePlan.value
+        const originFinalAuditMode = finalAuditMode.value
+        if (!originAgent) {
             console.error('No agent selected')
             return false
         }
@@ -1327,34 +1387,40 @@ export function useWorkflowCore({
             console.log('Starting workflow...')
 
             // Check if we already have an empty workflow (created by createNewWorkflow)
-            if (currentWorkflowId.value && workflowStore.currentWorkflow) {
-                const currentQuery = workflowStore.currentWorkflow.userQuery
+            if (originSessionId && originWorkflow) {
+                const currentQuery = originWorkflow.userQuery
                 if (!currentQuery || currentQuery.trim() === '') {
                     // We have an empty workflow, update it with the query and start
-                    console.log('Using existing empty workflow:', currentWorkflowId.value)
+                    console.log('Using existing empty workflow:', originSessionId)
+
+                    const nextConfig = mergeLocalUiOverrides(
+                        originWorkflow.agentConfig || getCurrentWorkflowAgentConfig()
+                    )
 
                     // Update workflow user_query in backend. Title should be generated by AI.
                     await invokeWrapper('update_workflow_query', {
-                        sessionId: currentWorkflowId.value,
+                        sessionId: originSessionId,
                         userQuery: visiblePrompt
                     })
 
                     // Persist any unsaved local UI config toggles before engine startup.
-                    await persistCurrentWorkflowUiConfigBeforeStart()
+                    await persistCurrentWorkflowUiConfigBeforeStart(originSessionId, nextConfig)
 
                     // Ensure event listener is attached before starting runtime,
                     // otherwise early UI events (e.g. approval confirm) can be missed.
-                    await setupWorkflowEvents(currentWorkflowId.value)
+                    if (currentWorkflowId.value === originSessionId) {
+                        await setupWorkflowEvents(originSessionId)
+                    }
 
                     // Trigger engine
                     console.log('Calling workflow_start backend command...')
                     await invokeWrapper('workflow_start', {
-                        sessionId: currentWorkflowId.value,
-                        agentId: selectedAgent.value.id,
+                        sessionId: originSessionId,
+                        agentId: originWorkflow.agentId || originAgent.id,
                         initialPrompt: visiblePrompt,
                         initialMetadata: options.metadata || null,
                         initialAttachedContext: options.attachedContext || null,
-                        planningMode: planningMode.value
+                        planningMode: originPlanningMode
                     })
                     console.log('Workflow engine started successfully')
                     return true
@@ -1367,11 +1433,11 @@ export function useWorkflowCore({
             // Get inherited config if from another workflow
             let inheritedAgentConfig = null
             let inheritedAgentId = null
-            if (currentWorkflowId.value) {
+            if (originSessionId) {
                 try {
-                    const baseConfig = getCurrentWorkflowAgentConfig()
+                    const baseConfig = originWorkflow?.agentConfig || getCurrentWorkflowAgentConfig()
                     inheritedAgentConfig = JSON.stringify(buildInheritedWorkflowConfig(baseConfig || {}))
-                    inheritedAgentId = workflowStore.currentWorkflow?.agentId || null
+                    inheritedAgentId = originWorkflow?.agentId || null
                 } catch (error) {
                     console.warn('Failed to get previous workflow config:', error)
                 }
@@ -1381,12 +1447,12 @@ export function useWorkflowCore({
             let workflowAllowedPaths = []
             if (pendingPaths.value.length > 0) {
                 workflowAllowedPaths = [...pendingPaths.value]
-            } else if (selectedAgent.value.allowedPaths) {
+            } else if (originAgent.allowedPaths) {
                 try {
                     workflowAllowedPaths =
-                        typeof selectedAgent.value.allowedPaths === 'string'
-                            ? JSON.parse(selectedAgent.value.allowedPaths)
-                            : selectedAgent.value.allowedPaths
+                        typeof originAgent.allowedPaths === 'string'
+                            ? JSON.parse(originAgent.allowedPaths)
+                            : originAgent.allowedPaths
                 } catch (e) {
                     console.error('Failed to parse agent allowedPaths:', e)
                 }
@@ -1396,10 +1462,10 @@ export function useWorkflowCore({
             const res = await invokeWrapper('create_workflow', {
                 request: {
                     userQuery: visiblePrompt,
-                    agentId: inheritedAgentId || selectedAgent.value.id,
+                    agentId: inheritedAgentId || originAgent.id,
                     allowedPaths: workflowAllowedPaths,
-                    autoApprovePlan: autoApprovePlan.value,
-                    finalAudit: finalAuditMode.value === 'on',
+                    autoApprovePlan: originAutoApprovePlan,
+                    finalAudit: originFinalAuditMode === 'on',
                     inheritedAgentConfig
                 }
             })
@@ -1411,7 +1477,11 @@ export function useWorkflowCore({
             pendingPaths.value = []
 
             // Update selectedAgent if we inherited a different agent
-            if (inheritedAgentId && inheritedAgentId !== selectedAgent.value?.id) {
+            if (
+                currentWorkflowId.value === originSessionId &&
+                inheritedAgentId &&
+                inheritedAgentId !== selectedAgent.value?.id
+            ) {
                 const inheritedAgent = agentStore.agents.find(a => a.id === inheritedAgentId)
                 if (inheritedAgent) {
                     selectedAgent.value = inheritedAgent
@@ -1420,18 +1490,22 @@ export function useWorkflowCore({
 
             // Sync UI state
             await workflowStore.loadWorkflows()
-            await workflowStore.selectWorkflow(newWorkflowId)
-            await setupWorkflowEvents(newWorkflowId)
+            if (currentWorkflowId.value === originSessionId) {
+                await workflowStore.selectWorkflow(newWorkflowId)
+                if (currentWorkflowId.value === newWorkflowId) {
+                    await setupWorkflowEvents(newWorkflowId)
+                }
+            }
 
             // Trigger engine
             console.log('Calling workflow_start backend command...')
             await invokeWrapper('workflow_start', {
                 sessionId: newWorkflowId,
-                agentId: inheritedAgentId || selectedAgent.value.id,
+                agentId: inheritedAgentId || originAgent.id,
                 initialPrompt: visiblePrompt,
                 initialMetadata: options.metadata || null,
                 initialAttachedContext: options.attachedContext || null,
-                planningMode: planningMode.value
+                planningMode: originPlanningMode
             })
             console.log('Workflow engine started successfully')
             return true
@@ -1443,8 +1517,44 @@ export function useWorkflowCore({
     }
 
     const onSendMessage = async (message, options = {}) => {
+        const hasExplicitTarget = Object.prototype.hasOwnProperty.call(options, 'target')
+        const messageTarget = options.target || null
+        const targetSessionId = hasExplicitTarget
+            ? messageTarget?.sessionId || null
+            : currentWorkflowId.value
+        const targetIsCurrentSession = targetSessionId === currentWorkflowId.value
+        const targetWorkflow = targetIsCurrentSession
+            ? workflowStore.currentWorkflow
+            : workflows.value.find((workflow) => workflow.id === targetSessionId)
+        const targetStatus = String(
+            messageTarget?.status || targetWorkflow?.status || ''
+        ).toLowerCase()
+        const targetWaitReason = String(
+            messageTarget?.waitReason ||
+                (targetIsCurrentSession
+                    ? waitReason.value
+                    : targetWorkflow?.waitReason || targetWorkflow?.wait_reason) ||
+                ''
+        ).toLowerCase()
+        const targetHasLiveSession = hasExplicitTarget
+            ? messageTarget?.hasLiveSession === true
+            : hasLiveSession.value
+        const targetIsRunning = hasExplicitTarget
+            ? messageTarget?.isRunning === true
+            : isRunning.value
+        const targetIsWaiting = hasExplicitTarget
+            ? messageTarget?.isWaiting === true
+            : isWaiting.value
+        const targetAgentId =
+            messageTarget?.agentId ||
+            targetWorkflow?.agentId ||
+            (targetIsCurrentSession ? selectedAgent.value?.id : null)
+        const targetPlanningMode = hasExplicitTarget
+            ? messageTarget?.planningMode === true
+            : planningMode.value
+
         // Handle Builtin UI Commands (Exact match after trim)
-        if (message.trim().startsWith('/')) {
+        if (targetIsCurrentSession && message.trim().startsWith('/')) {
             if (await handleBuiltinCommand(message)) {
                 return 'handled_builtin_command'
             }
@@ -1454,14 +1564,18 @@ export function useWorkflowCore({
 
         // CRITICAL: Reset the stream parser and UI buffer BEFORE sending the new request.
         // This ensures no residual data from the previous turn pollutes the next response.
-        resetChatState()
+        if (targetIsCurrentSession) {
+            resetChatState()
+        }
 
-        if (!currentWorkflowId.value) {
+        if (!targetSessionId) {
+            if (hasExplicitTarget && currentWorkflowId.value) {
+                return false
+            }
             // Start brand new workflow
             return await startNewWorkflow(message, options)
         } else {
-            const currentStatus = String(workflowStore.currentWorkflow?.status || '').toLowerCase()
-            if (currentStatus === WORKFLOW_STATUSES.STOPPING) {
+            if (targetStatus === WORKFLOW_STATUSES.STOPPING) {
                 showMessage(
                     t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
                     'warning'
@@ -1471,40 +1585,43 @@ export function useWorkflowCore({
             // 2. Decide: Signal or Re-start?
             // Phase 3: Use unified waiting check - all waiting states should send signal
             // Backend will validate signal type based on wait_reason
-            if (hasLiveSession.value || isRunning.value || isWaiting.value) {
-                const shouldQueueLocally =
-                    isRunning.value ||
-                    waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL ||
-                    waitReason.value === WORKFLOW_WAIT_REASONS.SUB_AGENT
+            if (targetHasLiveSession || targetIsRunning || targetIsWaiting) {
+                const shouldQueueMessage =
+                    targetIsRunning ||
+                    targetWaitReason === WORKFLOW_WAIT_REASONS.APPROVAL ||
+                    targetWaitReason === WORKFLOW_WAIT_REASONS.SUB_AGENT
                 let queuedId = null
-                if (shouldQueueLocally) {
+                if (shouldQueueMessage) {
                     queuedId = `local_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-                    workflowStore.addMessageToQueue({
-                        id: queuedId,
-                        content: message,
-                        attachedContext: options.attachedContext || null,
-                        metadata: options.metadata || null,
-                        status:
-                            waitReason.value === WORKFLOW_WAIT_REASONS.APPROVAL
-                                ? 'pending_approval'
-                                : 'queued',
-                        sent: false,
-                        acknowledged: false
-                    })
+                    if (targetIsCurrentSession) {
+                        workflowStore.addMessageToQueue({
+                            id: queuedId,
+                            sessionId: targetSessionId,
+                            content: message,
+                            attachedContext: options.attachedContext || null,
+                            metadata: options.metadata || null,
+                            status:
+                                targetWaitReason === WORKFLOW_WAIT_REASONS.APPROVAL
+                                    ? 'pending_approval'
+                                    : 'queued',
+                            sent: false,
+                            acknowledged: false
+                        })
+                    }
                 }
 
                 // Just send signal to the running loop
                 try {
                     // Optimistic update only for states that immediately consume user input.
                     const shouldOptimisticUpdate =
-                        waitReason.value === WORKFLOW_WAIT_REASONS.USER_INPUT ||
-                        waitReason.value === WORKFLOW_WAIT_REASONS.CONFIRMATION
+                        targetWaitReason === WORKFLOW_WAIT_REASONS.USER_INPUT ||
+                        targetWaitReason === WORKFLOW_WAIT_REASONS.CONFIRMATION
                     if (shouldOptimisticUpdate) {
-                        workflowStore.updateWorkflowStatus(currentWorkflowId.value, WORKFLOW_STATUSES.THINKING)
+                        workflowStore.updateWorkflowStatus(targetSessionId, WORKFLOW_STATUSES.THINKING)
                     }
 
                     const res = await sendUserMessageSignal(
-                        currentWorkflowId.value,
+                        targetSessionId,
                         message,
                         queuedId,
                         options
@@ -1528,17 +1645,21 @@ export function useWorkflowCore({
                 // DO NOT add message manually here, workflow_start will handle it and broadcast via events.
                 try {
                     // Ensure event listener is setup for this session
-                    await setupWorkflowEvents(currentWorkflowId.value)
+                    if (targetIsCurrentSession) {
+                        await setupWorkflowEvents(targetSessionId)
+                    }
 
                     await invokeWrapper('workflow_start', {
-                        sessionId: currentWorkflowId.value,
-                        agentId: selectedAgent.value.id,
+                        sessionId: targetSessionId,
+                        agentId: targetAgentId,
                         initialPrompt: message,
                         initialMetadata: options.metadata || null,
                         initialAttachedContext: options.attachedContext || null,
-                        planningMode: planningMode.value
+                        planningMode: targetPlanningMode
                     })
-                    await refreshCurrentWorkflowUiConfig()
+                    if (targetIsCurrentSession) {
+                        await refreshCurrentWorkflowUiConfig()
+                    }
                     return true
                 } catch (error) {
                     const errorText = String(error)
@@ -1552,9 +1673,11 @@ export function useWorkflowCore({
                     // Recovery path: session is already active in manager, route as user_message signal.
                     if (errorText.includes('Session already exists')) {
                         try {
-                            workflowStore.setHasLiveSession(true)
+                            if (targetIsCurrentSession) {
+                                workflowStore.setHasLiveSession(true)
+                            }
                             await sendUserMessageSignal(
-                                currentWorkflowId.value,
+                                targetSessionId,
                                 message,
                                 null,
                                 options
@@ -1584,12 +1707,12 @@ export function useWorkflowCore({
 
         workflowStore.removeQueuedMessage(queuedId)
 
-        if (!queuedItem.sent || !currentWorkflowId.value) {
+        if (!queuedItem.sent || !queuedItem.sessionId) {
             return
         }
 
         try {
-            await removeQueuedUserMessageSignal(currentWorkflowId.value, queuedId)
+            await removeQueuedUserMessageSignal(queuedItem.sessionId, queuedId)
         } catch (error) {
             workflowStore.addMessageToQueue(queuedItem)
             console.error('Failed to remove queued message from workflow:', error)
@@ -1709,10 +1832,11 @@ export function useWorkflowCore({
     }
 
     const onStop = async () => {
-        if (currentWorkflowId.value) {
+        const sessionId = currentWorkflowId.value
+        if (sessionId) {
             // Optimistic update: Immediately set running to false to toggle the UI button.
             // The backend might take a moment to gracefully cancel, but the user expects immediate feedback.
-            workflowStore.updateWorkflowStatus(currentWorkflowId.value, WORKFLOW_STATUSES.STOPPING, null)
+            workflowStore.updateWorkflowStatus(sessionId, WORKFLOW_STATUSES.STOPPING, null)
             workflowStore.setRunning(false)
             workflowStore.setHasLiveSession(true)
 
@@ -1723,9 +1847,11 @@ export function useWorkflowCore({
 
             try {
                 await invokeWrapper('workflow_stop', {
-                    sessionId: currentWorkflowId.value
+                    sessionId
                 })
-                await workflowStore.selectWorkflow(currentWorkflowId.value)
+                if (currentWorkflowId.value === sessionId) {
+                    await workflowStore.selectWorkflow(sessionId)
+                }
             } catch (error) {
                 console.error('Failed to stop workflow:', error)
             }
@@ -2001,6 +2127,7 @@ export function useWorkflowCore({
     )
 
     onBeforeUnmount(() => {
+        workflowEventSetupRevision += 1
         teardownBackgroundStateListeners()
     })
 

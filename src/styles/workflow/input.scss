@@ -342,7 +342,20 @@ footer.input-container {
                         color:var(--cs-text-color-secondary);
                         border:none;
 
-                        &:hover {
+                        transition:
+                            color 0.2s ease,
+                            background-color 0.2s ease;
+
+                        .cs {
+                            transition: transform 0.2s ease;
+                        }
+
+                        &.open .cs {
+                            transform: rotate(180deg);
+                        }
+
+                        &:hover,
+                        &.open {
                             color: var(--cs-color-primary);
                             background: var(--cs-hover-bg-color);
                             border-color: var(--el-color-primary);
@@ -430,36 +443,34 @@ footer.input-container {
         padding: var(--cs-space-xs);
     }
 
-    .model-option-group-label {
-        padding: var(--cs-space-xs) var(--cs-space-sm);
-        color: var(--cs-text-color-secondary);
-        font-size: var(--cs-font-size-xs, 11px);
-        font-weight: 600;
-    }
-
-    .model-option-divider {
-        height: 1px;
-        margin: var(--cs-space-xs) 0;
-        background: var(--cs-border-color);
-    }
-
     .model-option {
+        position: relative;
         display: flex;
         flex-direction: column;
         gap: var(--cs-space-xs);
-        padding: var(--cs-space-xs) var(--cs-space-sm);
-        border-radius: var(--cs-border-radius-sm);
+        padding: var(--cs-space-sm);
+        border: 1px solid transparent;
+        border-radius: var(--cs-border-radius);
         cursor: pointer;
         outline: none;
+        transition:
+            background-color 0.16s ease,
+            border-color 0.16s ease,
+            box-shadow 0.16s ease;
 
-        &:hover,
-        &:focus-visible,
-        &.active {
+        &:hover {
             background: var(--cs-hover-bg-color);
         }
 
         &:focus-visible {
-            box-shadow: 0 0 0 2px var(--el-color-primary-light-5);
+            border-color: var(--el-color-primary-light-5);
+            box-shadow: 0 0 0 2px var(--el-color-primary-light-8);
+        }
+
+        &.active {
+            border-color: var(--el-color-primary-light-5);
+            background: var(--el-color-primary-light-9);
+            box-shadow: inset 3px 0 0 var(--cs-color-primary);
         }
     }
 
@@ -483,6 +494,11 @@ footer.input-container {
         white-space: nowrap;
     }
 
+    .model-option .cs {
+        flex-shrink: 0;
+        color: var(--cs-color-primary);
+    }
+
     .model-thinking-budget {
         flex-wrap: wrap;
         color: var(--cs-text-color-secondary);
@@ -491,21 +507,35 @@ footer.input-container {
 
     .model-thinking-label {
         margin-right: var(--cs-space-xs);
+        font-weight: 600;
     }
 
     .thinking-level-option {
-        padding: 1px 6px;
-        border: 0;
+        padding: 2px 7px;
+        border: 1px solid var(--cs-border-color);
         border-radius: var(--cs-border-radius-sm);
         background: transparent;
         color: inherit;
         cursor: pointer;
         font-size: inherit;
+        line-height: 1.2;
+        transition:
+            background-color 0.16s ease,
+            border-color 0.16s ease,
+            color 0.16s ease;
 
         &:hover,
-        &.active {
+        &:focus-visible {
+            border-color: var(--el-color-primary-light-5);
             background: var(--el-color-primary-light-9);
-            color: var(--el-color-primary);
+            color: var(--cs-color-primary);
+            outline: none;
+        }
+
+        &.active {
+            border-color: var(--cs-color-primary);
+            background: var(--el-color-primary-light-9);
+            color: var(--cs-color-primary);
         }
     }
 }

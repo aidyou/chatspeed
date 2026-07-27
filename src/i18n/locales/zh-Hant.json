@@ -1073,6 +1073,8 @@
     "planningModeTooltip": "規劃模式：執行前 AI 研究與策略",
     "planningModeDisabled": "已關閉規劃模式",
     "planningModeEnabled": "已開啟規劃模式",
+    "quickActionsConfiguration": "配置",
+    "quickActionsRuntime": "執行方式",
     "rejected": "已拒絕",
     "retrying": "請求頻率過快，正在重試 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
     "sessionLost": "工作階段已中斷，請重新啟動或重新整理頁面。",

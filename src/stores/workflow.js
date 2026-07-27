@@ -17,10 +17,12 @@ import { getToolStatusSummary } from '@/composables/workflow/toolDisplay';
 import { inferWorkflowToolExecutionStatus } from '@/composables/workflow/messageProjectionRules';
 import {
   appendMissingPendingToolMessages,
+  clearExecutionContextPendingTools,
   deriveInlinePendingApprovals,
   detectApprovalRecoveryDrift,
   normalizeExecutionContextForApproval,
-  resolveExecutionContextPendingTool
+  resolveExecutionContextPendingTool,
+  upsertExecutionContextPendingTool
 } from './workflowApprovalRecovery.js';
 
 /**
@@ -1328,14 +1330,24 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
       try {
         const tools = await invokeWrapper('get_auto_approved_tools', { sessionId: workflowId });
+        if (currentWorkflowId.value !== workflowId || messageLoadRevision !== requestRevision) {
+          return;
+        }
         if (tools && Array.isArray(tools)) {
           autoApprovedTools.value = tools;
         } else {
           autoApprovedTools.value = [];
         }
       } catch (e) {
+        if (currentWorkflowId.value !== workflowId || messageLoadRevision !== requestRevision) {
+          return;
+        }
         console.log('Could not fetch auto-approved tools:', e);
         autoApprovedTools.value = [];
+      }
+
+      if (currentWorkflowId.value !== workflowId || messageLoadRevision !== requestRevision) {
+        return;
       }
 
       const workflowIndex = workflows.value.findIndex(w => w.id === workflowId);
@@ -1388,6 +1400,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const addMessageToQueue = (message) => {
     messageQueue.value.push({
       id: message.id || `local_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      sessionId: message.sessionId || currentWorkflowId.value || null,
       content: message.content || '',
       status: message.status || 'queued',
       statusText: typeof message.statusText === 'string' ? message.statusText : '',
@@ -1496,6 +1509,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
           } else {
             addMessageToQueue({
               id: queuedId,
+              sessionId: message.sessionId || currentWorkflowId.value,
               content: message.message || message.content || '',
               status: 'queued',
               sent: true,
@@ -1705,6 +1719,31 @@ export const useWorkflowStore = defineStore('workflow', () => {
     );
     if (!executionContext) return;
     workflows.value[workflowIndex].executionContext = executionContext;
+  };
+
+  const clearPendingTools = (workflowId) => {
+    if (!workflowId) return;
+
+    const workflowIndex = workflows.value.findIndex(workflow => workflow.id === workflowId);
+    if (workflowIndex === -1) return;
+
+    const executionContext = clearExecutionContextPendingTools(
+      workflows.value[workflowIndex].executionContext
+    );
+    if (!executionContext) return;
+    workflows.value[workflowIndex].executionContext = executionContext;
+  };
+
+  const upsertPendingTool = (workflowId, pendingTool) => {
+    if (!workflowId || !pendingTool) return;
+
+    const workflowIndex = workflows.value.findIndex(workflow => workflow.id === workflowId);
+    if (workflowIndex === -1) return;
+
+    workflows.value[workflowIndex].executionContext = upsertExecutionContextPendingTool(
+      workflows.value[workflowIndex].executionContext,
+      pendingTool
+    );
   };
 
   const setCurrentContextTokens = (workflowId, totalTokens, maxTokens = null) => {
@@ -1996,6 +2035,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     setHasLiveSession,
     updateWorkflowStatus,
     resolvePendingTool,
+    clearPendingTools,
+    upsertPendingTool,
     setCurrentContextTokens,
     upsertSubAgentProgress,
     clearSubAgentProgress,

@@ -1068,6 +1068,8 @@
     "planningModeTooltip": "Planungsmodus: KI-Recherche und Strategien vor der Ausführung",
     "planningModeDisabled": "Planungsmodus deaktiviert",
     "planningModeEnabled": "Planungsmodus aktiviert",
+    "quickActionsConfiguration": "Konfiguration",
+    "quickActionsRuntime": "Ausführungsmodus",
     "rejected": "Abgelehnt",
     "retrying": "Anfrage zu häufig, wird wiederholt (Versuch {attempt}/{total}), warte {seconds} Sekunden...",
     "sessionLost": "Sitzung getrennt. Bitte neu starten oder die Seite aktualisieren.",

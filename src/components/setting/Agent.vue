@@ -1226,7 +1226,11 @@ const syncCurrentWorkflowSkillsConfig = async (savedAgentId, finalForm) => {
     selectedSkills: finalForm.selectedSkills || []
   })
 
-  await workflowStore.selectWorkflow(currentWorkflowId)
+  if (workflowStore.currentWorkflowId === currentWorkflowId) {
+    await workflowStore.selectWorkflow(currentWorkflowId)
+  } else {
+    await workflowStore.loadWorkflows()
+  }
 }
 
 const getModelList = key => {

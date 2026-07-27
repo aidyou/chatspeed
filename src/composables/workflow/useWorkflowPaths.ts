@@ -120,6 +120,16 @@ export function useWorkflowPaths({
   }
 
   const onAddPath = async () => {
+    const target = isAutomationContext.value
+      ? {
+          type: 'automation',
+          id: selectedAutomation.value?.id || '',
+          paths: [...automationAllowedPaths.value]
+        }
+      : currentWorkflowId.value
+        ? { type: 'workflow', id: currentWorkflowId.value, paths: [...allowedPaths.value] }
+        : { type: 'pending' }
+
     try {
       const selected = await open({
         directory: true,
@@ -127,23 +137,22 @@ export function useWorkflowPaths({
         title: t('settings.agent.selectDirectory')
       })
       if (selected) {
-        if (isAutomationContext.value) {
-          await updateSelectedAutomationPaths(paths => {
-            if (!paths.includes(selected)) {
-              paths.push(selected)
-            }
-            return paths
-          })
+        if (target.type === 'automation' && target.id) {
+          const nextPaths = [...target.paths]
+          if (!nextPaths.includes(selected)) {
+            nextPaths.push(selected)
+            await workflowAutomationStore.updateAutomationAllowedPaths(target.id, nextPaths)
+          }
           return
         }
-        if (currentWorkflowId.value) {
+        if (target.type === 'workflow' && target.id) {
           // Editing existing workflow
-          const newPaths = [...allowedPaths.value]
+          const newPaths = [...target.paths]
           if (!newPaths.includes(selected)) {
             newPaths.push(selected)
-            await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, newPaths)
+            await workflowStore.updateWorkflowAllowedPaths(target.id, newPaths)
           }
-        } else {
+        } else if (!currentWorkflowId.value && !isAutomationContext.value) {
           // No workflow yet - cache in pendingPaths
           if (!pendingPaths.value.includes(selected)) {
             pendingPaths.value.push(selected)

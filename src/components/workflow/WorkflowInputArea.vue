@@ -110,20 +110,21 @@
             trigger="click"
             popper-class="workflow-model-selector-popover">
             <template #reference>
-              <button type="button" class="selector-wrap model-selector-trigger">
+              <button
+                type="button"
+                class="selector-wrap model-selector-trigger"
+                :class="{ open: modelSelectorOpen }">
                 <span class="model-name">{{ activeModelName }}</span>
                 <cs name="arrow-down" size="12px" />
               </button>
             </template>
-            <div class="workflow-model-selector">
-              <template v-for="(group, groupIndex) in modelOptions" :key="group.key">
-                <div v-if="groupIndex > 0" class="model-option-divider" />
-                <div class="model-option-group-label">{{ group.label }}</div>
+            <div ref="modelSelectorRef" class="workflow-model-selector">
+              <template v-for="group in modelOptions" :key="group.key">
                 <div
                   v-for="option in group.models"
                   :key="option.key"
-                  class="model-option"
                   :class="{ active: option.selected }"
+                  class="model-option"
                   role="button"
                   tabindex="0"
                   @click="selectModel(option)"
@@ -133,7 +134,7 @@
                     <span class="model-option-name">{{ option.name }}</span>
                     <cs v-if="option.selected" name="check" size="14px" />
                   </span>
-                  <span v-if="option.supportsThinking" class="model-thinking-budget" @click.stop>
+                  <span v-if="option.supportsThinking && option.selected" class="model-thinking-budget" @click.stop>
                     <span class="model-thinking-label">{{ $t('settings.model.thinkingLevel') }}</span>
                     <button
                       v-for="level in thinkingLevelOptions"
@@ -167,7 +168,11 @@
                       <span class="dropdown-text">{{ $t('chat.addAttachment') }}</span>
                     </span>
                   </el-dropdown-item>
-                  <el-dropdown-item command="modelConfig" :divided="canAttachImages">
+                  <div v-if="canAttachImages" class="quick-actions-divider" />
+                  <div class="quick-actions-section-title">
+                    {{ $t('workflow.quickActionsConfiguration') }}
+                  </div>
+                  <el-dropdown-item command="modelConfig">
                     <cs name="model" size="14px" class="dropdown-icon" />
                     <span class="dropdown-content">
                       <span class="dropdown-text">{{ $t('settings.model.modelConfig') }}</span>
@@ -179,10 +184,13 @@
                       <span class="dropdown-text">{{ $t('workflow.skillsConfigTitle') }}</span>
                     </span>
                   </el-dropdown-item>
+                  <div class="quick-actions-divider" />
+                  <div class="quick-actions-section-title">
+                    {{ $t('workflow.quickActionsRuntime') }}
+                  </div>
                   <el-dropdown-item
                     v-if="showPlanningModeToggle"
                     command="planning"
-                    divided
                     :disabled="!canTogglePlanningMode"
                     :class="{ active: planningMode }">
                     <cs name="skill-plan" size="14px" class="dropdown-icon" />
@@ -210,7 +218,6 @@
                   </el-dropdown-item>
                   <el-dropdown-item
                     command="finalAudit"
-                    :divided="!showPlanningModeToggle"
                     :disabled="!canToggleFinalAuditMode"
                     :class="{ active: finalAuditMode !== 'off' }">
                     <cs name="check-circle" size="14px" class="dropdown-icon" />
@@ -536,7 +543,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import { useModelStore } from '@/stores/model'
@@ -735,6 +742,7 @@ const agentStore = useAgentStore()
 const modelStore = useModelStore()
 const settingStore = useSettingStore()
 const modelSelectorOpen = ref(false)
+const modelSelectorRef = ref(null)
 const modelConfigDraft = ref(null)
 
 const THINKING_LEVEL_TO_BUDGET = {
@@ -844,6 +852,27 @@ const updateThinkingLevel = (option, level) => {
   configs[activeModelKey.value] = selectedConfig
   updateActiveModelConfigs(configs)
 }
+
+watch(
+  modelSelectorOpen,
+  async (isOpen, _, onCleanup) => {
+    if (!isOpen) return
+
+    const closeOnEscape = event => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      modelSelectorOpen.value = false
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    onCleanup(() => document.removeEventListener('keydown', closeOnEscape))
+
+    await nextTick()
+    modelSelectorRef.value
+      ?.querySelector('.model-option.active')
+      ?.scrollIntoView({ block: 'nearest' })
+  }
+)
 
 watch(
   modelConfigScope,
@@ -1387,11 +1416,47 @@ defineExpose({
   flex-direction: row;
   align-items: flex-start;
   gap: var(--cs-space-xs);
+  margin: 1px 0;
+  padding: var(--cs-space-xs) var(--cs-space-sm);
+  border-radius: var(--cs-border-radius);
+  line-height: 1.35;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--cs-hover-bg-color);
+  }
+
+  &.active {
+    background: var(--el-color-primary-light-9);
+
+    .dropdown-icon,
+    .dropdown-check {
+      color: var(--cs-color-primary);
+    }
+  }
+}
+
+.quick-actions-divider {
+  height: 1px;
+  margin: var(--cs-space-xs) var(--cs-space-xs);
+  background: var(--cs-border-color);
+}
+
+.quick-actions-section-title {
+  padding: var(--cs-space-xs) var(--cs-space-sm) var(--cs-space-xxs);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .dropdown-icon {
   flex-shrink: 0;
-  margin-top: 2px;
+  color: var(--cs-text-color-secondary);
 }
 
 .dropdown-content {
@@ -1404,27 +1469,28 @@ defineExpose({
 .dropdown-main {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--cs-space-xs);
   min-width: 0;
 }
 
 .dropdown-text {
   min-width: 0;
   line-height: 1.4;
-  color: var(--cs-text-color);
+  color: var(--cs-text-color-primary);
 }
 
 .dropdown-note {
   margin-top: 2px;
-  font-size: 11px;
+  font-size: var(--cs-font-size-xs);
   line-height: 1.3;
-  color: var(--cs-text-secondary);
+  color: var(--cs-text-color-secondary);
   white-space: normal;
 }
 
 .dropdown-check {
   margin-left: auto;
   flex-shrink: 0;
+  color: var(--cs-color-primary);
 }
 
 @keyframes workflow-attachment-spin {

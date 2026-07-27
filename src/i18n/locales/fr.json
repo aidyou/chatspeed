@@ -1068,6 +1068,8 @@
     "planningModeTooltip": "Mode de planification : Recherche et stratégie IA avant exécution",
     "planningModeDisabled": "Mode de planification désactivé",
     "planningModeEnabled": "Mode de planification activé",
+    "quickActionsConfiguration": "Configuration",
+    "quickActionsRuntime": "Mode d'exécution",
     "rejected": "Refusé",
     "retrying": "Requête trop fréquente, nouvelle tentative (tentative {attempt}/{total}), attente de {seconds} secondes...",
     "sessionLost": "Session perdue. Redémarrez ou actualisez la page.",

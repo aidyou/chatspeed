@@ -60,6 +60,42 @@ export const resolveExecutionContextPendingTool = (ctx, toolCallId) => {
   return nextContext;
 };
 
+export const clearExecutionContextPendingTools = (ctx) => {
+  const normalized = normalizeExecutionContextForApproval(ctx);
+  if (!normalized) return normalized;
+
+  const nextContext = {
+    ...normalized,
+    pendingTools: []
+  };
+  delete nextContext.pending_tools;
+  return nextContext;
+};
+
+export const upsertExecutionContextPendingTool = (ctx, pendingTool) => {
+  const normalizedContext = normalizeExecutionContextForApproval(ctx) || {};
+  const normalizedPendingTool = normalizePendingTool(pendingTool);
+  if (!normalizedPendingTool.toolCallId) return normalizedContext;
+
+  const pendingTools = [...(normalizedContext.pendingTools || [])];
+  const existingIndex = pendingTools.findIndex(
+    tool => tool.toolCallId === normalizedPendingTool.toolCallId
+  );
+
+  if (existingIndex === -1) {
+    pendingTools.push(normalizedPendingTool);
+  } else {
+    pendingTools[existingIndex] = normalizedPendingTool;
+  }
+
+  const nextContext = {
+    ...normalizedContext,
+    pendingTools
+  };
+  delete nextContext.pending_tools;
+  return nextContext;
+};
+
 export const buildStructuredPendingToolMetadata = (
   pendingTool = {},
   { summary = DEFAULT_PENDING_SUMMARY } = {}
@@ -211,6 +247,7 @@ export const deriveInlinePendingApprovals = ({
 
   const normalizedContext = normalizeExecutionContextForApproval(executionContext);
   const pendingTools = normalizedContext?.pendingTools || [];
+  const hasStructuredPendingAuthority = normalizedContext !== null;
   const order = [];
   const latestById = new Map();
   const structuredPendingById = new Map();
@@ -234,7 +271,11 @@ export const deriveInlinePendingApprovals = ({
     const state = getToolApprovalState(message, meta);
     if (!state) continue;
 
-    if (!structuredPendingById.has(toolCallId) && !latestById.has(toolCallId)) {
+    if (
+      !hasStructuredPendingAuthority &&
+      !structuredPendingById.has(toolCallId) &&
+      !latestById.has(toolCallId)
+    ) {
       order.push(toolCallId);
     }
 

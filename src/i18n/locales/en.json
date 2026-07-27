@@ -1073,6 +1073,8 @@
     "planningModeTooltip": "Planning Mode: AI research and strategy before execution",
     "planningModeDisabled": "Planning mode disabled",
     "planningModeEnabled": "Planning mode enabled",
+    "quickActionsConfiguration": "Configuration",
+    "quickActionsRuntime": "Run mode",
     "rejected": "Rejected",
     "retrying": "Request too fast, retrying (attempt {attempt}/{total}), waiting {seconds} seconds...",
     "sessionLost": "Session lost. Please restart or refresh the page.",

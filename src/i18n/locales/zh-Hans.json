@@ -1073,6 +1073,8 @@
     "planningModeTooltip": "计划模式：在执行前进行 AI 调研和方案设计",
     "planningModeDisabled": "已关闭计划模式",
     "planningModeEnabled": "已开启计划模式",
+    "quickActionsConfiguration": "配置",
+    "quickActionsRuntime": "运行方式",
     "rejected": "已拒绝",
     "retrying": "请求频率过快，正在重试 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
     "sessionLost": "会话已断开，请重启或刷新页面。",

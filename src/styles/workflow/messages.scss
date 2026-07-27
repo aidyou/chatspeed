@@ -768,6 +768,12 @@
       }
     }
 
+    &.assistant{
+        .content{
+            padding-bottom: var(--cs-space-sm);
+        }
+    }
+
     &.think {
         margin-bottom: var(--cs-space-sm);
 

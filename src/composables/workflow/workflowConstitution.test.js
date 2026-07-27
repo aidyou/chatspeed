@@ -113,6 +113,54 @@ const toolIcons = readProjectFile('src/composables/workflow/toolIcons.ts')
 assert.match(toolIcons, /isWorkflowMcpTool\(normalized\)\) return 'mcp'/)
 
 const workflowView = readProjectFile('src/views/Workflow.vue')
+const globalApprovalProjection = sourceSection(
+  workflowView,
+  'const approvalQueueCount = computed(() => {',
+  'const canDeleteLastMessage = computed(() => {'
+)
+assert.match(globalApprovalProjection, /globalPendingApprovalList\.value\.length/)
+assert.match(globalApprovalProjection, /const backgroundEntries = pendingApprovalList\.value\.filter/)
+assert.match(globalApprovalProjection, /entry\.sessionId !== activeSessionId/)
+assert.match(
+  globalApprovalProjection,
+  /const currentEntries = workflowStore\.currentInlinePendingApprovals/
+)
+assert.match(
+  globalApprovalProjection,
+  /const merged = \[\.\.\.currentEntries, \.\.\.currentAskUserEntry, \.\.\.backgroundEntries\]/
+)
+assert.match(
+  globalApprovalProjection,
+  /const key = `\$\{entry\?\.sessionId \|\| ''\}:\$\{entry\?\.id \|\| ''\}`/,
+  'global action reminders must deduplicate per session and approval, not collapse all sessions'
+)
+const queuedImageSend = sourceSection(
+  workflowView,
+  'inputComposable.onSendMessage.value = async () => {',
+  '// ============================================================\n// Wrapper functions combining multiple composables'
+)
+assert.ok(
+  queuedImageSend.indexOf('const messageTarget = {') <
+    queuedImageSend.indexOf('await analyzeImageAttachments('),
+  'image sends must capture their workflow target before asynchronous attachment analysis'
+)
+assert.match(queuedImageSend, /sessionId: workflowStore\.currentWorkflowId/)
+assert.match(queuedImageSend, /target: messageTarget/)
+assert.match(
+  queuedImageSend,
+  /workflowStore\.currentWorkflowId === messageTarget\.sessionId[\s\S]*inputMessage\.value = backupMessage/,
+  'a failed background image send must not restore its input into the newly selected workflow'
+)
+const automationSelection = sourceSection(
+  workflowView,
+  'const onSelectAutomation = async',
+  'const onDeleteAutomation = async'
+)
+assert.match(automationSelection, /selectionRevision = \+\+workflowSelectionIntentRevision/)
+assert.match(
+  automationSelection,
+  /selectionRevision !== workflowSelectionIntentRevision[\s\S]*return/
+)
 const workflowInputArea = readProjectFile('src/components/workflow/WorkflowInputArea.vue')
 const visibleAutoApprovalTools = sourceSection(
   workflowInputArea,
@@ -146,7 +194,13 @@ assert.match(
 )
 assert.match(
   workflowInputArea,
-  /command="modelConfig" :divided="canAttachImages"[\s\S]*<cs name="model"[\s\S]*command="skillsConfig"/
+  /command="modelConfig"[\s\S]*<cs name="model"[\s\S]*command="skillsConfig"/
+)
+assert.match(workflowInputArea, /quickActionsConfiguration[\s\S]*quickActionsRuntime/)
+assert.match(workflowInputArea, /modelSelectorOpen[\s\S]*nextTick\(\)[\s\S]*scrollIntoView\(\{ block: 'nearest' \}\)/)
+assert.match(
+  workflowInputArea,
+  /event\.key !== 'Escape'[\s\S]*modelSelectorOpen\.value = false[\s\S]*document\.addEventListener\('keydown', closeOnEscape\)/
 )
 assert.match(workflowInputArea, /<cs name="stop" @click="confirmStop" v-if="canStop" \/>/)
 assert.match(
@@ -182,6 +236,60 @@ assert.doesNotMatch(
 )
 assert.doesNotMatch(workflowCore, /confirmationWaiting|showConfirmationDialog/)
 const workflowStore = readProjectFile('src/stores/workflow.js')
+const queuedMessageRouting = sourceSection(
+  workflowCore,
+  'const flushDeferredQueuedMessages',
+  '// Track the current session ID for event isolation'
+)
+assert.match(queuedMessageRouting, /item\.sessionId === activeSessionId/)
+assert.match(queuedMessageRouting, /sendUserMessageSignal\(activeSessionId/)
+const sendMessageRouting = sourceSection(
+  workflowCore,
+  'const onSendMessage = async',
+  'const removeQueuedMessage = async'
+)
+assert.match(sendMessageRouting, /targetSessionId = hasExplicitTarget/)
+assert.match(sendMessageRouting, /sendUserMessageSignal\([\s\S]*targetSessionId/)
+assert.doesNotMatch(sendMessageRouting, /sendUserMessageSignal\(\s*currentWorkflowId\.value/)
+const removeQueuedMessageRouting = sourceSection(
+  workflowCore,
+  'const removeQueuedMessage = async',
+  'const handleBuiltinCommand = async'
+)
+assert.match(
+  removeQueuedMessageRouting,
+  /removeQueuedUserMessageSignal\(queuedItem\.sessionId, queuedId\)/
+)
+assert.match(workflowStore, /sessionId: message\.sessionId \|\| currentWorkflowId\.value \|\| null/)
+assert.match(
+  workflowStore,
+  /get_auto_approved_tools[\s\S]*currentWorkflowId\.value !== workflowId \|\| messageLoadRevision !== requestRevision/,
+  'late workflow hydration must not overwrite the newly selected workflow'
+)
+const workflowSelection = sourceSection(
+  workflowCore,
+  'const selectWorkflow = async',
+  'const startNewWorkflow = async'
+)
+assert.match(workflowSelection, /previousInlineApprovals/)
+assert.match(
+  workflowSelection,
+  /upsertPendingApprovalEntry\(previousWorkflowId/,
+  'switching sessions must retain the previous session approvals in the global reminder cache'
+)
+assert.match(workflowSelection, /workflowStore\.currentWorkflowId !== id/)
+assert.match(workflowSelection, /currentSessionId\.value !== id/)
+const workflowEventSetup = sourceSection(
+  workflowCore,
+  'const setupWorkflowEvents = async',
+  '/**\n     * Select workflow with session isolation'
+)
+assert.match(workflowEventSetup, /setupRevision !== workflowEventSetupRevision/)
+assert.match(workflowEventSetup, /unlisten\(\)[\s\S]*return false/)
+const stopWorkflow = sourceSection(workflowCore, 'const onStop = async', 'const openModelSelector')
+assert.match(stopWorkflow, /const sessionId = currentWorkflowId\.value/)
+assert.match(stopWorkflow, /invokeWrapper\('workflow_stop', \{[\s\S]*sessionId/)
+assert.match(stopWorkflow, /currentWorkflowId\.value === sessionId/)
 assert.match(workflowStore, /invokeWrapper\('get_earlier_workflow_message_page'/)
 assert.match(
   workflowStore,
@@ -213,6 +321,12 @@ const clearContextProjection = sourceSection(
   workflowView,
   'const onClearContextFrame = async () => {',
   '// Wrapper for skill select that properly handles send'
+)
+assert.match(clearContextProjection, /const sessionId = currentWorkflowId\.value/)
+assert.doesNotMatch(
+  clearContextProjection,
+  /sessionId:\s*currentWorkflowId\.value/,
+  'clear-context commands must retain the workflow selected when the action began'
 )
 assert.match(
   clearContextProjection,

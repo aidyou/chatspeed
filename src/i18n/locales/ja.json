@@ -1068,6 +1068,8 @@
     "planningModeTooltip": "計画モード：実行前に AI の研究と戦略を立てます",
     "planningModeDisabled": "計画モードをオフにしました",
     "planningModeEnabled": "計画モードをオンにしました",
+    "quickActionsConfiguration": "設定",
+    "quickActionsRuntime": "実行モード",
     "rejected": "拒否済み",
     "retrying": "リクエストが多すぎます、再試行中（{attempt}/{total}回目）、{seconds}秒待ち...",
     "sessionLost": "セッションが切断されました。再起動するかページを更新してください。",

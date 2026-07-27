@@ -391,6 +391,7 @@ const visibleTaskGroupCount = ref(1)
 const automationDrawerVisible = ref(false)
 const workflowSidebarActiveTab = ref('history')
 const lastHistoryWorkflowId = ref(null)
+let workflowSelectionIntentRevision = 0
 const todayCostAmount = ref(0)
 const todayCostRefreshTimer = ref(null)
 const isRefreshingTodayCost = ref(false)
@@ -1042,6 +1043,7 @@ async function openImageAttachmentDialog() {
   if (!canUseImageAttachments.value) {
     return
   }
+  const sessionId = workflowStore.currentWorkflowId
 
   const selected = await open({
     multiple: true,
@@ -1052,6 +1054,9 @@ async function openImageAttachmentDialog() {
       }
     ]
   })
+  if (workflowStore.currentWorkflowId !== sessionId) {
+    return
+  }
 
   const paths = Array.isArray(selected) ? selected : selected ? [selected] : []
   for (const path of paths) {
@@ -1244,14 +1249,14 @@ function clearRecoverableWorkflowErrorMessages() {
 }
 
 async function handleContinue() {
-  if (await onContinue()) {
+  const sessionId = workflowStore.currentWorkflowId
+  if ((await onContinue()) && workflowStore.currentWorkflowId === sessionId) {
     clearRecoverableWorkflowErrorMessages()
   }
 }
 
-function appendImageAnalysisErrorMessage(error, attachments = []) {
-  const sessionId = workflowStore.currentWorkflowId
-  if (!sessionId) {
+function appendImageAnalysisErrorMessage(error, attachments = [], sessionId = null) {
+  if (!sessionId || workflowStore.currentWorkflowId !== sessionId) {
     return
   }
 
@@ -1311,6 +1316,18 @@ inputComposable.onSendMessage.value = async () => {
   const backupMessage = inputMessage.value
   const backupAttachments = [...imageAttachments.value]
   const rawMessage = backupMessage.trim()
+  const targetWorkflow = workflowStore.currentWorkflow
+  const messageTarget = {
+    sessionId: workflowStore.currentWorkflowId,
+    agentId: targetWorkflow?.agentId || selectedAgent.value?.id || null,
+    status: targetWorkflow?.status || null,
+    waitReason:
+      workflowStore.waitReason || targetWorkflow?.waitReason || targetWorkflow?.wait_reason || null,
+    hasLiveSession: workflowStore.hasLiveSession,
+    isRunning: workflowStore.isRunning,
+    isWaiting: workflowStore.isWaiting,
+    planningMode: planningMode.value
+  }
 
   if (!rawMessage && backupAttachments.length === 0) {
     return
@@ -1325,6 +1342,7 @@ inputComposable.onSendMessage.value = async () => {
       preparingQueueId = `local_queue_prepare_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
       workflowStore.addMessageToQueue({
         id: preparingQueueId,
+        sessionId: messageTarget.sessionId,
         content: buildPendingImageQueueText(rawMessage, backupAttachments),
         status: 'preparing_attachments',
         statusText: t('chat.analyzingImages'),
@@ -1348,11 +1366,13 @@ inputComposable.onSendMessage.value = async () => {
     if (preparingQueueId) {
       workflowStore.removeQueuedMessage(preparingQueueId)
     }
-    appendImageAnalysisErrorMessage(error, backupAttachments)
-    inputMessage.value = backupMessage
-    imageAttachments.value = backupAttachments
-    resetChatState()
-    isChatting.value = false
+    appendImageAnalysisErrorMessage(error, backupAttachments, messageTarget.sessionId)
+    if (workflowStore.currentWorkflowId === messageTarget.sessionId) {
+      inputMessage.value = backupMessage
+      imageAttachments.value = backupAttachments
+      resetChatState()
+      isChatting.value = false
+    }
     isPreparingImageSend.value = false
     showMessage(error?.message || t('chat.errorOnAddAttachment', { error: String(error) }), 'error')
     scrollMessageListToBottom()
@@ -1367,19 +1387,27 @@ inputComposable.onSendMessage.value = async () => {
   }
   isPreparingImageSend.value = false
 
-  const handledWorkflowCommand = await handleWorkflowSlashCommand(rawMessage)
+  const handledWorkflowCommand =
+    workflowStore.currentWorkflowId === messageTarget.sessionId &&
+    (await handleWorkflowSlashCommand(rawMessage))
   if (handledWorkflowCommand) {
     return true
   }
 
   const sendResult = await coreOnSendMessage(rawMessage, {
     attachedContext,
-    metadata
+    metadata,
+    target: messageTarget
   })
   if (sendResult === false) {
-    inputMessage.value = backupMessage
-    imageAttachments.value = backupAttachments
-  } else if (sendResult === true) {
+    if (workflowStore.currentWorkflowId === messageTarget.sessionId) {
+      inputMessage.value = backupMessage
+      imageAttachments.value = backupAttachments
+    }
+  } else if (
+    sendResult === true &&
+    workflowStore.currentWorkflowId === messageTarget.sessionId
+  ) {
     clearRecoverableWorkflowErrorMessages()
   }
   return sendResult
@@ -1509,7 +1537,8 @@ const handleWorkflowSlashCommand = async command => {
 }
 
 const onClearContextFrame = async () => {
-  if (!currentWorkflowId.value) {
+  const sessionId = currentWorkflowId.value
+  if (!sessionId) {
     showMessage(t('workflow.clearContextFrameNoSession'), 'warning')
     return
   }
@@ -1521,33 +1550,40 @@ const onClearContextFrame = async () => {
 
   try {
     const result = await invokeWrapper('workflow_begin_new_context_frame', {
-      sessionId: currentWorkflowId.value
+      sessionId
     })
 
     await workflowStore.updateWorkflowStatus(
-      currentWorkflowId.value,
+      sessionId,
       result?.state || WORKFLOW_STATUSES.PENDING,
       result?.waitReason ?? null
     )
-    workflowStore.setHasLiveSession(result?.hasLiveSession === true)
+    if (currentWorkflowId.value === sessionId) {
+      workflowStore.setHasLiveSession(result?.hasLiveSession === true)
+    }
 
     if (result?.noop) {
-      await workflowStore.loadMessages(currentWorkflowId.value)
+      await workflowStore.loadMessages(sessionId)
       showMessage(t('workflow.clearContextFrameNoop'), 'info')
       return
     }
 
-    visibleTaskGroupCount.value = 1
+    if (currentWorkflowId.value === sessionId) {
+      visibleTaskGroupCount.value = 1
+    }
 
     const markerMessage = result?.markerMessage || null
-    if (markerMessage) {
+    if (markerMessage && currentWorkflowId.value === sessionId) {
       workflowStore.addMessage({
         ...markerMessage,
-        sessionId: markerMessage.sessionId || currentWorkflowId.value
+        sessionId: markerMessage.sessionId || sessionId
       })
     }
 
-    await workflowStore.loadMessages(currentWorkflowId.value)
+    await workflowStore.loadMessages(sessionId)
+    if (currentWorkflowId.value !== sessionId) {
+      return
+    }
     visibleTaskGroupCount.value = 1
 
     if (workflowStore.currentWorkflow?.executionContext) {
@@ -1589,31 +1625,39 @@ const openSkillsSelector = async () => {
 }
 
 const onSkillsConfigSave = async config => {
+  const targetSessionId = currentWorkflowId.value
+  const targetAgent = targetSessionId ? null : selectedAgent.value
   try {
-    if (currentWorkflowId.value) {
+    if (targetSessionId) {
       await invokeWrapper('update_workflow_skills_config', {
-        sessionId: currentWorkflowId.value,
+        sessionId: targetSessionId,
         skillEnabled: config.skillEnabled !== false,
         selectedSkills: config.selectedSkills || []
       })
-      await workflowStore.selectWorkflow(currentWorkflowId.value)
-    } else if (selectedAgent.value) {
+      if (currentWorkflowId.value === targetSessionId) {
+        await workflowStore.selectWorkflow(targetSessionId)
+      } else {
+        await workflowStore.loadWorkflows()
+      }
+    } else if (targetAgent) {
       const updatedAgent = {
-        ...selectedAgent.value,
+        ...targetAgent,
         skillEnabled: config.skillEnabled !== false,
         selectedSkills: config.selectedSkills || []
       }
       await agentStore.saveAgent(updatedAgent)
       await agentStore.fetchAgents()
-      selectedAgent.value =
-        agentStore.agents.find(agent => agent.id === updatedAgent.id) || updatedAgent
+      if (!currentWorkflowId.value && selectedAgent.value?.id === updatedAgent.id) {
+        selectedAgent.value =
+          agentStore.agents.find(agent => agent.id === updatedAgent.id) || updatedAgent
+      }
     }
 
     showMessage(t('common.saveSuccess'), 'success')
   } catch (error) {
     console.error('Failed to save workflow skills config:', error)
-    if (currentWorkflowId.value) {
-      await workflowStore.selectWorkflow(currentWorkflowId.value)
+    if (targetSessionId && currentWorkflowId.value === targetSessionId) {
+      await workflowStore.selectWorkflow(targetSessionId)
     }
     showMessage(t('common.saveFailed'), 'error')
   }
@@ -1695,6 +1739,7 @@ const resolveAutomationWorkflowId = async automationId => {
 }
 
 const onSelectWorkflowFromHistory = async workflowId => {
+  workflowSelectionIntentRevision += 1
   if (
     workflowSidebarActiveTab.value === 'history' &&
     currentWorkflowId.value === workflowId &&
@@ -1709,7 +1754,11 @@ const onSelectWorkflowFromHistory = async workflowId => {
 
 const onSelectAutomation = async automationId => {
   if (!automationId) return
+  const selectionRevision = ++workflowSelectionIntentRevision
   const workflowSessionId = await resolveAutomationWorkflowId(automationId)
+  if (selectionRevision !== workflowSelectionIntentRevision) {
+    return
+  }
 
   if (
     workflowSidebarActiveTab.value === 'automation' &&
@@ -1779,7 +1828,11 @@ const onAutomationSaved = async () => {
 }
 
 const onAutomationStartedWorkflow = async workflowSessionId => {
+  const selectionRevision = ++workflowSelectionIntentRevision
   await workflowStore.loadWorkflows()
+  if (selectionRevision !== workflowSelectionIntentRevision) {
+    return
+  }
   await selectWorkflow(workflowSessionId)
 }
 
@@ -1875,7 +1928,8 @@ const displayAllowedPathTitle = computed(() => {
 })
 
 const onDeleteLastMessage = async () => {
-  if (!canDeleteLastMessage.value || !currentWorkflowId.value) return
+  const sessionId = currentWorkflowId.value
+  if (!canDeleteLastMessage.value || !sessionId) return
 
   try {
     await ElMessageBox.confirm(
@@ -1893,7 +1947,7 @@ const onDeleteLastMessage = async () => {
 
   try {
     const deleted = await invokeWrapper('delete_last_workflow_message', {
-      sessionId: currentWorkflowId.value
+      sessionId
     })
 
     if (!deleted) {
@@ -1901,8 +1955,10 @@ const onDeleteLastMessage = async () => {
       return
     }
 
-    workflowStore.resetWorkflowUiProjection(currentWorkflowId.value)
-    await selectWorkflow(currentWorkflowId.value)
+    if (currentWorkflowId.value === sessionId) {
+      workflowStore.resetWorkflowUiProjection(sessionId)
+      await selectWorkflow(sessionId)
+    }
     showMessage(t('workflow.deleteLastMessageDone'), 'success')
   } catch (error) {
     console.error('Failed to delete last workflow message:', error)
@@ -1983,18 +2039,24 @@ const onTogglePlanningMode = () => {
 
 const onSelectedAgentChange = async agent => {
   selectedAgent.value = agent
+  const sessionId = currentWorkflowId.value
 
-  if (!currentWorkflowId.value || !canEditCurrentWorkflowAgent.value || !agent) {
+  if (!sessionId || !canEditCurrentWorkflowAgent.value || !agent) {
     return
   }
 
   try {
     const agentConfigResult = await invokeWrapper('update_workflow_agent_id', {
-      sessionId: currentWorkflowId.value,
+      sessionId,
       agentId: agent.id
     })
     const agentConfig =
       typeof agentConfigResult === 'string' ? JSON.parse(agentConfigResult) : agentConfigResult
+
+    if (workflowStore.currentWorkflowId !== sessionId || !workflowStore.currentWorkflow) {
+      await workflowStore.loadWorkflows()
+      return
+    }
 
     if (workflowStore.currentWorkflow) {
       workflowStore.currentWorkflow.agentId = agent.id
@@ -2053,6 +2115,7 @@ const toggleWorkflowCompletionMute = async () => {
 
 const handleApprovalCommand = async sessionId => {
   if (!sessionId) return
+  workflowSelectionIntentRevision += 1
   sidebarRootFilterResetToken.value += 1
   await selectWorkflow(sessionId)
 }

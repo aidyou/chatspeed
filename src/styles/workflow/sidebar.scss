@@ -71,7 +71,9 @@
       border-radius: var(--cs-border-radius);
       color: var(--cs-text-color-secondary);
       cursor: pointer;
-      transition: background-color 0.2s ease, color 0.2s ease;
+      transition:
+        background-color 0.2s ease,
+        color 0.2s ease;
 
       &:hover:not(.disabled) {
         background-color: var(--cs-active-bg-color);
@@ -259,7 +261,9 @@
       border-radius: var(--cs-border-radius-round);
       color: var(--cs-text-color-secondary);
       cursor: pointer;
-      transition: background-color 0.2s ease, color 0.2s ease;
+      transition:
+        background-color 0.2s ease,
+        color 0.2s ease;
 
       &:hover,
       &.active {
@@ -314,6 +318,7 @@
         }
 
         .workflow-title {
+          font-size: var(--cs-font-size);
           font-weight: 500;
           overflow: hidden;
           text-overflow: ellipsis;
