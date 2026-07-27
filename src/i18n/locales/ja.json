@@ -1089,7 +1089,7 @@
       "stopping": "停止中",
       "thinking": "思考中"
     },
-    "skillsConfigTitle": "Workflow Skills 設定",
+    "skillsConfigTitle": "Skills 設定",
     "skillsSearchEmpty": "一致する Skills はありません。",
     "skillsSearchPlaceholder": "Skills 名で検索",
     "startFailed": "ワークフローの開始に失敗しました：{error}",
@@ -1138,6 +1138,8 @@
       "latestDynamic": "最新"
     },
     "stop": "停止",
+    "stopConfirmMessage": "現在のワークフローを停止しますか？実行中の操作は中断されます。",
+    "stopConfirmTitle": "ワークフローを停止",
     "stopping": "停止中",
     "thinking": "思考中…",
     "thinkingExpanded": "思考過程",

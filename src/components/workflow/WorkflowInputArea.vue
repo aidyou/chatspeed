@@ -167,16 +167,16 @@
                       <span class="dropdown-text">{{ $t('chat.addAttachment') }}</span>
                     </span>
                   </el-dropdown-item>
-                  <el-dropdown-item command="skillsConfig" :divided="canAttachImages">
+                  <el-dropdown-item command="modelConfig" :divided="canAttachImages">
+                    <cs name="model" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-text">{{ $t('settings.model.modelConfig') }}</span>
+                    </span>
+                  </el-dropdown-item>
+                  <el-dropdown-item command="skillsConfig">
                     <cs name="skill" size="14px" class="dropdown-icon" />
                     <span class="dropdown-content">
                       <span class="dropdown-text">{{ $t('workflow.skillsConfigTitle') }}</span>
-                    </span>
-                  </el-dropdown-item>
-                  <el-dropdown-item command="modelConfig" divided>
-                    <cs name="setting" size="14px" class="dropdown-icon" />
-                    <span class="dropdown-content">
-                      <span class="dropdown-text">{{ $t('settings.model.modelConfig') }}</span>
                     </span>
                   </el-dropdown-item>
                   <el-dropdown-item
@@ -488,7 +488,7 @@
           <el-button v-else-if="isStopping" size="small" round disabled>
             {{ $t('workflow.stopping') }}
           </el-button>
-          <cs name="stop" @click="$emit('stop')" v-if="canStop" />
+          <cs name="stop" @click="confirmStop" v-if="canStop" />
           <cs name="send" @click="$emit('send-message')" :class="{ disabled: !canSendMessage }" />
         </div>
       </div>
@@ -537,6 +537,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import { useModelStore } from '@/stores/model'
 import { useSettingStore } from '@/stores/setting'
@@ -1068,6 +1069,19 @@ const openCreateWorkflowDialog = () => {
 const createWorkflowFromSelectedMode = () => {
   createWorkflowDialogVisible.value = false
   emit('create-new-workflow', { inheritCurrent: createWorkflowInheritCurrent.value })
+}
+
+const confirmStop = async () => {
+  try {
+    await ElMessageBox.confirm(t('workflow.stopConfirmMessage'), t('workflow.stopConfirmTitle'), {
+      confirmButtonText: t('workflow.stop'),
+      cancelButtonText: t('common.cancel'),
+      type: 'warning'
+    })
+    emit('stop')
+  } catch {
+    // Cancelling leaves the workflow running.
+  }
 }
 
 const handleCreateWorkflowDialogKeydown = event => {

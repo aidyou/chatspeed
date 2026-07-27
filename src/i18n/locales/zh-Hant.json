@@ -1094,7 +1094,7 @@
       "stopping": "停止中",
       "thinking": "思考中"
     },
-    "skillsConfigTitle": "Workflow Skills 設定",
+    "skillsConfigTitle": "Skills 設定",
     "skillsSearchEmpty": "沒有符合的 Skills。",
     "skillsSearchPlaceholder": "按 Skills 名稱搜尋",
     "startFailed": "啟動工作流失敗：{error}",
@@ -1143,6 +1143,8 @@
       "latestDynamic": "最新動態"
     },
     "stop": "停止",
+    "stopConfirmMessage": "確定要停止目前的工作流程嗎？執行中的操作將會中斷。",
+    "stopConfirmTitle": "停止工作流程",
     "stopping": "停止中",
     "thinking": "思考中...",
     "thinkingExpanded": "思考過程",

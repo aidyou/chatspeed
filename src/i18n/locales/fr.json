@@ -1089,7 +1089,7 @@
       "stopping": "Arrêt en cours",
       "thinking": "Réflexion en cours"
     },
-    "skillsConfigTitle": "Skills du workflow",
+    "skillsConfigTitle": "Configuration des Skills",
     "skillsSearchEmpty": "Aucun Skill correspondant.",
     "skillsSearchPlaceholder": "Rechercher par nom",
     "startFailed": "Échec du démarrage du flux de travail: {error}",
@@ -1138,6 +1138,8 @@
       "latestDynamic": "Dernier"
     },
     "stop": "Arrêter",
+    "stopConfirmMessage": "Arrêter le workflow actuel ? Les opérations en cours seront interrompues.",
+    "stopConfirmTitle": "Arrêter le workflow",
     "stopping": "Arrêt...",
     "thinking": "Réflexion en cours...",
     "thinkingExpanded": "Processus de réflexion",

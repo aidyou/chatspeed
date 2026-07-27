@@ -1089,7 +1089,7 @@
       "stopping": "Остановка",
       "thinking": "Думаю"
     },
-    "skillsConfigTitle": "Skills workflow",
+    "skillsConfigTitle": "Настройка Skills",
     "skillsSearchEmpty": "Подходящие Skills не найдены.",
     "skillsSearchPlaceholder": "Поиск по имени",
     "startFailed": "Ошибка запуска рабочего процесса: {error}",
@@ -1138,6 +1138,8 @@
       "latestDynamic": "Последнее"
     },
     "stop": "Стоп",
+    "stopConfirmMessage": "Остановить текущий workflow? Выполняемые операции будут прерваны.",
+    "stopConfirmTitle": "Остановить workflow",
     "stopping": "Остановка",
     "thinking": "Думаю...",
     "thinkingExpanded": "Ход рассуждений",

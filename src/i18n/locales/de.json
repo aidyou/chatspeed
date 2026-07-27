@@ -1089,7 +1089,7 @@
       "stopping": "Wird gestoppt",
       "thinking": "Denkt nach"
     },
-    "skillsConfigTitle": "Workflow-Skills",
+    "skillsConfigTitle": "Skills-Konfiguration",
     "skillsSearchEmpty": "Keine passenden Skills.",
     "skillsSearchPlaceholder": "Skills nach Namen suchen",
     "startFailed": "Start fehlgeschlagen: {error}",
@@ -1138,6 +1138,8 @@
       "latestDynamic": "Neueste"
     },
     "stop": "Stopp",
+    "stopConfirmMessage": "Den aktuellen Workflow stoppen? Laufende Vorgänge werden unterbrochen.",
+    "stopConfirmTitle": "Workflow stoppen",
     "stopping": "Wird gestoppt",
     "thinking": "Denke nach...",
     "thinkingExpanded": "Denkprozess",

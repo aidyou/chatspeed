@@ -144,6 +144,15 @@ assert.match(
   workflowInputArea,
   /command === 'attachment'[\s\S]*quickActionsDropdownRef\.value\?\.handleClose\?\.\(\)[\s\S]*command === 'skillsConfig'[\s\S]*quickActionsDropdownRef\.value\?\.handleClose\?\.\(\)/
 )
+assert.match(
+  workflowInputArea,
+  /command="modelConfig" :divided="canAttachImages"[\s\S]*<cs name="model"[\s\S]*command="skillsConfig"/
+)
+assert.match(workflowInputArea, /<cs name="stop" @click="confirmStop" v-if="canStop" \/>/)
+assert.match(
+  workflowInputArea,
+  /ElMessageBox\.confirm\(t\('workflow\.stopConfirmMessage'\), t\('workflow\.stopConfirmTitle'\)[\s\S]*emit\('stop'\)/
+)
 const workflowMessages = readProjectFile('src/composables/workflow/useWorkflowMessages.ts')
 assert.doesNotMatch(
   workflowMessages,

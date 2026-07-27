@@ -1094,7 +1094,7 @@
       "stopping": "Stopping",
       "thinking": "Thinking"
     },
-    "skillsConfigTitle": "Workflow Skills",
+    "skillsConfigTitle": "Skills Configuration",
     "skillsSearchEmpty": "No matching skills.",
     "skillsSearchPlaceholder": "Search by skill name",
     "startFailed": "Failed to start workflow: {error}",
@@ -1143,6 +1143,8 @@
       "latestDynamic": "Latest"
     },
     "stop": "Stop",
+    "stopConfirmMessage": "Stop the current workflow? Any operation in progress will be interrupted.",
+    "stopConfirmTitle": "Stop workflow",
     "stopping": "Stopping",
     "thinking": "Thinking...",
     "thinkingExpanded": "Thinking Process",

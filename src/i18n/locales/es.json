@@ -1089,7 +1089,7 @@
       "stopping": "Deteniendo",
       "thinking": "Pensando"
     },
-    "skillsConfigTitle": "Skills del workflow",
+    "skillsConfigTitle": "Configuración de Skills",
     "skillsSearchEmpty": "No hay Skills coincidentes.",
     "skillsSearchPlaceholder": "Buscar por nombre",
     "startFailed": "Error al iniciar el flujo de trabajo: {error}",
@@ -1138,6 +1138,8 @@
       "latestDynamic": "Más reciente"
     },
     "stop": "Detener",
+    "stopConfirmMessage": "¿Detener el workflow actual? Las operaciones en curso se interrumpirán.",
+    "stopConfirmTitle": "Detener workflow",
     "stopping": "Deteniendo",
     "thinking": "Pensando...",
     "thinkingExpanded": "Proceso de razonamiento",

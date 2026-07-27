@@ -1089,7 +1089,7 @@
       "stopping": "Parando",
       "thinking": "Pensando"
     },
-    "skillsConfigTitle": "Skills do workflow",
+    "skillsConfigTitle": "Configuração de Skills",
     "skillsSearchEmpty": "Nenhuma Skill correspondente.",
     "skillsSearchPlaceholder": "Buscar por nome",
     "startFailed": "Falha ao iniciar o fluxo de trabalho: {error}",
@@ -1138,6 +1138,8 @@
       "latestDynamic": "Mais recente"
     },
     "stop": "Parar",
+    "stopConfirmMessage": "Parar o workflow atual? As operações em andamento serão interrompidas.",
+    "stopConfirmTitle": "Parar workflow",
     "stopping": "Parando",
     "thinking": "Pensando...",
     "thinkingExpanded": "Processo de raciocínio",
