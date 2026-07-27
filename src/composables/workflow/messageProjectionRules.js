@@ -170,6 +170,76 @@ export const selectVisibleWorkflowMessageWindow = (groups = [], visibleMessageCo
   }
 }
 
+export const getWorkflowPersistedMessageId = message => {
+  const value = message?.id
+  if (value === null || value === undefined || value === '') return null
+  const normalized = String(value).trim()
+  return /^\d+$/.test(normalized) ? normalized : null
+}
+
+/**
+ * Page responses, snapshots, and live events can overlap while a history request
+ * is in flight. Keep one copy of each persisted database row, preferring the
+ * later source so current state replaces an older page projection.
+ */
+export const mergeWorkflowMessagePages = (earlierMessages = [], currentMessages = []) => {
+  const merged = []
+  const persistedMessageIndex = new Map()
+
+  for (const message of [...earlierMessages, ...currentMessages]) {
+    const persistedMessageId = getWorkflowPersistedMessageId(message)
+    if (!persistedMessageId) {
+      merged.push(message)
+      continue
+    }
+
+    const existingIndex = persistedMessageIndex.get(persistedMessageId)
+    if (existingIndex === undefined) {
+      persistedMessageIndex.set(persistedMessageId, merged.length)
+      merged.push(message)
+    } else {
+      merged[existingIndex] = message
+    }
+  }
+
+  return merged
+}
+
+/**
+ * A queued user message has one canonical queue identifier from the backend.
+ * A projection must not render more than one copy when completion-boundary
+ * reconciliation temporarily includes the same message in multiple groups.
+ */
+export const dedupeQueuedUserMessageProjection = (messages = []) => {
+  const selectedMessageByQueueId = new Map()
+
+  const getPriority = message => {
+    const queueStatus = String(message?.metadata?.queue_status || '').toLowerCase()
+    if (queueStatus === 'applied') return 2
+    if (message?.id !== null && message?.id !== undefined) return 1
+    return 0
+  }
+
+  for (const message of messages) {
+    const queuedMessageId = String(message?.metadata?.queued_user_message_id || '').trim()
+    if (!queuedMessageId || message?.role !== 'user') continue
+
+    const existing = selectedMessageByQueueId.get(queuedMessageId)
+    if (!existing || getPriority(message) > getPriority(existing)) {
+      selectedMessageByQueueId.set(queuedMessageId, message)
+    }
+  }
+
+  return messages.filter(message => {
+    const queuedMessageId = String(message?.metadata?.queued_user_message_id || '').trim()
+    return (
+      !queuedMessageId ||
+      message?.role !== 'user' ||
+      selectedMessageByQueueId.get(queuedMessageId) === message
+    )
+  })
+}
+
 export const reconcileWorkflowTaskWindowState = ({
   messages = [],
   workflowId = null,

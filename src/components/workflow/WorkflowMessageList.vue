@@ -1033,6 +1033,7 @@ const isRevealingEarlierTaskGroup = ref(false)
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
 let userMessageResizeObserver = null
+let messageContentResizeObserver = null
 let scrollFrameId = null
 let scrollCorrectionFrameId = null
 let observedMessageListWidth = 0
@@ -2919,6 +2920,7 @@ watch(
   () => {
     performScrollToBottom()
     scheduleMeasureUserMessageOverflow()
+    syncMessageContentResizeObserver()
   },
   { flush: 'post' }
 )
@@ -2927,6 +2929,7 @@ watch(
   streamingLayoutState,
   () => {
     performScrollToBottom()
+    syncMessageContentResizeObserver()
   },
   { flush: 'post' }
 )
@@ -2942,9 +2945,20 @@ watch(
   }
 )
 
+const syncMessageContentResizeObserver = () => {
+  const container = messagesRef.value
+  if (!messageContentResizeObserver || !container) return
+
+  messageContentResizeObserver.disconnect()
+  Array.from(container.children).forEach(child => messageContentResizeObserver.observe(child))
+}
+
 onMounted(() => {
   componentUnmounted = false
   if (typeof ResizeObserver !== 'undefined') {
+    messageContentResizeObserver = new ResizeObserver(() => {
+      performScrollToBottom()
+    })
     userMessageResizeObserver = new ResizeObserver(entries => {
       const nextWidth = entries[0]?.contentRect?.width || messagesRef.value?.clientWidth || 0
       if (nextWidth === observedMessageListWidth) return
@@ -2954,6 +2968,7 @@ onMounted(() => {
     if (messagesRef.value) {
       observedMessageListWidth = messagesRef.value.clientWidth
       userMessageResizeObserver.observe(messagesRef.value)
+      syncMessageContentResizeObserver()
     }
   } else if (typeof window !== 'undefined') {
     window.addEventListener('resize', scheduleMeasureUserMessageOverflow)
@@ -2969,7 +2984,12 @@ onBeforeUnmount(() => {
   if (userMessageResizeObserver) {
     userMessageResizeObserver.disconnect()
     userMessageResizeObserver = null
-  } else if (typeof window !== 'undefined') {
+  }
+  if (messageContentResizeObserver) {
+    messageContentResizeObserver.disconnect()
+    messageContentResizeObserver = null
+  }
+  if (typeof ResizeObserver === 'undefined' && typeof window !== 'undefined') {
     window.removeEventListener('resize', scheduleMeasureUserMessageOverflow)
   }
   if (scrollFrameId !== null) {

@@ -157,8 +157,13 @@
               trigger="click"
               :hide-on-click="false"
               @command="handleQuickActionCommand">
-              <label class="icon-btn upperLayer">
+              <label
+                class="icon-btn upperLayer quick-actions-badge"
+                :class="{ 'has-active-options': activeRuntimeOptionCount > 0 }">
                 <cs name="add" class="small" />
+                <span v-if="activeRuntimeOptionCount > 0" class="badge">
+                  {{ activeRuntimeOptionCount }}
+                </span>
               </label>
               <template #dropdown>
                 <el-dropdown-menu class="workflow-quick-actions-dropdown">
@@ -1089,6 +1094,13 @@ const createWorkflowInheritCurrent = ref(true)
 const inputMessage = defineModel('inputMessage', { type: String, default: '' })
 
 const autoCompressMenuLabel = computed(() => t('workflow.autoCompressShort'))
+const activeRuntimeOptionCount = computed(
+  () =>
+    Number(props.planningMode) +
+    Number(props.planningMode && props.autoApprovePlan) +
+    Number(props.finalAuditMode !== 'off') +
+    Number(props.autoCompressEnabled)
+)
 
 const openCreateWorkflowDialog = () => {
   createWorkflowInheritCurrent.value = Boolean(props.currentWorkflow)
@@ -1491,6 +1503,28 @@ defineExpose({
   margin-left: auto;
   flex-shrink: 0;
   color: var(--cs-color-primary);
+}
+
+.quick-actions-badge {
+  .badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: var(--cs-border-radius-lg);
+    background: var(--el-color-primary);
+    color: var(--cs-text-color-on-primary, #fff);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
+  }
+
+  &.has-active-options .cs {
+    color: var(--el-color-primary);
+  }
 }
 
 @keyframes workflow-attachment-spin {

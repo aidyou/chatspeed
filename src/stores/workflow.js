@@ -14,7 +14,7 @@ import {
 import { deriveToolViewState } from '@/composables/workflow/useToolStateMapper';
 import { isAutoExecuteWorkflowTool } from '@/composables/workflow/toolApproval';
 import { getToolStatusSummary } from '@/composables/workflow/toolDisplay';
-import { inferWorkflowToolExecutionStatus } from '@/composables/workflow/messageProjectionRules';
+import { getWorkflowPersistedMessageId, inferWorkflowToolExecutionStatus, mergeWorkflowMessagePages } from '@/composables/workflow/messageProjectionRules';
 import {
   appendMissingPendingToolMessages,
   clearExecutionContextPendingTools,
@@ -101,16 +101,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return normalized;
   };
 
-  const getPersistedMessageId = (message) => {
-    const value = message?.id;
-    if (value === null || value === undefined || value === '') return null;
-    const normalized = String(value).trim();
-    return /^\d+$/.test(normalized) ? normalized : null;
-  };
-
   const comparePersistedMessageOrder = (left, right) => {
-    const leftId = getPersistedMessageId(left);
-    const rightId = getPersistedMessageId(right);
+    const leftId = getWorkflowPersistedMessageId(left);
+    const rightId = getWorkflowPersistedMessageId(right);
     if (!leftId && !rightId) return 0;
     if (!leftId) return 1;
     if (!rightId) return -1;
@@ -1551,10 +1544,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
       }
     }
 
+    const incomingPersistedMessageId = getWorkflowPersistedMessageId(message);
     const incomingToolCallId = message.metadata?.tool_call_id;
     const incomingQueuedUserMessageId = message.metadata?.queued_user_message_id;
     const index = messages.value.findIndex((m) => {
-      if (message.id && m.id === message.id) return true;
+      if (
+        incomingPersistedMessageId &&
+        getWorkflowPersistedMessageId(m) === incomingPersistedMessageId
+      ) {
+        return true;
+      }
       if (
         incomingToolCallId &&
         m.metadata?.tool_call_id === incomingToolCallId &&
@@ -1860,7 +1859,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const earlierMessages = (page.messages || []).map(message =>
       normalizeWorkflowMessage(message, workflowId)
     );
-    messages.value = [...earlierMessages, ...messages.value];
+    messages.value = mergeWorkflowMessagePages(earlierMessages, messages.value);
     messageWindowBeforeId.value = page.beforeMessageId ?? beforeMessageId;
     hiddenEarlierMessageCount.value = Number(page.hiddenEarlierMessageCount) || 0;
     return earlierMessages.length > 0;
@@ -1887,7 +1886,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const earlierMessages = (window.messages || []).map(message =>
       normalizeWorkflowMessage(message, workflowId)
     );
-    messages.value = [...earlierMessages, ...messages.value];
+    messages.value = mergeWorkflowMessagePages(earlierMessages, messages.value);
     messageWindowBeforeId.value = window.beforeMessageId ?? beforeMessageId;
     hiddenEarlierMessageCount.value = 0;
     hiddenCompletedTaskCount.value = Number(window.hiddenCompletedTaskCount) || 0;

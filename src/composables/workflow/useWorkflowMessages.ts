@@ -2,6 +2,7 @@ import { ref, computed, watch } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
 import {
   collectSubAgentCompletions,
+  dedupeQueuedUserMessageProjection,
   excludeLeadingManualClearContextMarkers,
   getStructuredWorkflowToolName,
   hasOpenWorkflowTaskFrame,
@@ -111,13 +112,15 @@ export function useWorkflowMessages(options = {}) {
   }
 
   const filteredWorkflowMessages = computed(() =>
-    (workflowStore.messages || []).filter(message => {
-      if (isHiddenSystemObservation(message) && !isSubAgentCompletionObservation(message)) {
-        return false
-      }
-      const messageWorkflowId = message?.sessionId || message?.session_id
-      return !messageWorkflowId || messageWorkflowId === workflowStore.currentWorkflowId
-    })
+    dedupeQueuedUserMessageProjection(
+      (workflowStore.messages || []).filter(message => {
+        if (isHiddenSystemObservation(message) && !isSubAgentCompletionObservation(message)) {
+          return false
+        }
+        const messageWorkflowId = message?.sessionId || message?.session_id
+        return !messageWorkflowId || messageWorkflowId === workflowStore.currentWorkflowId
+      })
+    )
   )
 
   const { childAgentSummariesAll } = useSubAgentSummaries()

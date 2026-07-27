@@ -2,15 +2,18 @@ import assert from 'node:assert/strict'
 
 import {
   collectSubAgentCompletions,
+  dedupeQueuedUserMessageProjection,
   excludeLeadingManualClearContextMarkers,
   excludeManualClearContextMarkers,
   getStructuredWorkflowToolName,
+  getWorkflowPersistedMessageId,
   hasOpenWorkflowTaskFrame,
   inferWorkflowToolExecutionStatus,
   isPendingApprovalEntryForTool,
   isWorkflowCompletionMessage,
   isWorkflowToolAwaitingExecution,
   mergeManualClearContextMarkersIntoPreviousGroups,
+  mergeWorkflowMessagePages,
   normalizeVisibleCompletionReport,
   reconcileWorkflowTaskWindowState,
   resolveWorkflowPhaseFromPlanningMode,
@@ -223,6 +226,62 @@ assert.equal(
   ),
   false,
   'messages without structured tool identity must never use completion presentation'
+)
+
+const queuedMessageProjection = dedupeQueuedUserMessageProjection([
+  {
+    id: null,
+    role: 'user',
+    message: 'queued input',
+    metadata: {
+      queued_user_message_id: 'queue-boundary-1',
+      queue_status: 'queued'
+    }
+  },
+  {
+    id: 42,
+    role: 'user',
+    message: 'queued input',
+    metadata: {
+      queued_user_message_id: 'queue-boundary-1',
+      queue_status: 'applied'
+    }
+  }
+])
+assert.equal(
+  queuedMessageProjection.length,
+  1,
+  'one queued message must render once when completion-boundary reconciliation temporarily repeats it'
+)
+assert.equal(
+  queuedMessageProjection[0].id,
+  42,
+  'the persisted applied record must replace its transient queued projection'
+)
+
+assert.equal(getWorkflowPersistedMessageId({ id: ' 42 ' }), '42')
+assert.equal(getWorkflowPersistedMessageId({ id: 'temporary-message' }), null)
+
+const mergedHistoryMessages = mergeWorkflowMessagePages(
+  [
+    { id: 40, message: 'older message' },
+    { id: '41', message: 'stale live projection' }
+  ],
+  [
+    { id: 41, message: 'current page projection' },
+    { id: 42, message: 'current message' },
+    { id: null, message: 'transient message' }
+  ]
+)
+assert.deepEqual(
+  mergedHistoryMessages.map(message => [message.id, message.message]),
+  [
+    [40, 'older message'],
+    [41, 'current page projection'],
+    [42, 'current message'],
+    [null, 'transient message']
+  ],
+  'history page merging must be idempotent across numeric and string persisted IDs'
 )
 
 const visibleCompletion = collectSubAgentCompletions(
