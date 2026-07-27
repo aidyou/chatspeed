@@ -659,7 +659,11 @@ impl BackendAdapter for ClaudeBackendAdapter {
         let usage = claude_response
             .usage
             .map(|u| UnifiedUsage {
-                input_tokens: u.input_tokens,
+                input_tokens: u
+                    .input_tokens
+                    // Claude reports uncached input separately from cache reads. Normalize to
+                    // total input so shared stats subtract cache tokens exactly once.
+                    .saturating_add(u.cache_read_input_tokens.unwrap_or(0)),
                 output_tokens: u.output_tokens,
                 cache_creation_input_tokens: u.cache_creation_input_tokens,
                 cache_read_input_tokens: u.cache_read_input_tokens,
@@ -751,8 +755,20 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                             let usage = claude_event
                                                 .usage
                                                 .map(|u| UnifiedUsage {
-                                                    input_tokens: u.input_tokens.unwrap_or(0),
+                                                    input_tokens: u
+                                                        .input_tokens
+                                                        .unwrap_or(0)
+                                                        // Claude reports uncached input separately from cache reads.
+                                                        // Normalize to total input so shared stats subtract cache
+                                                        // tokens exactly once.
+                                                        .saturating_add(
+                                                            u.cache_read_input_tokens.unwrap_or(0),
+                                                        ),
                                                     output_tokens: u.output_tokens.unwrap_or(0),
+                                                    cache_creation_input_tokens: u
+                                                        .cache_creation_input_tokens,
+                                                    cache_read_input_tokens: u
+                                                        .cache_read_input_tokens,
                                                     ..Default::default()
                                                 })
                                                 .unwrap_or_default();
@@ -999,8 +1015,19 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                         let usage = claude_event
                                             .usage
                                             .map(|u| UnifiedUsage {
-                                                input_tokens: u.input_tokens.unwrap_or(0),
+                                                input_tokens: u
+                                                    .input_tokens
+                                                    .unwrap_or(0)
+                                                    // Claude reports uncached input separately from cache reads.
+                                                    // Normalize to total input so shared stats subtract cache
+                                                    // tokens exactly once.
+                                                    .saturating_add(
+                                                        u.cache_read_input_tokens.unwrap_or(0),
+                                                    ),
                                                 output_tokens: u.output_tokens.unwrap_or(0),
+                                                cache_creation_input_tokens: u
+                                                    .cache_creation_input_tokens,
+                                                cache_read_input_tokens: u.cache_read_input_tokens,
                                                 ..Default::default()
                                             })
                                             .unwrap_or_default();

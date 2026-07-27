@@ -228,6 +228,8 @@ pub struct ClaudeStreamDelta {
 pub struct ClaudeStreamUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+    pub cache_read_input_tokens: Option<u64>,
 }
 
 /// Simplified Claude stream event for internal processing
@@ -415,6 +417,27 @@ impl ClaudeNativeRequest {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_stream_usage_deserializes_cache_tokens() {
+        let event: ClaudeStreamEvent = serde_json::from_value(json!({
+            "type": "message_delta",
+            "delta": { "type": "message_delta", "stop_reason": "end_turn" },
+            "usage": {
+                "input_tokens": 114,
+                "output_tokens": 13,
+                "cache_creation_input_tokens": 256,
+                "cache_read_input_tokens": 1024
+            }
+        }))
+        .unwrap();
+
+        let usage = event.usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(114));
+        assert_eq!(usage.output_tokens, Some(13));
+        assert_eq!(usage.cache_creation_input_tokens, Some(256));
+        assert_eq!(usage.cache_read_input_tokens, Some(1024));
+    }
 
     #[test]
     fn test_tool_result_with_cache_control_deserialization() {

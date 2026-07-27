@@ -34,5 +34,5 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 
 - Workflow runtime and frontend: when changing `src-tauri/src/workflow/react`, `src/views/Workflow.vue`, `src/components/workflow`, `src/composables/workflow`, or workflow modules in `src/stores`, read and follow `src-tauri/src/workflow/react/CONSTITUTION.md`.
 - CCProxy: when changing `src-tauri/src/ccproxy`, read and follow `src-tauri/src/ccproxy/CONSTITUTION.md`.
-- CCProxy routing is order-sensitive. After routing, handler, adapter, or protocol changes, run `python3 test/ccproxy/api_all_test.py` when feasible.
+- CCProxy routing is order-sensitive.
 - Proxy responses must use header filtering. Do not forward transport headers like `Content-Length`, `Transfer-Encoding`, `Connection`, or `Content-Encoding` directly.

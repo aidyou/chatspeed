@@ -873,8 +873,20 @@ fn chunk_parser_and_log(
                                 }
                                 "message_delta" => {
                                     if let Some(usage) = claude_event.usage {
+                                        let cache_tokens =
+                                            usage.cache_read_input_tokens.unwrap_or(0);
+                                        // Claude reports uncached input separately from cache reads. Normalize
+                                        // stored input to total input so the shared cost formula subtracts cache
+                                        // tokens exactly once, matching OpenAI and Gemini statistics.
+                                        recorder.input_tokens = Some(
+                                            usage
+                                                .input_tokens
+                                                .unwrap_or(0)
+                                                .saturating_add(cache_tokens),
+                                        );
                                         recorder.output_tokens =
                                             Some(usage.output_tokens.unwrap_or(0));
+                                        recorder.cache_tokens = Some(cache_tokens);
                                     }
                                 }
                                 _ => {}
@@ -957,6 +969,11 @@ fn chunk_parser_and_log(
                             {
                                 recorder.output_tokens = Some(candidates_token_count);
                             }
+                            // Gemini prompt_token_count already includes cached content. Record the
+                            // cached portion separately so the shared cost formula subtracts it once.
+                            recorder.cache_tokens = usage_metadata
+                                .get("cached_content_token_count")
+                                .and_then(|t| t.as_u64());
                         }
                     }
                     ChatProtocol::Ollama => {
@@ -1123,7 +1140,10 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
                 .and_then(|u| u.get("cache_read_input_tokens"))
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            (input, output, cache)
+            // Claude reports uncached input separately from cache reads. Normalize stored input to
+            // total input (uncached + cache read) so the shared cost formula can subtract cache
+            // tokens exactly once, matching OpenAI and Gemini statistics.
+            (input.saturating_add(cache), output, cache)
         }
         ChatProtocol::Gemini => {
             let usage = value.get("usageMetadata");
@@ -1152,5 +1172,27 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
                 .unwrap_or(0);
             (input, output, 0)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn claude_usage_normalizes_uncached_and_cache_read_tokens() {
+        let (input, output, cache) = extract_usage_from_value(
+            &json!({
+                "usage": {
+                    "input_tokens": 114,
+                    "output_tokens": 13,
+                    "cache_read_input_tokens": 1024
+                }
+            }),
+            &ChatProtocol::Claude,
+        );
+
+        assert_eq!((input, output, cache), (1138, 13, 1024));
     }
 }
