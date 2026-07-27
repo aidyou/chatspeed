@@ -17,6 +17,7 @@ pub const TRAY_ID: &str = "Chatspeed";
 // Startup and update config
 pub const CFG_AUTO_START: &str = "auto_start";
 pub const CFG_AUTO_UPDATE: &str = "auto_update";
+pub const CFG_WORKFLOW_PREVENT_IDLE_SLEEP: &str = "workflow_prevent_idle_sleep";
 
 // =================================================
 // Core plugin identifiers

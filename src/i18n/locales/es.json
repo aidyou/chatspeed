@@ -408,6 +408,8 @@
       "visionModel": "Modelo de visión",
       "visionModelRequired": "Configure primero un modelo de visión en los ajustes para admitir el análisis de imágenes.",
       "visionModelTooltip": "Seleccione un modelo de visión para el análisis de imágenes. Al enviar imágenes en el chat, se utilizará este modelo para analizar el contenido de la imagen.",
+      "workflowPreventIdleSleep": "Evitar suspensión por inactividad durante los flujos de trabajo",
+      "workflowPreventIdleSleepTooltip": "Evita la suspensión automática solo mientras un flujo de trabajo piensa o ejecuta herramientas. La pantalla aún puede apagarse y esperar una entrada o aprobación no mantiene el equipo activo.",
       "workflowWindowVisibleShortcut": "Ventana de flujo de trabajo"
     },
     "mcp": {

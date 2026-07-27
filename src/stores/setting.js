@@ -49,6 +49,7 @@ const defaultSettings = {
   wordSelectionToolbar: false,
   autoStart: false,
   autoUpdate: true,
+  workflowPreventIdleSleep: false,
   backupDir: '',
   // chat completion proxy settings
   // Allows defining grouped model aliases.

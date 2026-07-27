@@ -413,6 +413,8 @@
       "visionModel": "视觉模型",
       "visionModelRequired": "请先在设置中配置视觉模型以支持图片分析",
       "visionModelTooltip": "选择用于图片分析的视觉模型。在聊天中发送图片时，将使用此模型分析图片内容。",
+      "workflowPreventIdleSleep": "工作流运行时阻止自动休眠",
+      "workflowPreventIdleSleepTooltip": "仅在工作流思考或执行工具时阻止系统自动休眠。屏幕仍可按系统设置熄灭；等待输入或审批不会保持电脑唤醒。",
       "workflowWindowVisibleShortcut": "工作流窗口"
     },
     "mcp": {

@@ -413,6 +413,8 @@
       "visionModel": "Vision Model",
       "visionModelRequired": "Please configure a vision model in settings first to support image analysis.",
       "visionModelTooltip": "Select a vision model for image analysis. When sending images in chat, this model will be used to analyze the image content.",
+      "workflowPreventIdleSleep": "Prevent idle sleep while workflows run",
+      "workflowPreventIdleSleepTooltip": "Prevents automatic system sleep only while a workflow is thinking or executing tools. The display may still turn off, and waiting for input or approval does not keep the computer awake.",
       "workflowWindowVisibleShortcut": "Workflow Window"
     },
     "mcp": {

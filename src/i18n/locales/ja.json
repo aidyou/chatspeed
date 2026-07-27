@@ -408,6 +408,8 @@
       "visionModel": "ビジョンモデル",
       "visionModelRequired": "画像分析をサポートするには、まず設定でビジョンモデルを構成してください",
       "visionModelTooltip": "画像分析用のビジョンモデルを選択します。チャットで画像を送信すると、このモデルが画像内容を分析します。",
+      "workflowPreventIdleSleep": "ワークフロー実行中の自動スリープを防止",
+      "workflowPreventIdleSleepTooltip": "ワークフローが思考中またはツールを実行中に限り、システムの自動スリープを防止します。画面は引き続き消灯でき、入力や承認を待っている間はコンピューターを起動状態に保ちません。",
       "workflowWindowVisibleShortcut": "ワークフローウィンドウ"
     },
     "mcp": {

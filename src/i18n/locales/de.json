@@ -408,6 +408,8 @@
       "visionModel": "Vision-Modell",
       "visionModelRequired": "Bitte konfigurieren Sie zuerst ein Vision-Modell in den Einstellungen, um die Bildanalyse zu unterstützen",
       "visionModelTooltip": "Wählen Sie ein Vision-Modell für die Bildanalyse aus. Wenn Sie Bilder im Chat senden, analysiert dieses Modell den Bildinhalt.",
+      "workflowPreventIdleSleep": "Automatischen Ruhezustand bei laufenden Workflows verhindern",
+      "workflowPreventIdleSleepTooltip": "Verhindert automatischen Ruhezustand nur, während ein Workflow nachdenkt oder Werkzeuge ausführt. Der Bildschirm kann weiterhin ausgehen; beim Warten auf Eingaben oder Genehmigungen bleibt der Computer nicht wach.",
       "workflowWindowVisibleShortcut": "Workflow-Fenster"
     },
     "mcp": {

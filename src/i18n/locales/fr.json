@@ -408,6 +408,8 @@
       "visionModel": "Modèle de vision",
       "visionModelRequired": "Veuillez d'abord configurer un modèle de vision dans les paramètres pour prendre en charge l'analyse d'images.",
       "visionModelTooltip": "Sélectionnez un modèle de vision pour l'analyse des images. Lors de l'envoi d'images dans le chat, ce modèle sera utilisé pour analyser le contenu de l'image.",
+      "workflowPreventIdleSleep": "Empêcher la mise en veille automatique pendant les workflows",
+      "workflowPreventIdleSleepTooltip": "Empêche la mise en veille automatique uniquement lorsqu’un workflow réfléchit ou exécute des outils. L’écran peut toujours s’éteindre, et l’attente d’une saisie ou d’une approbation ne maintient pas l’ordinateur éveillé.",
       "workflowWindowVisibleShortcut": "Fenêtre de flux de travail"
     },
     "mcp": {

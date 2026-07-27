@@ -408,6 +408,8 @@
       "visionModel": "비전 모델",
       "visionModelRequired": "이미지 분석을 지원하려면 먼저 설정에서 비전 모델을 구성하십시오.",
       "visionModelTooltip": "이미지 분석용 비전 모델을 선택합니다. 채팅에서 이미지를 보낼 때 이 모델을 사용하여 이미지 내용을 분석합니다.",
+      "workflowPreventIdleSleep": "워크플로우 실행 중 자동 절전 방지",
+      "workflowPreventIdleSleepTooltip": "워크플로우가 생각하거나 도구를 실행하는 동안에만 시스템의 자동 절전을 방지합니다. 화면은 계속 꺼질 수 있으며, 입력 또는 승인을 기다리는 동안에는 컴퓨터가 계속 켜져 있지 않습니다.",
       "workflowWindowVisibleShortcut": "워크플로우 창"
     },
     "mcp": {

@@ -413,6 +413,8 @@
       "visionModel": "視覺模型",
       "visionModelRequired": "請先在設定中配置視覺模型以支援圖片分析",
       "visionModelTooltip": "選擇用於圖片分析的視覺模型。在聊天中發送圖片時，將使用此模型分析圖片內容。",
+      "workflowPreventIdleSleep": "工作流程運行時防止自動睡眠",
+      "workflowPreventIdleSleepTooltip": "僅在工作流程思考或執行工具時防止系統自動睡眠。螢幕仍可依系統設定關閉；等待輸入或核准時不會讓電腦保持喚醒。",
       "workflowWindowVisibleShortcut": "工作流程視窗"
     },
     "mcp": {

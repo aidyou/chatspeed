@@ -37,6 +37,7 @@ use crate::db::{AiModel, AiSkill, MainStore, ModelConfig};
 use crate::db::{BackupConfig, DbBackup};
 use crate::libs::fs::{self, get_file_name};
 use crate::tray::create_tray;
+use crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR;
 
 use rust_i18n::{set_locale, t};
 use serde_json::Value;
@@ -144,6 +145,9 @@ pub fn set_config(
                     set_locale(&lang);
                     #[cfg(debug_assertions)]
                     log::debug!("Language set to: {}", lang);
+                }
+                CFG_WORKFLOW_PREVENT_IDLE_SLEEP => {
+                    WORKFLOW_IDLE_SLEEP_INHIBITOR.set_enabled(value.as_bool().unwrap_or(false));
                 }
                 _ => {}
             },

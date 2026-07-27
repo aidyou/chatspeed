@@ -759,6 +759,10 @@ pub async fn run() -> crate::error::Result<()> {
             app.manage(gateway.clone());
 
             // State 8: WorkflowManager (Session lifecycle manager)
+            let workflow_prevent_idle_sleep =
+                main_store.get_config(CFG_WORKFLOW_PREVENT_IDLE_SLEEP, false);
+            crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
+                .set_enabled(workflow_prevent_idle_sleep);
             let workflow_manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
             app.manage(workflow_manager.clone());
 

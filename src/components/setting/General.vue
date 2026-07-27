@@ -579,6 +579,19 @@
           <el-switch v-model="settings.autoUpdate" @change="onAutoUpdateChange" />
         </div>
       </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.workflowPreventIdleSleep') }}
+            <small class="tooltip">{{ $t('settings.general.workflowPreventIdleSleepTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-switch
+            v-model="settings.workflowPreventIdleSleep"
+            @change="onWorkflowPreventIdleSleepChange" />
+        </div>
+      </div>
       <div class="item update-item">
         <div class="label">
           <div class="update-meta">
@@ -1328,6 +1341,10 @@ const onProxyPasswordChange = () => {
  */
 const onAutoUpdateChange = value => {
   setSetting('autoUpdate', value || false)
+}
+
+const onWorkflowPreventIdleSleepChange = value => {
+  setSetting('workflowPreventIdleSleep', Boolean(value))
 }
 
 const onManualUpdateClick = async () => {

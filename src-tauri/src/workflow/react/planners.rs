@@ -77,7 +77,7 @@ impl ReActExecutor for PlanningExecutor {
     }
 
     fn set_state(&mut self, state: crate::workflow::react::types::WorkflowState) {
-        self.executor.state = state;
+        self.executor.set_state(state);
     }
 
     fn attach_signal_rx(&mut self, signal_rx: tokio::sync::mpsc::Receiver<String>) {

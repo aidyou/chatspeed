@@ -11,6 +11,7 @@ pub mod error;
 pub mod events;
 pub mod file_preview;
 pub mod gateway;
+pub mod idle_sleep;
 pub mod intelligence;
 pub mod interceptors;
 pub mod llm;

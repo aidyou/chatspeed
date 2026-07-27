@@ -828,6 +828,8 @@ impl ReActExecutor for WorkflowExecutor {
 
     fn set_state(&mut self, state: WorkflowState) {
         self.state = state;
+        crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
+            .sync_workflow_state(&self.session_id, &self.state);
     }
 
     fn attach_signal_rx(&mut self, signal_rx: tokio::sync::mpsc::Receiver<String>) {
@@ -1283,6 +1285,8 @@ impl WorkflowExecutor {
                 }
                 if let Ok(state) = snapshot.workflow.status.parse::<WorkflowState>() {
                     self.state = state;
+                    crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
+                        .sync_workflow_state(&self.session_id, &self.state);
                 }
             }
         }
@@ -1438,6 +1442,8 @@ impl WorkflowExecutor {
 
                         // Enter safe-failed state (use Error state as safe-failed)
                         self.state = WorkflowState::Error;
+                        crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
+                            .sync_workflow_state(&self.session_id, &self.state);
                         let _ = self
                             .dispatch_ui_payload(GatewayPayload::Error {
                                 message: format!(
@@ -5638,6 +5644,11 @@ impl WorkflowExecutor {
         }
 
         self.state = new_state.clone();
+        // This is the single lifecycle hook for the idle-sleep assertion. It intentionally
+        // releases for ask_user, approvals, confirmations, sub-agent waits, errors, cancellation,
+        // stopping, and completion because none of those states can make autonomous progress.
+        crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
+            .sync_workflow_state(&self.session_id, &self.state);
 
         // Cleanup pending approvals when transitioning away from approval-waiting states
         if matches!(
@@ -7115,6 +7126,8 @@ impl WorkflowExecutor {
 
 impl Drop for WorkflowExecutor {
     fn drop(&mut self) {
+        crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
+            .remove_workflow(&self.session_id);
         Dispatcher::unregister_session_dispatcher(&self.session_id);
     }
 }
