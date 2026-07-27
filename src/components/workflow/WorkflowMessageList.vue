@@ -104,7 +104,10 @@
           </div>
         </div>
         <div v-else class="ai-content chat">
-          <div v-if="isCollapsedToolGroupMessage(message)" class="cli-tool-call tool-group">
+          <div
+            v-if="isCollapsedToolGroupMessage(message)"
+            class="cli-tool-call tool-group"
+            :class="{ 'tool-group--running': isCollapsedToolGroupRunning(message) }">
             <div
               class="tool-line title-wrap expandable"
               @click="$emit('toggle-expand', message.displayId)">
@@ -1502,7 +1505,14 @@ const COLLAPSIBLE_READ_TOOL_NAMES = new Set(['read_file', 'list_dir', 'web_fetch
 const COLLAPSIBLE_SEARCH_TOOL_NAMES = new Set(['grep', 'glob', 'web_search'])
 const COLLAPSIBLE_COMMAND_TOOL_NAMES = new Set(['bash'])
 const COLLAPSIBLE_MUTATION_TOOL_NAMES = new Set(['edit_file', 'write_file'])
-const NON_COLLAPSIBLE_TOOL_NAMES = new Set(['ask_user', 'submit_plan'])
+const NON_COLLAPSIBLE_TOOL_NAMES = new Set([
+  'ask_user',
+  'submit_plan',
+  'complete_workflow',
+  'sub_agent_run',
+  'sub_agent_output',
+  'sub_agent_stop'
+])
 const TODO_TOOL_NAMES = new Set(['todo_create', 'todo_list', 'todo_update', 'todo_get'])
 const TODO_STATUS_LABELS = {
   completed: 'workflow.toolGroups.todoStatuses.completed',
@@ -1613,45 +1623,35 @@ const isToolWaitingApproval = message => {
   return isApprovalPending(message) || executionStatus === 'pending_approval'
 }
 
+const isCollapsibleToolMessage = message => {
+  if (message?.role !== 'tool') return false
+  const toolName = getMessageToolName(message)
+  return !!toolName && !NON_COLLAPSIBLE_TOOL_NAMES.has(toolName) && !isToolWaitingApproval(message)
+}
+
 const isCollapsibleReadOnlyToolMessage = message => {
-  if (message?.role !== 'tool') return false
   const toolName = getMessageToolName(message)
-  if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName) || TODO_TOOL_NAMES.has(toolName)) {
-    return false
-  }
-  if (isToolWaitingApproval(message)) return false
-  return getReadOnlyToolCategory(toolName) !== null
+  return (
+    isCollapsibleToolMessage(message) &&
+    !TODO_TOOL_NAMES.has(toolName) &&
+    getReadOnlyToolCategory(toolName) !== null
+  )
 }
 
-const isCollapsibleTodoToolMessage = message => {
-  if (message?.role !== 'tool') return false
-  const toolName = getMessageToolName(message)
-  if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName)) return false
-  if (isToolWaitingApproval(message)) return false
-  return TODO_TOOL_NAMES.has(toolName)
-}
+const isCollapsibleTodoToolMessage = message =>
+  isCollapsibleToolMessage(message) && TODO_TOOL_NAMES.has(getMessageToolName(message))
 
-const isCollapsibleCommandToolMessage = message => {
-  if (message?.role !== 'tool') return false
-  const toolName = getMessageToolName(message)
-  if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName)) return false
-  if (isToolWaitingApproval(message)) return false
-  return COLLAPSIBLE_COMMAND_TOOL_NAMES.has(toolName)
-}
+const isCollapsibleCommandToolMessage = message =>
+  isCollapsibleToolMessage(message) &&
+  COLLAPSIBLE_COMMAND_TOOL_NAMES.has(getMessageToolName(message))
 
-const isCollapsibleMutationToolMessage = message => {
-  if (message?.role !== 'tool') return false
-  const toolName = getMessageToolName(message)
-  if (!toolName || NON_COLLAPSIBLE_TOOL_NAMES.has(toolName)) return false
-  if (isToolWaitingApproval(message)) return false
-  return COLLAPSIBLE_MUTATION_TOOL_NAMES.has(toolName)
-}
+const isCollapsibleMutationToolMessage = message =>
+  isCollapsibleToolMessage(message) &&
+  COLLAPSIBLE_MUTATION_TOOL_NAMES.has(getMessageToolName(message))
 
 const isCollapsibleMcpToolMessage = message => {
-  if (message?.role !== 'tool') return false
   const toolName = getMessageToolName(message)
-  if (!toolName || isToolWaitingApproval(message)) return false
-  return isWorkflowMcpTool(toolName)
+  return isCollapsibleToolMessage(message) && isWorkflowMcpTool(toolName)
 }
 
 const getCollapsibleToolGroupKind = message => {
@@ -1660,7 +1660,7 @@ const getCollapsibleToolGroupKind = message => {
   if (isCollapsibleCommandToolMessage(message)) return 'command_tools'
   if (isCollapsibleMutationToolMessage(message)) return 'mutation_tools'
   if (isCollapsibleMcpToolMessage(message)) return 'mcp_tools'
-  return null
+  return isCollapsibleToolMessage(message) ? 'other_tools' : null
 }
 
 const getTodoStatusLabel = status => {
@@ -1967,6 +1967,31 @@ const buildMixedToolGroupMessage = (messages, index, kinds) => {
   }
 }
 
+const buildOtherToolGroupMessage = (messages, index) => ({
+  ...messages[0],
+  role: 'assistant',
+  displayId: getCollapsedToolGroupExpandId(messages, index, 'other_tools'),
+  metadata: {
+    ...(messages[0]?.metadata || {}),
+    message_kind: 'tool_group',
+    tool_group_kind: 'other_tools'
+  },
+  groupDisplay: {
+    icon: 'tool',
+    action: t('workflow.toolGroups.mixedTitle'),
+    target: '',
+    summary: messages
+      .map(message => {
+        const display = message?.toolDisplay || {}
+        return truncateToolGroupText([display.action, display.target].filter(Boolean).join(' '), 60)
+      })
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(' · ')
+  },
+  groupedTools: messages
+})
+
 const buildToolGroupMessage = (messages, index) => {
   const kinds = new Set(messages.map(getCollapsibleToolGroupKind).filter(Boolean))
   if (kinds.size > 1) return buildMixedToolGroupMessage(messages, index, kinds)
@@ -1977,7 +2002,7 @@ const buildToolGroupMessage = (messages, index) => {
   if (kind === 'command_tools') return buildCommandToolGroupMessage(messages, index)
   if (kind === 'mutation_tools') return buildMutationToolGroupMessage(messages, index)
   if (kind === 'mcp_tools') return buildMcpToolGroupMessage(messages, index)
-  return messages[0]
+  return buildOtherToolGroupMessage(messages, index)
 }
 
 const collapseToolMessageGroups = messages => {
@@ -1995,7 +2020,7 @@ const collapseToolMessageGroups = messages => {
         nextIndex += 1
       }
 
-      collapsed.push(group.length > 1 ? buildToolGroupMessage(group, index) : current)
+      collapsed.push(buildToolGroupMessage(group, index))
       index = nextIndex
       continue
     }
@@ -2092,6 +2117,12 @@ const isToolAwaitingExecution = message => {
 
 const isToolMessageExpanded = message =>
   isApprovalPending(message) || props.isMessageExpanded(message)
+
+const isCollapsedToolGroupRunning = message =>
+  Array.isArray(message?.groupedTools) &&
+  message.groupedTools.some(
+    tool => String(tool?.metadata?.execution_status || '').toLowerCase() === 'running'
+  )
 
 const getToolSummaryText = message =>
   isToolAwaitingExecution(message)

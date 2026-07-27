@@ -209,6 +209,25 @@
             color: var(--el-color-warning);
           }
 
+          &.tool-group--running > .tool-line.title-wrap {
+            .tool-name,
+            .tool-target {
+              background: linear-gradient(
+                90deg,
+                var(--cs-text-color-primary) 0%,
+                var(--cs-text-color-primary) 42%,
+                var(--el-color-primary-light-3) 50%,
+                var(--cs-text-color-primary) 58%,
+                var(--cs-text-color-primary) 100%
+              );
+              background-size: 220% 100%;
+              background-clip: text;
+              -webkit-background-clip: text;
+              color: transparent;
+              animation: tool-group-title-shimmer 2.2s linear infinite;
+            }
+          }
+
           &.tool-bash .tool-type-icon {
             color: var(--el-color-info);
           }
@@ -869,6 +888,25 @@
 // Phase 9: Task Ledger highlight message style
 .highlight-message {
   animation: highlight-pulse 2s ease-in-out;
+}
+
+@keyframes tool-group-title-shimmer {
+  from {
+    background-position: 110% 0;
+  }
+
+  to {
+    background-position: -110% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cli-tool-call.tool-group--running > .tool-line.title-wrap {
+    .tool-name,
+    .tool-target {
+      animation: none;
+    }
+  }
 }
 
 @keyframes highlight-pulse {
