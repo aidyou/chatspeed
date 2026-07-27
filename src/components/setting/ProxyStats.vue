@@ -23,7 +23,11 @@
             size="small"
             @click="fetchDailyStats(false)"
             :loading="loading" />
-          <el-checkbox v-model="autoRefreshEnabled" size="small" style="margin-right: 15px">
+          <el-checkbox
+            v-if="canAutoRefresh"
+            v-model="autoRefreshEnabled"
+            size="small"
+            style="margin-right: 15px">
             {{ $t('settings.proxy.stats.autoRefresh') }}
           </el-checkbox>
         </el-space>
@@ -423,7 +427,7 @@
 </template>
 
 <script setup>
-import { markRaw, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { computed, markRaw, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Bar, DualAxes, Line, Pie } from '@antv/g2plot'
 import { invokeWrapper } from '@/libs/tauri'
 import { useI18n } from 'vue-i18n'
@@ -444,10 +448,14 @@ const { t } = useI18n()
 const modelStore = useModelStore()
 
 const STORAGE_KEY_AUTO_REFRESH = 'ccproxy_stats_auto_refresh'
+const MAX_AUTO_REFRESH_DAYS = 30
 
 const loading = ref(false)
 const selectedDays = ref(0)
 const autoRefreshEnabled = ref(localStorage.getItem(STORAGE_KEY_AUTO_REFRESH) === 'true')
+const canAutoRefresh = computed(
+  () => selectedDays.value >= 0 && selectedDays.value < MAX_AUTO_REFRESH_DAYS
+)
 const dailyStatsRaw = ref([])
 const dailyStats = ref([])
 const groupedStatsRaw = ref([])
@@ -533,7 +541,12 @@ const destroyTrendChart = tabName => {
 }
 
 const scheduleNextRefresh = () => {
-  if (isUnmounted || !autoRefreshEnabled.value || document.visibilityState !== 'visible') {
+  if (
+    isUnmounted ||
+    !canAutoRefresh.value ||
+    !autoRefreshEnabled.value ||
+    document.visibilityState !== 'visible'
+  ) {
     refreshTimer = null
     return
   }
@@ -548,7 +561,11 @@ const startRefreshTimer = () => {
     clearTimeout(refreshTimer)
     refreshTimer = null
   }
-  if (!autoRefreshEnabled.value || document.visibilityState !== 'visible') {
+  if (
+    !canAutoRefresh.value ||
+    !autoRefreshEnabled.value ||
+    document.visibilityState !== 'visible'
+  ) {
     return
   }
   scheduleNextRefresh()
@@ -556,7 +573,7 @@ const startRefreshTimer = () => {
 
 const handleDocumentVisibilityChange = () => {
   if (document.visibilityState === 'visible') {
-    if (autoRefreshEnabled.value) {
+    if (canAutoRefresh.value && autoRefreshEnabled.value) {
       fetchDailyStats(true)
       startRefreshTimer()
     }
@@ -813,7 +830,12 @@ const getProtocolTextColor = protocol => {
 }
 
 const fetchDailyStats = async (isAutoRefresh = false) => {
-  if (isUnmounted || isRefreshing || (isAutoRefresh && document.visibilityState !== 'visible')) {
+  if (
+    isUnmounted ||
+    isRefreshing ||
+    (isAutoRefresh &&
+      (!canAutoRefresh.value || document.visibilityState !== 'visible'))
+  ) {
     return
   }
 
@@ -1446,6 +1468,13 @@ const handleDeleteStats = async days => {
     loading.value = false
   }
 }
+
+watch(canAutoRefresh, allowed => {
+  if (!allowed && refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
+})
 
 watch(autoRefreshEnabled, val => {
   localStorage.setItem(STORAGE_KEY_AUTO_REFRESH, val ? 'true' : 'false')

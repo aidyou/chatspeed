@@ -481,7 +481,10 @@ impl MainStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{stats_range_for_days, stats_range_for_local_date, stats_range_for_local_dates};
+    use super::{
+        stats_range_for_date_range, stats_range_for_days, stats_range_for_local_date,
+        stats_range_for_local_dates,
+    };
     use chrono::{Duration, Local, TimeZone, Utc};
     use rusqlite::Connection;
     use std::time::Instant;
@@ -490,6 +493,13 @@ mod tests {
     fn rejects_invalid_statistics_ranges() {
         assert!(stats_range_for_days(-2).is_err());
         assert!(stats_range_for_local_date("not-a-date").is_err());
+        assert!(stats_range_for_date_range("2026-07-27", "2026-07-21").is_err());
+    }
+
+    #[test]
+    fn accepts_chronological_statistics_date_range() {
+        let (start_at, end_at) = stats_range_for_date_range("2026-07-21", "2026-07-27").unwrap();
+        assert!(start_at < end_at);
     }
 
     #[test]

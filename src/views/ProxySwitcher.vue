@@ -799,8 +799,8 @@ const loadTrendPopoverData = async proxy => {
 
     const dailyRowsByDate = new Map()
     const rangeRows = await invokeWrapper('get_ccproxy_grouped_stats_by_date_range', {
-      startDate: dates[dates.length - 1],
-      endDate: dates[0]
+      startDate: dates[0],
+      endDate: dates[dates.length - 1]
     })
     ;(rangeRows || []).forEach(row => {
       const rows = dailyRowsByDate.get(row.date) || []
