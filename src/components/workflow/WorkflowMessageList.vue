@@ -1663,6 +1663,77 @@ const getCollapsibleToolGroupKind = message => {
   return isCollapsibleToolMessage(message) ? 'other_tools' : null
 }
 
+const buildPendingToolGroupItem = call => {
+  const toolCallId = String(call?.id || '').trim()
+  const toolName = String(call?.toolName || '').trim()
+  const argumentsValue = call?.arguments ?? {}
+
+  return {
+    id: `pending_tool:${toolCallId}`,
+    displayId: `pending_tool:${toolCallId}`,
+    role: 'tool',
+    message: '',
+    isRejected: !!call?.isRejected,
+    isApproved: false,
+    metadata: {
+      tool_call_id: toolCallId,
+      tool_name: toolName,
+      tool_call: {
+        id: toolCallId,
+        function: {
+          name: toolName,
+          arguments: argumentsValue
+        }
+      },
+      approval_status: 'approved',
+      execution_status: 'running'
+    },
+    toolDisplay: {
+      icon: call?.icon || 'tool',
+      toolType: call?.toolType || 'tool-system',
+      action: call?.action || toolName,
+      target: call?.target || '',
+      summary: call?.summary || '',
+      isError: !!call?.isRejected
+    }
+  }
+}
+
+const projectPendingToolGroups = messages => {
+  const projected = []
+
+  messages.forEach((message, index) => {
+    const pendingCalls = Array.isArray(message?.pendingToolCalls) ? message.pendingToolCalls : []
+    const groupedTools = pendingCalls
+      .map(buildPendingToolGroupItem)
+      .filter(tool => getCollapsibleToolGroupKind(tool))
+
+    if (groupedTools.length === 0) {
+      projected.push(message)
+      return
+    }
+
+    const groupedToolIds = new Set(groupedTools.map(tool => tool.metadata.tool_call_id))
+    const remainingPendingCalls = pendingCalls.filter(
+      call => !groupedToolIds.has(String(call?.id || '').trim())
+    )
+    const hasAssistantContent = Boolean(
+      String(message?.message || '').trim() || String(message?.reasoning || '').trim()
+    )
+
+    if (message?.role !== 'assistant' || hasAssistantContent || remainingPendingCalls.length > 0) {
+      projected.push({
+        ...message,
+        pendingToolCalls: remainingPendingCalls
+      })
+    }
+
+    projected.push(buildToolGroupMessage(groupedTools, index))
+  })
+
+  return projected
+}
+
 const getTodoStatusLabel = status => {
   const normalized = String(status || '')
     .trim()
@@ -1780,17 +1851,16 @@ const countMutationFiles = messages => {
   return paths.size || messages.length
 }
 
-const buildMixedToolSummary = (messages, kinds) => {
+const buildMixedToolSummary = profile => {
   const summaryParts = []
-  if (kinds.has('readonly_tools')) {
-    summaryParts.push(buildReadOnlyToolSummary(messages.filter(isCollapsibleReadOnlyToolMessage)))
+  if (profile.readonly.length > 0) {
+    summaryParts.push(buildReadOnlyToolSummary(profile.readonly))
   }
-  if (kinds.has('mutation_tools')) {
-    summaryParts.push(buildMutationToolSummary(messages.filter(isCollapsibleMutationToolMessage)))
+  if (profile.mutation.length > 0) {
+    summaryParts.push(buildMutationToolSummary(profile.mutation))
   }
-  if (kinds.has('command_tools')) {
-    const commands = messages
-      .filter(isCollapsibleCommandToolMessage)
+  if (profile.command.length > 0) {
+    const commands = profile.command
       .map(getBashCommandPreview)
       .filter(Boolean)
       .slice(0, 3)
@@ -1798,22 +1868,49 @@ const buildMixedToolSummary = (messages, kinds) => {
       summaryParts.push(`${t('workflow.toolGroups.runVerb')} ${commands.join(', ')}`)
     }
   }
-  if (kinds.has('mcp_tools')) {
-    summaryParts.push(buildMcpToolSummary(messages.filter(isCollapsibleMcpToolMessage)))
+  if (profile.mcp.length > 0) {
+    summaryParts.push(buildMcpToolSummary(profile.mcp))
   }
-  if (kinds.has('todo_tools')) {
+  if (profile.todo.length > 0) {
     summaryParts.push(
-      messages.filter(isCollapsibleTodoToolMessage).map(getTodoToolStatusText).filter(Boolean).join('  ')
+      profile.todo.map(getTodoToolStatusText).filter(Boolean).join('  ')
     )
   }
   return summaryParts.filter(Boolean).join(' · ')
 }
 
-const buildReadOnlyToolGroupMessage = (messages, index) => {
+const createToolGroupProfile = messages => {
+  const profile = {
+    kinds: new Set(),
+    readonly: [],
+    todo: [],
+    command: [],
+    mutation: [],
+    mcp: [],
+    other: []
+  }
+
+  messages.forEach(message => {
+    const kind = getCollapsibleToolGroupKind(message)
+    if (!kind) return
+
+    profile.kinds.add(kind)
+    if (kind === 'readonly_tools') profile.readonly.push(message)
+    else if (kind === 'todo_tools') profile.todo.push(message)
+    else if (kind === 'command_tools') profile.command.push(message)
+    else if (kind === 'mutation_tools') profile.mutation.push(message)
+    else if (kind === 'mcp_tools') profile.mcp.push(message)
+    else profile.other.push(message)
+  })
+
+  return profile
+}
+
+const buildReadOnlyToolGroupMessage = (messages, index, profile) => {
   let readCount = 0
   let searchCount = 0
 
-  messages.forEach(message => {
+  profile.readonly.forEach(message => {
     const category = getReadOnlyToolCategory(getMessageToolName(message))
     if (category === 'read') readCount += 1
     if (category === 'search') searchCount += 1
@@ -1840,13 +1937,13 @@ const buildReadOnlyToolGroupMessage = (messages, index) => {
       icon: 'search',
       action: t('workflow.toolGroups.explorationTitle'),
       target: summaryParts.join(' · '),
-      summary: buildReadOnlyToolSummary(messages)
+      summary: buildReadOnlyToolSummary(profile.readonly)
     },
     groupedTools: messages
   }
 }
 
-const buildTodoToolGroupMessage = (messages, index) => ({
+const buildTodoToolGroupMessage = (messages, index, profile) => ({
   ...messages[0],
   role: 'assistant',
   displayId: getCollapsedToolGroupExpandId(messages, index, 'todo_tools'),
@@ -1859,12 +1956,12 @@ const buildTodoToolGroupMessage = (messages, index) => ({
     icon: 'todo',
     action: t('workflow.toolGroups.todoTitle'),
     target: '',
-    summary: messages.map(getTodoToolStatusText).filter(Boolean).join('  ')
+    summary: profile.todo.map(getTodoToolStatusText).filter(Boolean).join('  ')
   },
   groupedTools: messages
 })
 
-const buildCommandToolGroupMessage = (messages, index) => ({
+const buildCommandToolGroupMessage = (messages, index, profile) => ({
   ...messages[0],
   role: 'assistant',
   displayId: getCollapsedToolGroupExpandId(messages, index, 'command_tools'),
@@ -1877,7 +1974,7 @@ const buildCommandToolGroupMessage = (messages, index) => ({
     icon: 'bash',
     action: t('workflow.toolGroups.commandTitle'),
     target: t('workflow.toolGroups.commands', { count: messages.length }),
-    summary: `${t('workflow.toolGroups.runVerb')} ${messages
+    summary: `${t('workflow.toolGroups.runVerb')} ${profile.command
       .map(getBashCommandPreview)
       .filter(Boolean)
       .slice(0, 3)
@@ -1886,7 +1983,7 @@ const buildCommandToolGroupMessage = (messages, index) => ({
   groupedTools: messages
 })
 
-const buildMutationToolGroupMessage = (messages, index) => ({
+const buildMutationToolGroupMessage = (messages, index, profile) => ({
   ...messages[0],
   role: 'assistant',
   displayId: getCollapsedToolGroupExpandId(messages, index, 'mutation_tools'),
@@ -1899,12 +1996,12 @@ const buildMutationToolGroupMessage = (messages, index) => ({
     icon: 'edit',
     action: t('workflow.toolGroups.mutationTitle'),
     target: t('workflow.toolGroups.mutations', { count: messages.length }),
-    summary: buildMutationToolSummary(messages)
+    summary: buildMutationToolSummary(profile.mutation)
   },
   groupedTools: messages
 })
 
-const buildMcpToolGroupMessage = (messages, index) => ({
+const buildMcpToolGroupMessage = (messages, index, profile) => ({
   ...messages[0],
   role: 'assistant',
   displayId: getCollapsedToolGroupExpandId(messages, index, 'mcp_tools'),
@@ -1917,35 +2014,31 @@ const buildMcpToolGroupMessage = (messages, index) => ({
     icon: 'mcp',
     action: t('workflow.toolGroups.mcpTitle'),
     target: t('workflow.toolGroups.mcpCalls', { count: messages.length }),
-    summary: buildMcpToolSummary(messages)
+    summary: buildMcpToolSummary(profile.mcp)
   },
   groupedTools: messages
 })
 
-const buildMixedToolGroupMessage = (messages, index, kinds) => {
+const buildMixedToolGroupMessage = (messages, index, profile) => {
   const targetParts = []
-  const readonlyMessages = messages.filter(isCollapsibleReadOnlyToolMessage)
-  const mutationMessages = messages.filter(isCollapsibleMutationToolMessage)
-  const commandMessages = messages.filter(isCollapsibleCommandToolMessage)
-  const mcpMessages = messages.filter(isCollapsibleMcpToolMessage)
-  const todoMessages = messages.filter(isCollapsibleTodoToolMessage)
+  const { readonly, mutation, command, mcp, todo } = profile
 
-  if (readonlyMessages.length > 0) {
-    targetParts.push(t('workflow.toolGroups.explorations', { count: readonlyMessages.length }))
+  if (readonly.length > 0) {
+    targetParts.push(t('workflow.toolGroups.explorations', { count: readonly.length }))
   }
-  if (mutationMessages.length > 0) {
+  if (mutation.length > 0) {
     targetParts.push(
-      t('workflow.toolGroups.filesChanged', { count: countMutationFiles(mutationMessages) })
+      t('workflow.toolGroups.filesChanged', { count: countMutationFiles(mutation) })
     )
   }
-  if (commandMessages.length > 0) {
-    targetParts.push(t('workflow.toolGroups.commands', { count: commandMessages.length }))
+  if (command.length > 0) {
+    targetParts.push(t('workflow.toolGroups.commands', { count: command.length }))
   }
-  if (mcpMessages.length > 0) {
-    targetParts.push(t('workflow.toolGroups.mcpCalls', { count: mcpMessages.length }))
+  if (mcp.length > 0) {
+    targetParts.push(t('workflow.toolGroups.mcpCalls', { count: mcp.length }))
   }
-  if (todoMessages.length > 0) {
-    targetParts.push(t('workflow.toolGroups.todoUpdates', { count: todoMessages.length }))
+  if (todo.length > 0) {
+    targetParts.push(t('workflow.toolGroups.todoUpdates', { count: todo.length }))
   }
 
   return {
@@ -1961,7 +2054,7 @@ const buildMixedToolGroupMessage = (messages, index, kinds) => {
       icon: 'tool',
       action: t('workflow.toolGroups.mixedTitle'),
       target: targetParts.join(' · '),
-      summary: buildMixedToolSummary(messages, kinds)
+      summary: buildMixedToolSummary(profile)
     },
     groupedTools: messages
   }
@@ -1993,15 +2086,15 @@ const buildOtherToolGroupMessage = (messages, index) => ({
 })
 
 const buildToolGroupMessage = (messages, index) => {
-  const kinds = new Set(messages.map(getCollapsibleToolGroupKind).filter(Boolean))
-  if (kinds.size > 1) return buildMixedToolGroupMessage(messages, index, kinds)
+  const profile = createToolGroupProfile(messages)
+  if (profile.kinds.size > 1) return buildMixedToolGroupMessage(messages, index, profile)
 
-  const [kind] = kinds
-  if (kind === 'readonly_tools') return buildReadOnlyToolGroupMessage(messages, index)
-  if (kind === 'todo_tools') return buildTodoToolGroupMessage(messages, index)
-  if (kind === 'command_tools') return buildCommandToolGroupMessage(messages, index)
-  if (kind === 'mutation_tools') return buildMutationToolGroupMessage(messages, index)
-  if (kind === 'mcp_tools') return buildMcpToolGroupMessage(messages, index)
+  const [kind] = profile.kinds
+  if (kind === 'readonly_tools') return buildReadOnlyToolGroupMessage(messages, index, profile)
+  if (kind === 'todo_tools') return buildTodoToolGroupMessage(messages, index, profile)
+  if (kind === 'command_tools') return buildCommandToolGroupMessage(messages, index, profile)
+  if (kind === 'mutation_tools') return buildMutationToolGroupMessage(messages, index, profile)
+  if (kind === 'mcp_tools') return buildMcpToolGroupMessage(messages, index, profile)
   return buildOtherToolGroupMessage(messages, index)
 }
 
@@ -2035,10 +2128,12 @@ const collapseToolMessageGroups = messages => {
 const visibleMessages = computed(() =>
   excludeLeadingManualClearContextMarkers(
     collapseToolMessageGroups(
-      collapseAssistantCompletionPairs(
-        collapseRepeatedFinishTaskErrors(
-          props.messages.filter(
-            message => !isHiddenSystemObservation(message) || isManualClearContextMessage(message)
+      projectPendingToolGroups(
+        collapseAssistantCompletionPairs(
+          collapseRepeatedFinishTaskErrors(
+            props.messages.filter(
+              message => !isHiddenSystemObservation(message) || isManualClearContextMessage(message)
+            )
           )
         )
       )

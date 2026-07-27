@@ -93,6 +93,16 @@ assert.match(toolGroupProjection, /icon: 'mcp'/)
 assert.match(toolGroupProjection, /tool_group_kind: 'mixed_tools'/)
 assert.match(
   toolGroupProjection,
+  /const projectPendingToolGroups = messages =>/,
+  'auto-executing pending tool calls must use the same grouped presentation before results arrive'
+)
+assert.match(
+  messageList,
+  /projectPendingToolGroups\(/,
+  'the visible message projection must include running pending tool groups'
+)
+assert.match(
+  toolGroupProjection,
   /while \(nextIndex < messages\.length && getCollapsibleToolGroupKind\(messages\[nextIndex\]\)\)/
 )
 assert.doesNotMatch(

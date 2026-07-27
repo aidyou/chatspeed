@@ -215,16 +215,18 @@
               background: linear-gradient(
                 90deg,
                 var(--cs-text-color-primary) 0%,
-                var(--cs-text-color-primary) 42%,
+                var(--cs-text-color-primary) 24%,
+                var(--el-color-primary-light-8) 36%,
                 var(--el-color-primary-light-3) 50%,
-                var(--cs-text-color-primary) 58%,
+                var(--el-color-primary-light-8) 64%,
+                var(--cs-text-color-primary) 76%,
                 var(--cs-text-color-primary) 100%
               );
-              background-size: 220% 100%;
+              background-size: 260% 100%;
               background-clip: text;
               -webkit-background-clip: text;
               color: transparent;
-              animation: tool-group-title-shimmer 2.2s linear infinite;
+              animation: tool-group-title-shimmer 2.8s ease-in-out infinite;
             }
           }
 
@@ -898,11 +900,11 @@
 
 @keyframes tool-group-title-shimmer {
   from {
-    background-position: 110% 0;
+    background-position: 130% 0;
   }
 
   to {
-    background-position: -110% 0;
+    background-position: -130% 0;
   }
 }
 

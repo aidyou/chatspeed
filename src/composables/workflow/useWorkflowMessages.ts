@@ -968,6 +968,7 @@ export function useWorkflowMessages(options = {}) {
                   : ''
               return {
                 id: call.id,
+                arguments: args,
                 icon,
                 toolType,
                 action,
