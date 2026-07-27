@@ -413,7 +413,7 @@ impl BackendAdapter for OllamaBackendAdapter {
 
         if log_proxy_to_file {
             // Log the request to a file
-            log::info!(target: "ccproxy_logger","Ollama Request Body: \n{}\n----------------\n", serde_json::to_string_pretty(&request_json).unwrap_or_default());
+            log::info!(target: "ccproxy_upstream_logger","Ollama Request Body: \n{}\n----------------\n", serde_json::to_string_pretty(&request_json).unwrap_or_default());
         }
 
         Ok(client.post(provider_full_url).json(&request_json))

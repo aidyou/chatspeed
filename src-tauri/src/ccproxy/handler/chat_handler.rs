@@ -1,4 +1,7 @@
-use axum::response::{IntoResponse, Response};
+use axum::{
+    body::{to_bytes, Body},
+    response::{IntoResponse, Response},
+};
 use reqwest::header::HeaderMap;
 use rust_i18n::t;
 use std::sync::{Arc, RwLock};
@@ -33,6 +36,29 @@ use crate::constants::{
     CFG_CCPROXY_RETRY_ON_429_DEFAULT,
 };
 use crate::db::{CcproxyStat, MainStore};
+
+async fn log_client_response(
+    response: Response,
+    client_protocol: &ChatProtocol,
+    log_to_file: bool,
+) -> ProxyResult<Response> {
+    if !log_to_file {
+        return Ok(response);
+    }
+
+    let (parts, body) = response.into_parts();
+    let body_bytes = to_bytes(body, usize::MAX)
+        .await
+        .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
+    log::info!(
+        target: "ccproxy_client_logger",
+        "[Client] {} Response Body: \n{}\n================\n\n",
+        client_protocol,
+        String::from_utf8_lossy(&body_bytes)
+    );
+
+    Ok(Response::from_parts(parts, Body::from(body_bytes)))
+}
 
 fn get_proxy_alias_from_body(
     chat_protocol: &ChatProtocol,
@@ -347,8 +373,8 @@ pub(crate) async fn execute_unified_chat_request(
                 message
             );
 
-            if log_org_to_file {
-                log::info!(target: "ccproxy_logger", "[ERROR] Backend request failed before receiving a response, protocol: {}, model: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, message);
+            if log_proxy_to_file {
+                log::info!(target: "ccproxy_upstream_logger", "[ERROR] Backend request failed before receiving a response, protocol: {}, model: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, message);
             }
 
             {
@@ -370,13 +396,14 @@ pub(crate) async fn execute_unified_chat_request(
                 });
             }
 
-            return Ok(output_adapter.adapt_error_response(UnifiedErrorResponse {
+            let response = output_adapter.adapt_error_response(UnifiedErrorResponse {
                 status_code: http::StatusCode::BAD_GATEWAY.as_u16(),
                 message,
                 error_type: None,
                 code: None,
                 request_id: Some(message_id),
-            }));
+            });
+            return log_client_response(response, &client_protocol, log_org_to_file).await;
         }
         Err(error) => return Err(error),
     };
@@ -394,8 +421,8 @@ pub(crate) async fn execute_unified_chat_request(
         };
         let error_body_str = String::from_utf8_lossy(&error_body_bytes);
 
-        if log_org_to_file {
-            log::info!(target: "ccproxy_logger", "[ERROR] {} Response Error, model: {}, Status: {}, Body: \n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, status_code, error_body_str);
+        if log_proxy_to_file {
+            log::info!(target: "ccproxy_upstream_logger", "[ERROR] {} Response Error, model: {}, Status: {}, Body: \n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, status_code, error_body_str);
         }
 
         log::warn!(
@@ -456,7 +483,7 @@ pub(crate) async fn execute_unified_chat_request(
                 http::header::HeaderValue::from_static("application/json"),
             );
         }
-        return Ok(response);
+        return log_client_response(response, &client_protocol, log_org_to_file).await;
     }
 
     let estimated_input_tokens =
@@ -481,6 +508,7 @@ pub(crate) async fn execute_unified_chat_request(
             output_adapter,
             sse_status,
             log_org_to_file,
+            log_proxy_to_file,
             main_store_arc.clone(),
             proxy_model.client_alias.clone(),
             proxy_model.model.clone(),
@@ -497,8 +525,8 @@ pub(crate) async fn execute_unified_chat_request(
             .await
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
-        if log_org_to_file {
-            log::info!(target: "ccproxy_logger", "[Backend Raw Response] {} Body: \n{}\n================\n\n", proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
+        if log_proxy_to_file {
+            log::info!(target: "ccproxy_upstream_logger", "[Upstream] {} Response Body: \n{}\n================\n\n", proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
         }
 
         let backend_response = crate::ccproxy::adapter::backend::BackendResponse {
@@ -565,7 +593,7 @@ pub(crate) async fn execute_unified_chat_request(
             }
         }
 
-        Ok(response)
+        log_client_response(response, &client_protocol, log_org_to_file).await
     }
 }
 
@@ -673,7 +701,7 @@ pub async fn handle_chat_completion(
     }
 
     if log_org_to_file {
-        log::info!(target: "ccproxy_logger", "message id:{}\n{} Origin Request Body: \n{}\n----------------\n", &message_id, &protocol_string, String::from_utf8_lossy(&preprocessed_request_body));
+        log::info!(target: "ccproxy_client_logger", "message id:{}\n{} Client Request Body: \n{}\n----------------\n", &message_id, &protocol_string, String::from_utf8_lossy(&preprocessed_request_body));
     }
 
     let (mut unified_request, proxy_alias, is_streaming_request) = build_unified_request(

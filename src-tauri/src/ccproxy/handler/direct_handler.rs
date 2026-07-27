@@ -13,7 +13,7 @@ use crate::db::{CcproxyStat, MainStore};
 
 use axum::body::Body;
 use axum::response::Response;
-use futures_util::stream::StreamExt;
+use futures_util::{stream, StreamExt};
 use http::HeaderMap;
 use reqwest::header::{HeaderName as ReqwestHeaderName, HeaderValue as ReqwestHeaderValue};
 use rust_i18n::t;
@@ -120,7 +120,7 @@ pub async fn handle_direct_forward(
 
     if log_proxy_to_file {
         log::info!(
-            target: "ccproxy_logger",
+            target: "ccproxy_upstream_logger",
             "[Direct] {} Final Request Body: \n{}\n----------------\n",
             proxy_model.chat_protocol.to_string(),
             serde_json::to_string_pretty(&body_json).unwrap_or_default()
@@ -137,10 +137,10 @@ pub async fn handle_direct_forward(
         main_store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
     let retry_config = RetryConfig::from_settings(max_retries);
 
-    // Persist direct-forward backend failures even when body logging is disabled so upstream
-    // incidents remain visible in ccproxy.log.
     let log_direct_backend_error = |message: &str| {
-        log::info!(target: "ccproxy_logger", "[ERROR][Direct] protocol: {}, model: {}, provider: {}, url: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, &proxy_model.provider, &full_url, message);
+        if log_proxy_to_file {
+            log::info!(target: "ccproxy_upstream_logger", "[ERROR][Direct] protocol: {}, model: {}, provider: {}, url: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, &proxy_model.provider, &full_url, message);
+        }
     };
 
     // Send request with retry support for 429 status code
@@ -248,6 +248,9 @@ pub async fn handle_direct_forward(
             tool_compat_mode: false,
         });
 
+        let log_recorder_at_end = log_recorder.clone();
+        let chat_protocol_at_end = chat_protocol.clone();
+        let sse_status_at_end = sse_status.clone();
         let stream = target_response.bytes_stream().map(move |chunk| {
             let sse_status = sse_status.clone();
             let log_recorder = log_recorder_clone.clone();
@@ -256,7 +259,7 @@ pub async fn handle_direct_forward(
             let _guard = stat_guard.clone();
 
             chunk.map(move |bytes| {
-                // Always parse for statistics, but only log to file if enabled
+                // Always parse for statistics, but only log to file if enabled.
                 chunk_parser_and_log(
                     &bytes,
                     log_recorder.clone(),
@@ -264,7 +267,6 @@ pub async fn handle_direct_forward(
                     sse_status.clone(),
                     log_proxy_to_file,
                 );
-
                 inject_openai_estimated_usage_before_done(
                     bytes,
                     log_recorder,
@@ -273,6 +275,15 @@ pub async fn handle_direct_forward(
                 )
             })
         });
+        let stream = stream.chain(stream::once(async move {
+            log_direct_stream_response(
+                log_recorder_at_end,
+                &chat_protocol_at_end,
+                sse_status_at_end,
+                log_proxy_to_file,
+            );
+            Ok::<bytes::Bytes, reqwest::Error>(bytes::Bytes::new())
+        }));
 
         let body = Body::from_stream(stream);
         if let Ok(rsp) = response_builder.body(body) {
@@ -289,7 +300,7 @@ pub async fn handle_direct_forward(
             .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
 
         if log_proxy_to_file {
-            log::info!(target: "ccproxy_logger", "[Direct] {} Response Body: {}\n================\n\n",proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
+            log::info!(target: "ccproxy_upstream_logger", "[Direct] {} Response Body: {}\n================\n\n",proxy_model.chat_protocol.to_string(), String::from_utf8_lossy(&body_bytes));
         }
 
         // Record statistics for non-streaming direct forward
@@ -545,14 +556,13 @@ fn inject_openai_estimated_usage_before_done(
     bytes::Bytes::from(rewritten)
 }
 
-fn log_direct_stream_response_if_complete(
-    chunk_str: &str,
+fn log_direct_stream_response(
     log_recorder: Arc<Mutex<StreamLogRecorder>>,
     chat_protocol: &ChatProtocol,
     sse_status: Arc<RwLock<SseStatus>>,
     log_to_file: bool,
 ) {
-    if !log_to_file || !chunk_str.contains("[DONE]") {
+    if !log_to_file {
         return;
     }
 
@@ -579,7 +589,7 @@ fn log_direct_stream_response_if_complete(
         recorder.stream_response_logged = true;
 
         log::info!(
-            target: "ccproxy_logger",
+            target: "ccproxy_upstream_logger",
             "[Direct] {} Stream Response: \n{}\n================\n\n",
             chat_protocol.to_string(),
             serde_json::to_string_pretty(&*recorder).unwrap_or_default()
@@ -1069,14 +1079,6 @@ fn chunk_parser_and_log(
             }
         }
     }
-
-    log_direct_stream_response_if_complete(
-        &chunk_str,
-        log_recorder,
-        chat_protocol,
-        sse_status,
-        log_to_file,
-    );
 }
 
 fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64, i64) {
@@ -1179,6 +1181,24 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn direct_stream_response_is_logged_when_stream_ends() {
+        let log_recorder = Arc::new(Mutex::new(StreamLogRecorder::new(
+            "test-id".to_string(),
+            "test-model".to_string(),
+        )));
+        let sse_status = Arc::new(RwLock::new(SseStatus::default()));
+
+        log_direct_stream_response(
+            log_recorder.clone(),
+            &ChatProtocol::Claude,
+            sse_status,
+            true,
+        );
+
+        assert!(log_recorder.lock().unwrap().stream_response_logged);
+    }
 
     #[test]
     fn claude_usage_normalizes_uncached_and_cache_read_tokens() {

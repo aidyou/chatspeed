@@ -24,7 +24,8 @@ pub async fn handle_streamed_response(
     backend_adapter: Arc<dyn BackendAdapter>,
     output_adapter: impl OutputAdapter + Send + Sync + 'static,
     sse_status: Arc<RwLock<SseStatus>>,
-    log_to_file: bool,
+    log_client_to_file: bool,
+    log_upstream_to_file: bool,
     main_store_arc: Arc<MainStore>,
     client_model: String,
     backend_model: String,
@@ -46,6 +47,7 @@ pub async fn handle_streamed_response(
         .await;
 
     let reassembled_stream = ReceiverStream::new(reassembled_receiver);
+    let backend_protocol_for_log = backend_protocol.clone();
 
     let sse_status_clone = sse_status.clone();
     let message_id = if let Ok(state) = sse_status.read() {
@@ -64,9 +66,18 @@ pub async fn handle_streamed_response(
         .then(move |item| {
             let adapter = backend_adapter.clone();
             let status = sse_status_clone.clone();
+            let backend_protocol = backend_protocol_for_log.clone();
             async move {
                 match item {
                     Ok(chunk) => {
+                        if log_upstream_to_file {
+                            log::info!(
+                                target: "ccproxy_upstream_logger",
+                                "[Upstream] {} Stream Event: \n{}\n----------------\n",
+                                backend_protocol,
+                                String::from_utf8_lossy(&chunk)
+                            );
+                        }
                         let result = adapter
                             .adapt_stream_chunk(chunk, status)
                             .await
@@ -81,7 +92,7 @@ pub async fn handle_streamed_response(
                         result
                     }
                     Err(e) => {
-                        log::error!("error on backend stream: {}", e.to_string());
+                        log::error!("error on backend stream: {}", e);
                         vec![UnifiedStreamChunk::Error {
                             message: e.to_string(),
                         }]
@@ -121,7 +132,7 @@ pub async fn handle_streamed_response(
                     client_protocol_inner,
                     &unified_chunk,
                     &mut log_recorder,
-                    log_to_file,
+                    log_client_to_file,
                 );
             }
 
@@ -238,7 +249,7 @@ pub fn adapt_stream_chunk_to_log(
                 .or(usage.cached_content_tokens);
 
             if log_to_file {
-                log::info!(target: "ccproxy_logger", "[Proxy] {} Stream Response: \n{}\n================\n\n", client_protocol.to_string(), serde_json::to_string_pretty(&recorder).unwrap_or_default());
+                log::info!(target: "ccproxy_client_logger", "[Proxy] {} Stream Response: \n{}\n================\n\n", client_protocol.to_string(), serde_json::to_string_pretty(&recorder).unwrap_or_default());
             }
         }
         _ => {}

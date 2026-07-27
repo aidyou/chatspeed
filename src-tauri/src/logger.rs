@@ -211,7 +211,8 @@ pub fn setup_logger(app: &tauri::App) {
     *LOG_DIR.write() = log_dir.clone();
 
     let log_file_path = log_dir.join("chatspeed.log");
-    let ccproxy_log_path = log_dir.join("ccproxy.log");
+    let ccproxy_client_log_path = log_dir.join("ccproxy-client.log");
+    let ccproxy_upstream_log_path = log_dir.join("ccproxy-upstream.log");
 
     eprintln!("Initializing logger...");
     eprintln!("Log directory: {:?}", log_dir);
@@ -256,14 +257,26 @@ pub fn setup_logger(app: &tauri::App) {
         }
     };
 
-    let ccproxy_log_file = match OpenOptions::new()
+    let ccproxy_client_log_file = match OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&ccproxy_log_path)
+        .open(&ccproxy_client_log_path)
     {
         Ok(f) => Some(f),
         Err(e) => {
-            eprintln!("Failed to create ccproxy log file: {}", e);
+            eprintln!("Failed to create ccproxy client log file: {}", e);
+            None
+        }
+    };
+
+    let ccproxy_upstream_log_file = match OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&ccproxy_upstream_log_path)
+    {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!("Failed to create ccproxy upstream log file: {}", e);
             None
         }
     };
@@ -276,7 +289,11 @@ pub fn setup_logger(app: &tauri::App) {
         .level(log::LevelFilter::Debug)
         .filter(|record| {
             record.target().contains("chatspeed")
-                || (record.level() < log::LevelFilter::Info && record.target() != "ccproxy_logger")
+                || (record.level() < log::LevelFilter::Info
+                    && !matches!(
+                        record.target(),
+                        "ccproxy_client_logger" | "ccproxy_upstream_logger"
+                    ))
         })
         .format(console_log_formatter)
         .chain(std::io::stdout());
@@ -291,7 +308,11 @@ pub fn setup_logger(app: &tauri::App) {
         .level(log_level)
         .filter(|record| {
             record.target().contains("chatspeed")
-                || (record.level() < log::LevelFilter::Info && record.target() != "ccproxy_logger")
+                || (record.level() < log::LevelFilter::Info
+                    && !matches!(
+                        record.target(),
+                        "ccproxy_client_logger" | "ccproxy_upstream_logger"
+                    ))
         })
         .format(file_log_formatter);
 
@@ -300,15 +321,23 @@ pub fn setup_logger(app: &tauri::App) {
         file_dispatcher = file_dispatcher.chain(file);
     }
 
-    // ccproxy dispatcher - raw format
-    let mut ccproxy_dispatcher = fern::Dispatch::new()
+    // CCProxy debug dispatchers use raw formatting so request and response bodies remain readable.
+    let ccproxy_client_log_enabled = ccproxy_client_log_file.is_some();
+    let mut ccproxy_client_dispatcher = fern::Dispatch::new()
         .level(log::LevelFilter::Info)
-        .filter(|record| record.target() == "ccproxy_logger")
+        .filter(|record| record.target() == "ccproxy_client_logger")
         .format(|out, message, _| out.finish(format_args!("{}", message)));
+    if let Some(file) = ccproxy_client_log_file {
+        ccproxy_client_dispatcher = ccproxy_client_dispatcher.chain(file);
+    }
 
-    let ccproxy_log_enabled = ccproxy_log_file.is_some();
-    if let Some(file) = ccproxy_log_file {
-        ccproxy_dispatcher = ccproxy_dispatcher.chain(file);
+    let ccproxy_upstream_log_enabled = ccproxy_upstream_log_file.is_some();
+    let mut ccproxy_upstream_dispatcher = fern::Dispatch::new()
+        .level(log::LevelFilter::Info)
+        .filter(|record| record.target() == "ccproxy_upstream_logger")
+        .format(|out, message, _| out.finish(format_args!("{}", message)));
+    if let Some(file) = ccproxy_upstream_log_file {
+        ccproxy_upstream_dispatcher = ccproxy_upstream_dispatcher.chain(file);
     }
 
     // Apply logger configuration
@@ -316,8 +345,11 @@ pub fn setup_logger(app: &tauri::App) {
     if log_file_enabled {
         final_dispatcher = final_dispatcher.chain(file_dispatcher);
     }
-    if ccproxy_log_enabled {
-        final_dispatcher = final_dispatcher.chain(ccproxy_dispatcher);
+    if ccproxy_client_log_enabled {
+        final_dispatcher = final_dispatcher.chain(ccproxy_client_dispatcher);
+    }
+    if ccproxy_upstream_log_enabled {
+        final_dispatcher = final_dispatcher.chain(ccproxy_upstream_dispatcher);
     }
 
     if let Err(e) = final_dispatcher.apply() {

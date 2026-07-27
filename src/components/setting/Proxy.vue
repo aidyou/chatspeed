@@ -203,36 +203,14 @@
             <div class="item">
               <div class="label">
                 <div class="label-text">
-                  {{ $t('settings.proxy.settings.logProxyToFile') }}
-                  <el-space>
-                    <small>{{ $t('settings.proxy.settings.logProxyToFileTip') }}</small>
-                    <a
-                      class="small important"
-                      href="javascript:"
-                      @click="openLogFile"
-                      v-if="logOrgFilePath"
-                      >{{ $t('settings.proxy.settings.openLogFile') }}</a
-                    >
-                  </el-space>
-                </div>
-              </div>
-              <div class="value">
-                <el-switch
-                  v-model="settings.chatCompletionProxyLogProxyToFile"
-                  @change="saveProxySettings('chatCompletionProxyLogProxyToFile')" />
-              </div>
-            </div>
-            <div class="item">
-              <div class="label">
-                <div class="label-text">
                   {{ $t('settings.proxy.settings.logOrgToFile') }}
                   <el-space>
                     <small>{{ $t('settings.proxy.settings.logOrgToFileTip') }}</small>
                     <a
                       class="small important"
                       href="javascript:"
-                      @click="openLogFile"
-                      v-if="logOrgFilePath"
+                      @click="openClientLogFile"
+                      v-if="clientLogFilePath"
                       >{{ $t('settings.proxy.settings.openLogFile') }}</a
                     >
                   </el-space>
@@ -242,6 +220,28 @@
                 <el-switch
                   v-model="settings.chatCompletionProxyLogToFile"
                   @change="saveProxySettings('chatCompletionProxyLogToFile')" />
+              </div>
+            </div>
+            <div class="item">
+              <div class="label">
+                <div class="label-text">
+                  {{ $t('settings.proxy.settings.logProxyToFile') }}
+                  <el-space>
+                    <small>{{ $t('settings.proxy.settings.logProxyToFileTip') }}</small>
+                    <a
+                      class="small important"
+                      href="javascript:"
+                      @click="openUpstreamLogFile"
+                      v-if="upstreamLogFilePath"
+                      >{{ $t('settings.proxy.settings.openLogFile') }}</a
+                    >
+                  </el-space>
+                </div>
+              </div>
+              <div class="value">
+                <el-switch
+                  v-model="settings.chatCompletionProxyLogProxyToFile"
+                  @change="saveProxySettings('chatCompletionProxyLogProxyToFile')" />
               </div>
             </div>
             <div class="item">
@@ -636,23 +636,27 @@ watch(
   { immediate: true }
 )
 
-const logOrgFilePath = computed(() => {
-  return env.value.logDir ? env.value.logDir + '/ccproxy.log' : ''
+const clientLogFilePath = computed(() => {
+  return env.value.logDir ? env.value.logDir + '/ccproxy-client.log' : ''
+})
+
+const upstreamLogFilePath = computed(() => {
+  return env.value.logDir ? env.value.logDir + '/ccproxy-upstream.log' : ''
 })
 
 onMounted(() => {
   settingStore.getEnv()
 })
 
-const openLogFile = async () => {
-  if (logOrgFilePath.value) {
-    await openPath(logOrgFilePath.value)
+const openClientLogFile = async () => {
+  if (clientLogFilePath.value) {
+    await openPath(clientLogFilePath.value)
   }
 }
 
-const openProxyLogFile = async () => {
-  if (logProxyFilePath.value) {
-    await openPath(logProxyFilePath.value)
+const openUpstreamLogFile = async () => {
+  if (upstreamLogFilePath.value) {
+    await openPath(upstreamLogFilePath.value)
   }
 }
 

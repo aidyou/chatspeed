@@ -167,7 +167,7 @@ async fn direct_forward_responses(
 
     if log_proxy_to_file {
         log::info!(
-            target: "ccproxy_logger",
+            target: "ccproxy_upstream_logger",
             "[Direct] OpenAI Responses Final Request Body: \n{}\n----------------\n",
             serde_json::to_string_pretty(&body_json).unwrap_or_default()
         );
@@ -193,7 +193,7 @@ async fn direct_forward_responses(
 
     if log_proxy_to_file {
         log::info!(
-            target: "ccproxy_logger",
+            target: "ccproxy_upstream_logger",
             "[Direct] OpenAI Responses Response Body: {}\n================\n\n",
             String::from_utf8_lossy(&body_bytes)
         );
@@ -321,7 +321,7 @@ pub async fn handle_responses(
     // debugging, especially for streaming reasoning output and client-side completion
     // behavior. Prefer the direct Responses path when a provider supports it.
     if log_org_to_file {
-        log::info!(target: "ccproxy_logger", "message id:{}\nOpenAI Responses Origin Request Body: \n{}\n----------------\n", &message_id, String::from_utf8_lossy(&client_request_body));
+        log::info!(target: "ccproxy_client_logger", "message id:{}\nOpenAI Responses Client Request Body: \n{}\n----------------\n", &message_id, String::from_utf8_lossy(&client_request_body));
     }
 
     let is_streaming_request = client_request_payload.stream.unwrap_or(false);
