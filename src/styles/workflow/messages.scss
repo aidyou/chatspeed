@@ -34,7 +34,7 @@
     .content-container {
       flex: 1;
       min-width: 0;
-      padding-right: var(--cs-space)
+      padding-right: var(--cs-space);
     }
 
     &.user {
@@ -133,18 +133,18 @@
       .ai-content {
         .content {
           background: none;
-          padding-top:0;
+          padding-top: 0;
 
-          table{
+          table {
             max-width: 100%;
           }
 
-          pre{
-              border:none;
+          pre {
+            border: none;
 
-              code{
-                  background: none;
-              }
+            code {
+              background: none;
+            }
           }
         }
 
@@ -164,9 +164,9 @@
           transition: all 0.2s ease;
 
           // Status-based border colors (override tool type colors)
-        //   &.status-success {
-        //     border-left-color: var(--el-color-success);
-        //   }
+          //   &.status-success {
+          //     border-left-color: var(--el-color-success);
+          //   }
 
           &.status-error {
             // border-left-color: var(--el-color-danger);
@@ -210,15 +210,14 @@
           }
 
           &.tool-group--running > .tool-line.title-wrap {
-            .tool-name,
-            .tool-target {
+            .tool-group__summary-text {
               background: linear-gradient(
                 90deg,
                 var(--cs-text-color-primary) 0%,
                 var(--cs-text-color-primary) 24%,
-                var(--el-color-primary-light-8) 36%,
-                var(--el-color-primary-light-3) 50%,
-                var(--el-color-primary-light-8) 64%,
+                var(--el-color-primary-light-9) 36%,
+                var(--el-color-primary-light-7) 50%,
+                var(--el-color-primary-light-9) 64%,
                 var(--cs-text-color-primary) 76%,
                 var(--cs-text-color-primary) 100%
               );
@@ -458,13 +457,13 @@
               }
             }
 
-            .content{
-                padding: 0;
+            .content {
+              padding: 0;
 
-                pre{
-                    padding:0;
-                    margin:0;
-                }
+              pre {
+                padding: 0;
+                margin: 0;
+              }
             }
 
             .raw-content {
@@ -701,7 +700,7 @@
 
         // Thoughts - collapsible reasoning container
         .reasoning-container {
-          margin-bottom: var(--cs-space);
+          margin-bottom: var(--cs-space-sm);
 
           .reasoning-header {
             display: flex;
@@ -766,22 +765,21 @@
             }
           }
         }
-
       }
     }
 
-    &.assistant{
-        .content{
-            padding-bottom: var(--cs-space-sm);
-        }
+    &.assistant {
+      .content {
+        padding-bottom: 0;
+      }
     }
 
     &.think {
-        margin-bottom: var(--cs-space-sm);
+      margin-bottom: var(--cs-space-sm);
 
-         &.ai-content .reasoning-container{
-             margin-bottom: 0;
-         }
+      &.ai-content .reasoning-container {
+        margin-bottom: 0;
+      }
     }
 
     &.observe {
@@ -791,7 +789,6 @@
 
     &.is-error {
       margin: var(--cs-space) 0;
-
 
       .ai-content {
         background: transparent !important;
@@ -910,8 +907,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .cli-tool-call.tool-group--running > .tool-line.title-wrap {
-    .tool-name,
-    .tool-target {
+    .tool-group__summary-text {
       animation: none;
     }
   }

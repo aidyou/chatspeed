@@ -109,19 +109,19 @@
             class="cli-tool-call tool-group"
             :class="{ 'tool-group--running': isCollapsedToolGroupRunning(message) }">
             <div
-              class="tool-line title-wrap expandable"
+              class="tool-line title-wrap expandable tool-group__summary"
+              :class="{ expanded: isMessageExpanded(message) }"
+              :title="message.groupDisplay.summary"
               @click="$emit('toggle-expand', message.displayId)">
               <cs :name="message.groupDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
-              <span class="tool-name">{{ message.groupDisplay.action }}</span>
-              <span class="tool-target">{{ message.groupDisplay.target }}</span>
-            </div>
-            <div
-              v-if="!isMessageExpanded(message)"
-              class="tool-line summary expandable"
-              @click="$emit('toggle-expand', message.displayId)">
-              <span class="corner-icon">⎿</span>
-              <span class="summary-text">{{ message.groupDisplay.summary }}</span>
-              <span class="expand-hint">(click to expand)</span>
+              <span class="tool-group__summary-text">{{ message.groupDisplay.summary }}</span>
+              <button
+                type="button"
+                class="tool-group__expand-button"
+                :aria-label="$t('workflow.toolGroups.expand')"
+                @click.stop="$emit('toggle-expand', message.displayId)">
+                <cs name="caret-down" size="14px" />
+              </button>
             </div>
             <div v-if="isMessageExpanded(message)" class="tool-detail collapsed-tool-group__body">
               <div
@@ -1515,13 +1515,21 @@ const NON_COLLAPSIBLE_TOOL_NAMES = new Set([
   'sub_agent_stop'
 ])
 const TODO_TOOL_NAMES = new Set(['todo_create', 'todo_list', 'todo_update', 'todo_get'])
-const TODO_STATUS_LABELS = {
-  completed: 'workflow.toolGroups.todoStatuses.completed',
-  in_progress: 'workflow.toolGroups.todoStatuses.inProgress',
-  pending: 'workflow.toolGroups.todoStatuses.pending',
-  failed: 'workflow.toolGroups.todoStatuses.failed',
-  deleted: 'workflow.toolGroups.todoStatuses.deleted',
-  data_missing: 'workflow.toolGroups.todoStatuses.dataMissing'
+const TOOL_GROUP_LABEL_KEYS = {
+  bash: 'workflow.toolGroups.runCommand',
+  edit_file: 'workflow.toolGroups.editFile',
+  glob: 'workflow.toolGroups.fileSearch',
+  grep: 'workflow.toolGroups.fileSearch',
+  list_dir: 'workflow.toolGroups.readFile',
+  read_file: 'workflow.toolGroups.readFile',
+  skill: 'workflow.toolGroups.useSkill',
+  todo_create: 'workflow.toolGroups.createTask',
+  todo_get: 'workflow.toolGroups.updateTask',
+  todo_list: 'workflow.toolGroups.updateTask',
+  todo_update: 'workflow.toolGroups.updateTask',
+  web_fetch: 'workflow.toolGroups.readWeb',
+  web_search: 'workflow.toolGroups.webSearch',
+  write_file: 'workflow.toolGroups.createFile'
 }
 
 const isCollapsedToolGroupMessage = message => message?.metadata?.message_kind === 'tool_group'
@@ -1556,23 +1564,23 @@ const getReadOnlyToolCategory = toolName => {
   return null
 }
 
-const getReadOnlyToolPreviewLabel = message => {
+const getToolGroupLabel = message => {
+  const toolName = getMessageToolName(message)
+  if (isWorkflowMcpTool(toolName)) return t('workflow.toolGroups.callMcp')
+  return t(TOOL_GROUP_LABEL_KEYS[toolName] || 'workflow.toolGroups.useTool')
+}
+
+const getToolGroupPreview = message => {
   const toolName = getMessageToolName(message)
   const args = getToolCallArguments(message) || {}
 
-  if (toolName === 'read_file' || toolName === 'list_dir') {
-    return normalizeToolPathLabel(args.file_path || args.path || message?.toolDisplay?.target || '')
+  if (toolName === 'read_file' || toolName === 'list_dir' || toolName === 'edit_file' || toolName === 'write_file') {
+    return normalizeToolPathLabel(
+      args.file_path || args.path || getDiffFilePath(message) || message?.toolDisplay?.target || ''
+    )
   }
 
-  if (toolName === 'web_fetch') {
-    return truncateToolGroupText(args.url || message?.toolDisplay?.target || '')
-  }
-
-  if (toolName === 'grep') {
-    return truncateToolGroupText(args.pattern || message?.toolDisplay?.target || '')
-  }
-
-  if (toolName === 'glob') {
+  if (toolName === 'grep' || toolName === 'glob') {
     return truncateToolGroupText(args.pattern || message?.toolDisplay?.target || '')
   }
 
@@ -1581,48 +1589,46 @@ const getReadOnlyToolPreviewLabel = message => {
     return truncateToolGroupText(query || message?.toolDisplay?.target || '')
   }
 
-  return truncateToolGroupText(message?.toolDisplay?.target || message?.toolDisplay?.summary || '')
-}
-
-const buildReadOnlyToolSummary = messages => {
-  const readItems = []
-  const searchItems = []
-  const seenReadItems = new Set()
-  const seenSearchItems = new Set()
-
-  messages.forEach(message => {
-    const label = getReadOnlyToolPreviewLabel(message)
-    if (!label) return
-
-    const category = getReadOnlyToolCategory(getMessageToolName(message))
-    if (category === 'read' && !seenReadItems.has(label)) {
-      seenReadItems.add(label)
-      readItems.push(label)
-    }
-    if (category === 'search' && !seenSearchItems.has(label)) {
-      seenSearchItems.add(label)
-      searchItems.push(label)
-    }
-  })
-
-  const summaryParts = []
-  if (readItems.length > 0) {
-    summaryParts.push(`${t('workflow.toolGroups.readVerb')} ${readItems.slice(0, 3).join(', ')}`)
+  if (toolName === 'web_fetch') {
+    return truncateToolGroupText(args.url || message?.toolDisplay?.target || '')
   }
-  if (searchItems.length > 0) {
-    summaryParts.push(
-      `${t('workflow.toolGroups.searchVerb')} ${searchItems.slice(0, 3).join(', ')}`
+
+  if (toolName === 'bash') {
+    return getBashCommandPreview(message)
+  }
+
+  if (toolName === 'skill') {
+    return truncateToolGroupText(args.skill || message?.toolDisplay?.target || '')
+  }
+
+  if (TODO_TOOL_NAMES.has(toolName)) {
+    return truncateToolGroupText(
+      args.subject || args.todo_id || message?.toolDisplay?.target || message?.toolDisplay?.summary || ''
     )
   }
 
-  return summaryParts.join(' · ')
+  if (isWorkflowMcpTool(toolName)) {
+    const display = message?.toolDisplay || {}
+    return truncateToolGroupText(display.target || display.action || toolName)
+  }
+
+  return truncateToolGroupText(message?.toolDisplay?.target || message?.toolDisplay?.summary || '')
 }
 
-const isToolWaitingApproval = message => {
-  const executionStatus = String(message?.metadata?.execution_status || '').toLowerCase()
-  if (executionStatus && executionStatus !== 'pending_approval') return false
-  return isApprovalPending(message) || executionStatus === 'pending_approval'
-}
+const buildToolGroupSummary = messages =>
+  truncateToolGroupText(
+    messages
+      .map(message => {
+        const label = getToolGroupLabel(message)
+        const preview = getToolGroupPreview(message)
+        return preview ? `${label} ${preview}` : label
+      })
+      .filter(Boolean)
+      .join(' · '),
+    120
+  )
+
+const isToolWaitingApproval = message => isApprovalPending(message)
 
 const isCollapsibleToolMessage = message => {
   if (message?.role !== 'tool') return false
@@ -1735,50 +1741,6 @@ const projectPendingToolGroups = messages => {
   return projected
 }
 
-const getTodoStatusLabel = status => {
-  const normalized = String(status || '')
-    .trim()
-    .toLowerCase()
-  const key = TODO_STATUS_LABELS[normalized]
-  return key ? t(key) : normalized
-}
-
-const getTodoToolLabel = message => {
-  const args = getToolCallArguments(message) || {}
-  const target = String(message?.toolDisplay?.target || '').trim()
-  const subject = String(args.subject || '').trim()
-  const todoId = String(args.todo_id || '').trim()
-  return target || subject || (todoId ? `#${todoId}` : t('workflow.toolGroups.todoFallbackTarget'))
-}
-
-const getTodoToolStatusText = message => {
-  const toolName = getMessageToolName(message)
-  const args = getToolCallArguments(message) || {}
-
-  if (toolName === 'todo_update') {
-    return `${getTodoToolLabel(message)} -> ${getTodoStatusLabel(args.status)}`
-  }
-
-  if (toolName === 'todo_create') {
-    return `${getTodoToolLabel(message)} -> ${t('workflow.toolGroups.todoStatuses.created')}`
-  }
-
-  if (toolName === 'todo_list') {
-    return t('workflow.toolGroups.todoStatuses.listed')
-  }
-
-  if (toolName === 'todo_get') {
-    return `${getTodoToolLabel(message)} -> ${t('workflow.toolGroups.todoStatuses.viewed')}`
-  }
-
-  return (
-    message?.toolDisplay?.summary ||
-    message?.toolDisplay?.target ||
-    message?.toolDisplay?.action ||
-    ''
-  )
-}
-
 const getWorkflowDisplayRoots = () => {
   const workflow = workflowStore.currentWorkflow
   const roots = [
@@ -1795,308 +1757,34 @@ const getBashCommandPreview = message => {
   return truncateToolGroupText(normalizeShellCommandForDisplay(command, getWorkflowDisplayRoots()), 60)
 }
 
-const getMutationToolPreviewData = message => {
-  const toolName = getMessageToolName(message)
-  const verb = toolName === 'write_file' ? t('workflow.toolGroups.writeVerb') : t('workflow.toolGroups.editVerb')
-  const path = normalizeToolPathLabel(getDiffFilePath(message) || message?.toolDisplay?.target || '')
-  return {
-    verb,
-    path
-  }
+const TOOL_GROUP_ICONS = {
+  command_tools: 'bash',
+  mcp_tools: 'mcp',
+  mutation_tools: 'edit',
+  readonly_tools: 'search',
+  todo_tools: 'todo'
 }
-
-const buildMutationToolSummary = messages => {
-  const grouped = new Map()
-
-  messages.forEach(message => {
-    const { verb, path } = getMutationToolPreviewData(message)
-    const key = verb
-    if (!grouped.has(key)) grouped.set(key, new Map())
-
-    const pathMap = grouped.get(key)
-    const normalizedPath = path || ''
-    pathMap.set(normalizedPath, (pathMap.get(normalizedPath) || 0) + 1)
-  })
-
-  return Array.from(grouped.entries())
-    .map(([verb, pathMap]) => {
-      const parts = Array.from(pathMap.entries())
-        .slice(0, 3)
-        .map(([path, count]) => {
-          if (!path) return verb
-          return count > 1 ? `${path} (${count})` : path
-        })
-        .filter(Boolean)
-
-      return parts.length > 0 ? `${verb} ${parts.join(' ')}` : verb
-    })
-    .filter(Boolean)
-    .join(' · ')
-}
-
-const getMcpToolPreview = message => {
-  const display = message?.toolDisplay || {}
-  const label = [display.action, display.target].filter(Boolean).join(' ')
-  return truncateToolGroupText(label || getMessageToolName(message), 60)
-}
-
-const buildMcpToolSummary = messages =>
-  messages.map(getMcpToolPreview).filter(Boolean).slice(0, 3).join(' · ')
-
-const countMutationFiles = messages => {
-  const paths = new Set(
-    messages
-      .map(message => getMutationToolPreviewData(message).path)
-      .filter(Boolean)
-  )
-  return paths.size || messages.length
-}
-
-const buildMixedToolSummary = profile => {
-  const summaryParts = []
-  if (profile.readonly.length > 0) {
-    summaryParts.push(buildReadOnlyToolSummary(profile.readonly))
-  }
-  if (profile.mutation.length > 0) {
-    summaryParts.push(buildMutationToolSummary(profile.mutation))
-  }
-  if (profile.command.length > 0) {
-    const commands = profile.command
-      .map(getBashCommandPreview)
-      .filter(Boolean)
-      .slice(0, 3)
-    if (commands.length > 0) {
-      summaryParts.push(`${t('workflow.toolGroups.runVerb')} ${commands.join(', ')}`)
-    }
-  }
-  if (profile.mcp.length > 0) {
-    summaryParts.push(buildMcpToolSummary(profile.mcp))
-  }
-  if (profile.todo.length > 0) {
-    summaryParts.push(
-      profile.todo.map(getTodoToolStatusText).filter(Boolean).join('  ')
-    )
-  }
-  return summaryParts.filter(Boolean).join(' · ')
-}
-
-const createToolGroupProfile = messages => {
-  const profile = {
-    kinds: new Set(),
-    readonly: [],
-    todo: [],
-    command: [],
-    mutation: [],
-    mcp: [],
-    other: []
-  }
-
-  messages.forEach(message => {
-    const kind = getCollapsibleToolGroupKind(message)
-    if (!kind) return
-
-    profile.kinds.add(kind)
-    if (kind === 'readonly_tools') profile.readonly.push(message)
-    else if (kind === 'todo_tools') profile.todo.push(message)
-    else if (kind === 'command_tools') profile.command.push(message)
-    else if (kind === 'mutation_tools') profile.mutation.push(message)
-    else if (kind === 'mcp_tools') profile.mcp.push(message)
-    else profile.other.push(message)
-  })
-
-  return profile
-}
-
-const buildReadOnlyToolGroupMessage = (messages, index, profile) => {
-  let readCount = 0
-  let searchCount = 0
-
-  profile.readonly.forEach(message => {
-    const category = getReadOnlyToolCategory(getMessageToolName(message))
-    if (category === 'read') readCount += 1
-    if (category === 'search') searchCount += 1
-  })
-
-  const summaryParts = []
-  if (readCount > 0) {
-    summaryParts.push(t('workflow.toolGroups.reads', { count: readCount }))
-  }
-  if (searchCount > 0) {
-    summaryParts.push(t('workflow.toolGroups.searches', { count: searchCount }))
-  }
-
-  return {
-    ...messages[0],
-    role: 'assistant',
-    displayId: getCollapsedToolGroupExpandId(messages, index, 'readonly_tools'),
-    metadata: {
-      ...(messages[0]?.metadata || {}),
-      message_kind: 'tool_group',
-      tool_group_kind: 'readonly_tools'
-    },
-    groupDisplay: {
-      icon: 'search',
-      action: t('workflow.toolGroups.explorationTitle'),
-      target: summaryParts.join(' · '),
-      summary: buildReadOnlyToolSummary(profile.readonly)
-    },
-    groupedTools: messages
-  }
-}
-
-const buildTodoToolGroupMessage = (messages, index, profile) => ({
-  ...messages[0],
-  role: 'assistant',
-  displayId: getCollapsedToolGroupExpandId(messages, index, 'todo_tools'),
-  metadata: {
-    ...(messages[0]?.metadata || {}),
-    message_kind: 'tool_group',
-    tool_group_kind: 'todo_tools'
-  },
-  groupDisplay: {
-    icon: 'todo',
-    action: t('workflow.toolGroups.todoTitle'),
-    target: '',
-    summary: profile.todo.map(getTodoToolStatusText).filter(Boolean).join('  ')
-  },
-  groupedTools: messages
-})
-
-const buildCommandToolGroupMessage = (messages, index, profile) => ({
-  ...messages[0],
-  role: 'assistant',
-  displayId: getCollapsedToolGroupExpandId(messages, index, 'command_tools'),
-  metadata: {
-    ...(messages[0]?.metadata || {}),
-    message_kind: 'tool_group',
-    tool_group_kind: 'command_tools'
-  },
-  groupDisplay: {
-    icon: 'bash',
-    action: t('workflow.toolGroups.commandTitle'),
-    target: t('workflow.toolGroups.commands', { count: messages.length }),
-    summary: `${t('workflow.toolGroups.runVerb')} ${profile.command
-      .map(getBashCommandPreview)
-      .filter(Boolean)
-      .slice(0, 3)
-      .join(', ')}`
-  },
-  groupedTools: messages
-})
-
-const buildMutationToolGroupMessage = (messages, index, profile) => ({
-  ...messages[0],
-  role: 'assistant',
-  displayId: getCollapsedToolGroupExpandId(messages, index, 'mutation_tools'),
-  metadata: {
-    ...(messages[0]?.metadata || {}),
-    message_kind: 'tool_group',
-    tool_group_kind: 'mutation_tools'
-  },
-  groupDisplay: {
-    icon: 'edit',
-    action: t('workflow.toolGroups.mutationTitle'),
-    target: t('workflow.toolGroups.mutations', { count: messages.length }),
-    summary: buildMutationToolSummary(profile.mutation)
-  },
-  groupedTools: messages
-})
-
-const buildMcpToolGroupMessage = (messages, index, profile) => ({
-  ...messages[0],
-  role: 'assistant',
-  displayId: getCollapsedToolGroupExpandId(messages, index, 'mcp_tools'),
-  metadata: {
-    ...(messages[0]?.metadata || {}),
-    message_kind: 'tool_group',
-    tool_group_kind: 'mcp_tools'
-  },
-  groupDisplay: {
-    icon: 'mcp',
-    action: t('workflow.toolGroups.mcpTitle'),
-    target: t('workflow.toolGroups.mcpCalls', { count: messages.length }),
-    summary: buildMcpToolSummary(profile.mcp)
-  },
-  groupedTools: messages
-})
-
-const buildMixedToolGroupMessage = (messages, index, profile) => {
-  const targetParts = []
-  const { readonly, mutation, command, mcp, todo } = profile
-
-  if (readonly.length > 0) {
-    targetParts.push(t('workflow.toolGroups.explorations', { count: readonly.length }))
-  }
-  if (mutation.length > 0) {
-    targetParts.push(
-      t('workflow.toolGroups.filesChanged', { count: countMutationFiles(mutation) })
-    )
-  }
-  if (command.length > 0) {
-    targetParts.push(t('workflow.toolGroups.commands', { count: command.length }))
-  }
-  if (mcp.length > 0) {
-    targetParts.push(t('workflow.toolGroups.mcpCalls', { count: mcp.length }))
-  }
-  if (todo.length > 0) {
-    targetParts.push(t('workflow.toolGroups.todoUpdates', { count: todo.length }))
-  }
-
-  return {
-    ...messages[0],
-    role: 'assistant',
-    displayId: getCollapsedToolGroupExpandId(messages, index, 'mixed_tools'),
-    metadata: {
-      ...(messages[0]?.metadata || {}),
-      message_kind: 'tool_group',
-      tool_group_kind: 'mixed_tools'
-    },
-    groupDisplay: {
-      icon: 'tool',
-      action: t('workflow.toolGroups.mixedTitle'),
-      target: targetParts.join(' · '),
-      summary: buildMixedToolSummary(profile)
-    },
-    groupedTools: messages
-  }
-}
-
-const buildOtherToolGroupMessage = (messages, index) => ({
-  ...messages[0],
-  role: 'assistant',
-  displayId: getCollapsedToolGroupExpandId(messages, index, 'other_tools'),
-  metadata: {
-    ...(messages[0]?.metadata || {}),
-    message_kind: 'tool_group',
-    tool_group_kind: 'other_tools'
-  },
-  groupDisplay: {
-    icon: 'tool',
-    action: t('workflow.toolGroups.mixedTitle'),
-    target: '',
-    summary: messages
-      .map(message => {
-        const display = message?.toolDisplay || {}
-        return truncateToolGroupText([display.action, display.target].filter(Boolean).join(' '), 60)
-      })
-      .filter(Boolean)
-      .slice(0, 3)
-      .join(' · ')
-  },
-  groupedTools: messages
-})
 
 const buildToolGroupMessage = (messages, index) => {
-  const profile = createToolGroupProfile(messages)
-  if (profile.kinds.size > 1) return buildMixedToolGroupMessage(messages, index, profile)
+  const kinds = new Set(messages.map(getCollapsibleToolGroupKind).filter(Boolean))
+  const [singleKind] = kinds
+  const kind = kinds.size === 1 ? singleKind : 'mixed_tools'
 
-  const [kind] = profile.kinds
-  if (kind === 'readonly_tools') return buildReadOnlyToolGroupMessage(messages, index, profile)
-  if (kind === 'todo_tools') return buildTodoToolGroupMessage(messages, index, profile)
-  if (kind === 'command_tools') return buildCommandToolGroupMessage(messages, index, profile)
-  if (kind === 'mutation_tools') return buildMutationToolGroupMessage(messages, index, profile)
-  if (kind === 'mcp_tools') return buildMcpToolGroupMessage(messages, index, profile)
-  return buildOtherToolGroupMessage(messages, index)
+  return {
+    ...messages[0],
+    role: 'assistant',
+    displayId: getCollapsedToolGroupExpandId(messages, index, kind),
+    metadata: {
+      ...(messages[0]?.metadata || {}),
+      message_kind: 'tool_group',
+      tool_group_kind: kind
+    },
+    groupDisplay: {
+      icon: TOOL_GROUP_ICONS[kind] || 'tool',
+      summary: buildToolGroupSummary(messages)
+    },
+    groupedTools: messages
+  }
 }
 
 const collapseToolMessageGroups = messages => {
@@ -3452,13 +3140,58 @@ defineExpose({
   border-left: none;
 }
 
+.tool-group__summary {
+  align-items: center !important;
+  gap: var(--cs-space-xs) !important;
+  min-width: 0;
+}
+
+.tool-group__summary-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-group__expand-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--cs-size-md);
+  height: var(--cs-size-md);
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--cs-border-radius-full);
+  background: transparent;
+  color: var(--cs-text-color-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.tool-group__summary:hover .tool-group__expand-button,
+.tool-group__summary:focus-within .tool-group__expand-button {
+  opacity: 1;
+}
+
+.tool-group__expand-button:hover {
+  background: var(--cs-hover-bg-color);
+}
+
+.tool-group__summary.expanded .tool-group__expand-button {
+  transform: rotate(180deg);
+}
+
 .collapsed-tool-group__body {
   display: flex;
   flex-direction: column;
   gap: var(--cs-space-sm);
-}
-
-.collapsed-tool-group__item {
   margin-bottom: 0;
 }
 

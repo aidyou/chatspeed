@@ -88,9 +88,10 @@ const toolGroupProjection = sourceSection(
   'const visibleMessages'
 )
 assert.match(toolGroupProjection, /isWorkflowMcpTool\(toolName\)/)
-assert.match(toolGroupProjection, /tool_group_kind: 'mcp_tools'/)
-assert.match(toolGroupProjection, /icon: 'mcp'/)
-assert.match(toolGroupProjection, /tool_group_kind: 'mixed_tools'/)
+assert.match(toolGroupProjection, /mcp_tools/)
+assert.match(toolGroupProjection, /mcp_tools: 'mcp'/)
+assert.match(toolGroupProjection, /mixed_tools/)
+assert.match(toolGroupProjection, /tool_group_kind: kind/)
 assert.match(
   toolGroupProjection,
   /const projectPendingToolGroups = messages =>/,
@@ -104,6 +105,11 @@ assert.match(
 assert.match(
   toolGroupProjection,
   /while \(nextIndex < messages\.length && getCollapsibleToolGroupKind\(messages\[nextIndex\]\)\)/
+)
+assert.match(
+  sourceSection(messageList, 'const isToolWaitingApproval', 'const isCollapsibleReadOnlyToolMessage'),
+  /const isToolWaitingApproval = message => isApprovalPending\(message\)/,
+  'only the canonical pending-approval ID set may exclude a tool from grouping'
 )
 assert.doesNotMatch(
   sourceSection(messageList, 'const isToolWaitingApproval', 'const isCollapsibleReadOnlyToolMessage'),
