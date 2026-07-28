@@ -18,6 +18,16 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 - For small localized fixes, proceed directly.
 - Prefer the narrowest useful verification. If you cannot run verification, say so.
 
+## CodeGraph Usage
+
+- When CodeGraph MCP is available and its index is healthy, use it as the default tool for repository navigation, symbol lookup, source reading, and static impact analysis.
+- Do not start with `grep`, or filesystem globbing to locate a known symbol, inspect a known source file, or assess static callers/callees.
+- Use the narrowest CodeGraph query: `codegraph_search` then a file-pinned `codegraph_node` for a known symbol; `codegraph_node(file, symbolsOnly: true)` for a known file; and scoped `codegraph_files` for a known directory or file type.
+- Before changing a resolved symbol, inspect it with `codegraph_node` and use bounded, file-pinned `codegraph_callers` and `codegraph_callees` when assessing its static blast radius.
+- For string-based dispatch, Tauri command names, configuration or i18n keys, events, macros, generated wiring, dynamic property access, runtime data flow, external APIs, and cross-language boundaries, prefer a native permission-aware text-search tool when one is available. Otherwise use `grep`. Use it after CodeGraph for textual verification when needed.
+- Treat CodeGraph edges as incomplete static evidence. Verify behavior-changing conclusions against current source and focused tests; empty caller/callee results do not prove a symbol is unused.
+- If `.codegraph` is missing or CodeGraph reports an uninitialized index, run `codegraph init`. If CodeGraph is unavailable, continue with the native text-search tool when available, or `grep` and standard repository navigation.
+
 ## Project Constraints
 
 - Rust/Tauri: use `Result` and `?`; avoid `unwrap()` and `expect()` in normal production code.

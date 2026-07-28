@@ -288,7 +288,7 @@ impl ObservationReinforcer {
                     let preview = line_based_preview(&raw_res, LARGE_TOOL_OUTPUT_CHAR_LIMIT);
                     let reminder = if persistence_reason == "reduced" {
                         format!(
-                            "<SYSTEM_REMINDER>bash output was reduced for this command, so the complete output was saved to '{}'. File size: {} bytes. Use read_file with offset=0 to inspect the complete output, or use grep on this file path to find specific facts. Treat the saved file as the source of truth instead of rerunning the command solely to recover omitted output.</SYSTEM_REMINDER>",
+                            "<SYSTEM_REMINDER>bash output was reduced for this command. The command-aware summary is usually sufficient; inspect the complete output only when it lacks a fact needed for the next action. The complete output was saved to '{}'. File size: {} bytes. Use read_file with offset=0 or grep on this file path to find specific facts. Treat the saved file as the source of truth instead of rerunning the command solely to recover omitted output.</SYSTEM_REMINDER>",
                             file_path, file_size,
                         )
                     } else {
@@ -300,9 +300,19 @@ impl ObservationReinforcer {
                     let llm_content = llm_content_override
                         .map(|content| format!("{}\n{}", content, reminder))
                         .or_else(|| Some(reminder.clone()));
+                    let content_tag = if persistence_reason == "reduced" {
+                        "reduced_output"
+                    } else {
+                        "truncated_content"
+                    };
+                    let additional_attributes = if persistence_reason == "reduced" {
+                        " reduction=\"command_aware\" preview=\"raw\""
+                    } else {
+                        ""
+                    };
                     ReinforcedResult {
                         content: format!(
-                            "<truncated_content path=\"{}\" next_offset=\"0\" file_size_bytes=\"{}\">\n{}\n</truncated_content>\n{}",
+                            "<{content_tag} path=\"{}\" next_offset=\"0\" file_size_bytes=\"{}\"{additional_attributes}>\n{}\n</{content_tag}>\n{}",
                             file_path, file_size, preview, reminder,
                         ),
                         llm_content,
@@ -980,8 +990,12 @@ mod tests {
         );
 
         assert!(reinforced.summary.contains("Persisted reduction"));
+        assert!(reinforced.content.contains("<reduced_output path=\""));
+        assert!(reinforced.content.contains("reduction=\"command_aware\""));
+        assert!(!reinforced.content.contains("<truncated_content"));
         let llm_content = reinforced.llm_content.as_deref().unwrap_or_default();
         assert!(llm_content.contains("output was reduced for this command"));
+        assert!(llm_content.contains("command-aware summary is usually sufficient"));
         assert!(!llm_content.contains("output exceeded"));
 
         remove_persisted_output(&reinforced.content);

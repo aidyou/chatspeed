@@ -201,19 +201,20 @@ impl ToolDefinition for Grep {
         crate::tools::TOOL_GREP
     }
     fn description(&self) -> &str {
-        "A powerful search tool built on ripgrep logic\n\n\
+        "A native, permission-aware text search tool\n\n\
         Usage:\n\
-        - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a bash command. The Grep tool has been optimized for correct permissions and access.\n\
-        - Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\")\n\
+        - For ordinary content searches, ALWAYS use this Grep tool instead of invoking `grep` or `rg` through bash. It applies the tool system's permission and output controls.\n\
+        - If an available native or MCP tool can precisely resolve symbols, functions, indexed source, or static callers/callees, prefer that tool for the structural query; use Grep for textual and runtime relationships it cannot represent.\n\
+        - Uses Rust regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\"). Look-around and backreferences are not supported.\n\
         - Supports compound searches with regex alternation (e.g., \"foo|bar|baz\", \"create_workflow|workflow_start|finalAudit\")\n\
         - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\", \"src-tauri/src/**/*.rs\")\n\
         - Skips common binary, media, archive, document, and executable files such as .so, .dll, .exe, .zip, .rar, .png, .jpg, and .pdf. Only text-like files are searched.\n\
-        - Output modes: \"content\" shows matching lines with file and line number (default), \"files_with_matches\" shows only file paths, \"count\" shows match counts\n\
+        - Output modes: \"content\" shows matching lines with file and line number (default), \"files_with_matches\" shows only file paths, and \"count\" shows matching-line counts per file.\n\
         - In content mode, very long matching lines are truncated from the first match position to keep output readable\n\
+        - Results are capped at 500 entries. Check the structured `truncated` field before treating a result as exhaustive; narrow path, glob, or pattern when it is true.\n\
         - For efficient exploration, search several related terms at once, use content mode to get line numbers, then read only targeted files/ranges.\n\
         - Use files_with_matches only for broad searches where content mode would be too noisy; follow up with content mode before reading files.\n\
         - Use sub_agent_run for open-ended searches requiring multiple rounds\n\
-        - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping (use `interface\\{\\}` to find `interface{}` in Go code)\n\
         - Patterns match within single lines."
     }
     fn category(&self) -> ToolCategory {
@@ -231,10 +232,10 @@ impl ToolDefinition for Grep {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string", "description": "The regular expression pattern to search for in file contents. Use alternation (foo|bar|baz) for compound searches." },
-                    "path": { "type": "string", "description": "File or directory to search in. Use a relative path for the primary working directory; use an absolute path for other authorized directories. Defaults to the primary working directory." },
+                    "pattern": { "type": "string", "description": "Rust regular expression pattern to search for in file contents. Use alternation (foo|bar|baz) for compound searches; look-around and backreferences are unsupported." },
+                    "path": { "type": "string", "description": "Required file or directory to search. Use a relative path for the primary working directory; use an absolute path for other authorized directories." },
                     "glob": { "type": "string", "description": "Glob pattern to filter files (e.g. \"*.js\", \"**/*.tsx\", \"src/**/*.rs\")." },
-                    "output_mode": { "type": "string", "enum": ["content", "files_with_matches", "count"], "default": "content", "description": "Output format. content is the default and returns file:line:matched_content. files_with_matches returns only file paths for broad noise-reduction searches. count returns match counts per file." }
+                    "output_mode": { "type": "string", "enum": ["content", "files_with_matches", "count"], "default": "content", "description": "Output format. content is the default and returns file:line:matched_content. files_with_matches returns only file paths for broad noise-reduction searches. count returns matching-line counts per file." }
                 },
                 "required": ["pattern", "path"]
             }),
@@ -263,7 +264,7 @@ impl ToolDefinition for Grep {
         let path = resolve_tool_path(search_path, self.path_guard.as_ref());
         let display_path = display_path_for_tool_output(&path, self.path_guard.as_ref());
         let mut matches = vec![];
-        const MAX_MATCHES: usize = 500;
+        let mut truncated = false;
 
         if !path.exists() {
             return Err(ToolError::IoError(format!(
@@ -276,12 +277,12 @@ impl ToolDefinition for Grep {
             if Self::matches_glob(&path, path.parent(), glob_set.as_ref())
                 && Self::is_searchable_text_file(&path)
             {
-                Self::search_in_file(
+                truncated = Self::search_in_file(
                     &path,
                     &re,
                     output_mode,
                     &mut matches,
-                    MAX_MATCHES,
+                    Self::MAX_MATCHES,
                     self.path_guard.as_ref(),
                 )?;
             }
@@ -305,15 +306,16 @@ impl ToolDefinition for Grep {
                     if !Self::is_searchable_text_file(entry.path()) {
                         continue;
                     }
-                    Self::search_in_file(
+                    let limit_reached = Self::search_in_file(
                         entry.path(),
                         &re,
                         output_mode,
                         &mut matches,
-                        MAX_MATCHES,
+                        Self::MAX_MATCHES,
                         self.path_guard.as_ref(),
                     )?;
-                    if matches.len() >= MAX_MATCHES {
+                    if limit_reached {
+                        truncated = true;
                         break;
                     }
                 }
@@ -324,14 +326,36 @@ impl ToolDefinition for Grep {
             Ok(ToolCallResult::success(
                 Some("[No matches found]".into()),
                 Some(json!({
+                    "pattern": pattern_str,
+                    "path": result_path_for_tool_output(&path),
+                    "display_path": display_path,
+                    "output_mode": output_mode,
+                    "count": 0,
+                    "truncated": false,
+                    "max_matches": Self::MAX_MATCHES,
                     "llm_content": "[No matches found]"
                 })),
             ))
         } else {
+            let mut llm_content =
+                preview_grep_lines_for_llm(&matches, output_mode).unwrap_or_default();
+            if truncated {
+                llm_content.push_str(&format!(
+                    "\n<SYSTEM_REMINDER>Search stopped after {} entries. Narrow path, glob, or pattern before treating the result as exhaustive.</SYSTEM_REMINDER>",
+                    Self::MAX_MATCHES
+                ));
+            }
             Ok(ToolCallResult::success(
                 Some(matches.join("\n")),
                 Some(json!({
-                    "llm_content": preview_grep_lines_for_llm(&matches, output_mode)
+                    "pattern": pattern_str,
+                    "path": result_path_for_tool_output(&path),
+                    "display_path": display_path,
+                    "output_mode": output_mode,
+                    "count": matches.len(),
+                    "truncated": truncated,
+                    "max_matches": Self::MAX_MATCHES,
+                    "llm_content": llm_content
                 })),
             ))
         }
@@ -339,6 +363,7 @@ impl ToolDefinition for Grep {
 }
 
 impl Grep {
+    const MAX_MATCHES: usize = 500;
     const MAX_CONTENT_MATCH_CHARS: usize = 500;
     const TEXT_SNIFF_BYTES: usize = 8192;
     const SKIPPED_BINARY_EXTENSIONS: &'static [&'static str] = &[
@@ -443,7 +468,7 @@ impl Grep {
         matches: &mut Vec<String>,
         max: usize,
         path_guard: Option<&Arc<RwLock<PathGuard>>>,
-    ) -> Result<(), ToolError> {
+    ) -> Result<bool, ToolError> {
         let file = fs::File::open(path).map_err(|e| ToolError::IoError(e.to_string()))?;
         let reader = BufReader::new(file);
         let mut count = 0;
@@ -464,11 +489,12 @@ impl Grep {
                         }
                         "files_with_matches" if count == 1 => {
                             matches.push(display_path_for_tool_output(path, path_guard));
+                            return Ok(matches.len() >= max);
                         }
                         _ => {}
                     }
                     if matches.len() >= max {
-                        return Ok(());
+                        return Ok(true);
                     }
                 }
             }
@@ -480,7 +506,7 @@ impl Grep {
                 count
             ));
         }
-        Ok(())
+        Ok(matches.len() >= max)
     }
 
     fn format_content_match(content: &str, match_start: usize) -> String {
@@ -949,9 +975,16 @@ mod tests {
         let result = tool.call(params).await.unwrap();
         let content = result.content.unwrap();
         let matches: Vec<&str> = content.lines().collect();
+        let structured = result.structured_content.unwrap();
 
         // Should be limited to MAX_MATCHES (500)
         assert_eq!(matches.len(), 500);
+        assert_eq!(structured["count"].as_u64(), Some(500));
+        assert_eq!(structured["truncated"].as_bool(), Some(true));
+        assert_eq!(structured["max_matches"].as_u64(), Some(500));
+        assert!(structured["llm_content"]
+            .as_str()
+            .is_some_and(|content| content.contains("Search stopped after 500 entries")));
     }
 
     #[tokio::test]
