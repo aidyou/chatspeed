@@ -91,7 +91,26 @@ assert.match(toolGroupProjection, /isWorkflowMcpTool\(toolName\)/)
 assert.match(toolGroupProjection, /mcp_tools/)
 assert.match(toolGroupProjection, /mcp_tools: 'mcp'/)
 assert.match(toolGroupProjection, /mixed_tools/)
-assert.match(toolGroupProjection, /tool_group_kind: kind/)
+assert.match(
+  messageList,
+  /const buildToolGroupSummary = messages => \{[\s\S]*const operations = new Map\(\)/,
+  'tool groups must aggregate repeated operations into a compact title'
+)
+assert.match(
+  messageList,
+  /count > 1 \? `\$\{preview\}\(\$\{count\}\)` : preview/,
+  'repeated targets must display a single target with its occurrence count'
+)
+assert.match(
+  messageList,
+  /return \[operation\.label, \.\.\.previews\.filter\(Boolean\)\]\.join\(' '\)/,
+  'distinct targets must remain grouped under their shared operation label'
+)
+assert.match(
+  messageList,
+  /return `tool_group:\$\{firstToolCallId \|\| firstId\}`/,
+  'tool-group identity must remain stable as tools append or transition from pending to completed'
+)
 assert.match(
   toolGroupProjection,
   /const projectPendingToolGroups = messages =>/,

@@ -111,7 +111,6 @@
             <div
               class="tool-line title-wrap expandable tool-group__summary"
               :class="{ expanded: isMessageExpanded(message) }"
-              :title="message.groupDisplay.summary"
               @click="$emit('toggle-expand', message.displayId)">
               <cs :name="message.groupDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
               <span class="tool-group__summary-text">{{ message.groupDisplay.summary }}</span>
@@ -1534,12 +1533,11 @@ const TOOL_GROUP_LABEL_KEYS = {
 
 const isCollapsedToolGroupMessage = message => message?.metadata?.message_kind === 'tool_group'
 
-const getCollapsedToolGroupExpandId = (messages, index, kind) => {
+const getCollapsedToolGroupExpandId = (messages, index) => {
   const first = messages[0]
-  const last = messages[messages.length - 1]
   const firstId = first?.displayId || first?.id || `tool_group_${index}`
-  const lastId = last?.displayId || last?.id || firstId
-  return `${firstId}:${kind}:${lastId}:${messages.length}`
+  const firstToolCallId = String(first?.metadata?.tool_call_id || '').trim()
+  return `tool_group:${firstToolCallId || firstId}`
 }
 
 const truncateToolGroupText = (value, maxLength = 48) => {
@@ -1615,18 +1613,49 @@ const getToolGroupPreview = message => {
   return truncateToolGroupText(message?.toolDisplay?.target || message?.toolDisplay?.summary || '')
 }
 
-const buildToolGroupSummary = messages =>
-  truncateToolGroupText(
-    messages
-      .map(message => {
-        const label = getToolGroupLabel(message)
-        const preview = getToolGroupPreview(message)
-        return preview ? `${label} ${preview}` : label
+const buildToolGroupSummary = messages => {
+  const operations = new Map()
+
+  messages.forEach(message => {
+    const label = getToolGroupLabel(message)
+    const preview = getToolGroupPreview(message)
+    const key = label
+    if (!key || !label) return
+
+    let operation = operations.get(key)
+    if (!operation) {
+      operation = {
+        label,
+        previewCounts: new Map(),
+        withoutPreviewCount: 0
+      }
+      operations.set(key, operation)
+    }
+
+    if (preview) {
+      operation.previewCounts.set(preview, (operation.previewCounts.get(preview) || 0) + 1)
+    } else {
+      operation.withoutPreviewCount += 1
+    }
+  })
+
+  return truncateToolGroupText(
+    Array.from(operations.values())
+      .map(operation => {
+        const previews = Array.from(operation.previewCounts, ([preview, count]) =>
+          count > 1 ? `${preview}(${count})` : preview
+        )
+        if (operation.withoutPreviewCount > 0) {
+          previews.push(
+            operation.withoutPreviewCount > 1 ? `(${operation.withoutPreviewCount})` : ''
+          )
+        }
+        return [operation.label, ...previews.filter(Boolean)].join(' ')
       })
-      .filter(Boolean)
       .join(' · '),
     120
   )
+}
 
 const isToolWaitingApproval = message => isApprovalPending(message)
 
@@ -1773,7 +1802,7 @@ const buildToolGroupMessage = (messages, index) => {
   return {
     ...messages[0],
     role: 'assistant',
-    displayId: getCollapsedToolGroupExpandId(messages, index, kind),
+    displayId: getCollapsedToolGroupExpandId(messages, index),
     metadata: {
       ...(messages[0]?.metadata || {}),
       message_kind: 'tool_group',
