@@ -104,41 +104,45 @@
       </div>
 
       <div v-else class="compact-sidebar-list">
-        <el-tooltip
-          v-for="automation in filteredAutomations"
-          :key="automation.id"
-          placement="right"
-          :hide-after="0"
-          :enterable="false"
-          popper-class="workflow-sidebar-tooltip">
-          <template #content>
-            <div class="workflow-sidebar-tooltip__title">
-              {{ automation.title || $t('workflow.automation.untitled') }}
-            </div>
-            <div class="workflow-sidebar-tooltip__meta">
-              <span class="workflow-sidebar-tooltip__status">
-                <span :class="['status-indicator', getAutomationStatusClass(automation)]"></span>
-                {{ getAutomationStatusLabel(automation) }}
-              </span>
-              <span v-if="getPrimaryRootName(automation)" class="workflow-sidebar-tooltip__root">
-                <cs name="ext-folder" />
-                {{ getPrimaryRootName(automation) }}
-              </span>
-            </div>
-          </template>
-          <div
-            class="compact-sidebar-item"
-            :class="[
-              getAutomationStatusClass(automation),
-              { active: automation.id === selectedAutomationId }
-            ]"
-            @click="$emit('select-automation', automation.id)">
-            <span class="compact-sidebar-item__badge">
-              {{ getPrimaryRootInitials(automation) }}
-            </span>
-            <span :class="['compact-sidebar-item__status', getAutomationStatusClass(automation)]"></span>
+        <template v-for="group in automationGroups" :key="group.id">
+          <div v-if="group.items.length" class="compact-sidebar-group compact-automation-group">
+            <el-tooltip
+              v-for="automation in group.items"
+              :key="automation.id"
+              placement="right"
+              :hide-after="0"
+              :enterable="false"
+              popper-class="workflow-sidebar-tooltip">
+              <template #content>
+                <div class="workflow-sidebar-tooltip__title">
+                  {{ automation.title || $t('workflow.automation.untitled') }}
+                </div>
+                <div class="workflow-sidebar-tooltip__meta">
+                  <span class="workflow-sidebar-tooltip__status">
+                    <span :class="['status-indicator', getAutomationStatusClass(automation)]"></span>
+                    {{ getAutomationStatusLabel(automation) }}
+                  </span>
+                  <span v-if="getPrimaryRootName(automation)" class="workflow-sidebar-tooltip__root">
+                    <cs name="ext-folder" />
+                    {{ getPrimaryRootName(automation) }}
+                  </span>
+                </div>
+              </template>
+              <div
+                class="compact-sidebar-item"
+                :class="[
+                  getAutomationStatusClass(automation),
+                  { active: automation.id === selectedAutomationId }
+                ]"
+                @click="$emit('select-automation', automation.id)">
+                <span class="compact-sidebar-item__badge">
+                  {{ getPrimaryRootInitials(automation) }}
+                </span>
+                <span :class="['compact-sidebar-item__status', getAutomationStatusClass(automation)]"></span>
+              </div>
+            </el-tooltip>
           </div>
-        </el-tooltip>
+        </template>
       </div>
     </div>
 
@@ -183,33 +187,43 @@
           </div>
           <div class="workflow-list">
             <div class="list">
-              <div class="item" v-for="wf in filteredWorkflows" :key="wf.id" @click="$emit('select-workflow', wf.id)"
-                @mouseenter="hoveredWorkflowIndex = wf.id" @mouseleave="hoveredWorkflowIndex = null" :class="{
-                  active: wf.id === currentWorkflowId,
-                  disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId
-                }">
-                <div class="workflow-title">{{ wf.title || wf.userQuery || $t('workflow.untitled') }}</div>
-                <div class="workflow-status-row">
-                  <div class="workflow-status">
-                    <span :class="['status-indicator', getWorkflowStatusClass(wf.status)]"></span>
-                    {{ getWorkflowStatusLabel(wf.status) }}
-                  </div>
+              <template v-for="group in workflowGroups" :key="group.id">
+                <div v-if="group.items.length" class="workflow-list-group">
                   <div
-                    v-if="getPrimaryRootName(wf)"
-                    class="workflow-primary-root"
-                    :title="getPrimaryRootPath(wf)">
-                    {{ getPrimaryRootName(wf) }}
+                    class="item"
+                    v-for="wf in group.items"
+                    :key="wf.id"
+                    @click="$emit('select-workflow', wf.id)"
+                    @mouseenter="hoveredWorkflowIndex = wf.id"
+                    @mouseleave="hoveredWorkflowIndex = null"
+                    :class="{
+                      active: wf.id === currentWorkflowId,
+                      disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId
+                    }">
+                    <div class="workflow-title">{{ wf.title || wf.userQuery || $t('workflow.untitled') }}</div>
+                    <div class="workflow-status-row">
+                      <div class="workflow-status">
+                        <span :class="['status-indicator', getWorkflowStatusClass(wf.status)]"></span>
+                        {{ getWorkflowStatusLabel(wf.status) }}
+                      </div>
+                      <div
+                        v-if="getPrimaryRootName(wf)"
+                        class="workflow-primary-root"
+                        :title="getPrimaryRootPath(wf)">
+                        {{ getPrimaryRootName(wf) }}
+                      </div>
+                    </div>
+                    <div class="icons" v-show="wf.id === hoveredWorkflowIndex">
+                      <div class="icon icon-edit" @click.stop="$emit('edit-workflow', wf.id)">
+                        <cs name="edit" />
+                      </div>
+                      <div class="icon icon-delete" @click.stop="$emit('delete-workflow', wf.id)">
+                        <cs name="delete" />
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div class="icons" v-show="wf.id === hoveredWorkflowIndex">
-                  <div class="icon icon-edit" @click.stop="$emit('edit-workflow', wf.id)">
-                    <cs name="edit" />
-                  </div>
-                  <div class="icon icon-delete" @click.stop="$emit('delete-workflow', wf.id)">
-                    <cs name="delete" />
-                  </div>
-                </div>
-              </div>
+              </template>
             </div>
           </div>
         </el-tab-pane>
@@ -239,39 +253,43 @@
                 class="sidebar-empty">
                 {{ $t('workflow.automation.empty') }}
               </div>
-              <div
-                class="item automation-item"
-                v-for="automation in filteredAutomations"
-                :key="automation.id"
-                :class="{ active: automation.id === selectedAutomationId }"
-                @click="$emit('select-automation', automation.id)"
-                @mouseenter="hoveredWorkflowIndex = automation.id"
-                @mouseleave="hoveredWorkflowIndex = null">
-                <div class="workflow-title">
-                  <cs name="clock" size="12px" />
-                  {{ automation.title || $t('workflow.automation.untitled') }}
-                </div>
-                <div class="workflow-status-row">
-                  <div class="workflow-status">
-                    <span :class="['status-indicator', getAutomationStatusClass(automation)]"></span>
-                    {{ getAutomationStatusLabel(automation) }}
-                  </div>
+              <template v-for="group in automationGroups" :key="group.id">
+                <div v-if="group.items.length" class="workflow-list-group">
                   <div
-                    v-if="getPrimaryRootName(automation)"
-                    class="workflow-primary-root"
-                    :title="getPrimaryRootPath(automation)">
-                    {{ getPrimaryRootName(automation) }}
+                    class="item automation-item"
+                    v-for="automation in group.items"
+                    :key="automation.id"
+                    :class="{ active: automation.id === selectedAutomationId }"
+                    @click="$emit('select-automation', automation.id)"
+                    @mouseenter="hoveredWorkflowIndex = automation.id"
+                    @mouseleave="hoveredWorkflowIndex = null">
+                    <div class="workflow-title">
+                      <cs name="clock" size="12px" />
+                      {{ automation.title || $t('workflow.automation.untitled') }}
+                    </div>
+                    <div class="workflow-status-row">
+                      <div class="workflow-status">
+                        <span :class="['status-indicator', getAutomationStatusClass(automation)]"></span>
+                        {{ getAutomationStatusLabel(automation) }}
+                      </div>
+                      <div
+                        v-if="getPrimaryRootName(automation)"
+                        class="workflow-primary-root"
+                        :title="getPrimaryRootPath(automation)">
+                        {{ getPrimaryRootName(automation) }}
+                      </div>
+                    </div>
+                    <div class="icons" v-show="automation.id === hoveredWorkflowIndex">
+                      <div class="icon icon-edit" @click.stop="$emit('edit-automation', automation.id)">
+                        <cs name="edit" />
+                      </div>
+                      <div class="icon icon-delete" @click.stop="$emit('delete-automation', automation.id)">
+                        <cs name="delete" />
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div class="icons" v-show="automation.id === hoveredWorkflowIndex">
-                  <div class="icon icon-edit" @click.stop="$emit('edit-automation', automation.id)">
-                    <cs name="edit" />
-                  </div>
-                  <div class="icon icon-delete" @click.stop="$emit('delete-automation', automation.id)">
-                    <cs name="delete" />
-                  </div>
-                </div>
-              </div>
+              </template>
             </div>
           </div>
         </el-tab-pane>
@@ -452,11 +470,16 @@ const getWorkflowStatusLabel = (status) => {
   return t(key || workflowStatusLabels.pending)
 }
 
+const isActiveWorkflow = workflow =>
+  !stoppedStatuses.has(String(workflow.status || '').toLowerCase())
+
 const getAutomationStatusClass = (automation) =>
   automation.enabled ? 'completed' : 'paused'
 
 const getAutomationStatusLabel = (automation) =>
   automation.enabled ? t('workflow.automation.enabled') : t('workflow.automation.disabled')
+
+const isActiveAutomation = automation => automation.enabled !== false
 
 const primaryRootOptions = computed(() => {
   const seen = new Set()
@@ -526,14 +549,12 @@ const filteredWorkflows = computed(() => {
 })
 
 const compactActiveWorkflows = computed(() =>
-  props.workflows.filter((workflow) =>
-    !stoppedStatuses.has(String(workflow.status || '').toLowerCase())
-  )
+  props.workflows.filter(isActiveWorkflow)
 )
 
 const compactRecentWorkflows = computed(() =>
   props.workflows
-    .filter((workflow) => stoppedStatuses.has(String(workflow.status || '').toLowerCase()))
+    .filter((workflow) => !isActiveWorkflow(workflow))
     .slice(0, 5)
 )
 
@@ -543,5 +564,21 @@ const filteredAutomations = computed(() => {
     const query = automationSearchQuery.value.toLowerCase()
     return String(automation.title || '').toLowerCase().includes(query)
   })
+})
+
+const workflowGroups = computed(() => {
+  const workflows = filteredWorkflows.value
+  return [
+    { id: 'active', items: workflows.filter(isActiveWorkflow) },
+    { id: 'recent', items: workflows.filter((workflow) => !isActiveWorkflow(workflow)) }
+  ]
+})
+
+const automationGroups = computed(() => {
+  const automations = filteredAutomations.value
+  return [
+    { id: 'active', items: automations.filter(isActiveAutomation) },
+    { id: 'recent', items: automations.filter((automation) => !isActiveAutomation(automation)) }
+  ]
 })
 </script>

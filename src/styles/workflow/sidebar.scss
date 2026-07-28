@@ -114,6 +114,12 @@
       gap: 4px;
     }
 
+    .compact-automation-group + .compact-automation-group {
+      margin-top: var(--cs-space-sm);
+      padding-top: var(--cs-space-sm);
+      border-top: 1px solid var(--cs-border-color);
+    }
+
     .compact-sidebar-group-separator {
       width: 20px;
       height: 1px;
@@ -283,6 +289,12 @@
     height: calc(100% - 60px);
 
     .list {
+      .workflow-list-group + .workflow-list-group {
+        margin-top: var(--cs-space-sm);
+        padding-top: var(--cs-space-sm);
+        border-top: 1px solid var(--cs-border-color);
+      }
+
       .sidebar-empty {
         padding: 8px 15px;
         color: var(--cs-text-color-secondary);
@@ -500,6 +512,9 @@
 }
 
 .workflow-root-filter-menu {
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+
   .dropdown-text {
     flex: 1;
     text-align: left;
