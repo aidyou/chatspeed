@@ -975,6 +975,7 @@
       "fileCreatedDone": "Fichier créé : {path}",
       "fileEditedDone": "Fichier modifié : {path}",
       "runningCommand": "Exécution de la commande : {command}",
+      "runningElapsed": "{text} ...({seconds}s)",
       "runningTool": "Exécution de l’outil : {tool}",
       "thinking": "Réflexion",
       "toolCompleted": "Outil terminé : {tool}"

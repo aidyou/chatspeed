@@ -262,6 +262,7 @@
                 class="icon-btn upperLayer"
                 :class="{ 'warning-mode': approvalLevel === 'full' }">
                 <cs
+                  :key="approvalLevel"
                   :name="
                     approvalLevel === 'default'
                       ? 'setting'

@@ -13,10 +13,11 @@
 </template>
 
 <script setup>
-import { computed, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { resolveWorkflowToolIcon } from '@/composables/workflow/toolIcons'
 import { normalizeShellCommandForDisplay, formatDisplayPath } from '@/composables/workflow/toolDisplay'
+import { TERMINAL_STATUSES } from '@/composables/workflow/signalTypes'
 import { useWorkflowStore } from '@/stores/workflow'
 
 const props = defineProps({
@@ -50,7 +51,7 @@ const workflowWaitReason = computed(() =>
       ''
   ).toLowerCase()
 )
-const isCompleted = computed(() => workflowStatus.value === 'completed')
+const isTerminal = computed(() => TERMINAL_STATUSES.includes(workflowStatus.value))
 const isWaitingForUser = computed(
   () => workflowWaitReason.value === 'user_input' || workflowStatus.value === 'awaiting_user'
 )
@@ -60,12 +61,15 @@ const isWaitingForApproval = computed(
     workflowStatus.value === 'awaiting_approval' ||
     workflowStatus.value === 'awaiting_auto_approval'
 )
+const retryInfo = computed(() => props.chatState?.retryInfo || null)
+const hasActiveRetry = computed(() => Number(retryInfo.value?.nextRetryIn || 0) > 0)
 const visible = computed(
   () =>
-    !isCompleted.value &&
+    !isTerminal.value &&
     (workflowStore.isRunning ||
       isWaitingForUser.value ||
       isWaitingForApproval.value ||
+      hasActiveRetry.value ||
       workflowStore.notification.message)
 )
 
@@ -157,6 +161,32 @@ const latestToolState = computed(() => {
     .sort((left, right) => Number(right?.updatedAt || 0) - Number(left?.updatedAt || 0))[0]
 })
 
+const elapsedNow = ref(Date.now())
+let elapsedTimer = null
+
+const stopElapsedTimer = () => {
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+}
+
+watch(
+  () => !isTerminal.value && latestToolState.value?.status === 'approved_running',
+  isRunningTool => {
+    stopElapsedTimer()
+    elapsedNow.value = Date.now()
+    if (isRunningTool) {
+      elapsedTimer = setInterval(() => {
+        elapsedNow.value = Date.now()
+      }, 1000)
+    }
+  },
+  { immediate: true }
+)
+
+onBeforeUnmount(stopElapsedTimer)
+
 const latestTerminalError = computed(() => {
   for (let index = currentStepMessages.value.length - 1; index >= 0; index -= 1) {
     const message = currentStepMessages.value[index]
@@ -208,6 +238,12 @@ const getToolLabel = tool => truncateText(tool?.title || tool?.summary || '', 72
 
 const buildToolText = (key, params) => t(key, params)
 
+const withToolElapsed = (text, tool) => {
+  const startedAt = Number(tool?.startedAt || tool?.updatedAt || tool?.createdAt || elapsedNow.value)
+  const seconds = Math.max(0, Math.floor((elapsedNow.value - startedAt) / 1000))
+  return buildToolText('workflow.statusNotifier.runningElapsed', { text, seconds })
+}
+
 const buildToolState = tool => {
   if (!tool) return null
 
@@ -252,7 +288,7 @@ const buildToolState = tool => {
   if (tool.status === 'approved_running') {
     if (toolName === 'edit_file' && path) {
       return {
-        text: buildToolText('workflow.statusNotifier.editingFile', { path }),
+        text: withToolElapsed(buildToolText('workflow.statusNotifier.editingFile', { path }), tool),
         tone: 'info',
         icon: getToolIcon(toolName, 'edit'),
         spinning: false
@@ -261,7 +297,7 @@ const buildToolState = tool => {
 
     if (toolName === 'write_file' && path) {
       return {
-        text: buildToolText('workflow.statusNotifier.creatingFile', { path }),
+        text: withToolElapsed(buildToolText('workflow.statusNotifier.creatingFile', { path }), tool),
         tone: 'info',
         icon: getToolIcon(toolName, 'write_file'),
         spinning: false
@@ -270,9 +306,12 @@ const buildToolState = tool => {
 
     if (toolName === 'bash') {
       return {
-        text: buildToolText('workflow.statusNotifier.runningCommand', {
-          command: command || label
-        }),
+        text: withToolElapsed(
+          buildToolText('workflow.statusNotifier.runningCommand', {
+            command: command || label
+          }),
+          tool
+        ),
         tone: 'info',
         icon: getToolIcon(toolName, 'bash'),
         spinning: false
@@ -280,7 +319,10 @@ const buildToolState = tool => {
     }
 
     return {
-      text: buildToolText('workflow.statusNotifier.runningTool', { tool: label }),
+      text: withToolElapsed(
+        buildToolText('workflow.statusNotifier.runningTool', { tool: label }),
+        tool
+      ),
       tone: 'info',
       icon: getToolIcon(toolName, 'tool'),
       spinning: false
@@ -334,6 +376,19 @@ const displayState = computed(() => {
   const notificationCategory = String(notification.category || 'info')
   const latestTool = latestToolState.value
   const latestToolDisplay = buildToolState(latestTool)
+
+  if (hasActiveRetry.value) {
+    return {
+      text: t('workflow.retrying', {
+        attempt: retryInfo.value.attempt,
+        total: retryInfo.value.total,
+        seconds: retryInfo.value.nextRetryIn
+      }),
+      tone: 'warning',
+      icon: 'loading',
+      spinning: true
+    }
+  }
 
   if (notificationMessage && ['warning', 'error'].includes(notificationCategory)) {
     return {
@@ -439,7 +494,7 @@ watch(() => workflowStore.notification.timestamp, () => {
 
 watch(() => workflowStore.currentWorkflow?.status, (newStatus, oldStatus) => {
   if (oldStatus && newStatus !== oldStatus) {
-    if (String(newStatus || '').toLowerCase() === 'completed') {
+    if (TERMINAL_STATUSES.includes(String(newStatus || '').toLowerCase())) {
       workflowStore.setNotification('', 'info')
       return
     }

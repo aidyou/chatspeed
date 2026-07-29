@@ -19,6 +19,7 @@ export interface ToolViewState {
   errorType?: string
   approvalStatus?: 'pending' | 'approved' | 'rejected'
   createdAt: number
+  startedAt?: number
   updatedAt: number
   workflowId: string
   streamOutput?: string[]
@@ -100,11 +101,16 @@ export function useTaskLedger() {
     const ledger = currentLedger.value
     const existing = ledger.tools.get(state.toolCallId)
     const now = Date.now()
+    const status = state.status || existing?.status || 'pending'
+    const startedAt =
+      state.startedAt ??
+      existing?.startedAt ??
+      (status === 'approved_running' && existing?.status !== 'approved_running' ? now : undefined)
 
     const next: ToolViewState = {
       toolCallId: state.toolCallId,
       toolName: state.toolName || existing?.toolName || 'unknown',
-      status: state.status || existing?.status || 'pending',
+      status,
       title: state.title || existing?.title || state.toolName || 'Tool',
       summary: state.summary ?? existing?.summary ?? 'Waiting...',
       arguments: state.arguments || existing?.arguments,
@@ -112,6 +118,7 @@ export function useTaskLedger() {
       errorType: state.errorType ?? existing?.errorType,
       approvalStatus: state.approvalStatus || existing?.approvalStatus || 'pending',
       createdAt: existing?.createdAt || now,
+      startedAt,
       updatedAt: now,
       workflowId: currentWorkflowId.value || existing?.workflowId || '',
       streamOutput: state.streamOutput || existing?.streamOutput || [],

@@ -3690,17 +3690,6 @@ pub async fn workflow_start(
             let _ = manager_for_spawn
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Failed);
 
-            // Notify UI about the fatal crash
-            let _ = gateway_for_spawn
-                .send(
-                    &session_id_for_spawn,
-                    crate::workflow::react::types::GatewayPayload::State {
-                        state: crate::workflow::react::types::WorkflowState::Error,
-                        wait_reason: None,
-                    },
-                )
-                .await;
-
             let _ = gateway_for_spawn
                 .send(
                     &session_id_for_spawn,

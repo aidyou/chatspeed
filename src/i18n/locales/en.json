@@ -980,6 +980,7 @@
       "fileCreatedDone": "File created: {path}",
       "fileEditedDone": "File edited: {path}",
       "runningCommand": "Running command: {command}",
+      "runningElapsed": "{text} ...({seconds}s)",
       "runningTool": "Running tool: {tool}",
       "thinking": "Thinking",
       "toolCompleted": "Tool completed: {tool}"

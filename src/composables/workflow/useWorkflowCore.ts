@@ -987,6 +987,11 @@ export function useWorkflowCore({
                         workflowStore.setHasLiveSession(!isTerminalState)
                     }
 
+                    if (isTerminalState) {
+                        clearRetryTimer()
+                        workflowStore.setNotification('', 'info')
+                    }
+
                     const prevState = workflowStore.currentWorkflow?.status
                     workflowStore.updateWorkflowStatus(sessionId, payload.state, payload.wait_reason || null)
 

@@ -793,7 +793,26 @@ impl ReActExecutor for WorkflowExecutor {
     }
 
     async fn run_loop(&mut self) -> Result<(), WorkflowEngineError> {
-        self.run_loop_internal().await
+        let result = self.run_loop_internal().await;
+
+        if let Err(error) = &result {
+            let is_cancelled = matches!(error, WorkflowEngineError::Cancelled(_));
+            let is_terminal = matches!(
+                self.state,
+                WorkflowState::Completed | WorkflowState::Error | WorkflowState::Cancelled
+            );
+
+            if !is_cancelled && !is_terminal {
+                log::error!(
+                    "[Workflow][session={}][phase=run_loop][event=terminal_error] Transitioning workflow to error after run loop failure: {}",
+                    self.session_id,
+                    error
+                );
+                self.update_state(WorkflowState::Error).await?;
+            }
+        }
+
+        result
     }
 
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
@@ -7254,6 +7273,88 @@ mod recovery_tests {
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
         (dir, Arc::new(store))
+    }
+
+    #[tokio::test]
+    async fn run_loop_failure_transitions_to_durable_error_state() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "run-loop-terminal-error";
+        let agent = Agent::new(
+            "run-loop-error-agent".to_string(),
+            "Run Loop Error Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "Fail safely", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let observed_payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: observed_payloads.clone(),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(12).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::planning_strict(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Thinking;
+        executor.recovery_failed = true;
+
+        let result = executor.run_loop().await;
+
+        assert!(result.is_err());
+        assert_eq!(executor.state, WorkflowState::Error);
+        assert_eq!(
+            store
+                .get_workflow(session_id)
+                .expect("failed to read workflow")
+                .expect("workflow should exist")
+                .status,
+            "error"
+        );
+        assert!(observed_payloads
+            .lock()
+            .expect("payload lock")
+            .iter()
+            .any(|payload| matches!(
+                payload,
+                GatewayPayload::State {
+                    state: WorkflowState::Error,
+                    wait_reason: None
+                }
+            )));
     }
 
     #[tokio::test]

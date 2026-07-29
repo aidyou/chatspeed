@@ -561,19 +561,6 @@ impl LlmProcessor {
                                 )
                                 .await?;
 
-                            gateway
-	                                .send(
-	                                    &self.session_id,
-	                                    GatewayPayload::Notification {
-	                                        message: format!(
-	                                            "AI server returned an empty response. Retrying in {}s (Attempt {}/{})",
-	                                            wait_secs, retry_count, max_retries
-	                                        ),
-	                                        category: Some("warning".to_string()),
-	                                    },
-	                                )
-	                                .await?;
-
                             tokio::select! {
                                 _ = sleep(Duration::from_secs(wait_secs as u64)) => {},
                                 sig = signal_rx.recv() => {
@@ -692,20 +679,6 @@ impl LlmProcessor {
                                     attempt: retry_count,
                                     total_attempts: max_retries,
                                     next_retry_in_seconds: wait_secs,
-                                },
-                            )
-                            .await?;
-
-                        // Also send a user-friendly notification
-                        gateway
-                            .send(
-                                &self.session_id,
-                                GatewayPayload::Notification {
-                                    message: format!(
-                                        "AI server error. Retrying in {}s (Attempt {}/{})",
-                                        wait_secs, retry_count, max_retries
-                                    ),
-                                    category: Some("warning".to_string()),
                                 },
                             )
                             .await?;

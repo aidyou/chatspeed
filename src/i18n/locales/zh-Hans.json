@@ -980,6 +980,7 @@
       "fileCreatedDone": "文件创建完成: {path}",
       "fileEditedDone": "文件编辑完成: {path}",
       "runningCommand": "正在执行命令: {command}",
+      "runningElapsed": "{text} ...({seconds}s)",
       "runningTool": "正在执行工具: {tool}",
       "thinking": "思考中",
       "toolCompleted": "工具执行完成: {tool}"

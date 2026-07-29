@@ -975,6 +975,7 @@
       "fileCreatedDone": "ファイルを作成しました: {path}",
       "fileEditedDone": "ファイルを編集しました: {path}",
       "runningCommand": "コマンドを実行中: {command}",
+      "runningElapsed": "{text} ...({seconds}s)",
       "runningTool": "ツールを実行中: {tool}",
       "thinking": "考え中",
       "toolCompleted": "ツール完了: {tool}"

@@ -130,7 +130,7 @@ export function useWorkflowChat({ currentWorkflowId }) {
 
   // Handle retry status with countdown
   const setRetryStatus = (payload) => {
-    chatState.value.retryInfo = null
+    clearRetryTimer()
     chatState.value.retryInfo = {
       attempt: payload.attempt,
       total: payload.total_attempts,
@@ -138,7 +138,6 @@ export function useWorkflowChat({ currentWorkflowId }) {
     }
 
     // Auto-decrement timer
-    clearRetryTimer()
     retryCountdownTimer = setInterval(() => {
       if (chatState.value.retryInfo && chatState.value.retryInfo.nextRetryIn > 0) {
         chatState.value.retryInfo.nextRetryIn--

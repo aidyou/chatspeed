@@ -803,6 +803,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const newStatus = toolState.status || existing?.status || 'pending';
     const existingPriority = existing ? (priority[existing.status] || 0) : 0;
     const newPriority = priority[newStatus] || 0;
+    const startedAt =
+      toolState.startedAt ??
+      existing?.startedAt ??
+      (newStatus === 'approved_running' && existing?.status !== 'approved_running' ? now : undefined);
 
     // 如果现有状态优先级更高，保留现有状态
     if (existingPriority > newPriority && !toolState.force) {
@@ -820,6 +824,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       errorType: toolState.errorType ?? existing?.errorType,
       approvalStatus: toolState.approvalStatus || existing?.approvalStatus || 'pending',
       createdAt: existing?.createdAt || now,
+      startedAt,
       updatedAt: now,
       workflowId: currentWorkflowId.value,
       streamOutput: toolState.streamOutput || existing?.streamOutput || [],

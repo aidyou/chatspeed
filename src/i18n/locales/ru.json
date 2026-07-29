@@ -975,6 +975,7 @@
       "fileCreatedDone": "Файл создан: {path}",
       "fileEditedDone": "Файл изменён: {path}",
       "runningCommand": "Выполняется команда: {command}",
+      "runningElapsed": "{text} ...({seconds}s)",
       "runningTool": "Выполняется инструмент: {tool}",
       "thinking": "Размышление",
       "toolCompleted": "Инструмент завершён: {tool}"

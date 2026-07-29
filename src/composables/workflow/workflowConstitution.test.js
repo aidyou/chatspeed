@@ -57,6 +57,7 @@ assert.match(extractToolName, /getStructuredWorkflowToolName\(message\)/)
 assert.doesNotMatch(extractToolName, /title|action|message\.message|content/)
 
 const workflowCore = readProjectFile('src/composables/workflow/useWorkflowCore.ts')
+const workflowChat = readProjectFile('src/composables/workflow/useWorkflowChat.ts')
 assert.match(workflowCore, /autoApprovePlan: autoApprovePlan\.value/)
 assert.match(workflowCore, /'autoApprovePlan'/)
 assert.match(
@@ -209,6 +210,7 @@ assert.match(
   /selectionRevision !== workflowSelectionIntentRevision[\s\S]*return/
 )
 const workflowInputArea = readProjectFile('src/components/workflow/WorkflowInputArea.vue')
+assert.match(workflowInputArea, /<cs[\s\S]*:key="approvalLevel"[\s\S]*:name=/)
 const visibleAutoApprovalTools = sourceSection(
   workflowInputArea,
   'const workflowAvailableToolIds',
@@ -275,6 +277,7 @@ assert.doesNotMatch(
 )
 
 const reactEngine = readProjectFile('src-tauri/src/workflow/react/engine.rs')
+const reactLlm = readProjectFile('src-tauri/src/workflow/react/llm.rs')
 assert.doesNotMatch(reactEngine, /DEFAULT_MAX_STEPS|STEP BUDGET|max-step budget|self\.max_steps/)
 assert.doesNotMatch(
   reactEngine,
@@ -289,6 +292,16 @@ const postMessageCompression = sourceSection(
 assert.match(postMessageCompression, /if needs_compression/)
 assert.match(postMessageCompression, /build_pressure_compression_candidate\(\)/)
 assert.match(postMessageCompression, /"context_pressure"/)
+const runLoopFinalization = sourceSection(
+  reactEngine,
+  'let result = self.run_loop_internal().await;',
+  'async fn begin_new_context_segment'
+)
+assert.match(runLoopFinalization, /self\.update_state\(WorkflowState::Error\)\.await/)
+assert.doesNotMatch(
+  reactLlm,
+  /AI server error\. Retrying|AI server returned an empty response\. Retrying/
+)
 assert.doesNotMatch(workflowCore, /confirmationWaiting|showConfirmationDialog/)
 const workflowStore = readProjectFile('src/stores/workflow.js')
 const queuedMessageRouting = sourceSection(
@@ -341,6 +354,20 @@ const workflowEventSetup = sourceSection(
 )
 assert.match(workflowEventSetup, /setupRevision !== workflowEventSetupRevision/)
 assert.match(workflowEventSetup, /unlisten\(\)[\s\S]*return false/)
+assert.match(
+  workflowEventSetup,
+  /if \(isTerminalState\) \{[\s\S]*clearRetryTimer\(\)[\s\S]*workflowStore\.setNotification\('', 'info'\)/
+)
+const retryStatusHandler = sourceSection(
+  workflowChat,
+  'const setRetryStatus = (payload) => {',
+  '// Handle chunk for streaming'
+)
+assert.ok(
+  retryStatusHandler.indexOf('clearRetryTimer()') <
+    retryStatusHandler.indexOf('chatState.value.retryInfo = {'),
+  'retry timer cleanup must happen before installing the next structured retry state'
+)
 const stopWorkflow = sourceSection(workflowCore, 'const onStop = async', 'const openModelSelector')
 assert.match(stopWorkflow, /const sessionId = currentWorkflowId\.value/)
 assert.match(stopWorkflow, /invokeWrapper\('workflow_stop', \{[\s\S]*sessionId/)
@@ -403,6 +430,7 @@ assert.ok(
 )
 
 const approvalDialog = readProjectFile('src/components/workflow/ApprovalDialog.vue')
+const statusNotifier = readProjectFile('src/components/workflow/StatusNotifier.vue')
 assert.match(approvalDialog, /toolName: String/)
 assert.match(approvalDialog, /v-if="isPlanApproval" class="plan-details-actions"/)
 assert.match(approvalDialog, /const copyPlanMarkdown = async/)
@@ -416,6 +444,13 @@ assert.match(messageList, /copySubAgentTask\(message\)/)
 assert.match(messageList, /copySubAgentResult\(message\)/)
 assert.match(messageList, /message\?\.subAgentCard\?\.task/)
 assert.match(messageList, /message\?\.subAgentCard\?\.result/)
+assert.match(statusNotifier, /TERMINAL_STATUSES\.includes\(workflowStatus\.value\)/)
+assert.match(statusNotifier, /t\('workflow\.retrying', \{/)
+assert.match(statusNotifier, /hasActiveRetry\.value/)
+assert.match(statusNotifier, /tool\?\.startedAt \|\| tool\?\.updatedAt/)
+assert.match(statusNotifier, /workflow\.statusNotifier\.runningElapsed/)
+assert.match(statusNotifier, /setInterval\(\(\) => \{/)
+assert.match(workflowStore, /const startedAt =[\s\S]*newStatus === 'approved_running'/)
 
 const deleteWorkflow = sourceSection(
   workflowCore,
