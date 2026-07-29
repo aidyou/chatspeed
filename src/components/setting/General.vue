@@ -359,10 +359,95 @@
     </div>
   </div>
 
+  <!-- workflow terminal settings -->
+  <div class="card">
+    <div class="title">{{ $t('settings.general.terminalSettings') }}</div>
+    <div class="list">
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.terminalDefaultShell') }}
+            <small class="tooltip">{{ $t('settings.general.terminalDefaultShellTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-select v-model="settings.terminalDefaultShell" @change="onTerminalDefaultShellChange">
+            <el-option :label="$t('settings.general.terminalDefaultShellSystem')" value="system" />
+            <el-option v-for="shell in terminalShells" :key="shell.path" :label="shell.name" :value="shell.path" />
+          </el-select>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.terminalOutputLineLimit') }}
+            <small class="tooltip">{{ $t('settings.general.terminalOutputLineLimitTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 200px">
+          <el-input-number v-model="settings.terminalOutputLineLimit" :min="100" :max="20000" :step="100"
+            @change="onTerminalOutputLineLimitChange" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.terminalColorScheme') }}</div>
+        <div class="value">
+          <el-select v-model="settings.terminalColorScheme" @change="onTerminalColorSchemeChange">
+            <el-option :label="$t('settings.general.terminalColorSchemeAuto')" value="auto" />
+            <el-option :label="$t('settings.general.terminalColorSchemeLight')" value="light" />
+            <el-option :label="$t('settings.general.terminalColorSchemeDark')" value="dark" />
+          </el-select>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- shortcut settings -->
   <div class="card">
     <div class="title">{{ $t('settings.general.shortcutSettings') }}</div>
     <div class="list">
+      <div class="item">
+        <div class="label">{{ $t('settings.general.terminalToggleShortcut') }}</div>
+        <div class="value">
+          <el-tooltip :content="getShortcutPlaceholder('terminalToggleShortcut')" placement="top" :hide-after="0"
+            :enterable="false">
+            <el-input :model-value="getShortcutDisplayValue('terminalToggleShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('terminalToggleShortcut')"
+              @keydown.prevent="e => captureShortcut(e, 'terminalToggleShortcut')" @focus="isCapturing = true"
+              @blur="isCapturing = false">
+              <template #append>
+                <el-button @click="restoreDefaultShortcut('terminalToggleShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
+                <el-button @click="clearShortcut('terminalToggleShortcut')">
+                  {{ $t('common.clear') }}
+                </el-button>
+              </template>
+            </el-input>
+          </el-tooltip>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.terminalClearShortcut') }}</div>
+        <div class="value">
+          <el-tooltip :content="getShortcutPlaceholder('terminalClearShortcut')" placement="top" :hide-after="0"
+            :enterable="false">
+            <el-input :model-value="getShortcutDisplayValue('terminalClearShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('terminalClearShortcut')"
+              @keydown.prevent="e => captureShortcut(e, 'terminalClearShortcut')" @focus="isCapturing = true"
+              @blur="isCapturing = false">
+              <template #append>
+                <el-button @click="restoreDefaultShortcut('terminalClearShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
+                <el-button @click="clearShortcut('terminalClearShortcut')">
+                  {{ $t('common.clear') }}
+                </el-button>
+              </template>
+            </el-input>
+          </el-tooltip>
+        </div>
+      </div>
       <div class="item">
         <div class="label">{{ $t('settings.general.mainWindowVisibleShortcut') }}</div>
         <div class="value">
@@ -888,7 +973,10 @@ const searchEngines = computed(() => {
 })
 
 const defaultBackupDir = ref('')
+const terminalShells = ref([])
 const defaultShortcutMap = {
+  terminalToggleShortcut: 'CommandOrControl+J',
+  terminalClearShortcut: 'CommandOrControl+K',
   mainWindowVisibleShortcut: 'F2',
   noteWindowVisibleShortcut: 'Alt+N',
   workflowWindowVisibleShortcut: 'Alt+W',
@@ -955,6 +1043,18 @@ const softwareLanguages = getSoftwareLanguages()
 const unlistenSyncState = ref(null)
 
 onMounted(async () => {
+  try {
+    terminalShells.value = await invokeWrapper('get_available_terminal_shells')
+    if (
+      settings.value.terminalDefaultShell !== 'system' &&
+      !terminalShells.value.some(shell => shell.path === settings.value.terminalDefaultShell)
+    ) {
+      setSetting('terminalDefaultShell', 'system')
+    }
+  } catch (error) {
+    console.error('Failed to load available terminal shells:', error)
+  }
+
   try {
     await refreshApiKeyEncryptionStatus()
   } catch (error) {
@@ -1064,6 +1164,18 @@ const onCodeLightThemeChange = value => {
 
 const onCodeDarkThemeChange = value => {
   setSetting('codeDarkTheme', value || 'default')
+}
+
+const onTerminalDefaultShellChange = value => {
+  setSetting('terminalDefaultShell', value || 'system')
+}
+
+const onTerminalOutputLineLimitChange = value => {
+  setSetting('terminalOutputLineLimit', Math.min(Math.max(Number(value) || 2000, 100), 20000))
+}
+
+const onTerminalColorSchemeChange = value => {
+  setSetting('terminalColorScheme', value || 'auto')
 }
 
 /**

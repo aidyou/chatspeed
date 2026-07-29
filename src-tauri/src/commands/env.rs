@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use std::env::consts;
 
 use crate::constants::get_static_var;
+use crate::environment::get_available_shells;
 
 /// Get the OS information
 ///
@@ -24,6 +25,14 @@ pub fn get_os_info() -> Value {
         "arch": consts::ARCH,
         "language": rust_i18n::locale().to_string(),
     })
+}
+
+#[tauri::command]
+pub fn get_available_terminal_shells() -> Vec<serde_json::Value> {
+    get_available_shells()
+        .into_iter()
+        .map(|shell| json!({ "name": shell.name, "path": shell.path }))
+        .collect()
 }
 
 #[tauri::command]

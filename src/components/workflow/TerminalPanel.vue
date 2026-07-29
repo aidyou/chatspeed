@@ -1,10 +1,11 @@
 <template>
   <section
     v-show="terminal.visible"
+    ref="panel"
     class="workflow-terminal"
     :class="{ fullscreen: terminal.fullscreen }"
     :style="terminal.fullscreen ? undefined : { height: `${panelHeight}px` }">
-    <div class="workflow-terminal__resize" @mousedown="startResize" />
+    <div v-if="!terminal.fullscreen" class="workflow-terminal__resize" @mousedown="startResize" />
     <header class="workflow-terminal__bar">
       <div class="workflow-terminal__tabs">
         <button
@@ -21,7 +22,7 @@
       <div class="workflow-terminal__controls">
         <el-tooltip :content="$t('workflow.terminal.new')"><button type="button" @click="terminal.create()"><cs name="add" /></button></el-tooltip>
         <el-tooltip :content="$t('workflow.terminal.minimize')"><button type="button" @click="terminal.visible = false"><cs name="minimize" /></button></el-tooltip>
-        <el-tooltip :content="$t('workflow.terminal.fullscreen')"><button type="button" @click="terminal.fullscreen = !terminal.fullscreen"><cs :name="terminal.fullscreen ? 'fullscreen-off' : 'fullscreen'" /></button></el-tooltip>
+        <el-tooltip :content="$t('workflow.terminal.fullscreen')"><button type="button" @click="terminal.fullscreen = !terminal.fullscreen"><cs :name="terminal.fullscreen ? 'fullscreen' : 'fullscreen-off'" /></button></el-tooltip>
         <el-dropdown trigger="click" @command="terminal.restartWithShell">
           <button class="workflow-terminal__shell" type="button"><cs name="bash" />{{ terminal.activeTab?.shellName }}<cs name="caret-down" /></button>
           <template #dropdown><el-dropdown-menu><el-dropdown-item v-for="shell in terminal.shells" :key="shell.path" :command="shell.path">{{ shell.name }}</el-dropdown-item></el-dropdown-menu></template>
@@ -39,21 +40,44 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { ElMessageBox } from 'element-plus'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalTab } from '@/composables/workflow/useTerminal'
 
-const props = defineProps<{ terminal: any }>()
+const props = defineProps<{ terminal: any; preferences: any }>()
+const { t } = useI18n()
 const terminal = props.terminal
-const panelHeight = computed(() => Math.min(Math.max(180, terminal.height), Math.max(180, window.innerHeight - 120)))
+const preferences = props.preferences
+const panel = ref<HTMLElement | null>(null)
+const panelHeight = computed(() => Math.min(Math.max(180, terminal.height), Math.max(180, window.innerHeight - 160)))
 const hosts = new Map<string, HTMLElement>()
-const instances = new Map<string, { terminal: Terminal; fit: FitAddon; observer: ResizeObserver }>()
+const instances = new Map<string, { terminal: Terminal; fit: FitAddon; observer: ResizeObserver; clearOutputQueue: () => void }>()
+const pageDark = ref(document.documentElement.classList.contains('dark'))
+const terminalTheme = computed(() => {
+  const scheme = preferences.colorScheme || 'auto'
+  const dark = scheme === 'dark' || (scheme === 'auto' && pageDark.value)
+  return dark
+    ? { background: '#151515', foreground: '#e8e8e8', cursor: '#e8e8e8', selectionBackground: '#4b5563' }
+    : { background: '#ffffff', foreground: '#1f2937', cursor: '#1f2937', selectionBackground: '#bfdbfe' }
+})
 
 const tabTitle = (tab: TerminalTab) => `${tab.cwd.split(/[\\/]/).filter(Boolean).pop() || tab.cwd} -- ${tab.shellName}`
 const selectTab = (sessionId: string) => { terminal.activeSessionId = sessionId }
 const focus = (sessionId: string) => instances.get(sessionId)?.terminal.focus()
+const shortcutMainKey = (shortcut: string | undefined) => shortcut?.split('+').pop()?.toLowerCase()
+const matchesTerminalShortcut = (event: KeyboardEvent, shortcut: string | undefined) => {
+  if (!shortcut) return false
+  const parts = shortcut.split('+')
+  const requiresCommandOrControl = parts.includes('CommandOrControl')
+  const commandOrControlPressed = preferences.usesCommandKey ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
+  if (requiresCommandOrControl !== commandOrControlPressed) return false
+  if (parts.includes('Alt') !== event.altKey || parts.includes('Shift') !== event.shiftKey) return false
+  return event.key.toLowerCase() === shortcutMainKey(shortcut)
+}
 
 const setHost = (sessionId: string, element: Element | null) => {
   if (element instanceof HTMLElement) hosts.set(sessionId, element)
@@ -64,6 +88,7 @@ const disposeTab = (sessionId: string) => {
   const instance = instances.get(sessionId)
   if (!instance) return
   terminal.unregisterWriter(sessionId)
+  instance.clearOutputQueue()
   instance.observer.disconnect()
   instance.terminal.dispose()
   instances.delete(sessionId)
@@ -79,28 +104,109 @@ const syncSize = (sessionId: string) => {
   }
 }
 
+const cwdFromOsc7 = (uri: string) => {
+  const parsed = new URL(uri)
+  const pathname = decodeURIComponent(parsed.pathname)
+  // OSC 7 represents Windows paths as file://host/C:/path. Convert only that URI form;
+  // Unix paths remain untouched.
+  return /^\/[A-Za-z]:\//.test(pathname) ? pathname.slice(1).replaceAll('/', '\\') : pathname
+}
+
 const mountTab = (tab: TerminalTab) => {
   if (instances.has(tab.sessionId)) return
   const host = hosts.get(tab.sessionId)
   if (!host) return
 
-  const instance = new Terminal({ cursorBlink: true, convertEol: false, fontSize: 13 })
+  const instance = new Terminal({
+    cursorBlink: true,
+    convertEol: false,
+    fontSize: 13,
+    scrollback: Math.min(Math.max(100, Number(preferences.outputLineLimit || 2000)), 20000),
+    theme: terminalTheme.value
+  })
   const fit = new FitAddon()
   instance.loadAddon(fit)
   instance.parser.registerOscHandler(7, uri => {
     try {
-      terminal.updateCwd(tab.sessionId, decodeURIComponent(new URL(uri).pathname))
+      terminal.updateCwd(tab.sessionId, cwdFromOsc7(uri))
     } catch {
       // Ignore malformed terminal title reports without affecting PTY rendering.
     }
     return true
   })
   instance.open(host)
-  instance.onData(data => terminal.write(tab.sessionId, data))
+  instance.attachCustomKeyEventHandler(event => {
+    if (matchesTerminalShortcut(event, preferences.clearShortcut)) {
+      event.preventDefault()
+      terminal.clear(tab.sessionId)
+      return false
+    }
+    if (matchesTerminalShortcut(event, preferences.toggleShortcut)) {
+      event.preventDefault()
+      terminal.visible = !terminal.visible
+      return false
+    }
+    return true
+  })
+  instance.onData(data => {
+    // Queue every keystroke through the per-session bridge so interactive prompts such as SSH
+    // password entry receive input in order instead of overlapping Tauri invocations.
+    void terminal.write(tab.sessionId, data)
+  })
   const observer = new ResizeObserver(() => syncSize(tab.sessionId))
   observer.observe(host)
-  instances.set(tab.sessionId, { terminal: instance, fit, observer })
-  terminal.registerWriter(tab.sessionId, data => instance.write(data))
+  let outputQueue: Uint8Array[] = []
+  let pendingCarriageReturn: Uint8Array | null = null
+  let writeInFlight = false
+  let disposed = false
+  const joinOutput = (first: Uint8Array, second: Uint8Array) => {
+    const joined = new Uint8Array(first.length + second.length)
+    joined.set(first)
+    joined.set(second, first.length)
+    return joined
+  }
+  const flushOutputQueue = () => {
+    if (disposed || writeInFlight) return
+    const output = outputQueue.shift()
+    if (!output) return
+    writeInFlight = true
+    // xterm's write callback fires only after parser/render consumption. Serializing PTY chunks
+    // through that callback preserves CR/CSI progress updates even when Tauri emits rapidly.
+    instance.write(output, () => {
+      writeInFlight = false
+      flushOutputQueue()
+    })
+  }
+  const enqueueOutput = (data: Uint8Array) => {
+    const merged = pendingCarriageReturn ? joinOutput(pendingCarriageReturn, data) : data
+    pendingCarriageReturn = null
+    if (merged.length && merged.at(-1) === 13) {
+      // Preserve a bare CR until its following PTY event arrives. Cargo commonly emits the CR,
+      // erase sequence, and replacement progress line as separate Tauri events; xterm must parse
+      // that boundary atomically without changing the original terminal byte stream.
+      if (merged.length > 1) outputQueue.push(merged.slice(0, -1))
+      pendingCarriageReturn = merged.slice(-1)
+    } else if (merged.length) {
+      outputQueue.push(merged)
+    }
+    flushOutputQueue()
+  }
+  const clearOutputQueue = () => {
+    disposed = true
+    outputQueue = []
+    pendingCarriageReturn = null
+  }
+  instances.set(tab.sessionId, { terminal: instance, fit, observer, clearOutputQueue })
+  terminal.registerWriter(tab.sessionId, {
+    write: enqueueOutput,
+    clear: () => {
+      outputQueue = []
+      pendingCarriageReturn = null
+      writeInFlight = false
+      instance.clear()
+      return new Uint8Array()
+    }
+  })
   syncSize(tab.sessionId)
 }
 
@@ -117,6 +223,15 @@ const reconcile = async () => {
 }
 
 const closeTab = async (sessionId: string) => {
+  try {
+    await ElMessageBox.confirm(
+      t('workflow.terminal.closeConfirmMessage'),
+      t('workflow.terminal.closeConfirmTitle'),
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
   await terminal.close(sessionId)
   disposeTab(sessionId)
 }
@@ -124,22 +239,44 @@ const closeTab = async (sessionId: string) => {
 let resizing = false
 const resizePanel = (event: MouseEvent) => {
   if (!resizing) return
-  terminal.height = Math.min(Math.max(180, window.innerHeight - event.clientY), Math.max(180, window.innerHeight - 120))
+  const containerBottom = panel.value?.parentElement?.getBoundingClientRect().bottom ?? window.innerHeight
+  const maxHeight = Math.max(180, containerBottom - 160)
+  terminal.height = Math.min(Math.max(180, containerBottom - event.clientY), maxHeight)
 }
 const stopResize = () => {
   resizing = false
   window.removeEventListener('mousemove', resizePanel)
   window.removeEventListener('mouseup', stopResize)
 }
-const startResize = () => {
+const startResize = (event: MouseEvent) => {
+  event.preventDefault()
   resizing = true
   window.addEventListener('mousemove', resizePanel)
   window.addEventListener('mouseup', stopResize)
 }
 
+let themeObserver: MutationObserver | null = null
+
+watch(terminalTheme, theme => {
+  for (const instance of instances.values()) instance.terminal.options.theme = theme
+})
+watch(
+  () => preferences.outputLineLimit,
+  limit => {
+    const scrollback = Math.min(Math.max(100, Number(limit || 2000)), 20000)
+    for (const instance of instances.values()) instance.terminal.options.scrollback = scrollback
+  }
+)
 watch(() => [terminal.visible, terminal.activeSessionId, terminal.tabs.map((tab: TerminalTab) => tab.sessionId).join(',')], reconcile, { immediate: true, flush: 'post' })
+onMounted(() => {
+  themeObserver = new MutationObserver(() => {
+    pageDark.value = document.documentElement.classList.contains('dark')
+  })
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+})
 onBeforeUnmount(() => {
   stopResize()
+  themeObserver?.disconnect()
   for (const sessionId of instances.keys()) disposeTab(sessionId)
 })
 </script>
@@ -156,5 +293,6 @@ onBeforeUnmount(() => {
 .workflow-terminal__controls { display: flex; align-items: center; gap: 3px; padding: 0 8px; }
 .workflow-terminal__controls button { display: inline-flex; align-items: center; gap: 5px; padding: 5px; }
 .workflow-terminal__shell { max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.workflow-terminal__content { flex: 1; min-height: 0; padding: 8px; overflow: hidden; }
+.workflow-terminal__content { flex: 1; min-height: 0; padding: 0; overflow: hidden; }
+.xterm-scrollable-element{padding:var(--cs-space-sm);}
 </style>

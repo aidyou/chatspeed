@@ -26,6 +26,12 @@ const defaultSettings = {
   workflowCompletionMuted: true,
   workflowLastSelectedId: '',
   workflowAutomationLastSelectedId: '',
+  // workflow terminal settings
+  terminalDefaultShell: 'system',
+  terminalOutputLineLimit: 2000,
+  terminalColorScheme: 'auto',
+  terminalToggleShortcut: 'CommandOrControl+J',
+  terminalClearShortcut: 'CommandOrControl+K',
   // chat settings
   historyMessages: 5,
   conversationTitleGenModel: { id: '', model: '' },

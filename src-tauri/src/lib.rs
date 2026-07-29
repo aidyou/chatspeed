@@ -303,6 +303,7 @@ pub async fn run() -> crate::error::Result<()> {
             // os
             get_os_info,
             get_env,
+            get_available_terminal_shells,
             // workflow terminal (commands additionally enforce the workflow window label)
             terminal_list_shells,
             terminal_list_sessions,

@@ -124,8 +124,9 @@ assert.match(
   /projectPendingToolGroups\(/,
   'the visible message projection must include running pending tool groups'
 )
-assert.match(workflowMessageStyles, /var\(--cs-shimmer-inverse-color\)/)
-assert.match(workflowMessageStyles, /animation: tool-group-title-shimmer 1\.8s linear infinite/)
+assert.match(workflowMessageStyles, /background: linear-gradient\(/)
+assert.match(workflowMessageStyles, /color-mix\(in srgb, var\(--cs-text-color-primary\)/)
+assert.match(workflowMessageStyles, /animation: tool-group-title-shimmer 2\.8s ease-in-out infinite/)
 assert.match(
   themeVariables,
   /:root\.light[\s\S]*--cs-shimmer-inverse-color: rgba\(255, 255, 255, 0\.55\)/

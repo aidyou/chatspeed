@@ -346,7 +346,7 @@ body {
   width: 100vw;
   overflow: hidden;
   background: var(--cs-bg-color);
-  border-radius: var(--cs-border-radius-md);
+  border-radius: var(--cs-border-radius-lg);
   box-sizing: border-box;
 
   .titlebar {
@@ -357,7 +357,7 @@ body {
     user-select: none;
     background: transparent;
     box-sizing: border-box;
-    border-radius: var(--cs-border-radius-md) var(--cs-border-radius-md) 0 0;
+    border-radius: var(--cs-border-radius-lg) var(--cs-border-radius-lg) 0 0;
     position: fixed;
     top: 0;
     left: 0;

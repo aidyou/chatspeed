@@ -218,8 +218,6 @@
         <!-- Status Panel (Floating) -->
         <StatusPanel />
 
-        <TerminalPanel :terminal="terminal" />
-
         <!-- Input Area -->
         <WorkflowInputArea
           ref="inputAreaRef"
@@ -277,6 +275,8 @@
           @open-model-selector="openModelSelector"
           @remove-attachment="removeImageAttachment"
           @open-skills-selector="openSkillsSelector" />
+
+        <TerminalPanel :terminal="terminal" :preferences="terminalPreferences" />
       </el-container>
     </div>
 
@@ -645,7 +645,15 @@ const {
   automationItemCount: computed(() => workflowAutomationStore.automations.length)
 })
 
-const terminal = useTerminal(currentPaths)
+const terminalPreferences = computed(() => ({
+  defaultShell: settingStore.settings.terminalDefaultShell,
+  outputLineLimit: settingStore.settings.terminalOutputLineLimit,
+  colorScheme: settingStore.settings.terminalColorScheme,
+  clearShortcut: settingStore.settings.terminalClearShortcut,
+  toggleShortcut: settingStore.settings.terminalToggleShortcut,
+  usesCommandKey: osType.value === 'macos'
+}))
+const terminal = useTerminal(currentPaths, terminalPreferences)
 
 const builtinCommands = computed(() => {
   const commands = [
@@ -2188,7 +2196,39 @@ watch(
   }
 )
 
+const matchesLocalShortcut = (event, shortcut) => {
+  if (!shortcut) return false
+  const parts = shortcut.split('+')
+  const mainKey = parts.pop()?.toLowerCase()
+  if (!mainKey) return false
+
+  const requiresCommandOrControl = parts.includes('CommandOrControl')
+  const commandOrControlPressed = osType.value === 'macos' ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
+  if (requiresCommandOrControl !== commandOrControlPressed) return false
+  if (parts.includes('Alt') !== event.altKey || parts.includes('Shift') !== event.shiftKey) return false
+  return event.key.toLowerCase() === mainKey
+}
+
 const onGlobalKeyDown = event => {
+  if (matchesLocalShortcut(event, settingStore.settings.terminalToggleShortcut)) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (terminal.hasSessions) terminal.visible = !terminal.visible
+    else terminal.open()
+    return
+  }
+
+  const terminalFocused = Boolean(event.target?.closest?.('.workflow-terminal'))
+  if (terminalFocused && matchesLocalShortcut(event, settingStore.settings.terminalClearShortcut)) {
+    event.preventDefault()
+    event.stopPropagation()
+    terminal.clear()
+    return
+  }
+
+  // Interactive terminal shortcuts belong to the PTY, never to workflow/app actions.
+  if (terminalFocused) return
+
   const isMac = osType.value === 'macos'
   const modifierPressed = isMac ? event.metaKey : event.ctrlKey
 

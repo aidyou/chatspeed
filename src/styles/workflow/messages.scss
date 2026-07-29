@@ -212,23 +212,20 @@
           &.tool-group--running > .tool-line.title-wrap {
             .tool-group__summary-text {
               background: linear-gradient(
-                90deg,
+                100deg,
                 var(--cs-text-color-primary) 0%,
-                var(--cs-text-color-primary) 25%,
-                color-mix(
-                  in srgb,
-                  var(--cs-text-color-primary) 70%,
-                  var(--cs-shimmer-inverse-color)
-                )
-                  50%,
-                var(--cs-text-color-primary) 75%,
+                var(--cs-text-color-primary) 46%,
+                color-mix(in srgb, var(--cs-text-color-primary) 55%, var(--cs-color-white)) 48%,
+                color-mix(in srgb, var(--cs-text-color-primary) 35%, var(--cs-color-white)) 50%,
+                color-mix(in srgb, var(--cs-text-color-primary) 55%, var(--cs-color-white)) 52%,
+                var(--cs-text-color-primary) 54%,
                 var(--cs-text-color-primary) 100%
               );
-              background-size: 220% 100%;
+              background-size: 200% 100%;
               background-clip: text;
               -webkit-background-clip: text;
               color: transparent;
-              animation: tool-group-title-shimmer 1.8s linear infinite;
+              animation: tool-group-title-shimmer 2.8s ease-in-out infinite;
             }
           }
 
@@ -927,11 +924,11 @@
 
 @keyframes tool-group-title-shimmer {
   from {
-    background-position: 130% 0;
+    background-position: 100% 0;
   }
 
   to {
-    background-position: -130% 0;
+    background-position: 0 0;
   }
 }
 

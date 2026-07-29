@@ -52,13 +52,19 @@ struct TerminalRegistry {
     sessions: HashMap<String, TerminalSession>,
 }
 
-struct TerminalSession {
-    metadata: TerminalSessionMetadata,
+struct TerminalResources {
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     #[cfg(unix)]
     process_group: Option<libc::pid_t>,
+}
+
+struct TerminalSession {
+    metadata: TerminalSessionMetadata,
+    // Natural process exit releases PTY resources immediately while retaining metadata so the
+    // frontend can present an exited tab until the user explicitly closes it.
+    resources: Option<TerminalResources>,
 }
 
 /// Owns all interactive PTY processes associated with the workflow window.
@@ -143,6 +149,12 @@ impl TerminalManager {
             }
         };
         install_session_prompt(&mut writer, &shell);
+        // Let the login shell apply its profile and prompt hook, then start the visible session
+        // with a clean screen without writing anything to user configuration files.
+        let clear_command = if cfg!(windows) { "cls\r\n" } else { "clear\n" };
+        let _ = writer
+            .write_all(clear_command.as_bytes())
+            .and_then(|_| writer.flush());
         let reader = match pair.master.try_clone_reader() {
             Ok(reader) => reader,
             Err(error) => {
@@ -163,11 +175,13 @@ impl TerminalManager {
             session_id.clone(),
             TerminalSession {
                 metadata: reader_metadata.clone(),
-                writer,
-                master: pair.master,
-                child,
-                #[cfg(unix)]
-                process_group,
+                resources: Some(TerminalResources {
+                    writer,
+                    master: pair.master,
+                    child,
+                    #[cfg(unix)]
+                    process_group,
+                }),
             },
         );
         self.spawn_reader(session_id, reader, Arc::clone(&self.sessions));
@@ -185,10 +199,14 @@ impl TerminalManager {
             return Err("terminal_session_exited".to_string());
         }
 
-        session
+        let resources = session
+            .resources
+            .as_mut()
+            .ok_or_else(|| "terminal_session_exited".to_string())?;
+        resources
             .writer
             .write_all(input.as_bytes())
-            .and_then(|_| session.writer.flush())
+            .and_then(|_| resources.writer.flush())
             .map_err(|error| format!("terminal_write_failed:{error}"))
     }
 
@@ -199,7 +217,11 @@ impl TerminalManager {
             .sessions
             .get(session_id)
             .ok_or_else(|| "terminal_session_not_found".to_string())?;
-        session
+        let resources = session
+            .resources
+            .as_ref()
+            .ok_or_else(|| "terminal_session_exited".to_string())?;
+        resources
             .master
             .resize(size)
             .map_err(|error| format!("terminal_resize_failed:{error}"))
@@ -210,15 +232,7 @@ impl TerminalManager {
         let session = self.sessions.lock().sessions.remove(session_id);
         if let Some(mut session) = session {
             session.metadata.alive = false;
-            #[cfg(unix)]
-            terminate_child_tree(&mut *session.child, session.process_group);
-            #[cfg(windows)]
-            terminate_child_tree(&mut *session.child);
-            #[cfg(not(any(unix, windows)))]
-            {
-                let _ = session.child.kill();
-                let _ = session.child.wait();
-            }
+            terminate_terminal_resources(session.resources.take());
         }
         Ok(())
     }
@@ -261,9 +275,9 @@ impl TerminalManager {
         let app_handle = self.app_handle.clone();
         std::thread::spawn(move || {
             let mut buffer = vec![0_u8; 8192];
-            loop {
+            let reached_eof = loop {
                 match reader.read(&mut buffer) {
-                    Ok(0) => break,
+                    Ok(0) => break true,
                     Ok(read) => {
                         let event = TerminalOutputEvent {
                             session_id: session_id.clone(),
@@ -273,14 +287,18 @@ impl TerminalManager {
                             .emit_to(WORKFLOW_WINDOW_LABEL, "terminal://output", event)
                             .is_err()
                         {
-                            break;
+                            break false;
                         }
                     }
-                    Err(_) => break,
+                    Err(_) => break false,
                 }
-            }
-            if let Some(session) = sessions.lock().sessions.get_mut(&session_id) {
-                session.metadata.alive = false;
+            };
+            if reached_eof {
+                reap_exited_session(&sessions, &session_id);
+            } else {
+                // A reader I/O error or output-event delivery failure leaves the UI unable to
+                // safely control this session. Remove and terminate it before reporting exit.
+                abort_terminal_session(&sessions, &session_id);
             }
             let _ = app_handle.emit_to(
                 WORKFLOW_WINDOW_LABEL,
@@ -291,6 +309,60 @@ impl TerminalManager {
                 },
             );
         });
+    }
+}
+
+fn abort_terminal_session(sessions: &Arc<Mutex<TerminalRegistry>>, session_id: &str) {
+    let resources = sessions
+        .lock()
+        .sessions
+        .remove(session_id)
+        .and_then(|mut session| {
+            session.metadata.alive = false;
+            session.resources.take()
+        });
+
+    terminate_terminal_resources(resources);
+}
+
+fn reap_exited_session(sessions: &Arc<Mutex<TerminalRegistry>>, session_id: &str) {
+    let resources = {
+        let mut registry = sessions.lock();
+        let Some(session) = registry.sessions.get_mut(session_id) else {
+            return;
+        };
+        session.metadata.alive = false;
+        session.resources.take()
+    };
+
+    reap_terminal_resources(resources);
+}
+
+#[cfg(test)]
+fn reap_terminal_session(session: &mut TerminalSession) {
+    session.metadata.alive = false;
+    reap_terminal_resources(session.resources.take());
+}
+
+fn terminate_terminal_resources(resources: Option<TerminalResources>) {
+    if let Some(mut resources) = resources {
+        #[cfg(unix)]
+        terminate_child_tree(&mut *resources.child, resources.process_group);
+        #[cfg(windows)]
+        terminate_child_tree(&mut *resources.child);
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = resources.child.kill();
+            let _ = resources.child.wait();
+        }
+    }
+}
+
+fn reap_terminal_resources(resources: Option<TerminalResources>) {
+    if let Some(mut resources) = resources {
+        // EOF from the PTY means the child closed its terminal. Reap it now so an exited tab
+        // keeps only UI metadata rather than a child handle, master PTY, or zombie process.
+        let _ = resources.child.wait();
     }
 }
 
@@ -305,8 +377,15 @@ fn build_shell_command(shell: &ShellDescriptor) -> CommandBuilder {
 
     #[cfg(unix)]
     {
-        command.arg("-l");
-        command.arg("-i");
+        match shell.name.as_str() {
+            // fish uses a different startup contract and does not accept POSIX login flags.
+            "fish" => command.arg("-i"),
+            // POSIX-family shells support the same interactive login launch used by bash/zsh.
+            _ => {
+                command.arg("-l");
+                command.arg("-i");
+            }
+        };
     }
 
     #[cfg(windows)]
@@ -323,23 +402,110 @@ fn build_shell_command(shell: &ShellDescriptor) -> CommandBuilder {
 
 #[cfg(unix)]
 fn terminate_child_tree(child: &mut dyn portable_pty::Child, process_group: Option<libc::pid_t>) {
+    let root_process = child
+        .process_id()
+        .map(|process_id| process_id as libc::pid_t);
+    let mut tracked_processes = root_process
+        .map(terminal_process_tree_members)
+        .unwrap_or_default();
+    if let Some(root_process) = root_process {
+        tracked_processes.push(root_process);
+    }
+
     if let Some(process_group) = process_group.filter(|group| *group > 0) {
-        // portable-pty creates an isolated session for the controlling PTY. Terminate all
-        // members so interactive-shell background jobs in separate process groups cannot leak.
-        for process_id in terminal_session_members(process_group) {
-            unsafe {
-                libc::kill(process_id, libc::SIGHUP);
-                libc::kill(process_id, libc::SIGTERM);
-            }
-        }
-        // Preserve a process-group fallback if the platform cannot enumerate a session member.
+        let session_id = terminal_session_id(process_group);
+        tracked_processes.extend(terminal_session_members(session_id));
+        // portable-pty usually creates an isolated session for the controlling PTY. Terminate all
+        // members, while also retaining the shell descendant tree for PTY backends that do not.
+        signal_processes(&tracked_processes, libc::SIGHUP);
+        signal_processes(&tracked_processes, libc::SIGTERM);
         unsafe {
             libc::kill(-process_group, libc::SIGHUP);
             libc::kill(-process_group, libc::SIGTERM);
         }
+    } else {
+        signal_processes(&tracked_processes, libc::SIGHUP);
+        signal_processes(&tracked_processes, libc::SIGTERM);
     }
     let _ = child.kill();
     let _ = child.wait();
+
+    // A direct user shell may launch a background process that deliberately ignores HUP/TERM.
+    // It can be reparented when the shell exits, so retain the pre-close process tree and force
+    // kill every surviving member rather than relying on a second descendant-tree lookup.
+    for _ in 0..5 {
+        let surviving = tracked_processes
+            .iter()
+            .copied()
+            .filter(|process_id| process_is_alive(*process_id))
+            .collect::<Vec<_>>();
+        if surviving.is_empty() {
+            break;
+        }
+        signal_processes(&surviving, libc::SIGKILL);
+        if let Some(process_group) = process_group.filter(|group| *group > 0) {
+            unsafe {
+                libc::kill(-process_group, libc::SIGKILL);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
+fn signal_processes(process_ids: &[libc::pid_t], signal: libc::c_int) {
+    for process_id in process_ids {
+        if *process_id > 0 {
+            unsafe {
+                libc::kill(*process_id, signal);
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_is_alive(process_id: libc::pid_t) -> bool {
+    process_id > 0 && unsafe { libc::kill(process_id, 0) == 0 }
+}
+
+#[cfg(unix)]
+fn terminal_process_tree_members(root_process: libc::pid_t) -> Vec<libc::pid_t> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid="])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+
+    let processes = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((
+                fields.next()?.parse::<libc::pid_t>().ok()?,
+                fields.next()?.parse::<libc::pid_t>().ok()?,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut members = Vec::new();
+    let mut parents = vec![root_process];
+    while let Some(parent) = parents.pop() {
+        for (process_id, process_parent) in &processes {
+            if *process_parent == parent && !members.contains(process_id) {
+                members.push(*process_id);
+                parents.push(*process_id);
+            }
+        }
+    }
+    members
+}
+
+#[cfg(unix)]
+fn terminal_session_id(process_group: libc::pid_t) -> libc::pid_t {
+    let session_id = unsafe { libc::getsid(process_group) };
+    (session_id > 0)
+        .then_some(session_id)
+        .unwrap_or(process_group)
 }
 
 #[cfg(target_os = "macos")]
@@ -406,12 +572,22 @@ fn terminate_child_tree(child: &mut dyn portable_pty::Child) {
     let _ = child.wait();
 }
 
+#[cfg(windows)]
+fn windows_prompt_bootstrap(is_cmd: bool) -> &'static str {
+    if is_cmd {
+        "PROMPT \u{1b}]7;file://%COMPUTERNAME%/$P\u{7}$P$G\r\n"
+    } else {
+        "function prompt { $path = (Get-Location).Path.Replace('\\','/'); Write-Host -NoNewline \"`e]7;file://$env:COMPUTERNAME/$path`a\"; \"$((Get-Location).Path) > \" }\r\n"
+    }
+}
+
 fn install_session_prompt(writer: &mut (dyn Write + Send), shell: &ShellDescriptor) {
     #[cfg(unix)]
     {
         let command = match shell.name.as_str() {
-            "zsh" => "autoload -Uz add-zsh-hook; _cs_terminal_osc7(){ print -n $'\\e]7;file://'${HOST:-localhost}${PWD}$'\\a'; }; add-zsh-hook precmd _cs_terminal_osc7; PROMPT='%~ > '\n",
+            "zsh" => "autoload -Uz add-zsh-hook; _cs_terminal_osc7(){ print -n $'\\e]7;file://'${HOST:-localhost}${PWD}$'\\a'; }; add-zsh-hook precmd _cs_terminal_osc7; PROMPT='%d > '\n",
             "bash" => "__cs_terminal_osc7(){ printf '\\033]7;file://%s%s\\007' \"${HOSTNAME:-localhost}\" \"$PWD\"; }; PROMPT_COMMAND=\"__cs_terminal_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}\"; PS1='\\w > '\n",
+            "fish" => "function __cs_terminal_osc7 --on-event fish_prompt; printf '\\e]7;file://%s%s\\a' \"$HOSTNAME\" \"$PWD\"; end; function fish_prompt; printf '%s > ' \"$PWD\"; end\n",
             _ => "PS1='\\w > '\n",
         };
         let _ = writer
@@ -421,11 +597,7 @@ fn install_session_prompt(writer: &mut (dyn Write + Send), shell: &ShellDescript
 
     #[cfg(windows)]
     {
-        let command = if shell.name.eq_ignore_ascii_case("cmd.exe") {
-            "PROMPT \u{1b}]7;file://%COMPUTERNAME%$P\u{7}$P$G\r\n"
-        } else {
-            "function prompt { $path = (Get-Location).Path; Write-Host -NoNewline \"`e]7;file://$env:COMPUTERNAME$path`a\"; \"$path > \" }\r\n"
-        };
+        let command = windows_prompt_bootstrap(shell.name.eq_ignore_ascii_case("cmd.exe"));
         let _ = writer
             .write_all(command.as_bytes())
             .and_then(|_| writer.flush());
@@ -491,25 +663,221 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn supported_unix_shell_uses_login_interactive_startup_and_cwd_prompt_hook() {
-        let shell = ShellDescriptor {
+    fn unix_shell_launch_contracts_cover_posix_and_fish() {
+        let bash = ShellDescriptor {
             name: "bash".to_string(),
             path: "/bin/bash".to_string(),
         };
-        let command = build_shell_command(&shell);
-        let arguments = command
+        let bash_command = build_shell_command(&bash);
+        let bash_arguments = bash_command
             .get_argv()
             .iter()
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        assert_eq!(arguments, vec!["/bin/bash", "-l", "-i"]);
+        assert_eq!(bash_arguments, vec!["/bin/bash", "-l", "-i"]);
+
+        let fish = ShellDescriptor {
+            name: "fish".to_string(),
+            path: "/usr/bin/fish".to_string(),
+        };
+        let fish_command = build_shell_command(&fish);
+        let fish_arguments = fish_command
+            .get_argv()
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(fish_arguments, vec!["/usr/bin/fish", "-i"]);
 
         let mut bootstrap = Vec::new();
-        install_session_prompt(&mut bootstrap, &shell);
+        install_session_prompt(&mut bootstrap, &bash);
         let bootstrap = String::from_utf8(bootstrap).expect("bootstrap must be UTF-8");
         assert!(bootstrap.contains("PROMPT_COMMAND"));
         assert!(bootstrap.contains("PS1='\\w > '"));
         assert!(bootstrap.contains("]7;file://"));
+
+        let mut fish_bootstrap = Vec::new();
+        install_session_prompt(&mut fish_bootstrap, &fish);
+        let fish_bootstrap =
+            String::from_utf8(fish_bootstrap).expect("fish bootstrap must be UTF-8");
+        assert!(fish_bootstrap.contains("fish_prompt"));
+        assert!(fish_bootstrap.contains("]7;file://"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_prompt_bootstraps_emit_valid_file_uris() {
+        let cmd = super::windows_prompt_bootstrap(true);
+        let powershell = super::windows_prompt_bootstrap(false);
+        assert!(cmd.contains("file://%COMPUTERNAME%/$P"));
+        assert!(powershell.contains("file://$env:COMPUTERNAME/$path"));
+        assert!(powershell.contains("Replace('\\\\','/')"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn natural_terminal_exit_releases_managed_pty_resources() {
+        use portable_pty::native_pty_system;
+
+        let pair = native_pty_system()
+            .openpty(super::PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("PTY should open for natural-exit test");
+        let mut command = super::CommandBuilder::new("/bin/sh");
+        command.args(["-c", "exit 0"]);
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .expect("PTY child should start for natural-exit test");
+        let writer = pair
+            .master
+            .take_writer()
+            .expect("PTY writer should be available");
+        let process_group = pair.master.process_group_leader();
+        let metadata = super::TerminalSessionMetadata {
+            session_id: "natural-exit".to_string(),
+            shell_name: "sh".to_string(),
+            shell_path: "/bin/sh".to_string(),
+            cwd: "/".to_string(),
+            alive: true,
+        };
+        let mut session = super::TerminalSession {
+            metadata,
+            resources: Some(super::TerminalResources {
+                writer,
+                master: pair.master,
+                child,
+                process_group,
+            }),
+        };
+
+        super::reap_terminal_session(&mut session);
+        assert!(!session.metadata.alive);
+        assert!(session.resources.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reader_exit_reaping_retains_only_exited_tab_metadata() {
+        use portable_pty::native_pty_system;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let pair = native_pty_system()
+            .openpty(super::PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("PTY should open for reader-exit test");
+        let mut command = super::CommandBuilder::new("/bin/sh");
+        command.args(["-c", "exit 0"]);
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .expect("PTY child should start for reader-exit test");
+        let writer = pair
+            .master
+            .take_writer()
+            .expect("PTY writer should be available");
+        let process_group = pair.master.process_group_leader();
+        let session_id = "reader-exit".to_string();
+        let metadata = super::TerminalSessionMetadata {
+            session_id: session_id.clone(),
+            shell_name: "sh".to_string(),
+            shell_path: "/bin/sh".to_string(),
+            cwd: "/".to_string(),
+            alive: true,
+        };
+        let sessions = Arc::new(super::Mutex::new(super::TerminalRegistry {
+            sessions: HashMap::from([(
+                session_id.clone(),
+                super::TerminalSession {
+                    metadata,
+                    resources: Some(super::TerminalResources {
+                        writer,
+                        master: pair.master,
+                        child,
+                        process_group,
+                    }),
+                },
+            )]),
+        }));
+
+        super::reap_exited_session(&sessions, &session_id);
+        let registry = sessions.lock();
+        let session = registry
+            .sessions
+            .get(&session_id)
+            .expect("exited tab metadata retained");
+        assert!(!session.metadata.alive);
+        assert!(session.resources.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reader_failure_aborts_and_removes_the_live_session() {
+        use portable_pty::native_pty_system;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let pair = native_pty_system()
+            .openpty(super::PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("PTY should open for reader-failure test");
+        let mut command = super::CommandBuilder::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .expect("PTY child should start for reader-failure test");
+        let writer = pair
+            .master
+            .take_writer()
+            .expect("PTY writer should be available");
+        let process_group = pair.master.process_group_leader();
+        let session_id = "reader-failure".to_string();
+        let metadata = super::TerminalSessionMetadata {
+            session_id: session_id.clone(),
+            shell_name: "sh".to_string(),
+            shell_path: "/bin/sh".to_string(),
+            cwd: "/".to_string(),
+            alive: true,
+        };
+        let sessions = Arc::new(super::Mutex::new(super::TerminalRegistry {
+            sessions: HashMap::from([(
+                session_id.clone(),
+                super::TerminalSession {
+                    metadata,
+                    resources: Some(super::TerminalResources {
+                        writer,
+                        master: pair.master,
+                        child,
+                        process_group,
+                    }),
+                },
+            )]),
+        }));
+
+        super::abort_terminal_session(&sessions, &session_id);
+        assert!(
+            !sessions.lock().sessions.contains_key(&session_id),
+            "reader failures must not leave an unreachable backend session"
+        );
+        if let Some(process_group) = process_group {
+            assert!(
+                super::terminal_session_members(process_group).is_empty(),
+                "reader failure leaked terminal processes"
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -527,7 +895,7 @@ mod tests {
             })
             .expect("PTY should open for ANSI routing test");
         let mut command = super::CommandBuilder::new("/bin/sh");
-        command.args(["-c", "printf '\\033[31mred\\033[0m'"]);
+        command.args(["-c", "printf 'first\\rsecond\\033[31mred\\033[0m'"]);
         let mut child = pair
             .slave
             .spawn_command(command)
@@ -550,6 +918,9 @@ mod tests {
             .expect("PTY output should be readable");
         let ansi = b"\x1b[31mred\x1b[0m";
         assert!(output.windows(ansi.len()).any(|window| window == ansi));
+        assert!(output
+            .windows(b"first\rsecond".len())
+            .any(|window| window == b"first\rsecond"));
         assert!(child.wait().is_ok());
     }
     #[cfg(unix)]
@@ -585,6 +956,69 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn pty_cleanup_force_kills_signal_ignoring_background_jobs() {
+        use portable_pty::native_pty_system;
+        use std::fs;
+
+        let marker_dir = tempfile::tempdir().expect("temporary marker directory");
+        let marker = marker_dir.path().join("background-job.pid");
+        let pair = native_pty_system()
+            .openpty(super::PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("PTY should open for force-cleanup test");
+        let mut command = super::CommandBuilder::new("/bin/sh");
+        command.arg("-c");
+        command.arg(format!(
+            "trap '' HUP TERM; (trap '' HUP TERM; exec sleep 30) & echo $! > {}; wait",
+            marker.display()
+        ));
+        let mut child = pair
+            .slave
+            .spawn_command(command)
+            .expect("PTY child should start for force-cleanup test");
+        let process_group = pair.master.process_group_leader();
+        let session_id = super::terminal_session_id(process_group.expect("PTY session leader id"));
+        let shell_pid = child
+            .process_id()
+            .map(|process_id| process_id as libc::pid_t)
+            .expect("PTY shell process id");
+
+        let background_pid = (0..10)
+            .find_map(|_| {
+                fs::read_to_string(&marker)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<libc::pid_t>().ok())
+                    .filter(|process_id| unsafe { libc::kill(*process_id, 0) == 0 })
+                    .or_else(|| {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        None
+                    })
+            })
+            .expect("signal-ignoring background job should start");
+        assert!(
+            super::terminal_process_tree_members(shell_pid).contains(&background_pid),
+            "background job must remain in the shell process tree before cleanup"
+        );
+
+        super::terminate_child_tree(&mut *child, process_group);
+        assert!(child.wait().is_ok());
+        assert!(
+            unsafe { libc::kill(background_pid, 0) != 0 },
+            "force cleanup left signal-ignoring background process {background_pid} alive"
+        );
+        let remaining = super::terminal_session_members(session_id);
+        assert!(
+            remaining.is_empty(),
+            "force cleanup leaked signal-ignoring terminal processes: {remaining:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn zsh_bootstrap_reports_cwd_with_osc7() {
         let shell = ShellDescriptor {
             name: "zsh".to_string(),
@@ -594,7 +1028,7 @@ mod tests {
         install_session_prompt(&mut bootstrap, &shell);
         let bootstrap = String::from_utf8(bootstrap).expect("bootstrap must be UTF-8");
         assert!(bootstrap.contains("add-zsh-hook"));
-        assert!(bootstrap.contains("PROMPT='%~ > '"));
+        assert!(bootstrap.contains("PROMPT='%d > '"));
         assert!(bootstrap.contains("]7;file://"));
     }
 }

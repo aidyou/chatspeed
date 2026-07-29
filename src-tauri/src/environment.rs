@@ -94,13 +94,35 @@ fn get_shell_path() -> Option<String> {
 /// # Returns
 /// - `Some(String)`: The full PATH string if successfully retrieved.
 /// - `None`: If the PATH could not be retrieved using the attempted methods.
+fn login_path_shell_candidates(terminal_shells: Vec<String>) -> Vec<String> {
+    let mut shell_paths = terminal_shells;
+    #[cfg(unix)]
+    for shell in ["/bin/sh", "/usr/bin/sh"] {
+        if is_executable_file(Path::new(shell)) && !shell_paths.iter().any(|path| path == shell) {
+            shell_paths.push(shell.to_string());
+        }
+    }
+    shell_paths
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn get_shell_path() -> Option<String> {
-    // Unix-like systems: Try multiple shells
-    let shells = get_available_shells();
+    // Keep this general environment probe independent of the terminal UI allowlist: a POSIX
+    // `sh` remains a valid login-PATH fallback even though it lacks the terminal prompt contract.
+    let mut shell_paths = login_path_shell_candidates(
+        get_available_shells()
+            .into_iter()
+            .map(|shell| shell.path)
+            .collect(),
+    );
+    if let Ok(output) = Command::new("which").arg("sh").output() {
+        let shell = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if output.status.success() && !shell.is_empty() && !shell_paths.contains(&shell) {
+            shell_paths.push(shell);
+        }
+    }
 
-    for shell in shells {
-        let shell_path = shell.path;
+    for shell_path in shell_paths {
         let try_command =
             |shell_name: &str, args: Vec<&str>| -> Result<Option<String>, std::io::ErrorKind> {
                 match Command::new(shell_name).args(&args).output() {
@@ -153,7 +175,9 @@ fn get_shell_path() -> Option<String> {
 fn supports_terminal_shell(shell: &ShellDescriptor) -> bool {
     #[cfg(unix)]
     {
-        matches!(shell.name.as_str(), "zsh" | "bash")
+        // Only expose shells with an explicitly verified interactive launch and prompt/OSC 7
+        // contract in `terminal.rs`. Keep generic POSIX shells available for PATH discovery.
+        matches!(shell.name.as_str(), "bash" | "zsh" | "fish")
     }
     #[cfg(windows)]
     {
@@ -193,9 +217,11 @@ pub(crate) fn get_available_shells() -> Vec<ShellDescriptor> {
             PathBuf::from("/usr/bin/zsh"),
             PathBuf::from("/bin/bash"),
             PathBuf::from("/usr/bin/bash"),
+            PathBuf::from("/bin/fish"),
+            PathBuf::from("/usr/bin/fish"),
         ]);
 
-        for name in ["zsh", "bash"] {
+        for name in ["zsh", "bash", "fish"] {
             if let Ok(output) = Command::new("which").arg(name).output() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if output.status.success() && !path.is_empty() {
@@ -238,12 +264,12 @@ pub(crate) fn get_available_shells() -> Vec<ShellDescriptor> {
     shells
 }
 
-/// Gets the preferred interactive terminal shell for the current platform.
-pub(crate) fn get_default_shell() -> Option<ShellDescriptor> {
-    let shells = get_available_shells();
-
+fn select_default_shell(
+    shells: Vec<ShellDescriptor>,
+    #[allow(unused_variables)] user_shell: Option<&str>,
+) -> Option<ShellDescriptor> {
     #[cfg(unix)]
-    if let Ok(user_shell) = env::var("SHELL") {
+    if let Some(user_shell) = user_shell {
         if let Some(shell) = shells.iter().find(|shell| shell.path == user_shell) {
             return Some(shell.clone());
         }
@@ -267,6 +293,12 @@ pub(crate) fn get_default_shell() -> Option<ShellDescriptor> {
                 .cloned()
         })
         .or_else(|| shells.into_iter().next())
+}
+
+/// Gets the preferred interactive terminal shell for the current platform.
+pub(crate) fn get_default_shell() -> Option<ShellDescriptor> {
+    let user_shell = env::var("SHELL").ok();
+    select_default_shell(get_available_shells(), user_shell.as_deref())
 }
 
 /// Builds the minimal environment required by a terminal child without exposing it to the UI.
@@ -377,26 +409,79 @@ fn merge_paths(original: &str, new: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_paths, supports_terminal_shell, ShellDescriptor};
+    use super::{merge_paths, select_default_shell, supports_terminal_shell, ShellDescriptor};
 
     #[cfg(unix)]
     #[test]
-    fn only_shells_with_terminal_prompt_contracts_are_selectable() {
-        let bash = ShellDescriptor {
-            name: "bash".to_string(),
-            path: "/bin/bash".to_string(),
-        };
-        let zsh = ShellDescriptor {
-            name: "zsh".to_string(),
-            path: "/bin/zsh".to_string(),
-        };
-        let sh = ShellDescriptor {
-            name: "sh".to_string(),
-            path: "/bin/sh".to_string(),
-        };
-        assert!(supports_terminal_shell(&bash));
-        assert!(supports_terminal_shell(&zsh));
-        assert!(!supports_terminal_shell(&sh));
+    fn only_shells_with_verified_terminal_contracts_are_selectable() {
+        for name in ["bash", "zsh", "fish"] {
+            let shell = ShellDescriptor {
+                name: name.to_string(),
+                path: format!("/bin/{name}"),
+            };
+            assert!(supports_terminal_shell(&shell), "{name} must be selectable");
+        }
+
+        for name in ["ksh", "mksh", "yash", "sh", "dash"] {
+            let shell = ShellDescriptor {
+                name: name.to_string(),
+                path: format!("/bin/{name}"),
+            };
+            assert!(
+                !supports_terminal_shell(&shell),
+                "{name} lacks a verified terminal launch and prompt contract"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verified_user_default_shell_precedes_platform_fallback() {
+        let shells = vec![
+            ShellDescriptor {
+                name: "bash".to_string(),
+                path: "/bin/bash".to_string(),
+            },
+            ShellDescriptor {
+                name: "zsh".to_string(),
+                path: "/bin/zsh".to_string(),
+            },
+            ShellDescriptor {
+                name: "fish".to_string(),
+                path: "/usr/local/bin/fish".to_string(),
+            },
+        ];
+        let selected = select_default_shell(shells, Some("/usr/local/bin/fish"))
+            .expect("a verified default shell should be selected");
+        assert_eq!(selected.name, "fish");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unverified_user_default_shell_falls_back_to_platform_shell() {
+        let shells = vec![
+            ShellDescriptor {
+                name: "zsh".to_string(),
+                path: "/bin/zsh".to_string(),
+            },
+            ShellDescriptor {
+                name: "bash".to_string(),
+                path: "/bin/bash".to_string(),
+            },
+        ];
+        let selected = select_default_shell(shells, Some("/bin/tcsh"))
+            .expect("a platform fallback shell should be selected");
+        #[cfg(target_os = "macos")]
+        assert_eq!(selected.name, "zsh");
+        #[cfg(target_os = "linux")]
+        assert_eq!(selected.name, "bash");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_path_candidates_retain_posix_sh_for_path_discovery() {
+        let candidates = super::login_path_shell_candidates(Vec::new());
+        assert!(candidates.iter().any(|path| path.ends_with("/sh")));
     }
 
     #[test]
