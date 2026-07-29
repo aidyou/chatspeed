@@ -156,7 +156,8 @@ const mountTab = (tab: TerminalTab) => {
   const observer = new ResizeObserver(() => syncSize(tab.sessionId))
   observer.observe(host)
   let outputQueue: Uint8Array[] = []
-  let pendingCarriageReturn: Uint8Array | null = null
+  let pendingProgressChunk: Uint8Array | null = null
+  let pendingProgressTimer: number | null = null
   let writeInFlight = false
   let disposed = false
   const joinOutput = (first: Uint8Array, second: Uint8Array) => {
@@ -164,6 +165,20 @@ const mountTab = (tab: TerminalTab) => {
     joined.set(first)
     joined.set(second, first.length)
     return joined
+  }
+  const containsLineControl = (data: Uint8Array) => data.includes(10) || data.includes(13)
+  const mayBeSplitProgressLine = (data: Uint8Array) => {
+    if (data.length < Math.max(40, instance.cols)) return false
+    if (containsLineControl(data)) return false
+    return data.at(-1) === 32
+  }
+  const flushPendingProgressChunk = () => {
+    if (pendingProgressTimer !== null) window.clearTimeout(pendingProgressTimer)
+    pendingProgressTimer = null
+    if (!pendingProgressChunk) return
+    outputQueue.push(pendingProgressChunk)
+    pendingProgressChunk = null
+    flushOutputQueue()
   }
   const flushOutputQueue = () => {
     if (disposed || writeInFlight) return
@@ -178,30 +193,40 @@ const mountTab = (tab: TerminalTab) => {
     })
   }
   const enqueueOutput = (data: Uint8Array) => {
-    const merged = pendingCarriageReturn ? joinOutput(pendingCarriageReturn, data) : data
-    pendingCarriageReturn = null
-    if (merged.length && merged.at(-1) === 13) {
-      // Preserve a bare CR until its following PTY event arrives. Cargo commonly emits the CR,
-      // erase sequence, and replacement progress line as separate Tauri events; xterm must parse
-      // that boundary atomically without changing the original terminal byte stream.
-      if (merged.length > 1) outputQueue.push(merged.slice(0, -1))
-      pendingCarriageReturn = merged.slice(-1)
-    } else if (merged.length) {
-      outputQueue.push(merged)
+    if (!data.length) return
+    const output = pendingProgressChunk ? joinOutput(pendingProgressChunk, data) : data
+    if (pendingProgressTimer !== null) window.clearTimeout(pendingProgressTimer)
+    pendingProgressChunk = null
+    pendingProgressTimer = null
+
+    // Cargo can split a padded CR progress update as "long line" then a standalone CR in the next
+    // PTY event. Writing the padded line before its CR lets xterm enter pending-wrap state and the
+    // later CR cannot fully undo the visual wrap, so briefly coalesce likely split progress lines.
+    if (mayBeSplitProgressLine(output)) {
+      pendingProgressChunk = output
+      pendingProgressTimer = window.setTimeout(flushPendingProgressChunk, 8)
+      return
     }
+
+    outputQueue.push(output)
     flushOutputQueue()
+  }
+  const clearPendingProgress = () => {
+    if (pendingProgressTimer !== null) window.clearTimeout(pendingProgressTimer)
+    pendingProgressTimer = null
+    pendingProgressChunk = null
   }
   const clearOutputQueue = () => {
     disposed = true
+    clearPendingProgress()
     outputQueue = []
-    pendingCarriageReturn = null
   }
   instances.set(tab.sessionId, { terminal: instance, fit, observer, clearOutputQueue })
   terminal.registerWriter(tab.sessionId, {
     write: enqueueOutput,
     clear: () => {
+      clearPendingProgress()
       outputQueue = []
-      pendingCarriageReturn = null
       writeInFlight = false
       instance.clear()
       return new Uint8Array()
@@ -293,6 +318,7 @@ onBeforeUnmount(() => {
 .workflow-terminal__controls { display: flex; align-items: center; gap: 3px; padding: 0 8px; }
 .workflow-terminal__controls button { display: inline-flex; align-items: center; gap: 5px; padding: 5px; }
 .workflow-terminal__shell { max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.workflow-terminal__content { flex: 1; min-height: 0; padding: 0; overflow: hidden; }
-.xterm-scrollable-element{padding:var(--cs-space-sm);}
+.workflow-terminal__content { flex: 1; min-height: 0; padding: var(--cs-space-sm); overflow: hidden; box-sizing: border-box; }
+.workflow-terminal__content :deep(.xterm) { height: 100%; }
+.workflow-terminal__content :deep(.xterm-screen) { max-width: 100%; }
 </style>
