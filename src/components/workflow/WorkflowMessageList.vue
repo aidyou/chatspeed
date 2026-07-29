@@ -421,11 +421,21 @@
                         >{{ getSubAgentTaskPreview(message) }}</span
                       >
                     </div>
-                    <cs
-                      name="double-arrow-down"
-                      size="14px"
-                      class="sub-agent-card__task-chevron"
-                      :class="{ expanded: isSubAgentTaskExpanded(message) }" />
+                    <div class="sub-agent-card__section-actions">
+                      <button
+                        type="button"
+                        class="sub-agent-card__copy-button"
+                        :title="$t('common.copy')"
+                        :aria-label="$t('common.copy')"
+                        @click.stop="copySubAgentTask(message)">
+                        <cs name="copy" />
+                      </button>
+                      <cs
+                        name="double-arrow-down"
+                        size="14px"
+                        class="sub-agent-card__task-chevron"
+                        :class="{ expanded: isSubAgentTaskExpanded(message) }" />
+                    </div>
                   </div>
                   <div v-if="isSubAgentTaskExpanded(message)" class="sub-agent-card__task-body">
                     <MarkdownSimple :content="message.subAgentCard.taskMarkdown" />
@@ -447,11 +457,21 @@
                         >{{ getSubAgentResultPreview(message) }}</span
                       >
                     </div>
-                    <cs
-                      name="double-arrow-down"
-                      size="14px"
-                      class="sub-agent-card__result-chevron"
-                      :class="{ expanded: isSubAgentResultExpanded(message) }" />
+                    <div class="sub-agent-card__section-actions">
+                      <button
+                        type="button"
+                        class="sub-agent-card__copy-button"
+                        :title="$t('common.copy')"
+                        :aria-label="$t('common.copy')"
+                        @click.stop="copySubAgentResult(message)">
+                        <cs name="copy" />
+                      </button>
+                      <cs
+                        name="double-arrow-down"
+                        size="14px"
+                        class="sub-agent-card__result-chevron"
+                        :class="{ expanded: isSubAgentResultExpanded(message) }" />
+                    </div>
                   </div>
                   <div v-if="isSubAgentResultExpanded(message)" class="sub-agent-card__result-body">
                     <MarkdownSimple :content="message.subAgentCard.resultMarkdown" />
@@ -878,6 +898,7 @@
 <script setup>
 import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { writeClipboard } from '@/libs/clipboard'
 import { showMessage } from '@/libs/util'
 import hljs from 'highlight.js'
 import {
@@ -2366,6 +2387,19 @@ const getSubAgentResultPreview = message => {
   if (!result) return ''
   return result.length > 96 ? `${result.slice(0, 96)}...` : result
 }
+
+const copySubAgentContent = async content => {
+  try {
+    await writeClipboard(String(content ?? ''))
+    showMessage(t('common.copied'), 'success')
+  } catch (error) {
+    console.error('Failed to copy sub-agent content:', error)
+    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+  }
+}
+
+const copySubAgentTask = message => copySubAgentContent(message?.subAgentCard?.task)
+const copySubAgentResult = message => copySubAgentContent(message?.subAgentCard?.result)
 
 const getSubAgentTaskExpandId = message => `${message?.displayId || message?.id || ''}:task`
 const getSubAgentResultExpandId = message => `${message?.displayId || message?.id || ''}:result`

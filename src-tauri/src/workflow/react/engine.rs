@@ -686,8 +686,30 @@ impl WorkflowExecutor {
         &mut self,
         role: &str,
         step_type: Option<&StepType>,
-        _needs_compression: bool,
+        needs_compression: bool,
     ) -> Result<bool, WorkflowEngineError> {
+        if needs_compression {
+            if let Some((compression_candidate, compressed_until_message_id)) =
+                self.context.build_pressure_compression_candidate()
+            {
+                if self
+                    .run_blocking_compression(
+                        compression_candidate,
+                        compressed_until_message_id,
+                        "context_pressure",
+                    )
+                    .await?
+                {
+                    return Ok(true);
+                }
+            } else {
+                log::info!(
+                    "[Workflow][session={}][phase=compression] Context exceeded the compression pressure threshold but no safe completed segment is available for blocking compression",
+                    self.session_id
+                );
+            }
+        }
+
         let is_new_task_boundary = role == "user" && step_type != Some(&StepType::Observe);
 
         if !is_new_task_boundary || !self.auto_compress_enabled {
@@ -5908,7 +5930,7 @@ impl WorkflowExecutor {
         })
         .await?;
 
-        let _ = self
+        let compression_applied = self
             .maybe_run_blocking_compression_after_message(
                 &role,
                 step_type.as_ref(),
@@ -5922,7 +5944,7 @@ impl WorkflowExecutor {
         // Summary messages should not trigger compression - they are the result of compression
         let is_summary = msg.message_kind == "summary";
 
-        Ok(needs_compression && !is_summary)
+        Ok(needs_compression && !is_summary && !compression_applied)
     }
 
     /// Automatically detects and activates skills triggered by slash commands in user input.

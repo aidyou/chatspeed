@@ -76,6 +76,8 @@ assert.match(approvalResolvedHandler, /payload\.tool_name === 'submit_plan'/)
 assert.match(approvalResolvedHandler, /resolvePendingTool\(sessionId, payload\.tool_call_id\)/)
 
 const messageList = readProjectFile('src/components/workflow/WorkflowMessageList.vue')
+const workflowMessageStyles = readProjectFile('src/styles/workflow/messages.scss')
+const themeVariables = readProjectFile('src/style/element/css-vars.css')
 assert.match(messageList, /:tool-name="getMessageToolName\(message\)"/)
 assert.doesNotMatch(messageList, /:action="message\.metadata\?\.tool_name/)
 assert.match(
@@ -120,6 +122,16 @@ assert.match(
   messageList,
   /projectPendingToolGroups\(/,
   'the visible message projection must include running pending tool groups'
+)
+assert.match(workflowMessageStyles, /var\(--cs-shimmer-inverse-color\)/)
+assert.match(workflowMessageStyles, /animation: tool-group-title-shimmer 1\.8s linear infinite/)
+assert.match(
+  themeVariables,
+  /:root\.light[\s\S]*--cs-shimmer-inverse-color: rgba\(255, 255, 255, 0\.55\)/
+)
+assert.match(
+  themeVariables,
+  /:root\.dark[\s\S]*--cs-shimmer-inverse-color: rgba\(0, 0, 0, 0\.55\)/
 )
 assert.match(
   toolGroupProjection,
@@ -269,6 +281,14 @@ assert.doesNotMatch(
   /Step budget:/,
   'runtime reminders must not pressure the model with a removed step limit'
 )
+const postMessageCompression = sourceSection(
+  reactEngine,
+  'async fn maybe_run_blocking_compression_after_message',
+  'async fn apply_background_compression_ready'
+)
+assert.match(postMessageCompression, /if needs_compression/)
+assert.match(postMessageCompression, /build_pressure_compression_candidate\(\)/)
+assert.match(postMessageCompression, /"context_pressure"/)
 assert.doesNotMatch(workflowCore, /confirmationWaiting|showConfirmationDialog/)
 const workflowStore = readProjectFile('src/stores/workflow.js')
 const queuedMessageRouting = sourceSection(
@@ -384,10 +404,18 @@ assert.ok(
 
 const approvalDialog = readProjectFile('src/components/workflow/ApprovalDialog.vue')
 assert.match(approvalDialog, /toolName: String/)
+assert.match(approvalDialog, /v-if="isPlanApproval" class="plan-details-actions"/)
+assert.match(approvalDialog, /const copyPlanMarkdown = async/)
+assert.match(approvalDialog, /await writeClipboard\(planMarkdown\.value\)/)
+assert.match(approvalDialog, /<cs name="copy" \/>/)
 assert.doesNotMatch(
   approvalDialog,
   /action: String|props\.action|normalizedAction|isFileChangePayload/
 )
+assert.match(messageList, /copySubAgentTask\(message\)/)
+assert.match(messageList, /copySubAgentResult\(message\)/)
+assert.match(messageList, /message\?\.subAgentCard\?\.task/)
+assert.match(messageList, /message\?\.subAgentCard\?\.result/)
 
 const deleteWorkflow = sourceSection(
   workflowCore,

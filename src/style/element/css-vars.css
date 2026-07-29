@@ -61,6 +61,7 @@
     --cs-text-color-secondary: #999;
     --cs-text-color-tertiary: #ccc;
     --cs-text-color-placeholder: var(--cs-text-color-tertiary);
+    --cs-shimmer-inverse-color: rgba(255, 255, 255, 0.55);
 
     --cs-bg-color: #f1f2f1;
     --cs-bg-color-light: #eaeaea;
@@ -109,6 +110,7 @@
     --cs-text-color-secondary: rgba(132, 133, 134, 0.9);
     --cs-text-color-tertiary: rgb(65, 65, 65, 0.9);
     --cs-text-color-placeholder: var(--cs-text-color-tertiary);
+    --cs-shimmer-inverse-color: rgba(0, 0, 0, 0.55);
 
     --cs-bg-color: #202122;
     --cs-bg-color-light: rgb(36, 36, 38);

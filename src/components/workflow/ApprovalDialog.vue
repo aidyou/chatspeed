@@ -2,6 +2,16 @@
   <div v-if="inline" class="approval-inline-panel" :class="{ 'diff-dialog': isEditAction }">
     <div class="approval-content">
       <div class="details-box" :class="{ 'plan-details-box': isPlanApproval }">
+        <div v-if="isPlanApproval" class="plan-details-actions">
+          <button
+            type="button"
+            class="copy-icon-button"
+            :title="$t('common.copy')"
+            :aria-label="$t('common.copy')"
+            @click="copyPlanMarkdown">
+            <cs name="copy" />
+          </button>
+        </div>
         <div v-if="isEditAction" class="diff-view">
           <FilePreviewDiff
             :file-path="filePath"
@@ -59,6 +69,8 @@ import { useI18n } from 'vue-i18n'
 import MarkdownSimple from '@/components/workflow/MarkdownSimple.vue'
 import FilePreviewDiff from '@/components/workflow/FilePreviewDiff.vue'
 import { formatPlanApprovalMarkdown } from '@/composables/workflow/planApproval'
+import { writeClipboard } from '@/libs/clipboard'
+import { showMessage } from '@/libs/util'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -258,6 +270,16 @@ const extractShellCommand = payload => {
 const shellCommand = computed(() => extractShellCommand(detailPayload.value))
 const shellMarkdown = computed(() => `\`\`\`bash\n${shellCommand.value || ''}\n\`\`\``)
 
+const copyPlanMarkdown = async () => {
+  try {
+    await writeClipboard(planMarkdown.value)
+    showMessage(t('common.copied'), 'success')
+  } catch (error) {
+    console.error('Failed to copy plan:', error)
+    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+  }
+}
+
 // const dialogWidth = computed(() => {
 //   return isEditAction.value ? '90%' : '500px'
 // })
@@ -321,6 +343,31 @@ const onReject = () => {
     }
 
     &.plan-details-box {
+      .plan-details-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: var(--cs-space-xs);
+      }
+
+      .copy-icon-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        border: 0;
+        border-radius: var(--cs-border-radius-sm);
+        color: var(--cs-text-color-secondary);
+        background: transparent;
+        cursor: pointer;
+
+        &:hover {
+          color: var(--cs-text-color-primary);
+          background: var(--cs-hover-bg-color);
+        }
+      }
+
       .markdown-view {
         max-height: none;
         overflow: visible;

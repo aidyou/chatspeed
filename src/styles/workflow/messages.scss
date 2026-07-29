@@ -214,11 +214,14 @@
               background: linear-gradient(
                 90deg,
                 var(--cs-text-color-primary) 0%,
-                var(--cs-text-color-primary) 24%,
-                var(--el-color-primary-light-9) 36%,
-                var(--el-color-primary-light-7) 50%,
-                var(--el-color-primary-light-9) 64%,
-                var(--cs-text-color-primary) 76%,
+                var(--cs-text-color-primary) 25%,
+                color-mix(
+                  in srgb,
+                  var(--cs-text-color-primary) 70%,
+                  var(--cs-shimmer-inverse-color)
+                )
+                  50%,
+                var(--cs-text-color-primary) 75%,
                 var(--cs-text-color-primary) 100%
               );
               background-size: 220% 100%;
@@ -677,6 +680,32 @@
               margin-top: 2px;
               flex-shrink: 0;
               transition: transform 0.2s ease;
+            }
+
+            &__section-actions {
+              display: flex;
+              align-items: center;
+              gap: 6px;
+              flex-shrink: 0;
+            }
+
+            &__copy-button {
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              width: 26px;
+              height: 26px;
+              padding: 0;
+              border: 0;
+              border-radius: var(--cs-border-radius-sm);
+              color: var(--cs-text-color-secondary);
+              background: transparent;
+              cursor: pointer;
+
+              &:hover {
+                color: var(--cs-text-color-primary);
+                background: var(--cs-hover-bg-color);
+              }
             }
 
             &__task-chevron.expanded,
