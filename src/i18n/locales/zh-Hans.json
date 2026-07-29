@@ -871,6 +871,12 @@
   },
   "workflow": {
     "allowedShellCommands": "允许的 Shell 命令",
+    "terminal": {
+      "fullscreen": "切换终端全屏",
+      "minimize": "最小化终端",
+      "new": "新建终端",
+      "title": "终端"
+    },
     "approval": {
       "acceptanceContract": "验收契约",
       "acceptanceCriteria": "验收标准",

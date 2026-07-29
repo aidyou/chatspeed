@@ -144,6 +144,12 @@
           </div>
         </template>
       </div>
+
+      <div class="workflow-terminal-entry compact-terminal-entry" :class="{ blinking: terminalMinimized }" @click="$emit('open-terminal')">
+        <el-tooltip :content="$t('workflow.terminal.title')" placement="right" :hide-after="0" :enterable="false">
+          <cs name="bash" size="var(--cs-font-size-lg)" />
+        </el-tooltip>
+      </div>
     </div>
 
     <div v-else class="sidebar-tabs-container">
@@ -301,6 +307,10 @@
             @reference-path="$emit('insert-path-reference', $event)" />
         </el-tab-pane>
       </el-tabs>
+      <button class="workflow-terminal-entry expanded-terminal-entry" :class="{ blinking: terminalMinimized }" type="button" @click="$emit('open-terminal')">
+        <cs name="bash" />
+        <span>{{ $t('workflow.terminal.title') }}</span>
+      </button>
     </div>
   </el-aside>
 </template>
@@ -349,6 +359,10 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  terminalMinimized: {
+    type: Boolean,
+    default: false
+  },
   automations: {
     type: Array,
     default: () => []
@@ -375,7 +389,8 @@ const emit = defineEmits([
   'toggle-sidebar',
   'add-path-from-tree',
   'remove-path-from-tree',
-  'insert-path-reference'
+  'insert-path-reference',
+  'open-terminal'
 ])
 
 const activeSidebarTab = computed({

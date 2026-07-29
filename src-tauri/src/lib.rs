@@ -14,6 +14,7 @@ mod scraper;
 mod search;
 mod sensitive;
 mod shortcut;
+mod terminal;
 mod tools;
 mod tray;
 mod updater;
@@ -55,6 +56,7 @@ use commands::note::*;
 use commands::proxy_group::*;
 use commands::sensitive::*;
 use commands::setting::*;
+use commands::terminal::*;
 use commands::updater::{check_for_updates, install_and_restart};
 use commands::window::*;
 use commands::workflow::*;
@@ -301,6 +303,13 @@ pub async fn run() -> crate::error::Result<()> {
             // os
             get_os_info,
             get_env,
+            // workflow terminal (commands additionally enforce the workflow window label)
+            terminal_list_shells,
+            terminal_list_sessions,
+            terminal_create,
+            terminal_write,
+            terminal_resize,
+            terminal_close,
             // fs
             image_preview,
             image_source_url,
@@ -433,6 +442,11 @@ pub async fn run() -> crate::error::Result<()> {
                 match window.label() {
                     // For these windows, we just hide them.
                     "assistant" | "workflow" => {
+                        if window.label() == "workflow" {
+                            if let Some(terminal_manager) = window.try_state::<Arc<crate::terminal::TerminalManager>>() {
+                                terminal_manager.reset_workflow_window();
+                            }
+                        }
                         api.prevent_close();
                         // Check if the window is valid before trying to hide it.
                         if window.is_visible().unwrap_or(false) {
@@ -766,7 +780,12 @@ pub async fn run() -> crate::error::Result<()> {
             let workflow_manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
             app.manage(workflow_manager.clone());
 
-            // State 9: SubAgentFactory
+            // State 9: TerminalManager
+            // Owns workflow-window PTYs independently from the ReAct workflow runtime.
+            let terminal_manager = Arc::new(crate::terminal::TerminalManager::new(app.handle().clone()));
+            app.manage(terminal_manager);
+
+            // State 10: SubAgentFactory
             let factory: Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory> = Arc::new(crate::workflow::react::orchestrator::DefaultSubAgentFactory {
                 main_store: main_store.clone(),
                 chat_state: chat_state.clone(),

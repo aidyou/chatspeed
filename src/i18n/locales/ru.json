@@ -866,6 +866,12 @@
   },
   "workflow": {
     "allowedShellCommands": "Разрешённые Shell-команды",
+    "terminal": {
+      "fullscreen": "Переключить полноэкранный терминал",
+      "minimize": "Свернуть терминал",
+      "new": "Новый терминал",
+      "title": "Терминал"
+    },
     "approval": {
       "acceptanceContract": "Контракт приемки",
       "acceptanceCriteria": "Критерии приемки",

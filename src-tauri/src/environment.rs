@@ -1,7 +1,54 @@
 use std::env;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// A shell executable that can safely be offered to the workflow terminal UI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ShellDescriptor {
+    pub name: String,
+    pub path: String,
+}
+
+impl ShellDescriptor {
+    fn from_path(path: impl Into<PathBuf>) -> Option<Self> {
+        let path = path.into();
+        if !is_executable_file(&path) {
+            return None;
+        }
+
+        Some(Self {
+            name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string(),
+            path: path.to_string_lossy().into_owned(),
+        })
+    }
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.is_file()
+        && path
+            .metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
 
 #[cfg(target_os = "windows")]
 /// Attempts to retrieve the full system PATH environment variable on Windows.
@@ -53,7 +100,7 @@ fn get_shell_path() -> Option<String> {
     let shells = get_available_shells();
 
     for shell in shells {
-        // Helper to try executing a command and return path or error kind
+        let shell_path = shell.path;
         let try_command =
             |shell_name: &str, args: Vec<&str>| -> Result<Option<String>, std::io::ErrorKind> {
                 match Command::new(shell_name).args(&args).output() {
@@ -80,103 +127,179 @@ fn get_shell_path() -> Option<String> {
         // 1. Try interactive login shell first (most likely to have full user PATH)
         log::debug!(
             "Attempting to get PATH using interactive login shell: {} -l -i -c \"echo $PATH\"",
-            shell
+            shell_path
         );
-        match try_command(&shell, vec!["-l", "-i", "-c", "echo $PATH"]) {
+        match try_command(&shell_path, vec!["-l", "-i", "-c", "echo $PATH"]) {
             Ok(Some(path)) => {
-                log::debug!("Using {} -l -i -c to get PATH: {}", shell, path);
+                log::debug!("Using {} -l -i -c to get PATH", shell_path);
                 return Some(path);
             }
-            Err(std::io::ErrorKind::NotFound) => {
-                log::debug!(
-                    "Shell {} not found, skipping further attempts with this shell.",
-                    shell
-                );
-                continue; // Shell not found, try next one
-            }
-            _ => { /* Fall through to non-interactive attempt */ }
+            Err(std::io::ErrorKind::NotFound) => continue,
+            _ => {}
         }
 
-        // 2. If interactive login shell didn't yield a PATH, try non-interactive login shell
-        log::debug!(
-            "Attempting to get PATH using non-interactive login shell: {} -l -c \"echo $PATH\"",
-            shell
-        );
-        match try_command(&shell, vec!["-l", "-c", "echo $PATH"]) {
+        match try_command(&shell_path, vec!["-l", "-c", "echo $PATH"]) {
             Ok(Some(path)) => {
-                log::debug!("Using {} -l -c to get PATH: {}", shell, path);
+                log::debug!("Using {} -l -c to get PATH", shell_path);
                 return Some(path);
             }
-            Err(std::io::ErrorKind::NotFound) => {
-                log::debug!(
-                    "Shell {} not found, skipping further attempts with this shell.",
-                    shell
-                );
-                continue; // Should have been caught by interactive attempt, but for safety
-            }
-            _ => { /* Fall through to next shell */ }
+            Err(std::io::ErrorKind::NotFound) => continue,
+            _ => {}
         }
     }
     None
 }
 
-/// Discovers and returns a list of available shell executables on Unix-like systems.
-///
-/// The function attempts to find shells in the following order:
-/// 1. The user's default shell (from `SHELL` environment variable).
-/// 2. Common shell paths (e.g., `/bin/zsh`, `/bin/bash`).
-/// 3. Shells found using the `which` command.
-///
-/// The list is deduplicated while preserving the order of discovery.
-///
-/// # Returns
-/// - `Vec<String>`: A vector of paths to available shell executables.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn get_available_shells() -> Vec<String> {
-    let mut shells = Vec::new();
-
-    // 1. First try user's default shell
-    if let Ok(user_shell) = env::var("SHELL") {
-        shells.push(user_shell);
+fn supports_terminal_shell(shell: &ShellDescriptor) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(shell.name.as_str(), "zsh" | "bash")
     }
+    #[cfg(windows)]
+    {
+        matches!(
+            shell.name.to_ascii_lowercase().as_str(),
+            "pwsh.exe" | "powershell.exe" | "cmd.exe"
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
+}
 
-    // 2. Check common shells (ordered by priority)
-    let common_shells = vec![
-        "/bin/zsh",      // Modern macOS default
-        "/usr/bin/zsh",  // Some Linux distributions
-        "/bin/bash",     // Traditional default
-        "/usr/bin/bash", // Some Linux distributions
-        "/bin/sh",       // Most basic shell
-    ];
+/// Returns executable shells available for interactive workflow terminal sessions.
+///
+/// On Unix this honors `$SHELL`, then `/etc/shells`, conventional locations and PATH.
+/// Windows follows its native shell order instead of applying a Unix shell allowlist.
+pub(crate) fn get_available_shells() -> Vec<ShellDescriptor> {
+    let mut candidates = Vec::new();
 
-    for shell_path in common_shells {
-        if std::path::Path::new(shell_path).exists() {
-            shells.push(shell_path.to_string());
+    #[cfg(unix)]
+    {
+        if let Ok(shell) = env::var("SHELL") {
+            candidates.push(PathBuf::from(shell));
         }
-    }
 
-    // 3. Try to find via which command
-    let shell_names = vec!["zsh", "bash", "sh"];
-    for shell_name in shell_names {
-        if let Ok(output) = Command::new("which").arg(shell_name).output() {
-            if output.status.success() {
+        if let Ok(shells) = std::fs::read_to_string("/etc/shells") {
+            candidates.extend(shells.lines().filter_map(|line| {
+                let line = line.trim();
+                (!line.is_empty() && !line.starts_with('#')).then(|| PathBuf::from(line))
+            }));
+        }
+
+        candidates.extend([
+            PathBuf::from("/bin/zsh"),
+            PathBuf::from("/usr/bin/zsh"),
+            PathBuf::from("/bin/bash"),
+            PathBuf::from("/usr/bin/bash"),
+        ]);
+
+        for name in ["zsh", "bash"] {
+            if let Ok(output) = Command::new("which").arg(name).output() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path.is_empty() && !shells.contains(&path) {
-                    shells.push(path);
+                if output.status.success() && !path.is_empty() {
+                    candidates.push(PathBuf::from(path));
                 }
             }
         }
     }
 
-    // Deduplicate while preserving order
-    let mut unique_shells = Vec::new();
-    for shell in shells {
-        if !unique_shells.contains(&shell) {
-            unique_shells.push(shell);
+    #[cfg(windows)]
+    {
+        for name in ["pwsh.exe", "powershell.exe", "cmd.exe"] {
+            if let Ok(output) = Command::new("where").arg(name).output() {
+                let path = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if output.status.success() && !path.is_empty() {
+                    candidates.push(PathBuf::from(path));
+                }
+            }
         }
     }
 
-    unique_shells
+    let mut shells = Vec::new();
+    for candidate in candidates {
+        if let Some(shell) = ShellDescriptor::from_path(candidate) {
+            if supports_terminal_shell(&shell)
+                && !shells
+                    .iter()
+                    .any(|existing: &ShellDescriptor| existing.path == shell.path)
+            {
+                shells.push(shell);
+            }
+        }
+    }
+
+    shells
+}
+
+/// Gets the preferred interactive terminal shell for the current platform.
+pub(crate) fn get_default_shell() -> Option<ShellDescriptor> {
+    let shells = get_available_shells();
+
+    #[cfg(unix)]
+    if let Ok(user_shell) = env::var("SHELL") {
+        if let Some(shell) = shells.iter().find(|shell| shell.path == user_shell) {
+            return Some(shell.clone());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    let preferred = ["zsh", "bash"];
+    #[cfg(target_os = "linux")]
+    let preferred = ["bash", "zsh"];
+    #[cfg(windows)]
+    let preferred = ["pwsh.exe", "powershell.exe", "cmd.exe"];
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    let preferred: [&str; 0] = [];
+
+    preferred
+        .iter()
+        .find_map(|name| {
+            shells
+                .iter()
+                .find(|shell| shell.name.eq_ignore_ascii_case(name))
+                .cloned()
+        })
+        .or_else(|| shells.into_iter().next())
+}
+
+/// Builds the minimal environment required by a terminal child without exposing it to the UI.
+pub(crate) fn get_terminal_environment() -> Vec<(String, String)> {
+    let mut environment = env::vars().collect::<Vec<_>>();
+    let original_path = env::var("PATH").unwrap_or_default();
+    if let Some(shell_path) = get_shell_path() {
+        let merged_path = merge_paths(&original_path, &shell_path);
+        set_environment_value(&mut environment, "PATH", merged_path);
+    }
+
+    if !environment.iter().any(|(key, _)| key == "HOME") {
+        if let Some(home) = dirs::home_dir() {
+            set_environment_value(
+                &mut environment,
+                "HOME",
+                home.to_string_lossy().into_owned(),
+            );
+        }
+    }
+
+    environment
+}
+
+fn set_environment_value(environment: &mut Vec<(String, String)>, key: &str, value: String) {
+    if let Some((_, existing_value)) = environment
+        .iter_mut()
+        .find(|(existing_key, _)| existing_key == key)
+    {
+        *existing_value = value;
+    } else {
+        environment.push((key.to_string(), value));
+    }
 }
 
 /// Sets up environment variables, primarily by attempting to obtain and merge the full system PATH.
@@ -252,7 +375,37 @@ fn merge_paths(original: &str, new: &str) -> String {
     paths.join(separator)
 }
 
-/// Initializes the cross-platform environment when the application starts.
+#[cfg(test)]
+mod tests {
+    use super::{merge_paths, supports_terminal_shell, ShellDescriptor};
+
+    #[cfg(unix)]
+    #[test]
+    fn only_shells_with_terminal_prompt_contracts_are_selectable() {
+        let bash = ShellDescriptor {
+            name: "bash".to_string(),
+            path: "/bin/bash".to_string(),
+        };
+        let zsh = ShellDescriptor {
+            name: "zsh".to_string(),
+            path: "/bin/zsh".to_string(),
+        };
+        let sh = ShellDescriptor {
+            name: "sh".to_string(),
+            path: "/bin/sh".to_string(),
+        };
+        assert!(supports_terminal_shell(&bash));
+        assert!(supports_terminal_shell(&zsh));
+        assert!(!supports_terminal_shell(&sh));
+    }
+
+    #[test]
+    fn merged_path_prioritizes_login_shell_entries_without_duplicates() {
+        let merged = merge_paths("/usr/bin:/bin:/usr/bin", "/custom/bin:/usr/bin");
+        assert_eq!(merged, "/custom/bin:/usr/bin:/bin");
+    }
+}
+
 ///
 /// This function calls `setup_environment_variables` to configure the system PATH
 /// and then `set_additional_env_vars` to ensure other necessary environment variables are present.

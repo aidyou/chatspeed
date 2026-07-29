@@ -866,6 +866,12 @@
   },
   "workflow": {
     "allowedShellCommands": "허용된 Shell 명령",
+    "terminal": {
+      "fullscreen": "터미널 전체 화면 전환",
+      "minimize": "터미널 최소화",
+      "new": "새 터미널",
+      "title": "터미널"
+    },
     "approval": {
       "acceptanceContract": "인수 계약",
       "acceptanceCriteria": "인수 기준",

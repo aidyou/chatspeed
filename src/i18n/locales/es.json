@@ -866,6 +866,12 @@
   },
   "workflow": {
     "allowedShellCommands": "Comandos Shell permitidos",
+    "terminal": {
+      "fullscreen": "Alternar terminal a pantalla completa",
+      "minimize": "Minimizar terminal",
+      "new": "Nuevo terminal",
+      "title": "Terminal"
+    },
     "approval": {
       "acceptanceContract": "Contrato de aceptacion",
       "acceptanceCriteria": "Criterios de aceptacion",

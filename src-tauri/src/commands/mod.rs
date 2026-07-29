@@ -12,6 +12,7 @@ pub mod note;
 pub mod proxy_group;
 pub mod sensitive;
 pub mod setting;
+pub mod terminal;
 pub mod types;
 pub mod updater;
 pub mod window;

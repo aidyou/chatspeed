@@ -871,6 +871,12 @@
   },
   "workflow": {
     "allowedShellCommands": "允許的 Shell 指令",
+    "terminal": {
+      "fullscreen": "切換終端機全螢幕",
+      "minimize": "最小化終端機",
+      "new": "新增終端機",
+      "title": "終端機"
+    },
     "approval": {
       "acceptanceContract": "驗收契約",
       "acceptanceCriteria": "驗收標準",

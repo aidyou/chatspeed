@@ -866,6 +866,12 @@
   },
   "workflow": {
     "allowedShellCommands": "許可された Shell コマンド",
+    "terminal": {
+      "fullscreen": "ターミナルの全画面を切り替え",
+      "minimize": "ターミナルを最小化",
+      "new": "新しいターミナル",
+      "title": "ターミナル"
+    },
     "approval": {
       "acceptanceContract": "受け入れ契約",
       "acceptanceCriteria": "受け入れ基準",

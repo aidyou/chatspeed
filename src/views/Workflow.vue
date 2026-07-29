@@ -148,6 +148,7 @@
         :current-paths="currentPaths"
         :can-switch-workflow="canSwitchWorkflow"
         :is-dragging="isDragging"
+        :terminal-minimized="terminal.hasSessions && !terminal.visible"
         :automations="workflowAutomationStore.automations"
         :selected-automation-id="workflowAutomationStore.selectedAutomationId"
         v-model:active-tab="workflowSidebarActiveTab"
@@ -161,7 +162,8 @@
         @add-path-from-tree="onAddPathFromTree"
         @remove-path-from-tree="onRemovePathFromTree"
         @insert-path-reference="insertPathReference"
-        @toggle-sidebar="onToggleSidebar" />
+        @toggle-sidebar="onToggleSidebar"
+        @open-terminal="terminal.open" />
 
       <!-- Resize Handle -->
       <div
@@ -215,6 +217,8 @@
 
         <!-- Status Panel (Floating) -->
         <StatusPanel />
+
+        <TerminalPanel :terminal="terminal" />
 
         <!-- Input Area -->
         <WorkflowInputArea
@@ -344,6 +348,7 @@ import WorkflowSkillsSelector from '@/components/workflow/WorkflowSkillsSelector
 import WorkflowSidebar from '@/components/workflow/WorkflowSidebar.vue'
 import WorkflowMessageList from '@/components/workflow/WorkflowMessageList.vue'
 import WorkflowInputArea from '@/components/workflow/WorkflowInputArea.vue'
+import TerminalPanel from '@/components/workflow/TerminalPanel.vue'
 import WorkflowAutomationEditor from '@/components/workflow/automation/WorkflowAutomationEditor.vue'
 
 // Composables
@@ -354,6 +359,7 @@ import { useWorkflowApproval } from '@/composables/workflow/useWorkflowApproval'
 import { useWorkflowPaths } from '@/composables/workflow/useWorkflowPaths'
 import { useWorkflowInput } from '@/composables/workflow/useWorkflowInput'
 import { useWorkflowCore } from '@/composables/workflow/useWorkflowCore'
+import { useTerminal } from '@/composables/workflow/useTerminal'
 
 const IMAGE_FILE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'])
 
@@ -638,6 +644,8 @@ const {
   historyItemCount: computed(() => filteredWorkflows.value.length),
   automationItemCount: computed(() => workflowAutomationStore.automations.length)
 })
+
+const terminal = useTerminal(currentPaths)
 
 const builtinCommands = computed(() => {
   const commands = [
@@ -2266,6 +2274,12 @@ onMounted(async () => {
       inputAreaRef.value?.focus()
     }
   })
+
+  try {
+    await terminal.initialize()
+  } catch (error) {
+    console.error('Failed to initialize workflow terminal:', error)
+  }
 
   try {
     const osInfo = await invokeWrapper('get_os_info')
