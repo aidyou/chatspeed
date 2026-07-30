@@ -113,6 +113,9 @@
               :class="{ expanded: isMessageExpanded(message) }"
               @click="$emit('toggle-expand', message.displayId)">
               <cs :name="message.groupDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
+              <span v-if="message.groupDisplay.thoughtSummary" class="tool-group__thought-count">
+                {{ message.groupDisplay.thoughtSummary }}
+              </span>
               <span class="tool-group__summary-text">{{ message.groupDisplay.summary }}</span>
               <button
                 type="button"
@@ -122,7 +125,29 @@
                 <cs name="caret-down" size="14px" />
               </button>
             </div>
-            <div v-if="isMessageExpanded(message)" class="tool-detail collapsed-tool-group__body">
+            <div v-if="isMessageExpanded(message)" class="collapsed-tool-group__body">
+              <div
+                v-for="(thought, thoughtIndex) in message.groupedThoughts || []"
+                :key="`${message.displayId}_grouped_thought_${thoughtIndex}`"
+                class="reasoning-container collapsed-tool-group__thought"
+                :style="{ order: thought.groupOrder ?? thoughtIndex }">
+                <div class="reasoning-header" @click="toggleReasoningForMessage(thought)">
+                  <cs name="reasoning" size="14px" class="reasoning-icon" />
+                  <span class="reasoning-text">
+                    {{
+                      isReasoningExpandedForMessage(thought)
+                        ? $t('workflow.thinkingExpanded') || 'Thinking Process'
+                        : $t('workflow.thoughtCompleted') || 'Thought Complete'
+                    }}
+                  </span>
+                  <span class="reasoning-toggle">
+                    {{ isReasoningExpandedForMessage(thought) ? '▲' : '▼' }}
+                  </span>
+                </div>
+                <div v-if="isReasoningExpandedForMessage(thought)" class="reasoning-content">
+                  {{ thought.reasoning || thought.message }}
+                </div>
+              </div>
               <div
                 v-for="(tool, toolIndex) in message.groupedTools"
                 :key="`${message.displayId}_grouped_tool_${toolIndex}`"
@@ -130,7 +155,8 @@
                 :class="[
                   tool.toolDisplay?.toolType || 'tool-system',
                   tool.toolDisplay?.isError ? 'status-error' : 'status-success'
-                ]">
+                ]"
+                :style="{ order: tool.groupOrder ?? toolIndex }">
                 <div
                   class="tool-line title-wrap expandable"
                   :class="{
@@ -158,7 +184,7 @@
                   <span class="summary-text">{{ getToolSummaryText(tool) }}</span>
                   <span class="expand-hint">(click to expand)</span>
                 </div>
-                <div v-if="isToolMessageExpanded(tool)" class="tool-detail">
+                <div v-if="isToolMessageExpanded(tool)" class="tool-detail tool-detail--expanded">
                   <pre
                     v-if="isBashToolCall(tool)"
                     class="bash-command"
@@ -331,7 +357,7 @@
                   </div>
                   <div
                     v-if="isExplorationToolExpanded(message, groupIndex, toolIndex)"
-                    class="tool-detail">
+                    class="tool-detail tool-detail--expanded">
                     <pre
                       v-if="isBashToolCall(tool)"
                       class="bash-command"
@@ -520,7 +546,7 @@
                 <span class="summary-text">{{ getToolSummaryText(message) }}</span>
                 <span class="expand-hint">(click to expand)</span>
               </div>
-              <div v-if="isToolMessageExpanded(message)" class="tool-detail">
+              <div v-if="isToolMessageExpanded(message)" class="tool-detail tool-detail--expanded">
                 <pre
                   v-if="isBashToolCall(message) && !isApprovalPending(message)"
                   class="bash-command"
@@ -908,7 +934,6 @@ import {
   isWorkflowToolAwaitingExecution,
   shouldRenderSubAgentCard
 } from '@/composables/workflow/messageProjectionRules'
-import { normalizeShellCommandForDisplay } from '@/composables/workflow/toolDisplay'
 import { isWorkflowMcpTool } from '@/composables/workflow/toolClassification'
 import ApprovalDialog from './ApprovalDialog.vue'
 import FilePreviewDiff from './FilePreviewDiff.vue'
@@ -1543,13 +1568,9 @@ const TOOL_GROUP_LABEL_KEYS = {
   list_dir: 'workflow.toolGroups.readFile',
   read_file: 'workflow.toolGroups.readFile',
   skill: 'workflow.toolGroups.useSkill',
-  todo_create: 'workflow.toolGroups.createTask',
-  todo_get: 'workflow.toolGroups.updateTask',
-  todo_list: 'workflow.toolGroups.updateTask',
-  todo_update: 'workflow.toolGroups.updateTask',
   web_fetch: 'workflow.toolGroups.readWeb',
-  web_search: 'workflow.toolGroups.webSearch',
-  write_file: 'workflow.toolGroups.createFile'
+  web_search: 'workflow.toolGroups.fileSearch',
+  write_file: 'workflow.toolGroups.editFile'
 }
 
 const isCollapsedToolGroupMessage = message => message?.metadata?.message_kind === 'tool_group'
@@ -1561,20 +1582,17 @@ const getCollapsedToolGroupExpandId = (messages, index) => {
   return `tool_group:${firstToolCallId || firstId}`
 }
 
+const getToolGroupThoughtSummary = count => {
+  if (!count) return ''
+  return t('workflow.toolGroups.thoughtChangeCount', { count })
+}
+
 const truncateToolGroupText = (value, maxLength = 48) => {
   const text = String(value || '')
     .replace(/\s+/g, ' ')
     .trim()
   if (!text) return ''
   return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text
-}
-
-const normalizeToolPathLabel = value => {
-  const normalized = String(value || '')
-    .replace(/\\/g, '/')
-    .trim()
-  if (!normalized) return ''
-  return normalized.split('/').filter(Boolean).pop() || normalized
 }
 
 const getReadOnlyToolCategory = toolName => {
@@ -1585,95 +1603,22 @@ const getReadOnlyToolCategory = toolName => {
 
 const getToolGroupLabel = message => {
   const toolName = getMessageToolName(message)
+  if (TODO_TOOL_NAMES.has(toolName)) return t('workflow.toolGroups.taskChanges')
   if (isWorkflowMcpTool(toolName)) return t('workflow.toolGroups.callMcp')
   return t(TOOL_GROUP_LABEL_KEYS[toolName] || 'workflow.toolGroups.useTool')
 }
 
-const getToolGroupPreview = message => {
-  const toolName = getMessageToolName(message)
-  const args = getToolCallArguments(message) || {}
-
-  if (toolName === 'read_file' || toolName === 'list_dir' || toolName === 'edit_file' || toolName === 'write_file') {
-    return normalizeToolPathLabel(
-      args.file_path || args.path || getDiffFilePath(message) || message?.toolDisplay?.target || ''
-    )
-  }
-
-  if (toolName === 'grep' || toolName === 'glob') {
-    return truncateToolGroupText(args.pattern || message?.toolDisplay?.target || '')
-  }
-
-  if (toolName === 'web_search') {
-    const query = Array.isArray(args.query) ? args.query.join(', ') : args.query
-    return truncateToolGroupText(query || message?.toolDisplay?.target || '')
-  }
-
-  if (toolName === 'web_fetch') {
-    return truncateToolGroupText(args.url || message?.toolDisplay?.target || '')
-  }
-
-  if (toolName === 'bash') {
-    return getBashCommandPreview(message)
-  }
-
-  if (toolName === 'skill') {
-    return truncateToolGroupText(args.skill || message?.toolDisplay?.target || '')
-  }
-
-  if (TODO_TOOL_NAMES.has(toolName)) {
-    return truncateToolGroupText(
-      args.subject || args.todo_id || message?.toolDisplay?.target || message?.toolDisplay?.summary || ''
-    )
-  }
-
-  if (isWorkflowMcpTool(toolName)) {
-    const display = message?.toolDisplay || {}
-    return truncateToolGroupText(display.target || display.action || toolName)
-  }
-
-  return truncateToolGroupText(message?.toolDisplay?.target || message?.toolDisplay?.summary || '')
-}
-
 const buildToolGroupSummary = messages => {
-  const operations = new Map()
+  const counts = new Map()
 
   messages.forEach(message => {
     const label = getToolGroupLabel(message)
-    const preview = getToolGroupPreview(message)
-    const key = label
-    if (!key || !label) return
-
-    let operation = operations.get(key)
-    if (!operation) {
-      operation = {
-        label,
-        previewCounts: new Map(),
-        withoutPreviewCount: 0
-      }
-      operations.set(key, operation)
-    }
-
-    if (preview) {
-      operation.previewCounts.set(preview, (operation.previewCounts.get(preview) || 0) + 1)
-    } else {
-      operation.withoutPreviewCount += 1
-    }
+    if (!label) return
+    counts.set(label, (counts.get(label) || 0) + 1)
   })
 
   return truncateToolGroupText(
-    Array.from(operations.values())
-      .map(operation => {
-        const previews = Array.from(operation.previewCounts, ([preview, count]) =>
-          count > 1 ? `${preview}(${count})` : preview
-        )
-        if (operation.withoutPreviewCount > 0) {
-          previews.push(
-            operation.withoutPreviewCount > 1 ? `(${operation.withoutPreviewCount})` : ''
-          )
-        }
-        return [operation.label, ...previews.filter(Boolean)].join(' ')
-      })
-      .join(' · '),
+    Array.from(counts, ([label, count]) => `${label} x${count}`).join(' · '),
     120
   )
 }
@@ -1785,26 +1730,10 @@ const projectPendingToolGroups = messages => {
       })
     }
 
-    projected.push(buildToolGroupMessage(groupedTools, index))
+    projected.push(buildToolGroupMessage(groupedTools, index, [], true))
   })
 
   return projected
-}
-
-const getWorkflowDisplayRoots = () => {
-  const workflow = workflowStore.currentWorkflow
-  const roots = [
-    ...(Array.isArray(workflow?.allowedPaths) ? workflow.allowedPaths : []),
-    ...(Array.isArray(workflow?.agentConfig?.allowedPaths) ? workflow.agentConfig.allowedPaths : [])
-  ]
-  return [...new Set(roots.filter(Boolean))]
-}
-
-const getBashCommandPreview = message => {
-  const args = getToolCallArguments(message) || {}
-  const command =
-    args.command || message?.toolDisplay?.target || message?.toolDisplay?.summary || ''
-  return truncateToolGroupText(normalizeShellCommandForDisplay(command, getWorkflowDisplayRoots()), 60)
 }
 
 const TOOL_GROUP_ICONS = {
@@ -1815,10 +1744,11 @@ const TOOL_GROUP_ICONS = {
   todo_tools: 'todo'
 }
 
-const buildToolGroupMessage = (messages, index) => {
+const buildToolGroupMessage = (messages, index, thoughts = [], isOngoing = false) => {
   const kinds = new Set(messages.map(getCollapsibleToolGroupKind).filter(Boolean))
   const [singleKind] = kinds
   const kind = kinds.size === 1 ? singleKind : 'mixed_tools'
+  const thoughtCount = thoughts.length
 
   return {
     ...messages[0],
@@ -1827,34 +1757,147 @@ const buildToolGroupMessage = (messages, index) => {
     metadata: {
       ...(messages[0]?.metadata || {}),
       message_kind: 'tool_group',
-      tool_group_kind: kind
+      tool_group_kind: kind,
+      tool_group_thought_count: thoughtCount,
+      tool_group_is_ongoing: isOngoing
     },
     groupDisplay: {
       icon: TOOL_GROUP_ICONS[kind] || 'tool',
+      thoughtSummary: getToolGroupThoughtSummary(thoughtCount),
       summary: buildToolGroupSummary(messages)
     },
+    groupedThoughts: thoughts,
     groupedTools: messages
   }
 }
 
-const collapseToolMessageGroups = messages => {
+const isToolGroupBoundaryMessage = message => {
+  if (!message) return true
+  if (isCollapsedToolGroupMessage(message)) return false
+  if (message.role === 'user') return true
+  if (isContextSnapshotMessage(message) || isManualClearContextMessage(message)) return true
+  if (isCompletionReportMessage(message)) return true
+  if (isExplorationBatchMessage(message)) return true
+  if (message.role === 'assistant') {
+    return !isThinkOnlyAssistantMessage(message)
+  }
+  if (message.role === 'tool') {
+    if (!getCollapsibleToolGroupKind(message)) return true
+    if (message?.toolDisplay?.isError || message?.isRejected) return true
+  }
+  return false
+}
+
+const isToolGroupOngoingBoundaryMessage = message => {
+  if (!message) return false
+  if (isCollapsedToolGroupMessage(message)) return false
+  if (message.role === 'user') return true
+  if (isContextSnapshotMessage(message) || isManualClearContextMessage(message)) return true
+  if (isCompletionReportMessage(message) || isFinishTaskMessage(message)) return true
+  if (isExplorationBatchMessage(message)) return true
+  if (message.role === 'assistant') {
+    return !!props.removeSystemReminder(message?.message || '').trim()
+  }
+  if (message.role === 'tool') {
+    if (isApprovalPending(message)) return true
+    if (!getCollapsibleToolGroupKind(message)) return true
+    if (message?.toolDisplay?.isError || message?.isRejected) return true
+  }
+  return false
+}
+
+const hasOngoingToolGroupAfter = (messages, startIndex) => {
+  for (let index = startIndex; index < messages.length; index += 1) {
+    if (isToolGroupOngoingBoundaryMessage(messages[index])) return false
+  }
+  return true
+}
+
+const buildGroupedThoughtItem = (message, index, order = index) => ({
+  ...message,
+  displayId: `${message?.displayId || message?.id || `thought_${index}`}:tool_group_thought`,
+  groupOrder: order,
+  sourceMessage: message
+})
+
+const getToolActivitySeedKind = message =>
+  isThinkOnlyAssistantMessage(message) ||
+  getCollapsibleToolGroupKind(message) ||
+  isCollapsedToolGroupMessage(message)
+
+const collectContiguousToolMessages = (messages, startIndex) => {
+  const tools = []
+  let nextIndex = startIndex
+  while (nextIndex < messages.length && getCollapsibleToolGroupKind(messages[nextIndex])) {
+    tools.push(messages[nextIndex])
+    nextIndex += 1
+  }
+  return { tools, nextIndex }
+}
+
+const collectToolActivityMessage = (message, index, thoughts, tools) => {
+  if (isThinkOnlyAssistantMessage(message)) {
+    thoughts.push(buildGroupedThoughtItem(message, index, index))
+    return
+  }
+
+  if (isCollapsedToolGroupMessage(message)) {
+    ;(message.groupedThoughts || []).forEach((thought, thoughtIndex) => {
+      thoughts.push(buildGroupedThoughtItem(thought, `${index}_${thoughtIndex}`, index + thoughtIndex / 1000))
+    })
+    ;(message.groupedTools || []).forEach((tool, toolIndex) => {
+      if (getCollapsibleToolGroupKind(tool)) {
+        tools.push({ ...tool, groupOrder: tool.groupOrder ?? index + (toolIndex + 1) / 1000 })
+      }
+    })
+    return
+  }
+
+  if (getCollapsibleToolGroupKind(message)) {
+    tools.push({ ...message, groupOrder: index })
+  }
+}
+
+const collapseToolActivityGroups = messages => {
   const collapsed = []
 
   for (let index = 0; index < messages.length; ) {
     const current = messages[index]
 
-    if (getCollapsibleToolGroupKind(current)) {
-      const group = [current]
-      let nextIndex = index + 1
+    if (getToolActivitySeedKind(current)) {
+      if (getCollapsibleToolGroupKind(current)) {
+        const contiguousGroup = collectContiguousToolMessages(messages, index)
+        const nextMessage = messages[contiguousGroup.nextIndex]
+        if (!isThinkOnlyAssistantMessage(nextMessage) && !isCollapsedToolGroupMessage(nextMessage)) {
+          collapsed.push(
+            buildToolGroupMessage(
+              contiguousGroup.tools,
+              index,
+              [],
+              hasOngoingToolGroupAfter(messages, contiguousGroup.nextIndex)
+            )
+          )
+          index = contiguousGroup.nextIndex
+          continue
+        }
+      }
 
-      while (nextIndex < messages.length && getCollapsibleToolGroupKind(messages[nextIndex])) {
-        group.push(messages[nextIndex])
+      const thoughts = []
+      const tools = []
+      let nextIndex = index
+
+      while (nextIndex < messages.length && !isToolGroupBoundaryMessage(messages[nextIndex])) {
+        collectToolActivityMessage(messages[nextIndex], nextIndex, thoughts, tools)
         nextIndex += 1
       }
 
-      collapsed.push(buildToolGroupMessage(group, index))
-      index = nextIndex
-      continue
+      if (tools.length > 0) {
+        collapsed.push(
+          buildToolGroupMessage(tools, index, thoughts, hasOngoingToolGroupAfter(messages, nextIndex))
+        )
+        index = nextIndex
+        continue
+      }
     }
 
     collapsed.push(current)
@@ -1866,7 +1909,7 @@ const collapseToolMessageGroups = messages => {
 
 const visibleMessages = computed(() =>
   excludeLeadingManualClearContextMarkers(
-    collapseToolMessageGroups(
+    collapseToolActivityGroups(
       projectPendingToolGroups(
         collapseAssistantCompletionPairs(
           collapseRepeatedFinishTaskErrors(
@@ -1952,11 +1995,27 @@ const isToolAwaitingExecution = message => {
 const isToolMessageExpanded = message =>
   isApprovalPending(message) || props.isMessageExpanded(message)
 
-const isCollapsedToolGroupRunning = message =>
-  Array.isArray(message?.groupedTools) &&
-  message.groupedTools.some(
-    tool => String(tool?.metadata?.execution_status || '').toLowerCase() === 'running'
-  )
+const TOOL_GROUP_RUNNING_STATUSES = new Set([
+  'running',
+  'pending',
+  'queued',
+  'waiting',
+  'awaiting_execution',
+  'approval_submitted'
+])
+
+const isToolGroupItemRunning = tool => {
+  const executionStatus = String(tool?.metadata?.execution_status || '').toLowerCase()
+  if (TOOL_GROUP_RUNNING_STATUSES.has(executionStatus)) return true
+  if (isToolAwaitingExecution(tool)) return true
+  const toolCallId = String(tool?.metadata?.tool_call_id || '').trim()
+  return !!toolCallId && approvedSubmissionIds.has(toolCallId) && isApprovalInFlight(tool)
+}
+
+const isCollapsedToolGroupRunning = message => {
+  if (message?.metadata?.tool_group_is_ongoing) return true
+  return Array.isArray(message?.groupedTools) && message.groupedTools.some(isToolGroupItemRunning)
+}
 
 const getToolSummaryText = message =>
   isToolAwaitingExecution(message)
@@ -3209,8 +3268,19 @@ defineExpose({
   min-width: 0;
 }
 
+.tool-group__thought-count {
+  flex: 0 0 auto;
+  padding: 1px var(--cs-space-xs);
+  border-radius: var(--cs-border-radius-full);
+  background: color-mix(in srgb, var(--el-color-primary) 12%, transparent);
+  color: var(--el-color-primary);
+  font-size: var(--cs-font-size-xs);
+  font-weight: 600;
+  line-height: 1.6;
+}
+
 .tool-group__summary-text {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3224,7 +3294,7 @@ defineExpose({
   flex: 0 0 auto;
   width: var(--cs-size-md);
   height: var(--cs-size-md);
-  margin-left: auto;
+  margin-left: 10px;
   padding: 0;
   border: 0;
   border-radius: var(--cs-border-radius-full);
@@ -3256,6 +3326,38 @@ defineExpose({
   flex-direction: column;
   gap: var(--cs-space-sm);
   margin-bottom: 0;
+  padding-top: var(--cs-space-sm);
+  animation: tool-expand-enter 0.16s ease-out both;
+  will-change: opacity, transform;
+}
+
+.tool-detail--expanded {
+  animation: tool-expand-enter 0.16s ease-out both;
+  will-change: opacity, transform;
+}
+
+@keyframes tool-expand-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .collapsed-tool-group__body,
+  .tool-detail--expanded {
+    animation: none;
+    will-change: auto;
+  }
+}
+
+.collapsed-tool-group__thought .reasoning-content {
+  background: none !important;
 }
 
 .choice-options--readonly {

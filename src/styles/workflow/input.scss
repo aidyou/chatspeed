@@ -201,11 +201,40 @@ footer.input-container {
     }
 
     .input {
+        position: relative;
         display: flex;
         flex-direction: column;
-        background-color: var(--cs-input-bg-color);
+        overflow: hidden;
+        background:
+            linear-gradient(
+                180deg,
+                color-mix(in srgb, var(--cs-bg-color) 72%, var(--cs-input-bg-color)),
+                var(--cs-input-bg-color)
+            );
         border-radius: var(--cs-border-radius-lg);
+        box-shadow:
+            inset 0 0 0 1px color-mix(in srgb, var(--cs-border-color) 82%, transparent),
+            0 10px 28px color-mix(in srgb, var(--cs-text-color-primary) 5%, transparent);
         padding: var(--cs-space-sm) var(--cs-space) var(--cs-space-xs);
+
+        &:hover {
+            box-shadow:
+                inset 0 0 0 1px color-mix(in srgb, var(--cs-color-primary) 26%, var(--cs-border-color)),
+                0 10px 28px color-mix(in srgb, var(--cs-text-color-primary) 6%, transparent);
+        }
+
+        &:focus-within {
+            background:
+                linear-gradient(
+                    180deg,
+                    color-mix(in srgb, var(--cs-color-primary) 6%, var(--cs-bg-color)),
+                    var(--cs-input-bg-color)
+                );
+            box-shadow:
+                inset 0 0 0 1px color-mix(in srgb, var(--cs-color-primary) 68%, var(--cs-border-color)),
+                0 0 0 3px color-mix(in srgb, var(--cs-color-primary) 12%, transparent),
+                0 12px 30px color-mix(in srgb, var(--cs-text-color-primary) 7%, transparent);
+        }
 
         .icons {
             display: flex;
@@ -261,11 +290,17 @@ footer.input-container {
             .el-textarea__inner {
                 border: none;
                 box-shadow: none;
-                background: var(--cs-input-bg-color) !important;
+                background: transparent !important;
                 resize: none !important;
                 color: var(--cs-text-color-primary);
+                caret-color: var(--cs-color-primary);
                 padding-left: var(--cs-space-xxs);
                 padding-right: var(--cs-space-xxs);
+
+                &::placeholder {
+                    color: var(--cs-text-color-secondary);
+                    opacity: 0.72;
+                }
             }
         }
 

@@ -101,8 +101,18 @@ assert.match(
 )
 assert.match(
   messageList,
-  /count > 1 \? `\$\{preview\}\(\$\{count\}\)` : preview/,
-  'repeated targets must display a single target with its occurrence count'
+  /return operation\.countStyle === 'x' \? `\$\{preview\} x\$\{count\}` : `\$\{preview\}\(\$\{count\}\)`/,
+  'tool group repeated-target formatting must support compact xN operation summaries without losing default target counts'
+)
+assert.match(
+  messageList,
+  /OPERATION_ONLY_TOOL_NAMES = new Set\(\['grep', 'glob', 'web_search', 'web_fetch'\]\)/,
+  'argument-heavy search and web tools must aggregate by operation instead of verbose parameters'
+)
+assert.match(
+  messageList,
+  /`\$\{label\}:mcp:\$\{preview \|\| 'unknown'\}`/,
+  'MCP tools must aggregate by server name, not individual MCP method name'
 )
 assert.match(
   messageList,
