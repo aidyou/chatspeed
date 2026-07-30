@@ -382,10 +382,6 @@ impl ShellPolicyEngine {
         command_str: &str,
         restrict_to_planning: bool,
     ) -> ShellDecision {
-        if let Some(decision) = self.match_custom_rule(command_str) {
-            return decision;
-        }
-
         let normalized_segments =
             match self.extract_policy_match_segments(command_str, restrict_to_planning) {
                 Ok(segments) => segments,
@@ -394,6 +390,16 @@ impl ShellPolicyEngine {
 
         if normalized_segments.is_empty() {
             return ShellDecision::Allow;
+        }
+
+        // A rule matching the first command must never authorize later commands
+        // in a compound shell expression. Preserve full-command matching only
+        // for a genuinely single command, then require every compound segment
+        // to match an explicit policy rule below.
+        if normalized_segments.len() == 1 {
+            if let Some(decision) = self.match_custom_rule(command_str) {
+                return decision;
+            }
         }
 
         let mut final_decision = ShellDecision::Allow;
@@ -2254,6 +2260,36 @@ mod tests {
         )));
         let engine = ShellPolicyEngine::new(
             guard,
+            vec![
+                ShellPolicyRule {
+                    pattern: "^git diff($| .*)".to_string(),
+                    decision: ShellDecision::Allow,
+                    description: None,
+                },
+                ShellPolicyRule {
+                    pattern: "^head($| .*)".to_string(),
+                    decision: ShellDecision::Allow,
+                    description: None,
+                },
+            ],
+        );
+
+        let result = engine.check("cd . && git diff src/main.rs | head -80", false);
+
+        assert_eq!(result, ShellDecision::Allow);
+    }
+
+    #[test]
+    fn test_policy_engine_does_not_allow_unmatched_mutations_after_allowed_git_diff() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_root],
+            vec![],
+            vec![],
+        )));
+        let engine = ShellPolicyEngine::new(
+            guard,
             vec![ShellPolicyRule {
                 pattern: "^git diff($| .*)".to_string(),
                 decision: ShellDecision::Allow,
@@ -2261,9 +2297,12 @@ mod tests {
             }],
         );
 
-        let result = engine.check("cd . && git diff src/main.rs | head -80", false);
+        let result = engine.check(
+            "git diff --check && git add -- src/lib.rs && git commit -m 'unsafe'",
+            false,
+        );
 
-        assert_eq!(result, ShellDecision::Allow);
+        assert!(matches!(result, ShellDecision::Review(_)));
     }
 
     #[test]
@@ -2278,11 +2317,18 @@ mod tests {
         )));
         let engine = ShellPolicyEngine::new(
             guard,
-            vec![ShellPolicyRule {
-                pattern: "^cargo check($| .*)".to_string(),
-                decision: ShellDecision::Allow,
-                description: None,
-            }],
+            vec![
+                ShellPolicyRule {
+                    pattern: "^cargo check($| .*)".to_string(),
+                    decision: ShellDecision::Allow,
+                    description: None,
+                },
+                ShellPolicyRule {
+                    pattern: "^tail($| .*)".to_string(),
+                    decision: ShellDecision::Allow,
+                    description: None,
+                },
+            ],
         );
 
         let result = engine.check(

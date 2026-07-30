@@ -890,6 +890,9 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                                 status
                                                     .index_to_tool_id
                                                     .insert(index, tool_id.clone());
+                                                status
+                                                    .tool_id_to_index
+                                                    .insert(tool_id.clone(), index);
                                                 update_message_block(&mut status, tool_id.clone());
                                             }
                                             unified_chunks.push(UnifiedStreamChunk::ToolUseStart {
@@ -966,10 +969,6 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                                     status.estimated_output_tokens +=
                                                         estimate_tokens(partial_json);
                                                 }
-                                                update_message_block(
-                                                    &mut status,
-                                                    "tool_use".to_string(),
-                                                );
                                                 id
                                             } else {
                                                 String::new()
@@ -997,8 +996,8 @@ impl BackendAdapter for ClaudeBackendAdapter {
                                 if let Ok(mut status) = sse_status.write() {
                                     let tool_id = status.index_to_tool_id.remove(&index);
                                     if let Some(id) = tool_id {
-                                        unified_chunks
-                                            .push(UnifiedStreamChunk::ToolUseEnd { id: id });
+                                        status.tool_id_to_index.remove(&id);
+                                        unified_chunks.push(UnifiedStreamChunk::ToolUseEnd { id });
                                     } else if !status.tool_id.is_empty()
                                         && status.current_content_block.contains("tool")
                                     {
@@ -1083,5 +1082,117 @@ impl BackendAdapter for ClaudeBackendAdapter {
         Err(anyhow::anyhow!(
             "Claude protocol does not support embeddings"
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ccproxy::adapter::backend::BackendAdapter;
+    use serde_json::json;
+
+    async fn adapt_event(
+        adapter: &ClaudeBackendAdapter,
+        status: Arc<RwLock<SseStatus>>,
+        event: serde_json::Value,
+    ) -> Vec<UnifiedStreamChunk> {
+        let event_name = event
+            .get("type")
+            .and_then(|value| value.as_str())
+            .expect("test event should have a type");
+        let chunk = format!("event: {event_name}\ndata: {}\n\n", event);
+
+        adapter
+            .adapt_stream_chunk(bytes::Bytes::from(chunk), status)
+            .await
+            .expect("Claude stream event should adapt")
+    }
+
+    #[tokio::test]
+    async fn preserves_tool_input_delta_index_and_mapping() {
+        let adapter = ClaudeBackendAdapter;
+        let status = Arc::new(RwLock::new(SseStatus::default()));
+
+        let start_chunks = adapt_event(
+            &adapter,
+            status.clone(),
+            json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_upstream",
+                    "name": "complete_workflow",
+                    "input": {}
+                }
+            }),
+        )
+        .await;
+
+        let tool_id = match start_chunks.as_slice() {
+            [UnifiedStreamChunk::ContentBlockStart { index, .. }, UnifiedStreamChunk::ToolUseStart {
+                id,
+                index: tool_index,
+                ..
+            }] => {
+                assert_eq!(*index, 0);
+                assert_eq!(*tool_index, 0);
+                id.clone()
+            }
+            other => panic!("unexpected start chunks: {other:?}"),
+        };
+
+        let deltas = ["{\\\"summary\\\":\\\"已完成", "：修复", "\\\"}"];
+        let mut assembled = String::new();
+        for delta in deltas {
+            let chunks = adapt_event(
+                &adapter,
+                status.clone(),
+                json!({
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": delta
+                    }
+                }),
+            )
+            .await;
+
+            match chunks.as_slice() {
+                [UnifiedStreamChunk::ToolUseDelta { id, delta, index }] => {
+                    assert_eq!(id, &tool_id);
+                    assert_eq!(*index, 0);
+                    assembled.push_str(delta);
+                }
+                other => panic!("unexpected delta chunks: {other:?}"),
+            }
+        }
+
+        assert_eq!(assembled, "{\\\"summary\\\":\\\"已完成：修复\\\"}");
+        {
+            let status = status.read().expect("status lock should be readable");
+            assert_eq!(status.message_index, 0);
+            assert_eq!(status.tool_id_to_index.get(&tool_id), Some(&0));
+        }
+
+        let stop_chunks = adapt_event(
+            &adapter,
+            status.clone(),
+            json!({
+                "type": "content_block_stop",
+                "index": 0
+            }),
+        )
+        .await;
+        assert!(matches!(
+            stop_chunks.as_slice(),
+            [
+                UnifiedStreamChunk::ContentBlockStop { index: 0 },
+                UnifiedStreamChunk::ToolUseEnd { id }
+            ] if id == &tool_id
+        ));
+        let status = status.read().expect("status lock should be readable");
+        assert!(status.tool_id_to_index.get(&tool_id).is_none());
     }
 }

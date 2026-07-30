@@ -165,21 +165,29 @@ fn validate_window_position<'a>(
         return None;
     }
 
-    let matched_monitor =
-        find_monitor_for_position(monitors, saved_pos.x, saved_pos.y, window_size)?;
-
-    if let Some(saved_screen_name) = saved_pos.screen_name.as_deref() {
-        let current_screen_name = matched_monitor.name();
-        if current_screen_name.map(|name| name.as_str()) != Some(saved_screen_name) {
+    let saved_screen_name = match saved_pos.screen_name.as_deref() {
+        Some(name) => name,
+        None => {
             warn!(
-                "Saved window position ({}, {}) expected screen {:?}, but matched {:?}. Ignoring saved position.",
-                saved_pos.x,
-                saved_pos.y,
-                saved_pos.screen_name,
-                current_screen_name
+                "Saved window position ({}, {}) does not include a screen name. Ignoring saved position.",
+                saved_pos.x, saved_pos.y
             );
             return None;
         }
+    };
+
+    let matched_monitor =
+        find_monitor_for_position(monitors, saved_pos.x, saved_pos.y, window_size)?;
+    let current_screen_name = matched_monitor.name();
+    if current_screen_name.map(|name| name.as_str()) != Some(saved_screen_name) {
+        warn!(
+            "Saved window position ({}, {}) expected screen {:?}, but matched {:?}. Ignoring saved position.",
+            saved_pos.x,
+            saved_pos.y,
+            saved_pos.screen_name,
+            current_screen_name
+        );
+        return None;
     }
 
     Some(matched_monitor)
@@ -201,16 +209,10 @@ pub fn is_position_on_any_screen<R: tauri::Runtime>(
     position_y: i32,
     window_size: PhysicalSize<u32>,
 ) -> bool {
-    let saved_pos = MainWindowPosition {
-        screen_name: None,
-        x: position_x,
-        y: position_y,
-    };
-
     match app_handle.available_monitors() {
         Ok(monitors) => {
             let is_on_screen =
-                validate_window_position(&monitors, &saved_pos, window_size).is_some();
+                find_monitor_for_position(&monitors, position_x, position_y, window_size).is_some();
 
             if !is_on_screen {
                 warn!(
@@ -224,6 +226,57 @@ pub fn is_position_on_any_screen<R: tauri::Runtime>(
         Err(e) => {
             error!("Failed to get available monitors: {}", e);
             false
+        }
+    }
+}
+
+fn center_window_on_primary_monitor(window: &WebviewWindow, window_size: PhysicalSize<u32>) {
+    match window.app_handle().primary_monitor() {
+        Ok(Some(monitor)) => {
+            let monitor_position = monitor.position();
+            let monitor_size = monitor.size();
+            let x_offset = (monitor_size.width.saturating_sub(window_size.width) / 2) as i32;
+            let y_offset = (monitor_size.height.saturating_sub(window_size.height) / 2) as i32;
+            let center_position =
+                PhysicalPosition::new(monitor_position.x + x_offset, monitor_position.y + y_offset);
+
+            if let Err(e) = window.set_position(tauri::Position::Physical(center_position)) {
+                warn!(
+                    "Failed to center window '{}' on primary monitor: {}. Falling back to window.center().",
+                    window.label(),
+                    e
+                );
+                if let Err(center_err) = window.center() {
+                    error!(
+                        "Failed to center window '{}': {}",
+                        window.label(),
+                        center_err
+                    );
+                }
+            }
+        }
+        Ok(None) => {
+            warn!(
+                "Primary monitor is unavailable when centering window '{}'. Falling back to window.center().",
+                window.label()
+            );
+            if let Err(e) = window.center() {
+                error!("Failed to center window '{}': {}", window.label(), e);
+            }
+        }
+        Err(e) => {
+            warn!(
+                "Failed to get primary monitor when centering window '{}': {}. Falling back to window.center().",
+                window.label(),
+                e
+            );
+            if let Err(center_err) = window.center() {
+                error!(
+                    "Failed to center window '{}': {}",
+                    window.label(),
+                    center_err
+                );
+            }
         }
     }
 }
@@ -803,13 +856,7 @@ pub fn restore_window_config(window: &WebviewWindow, main_store: Arc<MainStore>)
                         saved_pos.y,
                         e
                     );
-                    if let Err(center_err) = window.center() {
-                        error!(
-                            "Failed to center window '{}' after set_position failed: {}",
-                            window.label(),
-                            center_err
-                        );
-                    }
+                    center_window_on_primary_monitor(window, current_window_size);
                 } else {
                     #[cfg(debug_assertions)]
                     log::debug!(
@@ -826,10 +873,7 @@ pub fn restore_window_config(window: &WebviewWindow, main_store: Arc<MainStore>)
                         saved_pos.y,
                         window.label(),
                     );
-                if let Err(e) = window.center() {
-                    error!("Failed to center window '{}': {}", window.label(), e);
-                    // Consider what to do if even centering fails, though it's rare.
-                }
+                center_window_on_primary_monitor(window, current_window_size);
             }
         } else {
             // Saved position is (0,0), which we treat as "center" or "unspecified"
@@ -838,9 +882,7 @@ pub fn restore_window_config(window: &WebviewWindow, main_store: Arc<MainStore>)
                 "Saved position for window '{}' is (0,0) or default. Centering window.",
                 window.label(),
             );
-            if let Err(e) = window.center() {
-                error!("Failed to center window '{}': {}", window.label(), e);
-            }
+            center_window_on_primary_monitor(window, current_window_size);
         }
     }
 }

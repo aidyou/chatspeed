@@ -95,7 +95,19 @@ pub(crate) fn split_shell_command_segments(command: &str) -> Vec<String> {
                     current.clear();
                     continue;
                 }
-                '&' | '|' => {
+                '|' => {
+                    if chars.peek() == Some(&ch) {
+                        let _ = chars.next();
+                    } else if chars.peek() == Some(&'&') {
+                        let _ = chars.next();
+                    }
+                    if !current.trim().is_empty() {
+                        segments.push(current.trim().to_string());
+                    }
+                    current.clear();
+                    continue;
+                }
+                '&' => {
                     if chars.peek() == Some(&ch) {
                         let _ = chars.next();
                         if !current.trim().is_empty() {
@@ -650,7 +662,7 @@ pub(crate) fn generate_shell_approval_patterns(command: &str) -> Vec<String> {
 mod tests {
     use super::{
         classify_shell_stage, contains_unquoted_shell_operator, generate_shell_approval_patterns,
-        parse_safe_compound_command, SafeCompoundStage, ShellStage,
+        parse_safe_compound_command, split_shell_command_segments, SafeCompoundStage, ShellStage,
     };
 
     #[test]
@@ -680,6 +692,18 @@ mod tests {
                 "unexpected operator in {command}"
             );
         }
+    }
+
+    #[test]
+    fn split_shell_command_segments_preserves_quoted_operators() {
+        assert_eq!(
+            split_shell_command_segments("php -r \"echo 'xxx && yyy';\" && git status"),
+            vec!["php -r \"echo 'xxx && yyy';\"", "git status"]
+        );
+        assert_eq!(
+            split_shell_command_segments("echo \"a|b\" | head -1"),
+            vec!["echo \"a|b\"", "head -1"]
+        );
     }
 
     #[test]
@@ -875,6 +899,12 @@ mod tests {
             "cd . && cargo check --manifest-path src-tauri/Cargo.toml 2>&1 | tail -10",
         );
 
-        assert_eq!(patterns, vec!["^cargo check($| .*)".to_string()]);
+        assert_eq!(
+            patterns,
+            vec![
+                "^cargo check($| .*)".to_string(),
+                "^tail($| .*)".to_string()
+            ]
+        );
     }
 }
