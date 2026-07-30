@@ -20,12 +20,30 @@
         </button>
       </div>
       <div class="workflow-terminal__controls">
-        <el-tooltip :content="$t('workflow.terminal.new')"><button type="button" @click="terminal.create()"><cs name="add" /></button></el-tooltip>
-        <el-tooltip :content="$t('workflow.terminal.minimize')"><button type="button" @click="terminal.visible = false"><cs name="minimize" /></button></el-tooltip>
-        <el-tooltip :content="$t('workflow.terminal.fullscreen')"><button type="button" @click="terminal.fullscreen = !terminal.fullscreen"><cs :name="terminal.fullscreen ? 'fullscreen' : 'fullscreen-off'" /></button></el-tooltip>
+        <el-tooltip :content="$t('workflow.terminal.new')"
+          ><button type="button" @click="terminal.create()"><cs name="add" /></button
+        ></el-tooltip>
+        <el-tooltip :content="$t('workflow.terminal.minimize')"
+          ><button type="button" @click="terminal.visible = false"><cs name="minimize" /></button
+        ></el-tooltip>
+        <el-tooltip :content="$t('workflow.terminal.fullscreen')"
+          ><button type="button" @click="terminal.fullscreen = !terminal.fullscreen">
+            <cs :name="terminal.fullscreen ? 'fullscreen' : 'fullscreen-off'" /></button
+        ></el-tooltip>
         <el-dropdown trigger="click" @command="terminal.restartWithShell">
-          <button class="workflow-terminal__shell" type="button"><cs name="bash" />{{ terminal.activeTab?.shellName }}<cs name="caret-down" /></button>
-          <template #dropdown><el-dropdown-menu><el-dropdown-item v-for="shell in terminal.shells" :key="shell.path" :command="shell.path">{{ shell.name }}</el-dropdown-item></el-dropdown-menu></template>
+          <button class="workflow-terminal__shell" type="button">
+            <cs name="bash" />{{ terminal.activeTab?.shellName }}<cs name="caret-down" />
+          </button>
+          <template #dropdown
+            ><el-dropdown-menu
+              ><el-dropdown-item
+                v-for="shell in terminal.shells"
+                :key="shell.path"
+                :command="shell.path"
+                >{{ shell.name }}</el-dropdown-item
+              ></el-dropdown-menu
+            ></template
+          >
         </el-dropdown>
       </div>
     </header>
@@ -53,29 +71,50 @@ const { t } = useI18n()
 const terminal = props.terminal
 const preferences = props.preferences
 const panel = ref<HTMLElement | null>(null)
-const panelHeight = computed(() => Math.min(Math.max(180, terminal.height), Math.max(180, window.innerHeight - 160)))
+const panelHeight = computed(() =>
+  Math.min(Math.max(180, terminal.height), Math.max(180, window.innerHeight - 160))
+)
 const hosts = new Map<string, HTMLElement>()
-const instances = new Map<string, { terminal: Terminal; fit: FitAddon; observer: ResizeObserver; clearOutputQueue: () => void }>()
+const instances = new Map<
+  string,
+  { terminal: Terminal; fit: FitAddon; observer: ResizeObserver; clearOutputQueue: () => void }
+>()
 const pageDark = ref(document.documentElement.classList.contains('dark'))
 const terminalTheme = computed(() => {
   const scheme = preferences.colorScheme || 'auto'
   const dark = scheme === 'dark' || (scheme === 'auto' && pageDark.value)
   return dark
-    ? { background: '#151515', foreground: '#e8e8e8', cursor: '#e8e8e8', selectionBackground: '#4b5563' }
-    : { background: '#ffffff', foreground: '#1f2937', cursor: '#1f2937', selectionBackground: '#bfdbfe' }
+    ? {
+        background: '#151515',
+        foreground: '#e8e8e8',
+        cursor: '#e8e8e8',
+        selectionBackground: '#4b5563'
+      }
+    : {
+        background: '#ffffff',
+        foreground: '#1f2937',
+        cursor: '#1f2937',
+        selectionBackground: '#bfdbfe'
+      }
 })
 
-const tabTitle = (tab: TerminalTab) => `${tab.cwd.split(/[\\/]/).filter(Boolean).pop() || tab.cwd} -- ${tab.shellName}`
-const selectTab = (sessionId: string) => { terminal.activeSessionId = sessionId }
+const tabTitle = (tab: TerminalTab) =>
+  `${tab.cwd.split(/[\\/]/).filter(Boolean).pop() || tab.cwd} -- ${tab.shellName}`
+const selectTab = (sessionId: string) => {
+  terminal.activeSessionId = sessionId
+}
 const focus = (sessionId: string) => instances.get(sessionId)?.terminal.focus()
 const shortcutMainKey = (shortcut: string | undefined) => shortcut?.split('+').pop()?.toLowerCase()
 const matchesTerminalShortcut = (event: KeyboardEvent, shortcut: string | undefined) => {
   if (!shortcut) return false
   const parts = shortcut.split('+')
   const requiresCommandOrControl = parts.includes('CommandOrControl')
-  const commandOrControlPressed = preferences.usesCommandKey ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
+  const commandOrControlPressed = preferences.usesCommandKey
+    ? event.metaKey && !event.ctrlKey
+    : event.ctrlKey && !event.metaKey
   if (requiresCommandOrControl !== commandOrControlPressed) return false
-  if (parts.includes('Alt') !== event.altKey || parts.includes('Shift') !== event.shiftKey) return false
+  if (parts.includes('Alt') !== event.altKey || parts.includes('Shift') !== event.shiftKey)
+    return false
   return event.key.toLowerCase() === shortcutMainKey(shortcut)
 }
 
@@ -264,7 +303,8 @@ const closeTab = async (sessionId: string) => {
 let resizing = false
 const resizePanel = (event: MouseEvent) => {
   if (!resizing) return
-  const containerBottom = panel.value?.parentElement?.getBoundingClientRect().bottom ?? window.innerHeight
+  const containerBottom =
+    panel.value?.parentElement?.getBoundingClientRect().bottom ?? window.innerHeight
   const maxHeight = Math.max(180, containerBottom - 160)
   terminal.height = Math.min(Math.max(180, containerBottom - event.clientY), maxHeight)
 }
@@ -292,7 +332,15 @@ watch(
     for (const instance of instances.values()) instance.terminal.options.scrollback = scrollback
   }
 )
-watch(() => [terminal.visible, terminal.activeSessionId, terminal.tabs.map((tab: TerminalTab) => tab.sessionId).join(',')], reconcile, { immediate: true, flush: 'post' })
+watch(
+  () => [
+    terminal.visible,
+    terminal.activeSessionId,
+    terminal.tabs.map((tab: TerminalTab) => tab.sessionId).join(',')
+  ],
+  reconcile,
+  { immediate: true, flush: 'post' }
+)
 onMounted(() => {
   themeObserver = new MutationObserver(() => {
     pageDark.value = document.documentElement.classList.contains('dark')
@@ -307,18 +355,93 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
-.workflow-terminal { position: relative; z-index: 4; min-height: 180px; display: flex; flex-direction: column; border-top: 1px solid var(--cs-border-color); background: var(--cs-bg-color); flex-shrink: 0; }
-.workflow-terminal.fullscreen { position: absolute; inset: 0; height: auto; z-index: 20; }
-.workflow-terminal__resize { position: absolute; top: -3px; left: 0; right: 0; height: 6px; cursor: ns-resize; z-index: 1; }
-.workflow-terminal__bar { min-height: 38px; display: flex; align-items: center; border-bottom: 1px solid var(--cs-border-color); background: var(--cs-fill-color-light); }
-.workflow-terminal__tabs { display: flex; min-width: 0; overflow-x: auto; flex: 1; }
-.workflow-terminal__tab, .workflow-terminal__controls button { border: 0; background: transparent; color: var(--cs-text-color-secondary); cursor: pointer; }
-.workflow-terminal__tab { display: inline-flex; align-items: center; gap: 8px; padding: 0 10px; height: 38px; white-space: nowrap; border-right: 1px solid var(--cs-border-color); }
-.workflow-terminal__tab.active { color: var(--cs-text-color-primary); background: var(--cs-bg-color); }
-.workflow-terminal__controls { display: flex; align-items: center; gap: 3px; padding: 0 8px; }
-.workflow-terminal__controls button { display: inline-flex; align-items: center; gap: 5px; padding: 5px; }
-.workflow-terminal__shell { max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.workflow-terminal__content { flex: 1; min-height: 0; padding: var(--cs-space-sm); overflow: hidden; box-sizing: border-box; }
-.workflow-terminal__content :deep(.xterm) { height: 100%; }
-.workflow-terminal__content :deep(.xterm-screen) { max-width: 100%; }
+.workflow-terminal {
+  position: relative;
+  z-index: 4;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--cs-border-color);
+  background: var(--cs-bg-color);
+  flex-shrink: 0;
+}
+.workflow-terminal.fullscreen {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  z-index: 20;
+}
+.workflow-terminal__resize {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+  z-index: 1;
+}
+.workflow-terminal__bar {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--cs-border-color);
+  background: var(--cs-fill-color-light);
+}
+.workflow-terminal__tabs {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  flex: 1;
+}
+.workflow-terminal__tab,
+.workflow-terminal__controls button {
+  border: 0;
+  background: transparent;
+  color: var(--cs-text-color-secondary);
+  cursor: pointer;
+}
+.workflow-terminal__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 38px;
+  white-space: nowrap;
+  border-right: 1px solid var(--cs-border-color);
+}
+.workflow-terminal__tab.active {
+  color: var(--cs-text-color-primary);
+  background: var(--cs-bg-color);
+}
+.workflow-terminal__controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+}
+.workflow-terminal__controls button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px;
+}
+.workflow-terminal__shell {
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workflow-terminal__content {
+  flex: 1;
+  min-height: 0;
+  padding: var(--cs-space-sm);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.workflow-terminal__content :deep(.xterm) {
+  height: 100%;
+}
+.workflow-terminal__content :deep(.xterm-screen) {
+  max-width: 100%;
+}
 </style>
