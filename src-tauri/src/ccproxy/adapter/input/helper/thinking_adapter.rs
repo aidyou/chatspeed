@@ -136,57 +136,164 @@ pub fn effort_from_budget_tokens(budget_tokens: Option<i32>) -> Option<String> {
     Some(effort.to_string())
 }
 
-pub fn build_nvidia_deepseek_v4_chat_template_kwargs(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NvidiaNimThinkingProfile {
+    DeepSeekV4,
+    ThinkingFlag,
+    EnableThinkingFlag,
+    Glm,
+    MiniMaxM3,
+    Nemotron3,
+    Inkling,
+}
+
+fn detect_nvidia_nim_thinking_profile(model: &str) -> Option<NvidiaNimThinkingProfile> {
+    let lower = model.to_lowercase();
+
+    if lower.contains("deepseek-v4-") {
+        Some(NvidiaNimThinkingProfile::DeepSeekV4)
+    } else if (lower.contains("deepseek")
+        && (lower.contains("deepseek-v3") || lower.contains("r1")))
+        || lower.contains("kimi-k2")
+        || lower.contains("kimi-k3")
+    {
+        Some(NvidiaNimThinkingProfile::ThinkingFlag)
+    } else if lower.contains("glm-5")
+        || lower.contains("glm5")
+        || lower.contains("glm-4.7")
+        || lower.contains("glm4.7")
+    {
+        Some(NvidiaNimThinkingProfile::Glm)
+    } else if lower.contains("minimax-m3") {
+        Some(NvidiaNimThinkingProfile::MiniMaxM3)
+    } else if lower.contains("nemotron-3") {
+        Some(NvidiaNimThinkingProfile::Nemotron3)
+    } else if lower.contains("thinkingmachines/inkling") {
+        Some(NvidiaNimThinkingProfile::Inkling)
+    } else if lower.contains("qwen3")
+        || lower.contains("qwq")
+        || lower.contains("gemma-4")
+        || lower.contains("sarvam-m")
+    {
+        Some(NvidiaNimThinkingProfile::EnableThinkingFlag)
+    } else {
+        None
+    }
+}
+
+fn build_nvidia_nim_chat_template_kwargs(
+    profile: NvidiaNimThinkingProfile,
     include_thoughts: bool,
     reasoning_effort: Option<&str>,
     budget_tokens: Option<i32>,
 ) -> Value {
-    if !include_thoughts {
-        return json!({ "thinking": false });
-    }
-
     let normalized_effort = reasoning_effort
         .and_then(normalize_effort)
         .or_else(|| effort_from_budget_tokens(budget_tokens));
-    let reasoning_effort = match normalized_effort.as_deref() {
-        Some("xhigh" | "max") => "max",
-        _ => "high",
-    };
 
-    json!({
-        "thinking": true,
-        "reasoning_effort": reasoning_effort,
-    })
+    match profile {
+        NvidiaNimThinkingProfile::DeepSeekV4 => {
+            if !include_thoughts {
+                json!({ "thinking": false })
+            } else {
+                let reasoning_effort = match normalized_effort.as_deref() {
+                    Some("xhigh" | "max") => "max",
+                    _ => "high",
+                };
+                json!({
+                    "thinking": true,
+                    "reasoning_effort": reasoning_effort,
+                })
+            }
+        }
+        NvidiaNimThinkingProfile::ThinkingFlag => json!({ "thinking": include_thoughts }),
+        NvidiaNimThinkingProfile::EnableThinkingFlag => {
+            json!({ "enable_thinking": include_thoughts })
+        }
+        NvidiaNimThinkingProfile::Glm => {
+            if include_thoughts {
+                json!({ "enable_thinking": true, "clear_thinking": false })
+            } else {
+                json!({ "enable_thinking": false })
+            }
+        }
+        NvidiaNimThinkingProfile::MiniMaxM3 => {
+            let thinking_mode = if !include_thoughts {
+                "disabled"
+            } else if matches!(
+                normalized_effort.as_deref(),
+                Some("minimal" | "low" | "medium")
+            ) {
+                "adaptive"
+            } else {
+                "enabled"
+            };
+            json!({ "thinking_mode": thinking_mode })
+        }
+        NvidiaNimThinkingProfile::Nemotron3 => {
+            let low_effort = include_thoughts
+                && matches!(
+                    normalized_effort.as_deref(),
+                    Some("minimal" | "low" | "medium")
+                );
+            if low_effort {
+                json!({ "enable_thinking": true, "low_effort": true })
+            } else {
+                json!({ "enable_thinking": include_thoughts })
+            }
+        }
+        NvidiaNimThinkingProfile::Inkling => {
+            let reasoning_effort = if include_thoughts {
+                normalized_effort.unwrap_or_else(|| "high".to_string())
+            } else {
+                "none".to_string()
+            };
+            json!({ "reasoning_effort": reasoning_effort })
+        }
+    }
 }
 
-pub fn normalize_nvidia_deepseek_v4_thinking_fields(
+pub fn normalize_nvidia_nim_thinking_fields(
     body: &mut Value,
     provider_url: &str,
     model: &str,
+    fallback_thinking: Option<&UnifiedThinking>,
+    fallback_reasoning_effort: Option<&str>,
 ) {
     let is_nvidia_nim = reqwest::Url::parse(provider_url)
         .ok()
         .and_then(|url| url.host_str().map(str::to_owned))
         .is_some_and(|host| host.eq_ignore_ascii_case("integrate.api.nvidia.com"));
-    let is_deepseek_v4 = model.to_lowercase().contains("deepseek-v4-");
-    if !is_nvidia_nim || !is_deepseek_v4 {
+    let Some(profile) = detect_nvidia_nim_thinking_profile(model) else {
+        return;
+    };
+    if !is_nvidia_nim {
         return;
     }
 
     let explicit_enabled = body
         .get("thinking")
-        .and_then(|thinking| thinking.get("type"))
-        .and_then(Value::as_str)
-        .map(|value| value.eq_ignore_ascii_case("enabled"))
-        .or_else(|| body.get("enable_thinking").and_then(Value::as_bool));
+        .and_then(|thinking| {
+            thinking.as_bool().or_else(|| {
+                thinking
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(|value| value.eq_ignore_ascii_case("enabled"))
+            })
+        })
+        .or_else(|| body.get("enable_thinking").and_then(Value::as_bool))
+        .or_else(|| body.get("reasoning_split").and_then(Value::as_bool))
+        .or_else(|| fallback_thinking.and_then(|thinking| thinking.include_thoughts));
     let reasoning_effort = body
         .get("reasoning_effort")
         .and_then(Value::as_str)
+        .or(fallback_reasoning_effort)
         .map(str::to_owned);
     let thinking_budget = body
         .get("thinking_budget")
         .and_then(Value::as_i64)
-        .and_then(|value| i32::try_from(value).ok());
+        .and_then(|value| i32::try_from(value).ok())
+        .or_else(|| fallback_thinking.and_then(|thinking| thinking.budget_tokens));
     let has_generic_thinking_signal = explicit_enabled.is_some()
         || reasoning_effort.is_some()
         || thinking_budget.is_some_and(|value| value > 0);
@@ -198,7 +305,8 @@ pub fn normalize_nvidia_deepseek_v4_thinking_fields(
                     .as_deref()
                     .is_some_and(|value| value.eq_ignore_ascii_case("none"))
             });
-            let inferred_kwargs = build_nvidia_deepseek_v4_chat_template_kwargs(
+            let inferred_kwargs = build_nvidia_nim_chat_template_kwargs(
+                profile,
                 include_thoughts,
                 reasoning_effort.as_deref(),
                 thinking_budget,
@@ -222,6 +330,7 @@ pub fn normalize_nvidia_deepseek_v4_thinking_fields(
         body_object.remove("enable_thinking");
         body_object.remove("thinking_budget");
         body_object.remove("reasoning_effort");
+        body_object.remove("reasoning_split");
     }
 }
 
@@ -380,7 +489,7 @@ mod tests {
     use super::{
         adapt_vendor_thinking_params_for_openai_backend, build_openai_compat_thinking_fields,
         build_unified_thinking_from_openai_request, effort_from_budget_tokens,
-        merge_reasoning_into_openai_message_content, normalize_nvidia_deepseek_v4_thinking_fields,
+        merge_reasoning_into_openai_message_content, normalize_nvidia_nim_thinking_fields,
         supports_native_reasoning_history_for_openai_backend,
     };
     use crate::ccproxy::adapter::unified::UnifiedThinking;
@@ -437,10 +546,12 @@ mod tests {
             "thinking_budget": 8192,
         });
 
-        normalize_nvidia_deepseek_v4_thinking_fields(
+        normalize_nvidia_nim_thinking_fields(
             &mut body,
             "https://integrate.api.nvidia.com/v1/chat/completions",
             "deepseek-ai/deepseek-v4-flash",
+            None,
+            None,
         );
 
         assert_eq!(
@@ -465,10 +576,12 @@ mod tests {
             }
         });
 
-        normalize_nvidia_deepseek_v4_thinking_fields(
+        normalize_nvidia_nim_thinking_fields(
             &mut body,
             "https://integrate.api.nvidia.com/v1",
             "deepseek-ai/deepseek-v4-flash",
+            None,
+            None,
         );
 
         assert_eq!(
@@ -489,10 +602,12 @@ mod tests {
             "thinking_budget": 0,
         });
 
-        normalize_nvidia_deepseek_v4_thinking_fields(
+        normalize_nvidia_nim_thinking_fields(
             &mut body,
             "https://integrate.api.nvidia.com/v1",
             "deepseek-ai/deepseek-v4-flash",
+            None,
+            None,
         );
 
         assert_eq!(
@@ -501,6 +616,184 @@ mod tests {
         );
         assert!(body.get("reasoning_effort").is_none());
         assert!(body.get("thinking_budget").is_none());
+    }
+
+    #[test]
+    fn nvidia_nim_model_profiles_use_model_specific_chat_template_kwargs() {
+        let cases = [
+            (
+                "deepseek-ai/deepseek-v3.2",
+                serde_json::json!({ "thinking": true }),
+            ),
+            (
+                "moonshotai/kimi-k2.6",
+                serde_json::json!({ "thinking": true }),
+            ),
+            (
+                "moonshotai/kimi-k2-instruct",
+                serde_json::json!({ "thinking": true }),
+            ),
+            (
+                "moonshotai/kimi-k3",
+                serde_json::json!({ "thinking": true }),
+            ),
+            (
+                "qwen/qwen3-235b-a22b",
+                serde_json::json!({ "enable_thinking": true }),
+            ),
+            (
+                "google/gemma-4-31b-it",
+                serde_json::json!({ "enable_thinking": true }),
+            ),
+            (
+                "z-ai/glm-5",
+                serde_json::json!({ "enable_thinking": true, "clear_thinking": false }),
+            ),
+            (
+                "minimaxai/minimax-m3",
+                serde_json::json!({ "thinking_mode": "adaptive" }),
+            ),
+            (
+                "nvidia/nemotron-3-super-120b-a12b",
+                serde_json::json!({ "enable_thinking": true, "low_effort": true }),
+            ),
+            (
+                "thinkingmachines/inkling",
+                serde_json::json!({ "reasoning_effort": "medium" }),
+            ),
+        ];
+
+        for (model, expected) in cases {
+            let mut body = serde_json::json!({
+                "thinking": { "type": "enabled" },
+                "reasoning_effort": "medium",
+                "thinking_budget": 2048,
+            });
+
+            normalize_nvidia_nim_thinking_fields(
+                &mut body,
+                "https://integrate.api.nvidia.com/v1",
+                model,
+                None,
+                None,
+            );
+
+            assert_eq!(body["chat_template_kwargs"], expected, "model: {model}");
+            assert!(body.get("thinking").is_none(), "model: {model}");
+            assert!(body.get("reasoning_effort").is_none(), "model: {model}");
+            assert!(body.get("thinking_budget").is_none(), "model: {model}");
+        }
+    }
+
+    #[test]
+    fn nvidia_nim_model_profiles_disable_thinking_with_supported_fields() {
+        let cases = [
+            (
+                "deepseek-ai/deepseek-v4-flash",
+                serde_json::json!({ "thinking": false }),
+            ),
+            (
+                "deepseek-ai/deepseek-v3.2",
+                serde_json::json!({ "thinking": false }),
+            ),
+            (
+                "qwen/qwen3-235b-a22b",
+                serde_json::json!({ "enable_thinking": false }),
+            ),
+            (
+                "z-ai/glm-5",
+                serde_json::json!({ "enable_thinking": false }),
+            ),
+            (
+                "minimaxai/minimax-m3",
+                serde_json::json!({ "thinking_mode": "disabled" }),
+            ),
+            (
+                "nvidia/nemotron-3-super-120b-a12b",
+                serde_json::json!({ "enable_thinking": false }),
+            ),
+            (
+                "thinkingmachines/inkling",
+                serde_json::json!({ "reasoning_effort": "none" }),
+            ),
+        ];
+
+        for (model, expected) in cases {
+            let mut body = serde_json::json!({
+                "thinking": { "type": "disabled" },
+                "thinking_budget": 0,
+            });
+
+            normalize_nvidia_nim_thinking_fields(
+                &mut body,
+                "https://integrate.api.nvidia.com/v1",
+                model,
+                None,
+                None,
+            );
+
+            assert_eq!(body["chat_template_kwargs"], expected, "model: {model}");
+        }
+    }
+
+    #[test]
+    fn nvidia_nim_uses_unified_thinking_as_fallback_for_other_model_families() {
+        let mut body = serde_json::json!({ "model": "proxy-alias" });
+        let thinking = UnifiedThinking {
+            include_thoughts: Some(true),
+            budget_tokens: Some(1024),
+        };
+
+        normalize_nvidia_nim_thinking_fields(
+            &mut body,
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+            "google/gemma-4-31b-it",
+            Some(&thinking),
+            Some("low"),
+        );
+
+        assert_eq!(
+            body["chat_template_kwargs"],
+            serde_json::json!({ "enable_thinking": true })
+        );
+    }
+
+    #[test]
+    fn nvidia_nim_leaves_unknown_models_unchanged() {
+        let mut body = serde_json::json!({
+            "thinking": { "type": "enabled" },
+            "thinking_budget": 2048,
+        });
+        let original = body.clone();
+
+        normalize_nvidia_nim_thinking_fields(
+            &mut body,
+            "https://integrate.api.nvidia.com/v1",
+            "meta/llama-4-maverick-17b-128e-instruct",
+            None,
+            None,
+        );
+
+        assert_eq!(body, original);
+    }
+
+    #[test]
+    fn nvidia_nim_normalizer_leaves_official_glm_requests_unchanged() {
+        let mut body = serde_json::json!({
+            "thinking": { "type": "disabled" },
+            "model": "glm-5.2",
+        });
+        let original = body.clone();
+
+        normalize_nvidia_nim_thinking_fields(
+            &mut body,
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-5.2",
+            None,
+            None,
+        );
+
+        assert_eq!(body, original);
     }
 
     #[test]

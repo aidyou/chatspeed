@@ -463,6 +463,7 @@ pub fn is_function_call_supported(lower_model_id: &str) -> bool {
 /// Checks if a model is known to explicitly support or output reasoning/thinking steps
 pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
     if lower_model_id.contains("qwq")
+        || lower_model_id.contains("qwen3")
         || (lower_model_id.contains("qwen") && lower_model_id.contains("thinking"))
     {
         return true;
@@ -472,7 +473,19 @@ pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
         return true;
     }
 
-    if lower_model_id.contains("deepseek") && lower_model_id.contains("r1") {
+    if lower_model_id.contains("deepseek")
+        && (lower_model_id.contains("r1")
+            || lower_model_id.contains("deepseek-v3")
+            || lower_model_id.contains("deepseek-v4"))
+    {
+        return true;
+    }
+
+    if lower_model_id.contains("nemotron-3")
+        || lower_model_id.contains("gemma-4")
+        || lower_model_id.contains("thinkingmachines/inkling")
+        || lower_model_id.contains("sarvam-m")
+    {
         return true;
     }
 
@@ -487,20 +500,31 @@ pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
         return true;
     }
 
-    if lower_model_id.contains("glm4.5")
+    if lower_model_id.contains("glm-4.5")
+        || lower_model_id.contains("glm4.5")
+        || lower_model_id.contains("glm-4.6")
         || lower_model_id.contains("glm4.6")
+        || lower_model_id.contains("glm-4.7")
+        || lower_model_id.contains("glm4.7")
+        || lower_model_id.contains("glm-5")
         || lower_model_id.contains("glm5")
     {
         return true;
     }
 
-    // Kimi (Moonshot) - k2 and above support reasoning
-    if lower_model_id.contains("kimi") && lower_model_id.contains("k2") {
+    // Kimi (Moonshot) - K2 and K3 support reasoning
+    if lower_model_id.contains("kimi")
+        && (lower_model_id.contains("k2") || lower_model_id.contains("k3"))
+    {
         return true;
     }
 
-    // MiniMax - 2 and above support reasoning
-    if lower_model_id.contains("minimax") && lower_model_id.contains("2") {
+    // MiniMax - M2 and M3 support reasoning
+    if lower_model_id.contains("minimax")
+        && (lower_model_id.contains("m2")
+            || lower_model_id.contains("m3")
+            || lower_model_id.contains("2"))
+    {
         return true;
     }
 
@@ -567,6 +591,35 @@ pub fn is_image_input_supported(lower_model_id: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn recognizes_new_reasoning_model_families() {
+        for model in [
+            "deepseek-ai/deepseek-v4-flash",
+            "deepseek-ai/deepseek-v3.2",
+            "qwen/qwen3-235b-a22b",
+            "nvidia/nemotron-3-super-120b-a12b",
+            "google/gemma-4-31b-it",
+            "thinkingmachines/inkling",
+            "sarvamai/sarvam-m",
+            "minimaxai/minimax-m3",
+            "moonshotai/kimi-k3",
+            "glm-5.1",
+            "glm-5.2",
+            "glm-5",
+            "glm-5-turbo",
+            "glm-4.7",
+            "glm-4.7-flash",
+            "glm-4.6",
+            "glm-4.5",
+            "glm-4.5-flash",
+        ] {
+            assert!(is_reasoning_supported(model), "model: {model}");
+        }
+        assert!(!is_reasoning_supported(
+            "meta/llama-4-maverick-17b-128e-instruct"
+        ));
+    }
 
     #[test]
     fn test_get_proxy_type() {

@@ -116,6 +116,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nvidia_kimi_k2_instruct_request_uses_thinking_flag() {
+        let mut unified_request = UnifiedRequest {
+            model: "proxy-alias".to_string(),
+            messages: vec![UnifiedMessage {
+                role: UnifiedRole::User,
+                content: vec![UnifiedContentBlock::Text {
+                    text: "hello".to_string(),
+                }],
+                reasoning_content: None,
+            }],
+            stream: true,
+            thinking: Some(UnifiedThinking {
+                include_thoughts: Some(true),
+                budget_tokens: Some(2048),
+            }),
+            ..Default::default()
+        };
+
+        let request = OpenAIBackendAdapter
+            .adapt_request(
+                &Client::new(),
+                &mut unified_request,
+                "test-api-key",
+                "https://integrate.api.nvidia.com/v1/chat/completions",
+                "moonshotai/kimi-k2-instruct",
+                false,
+                &mut reqwest::header::HeaderMap::new(),
+            )
+            .await
+            .expect("NVIDIA Kimi request should adapt");
+        let payload = request_json(request);
+
+        assert_eq!(payload["chat_template_kwargs"], json!({ "thinking": true }));
+        assert!(payload.get("thinking").is_none());
+        assert!(payload.get("reasoning_effort").is_none());
+        assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[tokio::test]
+    async fn nvidia_gemma_request_uses_unified_thinking_fallback() {
+        let mut unified_request = UnifiedRequest {
+            model: "proxy-alias".to_string(),
+            messages: vec![UnifiedMessage {
+                role: UnifiedRole::User,
+                content: vec![UnifiedContentBlock::Text {
+                    text: "hello".to_string(),
+                }],
+                reasoning_content: None,
+            }],
+            stream: true,
+            reasoning_effort: Some("low".to_string()),
+            thinking: Some(UnifiedThinking {
+                include_thoughts: Some(true),
+                budget_tokens: Some(1024),
+            }),
+            ..Default::default()
+        };
+
+        let request = OpenAIBackendAdapter
+            .adapt_request(
+                &Client::new(),
+                &mut unified_request,
+                "test-api-key",
+                "https://integrate.api.nvidia.com/v1/chat/completions",
+                "google/gemma-4-31b-it",
+                false,
+                &mut reqwest::header::HeaderMap::new(),
+            )
+            .await
+            .expect("NVIDIA Gemma request should adapt");
+        let payload = request_json(request);
+
+        assert_eq!(
+            payload["chat_template_kwargs"],
+            json!({ "enable_thinking": true })
+        );
+        assert!(payload.get("thinking").is_none());
+        assert!(payload.get("reasoning_effort").is_none());
+        assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[tokio::test]
     async fn responses_custom_tool_history_uses_object_arguments() {
         let responses_request: OpenAIResponsesRequest = serde_json::from_value(json!({
             "model": "proxy-alias",

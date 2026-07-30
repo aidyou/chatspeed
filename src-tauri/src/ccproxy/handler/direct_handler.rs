@@ -1,4 +1,4 @@
-use crate::ccproxy::adapter::input::helper::thinking_adapter::normalize_nvidia_deepseek_v4_thinking_fields;
+use crate::ccproxy::adapter::input::helper::thinking_adapter::normalize_nvidia_nim_thinking_fields;
 use crate::ccproxy::adapter::unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart};
 use crate::ccproxy::helper::{get_tool_id, send_with_retry, RetryConfig};
 use crate::ccproxy::openai::OpenAIUsage;
@@ -95,10 +95,12 @@ pub async fn handle_direct_forward(
     ModelResolver::merge_parameters_json(&mut body_json, &proxy_model);
 
     body_json = enhance_direct_request_body(body_json, &proxy_model, &proxy_model.chat_protocol);
-    normalize_nvidia_deepseek_v4_thinking_fields(
+    normalize_nvidia_nim_thinking_fields(
         &mut body_json,
         &proxy_model.base_url,
         &proxy_model.model,
+        None,
+        None,
     );
     // Force set the model field for protocols that require it in the body to ensure the backend receives the correct ID.
     if let Some(obj) = body_json.as_object_mut() {

@@ -18,8 +18,7 @@ use crate::ccproxy::{
         backend::{common, update_message_block},
         input::helper::thinking_adapter::{
             adapt_vendor_thinking_params_for_openai_backend,
-            merge_reasoning_into_openai_message_content,
-            normalize_nvidia_deepseek_v4_thinking_fields,
+            merge_reasoning_into_openai_message_content, normalize_nvidia_nim_thinking_fields,
             supports_native_reasoning_history_for_openai_backend,
         },
         range_adapter::adapt_temperature,
@@ -561,7 +560,13 @@ impl BackendAdapter for OpenAIBackendAdapter {
             &mut request_json,
             &unified_request.custom_params,
         );
-        normalize_nvidia_deepseek_v4_thinking_fields(&mut request_json, full_provider_url, model);
+        normalize_nvidia_nim_thinking_fields(
+            &mut request_json,
+            full_provider_url,
+            model,
+            unified_request.thinking.as_ref(),
+            unified_request.reasoning_effort.as_deref(),
+        );
 
         if log_proxy_to_file {
             // Log the request to a file
