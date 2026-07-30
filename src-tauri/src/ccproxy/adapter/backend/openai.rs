@@ -19,6 +19,7 @@ use crate::ccproxy::{
         input::helper::thinking_adapter::{
             adapt_vendor_thinking_params_for_openai_backend,
             merge_reasoning_into_openai_message_content,
+            normalize_nvidia_deepseek_v4_thinking_fields,
             supports_native_reasoning_history_for_openai_backend,
         },
         range_adapter::adapt_temperature,
@@ -391,7 +392,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
         // Check if it's a Zhipu GLM model
         let _is_glm = unified_request.model.to_lowercase().contains("glm");
         // Check if it's a DeepSeek model
-        let is_deepseek = unified_request.model.to_lowercase().contains("deepseek");
+        let is_deepseek = model.to_lowercase().contains("deepseek");
         // Check if it's a Qwen model
         let _is_qwen = unified_request.model.to_lowercase().contains("qwen")
             || unified_request.model.to_lowercase().contains("qwq");
@@ -399,7 +400,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
         let _is_kimi = unified_request.model.to_lowercase().contains("kimi")
             || unified_request.model.to_lowercase().contains("moonshot");
         let vendor_thinking_params = adapt_vendor_thinking_params_for_openai_backend(
-            &unified_request.model,
+            model,
             unified_request.thinking.as_ref(),
             unified_request.reasoning_effort.as_deref(),
             unified_request
@@ -560,6 +561,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
             &mut request_json,
             &unified_request.custom_params,
         );
+        normalize_nvidia_deepseek_v4_thinking_fields(&mut request_json, full_provider_url, model);
 
         if log_proxy_to_file {
             // Log the request to a file

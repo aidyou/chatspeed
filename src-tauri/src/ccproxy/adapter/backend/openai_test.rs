@@ -6,7 +6,10 @@ mod tests {
     use super::super::{BackendAdapter, BackendResponse};
     use crate::ccproxy::adapter::{
         input::{from_claude, from_ollama, from_openai_responses},
-        unified::{UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool},
+        unified::{
+            UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedThinking,
+            UnifiedTool,
+        },
     };
     use crate::ccproxy::types::openai_responses::OpenAIResponsesRequest;
     use reqwest::Client;
@@ -67,6 +70,49 @@ mod tests {
             .and_then(|body| body.as_bytes())
             .expect("request body should be available as bytes");
         serde_json::from_slice(body).expect("request body should be valid json")
+    }
+
+    #[tokio::test]
+    async fn nvidia_deepseek_v4_request_uses_chat_template_kwargs() {
+        let mut unified_request = UnifiedRequest {
+            model: "proxy-alias".to_string(),
+            messages: vec![UnifiedMessage {
+                role: UnifiedRole::User,
+                content: vec![UnifiedContentBlock::Text {
+                    text: "hello".to_string(),
+                }],
+                reasoning_content: None,
+            }],
+            stream: true,
+            reasoning_effort: Some("xhigh".to_string()),
+            thinking: Some(UnifiedThinking {
+                include_thoughts: Some(true),
+                budget_tokens: Some(8192),
+            }),
+            ..Default::default()
+        };
+
+        let request = OpenAIBackendAdapter
+            .adapt_request(
+                &Client::new(),
+                &mut unified_request,
+                "test-api-key",
+                "https://integrate.api.nvidia.com/v1/chat/completions",
+                "deepseek-ai/deepseek-v4-flash",
+                false,
+                &mut reqwest::header::HeaderMap::new(),
+            )
+            .await
+            .expect("NVIDIA DeepSeek request should adapt");
+        let payload = request_json(request);
+
+        assert_eq!(
+            payload["chat_template_kwargs"],
+            json!({ "thinking": true, "reasoning_effort": "max" })
+        );
+        assert!(payload.get("thinking").is_none());
+        assert!(payload.get("reasoning_effort").is_none());
+        assert!(payload.get("thinking_budget").is_none());
     }
 
     #[tokio::test]
