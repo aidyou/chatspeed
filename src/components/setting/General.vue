@@ -370,10 +370,20 @@
             <small class="tooltip">{{ $t('settings.general.terminalDefaultShellTooltip') }}</small>
           </div>
         </div>
-        <div class="value">
+        <div class="value" style="width: 200px">
           <el-select v-model="settings.terminalDefaultShell" @change="onTerminalDefaultShellChange">
             <el-option :label="$t('settings.general.terminalDefaultShellSystem')" value="system" />
             <el-option v-for="shell in terminalShells" :key="shell.path" :label="shell.name" :value="shell.path" />
+          </el-select>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.terminalColorScheme') }}</div>
+        <div class="value" style="width: 200px">
+          <el-select v-model="settings.terminalColorScheme" @change="onTerminalColorSchemeChange">
+            <el-option :label="$t('settings.general.terminalColorSchemeAuto')" value="auto" />
+            <el-option :label="$t('settings.general.terminalColorSchemeLight')" value="light" />
+            <el-option :label="$t('settings.general.terminalColorSchemeDark')" value="dark" />
           </el-select>
         </div>
       </div>
@@ -384,19 +394,9 @@
             <small class="tooltip">{{ $t('settings.general.terminalOutputLineLimitTooltip') }}</small>
           </div>
         </div>
-        <div class="value" style="width: 200px">
+        <div class="value" >
           <el-input-number v-model="settings.terminalOutputLineLimit" :min="100" :max="20000" :step="100"
             @change="onTerminalOutputLineLimitChange" />
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">{{ $t('settings.general.terminalColorScheme') }}</div>
-        <div class="value">
-          <el-select v-model="settings.terminalColorScheme" @change="onTerminalColorSchemeChange">
-            <el-option :label="$t('settings.general.terminalColorSchemeAuto')" value="auto" />
-            <el-option :label="$t('settings.general.terminalColorSchemeLight')" value="light" />
-            <el-option :label="$t('settings.general.terminalColorSchemeDark')" value="dark" />
-          </el-select>
         </div>
       </div>
     </div>
@@ -406,48 +406,6 @@
   <div class="card">
     <div class="title">{{ $t('settings.general.shortcutSettings') }}</div>
     <div class="list">
-      <div class="item">
-        <div class="label">{{ $t('settings.general.terminalToggleShortcut') }}</div>
-        <div class="value">
-          <el-tooltip :content="getShortcutPlaceholder('terminalToggleShortcut')" placement="top" :hide-after="0"
-            :enterable="false">
-            <el-input :model-value="getShortcutDisplayValue('terminalToggleShortcut')" readonly
-              :placeholder="getShortcutPlaceholder('terminalToggleShortcut')"
-              @keydown.prevent="e => captureShortcut(e, 'terminalToggleShortcut')" @focus="isCapturing = true"
-              @blur="isCapturing = false">
-              <template #append>
-                <el-button @click="restoreDefaultShortcut('terminalToggleShortcut')">
-                  {{ $t('common.default') }}
-                </el-button>
-                <el-button @click="clearShortcut('terminalToggleShortcut')">
-                  {{ $t('common.clear') }}
-                </el-button>
-              </template>
-            </el-input>
-          </el-tooltip>
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">{{ $t('settings.general.terminalClearShortcut') }}</div>
-        <div class="value">
-          <el-tooltip :content="getShortcutPlaceholder('terminalClearShortcut')" placement="top" :hide-after="0"
-            :enterable="false">
-            <el-input :model-value="getShortcutDisplayValue('terminalClearShortcut')" readonly
-              :placeholder="getShortcutPlaceholder('terminalClearShortcut')"
-              @keydown.prevent="e => captureShortcut(e, 'terminalClearShortcut')" @focus="isCapturing = true"
-              @blur="isCapturing = false">
-              <template #append>
-                <el-button @click="restoreDefaultShortcut('terminalClearShortcut')">
-                  {{ $t('common.default') }}
-                </el-button>
-                <el-button @click="clearShortcut('terminalClearShortcut')">
-                  {{ $t('common.clear') }}
-                </el-button>
-              </template>
-            </el-input>
-          </el-tooltip>
-        </div>
-      </div>
       <div class="item">
         <div class="label">{{ $t('settings.general.mainWindowVisibleShortcut') }}</div>
         <div class="value">
@@ -630,6 +588,48 @@
                   {{ $t('common.default') }}
                 </el-button>
                 <el-button @click="clearShortcut('centerWindowShortcut')">
+                  {{ $t('common.clear') }}
+                </el-button>
+              </template>
+            </el-input>
+          </el-tooltip>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.terminalToggleShortcut') }}</div>
+        <div class="value">
+          <el-tooltip :content="getShortcutPlaceholder('terminalToggleShortcut')" placement="top" :hide-after="0"
+            :enterable="false">
+            <el-input :model-value="getShortcutDisplayValue('terminalToggleShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('terminalToggleShortcut')"
+              @keydown.prevent="e => captureShortcut(e, 'terminalToggleShortcut')" @focus="isCapturing = true"
+              @blur="isCapturing = false">
+              <template #append>
+                <el-button @click="restoreDefaultShortcut('terminalToggleShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
+                <el-button @click="clearShortcut('terminalToggleShortcut')">
+                  {{ $t('common.clear') }}
+                </el-button>
+              </template>
+            </el-input>
+          </el-tooltip>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.terminalClearShortcut') }}</div>
+        <div class="value">
+          <el-tooltip :content="getShortcutPlaceholder('terminalClearShortcut')" placement="top" :hide-after="0"
+            :enterable="false">
+            <el-input :model-value="getShortcutDisplayValue('terminalClearShortcut')" readonly
+              :placeholder="getShortcutPlaceholder('terminalClearShortcut')"
+              @keydown.prevent="e => captureShortcut(e, 'terminalClearShortcut')" @focus="isCapturing = true"
+              @blur="isCapturing = false">
+              <template #append>
+                <el-button @click="restoreDefaultShortcut('terminalClearShortcut')">
+                  {{ $t('common.default') }}
+                </el-button>
+                <el-button @click="clearShortcut('terminalClearShortcut')">
                   {{ $t('common.clear') }}
                 </el-button>
               </template>
