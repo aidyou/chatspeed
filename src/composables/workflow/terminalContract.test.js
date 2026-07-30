@@ -108,6 +108,7 @@ test('terminal preferences bound output, preserve terminal input, and use detect
   assert.doesNotMatch(panel, /pendingCarriageReturn/)
   assert.doesNotMatch(panel, /requestAnimationFrame\(flushOutput\)/)
   assert.match(panel, /attachCustomKeyEventHandler/)
+  assert.match(panel, /event\.isComposing \|\| event\.key === 'Process' \|\| event\.keyCode === 229/)
   assert.match(panel, /matchesTerminalShortcut/)
   assert.match(panel, /closeConfirmMessage/)
   assert.match(workflow, /terminalClearShortcut/)

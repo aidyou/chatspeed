@@ -20,30 +20,36 @@
         </button>
       </div>
       <div class="workflow-terminal__controls">
-        <el-tooltip :content="$t('workflow.terminal.new')"
-          ><button type="button" @click="terminal.create()"><cs name="add" /></button
-        ></el-tooltip>
-        <el-tooltip :content="$t('workflow.terminal.minimize')"
-          ><button type="button" @click="terminal.visible = false"><cs name="minimize" /></button
-        ></el-tooltip>
-        <el-tooltip :content="$t('workflow.terminal.fullscreen')"
-          ><button type="button" @click="terminal.fullscreen = !terminal.fullscreen">
-            <cs :name="terminal.fullscreen ? 'fullscreen' : 'fullscreen-off'" /></button
-        ></el-tooltip>
+        <el-tooltip :content="$t('workflow.terminal.new')">
+          <button type="button" @click="terminal.create()">
+            <cs name="add" />
+          </button>
+        </el-tooltip>
+        <el-tooltip :content="$t('workflow.terminal.minimize')">
+          <button type="button" @click="terminal.visible = false">
+            <cs name="minimize" />
+          </button>
+        </el-tooltip>
+        <el-tooltip :content="$t('workflow.terminal.fullscreen')">
+          <button type="button" @click="terminal.fullscreen = !terminal.fullscreen">
+            <cs :name="terminal.fullscreen ? 'fullscreen' : 'fullscreen-off'" />
+          </button>
+        </el-tooltip>
         <el-dropdown trigger="click" @command="terminal.restartWithShell">
           <button class="workflow-terminal__shell" type="button">
-            <cs name="bash" />{{ terminal.activeTab?.shellName }}<cs name="caret-down" />
+            <cs name="bash" />{{ terminal.activeTab?.shellName }}
+            <cs name="caret-down" />
           </button>
-          <template #dropdown
-            ><el-dropdown-menu
-              ><el-dropdown-item
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
                 v-for="shell in terminal.shells"
                 :key="shell.path"
                 :command="shell.path"
-                >{{ shell.name }}</el-dropdown-item
-              ></el-dropdown-menu
-            ></template
-          >
+                >{{ shell.name }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
         </el-dropdown>
       </div>
     </header>
@@ -175,6 +181,9 @@ const mountTab = (tab: TerminalTab) => {
   })
   instance.open(host)
   instance.attachCustomKeyEventHandler(event => {
+    if (event.isComposing || event.key === 'Process' || event.keyCode === 229) {
+      return true
+    }
     if (matchesTerminalShortcut(event, preferences.clearShortcut)) {
       event.preventDefault()
       terminal.clear(tab.sessionId)
@@ -365,12 +374,14 @@ onBeforeUnmount(() => {
   background: var(--cs-bg-color);
   flex-shrink: 0;
 }
+
 .workflow-terminal.fullscreen {
   position: absolute;
   inset: 0;
   height: auto;
   z-index: 20;
 }
+
 .workflow-terminal__resize {
   position: absolute;
   top: -3px;
@@ -380,6 +391,7 @@ onBeforeUnmount(() => {
   cursor: ns-resize;
   z-index: 1;
 }
+
 .workflow-terminal__bar {
   min-height: 38px;
   display: flex;
@@ -387,12 +399,14 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--cs-border-color);
   background: var(--cs-fill-color-light);
 }
+
 .workflow-terminal__tabs {
   display: flex;
   min-width: 0;
   overflow-x: auto;
   flex: 1;
 }
+
 .workflow-terminal__tab,
 .workflow-terminal__controls button {
   border: 0;
@@ -400,6 +414,7 @@ onBeforeUnmount(() => {
   color: var(--cs-text-color-secondary);
   cursor: pointer;
 }
+
 .workflow-terminal__tab {
   display: inline-flex;
   align-items: center;
@@ -409,28 +424,33 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   border-right: 1px solid var(--cs-border-color);
 }
+
 .workflow-terminal__tab.active {
   color: var(--cs-text-color-primary);
   background: var(--cs-bg-color);
 }
+
 .workflow-terminal__controls {
   display: flex;
   align-items: center;
   gap: 3px;
   padding: 0 8px;
 }
+
 .workflow-terminal__controls button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   padding: 5px;
 }
+
 .workflow-terminal__shell {
   max-width: 150px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .workflow-terminal__content {
   flex: 1;
   min-height: 0;
@@ -438,9 +458,11 @@ onBeforeUnmount(() => {
   overflow: hidden;
   box-sizing: border-box;
 }
+
 .workflow-terminal__content :deep(.xterm) {
   height: 100%;
 }
+
 .workflow-terminal__content :deep(.xterm-screen) {
   max-width: 100%;
 }
