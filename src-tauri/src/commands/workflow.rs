@@ -1326,6 +1326,18 @@ fn build_workflow_config_for_request(
         }
     }
 
+    if let Some(final_audit) = request.final_audit {
+        config.final_audit = Some(final_audit);
+        config.final_review_mode = Some(
+            if final_audit {
+                "sub_agent_review"
+            } else {
+                "off"
+            }
+            .to_string(),
+        );
+    }
+
     if let Some(auto_approve_plan) = request.auto_approve_plan {
         config.auto_approve_plan = Some(auto_approve_plan);
     }
@@ -2172,6 +2184,20 @@ async fn begin_new_context_frame_for_cold_session(
     Ok((context.current_segment_id, context.messages.last().cloned()))
 }
 
+async fn clear_persisted_workflow_todo_list(
+    main_store: &Arc<MainStore>,
+    session_id: &str,
+) -> Result<(), String> {
+    let runtime = main_store.db_runtime().map_err(|e| e.to_string())?;
+    MainStore::update_workflow_todo_list_with_runtime(
+        runtime,
+        session_id.to_string(),
+        "[]".to_string(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 async fn finalize_manual_clear_context_state(
     main_store: &Arc<MainStore>,
     workflow_manager: &Arc<WorkflowManager>,
@@ -2182,6 +2208,7 @@ async fn finalize_manual_clear_context_state(
         let store = &*main_store;
         persist_pending_workflow_state(&store, session_id)?;
     }
+    clear_persisted_workflow_todo_list(main_store, session_id).await?;
 
     if let Some(executor) = workflow_manager.get_executor(session_id) {
         let mut guard = executor.lock().await;
@@ -6452,6 +6479,8 @@ mod tests {
                     allowed_paths: Some(vec!["/inherited".to_string()]),
                     approval_level: Some("smart".to_string()),
                     auto_approve_plan: Some(false),
+                    final_audit: Some(true),
+                    final_review_mode: Some("sub_agent_review".to_string()),
                     ..AgentConfig::default()
                 })
                 .expect("serialize inherited config"),
@@ -6486,7 +6515,35 @@ mod tests {
             Some(vec!["/inherited".to_string()])
         );
         assert_eq!(persisted.auto_approve_plan, Some(true));
+        assert_eq!(persisted.final_audit, Some(false));
+        assert_eq!(persisted.final_review_mode.as_deref(), Some("off"));
         assert_eq!(persisted.approval_level, Some("smart".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_manual_clear_context_clears_persisted_todo_list() {
+        let store = create_test_store();
+        let main_store = Arc::new(store);
+        let session_id = "manual-clear-todos";
+        seed_agent(&main_store, "agent-test");
+        main_store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+        main_store
+            .update_workflow_todo_list(
+                session_id,
+                r#"[{"subject":"unfinished","status":"in_progress"}]"#,
+            )
+            .expect("failed to seed todo list");
+
+        clear_persisted_workflow_todo_list(&main_store, session_id)
+            .await
+            .expect("todo list clear should succeed");
+
+        let todos = main_store
+            .get_todo_list_for_workflow(session_id)
+            .expect("failed to read todo list");
+        assert!(todos.is_empty());
     }
 
     #[test]

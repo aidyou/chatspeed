@@ -520,6 +520,112 @@ impl WorkflowExecutor {
             Self::effective_context_limit(&self.agent_config, &self.policy.phase);
     }
 
+    fn apply_runtime_preferences_from_config(&mut self, config: &crate::db::agent::AgentConfig) {
+        if config.final_audit.is_some() || config.final_review_mode.is_some() {
+            let final_audit = config.normalized_final_review_mode() == "sub_agent_review";
+            self.agent_config.final_audit = Some(final_audit);
+            self.llm_processor.agent_config.final_audit = Some(final_audit);
+        }
+
+        if let Some(auto_compress) = config.auto_compress {
+            self.auto_compress_enabled = auto_compress;
+        }
+
+        if let Some(approval_level) = config.approval_level.as_deref() {
+            use std::str::FromStr;
+            if let Ok(level) = ApprovalLevel::from_str(approval_level) {
+                self.policy.approval_level = level;
+            }
+        }
+
+        if config.skill_enabled.is_some() || config.selected_skills.is_some() {
+            if config.skill_enabled.is_some() {
+                self.agent_config.skill_enabled = config.skill_enabled;
+            }
+            if let Some(selected_skills) = config.selected_skills.as_ref() {
+                self.agent_config.selected_skills = serde_json::to_string(selected_skills).ok();
+            }
+            self.sync_runtime_skills_from_agent_config();
+        }
+    }
+
+    fn sync_runtime_preferences_from_snapshot(&mut self) -> Option<crate::db::agent::AgentConfig> {
+        let snapshot_config = self
+            .context
+            .main_store
+            .get_workflow_snapshot(&self.session_id)
+            .ok()
+            .and_then(|snapshot| snapshot.workflow.agent_config)
+            .and_then(|config_json| crate::db::agent::AgentConfig::from_json(&config_json));
+
+        if let Some(config) = snapshot_config.as_ref() {
+            self.apply_runtime_preferences_from_config(config);
+        }
+
+        snapshot_config
+    }
+
+    fn runtime_agent_config_json(
+        &self,
+        preserved_config: Option<&crate::db::agent::AgentConfig>,
+    ) -> Value {
+        let mut agent_config = serde_json::to_value(crate::db::agent::AgentConfig {
+            allowed_paths: self
+                .agent_config
+                .allowed_paths
+                .as_deref()
+                .and_then(|paths| serde_json::from_str(paths).ok()),
+            shell_policy: self
+                .agent_config
+                .shell_policy
+                .as_deref()
+                .and_then(|policy| serde_json::from_str(policy).ok()),
+            approval_level: Some(self.policy.approval_level.to_string()),
+            auto_approve: self
+                .agent_config
+                .auto_approve
+                .as_deref()
+                .and_then(|tools| serde_json::from_str(tools).ok()),
+            auto_approve_plan: preserved_config.and_then(|config| config.auto_approve_plan),
+            auto_compress: Some(self.auto_compress_enabled),
+            available_tools: self
+                .agent_config
+                .available_tools
+                .as_deref()
+                .and_then(|tools| serde_json::from_str(tools).ok()),
+            final_audit: self.agent_config.final_audit,
+            final_review_mode: Some(
+                if self.agent_config.final_audit.unwrap_or(false) {
+                    "sub_agent_review"
+                } else {
+                    "off"
+                }
+                .to_string(),
+            ),
+            skill_enabled: self.agent_config.skill_enabled,
+            selected_skills: self
+                .agent_config
+                .selected_skills
+                .as_deref()
+                .and_then(|skills| serde_json::from_str(skills).ok()),
+            mcp_tool_exposure: self
+                .agent_config
+                .mcp_tool_exposure
+                .as_deref()
+                .and_then(|tools| serde_json::from_str(tools).ok()),
+            phase: Some(self.policy.phase.to_string()),
+            models: self.agent_config.models.clone(),
+            max_contexts: self.agent_config.max_contexts,
+        })
+        .unwrap_or_else(|_| json!({}));
+
+        if let Some(object) = agent_config.as_object_mut() {
+            object.retain(|_, value| !value.is_null());
+        }
+
+        agent_config
+    }
+
     fn sync_runtime_models_from_agent_config(&mut self) {
         let selected_model = Self::phase_runtime_model(&self.agent_config, &self.policy.phase);
         let utility_model = Self::utility_runtime_model(&self.agent_config, &self.policy.phase);
@@ -2006,32 +2112,25 @@ impl WorkflowExecutor {
         self.context
             .begin_execution_segment_from_approved_plan()
             .await?;
+        let preserved_config = self.sync_runtime_preferences_from_snapshot();
 
-        let mut updated_agent_config: Option<Value> = None;
-        {
+        let updated_agent_config = {
+            let agent_config = self.runtime_agent_config_json(preserved_config.as_ref());
             let store = self.context.main_store.as_ref();
-            if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
-                let mut agent_config: Value = snapshot
-                    .workflow
-                    .agent_config
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or(json!({}));
-                agent_config["phase"] = json!(self.policy.phase.to_string());
-                if let Ok(config_str) = serde_json::to_string(&agent_config) {
-                    let _ = store.update_workflow_agent_config(&self.session_id, &config_str);
-                }
-                updated_agent_config = Some(agent_config);
+            if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                let _ = store.update_workflow_agent_config(&self.session_id, &config_str);
             }
-        }
+            agent_config
+        };
 
         self.current_step = 0;
         self.consecutive_no_tool_calls = 0;
         self.register_foundation_tools().await?;
         self.dispatch_context_usage().await?;
-        if let Some(agent_config) = updated_agent_config {
-            self.dispatch_ui_payload(GatewayPayload::AgentConfigUpdated { agent_config })
-                .await?;
-        }
+        self.dispatch_ui_payload(GatewayPayload::AgentConfigUpdated {
+            agent_config: updated_agent_config,
+        })
+        .await?;
 
         self.append_approved_plan_observation(
             tool_call_id,
@@ -7690,6 +7789,21 @@ mod recovery_tests {
             .iter()
             .all(|payload| !matches!(payload, GatewayPayload::Confirm { .. })));
 
+        let runtime_preferences = crate::db::agent::AgentConfig {
+            auto_approve_plan: Some(true),
+            auto_compress: Some(false),
+            final_audit: Some(true),
+            final_review_mode: Some("sub_agent_review".to_string()),
+            approval_level: Some("smart".to_string()),
+            skill_enabled: Some(true),
+            selected_skills: Some(vec!["help".to_string()]),
+            phase: Some("planning".to_string()),
+            ..crate::db::agent::AgentConfig::default()
+        };
+        store
+            .update_workflow_agent_config(session_id, &runtime_preferences.to_json())
+            .expect("failed to persist runtime preferences");
+
         assert!(recovered_executor
             .transition_structured_auto_approved_plan()
             .await
@@ -7698,6 +7812,46 @@ mod recovery_tests {
             recovered_executor.policy.phase,
             ExecutionPhase::Implementation
         );
+        assert_eq!(
+            recovered_executor.policy.approval_level,
+            ApprovalLevel::Smart
+        );
+        assert!(!recovered_executor.auto_compress_enabled);
+        assert_eq!(recovered_executor.agent_config.final_audit, Some(true));
+        assert_eq!(recovered_executor.agent_config.skill_enabled, Some(true));
+        assert_eq!(
+            recovered_executor.agent_config.selected_skills.as_deref(),
+            Some("[\"help\"]")
+        );
+        let persisted_config = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to read workflow snapshot")
+            .workflow
+            .agent_config
+            .and_then(|config_json| crate::db::agent::AgentConfig::from_json(&config_json))
+            .expect("agent config should deserialize");
+        assert_eq!(persisted_config.phase.as_deref(), Some("implementation"));
+        assert_eq!(persisted_config.auto_approve_plan, Some(true));
+        assert_eq!(persisted_config.approval_level.as_deref(), Some("smart"));
+        assert_eq!(persisted_config.auto_compress, Some(false));
+        assert_eq!(persisted_config.final_audit, Some(true));
+        assert_eq!(persisted_config.skill_enabled, Some(true));
+        assert_eq!(
+            persisted_config.selected_skills,
+            Some(vec!["help".to_string()])
+        );
+        assert!(observed_payloads
+            .lock()
+            .expect("payload lock")
+            .iter()
+            .any(|payload| matches!(
+                payload,
+                GatewayPayload::AgentConfigUpdated { agent_config }
+                    if agent_config
+                        .get("autoApprovePlan")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+            )));
         assert_eq!(recovered_executor.state, WorkflowState::Thinking);
         assert!(recovered_executor.pending_approvals.is_empty());
         assert!(recovered_executor.context.messages.iter().any(|message| {

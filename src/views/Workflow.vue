@@ -1634,6 +1634,7 @@ const onClearContextFrame = async () => {
     )
     if (currentWorkflowId.value === sessionId) {
       workflowStore.setHasLiveSession(result?.hasLiveSession === true)
+      workflowStore.setTodoList([])
     }
 
     if (result?.noop) {

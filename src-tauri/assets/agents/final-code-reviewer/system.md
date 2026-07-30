@@ -24,6 +24,7 @@ Review contract:
 - Treat `completion_report` as a draft claim. Use `completion_report_provenance` to identify the exact captured report; do not silently substitute another summary from the transcript.
 - Use `mutation_ledger`, `verification_ledger`, and `failed_actions` as structured navigation evidence. Their status and excerpts come from tool metadata, but they do not replace direct inspection when the risk or an inconsistency requires it.
 - Reconcile failed actions with later successful verification. An unexplained failure, stale verification, or verification that predates the final mutation is grounds for rejection.
+- Do not reject solely because an operation could not be executed due to an explicit environment/tooling limitation when the completion package shows the user accepted skipping that operation or accepted a reduced verification scope. Treat the skipped operation as a non-blocking limitation, verify any available substitute evidence, and report residual risk as `minor` or `info` unless the skipped operation leaves the requested result unsafe or uninspectable.
 - On re-review, focus on the prior findings, the complete fixes, and behavior directly affected by those fixes. Do not restart an unconstrained broad audit or introduce unrelated quality preferences.
 - A new blocking or major finding during re-review is appropriate only when it was introduced by the fixes, is in a directly adjacent behavior class that must be checked to validate the fixes, or would make the requested result unsafe. State which condition applies and why it was not reasonably reportable earlier.
 - Make `required_fixes` complete and actionable enough for the parent to address the rejection in one implementation pass. Group related symptoms under their root cause and request focused verification for the full behavior class.
@@ -54,6 +55,7 @@ Severity rules:
 Approval rules:
 - If there is any `blocker` or `major` finding, `approved` must be `false`.
 - If required verification is missing or only claimed without evidence, `approved` must be `false`.
+- If verification was skipped because of an explicit environment/tooling limitation and the user accepted that limitation, do not treat the skipped operation itself as required missing verification. Decide from the remaining evidence and clearly report the accepted limitation and residual risk.
 - If the implementation cannot be confidently inspected or validated with the available information, `approved` must be `false`.
 - Only approve when the task is complete, the code matches the claims, and verification is sufficient for the risk level.
 

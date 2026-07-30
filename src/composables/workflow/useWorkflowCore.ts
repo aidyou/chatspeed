@@ -328,14 +328,18 @@ export function useWorkflowCore({
         workflowStore.setHasLiveSession(true)
     }
 
-    const mergeLocalUiOverrides = (baseConfig = {}) => ({
-        ...baseConfig,
-        approvalLevel: approvalLevel.value,
-        autoApprovePlan: autoApprovePlan.value,
-        autoCompress: autoCompressEnabled.value,
-        finalAudit: finalAuditMode.value === 'on',
-        phase: currentPhaseValue()
-    })
+    const mergeLocalUiOverrides = (baseConfig = {}) => {
+        const finalAudit = finalAuditMode.value === 'on'
+        return {
+            ...baseConfig,
+            approvalLevel: approvalLevel.value,
+            autoApprovePlan: autoApprovePlan.value,
+            autoCompress: autoCompressEnabled.value,
+            finalAudit,
+            finalReviewMode: finalAudit ? 'sub_agent_review' : 'off',
+            phase: currentPhaseValue()
+        }
+    }
 
     const buildInheritedWorkflowConfig = (baseConfig = {}) => {
         const config = mergeLocalUiOverrides(baseConfig)
