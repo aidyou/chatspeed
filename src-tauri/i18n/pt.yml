@@ -27,9 +27,14 @@ command:
     failed_to_read: 'Falha ao ler da área de transferência: %{error}'
     failed_to_write: 'Falha ao escrever na área de transferência: %{error}'
   fs:
+    file_changed_on_disk: O arquivo foi alterado no disco. Recarregue antes de salvar.
+    file_info_failed: 'Falha ao ler as informações do arquivo: %{error}'
+    file_too_large: 'O arquivo é grande demais para abrir. Tamanho máximo: %{max} bytes.'
     image_preview_failed: 'Falha ao gerar a pré-visualização da imagem: %{error}'
+    not_a_file: O caminho selecionado não é um arquivo.
     read_file_failed: 'Falha ao ler o arquivo: %{error}'
     unknown_filename: NomeDeArquivoDesconhecido.png
+    write_file_failed: 'Falha ao escrever o arquivo: %{error}'
   window:
     failed_to_close: 'Falha ao fechar a janela: %{error}'
 db:

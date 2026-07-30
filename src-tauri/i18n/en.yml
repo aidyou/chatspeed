@@ -25,9 +25,14 @@ command:
     failed_to_read: 'Failed to read clipboard: %{error}'
     failed_to_write: 'Failed to write clipboard: %{error}'
   fs:
+    file_changed_on_disk: File changed on disk. Reload before saving.
+    file_info_failed: 'Failed to read file information: %{error}'
+    file_too_large: 'File is too large to open. Maximum size: %{max} bytes.'
     image_preview_failed: 'Failed to generate image preview: %{error}'
+    not_a_file: The selected path is not a file.
     read_file_failed: 'Failed to read file: %{error}'
     unknown_filename: UnknownFileName.png
+    write_file_failed: 'Failed to write file: %{error}'
   window:
     failed_to_close: 'Failed to close window: %{error}'
 db:

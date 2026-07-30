@@ -25,9 +25,14 @@ command:
     failed_to_read: 讀取剪貼簿失敗：%{error}
     failed_to_write: 寫入剪貼簿失敗：%{error}
   fs:
+    file_changed_on_disk: 檔案已在磁碟上被修改，請重新載入後再儲存。
+    file_info_failed: 讀取檔案資訊失敗：%{error}
+    file_too_large: 檔案太大，無法開啟。最大大小：%{max} 位元組。
     image_preview_failed: 產生圖片預覽失敗：%{error}
+    not_a_file: 選取的路徑不是檔案。
     read_file_failed: 讀取檔案失敗：%{error}
     unknown_filename: 未知檔案名稱.png
+    write_file_failed: 寫入檔案失敗：%{error}
   window:
     failed_to_close: 關閉視窗失敗：%{error}
 db:

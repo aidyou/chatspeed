@@ -10,9 +10,99 @@ use std::fs;
 
 use crate::error::{AppError, Result};
 
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::process::Command;
+use std::time::UNIX_EPOCH;
+
+const EDITOR_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+
+#[derive(Debug, Serialize)]
+pub struct EditorFileInfo {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    pub modified_at_ms: u128,
+    pub is_file: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EditorFileContent {
+    pub path: String,
+    pub name: String,
+    pub content: String,
+    pub size: u64,
+    pub modified_at_ms: u128,
+}
+
+fn metadata_modified_at_ms(metadata: &fs::Metadata) -> Result<u128> {
+    let modified = metadata.modified().map_err(|e| AppError::General {
+        message: t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+    })?;
+
+    modified
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .map_err(|e| AppError::General {
+            message: t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+        })
+}
+
+fn editor_file_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
+fn editor_file_info_from_metadata(
+    file_path: &str,
+    metadata: &fs::Metadata,
+) -> Result<EditorFileInfo> {
+    let path = Path::new(file_path);
+    Ok(EditorFileInfo {
+        path: file_path.to_string(),
+        name: editor_file_name(path),
+        size: metadata.len(),
+        modified_at_ms: metadata_modified_at_ms(metadata)?,
+        is_file: metadata.is_file(),
+    })
+}
+
+fn ensure_editor_file(file_path: &str) -> Result<fs::Metadata> {
+    let metadata = fs::metadata(file_path).map_err(|e| AppError::General {
+        message: t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+    })?;
+
+    if !metadata.is_file() {
+        return Err(AppError::General {
+            message: t!("command.fs.not_a_file").to_string(),
+        });
+    }
+
+    Ok(metadata)
+}
+
+fn resolve_editor_max_bytes(max_bytes: Option<u64>) -> u64 {
+    max_bytes
+        .unwrap_or(EDITOR_MAX_FILE_BYTES)
+        .min(EDITOR_MAX_FILE_BYTES)
+}
+
+fn ensure_editor_file_size(metadata: &fs::Metadata, max_bytes: u64) -> Result<()> {
+    if metadata.len() > max_bytes {
+        return Err(AppError::General {
+            message: t!(
+                "command.fs.file_too_large",
+                max = EDITOR_MAX_FILE_BYTES.to_string()
+            )
+            .to_string(),
+        });
+    }
+
+    Ok(())
+}
 
 fn git_status_priority(status: &str) -> u8 {
     let code = status.trim();
@@ -261,6 +351,64 @@ pub async fn read_text_file(file_path: &str) -> Result<String> {
 }
 
 #[tauri::command]
+pub async fn get_text_file_info(file_path: &str) -> Result<EditorFileInfo> {
+    let metadata = ensure_editor_file(file_path)?;
+    editor_file_info_from_metadata(file_path, &metadata)
+}
+
+#[tauri::command]
+pub async fn read_text_file_for_editor(
+    file_path: &str,
+    max_bytes: Option<u64>,
+) -> Result<EditorFileContent> {
+    log::debug!("Reading editor text file from path: {}", file_path);
+
+    let resolved_max_bytes = resolve_editor_max_bytes(max_bytes);
+    let metadata = ensure_editor_file(file_path)?;
+    ensure_editor_file_size(&metadata, resolved_max_bytes)?;
+
+    let content = fs::read_to_string(file_path).map_err(|e| {
+        log::error!("Failed to read editor text file '{}': {}", file_path, e);
+        AppError::General {
+            message: t!("command.fs.read_file_failed", error = e.to_string()).to_string(),
+        }
+    })?;
+
+    let info = editor_file_info_from_metadata(file_path, &metadata)?;
+    Ok(EditorFileContent {
+        path: info.path,
+        name: info.name,
+        content,
+        size: info.size,
+        modified_at_ms: info.modified_at_ms,
+    })
+}
+
+#[tauri::command]
+pub async fn write_text_file_for_editor(
+    file_path: &str,
+    content: &str,
+    expected_modified_at_ms: u128,
+    expected_size: u64,
+) -> Result<EditorFileInfo> {
+    let metadata = ensure_editor_file(file_path)?;
+    let current_modified_at_ms = metadata_modified_at_ms(&metadata)?;
+
+    if metadata.len() != expected_size || current_modified_at_ms != expected_modified_at_ms {
+        return Err(AppError::General {
+            message: t!("command.fs.file_changed_on_disk").to_string(),
+        });
+    }
+
+    fs::write(file_path, content).map_err(|e| AppError::General {
+        message: t!("command.fs.write_file_failed", error = e.to_string()).to_string(),
+    })?;
+
+    let updated_metadata = ensure_editor_file(file_path)?;
+    editor_file_info_from_metadata(file_path, &updated_metadata)
+}
+
+#[tauri::command]
 pub async fn open_path_in_file_manager(path: &str) -> Result<()> {
     let target = Path::new(path);
 
@@ -382,4 +530,74 @@ pub async fn image_source_url(image_path: &std::path::Path) -> Result<String> {
         "{}/upload/workflow-source/{}",
         http_server, file_name
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn editor_read_rejects_files_over_resolved_limit() {
+        let dir = tempdir().expect("temporary directory");
+        let path = dir.path().join("large.rs");
+        fs::write(&path, "abcdef").expect("write test file");
+
+        let result = read_text_file_for_editor(path.to_str().expect("utf8 path"), Some(5)).await;
+
+        assert!(result.is_err(), "file over provided limit must be rejected");
+        let error = result.err().expect("expected error").to_string();
+        assert!(
+            error.contains("too") || error.contains("大") || error.contains("Maximum"),
+            "expected size-limit error, got: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn editor_write_rejects_changed_file_before_overwrite() {
+        let dir = tempdir().expect("temporary directory");
+        let path = dir.path().join("conflict.ts");
+        fs::write(&path, "let value = 1;\n").expect("write test file");
+
+        let opened = read_text_file_for_editor(path.to_str().expect("utf8 path"), None)
+            .await
+            .expect("read editor file");
+        fs::write(&path, "let value = 123;\n").expect("simulate external change");
+
+        let result = write_text_file_for_editor(
+            path.to_str().expect("utf8 path"),
+            "let value = 2;\n",
+            opened.modified_at_ms,
+            opened.size,
+        )
+        .await;
+
+        assert!(result.is_err(), "changed file must not be overwritten");
+        let disk_content = fs::read_to_string(&path).expect("read disk content");
+        assert_eq!(disk_content, "let value = 123;\n");
+    }
+
+    #[tokio::test]
+    async fn editor_write_updates_metadata_after_successful_save() {
+        let dir = tempdir().expect("temporary directory");
+        let path = dir.path().join("save.py");
+        fs::write(&path, "print('old')\n").expect("write test file");
+
+        let opened = read_text_file_for_editor(path.to_str().expect("utf8 path"), None)
+            .await
+            .expect("read editor file");
+        let updated = write_text_file_for_editor(
+            path.to_str().expect("utf8 path"),
+            "print('new')\n",
+            opened.modified_at_ms,
+            opened.size,
+        )
+        .await
+        .expect("save editor file");
+
+        assert_eq!(updated.size, "print('new')\n".len() as u64);
+        let disk_content = fs::read_to_string(&path).expect("read disk content");
+        assert_eq!(disk_content, "print('new')\n");
+    }
 }

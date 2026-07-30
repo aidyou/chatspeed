@@ -25,9 +25,14 @@ command:
     failed_to_read: '读取剪贴板失败: %{error}'
     failed_to_write: '写入剪贴板失败: %{error}'
   fs:
+    file_changed_on_disk: 文件已在磁盘上被修改，请重新加载后再保存。
+    file_info_failed: '读取文件信息失败: %{error}'
+    file_too_large: '文件太大，无法打开。最大大小：%{max} 字节。'
     image_preview_failed: '生成图片预览失败: %{error}'
+    not_a_file: 选择的路径不是文件。
     read_file_failed: '读取文件失败: %{error}'
     unknown_filename: 未知文件名.png
+    write_file_failed: '写入文件失败: %{error}'
   window:
     failed_to_close: '关闭窗口失败: %{error}'
 db:

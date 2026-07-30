@@ -288,7 +288,12 @@
         },
         "saveSuccess": "API 키 보호 설정이 업데이트되었습니다",
         "selectFile": "키 파일 선택",
-        "states": { "legacy": "이전 방식 보호", "locked": "잠김", "ready": "키 파일 보호 활성화", "unsupported": "지원되지 않는 암호화" },
+        "states": {
+          "legacy": "이전 방식 보호",
+          "locked": "잠김",
+          "ready": "키 파일 보호 활성화",
+          "unsupported": "지원되지 않는 암호화"
+        },
         "status": "보호 상태",
         "statusFailed": "API 키 보호 상태 확인 실패",
         "title": "API 키 보호",
@@ -1194,6 +1199,34 @@
       "all": "전체",
       "failed": "실패"
     },
-    "waitingForUser": "사용자 입력 대기 중"
+    "waitingForUser": "사용자 입력 대기 중",
+    "codeEditor": {
+      "closeConfirmMessage": "Close {name} without saving changes?",
+      "closeConfirmTitle": "Unsaved changes",
+      "closeTab": "Close {name}",
+      "closeWithoutSaving": "Close without saving",
+      "dirty": "Unsaved changes",
+      "empty": "Open a text file from Authorized Paths to start editing.",
+      "externalChangeMessage": "{name} changed on disk. Reload it before saving to avoid overwriting external changes.",
+      "externalChangeTitle": "File changed on disk",
+      "fileTooLarge": "File is too large to open. Maximum size: {max}.",
+      "openFailed": "Failed to open file: {error}",
+      "reload": "Reload",
+      "reloadConfirmMessage": "Reload {name} from disk and discard unsaved editor changes?",
+      "reloadConfirmTitle": "Reload file",
+      "save": "Save",
+      "saveFailed": "Failed to save file: {error}",
+      "saveShortcut": "Save ({shortcut})",
+      "saveSuccess": "{name} saved",
+      "tabEscapeHint": "Tab indents in the editor. Press Escape then Tab, or toggle tab-focus mode, to move focus out.",
+      "tabHint": "Tab indents"
+    },
+    "filePreview": {
+      "openFailed": "Failed to open file: {error}",
+      "openWithDefaultApp": "Open with Default App",
+      "selectDirectory": "Select Directory",
+      "unsupportedDesc": "You can open it with your system default application.",
+      "unsupportedTitle": "This file type is not supported for inline preview."
+    }
   }
 }

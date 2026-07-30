@@ -1199,6 +1199,34 @@
       "all": "全部",
       "failed": "失败"
     },
-    "waitingForUser": "等待用户输入"
+    "waitingForUser": "等待用户输入",
+    "codeEditor": {
+      "closeConfirmMessage": "关闭 {name} 并丢弃未保存的修改吗？",
+      "closeConfirmTitle": "存在未保存修改",
+      "closeTab": "关闭 {name}",
+      "closeWithoutSaving": "不保存并关闭",
+      "dirty": "未保存修改",
+      "empty": "从授权目录打开文本文件后即可编辑。",
+      "externalChangeMessage": "{name} 已在磁盘上被修改。请先重新加载，避免覆盖外部修改。",
+      "externalChangeTitle": "文件已在磁盘上修改",
+      "fileTooLarge": "文件太大，无法打开。最大大小：{max}。",
+      "openFailed": "打开文件失败：{error}",
+      "reload": "重新加载",
+      "reloadConfirmMessage": "从磁盘重新加载 {name} 并丢弃编辑器中的未保存修改吗？",
+      "reloadConfirmTitle": "重新加载文件",
+      "save": "保存",
+      "saveFailed": "保存文件失败：{error}",
+      "saveShortcut": "保存（{shortcut}）",
+      "saveSuccess": "{name} 已保存",
+      "tabEscapeHint": "编辑器中 Tab 会缩进。按 Escape 后再按 Tab，或切换 tab focus mode，可将焦点移出编辑器。",
+      "tabHint": "Tab 缩进"
+    },
+    "filePreview": {
+      "openFailed": "打开文件失败：{error}",
+      "openWithDefaultApp": "用默认应用打开",
+      "selectDirectory": "选择目录",
+      "unsupportedDesc": "你可以使用系统默认应用打开它。",
+      "unsupportedTitle": "此文件类型不支持内联预览。"
+    }
   }
 }

@@ -28,9 +28,14 @@ command:
     failed_to_read: 'Échec de la lecture du presse-papiers : %{error}'
     failed_to_write: 'Échec de l''écriture dans le presse-papiers : %{error}'
   fs:
+    file_changed_on_disk: Le fichier a changé sur le disque. Rechargez-le avant d’enregistrer.
+    file_info_failed: 'Échec de la lecture des informations du fichier : %{error}'
+    file_too_large: 'Le fichier est trop volumineux pour être ouvert. Taille maximale : %{max} octets.'
     image_preview_failed: 'Échec de la génération de l''aperçu de l''image : %{error}'
+    not_a_file: Le chemin sélectionné n’est pas un fichier.
     read_file_failed: 'Échec de la lecture du fichier : %{error}'
     unknown_filename: NomDeFichierInconnu.png
+    write_file_failed: 'Échec de l''écriture du fichier : %{error}'
   window:
     failed_to_close: 'Échec de la fermeture de la fenêtre : %{error}'
 db:

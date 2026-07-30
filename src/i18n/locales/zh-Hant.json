@@ -1199,6 +1199,34 @@
       "all": "全部",
       "failed": "失敗"
     },
-    "waitingForUser": "等待使用者輸入"
+    "waitingForUser": "等待使用者輸入",
+    "codeEditor": {
+      "closeConfirmMessage": "關閉 {name} 並捨棄未儲存的修改嗎？",
+      "closeConfirmTitle": "存在未儲存修改",
+      "closeTab": "關閉 {name}",
+      "closeWithoutSaving": "不儲存並關閉",
+      "dirty": "未儲存修改",
+      "empty": "從授權目錄開啟文字檔後即可編輯。",
+      "externalChangeMessage": "{name} 已在磁碟上被修改。請先重新載入，避免覆蓋外部修改。",
+      "externalChangeTitle": "檔案已在磁碟上修改",
+      "fileTooLarge": "檔案太大，無法開啟。最大大小：{max}。",
+      "openFailed": "開啟檔案失敗：{error}",
+      "reload": "重新載入",
+      "reloadConfirmMessage": "從磁碟重新載入 {name} 並捨棄編輯器中的未儲存修改嗎？",
+      "reloadConfirmTitle": "重新載入檔案",
+      "save": "儲存",
+      "saveFailed": "儲存檔案失敗：{error}",
+      "saveShortcut": "儲存（{shortcut}）",
+      "saveSuccess": "{name} 已儲存",
+      "tabEscapeHint": "編輯器中 Tab 會縮排。按 Escape 後再按 Tab，或切換 tab focus mode，可將焦點移出編輯器。",
+      "tabHint": "Tab 縮排"
+    },
+    "filePreview": {
+      "openFailed": "開啟檔案失敗：{error}",
+      "openWithDefaultApp": "用預設應用程式開啟",
+      "selectDirectory": "選擇目錄",
+      "unsupportedDesc": "你可以使用系統預設應用程式開啟它。",
+      "unsupportedTitle": "此檔案類型不支援內嵌預覽。"
+    }
   }
 }

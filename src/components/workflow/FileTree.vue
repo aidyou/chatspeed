@@ -57,7 +57,7 @@
             :node="child"
             :expanded-map="expandedNodes"
             @toggle="toggleExpand"
-            @preview="previewFile"
+            @preview="openFile"
             @reference="emit('referencePath', $event)" />
         </div>
       </div>
@@ -77,37 +77,31 @@
           <div class="unsupported-preview__icon">
             <cs name="warning" size="28px" />
           </div>
-          <div class="unsupported-preview__title">This file type is not supported for inline preview.</div>
+          <div class="unsupported-preview__title">{{ $t('workflow.filePreview.unsupportedTitle') }}</div>
           <div class="unsupported-preview__desc">
-            You can open it with your system default application.
+            {{ $t('workflow.filePreview.unsupportedDesc') }}
           </div>
           <div class="unsupported-preview__path">{{ previewFilePath }}</div>
-          <el-button type="primary" @click="openPreviewFileWithDefaultApp">Open with Default App</el-button>
+          <el-button type="primary" @click="openPreviewFileWithDefaultApp">{{ $t('workflow.filePreview.openWithDefaultApp') }}</el-button>
         </div>
         <div v-else-if="previewMode === 'image'" class="media-preview image-preview">
           <div class="media-preview__actions">
-            <el-button @click="openPreviewFileWithDefaultApp">Open with Default App</el-button>
+            <el-button @click="openPreviewFileWithDefaultApp">{{ $t('workflow.filePreview.openWithDefaultApp') }}</el-button>
           </div>
           <img :src="previewAssetUrl" :alt="previewTitle" class="image-preview__img" />
         </div>
         <div v-else-if="previewMode === 'audio'" class="media-preview audio-preview">
           <div class="media-preview__actions">
-            <el-button @click="openPreviewFileWithDefaultApp">Open with Default App</el-button>
+            <el-button @click="openPreviewFileWithDefaultApp">{{ $t('workflow.filePreview.openWithDefaultApp') }}</el-button>
           </div>
           <audio :src="previewAssetUrl" controls preload="metadata" class="audio-preview__player" />
         </div>
         <div v-else-if="previewMode === 'video'" class="media-preview video-preview">
           <div class="media-preview__actions">
-            <el-button @click="openPreviewFileWithDefaultApp">Open with Default App</el-button>
+            <el-button @click="openPreviewFileWithDefaultApp">{{ $t('workflow.filePreview.openWithDefaultApp') }}</el-button>
           </div>
           <video :src="previewAssetUrl" controls preload="metadata" class="video-preview__player" />
         </div>
-        <file-preview-diff
-          v-else-if="previewMode === 'diff'"
-          :file-path="previewFilePath"
-          :old-content="previewBaseContent"
-          :new-content="previewRawContent" />
-        <markdown-simple v-else :content="previewContent" :disable-interaction="true" />
       </div>
     </el-dialog>
   </div>
@@ -122,8 +116,6 @@ import { invokeWrapper } from '@/libs/tauri'
 import { writeClipboard } from '@/libs/clipboard'
 import { imagePreview } from '@/libs/fs'
 import { showMessage } from '@/libs/util'
-import MarkdownSimple from './MarkdownSimple.vue'
-import FilePreviewDiff from './FilePreviewDiff.vue'
 import TreeNode from './TreeNode.vue'
 
 const { t } = useI18n()
@@ -135,7 +127,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['addPath', 'removePath', 'referencePath'])
+const emit = defineEmits(['addPath', 'removePath', 'referencePath', 'openFile'])
 
 const roots = computed(() => props.paths)
 const expandedNodes = ref(new Map())
@@ -145,9 +137,6 @@ const loading = ref(false)
 // Preview state
 const previewVisible = ref(false)
 const previewTitle = ref('')
-const previewContent = ref('')
-const previewRawContent = ref('')
-const previewBaseContent = ref('')
 const previewMode = ref('markdown')
 const previewFilePath = ref('')
 const previewAssetUrl = ref('')
@@ -186,7 +175,7 @@ const onAddPath = async () => {
     const selected = await open({
       directory: true,
       multiple: false,
-      title: 'Select Directory'
+      title: t('workflow.filePreview.selectDirectory')
     })
     if (selected && !roots.value.includes(selected)) {
       emit('addPath', selected)
@@ -264,8 +253,18 @@ const openPreviewFileWithDefaultApp = async () => {
     await invokeWrapper('open_path_in_file_manager', { path: previewFilePath.value })
   } catch (error) {
     console.error('Failed to open file with default app:', error)
-    showMessage('Failed to open file', 'error')
+    showMessage(t('workflow.filePreview.openFailed', { error: String(error) }), 'error')
   }
+}
+
+const openFile = async (path) => {
+  const previewType = getPreviewType(path)
+  if (previewType === 'text') {
+    emit('openFile', path)
+    return
+  }
+
+  await previewFile(path)
 }
 
 const previewFile = async (path) => {
@@ -273,9 +272,6 @@ const previewFile = async (path) => {
     previewTitle.value = getDirName(path)
     previewFilePath.value = path
     previewAssetUrl.value = ''
-    previewContent.value = ''
-    previewRawContent.value = ''
-    previewBaseContent.value = ''
 
     const previewType = getPreviewType(path)
 
@@ -299,25 +295,12 @@ const previewFile = async (path) => {
       return
     }
 
-    const [content, baseContent] = await Promise.all([
-      invokeWrapper('read_text_file', { filePath: path }),
-      invokeWrapper('read_git_base_text_file', { filePath: path }).catch(() => null)
-    ])
-
-    previewRawContent.value = content
-    previewBaseContent.value = typeof baseContent === 'string' ? baseContent : ''
-
-    if (typeof baseContent === 'string' && baseContent !== content) {
-      previewMode.value = 'diff'
-      previewContent.value = ''
-    } else if (getFileExtension(path) !== 'md') {
-      previewMode.value = 'markdown'
-      const ext = getFileExtension(path) || 'text'
-      previewContent.value = `\`\`\`${ext}\n${content}\n\`\`\``
-    } else {
-      previewMode.value = 'markdown'
-      previewContent.value = content
+    if (previewType === 'text') {
+      emit('openFile', path)
+      return
     }
+
+    previewMode.value = 'unsupported'
     previewVisible.value = true
   } catch (e) {
     console.error('Failed to preview file:', e)

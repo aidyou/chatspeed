@@ -304,7 +304,8 @@
             :paths="currentPaths"
             @add-path="$emit('add-path-from-tree', $event)"
             @remove-path="$emit('remove-path-from-tree', $event)"
-            @reference-path="$emit('insert-path-reference', $event)" />
+            @reference-path="$emit('insert-path-reference', $event)"
+            @open-file="$emit('open-editor-file', $event)" />
         </el-tab-pane>
       </el-tabs>
       <button class="workflow-terminal-entry expanded-terminal-entry" :class="{ blinking: terminalMinimized }" type="button" @click="$emit('open-terminal')">
@@ -390,6 +391,7 @@ const emit = defineEmits([
   'add-path-from-tree',
   'remove-path-from-tree',
   'insert-path-reference',
+  'open-editor-file',
   'open-terminal'
 ])
 

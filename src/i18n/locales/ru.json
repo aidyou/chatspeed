@@ -288,7 +288,12 @@
         },
         "saveSuccess": "Защита API-ключей обновлена",
         "selectFile": "Выбрать файл ключа",
-        "states": { "legacy": "Прежняя защита", "locked": "Заблокировано", "ready": "Защита файлом включена", "unsupported": "Неподдерживаемое шифрование" },
+        "states": {
+          "legacy": "Прежняя защита",
+          "locked": "Заблокировано",
+          "ready": "Защита файлом включена",
+          "unsupported": "Неподдерживаемое шифрование"
+        },
         "status": "Состояние защиты",
         "statusFailed": "Не удалось проверить защиту",
         "title": "Защита API-ключей",
@@ -1194,6 +1199,34 @@
       "all": "Все",
       "failed": "Ошибка"
     },
-    "waitingForUser": "Ожидание ввода пользователя"
+    "waitingForUser": "Ожидание ввода пользователя",
+    "codeEditor": {
+      "closeConfirmMessage": "Close {name} without saving changes?",
+      "closeConfirmTitle": "Unsaved changes",
+      "closeTab": "Close {name}",
+      "closeWithoutSaving": "Close without saving",
+      "dirty": "Unsaved changes",
+      "empty": "Open a text file from Authorized Paths to start editing.",
+      "externalChangeMessage": "{name} changed on disk. Reload it before saving to avoid overwriting external changes.",
+      "externalChangeTitle": "File changed on disk",
+      "fileTooLarge": "File is too large to open. Maximum size: {max}.",
+      "openFailed": "Failed to open file: {error}",
+      "reload": "Reload",
+      "reloadConfirmMessage": "Reload {name} from disk and discard unsaved editor changes?",
+      "reloadConfirmTitle": "Reload file",
+      "save": "Save",
+      "saveFailed": "Failed to save file: {error}",
+      "saveShortcut": "Save ({shortcut})",
+      "saveSuccess": "{name} saved",
+      "tabEscapeHint": "Tab indents in the editor. Press Escape then Tab, or toggle tab-focus mode, to move focus out.",
+      "tabHint": "Tab indents"
+    },
+    "filePreview": {
+      "openFailed": "Failed to open file: {error}",
+      "openWithDefaultApp": "Open with Default App",
+      "selectDirectory": "Select Directory",
+      "unsupportedDesc": "You can open it with your system default application.",
+      "unsupportedTitle": "This file type is not supported for inline preview."
+    }
   }
 }

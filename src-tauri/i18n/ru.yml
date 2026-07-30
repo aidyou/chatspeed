@@ -26,9 +26,14 @@ command:
     failed_to_read: 'Не удалось прочитать из буфера обмена: %{error}'
     failed_to_write: 'Не удалось записать в буфер обмена: %{error}'
   fs:
+    file_changed_on_disk: Файл изменился на диске. Перезагрузите его перед сохранением.
+    file_info_failed: 'Не удалось прочитать информацию о файле: %{error}'
+    file_too_large: 'Файл слишком большой для открытия. Максимальный размер: %{max} байт.'
     image_preview_failed: 'Не удалось создать предварительный просмотр изображения: %{error}'
+    not_a_file: Выбранный путь не является файлом.
     read_file_failed: 'Не удалось прочитать файл: %{error}'
     unknown_filename: НеизвестноеИмяФайла.png
+    write_file_failed: 'Не удалось записать файл: %{error}'
   window:
     failed_to_close: 'Не удалось закрыть окно: %{error}'
 db:

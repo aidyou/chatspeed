@@ -162,6 +162,7 @@
         @add-path-from-tree="onAddPathFromTree"
         @remove-path-from-tree="onRemovePathFromTree"
         @insert-path-reference="insertPathReference"
+        @open-editor-file="codeEditor.openFile"
         @toggle-sidebar="onToggleSidebar"
         @open-terminal="terminal.open" />
 
@@ -174,107 +175,122 @@
 
       <!-- Main container -->
       <el-container class="main-container">
-        <el-main class="message-list-container">
-          <WorkflowMessageList
-            :key="currentWorkflowId || 'workflow-empty'"
-            ref="messageListRef"
-            :messages="enhancedMessages"
-            :hidden-earlier-message-count="hiddenEarlierMessageCount"
-            :hidden-completed-task-group-count="hiddenCompletedTaskGroupCount"
-            :is-running="isRunning"
-            :queued-messages="workflowStore.messageQueue"
-            :is-chatting="isChatting"
-            :chat-state="chatState"
-            :is-compressing="isCompressing"
-            :compression-message="compressionMessage"
-            :last-assistant-message="lastAssistantMessage"
-            :approval-loading="approvalLoading"
-            :active-approval-id="activeApprovalId"
-            :ask-user-submitting="askUserSubmitting"
-            :is-message-expanded="isMessageExpanded"
-            :is-reasoning-expanded="isReasoningExpanded"
-            :remove-system-reminder="removeSystemReminder"
-            :get-diff-markdown="getDiffMarkdown"
-            :parse-choice-content="parseChoiceContent"
-            :get-parsed-message="getParsedMessage"
-            :should-show-tool-raw-content="shouldShowToolRawContent"
-            :pending-count="currentInlinePendingApprovalIds.length"
-            :pending-approval-ids="currentInlinePendingApprovalIds"
-            :current-workflow-id="currentWorkflowId"
-            :wait-reason="waitReason"
-            :is-approval-submitting="isApprovalSubmitting"
-            @toggle-expand="toggleMessageExpand"
-            @toggle-reasoning="toggleReasoningExpand"
-            @reveal-earlier-messages="revealEarlierMessagesInTaskWindow"
-            @reveal-earlier-task-group="revealEarlierTaskGroup"
-            @submit-ask-user="submitAskUserResponse"
-            @approve-tool="onApproveAction"
-            @approve-all-tool="onApproveAllAction"
-            @approve-all-pending="onApproveAllPendingAction"
-            @remove-queued-message="removeQueuedMessage"
-            @reject-tool="onRejectAction" />
-        </el-main>
+        <div class="workflow-workspace" :class="{ 'has-editor': codeEditor.hasTabs.value }">
+          <WorkflowCodeEditor
+            v-if="codeEditor.hasTabs.value"
+            class="workflow-editor-pane"
+            :editor="codeEditor"
+            :style="{ width: `${codeEditorWidth}px` }" />
+          <div
+            v-if="codeEditor.hasTabs.value"
+            class="code-editor-resize-handle"
+            :class="{ dragging: isCodeEditorResizing }"
+            @mousedown="onCodeEditorResizeStart" />
 
-        <!-- Status Panel (Floating) -->
-        <StatusPanel />
+          <div class="workflow-chat-pane">
+            <el-main class="message-list-container">
+              <WorkflowMessageList
+                :key="currentWorkflowId || 'workflow-empty'"
+                ref="messageListRef"
+                :messages="enhancedMessages"
+                :hidden-earlier-message-count="hiddenEarlierMessageCount"
+                :hidden-completed-task-group-count="hiddenCompletedTaskGroupCount"
+                :is-running="isRunning"
+                :queued-messages="workflowStore.messageQueue"
+                :is-chatting="isChatting"
+                :chat-state="chatState"
+                :is-compressing="isCompressing"
+                :compression-message="compressionMessage"
+                :last-assistant-message="lastAssistantMessage"
+                :approval-loading="approvalLoading"
+                :active-approval-id="activeApprovalId"
+                :ask-user-submitting="askUserSubmitting"
+                :is-message-expanded="isMessageExpanded"
+                :is-reasoning-expanded="isReasoningExpanded"
+                :remove-system-reminder="removeSystemReminder"
+                :get-diff-markdown="getDiffMarkdown"
+                :parse-choice-content="parseChoiceContent"
+                :get-parsed-message="getParsedMessage"
+                :should-show-tool-raw-content="shouldShowToolRawContent"
+                :pending-count="currentInlinePendingApprovalIds.length"
+                :pending-approval-ids="currentInlinePendingApprovalIds"
+                :current-workflow-id="currentWorkflowId"
+                :wait-reason="waitReason"
+                :is-approval-submitting="isApprovalSubmitting"
+                @toggle-expand="toggleMessageExpand"
+                @toggle-reasoning="toggleReasoningExpand"
+                @reveal-earlier-messages="revealEarlierMessagesInTaskWindow"
+                @reveal-earlier-task-group="revealEarlierTaskGroup"
+                @submit-ask-user="submitAskUserResponse"
+                @approve-tool="onApproveAction"
+                @approve-all-tool="onApproveAllAction"
+                @approve-all-pending="onApproveAllPendingAction"
+                @remove-queued-message="removeQueuedMessage"
+                @reject-tool="onRejectAction" />
+            </el-main>
 
-        <!-- Input Area -->
-        <WorkflowInputArea
-          ref="inputAreaRef"
-          v-model:input-message="inputMessage"
-          :is-running="isRunning"
-          :is-chatting="isChatting"
-          :has-live-session="hasLiveSession"
-          :chat-state="chatState"
-          :wait-reason="waitReason"
-          :current-workflow="currentWorkflow"
-          :current-workflow-id="currentWorkflowId"
-          :selected-agent="selectedAgent"
-          :can-edit-agent="canEditCurrentWorkflowAgent"
-          :show-planning-mode-toggle="showPlanningModeToggle"
-          :can-toggle-planning-mode="canTogglePlanningMode"
-          :active-model-name="activeModelName"
-          :save-model-config="onModelConfigSave"
-          :planning-mode="planningMode"
-          :auto-approve-plan="autoApprovePlan"
-          :can-toggle-auto-approve-plan="canTogglePlanningMode"
-          :approval-level="approvalLevel"
-          :final-audit-mode="finalAuditMode"
-          :can-toggle-final-audit-mode="canToggleFinalAuditMode"
-          :auto-compress-enabled="autoCompressEnabled"
-          :agents="agentStore.agents"
-          :attachments="imageAttachments"
-          :can-attach-images="canUseImageAttachments"
-          :is-preparing-image-send="isPreparingImageSend"
-          :show-skill-suggestions="showSkillSuggestions"
-          :show-file-suggestions="showFileSuggestions"
-          :filtered-system-skills="filteredSystemSkills"
-          :grouped-skill-suggestions="groupedSkillSuggestions"
-          :file-suggestions="fileSuggestions"
-          :selected-skill-index="selectedSkillIndex"
-          :selected-file-index="selectedFileIndex"
-          :on-input-key-down="onInputKeyDown"
-          :on-composition-start="onCompositionStart"
-          :on-composition-end="onCompositionEnd"
-          :on-paste-input="onImagePaste"
-          :on-skill-select="onSkillSelect"
-          :on-file-select="onFileSelect"
-          @send-message="onSendMessage"
-          @continue="handleContinue"
-          @stop="onStop"
-          @approve-plan="onApprovePlan"
-          @toggle-planning-mode="togglePlanningModeWithFeedback"
-          @toggle-auto-approve-plan="toggleAutoApprovePlanWithFeedback"
-          @toggle-final-audit-mode="toggleFinalAuditModeWithFeedback"
-          @toggle-auto-compress="toggleAutoCompressWithFeedback"
-          @update-approval-level="approvalLevel = $event"
-          @update-selected-agent="onSelectedAgentChange"
-          @clear-context-frame="onClearContextFrame"
-          @create-new-workflow="createNewWorkflow($event)"
-          @open-image-dialog="openImageAttachmentDialogWithFeedback"
-          @open-model-selector="openModelSelector"
-          @remove-attachment="removeImageAttachment"
-          @open-skills-selector="openSkillsSelector" />
+            <!-- Status Panel (Floating) -->
+            <StatusPanel />
+
+            <!-- Input Area -->
+            <WorkflowInputArea
+              ref="inputAreaRef"
+              v-model:input-message="inputMessage"
+              :is-running="isRunning"
+              :is-chatting="isChatting"
+              :has-live-session="hasLiveSession"
+              :chat-state="chatState"
+              :wait-reason="waitReason"
+              :current-workflow="currentWorkflow"
+              :current-workflow-id="currentWorkflowId"
+              :selected-agent="selectedAgent"
+              :can-edit-agent="canEditCurrentWorkflowAgent"
+              :show-planning-mode-toggle="showPlanningModeToggle"
+              :can-toggle-planning-mode="canTogglePlanningMode"
+              :active-model-name="activeModelName"
+              :save-model-config="onModelConfigSave"
+              :planning-mode="planningMode"
+              :auto-approve-plan="autoApprovePlan"
+              :can-toggle-auto-approve-plan="canTogglePlanningMode"
+              :approval-level="approvalLevel"
+              :final-audit-mode="finalAuditMode"
+              :can-toggle-final-audit-mode="canToggleFinalAuditMode"
+              :auto-compress-enabled="autoCompressEnabled"
+              :agents="agentStore.agents"
+              :attachments="imageAttachments"
+              :can-attach-images="canUseImageAttachments"
+              :is-preparing-image-send="isPreparingImageSend"
+              :show-skill-suggestions="showSkillSuggestions"
+              :show-file-suggestions="showFileSuggestions"
+              :filtered-system-skills="filteredSystemSkills"
+              :grouped-skill-suggestions="groupedSkillSuggestions"
+              :file-suggestions="fileSuggestions"
+              :selected-skill-index="selectedSkillIndex"
+              :selected-file-index="selectedFileIndex"
+              :on-input-key-down="onInputKeyDown"
+              :on-composition-start="onCompositionStart"
+              :on-composition-end="onCompositionEnd"
+              :on-paste-input="onImagePaste"
+              :on-skill-select="onSkillSelect"
+              :on-file-select="onFileSelect"
+              @send-message="onSendMessage"
+              @continue="handleContinue"
+              @stop="onStop"
+              @approve-plan="onApprovePlan"
+              @toggle-planning-mode="togglePlanningModeWithFeedback"
+              @toggle-auto-approve-plan="toggleAutoApprovePlanWithFeedback"
+              @toggle-final-audit-mode="toggleFinalAuditModeWithFeedback"
+              @toggle-auto-compress="toggleAutoCompressWithFeedback"
+              @update-approval-level="approvalLevel = $event"
+              @update-selected-agent="onSelectedAgentChange"
+              @clear-context-frame="onClearContextFrame"
+              @create-new-workflow="createNewWorkflow($event)"
+              @open-image-dialog="openImageAttachmentDialogWithFeedback"
+              @open-model-selector="openModelSelector"
+              @remove-attachment="removeImageAttachment"
+              @open-skills-selector="openSkillsSelector" />
+          </div>
+        </div>
 
         <TerminalPanel :terminal="terminal" :preferences="terminalPreferences" />
       </el-container>
@@ -349,6 +365,7 @@ import WorkflowSidebar from '@/components/workflow/WorkflowSidebar.vue'
 import WorkflowMessageList from '@/components/workflow/WorkflowMessageList.vue'
 import WorkflowInputArea from '@/components/workflow/WorkflowInputArea.vue'
 import TerminalPanel from '@/components/workflow/TerminalPanel.vue'
+import WorkflowCodeEditor from '@/components/workflow/WorkflowCodeEditor.vue'
 import WorkflowAutomationEditor from '@/components/workflow/automation/WorkflowAutomationEditor.vue'
 
 // Composables
@@ -360,6 +377,7 @@ import { useWorkflowPaths } from '@/composables/workflow/useWorkflowPaths'
 import { useWorkflowInput } from '@/composables/workflow/useWorkflowInput'
 import { useWorkflowCore } from '@/composables/workflow/useWorkflowCore'
 import { useTerminal } from '@/composables/workflow/useTerminal'
+import { useWorkflowCodeEditor } from '@/composables/workflow/useWorkflowCodeEditor.js'
 
 const IMAGE_FILE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'])
 
@@ -654,6 +672,46 @@ const terminalPreferences = computed(() => ({
   usesCommandKey: osType.value === 'macos'
 }))
 const terminal = useTerminal(currentPaths, terminalPreferences)
+const codeEditor = useWorkflowCodeEditor({
+  t,
+  usesCommandKey: computed(() => osType.value === 'macos')
+})
+const codeEditorWidth = ref(560)
+const isCodeEditorResizing = ref(false)
+const CODE_EDITOR_MIN_WIDTH = 320
+const CODE_EDITOR_MAX_WIDTH_RATIO = 0.72
+let codeEditorResizeStartX = 0
+let codeEditorResizeStartWidth = 0
+
+const clampCodeEditorWidth = width => {
+  const maxWidth = Math.max(CODE_EDITOR_MIN_WIDTH, Math.floor(window.innerWidth * CODE_EDITOR_MAX_WIDTH_RATIO))
+  return Math.min(Math.max(CODE_EDITOR_MIN_WIDTH, width), maxWidth)
+}
+
+const onCodeEditorResizeMove = event => {
+  if (!isCodeEditorResizing.value) return
+  const delta = event.clientX - codeEditorResizeStartX
+  codeEditorWidth.value = clampCodeEditorWidth(codeEditorResizeStartWidth + delta)
+}
+
+const onCodeEditorResizeEnd = () => {
+  if (!isCodeEditorResizing.value) return
+  isCodeEditorResizing.value = false
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  window.removeEventListener('mousemove', onCodeEditorResizeMove)
+  window.removeEventListener('mouseup', onCodeEditorResizeEnd)
+}
+
+const onCodeEditorResizeStart = event => {
+  isCodeEditorResizing.value = true
+  codeEditorResizeStartX = event.clientX
+  codeEditorResizeStartWidth = codeEditorWidth.value
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onCodeEditorResizeMove)
+  window.addEventListener('mouseup', onCodeEditorResizeEnd)
+}
 
 const builtinCommands = computed(() => {
   const commands = [
@@ -2219,6 +2277,7 @@ const onGlobalKeyDown = event => {
   }
 
   const terminalFocused = Boolean(event.target?.closest?.('.workflow-terminal'))
+  const codeEditorFocused = Boolean(event.target?.closest?.('.workflow-code-editor'))
   if (terminalFocused && matchesLocalShortcut(event, settingStore.settings.terminalClearShortcut)) {
     event.preventDefault()
     event.stopPropagation()
@@ -2226,8 +2285,8 @@ const onGlobalKeyDown = event => {
     return
   }
 
-  // Interactive terminal shortcuts belong to the PTY, never to workflow/app actions.
-  if (terminalFocused) return
+  // Interactive terminal/editor shortcuts belong to their focused component, never to workflow/app actions.
+  if (terminalFocused || codeEditorFocused) return
 
   const isMac = osType.value === 'macos'
   const modifierPressed = isMac ? event.metaKey : event.ctrlKey
@@ -2368,6 +2427,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', handleTodayCostVisibilityChange)
   window.removeEventListener('keydown', onGlobalKeyDown)
   window.removeEventListener('resize', updateMaxWidth)
+  onCodeEditorResizeEnd()
   stopTodayCostRefresh()
   clearRetryTimer()
 })
@@ -2375,6 +2435,66 @@ onBeforeUnmount(() => {
 
 <style lang="scss">
 @use '@/styles/workflow/index' as *;
+
+.main-container {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workflow-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workflow-editor-pane {
+  flex: 0 0 auto;
+  min-width: 320px;
+  max-width: 72vw;
+}
+
+.code-editor-resize-handle {
+  width: 6px;
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 2px;
+    width: 1px;
+    background: var(--cs-border-color);
+    transition: background 0.2s ease;
+  }
+
+  &:hover::before,
+  &.dragging::before {
+    background: var(--cs-primary-color);
+  }
+}
+
+.workflow-chat-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.message-list-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
 
 .workflow-titlebar-left-actions {
   display: flex;

@@ -25,9 +25,14 @@ command:
     failed_to_read: '클립보드 읽기 실패: %{error}'
     failed_to_write: '클립보드 쓰기 실패: %{error}'
   fs:
+    file_changed_on_disk: 디스크의 파일이 변경되었습니다. 저장하기 전에 다시 불러오세요.
+    file_info_failed: '파일 정보 읽기 실패: %{error}'
+    file_too_large: '파일이 너무 커서 열 수 없습니다. 최대 크기: %{max}바이트.'
     image_preview_failed: '이미지 미리보기 생성 실패: %{error}'
+    not_a_file: 선택한 경로는 파일이 아닙니다.
     read_file_failed: '파일 읽기 실패: %{error}'
     unknown_filename: 알수없는파일명.png
+    write_file_failed: '파일 쓰기 실패: %{error}'
   window:
     failed_to_close: '창 닫기 실패: %{error}'
 db:

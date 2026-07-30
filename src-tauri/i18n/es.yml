@@ -28,9 +28,14 @@ command:
     failed_to_read: 'Error al leer del portapapeles: %{error}'
     failed_to_write: 'Error al escribir en el portapapeles: %{error}'
   fs:
+    file_changed_on_disk: El archivo cambió en el disco. Vuelva a cargarlo antes de guardar.
+    file_info_failed: 'Error al leer la información del archivo: %{error}'
+    file_too_large: 'El archivo es demasiado grande para abrirlo. Tamaño máximo: %{max} bytes.'
     image_preview_failed: 'Error al generar la vista previa de la imagen: %{error}'
+    not_a_file: La ruta seleccionada no es un archivo.
     read_file_failed: 'Error al leer el archivo: %{error}'
     unknown_filename: NombreDeArchivoDesconocido.png
+    write_file_failed: 'Error al escribir el archivo: %{error}'
   window:
     failed_to_close: 'Error al cerrar la ventana: %{error}'
 db:
