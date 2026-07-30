@@ -140,11 +140,20 @@ impl TerminalManager {
             .slave
             .spawn_command(command)
             .map_err(|error| format!("terminal_spawn_failed:{error}"))?;
+        #[cfg(unix)]
         let process_group = pair.master.process_group_leader();
         let mut writer = match pair.master.take_writer() {
             Ok(writer) => writer,
             Err(error) => {
+                #[cfg(unix)]
                 terminate_child_tree(&mut *child, process_group);
+                #[cfg(windows)]
+                terminate_child_tree(&mut *child);
+                #[cfg(not(any(unix, windows)))]
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
                 return Err(format!("terminal_writer_failed:{error}"));
             }
         };
@@ -158,7 +167,15 @@ impl TerminalManager {
         let reader = match pair.master.try_clone_reader() {
             Ok(reader) => reader,
             Err(error) => {
+                #[cfg(unix)]
                 terminate_child_tree(&mut *child, process_group);
+                #[cfg(windows)]
+                terminate_child_tree(&mut *child);
+                #[cfg(not(any(unix, windows)))]
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
                 return Err(format!("terminal_reader_failed:{error}"));
             }
         };
@@ -557,7 +574,7 @@ fn terminal_session_members(session_id: libc::pid_t) -> Vec<libc::pid_t> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn terminal_session_members(_: libc::pid_t) -> Vec<libc::pid_t> {
+fn terminal_session_members(_: i32) -> Vec<i32> {
     Vec::new()
 }
 

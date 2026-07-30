@@ -780,10 +780,10 @@ struct StageProcessGuard {
 }
 
 impl StageProcessGuard {
-    fn new(child: &Child) -> Self {
+    fn new(_child: &Child) -> Self {
         Self {
             #[cfg(unix)]
-            process_group_id: child.id().map_or(0, |id| id as i32),
+            process_group_id: _child.id().map_or(0, |id| id as i32),
             active: true,
         }
     }

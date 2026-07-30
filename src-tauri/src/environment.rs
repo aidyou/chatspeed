@@ -95,14 +95,22 @@ fn get_shell_path() -> Option<String> {
 /// - `Some(String)`: The full PATH string if successfully retrieved.
 /// - `None`: If the PATH could not be retrieved using the attempted methods.
 fn login_path_shell_candidates(terminal_shells: Vec<String>) -> Vec<String> {
-    let mut shell_paths = terminal_shells;
     #[cfg(unix)]
-    for shell in ["/bin/sh", "/usr/bin/sh"] {
-        if is_executable_file(Path::new(shell)) && !shell_paths.iter().any(|path| path == shell) {
-            shell_paths.push(shell.to_string());
+    {
+        let mut shell_paths = terminal_shells;
+        for shell in ["/bin/sh", "/usr/bin/sh"] {
+            if is_executable_file(Path::new(shell)) && !shell_paths.iter().any(|path| path == shell)
+            {
+                shell_paths.push(shell.to_string());
+            }
         }
+        shell_paths
     }
-    shell_paths
+
+    #[cfg(not(unix))]
+    {
+        terminal_shells
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
