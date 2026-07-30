@@ -9,12 +9,12 @@
 - **Workflow planning and review**:
   - Added traceable implementation plans, automatic plan approval, and reviewer handoff support.
   - Added inline model selection, refined configuration actions and interaction handling, and prevented the device from sleeping while a Workflow is running.
-- **Embedded terminal**:
-  - Added an embedded terminal with broader shell support, configurable shortcut and settings placement, improved Cargo-progress rendering, and IME composition handling.
 - **Workflow usability**:
   - Tool activity is now grouped with running states, compact summaries, clearer activity status, and improved message, sidebar, input, and thought-message presentation.
   - Long Workflow histories now load incrementally with cursor-based pagination while preserving task boundaries and scroll position.
 - **Proxy diagnostics**: Added separate client and upstream logs for CCProxy.
+- **Embedded terminal (Beta)**:
+  - Added an embedded terminal with broader shell support, configurable shortcut and settings placement, improved Cargo-progress rendering, and IME composition handling.
 
 ### 🪄 Improvements
 
@@ -32,7 +32,6 @@
   - Fixed runtime lifecycle and synchronous-recovery reads, failed-run finalization, resolved approval observations, running-tool grouping, tool-group aggregation, and activity-status timing.
   - Fixed active-sidebar separation, root-filter clearing after sidebar collapse, message rendering and behavior, input styling, and completed-tool display while subsequent text is streamed.
   - Kept post-tool thinking messages folded into the tool group until visible assistant text appears, avoiding transient UI flicker.
-- **Embedded terminal**: Coalesced split Cargo progress lines and corrected terminal-panel layout styling.
 - **CCProxy and statistics**:
   - Added NVIDIA DeepSeek V4 and NVIDIA NIM thinking-profile compatibility.
   - Corrected proxy statistics date ranges and cached-input accounting.
