@@ -96,28 +96,28 @@ assert.match(toolGroupProjection, /mcp_tools: 'mcp'/)
 assert.match(toolGroupProjection, /mixed_tools/)
 assert.match(
   messageList,
-  /const buildToolGroupSummary = messages => \{[\s\S]*const operations = new Map\(\)/,
+  /const buildToolGroupSummary = messages => \{[\s\S]*const counts = new Map\(\)/,
   'tool groups must aggregate repeated operations into a compact title'
 )
 assert.match(
   messageList,
-  /return operation\.countStyle === 'x' \? `\$\{preview\} x\$\{count\}` : `\$\{preview\}\(\$\{count\}\)`/,
-  'tool group repeated-target formatting must support compact xN operation summaries without losing default target counts'
+  /Array\.from\(counts, \(\[label, count\]\) => `\$\{label\} x\$\{count\}`\)\.join\(' · '\)/,
+  'tool group summaries must display compact label counts'
 )
 assert.match(
   messageList,
-  /OPERATION_ONLY_TOOL_NAMES = new Set\(\['grep', 'glob', 'web_search', 'web_fetch'\]\)/,
-  'argument-heavy search and web tools must aggregate by operation instead of verbose parameters'
+  /if \(TODO_TOOL_NAMES\.has\(toolName\)\) return t\('workflow\.toolGroups\.taskChanges'\)/,
+  'todo tools must aggregate under the task changes operation label'
 )
 assert.match(
   messageList,
-  /`\$\{label\}:mcp:\$\{preview \|\| 'unknown'\}`/,
-  'MCP tools must aggregate by server name, not individual MCP method name'
+  /if \(isWorkflowMcpTool\(toolName\)\) return t\('workflow\.toolGroups\.callMcp'\)/,
+  'MCP tools must aggregate under the MCP operation label'
 )
 assert.match(
   messageList,
-  /return \[operation\.label, \.\.\.previews\.filter\(Boolean\)\]\.join\(' '\)/,
-  'distinct targets must remain grouped under their shared operation label'
+  /return t\(TOOL_GROUP_LABEL_KEYS\[toolName\] \|\| 'workflow\.toolGroups\.useTool'\)/,
+  'known tools must aggregate by their localized operation label'
 )
 assert.match(
   messageList,
@@ -136,7 +136,7 @@ assert.match(
 )
 assert.match(workflowMessageStyles, /background: linear-gradient\(/)
 assert.match(workflowMessageStyles, /color-mix\(in srgb, var\(--cs-text-color-primary\)/)
-assert.match(workflowMessageStyles, /animation: tool-group-title-shimmer 2\.8s ease-in-out infinite/)
+assert.match(workflowMessageStyles, /animation: tool-group-title-shimmer 1\.3s ease-in-out infinite/)
 assert.match(
   themeVariables,
   /:root\.light[\s\S]*--cs-shimmer-inverse-color: rgba\(255, 255, 255, 0\.55\)/
@@ -458,8 +458,13 @@ assert.match(messageList, /message\?\.subAgentCard\?\.result/)
 assert.match(statusNotifier, /TERMINAL_STATUSES\.includes\(workflowStatus\.value\)/)
 assert.match(statusNotifier, /t\('workflow\.retrying', \{/)
 assert.match(statusNotifier, /hasActiveRetry\.value/)
-assert.match(statusNotifier, /tool\?\.startedAt \|\| tool\?\.updatedAt/)
+assert.match(statusNotifier, /const getPreviewSegment = text =>/)
+assert.match(statusNotifier, /const latestTextActivity = computed\(\(\) => \{/)
+assert.match(statusNotifier, /sort\(\(left, right\) => getToolTimestamp\(right\) - getToolTimestamp\(left\)\)/)
+assert.match(statusNotifier, /!textIsLatestActivity/)
+assert.match(statusNotifier, /elapsedNow\.value - latestToolUpdatedAt < 5000/)
 assert.match(statusNotifier, /workflow\.statusNotifier\.runningElapsed/)
+assert.match(statusNotifier, /workflowStore\.isRunning \|\| latestToolState\.value\?\.status === 'approved_running'/)
 assert.match(statusNotifier, /setInterval\(\(\) => \{/)
 assert.match(workflowStore, /const startedAt =[\s\S]*newStatus === 'approved_running'/)
 

@@ -126,19 +126,113 @@ const truncateText = (text, maxLength = 60) => {
   return `${normalized.slice(0, maxLength - 3)}...`
 }
 
-const getLastSentence = text => {
+const getPreviewSegment = text => {
   const normalized = sanitizePreviewText(text)
   if (!normalized) return ''
-  const sentences = normalized.split(/(?<=[。！？.!?])\s*/).filter(Boolean)
-  return sentences[sentences.length - 1] || normalized
+
+  const completedSentences = normalized.match(/[^。！？.!?]+[。！？.!?]+(?=\s|$|[^\w])/g) || []
+  const latestCompleted = completedSentences[completedSentences.length - 1]
+  if (latestCompleted) return latestCompleted.trim()
+
+  const segments = normalized.split(/[\n。！？.!?]+/).map(segment => segment.trim()).filter(Boolean)
+  return segments[segments.length - 1] || normalized
 }
 
-const latestStreamingPreview = computed(() => {
-  if (!props.isChatting) return ''
-  return truncateText(getLastSentence(props.chatState?.reasoning || props.chatState?.content || ''), 72)
+const getMessageTimestamp = (message, fallback = 0) => {
+  const candidates = [
+    message?.createdAt,
+    message?.created_at,
+    message?.updatedAt,
+    message?.updated_at,
+    message?.metadata?.created_at,
+    message?.metadata?.createdAt,
+    message?.metadata?.updated_at,
+    message?.metadata?.updatedAt
+  ]
+
+  for (const candidate of candidates) {
+    const numeric = Number(candidate)
+    if (Number.isFinite(numeric) && numeric > 0) return numeric
+  }
+
+  return fallback
+}
+
+const getToolTimestamp = tool =>
+  Math.max(
+    Number(tool?.updatedAt || 0),
+    Number(tool?.createdAt || 0),
+    Number(tool?.startedAt || 0)
+  )
+
+const streamActivity = ref({ contentAt: 0, reasoningAt: 0 })
+
+watch(
+  () => props.chatState?.content || '',
+  (content, previousContent) => {
+    if (content && content !== previousContent) {
+      streamActivity.value = { ...streamActivity.value, contentAt: Date.now() }
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  () => props.chatState?.reasoning || '',
+  (reasoning, previousReasoning) => {
+    if (reasoning && reasoning !== previousReasoning) {
+      streamActivity.value = { ...streamActivity.value, reasoningAt: Date.now() }
+    }
+  },
+  { immediate: true }
+)
+
+const latestStreamingActivity = computed(() => {
+  if (!props.isChatting) return null
+
+  const content = props.chatState?.content || ''
+  const reasoning = props.chatState?.reasoning || ''
+  const candidates = [
+    {
+      text: truncateText(getPreviewSegment(content), 72),
+      updatedAt: streamActivity.value.contentAt,
+      kind: 'content'
+    },
+    {
+      text: truncateText(getPreviewSegment(reasoning), 72),
+      updatedAt: streamActivity.value.reasoningAt,
+      kind: 'reasoning'
+    }
+  ].filter(candidate => candidate.text)
+
+  return candidates.sort((left, right) => right.updatedAt - left.updatedAt)[0] || null
 })
 
-const chatHasStreamingOutput = computed(() => Boolean(latestStreamingPreview.value))
+const latestTranscriptActivity = computed(() => {
+  const candidates = []
+
+  currentStepMessages.value.forEach((message, index) => {
+    if (message?.role !== 'assistant') return
+
+    const updatedAt = getMessageTimestamp(message, index + 1)
+    const contentText = truncateText(getPreviewSegment(message?.message || ''), 72)
+    if (contentText) {
+      candidates.push({ text: contentText, updatedAt, kind: 'content' })
+    }
+
+    const reasoningText = truncateText(getPreviewSegment(message?.reasoning || ''), 72)
+    if (reasoningText) {
+      candidates.push({ text: reasoningText, updatedAt, kind: 'reasoning' })
+    }
+  })
+
+  return candidates.sort((left, right) => right.updatedAt - left.updatedAt)[0] || null
+})
+
+const latestTextActivity = computed(() => {
+  const candidates = [latestStreamingActivity.value, latestTranscriptActivity.value].filter(Boolean)
+  return candidates.sort((left, right) => right.updatedAt - left.updatedAt)[0] || null
+})
 
 const pendingApprovalRequest = computed(() => workflowStore.pendingApprovalRequest || null)
 const isWaitingForPlanApproval = computed(
@@ -158,7 +252,7 @@ const latestToolState = computed(() => {
         String(tool?.status || '')
       )
     })
-    .sort((left, right) => Number(right?.updatedAt || 0) - Number(left?.updatedAt || 0))[0]
+    .sort((left, right) => getToolTimestamp(right) - getToolTimestamp(left))[0]
 })
 
 const elapsedNow = ref(Date.now())
@@ -172,11 +266,11 @@ const stopElapsedTimer = () => {
 }
 
 watch(
-  () => !isTerminal.value && latestToolState.value?.status === 'approved_running',
-  isRunningTool => {
+  () => !isTerminal.value && (workflowStore.isRunning || latestToolState.value?.status === 'approved_running'),
+  shouldTick => {
     stopElapsedTimer()
     elapsedNow.value = Date.now()
-    if (isRunningTool) {
+    if (shouldTick) {
       elapsedTimer = setInterval(() => {
         elapsedNow.value = Date.now()
       }, 1000)
@@ -376,6 +470,18 @@ const displayState = computed(() => {
   const notificationCategory = String(notification.category || 'info')
   const latestTool = latestToolState.value
   const latestToolDisplay = buildToolState(latestTool)
+  const latestToolUpdatedAt = latestTool ? getToolTimestamp(latestTool) : 0
+  const latestToolStatus = String(latestTool?.status || '')
+  const latestText = latestTextActivity.value
+  const latestTextUpdatedAt = Number(latestText?.updatedAt || 0)
+  const latestToolSucceeded = latestToolStatus === 'final_success'
+  const latestToolIsActive = ['pending', 'approved_running'].includes(latestToolStatus)
+  const textIsLatestActivity = latestTextUpdatedAt >= latestToolUpdatedAt
+  const shouldShowCompletedTool =
+    latestToolSucceeded &&
+    latestToolDisplay &&
+    !textIsLatestActivity &&
+    elapsedNow.value - latestToolUpdatedAt < 5000
 
   if (hasActiveRetry.value) {
     return {
@@ -417,9 +523,7 @@ const displayState = computed(() => {
     }
   }
 
-  const latestToolSucceeded = latestTool?.status === 'final_success'
-
-  if (latestToolDisplay && !(latestToolSucceeded && chatHasStreamingOutput.value)) {
+  if (latestToolDisplay && latestToolIsActive) {
     return latestToolDisplay
   }
 
@@ -441,13 +545,17 @@ const displayState = computed(() => {
     }
   }
 
-  if (chatHasStreamingOutput.value) {
+  if (latestText?.text && textIsLatestActivity) {
     return {
-      text: latestStreamingPreview.value,
+      text: latestText.text,
       tone: 'info',
       icon: 'reasoning',
       spinning: true
     }
+  }
+
+  if (shouldShowCompletedTool) {
+    return latestToolDisplay
   }
 
   if (workflowStore.isRunning) {

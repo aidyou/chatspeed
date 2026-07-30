@@ -3311,14 +3311,16 @@ defineExpose({
 .tool-group__summary:hover .tool-group__expand-button,
 .tool-group__summary:focus-within .tool-group__expand-button {
   opacity: 1;
+  transform: rotate(-90deg);
 }
 
 .tool-group__expand-button:hover {
   background: var(--cs-hover-bg-color);
+  transform: rotate(-90deg)
 }
 
 .tool-group__summary.expanded .tool-group__expand-button {
-  transform: rotate(180deg);
+  transform: rotate(0deg);
 }
 
 .collapsed-tool-group__body {
