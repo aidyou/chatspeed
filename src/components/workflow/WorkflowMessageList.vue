@@ -1779,7 +1779,7 @@ const isToolGroupBoundaryMessage = message => {
   if (isCompletionReportMessage(message)) return true
   if (isExplorationBatchMessage(message)) return true
   if (message.role === 'assistant') {
-    return !isThinkOnlyAssistantMessage(message)
+    return !!props.removeSystemReminder(message?.message || '').trim()
   }
   if (message.role === 'tool') {
     if (!getCollapsibleToolGroupKind(message)) return true

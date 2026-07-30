@@ -2,6 +2,43 @@
 
 # Release Notes
 
+## [2.0.10]
+
+### 🚀 New Features
+
+- **Workflow planning and review**:
+  - Added traceable implementation plans, automatic plan approval, and reviewer handoff support.
+  - Added inline model selection, refined configuration actions and interaction handling, and prevented the device from sleeping while a Workflow is running.
+- **Embedded terminal**:
+  - Added an embedded terminal with broader shell support, configurable shortcut and settings placement, improved Cargo-progress rendering, and IME composition handling.
+- **Workflow usability**:
+  - Tool activity is now grouped with running states, compact summaries, clearer activity status, and improved message, sidebar, input, and thought-message presentation.
+  - Long Workflow histories now load incrementally with cursor-based pagination while preserving task boundaries and scroll position.
+- **Proxy diagnostics**: Added separate client and upstream logs for CCProxy.
+
+### 🪄 Improvements
+
+- **SQLite runtime architecture**:
+  - Introduced a managed SQLite runtime and migrated Workflow, chat, agent, note, settings, MCP, proxy, and configuration operations to cache-backed readers and serialized writers.
+  - Removed broad global write-lock usage, improving concurrent persistence, workflow lifecycle handling, maintenance/restore boundaries, and checkpoint recovery coverage.
+- **Workflow runtime and tool behavior**:
+  - Preserved complete tool-call batches during context compression, enforced pressure compression from the canonical message path, and retained valid completion boundaries.
+  - Improved terminal tool streaming, Shell approval policies, search-result metadata, MCP tool-directory synchronization, and effective tool-policy synchronization.
+- **Build and maintenance**: Updated GitHub Actions for Node 24, published Linux updater manifests, applied security dependency updates, and streamlined Workflow frontend architecture and commit-skill documentation.
+
+### 🐞 Bug Fixes
+
+- **Workflow reliability and display**:
+  - Fixed runtime lifecycle and synchronous-recovery reads, failed-run finalization, resolved approval observations, running-tool grouping, tool-group aggregation, and activity-status timing.
+  - Fixed active-sidebar separation, root-filter clearing after sidebar collapse, message rendering and behavior, input styling, and completed-tool display while subsequent text is streamed.
+  - Kept post-tool thinking messages folded into the tool group until visible assistant text appears, avoiding transient UI flicker.
+- **Embedded terminal**: Coalesced split Cargo progress lines and corrected terminal-panel layout styling.
+- **CCProxy and statistics**:
+  - Added NVIDIA DeepSeek V4 and NVIDIA NIM thinking-profile compatibility.
+  - Corrected proxy statistics date ranges and cached-input accounting.
+
+---
+
 ## [2.0.9]
 
 ### 🚀 New Features
