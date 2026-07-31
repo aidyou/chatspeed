@@ -363,10 +363,13 @@ pub async fn handle_responses(
 #[cfg(test)]
 mod tests {
     use super::{
-        prepare_direct_responses_body, response_usage_tokens, response_usage_tokens_from_body,
-        supports_responses_api, OpenAIResponsesRoutingRequest,
+        direct_forward_responses, prepare_direct_responses_body, response_usage_tokens,
+        response_usage_tokens_from_body, supports_responses_api, OpenAIResponsesRoutingRequest,
     };
     use crate::ccproxy::types::{ChatProtocol, ProxyModel};
+    use crate::db::MainStore;
+    use axum::body::Body;
+    use axum::response::Response;
     use serde_json::json;
 
     fn proxy_model_with_metadata(metadata: Option<serde_json::Value>) -> ProxyModel {
@@ -522,6 +525,162 @@ mod tests {
         assert_eq!(cache, 80);
     }
 
+    #[tokio::test]
+    async fn native_responses_non_stream_persists_attribution_and_filters_headers() {
+        use axum::{extract::State, routing::post, Router};
+        use std::sync::Arc;
+        use tempfile::tempdir;
+        use tokio::sync::mpsc;
+
+        let response_body = serde_json::to_vec(&json!({
+            "id": "resp_test",
+            "object": "response",
+            "status": "completed",
+            "usage": {
+                "input_tokens": 120,
+                "output_tokens": 35,
+                "input_tokens_details": {"cached_tokens": 80}
+            }
+        }))
+        .expect("response should serialize");
+        let content_length = response_body.len().to_string();
+        let (headers_tx, mut headers_rx) = mpsc::channel(1);
+        let app = Router::new()
+            .route(
+                "/responses",
+                post(
+                    move |State(sender): State<mpsc::Sender<reqwest::header::HeaderMap>>,
+                          headers: reqwest::header::HeaderMap| {
+                        let response_body = response_body.clone();
+                        let content_length = content_length.clone();
+                        async move {
+                            sender
+                                .send(headers)
+                                .await
+                                .expect("receiver should remain open");
+                            Response::builder()
+                                .header("content-type", "application/json")
+                                .header("content-length", content_length)
+                                .header("x-upstream", "kept")
+                                .body(Body::from(response_body))
+                                .expect("mock response should build")
+                        }
+                    },
+                ),
+            )
+            .with_state(headers_tx);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("listener should be nonblocking");
+        let address = listener.local_addr().expect("listener should have address");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                tokio::net::TcpListener::from_std(listener).expect("tokio listener should convert"),
+                app,
+            )
+            .await
+            .expect("mock upstream should serve");
+        });
+
+        let directory = tempdir().expect("test directory should exist");
+        let store = Arc::new(
+            MainStore::new(directory.path().join("responses.db"))
+                .expect("test store should initialize"),
+        );
+        let proxy_model = proxy_model_with_metadata(Some(json!({
+            "supports_responses_api": true
+        })));
+        let proxy_model = ProxyModel {
+            base_url: format!("http://{address}"),
+            ..proxy_model
+        };
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (name, value) in [
+            ("x-cs-workflow-session-id", "workflow-session"),
+            ("x-cs-workflow-task-run-id", "workflow-session:task:1"),
+            ("x-cs-workflow-segment-id", "3"),
+            ("x-cs-root-session-id", "root-session"),
+            ("x-cs-root-task-run-id", "root-session:task:1"),
+            ("x-cs-request-kind", "react"),
+        ] {
+            headers.insert(name, value.parse().expect("test header should parse"));
+        }
+        let response = direct_forward_responses(
+            headers,
+            bytes::Bytes::from_static(br#"{"model":"alias","input":[]}"#),
+            proxy_model,
+            store.clone(),
+            false,
+        )
+        .await
+        .expect("native Responses request should succeed");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+        assert!(!response.headers().contains_key("content-length"));
+        let upstream_headers = headers_rx
+            .recv()
+            .await
+            .expect("upstream should receive request");
+        for name in [
+            "x-cs-workflow-session-id",
+            "x-cs-workflow-task-run-id",
+            "x-cs-workflow-segment-id",
+            "x-cs-root-session-id",
+            "x-cs-root-task-run-id",
+            "x-cs-request-kind",
+        ] {
+            assert!(!upstream_headers.contains_key(name));
+        }
+
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .expect("flush task should join")
+            .expect("telemetry should flush");
+        let stat = runtime
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT workflow_session_id, workflow_task_run_id, workflow_segment_id,
+                            root_session_id, root_task_run_id, request_kind,
+                            input_tokens, output_tokens, cache_tokens
+                     FROM ccproxy_stats",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i32>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, i64>(8)?,
+                        ))
+                    },
+                )?)
+            })
+            .await
+            .expect("attributed Responses stat should persist");
+        assert_eq!(
+            stat,
+            (
+                "workflow-session".to_string(),
+                "workflow-session:task:1".to_string(),
+                3,
+                "root-session".to_string(),
+                "root-session:task:1".to_string(),
+                "react".to_string(),
+                120,
+                35,
+                80,
+            )
+        );
+        server.abort();
+    }
+
     #[test]
     fn responses_usage_tokens_reads_stream_completed_event() {
         let body = r#"event: response.created
@@ -537,5 +696,157 @@ data: {"type":"response.completed","response":{"id":"resp_123","status":"complet
         assert_eq!(input, 81345);
         assert_eq!(output, 397);
         assert_eq!(cache, 76672);
+    }
+
+    #[tokio::test]
+    async fn native_responses_stream_persists_attribution_and_filters_headers() {
+        use axum::{extract::State, routing::post, Router};
+        use std::sync::Arc;
+        use tempfile::tempdir;
+        use tokio::sync::mpsc;
+
+        let response_body = concat!(
+            "event: response.created\n",
+            "data: {\"type\":\"response.created\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":120,\"input_tokens_details\":{\"cached_tokens\":80},\"output_tokens\":35}}}\n\n"
+        );
+        let content_length = response_body.len().to_string();
+        let (headers_tx, mut headers_rx) = mpsc::channel(1);
+        let app = Router::new()
+            .route(
+                "/responses",
+                post(
+                    move |State(sender): State<mpsc::Sender<reqwest::header::HeaderMap>>,
+                          headers: reqwest::header::HeaderMap| {
+                        let content_length = content_length.clone();
+                        async move {
+                            sender
+                                .send(headers)
+                                .await
+                                .expect("receiver should remain open");
+                            Response::builder()
+                                .header("content-type", "text/event-stream")
+                                .header("content-length", content_length)
+                                .header("x-upstream", "kept")
+                                .body(Body::from(response_body))
+                                .expect("mock stream response should build")
+                        }
+                    },
+                ),
+            )
+            .with_state(headers_tx);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("listener should be nonblocking");
+        let address = listener.local_addr().expect("listener should have address");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                tokio::net::TcpListener::from_std(listener).expect("tokio listener should convert"),
+                app,
+            )
+            .await
+            .expect("mock upstream should serve");
+        });
+        let directory = tempdir().expect("test directory should exist");
+        let store = Arc::new(
+            MainStore::new(directory.path().join("responses-stream.db"))
+                .expect("test store should initialize"),
+        );
+        let base_model = proxy_model_with_metadata(Some(json!({
+            "supports_responses_api": true
+        })));
+        let proxy_model = ProxyModel {
+            base_url: format!("http://{address}"),
+            ..base_model
+        };
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (name, value) in [
+            ("x-cs-workflow-session-id", "workflow-session"),
+            ("x-cs-workflow-task-run-id", "workflow-session:task:1"),
+            ("x-cs-workflow-segment-id", "3"),
+            ("x-cs-root-session-id", "root-session"),
+            ("x-cs-root-task-run-id", "root-session:task:1"),
+            ("x-cs-request-kind", "react"),
+        ] {
+            headers.insert(name, value.parse().expect("test header should parse"));
+        }
+        let response = direct_forward_responses(
+            headers,
+            bytes::Bytes::from_static(br#"{"model":"alias","input":[],"stream":true}"#),
+            proxy_model,
+            store.clone(),
+            false,
+        )
+        .await
+        .expect("native Responses stream should succeed");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+        assert!(!response.headers().contains_key("content-length"));
+        let upstream_headers = headers_rx
+            .recv()
+            .await
+            .expect("upstream should receive request");
+        for name in [
+            "x-cs-workflow-session-id",
+            "x-cs-workflow-task-run-id",
+            "x-cs-workflow-segment-id",
+            "x-cs-root-session-id",
+            "x-cs-root-task-run-id",
+            "x-cs-request-kind",
+        ] {
+            assert!(!upstream_headers.contains_key(name));
+        }
+        let _body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("stream body should be readable");
+
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .expect("flush task should join")
+            .expect("telemetry should flush");
+        let stat = runtime
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT workflow_session_id, workflow_task_run_id, workflow_segment_id,
+                            root_session_id, root_task_run_id, request_kind,
+                            input_tokens, output_tokens, cache_tokens
+                     FROM ccproxy_stats",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i32>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, i64>(8)?,
+                        ))
+                    },
+                )?)
+            })
+            .await
+            .expect("attributed Responses stream stat should persist");
+        assert_eq!(
+            stat,
+            (
+                "workflow-session".to_string(),
+                "workflow-session:task:1".to_string(),
+                3,
+                "root-session".to_string(),
+                "root-session:task:1".to_string(),
+                "react".to_string(),
+                120,
+                35,
+                80,
+            )
+        );
+        server.abort();
     }
 }

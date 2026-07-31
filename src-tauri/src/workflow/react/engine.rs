@@ -4733,15 +4733,25 @@ impl WorkflowExecutor {
         let duration_ms = store
             .workflow_task_phase_started_at_ms(&self.session_id)?
             .map(|started_at_ms| (chrono::Utc::now().timestamp_millis() - started_at_ms).max(0));
-        let usage_summary = store.summarize_workflow_task_usage(
-            &self.session_id,
-            &task_run_id,
-            &root_session_id,
-            &root_task_run_id,
-            "completed",
-            duration_ms,
-            false,
-        )?;
+        let usage_store = self.context.main_store.clone();
+        let usage_session_id = self.session_id.clone();
+        let usage_task_run_id = task_run_id.clone();
+        let usage_root_session_id = root_session_id.clone();
+        let usage_root_task_run_id = root_task_run_id.clone();
+        let usage_summary = tokio::task::spawn_blocking(move || {
+            usage_store.summarize_workflow_task_usage(
+                &usage_session_id,
+                &usage_task_run_id,
+                &usage_root_session_id,
+                &usage_root_task_run_id,
+                "completed",
+                duration_ms,
+            )
+        })
+        .await
+        .map_err(|error| {
+            WorkflowEngineError::General(format!("join workflow usage finalization: {error}"))
+        })??;
         let summary_json = serde_json::to_value(&usage_summary).map_err(|error| {
             WorkflowEngineError::General(format!("serialize workflow usage summary: {error}"))
         })?;
@@ -8602,6 +8612,123 @@ mod recovery_tests {
             .expect("skill instructions should be queued for the next LLM call");
         assert!(reminder.contains("<activated_skill name=\"help\""));
         assert!(executor.context.messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn complete_workflow_usage_marks_missing_attribution_partial_before_projection() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "complete-workflow-partial-usage";
+        let agent = Agent::new(
+            "complete-workflow-agent".to_string(),
+            "Complete Workflow Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "Task completed".to_string(),
+                reasoning: None,
+                message_kind: "tool".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
+                    "tool_call_id": "complete-partial-1",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to persist completion tool message");
+
+        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: payloads.clone(),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(12).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+
+        executor
+            .record_task_completed("complete-partial-1")
+            .await
+            .expect("completion usage finalization should succeed");
+
+        let summary = store
+            .load_workflow_task_usage(session_id, &format!("{session_id}:task:1"))
+            .expect("failed to load durable usage summary")
+            .expect("usage summary should be persisted");
+        assert!(summary.is_partial);
+        let metadata: Value = store
+            .db_runtime()
+            .expect("runtime should exist")
+            .read_blocking(|conn| {
+                let metadata_json: String = conn.query_row(
+                    "SELECT metadata FROM workflow_messages
+                     WHERE session_id = 'complete-workflow-partial-usage'
+                       AND json_extract(metadata, '$.tool_call_id') = 'complete-partial-1'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok(serde_json::from_str(&metadata_json)?)
+            })
+            .expect("completion metadata should remain durable");
+        assert_eq!(metadata["usage_summary"]["is_partial"], true);
+        assert!(payloads
+            .lock()
+            .expect("payload lock should be available")
+            .iter()
+            .any(|payload| matches!(
+                payload,
+                GatewayPayload::TaskCompleted {
+                    usage_summary: Some(summary),
+                    ..
+                } if summary.is_partial
+            )));
     }
 
     #[test]

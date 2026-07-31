@@ -822,16 +822,36 @@ mod usage_attribution_tests {
     #[tokio::test]
     async fn ccproxy_usage_attribution_unified_non_stream_persists_and_stays_off_upstream() {
         let (headers_tx, mut headers_rx) = mpsc::channel(1);
-        let app = Router::new().route("/chat/completions", post(
-            move |State(sender): State<mpsc::Sender<HeaderMap>>, headers: HeaderMap| async move {
-                sender.send(headers).await.expect("receiver should remain open");
-                axum::Json(serde_json::json!({
-                    "id": "chatcmpl_test", "object": "chat.completion", "created": 1, "model": "backend-model",
-                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16}
-                }))
-            }
-        )).with_state(headers_tx);
+        let response_body = serde_json::json!({
+            "id": "chatcmpl_test", "object": "chat.completion", "created": 1, "model": "backend-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4, "prompt_tokens_details": {"cached_tokens": 2}, "total_tokens": 16}
+        })
+        .to_string();
+        let content_length = response_body.len().to_string();
+        let app = Router::new()
+            .route(
+                "/chat/completions",
+                post(
+                    move |State(sender): State<mpsc::Sender<HeaderMap>>, headers: HeaderMap| {
+                        let response_body = response_body.clone();
+                        let content_length = content_length.clone();
+                        async move {
+                            sender
+                                .send(headers)
+                                .await
+                                .expect("receiver should remain open");
+                            Response::builder()
+                                .header("content-type", "application/json")
+                                .header("content-length", content_length)
+                                .header("x-upstream", "kept")
+                                .body(Body::from(response_body))
+                                .expect("mock response should build")
+                        }
+                    },
+                ),
+            )
+            .with_state(headers_tx);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -862,27 +882,62 @@ mod usage_attribution_tests {
         .await
         .expect("unified handler should succeed");
         assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+        assert!(!response.headers().contains_key("content-length"));
         let upstream_headers = headers_rx.recv().await.unwrap();
-        assert!(!upstream_headers.contains_key("x-cs-workflow-session-id"));
-        assert!(!upstream_headers.contains_key("x-cs-request-kind"));
+        for name in [
+            "x-cs-workflow-session-id",
+            "x-cs-workflow-task-run-id",
+            "x-cs-workflow-segment-id",
+            "x-cs-root-session-id",
+            "x-cs-root-task-run-id",
+            "x-cs-request-kind",
+        ] {
+            assert!(!upstream_headers.contains_key(name));
+        }
         let runtime = store.db_runtime().unwrap();
         let flush_runtime = runtime.clone();
         tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
             .await
             .unwrap()
             .unwrap();
-        let stat = runtime.read(|conn| Ok(conn.query_row(
-            "SELECT workflow_session_id, workflow_task_run_id, root_session_id, root_task_run_id, request_kind FROM ccproxy_stats", [],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?)),
-        )?)).await.unwrap();
+        let stat = runtime
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT workflow_session_id, workflow_task_run_id, workflow_segment_id,
+                            root_session_id, root_task_run_id, request_kind,
+                            input_tokens, output_tokens, cache_tokens
+                     FROM ccproxy_stats",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i32>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, i64>(8)?,
+                        ))
+                    },
+                )?)
+            })
+            .await
+            .unwrap();
         assert_eq!(
             stat,
             (
                 "workflow-session".to_string(),
                 "workflow-session:task:1".to_string(),
+                3,
                 "root-session".to_string(),
                 "root-session:task:1".to_string(),
-                "react".to_string()
+                "react".to_string(),
+                12,
+                4,
+                2,
             )
         );
         server.abort();
@@ -890,16 +945,24 @@ mod usage_attribution_tests {
 
     #[tokio::test]
     async fn ccproxy_usage_attribution_unified_stream_persists_after_body_consumption() {
-        let app = Router::new().route("/chat/completions", post(|| async {
-            axum::response::Response::builder()
-                .header("content-type", "text/event-stream")
-                .body(Body::from(concat!(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0}]}\n\n",
-                    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}\n\n",
-                    "data: [DONE]\n\n"
-                )))
-                .unwrap()
-        }));
+        let (headers_tx, mut headers_rx) = mpsc::channel(1);
+        let app = Router::new()
+            .route(
+                "/chat/completions",
+                post(move |State(sender): State<mpsc::Sender<HeaderMap>>, headers: HeaderMap| async move {
+                    sender.send(headers).await.expect("receiver should remain open");
+                    axum::response::Response::builder()
+                        .header("content-type", "text/event-stream")
+                        .header("x-upstream", "kept")
+                        .body(Body::from(concat!(
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"prompt_tokens_details\":{\"cached_tokens\":2},\"total_tokens\":16}}\n\n",
+                            "data: [DONE]\n\n"
+                        )))
+                        .expect("mock stream response should build")
+                }),
+            )
+            .with_state(headers_tx);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -931,6 +994,22 @@ mod usage_attribution_tests {
         )
         .await
         .unwrap();
+        assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+        assert!(!response.headers().contains_key("content-length"));
+        let upstream_headers = headers_rx
+            .recv()
+            .await
+            .expect("upstream should receive request");
+        for name in [
+            "x-cs-workflow-session-id",
+            "x-cs-workflow-task-run-id",
+            "x-cs-workflow-segment-id",
+            "x-cs-root-session-id",
+            "x-cs-root-task-run-id",
+            "x-cs-request-kind",
+        ] {
+            assert!(!upstream_headers.contains_key(name));
+        }
         let _body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -940,13 +1019,44 @@ mod usage_attribution_tests {
             .await
             .unwrap()
             .unwrap();
-        let stat = runtime.read(|conn| Ok(conn.query_row(
-            "SELECT workflow_session_id, request_kind, input_tokens, output_tokens FROM ccproxy_stats", [],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?)),
-        )?)).await.unwrap();
+        let stat = runtime
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT workflow_session_id, workflow_task_run_id, workflow_segment_id,
+                            root_session_id, root_task_run_id, request_kind,
+                            input_tokens, output_tokens, cache_tokens
+                     FROM ccproxy_stats",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i32>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, i64>(8)?,
+                        ))
+                    },
+                )?)
+            })
+            .await
+            .unwrap();
         assert_eq!(
             stat,
-            ("workflow-session".to_string(), "react".to_string(), 12, 4)
+            (
+                "workflow-session".to_string(),
+                "workflow-session:task:1".to_string(),
+                3,
+                "root-session".to_string(),
+                "root-session:task:1".to_string(),
+                "react".to_string(),
+                12,
+                4,
+                2,
+            )
         );
         server.abort();
     }

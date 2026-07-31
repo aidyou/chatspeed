@@ -77,6 +77,28 @@ impl DbRuntimeMetrics {
 
 type DbJob = Box<dyn FnOnce(&mut Connection) + Send + 'static>;
 
+fn run_blocking_runtime_aware<T, F>(
+    description: &'static str,
+    operation: F,
+) -> Result<T, StoreError>
+where
+    T: Send,
+    F: FnOnce() -> Result<T, StoreError> + Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(operation)
+        }
+        Ok(_) => std::thread::scope(|scope| {
+            scope
+                .spawn(operation)
+                .join()
+                .map_err(|_| StoreError::WorkerFailed(format!("{description} thread panicked")))?
+        }),
+        Err(_) => operation(),
+    }
+}
+
 enum WorkerMessage {
     Job(DbJob),
     Shutdown(oneshot::Sender<()>),
@@ -230,14 +252,16 @@ struct TelemetryIngress {
 
 impl TelemetryIngress {
     fn flush_blocking(&self) -> Result<(), StoreError> {
-        let (ack_sender, ack_receiver) = oneshot::channel();
-        self.sender
-            .send(TelemetryMessage::Flush(ack_sender))
-            .map_err(|_| StoreError::RuntimeClosed)?;
-        ack_receiver
-            .blocking_recv()
-            .map_err(|_| StoreError::RuntimeClosed)?
-            .map_err(StoreError::WorkerFailed)
+        run_blocking_runtime_aware("telemetry flush", || {
+            let (ack_sender, ack_receiver) = oneshot::channel();
+            self.sender
+                .send(TelemetryMessage::Flush(ack_sender))
+                .map_err(|_| StoreError::RuntimeClosed)?;
+            ack_receiver
+                .blocking_recv()
+                .map_err(|_| StoreError::RuntimeClosed)?
+                .map_err(StoreError::WorkerFailed)
+        })
     }
 
     fn enqueue(&self, stat: CcproxyStat, permit: JobPermit) -> Result<(), StoreError> {
@@ -316,16 +340,18 @@ impl TelemetryIngress {
 
 impl Worker {
     fn barrier_blocking(&self) -> Result<(), StoreError> {
-        let (result_sender, result_receiver) = oneshot::channel();
-        let job: DbJob = Box::new(move |_| {
-            let _ = result_sender.send(());
-        });
-        self.sender
-            .blocking_send(WorkerMessage::Job(job))
-            .map_err(|_| StoreError::RuntimeClosed)?;
-        result_receiver
-            .blocking_recv()
-            .map_err(|_| StoreError::RuntimeClosed)
+        run_blocking_runtime_aware("database barrier", || {
+            let (result_sender, result_receiver) = oneshot::channel();
+            let job: DbJob = Box::new(move |_| {
+                let _ = result_sender.send(());
+            });
+            self.sender
+                .blocking_send(WorkerMessage::Job(job))
+                .map_err(|_| StoreError::RuntimeClosed)?;
+            result_receiver
+                .blocking_recv()
+                .map_err(|_| StoreError::RuntimeClosed)
+        })
     }
 
     fn shutdown_blocking(&self) -> Result<(), StoreError> {
@@ -730,19 +756,7 @@ impl DbRuntime {
                 .map_err(|_| StoreError::RuntimeClosed)?
         };
 
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-                tokio::task::block_in_place(dispatch_and_wait)
-            }
-            Ok(_) => std::thread::scope(|scope| {
-                scope.spawn(dispatch_and_wait).join().map_err(|_| {
-                    StoreError::WorkerFailed(
-                        "blocking database dispatch thread panicked".to_string(),
-                    )
-                })?
-            }),
-            Err(_) => dispatch_and_wait(),
-        }
+        run_blocking_runtime_aware("blocking database dispatch", dispatch_and_wait)
     }
 
     fn observe_queue_depth(&self, worker: &Worker, is_writer: bool) {
@@ -1016,6 +1030,79 @@ mod tests {
             )
         });
         assert!(count.is_err(), "reader connections must remain query-only");
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn drain_blocking_flushes_telemetry_from_tokio_runtime() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let runtime = Arc::new(DbRuntime::open(temp_dir.path().join("runtime.db")).unwrap());
+        runtime
+            .write(|connection| {
+                connection.execute(
+                    "CREATE TABLE ccproxy_stats (
+                        workflow_session_id TEXT,
+                        workflow_task_run_id TEXT,
+                        workflow_segment_id INTEGER,
+                        root_session_id TEXT,
+                        root_task_run_id TEXT,
+                        request_kind TEXT,
+                        client_model TEXT NOT NULL,
+                        backend_model TEXT NOT NULL,
+                        provider_id INTEGER,
+                        provider TEXT NOT NULL,
+                        protocol TEXT NOT NULL,
+                        tool_compat_mode INTEGER NOT NULL,
+                        status_code INTEGER NOT NULL,
+                        error_message TEXT,
+                        input_tokens INTEGER NOT NULL,
+                        output_tokens INTEGER NOT NULL,
+                        cache_tokens INTEGER NOT NULL
+                    )",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        runtime
+            .enqueue_ccproxy_stat(CcproxyStat {
+                id: None,
+                workflow_session_id: Some("session".to_string()),
+                workflow_task_run_id: Some("session:task:1".to_string()),
+                workflow_segment_id: Some(1),
+                root_session_id: Some("session".to_string()),
+                root_task_run_id: Some("session:task:1".to_string()),
+                request_kind: Some("react".to_string()),
+                client_model: "alias".to_string(),
+                backend_model: "model".to_string(),
+                provider_id: Some(1),
+                provider: "provider".to_string(),
+                protocol: "openai".to_string(),
+                tool_compat_mode: 0,
+                status_code: 200,
+                error_message: None,
+                input_tokens: 1,
+                output_tokens: 2,
+                cache_tokens: 3,
+                request_at: None,
+            })
+            .unwrap();
+
+        runtime.drain_blocking().unwrap();
+
+        let count = runtime
+            .read(|connection| {
+                Ok(
+                    connection.query_row("SELECT COUNT(*) FROM ccproxy_stats", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
         runtime.shutdown().await.unwrap();
     }
 

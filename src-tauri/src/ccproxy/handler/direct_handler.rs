@@ -264,30 +264,12 @@ pub async fn handle_direct_forward(
                 provider: provider_name.clone(),
                 protocol: chat_protocol.to_string(),
                 tool_compat_mode: false,
-                workflow_session_id: client_headers
-                    .get("x-cs-workflow-session-id")
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::to_string),
-                workflow_task_run_id: client_headers
-                    .get("x-cs-workflow-task-run-id")
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::to_string),
-                workflow_segment_id: client_headers
-                    .get("x-cs-workflow-segment-id")
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.parse().ok()),
-                root_session_id: client_headers
-                    .get("x-cs-root-session-id")
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::to_string),
-                root_task_run_id: client_headers
-                    .get("x-cs-root-task-run-id")
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::to_string),
-                request_kind: client_headers
-                    .get("x-cs-request-kind")
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::to_string),
+                workflow_session_id: None,
+                workflow_task_run_id: None,
+                workflow_segment_id: None,
+                root_session_id: None,
+                root_task_run_id: None,
+                request_kind: None,
             }
             .with_workflow_attribution(&client_headers),
         );
@@ -1362,14 +1344,23 @@ mod tests {
             .read(|conn| {
                 Ok(conn.query_row(
                     "SELECT workflow_session_id, workflow_task_run_id, workflow_segment_id,
-                            root_session_id, root_task_run_id, request_kind, input_tokens, output_tokens
+                            root_session_id, root_task_run_id, request_kind, input_tokens, output_tokens,
+                            cache_tokens
                      FROM ccproxy_stats",
                     [],
-                    |row| Ok((
-                        row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i32>(2)?,
-                        row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?,
-                        row.get::<_, i64>(6)?, row.get::<_, i64>(7)?,
-                    )),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i32>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, i64>(8)?,
+                        ))
+                    },
                 )?)
             })
             .await
@@ -1384,7 +1375,8 @@ mod tests {
                 "root-session:task:1".to_string(),
                 "react".to_string(),
                 12,
-                4
+                4,
+                0,
             )
         );
         server.abort();
@@ -1392,17 +1384,24 @@ mod tests {
 
     #[tokio::test]
     async fn ccproxy_usage_attribution_direct_stream_persists_after_body_consumption() {
-        let app = Router::new().route("/chat/completions", post(|| async {
-            axum::response::Response::builder()
-                .header("content-type", "text/event-stream")
-                .header("x-upstream", "kept")
-                .body(Body::from(concat!(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0}]}\n\n",
-                    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}\n\n",
-                    "data: [DONE]\n\n"
-                )))
-                .unwrap()
-        }));
+        let (headers_tx, mut headers_rx) = mpsc::channel(1);
+        let app = Router::new()
+            .route(
+                "/chat/completions",
+                post(move |State(sender): State<mpsc::Sender<HeaderMap>>, headers: HeaderMap| async move {
+                    sender.send(headers).await.expect("test receiver should remain open");
+                    axum::response::Response::builder()
+                        .header("content-type", "text/event-stream")
+                        .header("x-upstream", "kept")
+                        .body(Body::from(concat!(
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"prompt_tokens_details\":{\"cached_tokens\":2},\"total_tokens\":16}}\n\n",
+                            "data: [DONE]\n\n"
+                        )))
+                        .expect("mock stream response should build")
+                }),
+            )
+            .with_state(headers_tx);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -1419,6 +1418,22 @@ mod tests {
             proxy_model(format!("http://{address}")), true, store.clone(), false,
         ).await.unwrap();
         assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+        assert!(!response.headers().contains_key("content-length"));
+        let upstream_headers = headers_rx
+            .recv()
+            .await
+            .expect("upstream should receive request");
+        for name in [
+            "x-cs-workflow-session-id",
+            "x-cs-workflow-task-run-id",
+            "x-cs-workflow-segment-id",
+            "x-cs-root-session-id",
+            "x-cs-root-task-run-id",
+            "x-cs-request-kind",
+        ] {
+            assert!(!upstream_headers.contains_key(name));
+        }
         let _body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -1428,13 +1443,44 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let stat = runtime.read(|conn| Ok(conn.query_row(
-            "SELECT workflow_session_id, request_kind, input_tokens, output_tokens FROM ccproxy_stats", [],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?)),
-        )?)).await.unwrap();
+        let stat = runtime
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT workflow_session_id, workflow_task_run_id, workflow_segment_id,
+                            root_session_id, root_task_run_id, request_kind,
+                            input_tokens, output_tokens, cache_tokens
+                     FROM ccproxy_stats",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i32>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, i64>(8)?,
+                        ))
+                    },
+                )?)
+            })
+            .await
+            .unwrap();
         assert_eq!(
             stat,
-            ("workflow-session".to_string(), "react".to_string(), 12, 4)
+            (
+                "workflow-session".to_string(),
+                "workflow-session:task:1".to_string(),
+                3,
+                "root-session".to_string(),
+                "root-session:task:1".to_string(),
+                "react".to_string(),
+                12,
+                4,
+                2,
+            )
         );
         server.abort();
     }

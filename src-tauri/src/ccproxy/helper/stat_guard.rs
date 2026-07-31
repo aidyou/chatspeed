@@ -169,10 +169,31 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let row = runtime.read(|conn| Ok(conn.query_row(
-            "SELECT workflow_session_id, workflow_task_run_id, workflow_segment_id, root_session_id, root_task_run_id, request_kind, input_tokens FROM ccproxy_stats", [],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i32>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, i64>(6)?)),
-        )?)).await.unwrap();
+        let row = runtime
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT workflow_session_id, workflow_task_run_id, workflow_segment_id,
+                            root_session_id, root_task_run_id, request_kind,
+                            input_tokens, output_tokens, cache_tokens
+                     FROM ccproxy_stats",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i32>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, i64>(6)?,
+                            row.get::<_, i64>(7)?,
+                            row.get::<_, i64>(8)?,
+                        ))
+                    },
+                )?)
+            })
+            .await
+            .unwrap();
         assert_eq!(
             row,
             (
@@ -182,7 +203,9 @@ mod tests {
                 "root-session".to_string(),
                 "root-session:task:1".to_string(),
                 "react".to_string(),
-                12
+                12,
+                0,
+                0,
             )
         );
     }

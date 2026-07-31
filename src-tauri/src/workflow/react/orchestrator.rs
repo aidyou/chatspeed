@@ -429,7 +429,6 @@ fn build_terminal_sub_agent_result(
             &root_task_run_id,
             terminal_status,
             duration_ms,
-            false,
         )
         .map_err(|error| {
             WorkflowEngineError::General(format!(
@@ -460,6 +459,28 @@ fn build_terminal_sub_agent_result(
     })?;
 
     Ok(result)
+}
+
+async fn build_terminal_sub_agent_result_async(
+    main_store: Arc<MainStore>,
+    task_id: String,
+    final_state: crate::workflow::react::types::WorkflowState,
+    run_result: Result<(), WorkflowEngineError>,
+    messages: Vec<WorkflowMessage>,
+) -> Result<Value, WorkflowEngineError> {
+    tokio::task::spawn_blocking(move || {
+        build_terminal_sub_agent_result(
+            main_store.as_ref(),
+            &task_id,
+            final_state,
+            &run_result,
+            &messages,
+        )
+    })
+    .await
+    .map_err(|error| {
+        WorkflowEngineError::General(format!("join sub-agent usage finalization: {error}"))
+    })?
 }
 
 fn render_task_output(result: &Value) -> String {
@@ -1001,17 +1022,22 @@ pub async fn spawn_call_sub_agent(
     );
 
     tokio::spawn(async move {
-        let mut guard = exec_clone.lock().await;
-        let result = guard.run_loop().await;
-        let final_state = guard.state();
-        let messages = guard.messages();
-        let completion_result = match build_terminal_sub_agent_result(
-            main_store_clone.as_ref(),
-            &task_id_clone,
+        let (result, final_state, messages) = {
+            let mut guard = exec_clone.lock().await;
+            let result = guard.run_loop().await;
+            let final_state = guard.state();
+            let messages = guard.messages();
+            (result, final_state, messages)
+        };
+        let completion_result = match build_terminal_sub_agent_result_async(
+            main_store_clone.clone(),
+            task_id_clone.clone(),
             final_state.clone(),
-            &result,
-            &messages,
-        ) {
+            result,
+            messages,
+        )
+        .await
+        {
             Ok(result) => result,
             Err(error) => {
                 log::error!(
@@ -1312,35 +1338,38 @@ impl ToolDefinition for TaskTool {
             );
 
             tokio::spawn(async move {
-                let (completion_result, output) = {
+                let (result, final_state, messages, session_id) = {
                     let mut guard = exec_clone.lock().await;
                     let result = guard.run_loop().await;
                     let final_state = guard.state();
                     let messages = guard.messages();
-                    if let Err(error) = &result {
-                        log::error!("Background task {} failed: {}", guard.session_id(), error);
-                    }
-                    let completion_result = match build_terminal_sub_agent_result(
-                        main_store.as_ref(),
-                        &task_id_clone,
-                        final_state,
-                        &result,
-                        &messages,
-                    ) {
-                        Ok(result) => result,
-                        Err(error) => {
-                            log::error!(
-                                "[Workflow][session={}][phase=sub_agent_completion] Background usage finalization failed; terminal result will not be projected: {}",
-                                task_id_clone,
-                                error
-                            );
-                            recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
-                            return;
-                        }
-                    };
-                    let output = render_task_output(&completion_result);
-                    (completion_result, output)
+                    let session_id = guard.session_id();
+                    (result, final_state, messages, session_id)
                 };
+                if let Err(error) = &result {
+                    log::error!("Background task {} failed: {}", session_id, error);
+                }
+                let completion_result = match build_terminal_sub_agent_result_async(
+                    main_store.clone(),
+                    task_id_clone.clone(),
+                    final_state,
+                    result,
+                    messages,
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        log::error!(
+                            "[Workflow][session={}][phase=sub_agent_completion] Background usage finalization failed; terminal result will not be projected: {}",
+                            task_id_clone,
+                            error
+                        );
+                        recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+                        return;
+                    }
+                };
+                let output = render_task_output(&completion_result);
                 remember_completed_task(
                     task_id_clone.clone(),
                     owner_session_id.clone(),
@@ -1510,17 +1539,22 @@ impl ToolDefinition for TaskTool {
         let task_id_clone = task_id.clone();
         let main_store = self.main_store.clone();
         tokio::spawn(async move {
-            let mut guard = exec_clone.lock().await;
-            let result = guard.run_loop().await;
-            let final_state = guard.state();
-            let messages = guard.messages();
-            let completion_result = match build_terminal_sub_agent_result(
-                main_store.as_ref(),
-                &task_id_clone,
+            let (result, final_state, messages) = {
+                let mut guard = exec_clone.lock().await;
+                let result = guard.run_loop().await;
+                let final_state = guard.state();
+                let messages = guard.messages();
+                (result, final_state, messages)
+            };
+            let completion_result = match build_terminal_sub_agent_result_async(
+                main_store.clone(),
+                task_id_clone.clone(),
                 final_state.clone(),
-                &result,
-                &messages,
-            ) {
+                result,
+                messages,
+            )
+            .await
+            {
                 Ok(result) => result,
                 Err(error) => {
                     log::error!(
@@ -2129,7 +2163,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_sub_agent_result_requires_and_persists_usage_summary() {
+    fn sub_agent_usage_all_normal_terminal_outcomes_are_partial_without_attribution() {
         let (_dir, store) = test_store();
         let agent = crate::db::Agent::new(
             "usage-agent".to_string(),
@@ -2158,31 +2192,45 @@ mod tests {
         store
             .create_workflow("usage-parent", "parent", &agent.id, None, None)
             .expect("failed to create parent workflow");
-        store
-            .create_workflow(
-                "usage-child",
-                "child",
-                &agent.id,
-                None,
-                Some("usage-parent"),
+        for (suffix, final_state, run_result, expected_status) in [
+            ("completed", WorkflowState::Completed, Ok(()), "completed"),
+            (
+                "failed",
+                WorkflowState::Error,
+                Err(WorkflowEngineError::General("provider failed".to_string())),
+                "failed",
+            ),
+            (
+                "cancelled",
+                WorkflowState::Cancelled,
+                Err(WorkflowEngineError::Cancelled("user stopped".to_string())),
+                "cancelled",
+            ),
+        ] {
+            let child_id = format!("usage-child-{suffix}");
+            store
+                .create_workflow(&child_id, "child", &agent.id, None, Some("usage-parent"))
+                .expect("failed to create child workflow");
+
+            let result = build_terminal_sub_agent_result(
+                store.as_ref(),
+                &child_id,
+                final_state,
+                &run_result,
+                &[],
             )
-            .expect("failed to create child workflow");
+            .expect("terminal child usage finalization must succeed");
 
-        let result = build_terminal_sub_agent_result(
-            store.as_ref(),
-            "usage-child",
-            WorkflowState::Completed,
-            &Ok(()),
-            &[],
-        )
-        .expect("terminal child usage finalization must succeed");
-
-        assert_eq!(result["status"], "completed");
-        assert_eq!(result["usage_summary"]["terminal_status"], "completed");
-        assert!(store
-            .load_workflow_task_usage("usage-child", "usage-child:task:1")
-            .expect("failed to load child usage summary")
-            .is_some());
+            assert_eq!(result["status"], expected_status);
+            assert_eq!(result["usage_summary"]["terminal_status"], expected_status);
+            assert_eq!(result["usage_summary"]["is_partial"], true);
+            let summary = store
+                .load_workflow_task_usage(&child_id, &format!("{child_id}:task:1"))
+                .expect("failed to load child usage summary")
+                .expect("child usage summary should be durable");
+            assert!(summary.is_partial);
+            assert_eq!(summary.terminal_status, expected_status);
+        }
     }
 
     #[test]

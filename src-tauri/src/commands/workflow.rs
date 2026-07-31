@@ -1738,11 +1738,7 @@ pub async fn create_workflow(
 
 #[tauri::command]
 pub async fn list_workflows(state: State<'_, Arc<MainStore>>) -> Result<Vec<Workflow>, String> {
-    let runtime = {
-        let store = &*state;
-        reconcile_interrupted_child_workflows(&store).map_err(|e| e.to_string())?;
-        store.db_runtime().map_err(|e| e.to_string())?
-    };
+    let runtime = state.db_runtime().map_err(|e| e.to_string())?;
 
     MainStore::list_workflows_with_runtime(runtime)
         .await
@@ -1832,7 +1828,6 @@ fn reconcile_durable_child_completion(
                 &root_task_run_id,
                 status,
                 duration_ms,
-                true,
             )?;
             store.upsert_workflow_task_usage(
                 child_id,
@@ -2006,10 +2001,10 @@ fn reconcile_durable_child_completion(
     Ok(())
 }
 
-pub(crate) fn reconcile_interrupted_child_workflows(
+fn reconcile_child_workflows(
     store: &MainStore,
+    child_workflows: Vec<Workflow>,
 ) -> Result<(), crate::db::StoreError> {
-    let child_workflows = store.list_child_workflows()?;
     let mut decisions = Vec::new();
 
     for child in child_workflows {
@@ -2096,7 +2091,6 @@ pub(crate) fn reconcile_interrupted_child_workflows(
                 &root_task_run_id,
                 "interrupted",
                 duration_ms,
-                true,
             )?;
             store.upsert_workflow_task_usage(
                 &child_id,
@@ -2205,6 +2199,21 @@ pub(crate) fn reconcile_interrupted_child_workflows(
     }
 
     Ok(())
+}
+
+pub(crate) fn reconcile_interrupted_child_workflows(
+    store: &MainStore,
+) -> Result<(), crate::db::StoreError> {
+    let child_workflows = store.list_child_workflows()?;
+    reconcile_child_workflows(store, child_workflows)
+}
+
+fn reconcile_child_workflows_for_parent(
+    store: &MainStore,
+    parent_session_id: &str,
+) -> Result<(), crate::db::StoreError> {
+    let child_workflows = store.list_child_workflows_for_parent(parent_session_id)?;
+    reconcile_child_workflows(store, child_workflows)
 }
 
 #[tauri::command]
@@ -2691,6 +2700,15 @@ pub async fn get_workflow_snapshot(
     session_id: String,
 ) -> Result<Value, String> {
     let main_store = state.inner().clone();
+    let recovery_store = main_store.clone();
+    let recovery_session_id = session_id.clone();
+    tokio::task::spawn_blocking(move || {
+        reconcile_child_workflows_for_parent(recovery_store.as_ref(), &recovery_session_id)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Failed to join workflow child recovery: {e}"))??;
+
     let snapshot_store = main_store.clone();
     let snapshot_session_id = session_id.clone();
     let (
@@ -5661,6 +5679,10 @@ mod tests {
             .expect("failed to load child usage summary")
             .expect("reconciled child usage summary should be durable");
         assert_eq!(summary.terminal_status, "interrupted");
+        assert!(
+            summary.is_partial,
+            "restart reconciliation without attributed stats must remain partial"
+        );
 
         let root_task_run_id = store
             .workflow_current_task_run_id("parent-usage")
@@ -5679,6 +5701,55 @@ mod tests {
                 Ok(())
             })
             .expect("failed to verify child usage root attribution");
+    }
+
+    #[test]
+    fn reconcile_child_workflows_for_parent_ignores_other_parent_history() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        for parent_id in ["current-parent", "history-parent"] {
+            store
+                .create_workflow(parent_id, "Parent task", "agent-test", None, None)
+                .expect("failed to create parent workflow");
+        }
+        for (child_id, parent_id) in [
+            ("current-child", "current-parent"),
+            ("history-child", "history-parent"),
+        ] {
+            store
+                .create_workflow(child_id, "Child task", "agent-test", None, Some(parent_id))
+                .expect("failed to create child workflow");
+            let mut context = ExecutionContext::new(child_id.to_string());
+            context.state = RuntimeState::Completed;
+            store
+                .upsert_execution_context(&context)
+                .expect("failed to persist completed child state");
+        }
+
+        reconcile_child_workflows_for_parent(&store, "current-parent")
+            .expect("failed to recover current parent children");
+
+        let current_child = store
+            .get_workflow("current-child")
+            .expect("failed to load current child")
+            .expect("current child should exist");
+        assert_eq!(current_child.status, "completed");
+        let history_child = store
+            .get_workflow("history-child")
+            .expect("failed to load historical child")
+            .expect("historical child should exist");
+        assert_eq!(history_child.status, "pending");
+        assert!(store
+            .get_execution_context("current-parent")
+            .expect("failed to load current parent context")
+            .expect("current parent completion projection should be durable")
+            .pending_sub_agent_completions
+            .iter()
+            .any(|completion| completion.sub_agent_id == "current-child"));
+        assert!(store
+            .get_execution_context("history-parent")
+            .expect("failed to load historical parent context")
+            .is_none());
     }
 
     #[test]

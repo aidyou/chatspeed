@@ -1134,6 +1134,23 @@ impl MainStore {
         })
     }
 
+    pub fn list_child_workflows_for_parent(
+        &self,
+        parent_session_id: &str,
+    ) -> Result<Vec<Workflow>, StoreError> {
+        let parent_session_id = parent_session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflows
+                 WHERE parent_session_id = ?1
+                 ORDER BY created_at ASC",
+            )?;
+            let rows =
+                statement.query_map(params![parent_session_id], |row| Ok(Workflow::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
     pub(crate) async fn delete_workflow_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
