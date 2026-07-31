@@ -2185,7 +2185,7 @@ async fn begin_new_context_frame_for_cold_session(
 }
 
 async fn clear_persisted_workflow_todo_list(
-    main_store: &Arc<MainStore>,
+    main_store: &MainStore,
     session_id: &str,
 ) -> Result<(), String> {
     let runtime = main_store.db_runtime().map_err(|e| e.to_string())?;

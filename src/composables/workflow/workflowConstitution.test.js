@@ -206,9 +206,49 @@ assert.ok(
 assert.match(queuedImageSend, /sessionId: workflowStore\.currentWorkflowId/)
 assert.match(queuedImageSend, /target: messageTarget/)
 assert.match(
+  workflowView,
+  /const inFlightDraftSessionIds = new Set\(\)/,
+  'workflow switches must know which captured draft is protected by an in-flight send'
+)
+assert.match(
+  workflowView,
+  /const hydrationRevision = \+\+inputDraftHydrationRevision[\s\S]*await restoreDraftImageAttachments[\s\S]*hydrationRevision !== inputDraftHydrationRevision[\s\S]*workflowStore\.currentWorkflowId !== sessionId[\s\S]*return[\s\S]*inputMessage\.value = draft\?\.inputMessage \|\| ''[\s\S]*imageAttachments\.value = restoredAttachments/,
+  'draft hydration must ignore stale async attachment restores after workflow switches'
+)
+assert.match(
+  workflowView,
+  /if \(hydrationRevision === inputDraftHydrationRevision\) \{[\s\S]*isHydratingInputDraft = false/,
+  'stale draft hydration must not reset a newer hydration guard'
+)
+assert.match(
   queuedImageSend,
-  /workflowStore\.currentWorkflowId === messageTarget\.sessionId[\s\S]*inputMessage\.value = backupMessage/,
-  'a failed background image send must not restore its input into the newly selected workflow'
+  /inFlightDraftSessionIds\.add\(messageTarget\.sessionId\)[\s\S]*saveCapturedInputDraft\(messageTarget\.sessionId, backupMessage, backupAttachments\)/,
+  'image sends must persist and protect the captured target draft before clearing visible input'
+)
+assert.match(
+  queuedImageSend,
+  /saveCapturedInputDraft\(messageTarget\.sessionId, backupMessage, backupAttachments\)[\s\S]*if \(workflowStore\.currentWorkflowId === messageTarget\.sessionId\) \{[\s\S]*inputMessage\.value = backupMessage/,
+  'image analysis failure must retain the captured target draft even after switching workflows'
+)
+assert.match(
+  queuedImageSend,
+  /if \(sendResult === false\) \{[\s\S]*saveCapturedInputDraft\(messageTarget\.sessionId, backupMessage, backupAttachments\)[\s\S]*workflowStore\.currentWorkflowId === messageTarget\.sessionId[\s\S]*inputMessage\.value = backupMessage/,
+  'dispatch failure must retain the captured target draft while restoring visible input only for the active matching workflow'
+)
+assert.match(
+  queuedImageSend,
+  /else if \(sendResult === true\) \{[\s\S]*removeWorkflowInputDraft\(messageTarget\.sessionId\)/,
+  'a successful captured send must clear that workflow draft even after switching workflows'
+)
+assert.match(
+  queuedImageSend,
+  /if \(workflowStore\.currentWorkflowId === messageTarget\.sessionId\) \{[\s\S]*clearRecoverableWorkflowErrorMessages\(\)/,
+  'successful background sends must only clear visible recoverable errors for the active matching workflow'
+)
+assert.match(
+  queuedImageSend,
+  /inFlightDraftSessionIds\.delete\(messageTarget\.sessionId\)/,
+  'in-flight draft protection must be released after terminal send paths'
 )
 const automationSelection = sourceSection(
   workflowView,
@@ -478,11 +518,17 @@ assert.match(deleteWorkflow, /clearPendingApprovalEntries\(id\)/)
 assert.match(deleteWorkflow, /backgroundStateListeners\.delete\(id\)/)
 assert.match(deleteWorkflow, /setWorkflowDeleting\(id, true\)/)
 assert.match(deleteWorkflow, /backendDeleteCompleted = true/)
+assert.match(deleteWorkflow, /removeWorkflowInputDraft\(id\)/)
 assert.match(deleteWorkflow, /if \(!backendDeleteCompleted\)/)
 assert.ok(
   deleteWorkflow.indexOf('setWorkflowDeleting(id, true)') <
     deleteWorkflow.indexOf("await invokeWrapper('delete_workflow'"),
   'deleting a workflow must block late approval events before invoking backend deletion'
+)
+assert.ok(
+  deleteWorkflow.indexOf("await invokeWrapper('delete_workflow'") <
+    deleteWorkflow.indexOf('removeWorkflowInputDraft(id)'),
+  'deleting a workflow must remove input draft only after backend deletion succeeds'
 )
 assert.ok(
   deleteWorkflow.indexOf('clearPendingApprovalEntries(id)') <

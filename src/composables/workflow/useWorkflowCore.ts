@@ -25,6 +25,7 @@ import {
     resolveWorkflowPhaseFromPlanningMode
 } from './messageProjectionRules'
 import { formatActiveModelName } from './modelConfigSelection'
+import { removeWorkflowInputDraft } from './useWorkflowInputDraftCache'
 import { AGENT_ROLE, SUB_AGENT_ROLE } from '@/constants/agent'
 
 /**
@@ -1990,6 +1991,7 @@ export function useWorkflowCore({
             try {
                 await invokeWrapper('delete_workflow', { sessionId: id })
                 backendDeleteCompleted = true
+                removeWorkflowInputDraft(id)
 
                 clearPendingApprovalEntries(id)
 

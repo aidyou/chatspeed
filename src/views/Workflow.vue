@@ -378,6 +378,11 @@ import { useWorkflowInput } from '@/composables/workflow/useWorkflowInput'
 import { useWorkflowCore } from '@/composables/workflow/useWorkflowCore'
 import { useTerminal } from '@/composables/workflow/useTerminal'
 import { useWorkflowCodeEditor } from '@/composables/workflow/useWorkflowCodeEditor.js'
+import {
+  loadWorkflowInputDraft,
+  removeWorkflowInputDraft,
+  saveWorkflowInputDraft
+} from '@/composables/workflow/useWorkflowInputDraftCache'
 
 const IMAGE_FILE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'])
 
@@ -1010,6 +1015,90 @@ function clearImageAttachments() {
   imageAttachments.value = []
 }
 
+let draftSaveTimer = null
+let isHydratingInputDraft = false
+let inputDraftHydrationRevision = 0
+const inFlightDraftSessionIds = new Set()
+
+function saveCurrentInputDraft(sessionId = workflowStore.currentWorkflowId) {
+  if (!sessionId || isHydratingInputDraft || inFlightDraftSessionIds.has(sessionId)) return
+  saveWorkflowInputDraft(sessionId, {
+    inputMessage: inputMessage.value,
+    attachments: imageAttachments.value
+  })
+}
+
+function saveCapturedInputDraft(sessionId, inputMessage, attachments) {
+  if (!sessionId) return
+  saveWorkflowInputDraft(sessionId, {
+    inputMessage,
+    attachments
+  })
+}
+
+function scheduleCurrentInputDraftSave() {
+  if (isHydratingInputDraft) return
+  if (draftSaveTimer) clearTimeout(draftSaveTimer)
+  draftSaveTimer = setTimeout(() => {
+    draftSaveTimer = null
+    saveCurrentInputDraft()
+  }, 300)
+}
+
+async function restoreWorkflowInputDraft(sessionId) {
+  const hydrationRevision = ++inputDraftHydrationRevision
+  isHydratingInputDraft = true
+  try {
+    const draft = loadWorkflowInputDraft(sessionId)
+    const restoredAttachments = await restoreDraftImageAttachments(draft?.attachments || [])
+    if (
+      hydrationRevision !== inputDraftHydrationRevision ||
+      workflowStore.currentWorkflowId !== sessionId
+    ) {
+      return
+    }
+    inputMessage.value = draft?.inputMessage || ''
+    imageAttachments.value = restoredAttachments
+  } finally {
+    nextTick(() => {
+      if (hydrationRevision === inputDraftHydrationRevision) {
+        isHydratingInputDraft = false
+      }
+    })
+  }
+}
+
+async function restoreDraftImageAttachments(attachments) {
+  const restored = []
+  for (const attachment of attachments) {
+    if (!attachment) continue
+    if (attachment.path && (!attachment.url || !attachment.sourceUrl)) {
+      try {
+        const [previewUrl, sourceUrl] = await Promise.all([
+          imagePreview(attachment.path),
+          imageSourceUrl(attachment.path)
+        ])
+        if (previewUrl && sourceUrl) {
+          restored.push({
+            ...attachment,
+            url: previewUrl,
+            sourceUrl,
+            uploading: false
+          })
+        }
+      } catch (error) {
+        console.warn('[Workflow] Failed to restore draft image attachment:', error)
+      }
+      continue
+    }
+
+    if (attachment.sourceUrl || attachment.url) {
+      restored.push({ ...attachment, uploading: false })
+    }
+  }
+  return restored
+}
+
 async function addImageAttachmentFromPath(path, name = '') {
   if (!canUseImageAttachments.value) {
     showMessage(t('settings.general.visionModelRequired'), 'warning')
@@ -1407,6 +1496,9 @@ inputComposable.onSendMessage.value = async () => {
     return
   }
 
+  inFlightDraftSessionIds.add(messageTarget.sessionId)
+  saveCapturedInputDraft(messageTarget.sessionId, backupMessage, backupAttachments)
+
   let attachedContext = null
   let metadata = null
   let preparingQueueId = null
@@ -1441,12 +1533,14 @@ inputComposable.onSendMessage.value = async () => {
       workflowStore.removeQueuedMessage(preparingQueueId)
     }
     appendImageAnalysisErrorMessage(error, backupAttachments, messageTarget.sessionId)
+    saveCapturedInputDraft(messageTarget.sessionId, backupMessage, backupAttachments)
     if (workflowStore.currentWorkflowId === messageTarget.sessionId) {
       inputMessage.value = backupMessage
       imageAttachments.value = backupAttachments
       resetChatState()
       isChatting.value = false
     }
+    inFlightDraftSessionIds.delete(messageTarget.sessionId)
     isPreparingImageSend.value = false
     showMessage(error?.message || t('chat.errorOnAddAttachment', { error: String(error) }), 'error')
     scrollMessageListToBottom()
@@ -1465,6 +1559,8 @@ inputComposable.onSendMessage.value = async () => {
     workflowStore.currentWorkflowId === messageTarget.sessionId &&
     (await handleWorkflowSlashCommand(rawMessage))
   if (handledWorkflowCommand) {
+    removeWorkflowInputDraft(messageTarget.sessionId)
+    inFlightDraftSessionIds.delete(messageTarget.sessionId)
     return true
   }
 
@@ -1474,16 +1570,18 @@ inputComposable.onSendMessage.value = async () => {
     target: messageTarget
   })
   if (sendResult === false) {
+    saveCapturedInputDraft(messageTarget.sessionId, backupMessage, backupAttachments)
     if (workflowStore.currentWorkflowId === messageTarget.sessionId) {
       inputMessage.value = backupMessage
       imageAttachments.value = backupAttachments
     }
-  } else if (
-    sendResult === true &&
-    workflowStore.currentWorkflowId === messageTarget.sessionId
-  ) {
-    clearRecoverableWorkflowErrorMessages()
+  } else if (sendResult === true) {
+    removeWorkflowInputDraft(messageTarget.sessionId)
+    if (workflowStore.currentWorkflowId === messageTarget.sessionId) {
+      clearRecoverableWorkflowErrorMessages()
+    }
   }
+  inFlightDraftSessionIds.delete(messageTarget.sessionId)
   return sendResult
 }
 
@@ -2317,10 +2415,34 @@ watch(
 
 watch(
   () => currentWorkflowId.value,
-  () => {
+  (nextWorkflowId, previousWorkflowId) => {
+    if (previousWorkflowId) {
+      saveCurrentInputDraft(previousWorkflowId)
+    }
     visibleTaskGroupCount.value = 1
-    clearImageAttachments()
-  }
+    if (nextWorkflowId) {
+      restoreWorkflowInputDraft(nextWorkflowId)
+    } else {
+      const hydrationRevision = ++inputDraftHydrationRevision
+      isHydratingInputDraft = true
+      inputMessage.value = ''
+      clearImageAttachments()
+      nextTick(() => {
+        if (hydrationRevision === inputDraftHydrationRevision) {
+          isHydratingInputDraft = false
+        }
+      })
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  [inputMessage, imageAttachments],
+  () => {
+    scheduleCurrentInputDraftSave()
+  },
+  { deep: true }
 )
 
 watch(

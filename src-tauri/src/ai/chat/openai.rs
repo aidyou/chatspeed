@@ -24,6 +24,8 @@ use crate::{
     ai::error::AiError, constants::INTERNAL_CCPROXY_API_KEY, db::MainStore, impl_stoppable,
 };
 
+use super::openai_responses::{self, ResponsesRequestContext};
+
 /// A standardized error structure for streaming to the frontend.
 #[derive(Serialize)]
 struct JsonErrorPayload<'a> {
@@ -504,7 +506,7 @@ impl OpenAIChat {
                                     break;
                                 }
                                 finish_reason = FinishReason::ToolCalls;
-                                self.process_and_send_tool_calls(
+                                Self::emit_tool_calls(
                                     &mut accumulated_tool_calls,
                                     &full_response,
                                     &chat_id,
@@ -555,7 +557,7 @@ impl OpenAIChat {
                     chat_id
                 );
                 finish_reason = FinishReason::ToolCalls;
-                self.process_and_send_tool_calls(
+                Self::emit_tool_calls(
                     &mut accumulated_tool_calls,
                     &full_response,
                     &chat_id,
@@ -724,8 +726,7 @@ impl OpenAIChat {
     }
 
     /// Processes and sends accumulated tool calls.
-    fn process_and_send_tool_calls<F: Fn(Arc<ChatResponse>) + Send + 'static>(
-        &self,
+    pub(crate) fn emit_tool_calls<F: Fn(Arc<ChatResponse>) + Send + 'static>(
         accumulated_tool_calls: &mut HashMap<u32, ToolCallDeclaration>,
         full_response: &str,
         chat_id: &str,
@@ -977,7 +978,6 @@ impl OpenAIChat {
 
     /// Determines the appropriate API endpoint based on tools and function call settings
     fn get_endpoint(
-        &self,
         messages: &[Value],
         tools: &Option<Vec<MCPToolDeclaration>>,
         model_detail: &[ModelConfig],
@@ -1022,9 +1022,46 @@ mod tests {
     use super::{
         extract_inline_reasoning_content, extract_reasoning_from_openai_message,
         sanitize_reasoning_content, should_emit_reasoning_chunk, EmptyHtmlCommentStreamState,
-        InlineThinkStreamState,
+        InlineThinkStreamState, OpenAIChat,
     };
+    use crate::db::ModelConfig;
     use serde_json::json;
+
+    #[test]
+    fn endpoint_decision_preserves_chat_and_compat_fallbacks() {
+        let model_detail = vec![ModelConfig {
+            id: "gpt-test".to_string(),
+            function_call: Some(false),
+            ..Default::default()
+        }];
+        let tools = Some(vec![crate::ai::traits::chat::MCPToolDeclaration {
+            name: "lookup".to_string(),
+            description: "Look up data".to_string(),
+            input_schema: json!({ "type": "object" }),
+            output_schema: None,
+            disabled: false,
+            scope: None,
+        }]);
+
+        assert_eq!(
+            OpenAIChat::get_endpoint(&[], &None, &model_detail, "gpt-test"),
+            "/v1/chat/completions"
+        );
+        assert_eq!(
+            OpenAIChat::get_endpoint(&[], &tools, &model_detail, "gpt-test"),
+            "/compat_mode/v1/chat/completions"
+        );
+
+        let function_call_model_detail = vec![ModelConfig {
+            id: "gpt-test".to_string(),
+            function_call: Some(true),
+            ..Default::default()
+        }];
+        assert_eq!(
+            OpenAIChat::get_endpoint(&[], &tools, &function_call_model_detail, "gpt-test"),
+            "/v1/chat/completions"
+        );
+    }
 
     #[test]
     fn sanitize_reasoning_content_removes_html_comments_only() {
@@ -1231,6 +1268,13 @@ impl AiChatTrait for OpenAIChat {
                     .find(|model_config| model_config.id == target.model)
                     .and_then(|model_config| model_config.function_call)
             });
+            let proxy_metadata = proxy_group.as_ref().and_then(|group| {
+                let store = self.main_store.as_ref();
+                let proxy_config: crate::ccproxy::ChatCompletionProxyConfig =
+                    store.get_config(crate::constants::CFG_CHAT_COMPLETION_PROXY, HashMap::new());
+                let target = proxy_config.get(group)?.get(&final_model)?.first()?;
+                store.config.get_ai_model_by_id(target.id).ok()?.metadata
+            });
             let function_call = metadata_function_call.or(proxy_function_call);
 
             // Return a default model config for proxy mode
@@ -1242,6 +1286,7 @@ impl AiChatTrait for OpenAIChat {
                     function_call,
                     ..ModelConfig::default()
                 }],
+                metadata: proxy_metadata,
                 ..Default::default()
             }
         } else {
@@ -1421,11 +1466,29 @@ impl AiChatTrait for OpenAIChat {
         );
 
         let base_endpoint =
-            self.get_endpoint(&messages, &tools, &model_detail.models, &final_model);
-        let endpoint = if let Some(group) = proxy_group {
-            format!("/{}{}", group, base_endpoint)
+            Self::get_endpoint(&messages, &tools, &model_detail.models, &final_model);
+        let use_responses_api = base_endpoint != "/compat_mode/v1/chat/completions"
+            && openai_responses::supports_responses_api(&model_detail.metadata);
+        if use_responses_api {
+            payload = openai_responses::build_responses_payload(ResponsesRequestContext {
+                model: &final_model,
+                messages: &messages,
+                tools: &tools,
+                metadata: &merged_metadata,
+                model_metadata: &model_detail.metadata,
+                params: &params,
+                stream: stream_enabled,
+            });
+        }
+        let selected_endpoint = if use_responses_api {
+            openai_responses::responses_endpoint()
         } else {
-            base_endpoint.to_string()
+            base_endpoint
+        };
+        let endpoint = if let Some(group) = proxy_group.as_ref() {
+            format!("/{}{}", group, selected_endpoint)
+        } else {
+            selected_endpoint.to_string()
         };
 
         let response = self
@@ -1490,15 +1553,36 @@ impl AiChatTrait for OpenAIChat {
         }
 
         if let Some(raw_response) = response.raw_response {
-            self.handle_stream_response(
+            if use_responses_api {
+                openai_responses::handle_response(
+                    chat_id.clone(),
+                    raw_response,
+                    callback,
+                    Some(merged_metadata),
+                    model_detail.name.clone(),
+                    stream_enabled,
+                    self.stop_flag.clone(),
+                )
+                .await
+            } else {
+                self.handle_stream_response(
+                    chat_id.clone(),
+                    raw_response,
+                    callback,
+                    Some(merged_metadata),
+                    model_detail.name.clone(),
+                    stream_enabled,
+                )
+                .await
+            }
+        } else if use_responses_api {
+            openai_responses::handle_non_stream_response_text(
                 chat_id.clone(),
-                raw_response,
+                response.content,
                 callback,
                 Some(merged_metadata),
                 model_detail.name.clone(),
-                stream_enabled,
             )
-            .await
         } else {
             self.handle_non_stream_response(
                 chat_id.clone(),
