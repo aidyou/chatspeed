@@ -187,21 +187,30 @@ pub async fn handle_direct_forward(
         let error_msg = String::from_utf8_lossy(&error_body_bytes).to_string();
         {
             let store = main_store_arc.as_ref();
-            let _ = store.record_ccproxy_stat(CcproxyStat {
-                id: None,
-                client_model: proxy_model.client_alias.clone(),
-                backend_model: model_name.clone(),
-                provider_id: Some(proxy_model.provider_id),
-                provider: provider_name.clone(),
-                protocol: chat_protocol_for_stat.to_string(),
-                tool_compat_mode: 0,
-                status_code: status_code.as_u16() as i32,
-                error_message: Some(error_msg.clone()),
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_tokens: 0,
-                request_at: None,
-            });
+            let _ = store.record_ccproxy_stat(
+                CcproxyStat {
+                    id: None,
+                    workflow_session_id: None,
+                    workflow_task_run_id: None,
+                    workflow_segment_id: None,
+                    root_session_id: None,
+                    root_task_run_id: None,
+                    request_kind: None,
+                    client_model: proxy_model.client_alias.clone(),
+                    backend_model: model_name.clone(),
+                    provider_id: Some(proxy_model.provider_id),
+                    provider: provider_name.clone(),
+                    protocol: chat_protocol_for_stat.to_string(),
+                    tool_compat_mode: 0,
+                    status_code: status_code.as_u16() as i32,
+                    error_message: Some(error_msg.clone()),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_tokens: 0,
+                    request_at: None,
+                }
+                .with_workflow_attribution(&client_headers),
+            );
         }
 
         log_direct_backend_error(&format!(
@@ -244,17 +253,44 @@ pub async fn handle_direct_forward(
         )));
 
         // Create the guard that will record stats when dropped (stream ends)
-        let stat_guard = Arc::new(StreamStatGuard {
-            log_recorder: log_recorder.clone(),
-            sse_status: sse_status.clone(),
-            main_store: main_store_arc.clone(),
-            client_model: proxy_model.client_alias.clone(),
-            backend_model: model_name.clone(),
-            provider_id: proxy_model.provider_id,
-            provider: provider_name.clone(),
-            protocol: chat_protocol.to_string(),
-            tool_compat_mode: false,
-        });
+        let stat_guard = Arc::new(
+            StreamStatGuard {
+                log_recorder: log_recorder.clone(),
+                sse_status: sse_status.clone(),
+                main_store: main_store_arc.clone(),
+                client_model: proxy_model.client_alias.clone(),
+                backend_model: model_name.clone(),
+                provider_id: proxy_model.provider_id,
+                provider: provider_name.clone(),
+                protocol: chat_protocol.to_string(),
+                tool_compat_mode: false,
+                workflow_session_id: client_headers
+                    .get("x-cs-workflow-session-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string),
+                workflow_task_run_id: client_headers
+                    .get("x-cs-workflow-task-run-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string),
+                workflow_segment_id: client_headers
+                    .get("x-cs-workflow-segment-id")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse().ok()),
+                root_session_id: client_headers
+                    .get("x-cs-root-session-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string),
+                root_task_run_id: client_headers
+                    .get("x-cs-root-task-run-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string),
+                request_kind: client_headers
+                    .get("x-cs-request-kind")
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string),
+            }
+            .with_workflow_attribution(&client_headers),
+        );
 
         let log_recorder_at_end = log_recorder.clone();
         let chat_protocol_at_end = chat_protocol.clone();
@@ -329,21 +365,30 @@ pub async fn handle_direct_forward(
                     output
                 );
 
-                let _ = store.record_ccproxy_stat(CcproxyStat {
-                    id: None,
-                    client_model: proxy_model.client_alias.clone(),
-                    backend_model: model_name.clone(),
-                    provider_id: Some(proxy_model.provider_id),
-                    provider: provider_name.clone(),
-                    protocol: chat_protocol_for_stat.to_string(),
-                    tool_compat_mode: 0,
-                    status_code: status_code.as_u16() as i32,
-                    error_message: None,
-                    input_tokens: input,
-                    output_tokens: output,
-                    cache_tokens: cache,
-                    request_at: None,
-                });
+                let _ = store.record_ccproxy_stat(
+                    CcproxyStat {
+                        id: None,
+                        workflow_session_id: None,
+                        workflow_task_run_id: None,
+                        workflow_segment_id: None,
+                        root_session_id: None,
+                        root_task_run_id: None,
+                        request_kind: None,
+                        client_model: proxy_model.client_alias.clone(),
+                        backend_model: model_name.clone(),
+                        provider_id: Some(proxy_model.provider_id),
+                        provider: provider_name.clone(),
+                        protocol: chat_protocol_for_stat.to_string(),
+                        tool_compat_mode: 0,
+                        status_code: status_code.as_u16() as i32,
+                        error_message: None,
+                        input_tokens: input,
+                        output_tokens: output,
+                        cache_tokens: cache,
+                        request_at: None,
+                    }
+                    .with_workflow_attribution(&client_headers),
+                );
             }
         }
 
@@ -1188,7 +1233,211 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{extract::State, routing::post, Router};
     use serde_json::json;
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
+
+    fn proxy_model(base_url: String) -> ProxyModel {
+        ProxyModel {
+            client_alias: "alias".to_string(),
+            provider_id: 1,
+            provider: "provider".to_string(),
+            chat_protocol: ChatProtocol::OpenAI,
+            base_url,
+            model: "backend-model".to_string(),
+            api_key: String::new(),
+            model_metadata: None,
+            custom_params: None,
+            prompt_injection: "off".to_string(),
+            prompt_injection_position: None,
+            prompt_text: String::new(),
+            tool_filter: Default::default(),
+            prompt_replace: Vec::new(),
+            temp_ratio: 1.0,
+            max_tokens: None,
+            temperature: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            top_p: None,
+            top_k: None,
+            stop: Vec::new(),
+            tool_compat_mode: None,
+        }
+    }
+
+    fn workflow_attribution_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in [
+            ("x-cs-workflow-session-id", "workflow-session"),
+            ("x-cs-workflow-task-run-id", "workflow-session:task:1"),
+            ("x-cs-workflow-segment-id", "3"),
+            ("x-cs-root-session-id", "root-session"),
+            ("x-cs-root-task-run-id", "root-session:task:1"),
+            ("x-cs-request-kind", "react"),
+        ] {
+            headers.insert(name, value.parse().expect("test header should parse"));
+        }
+        headers
+    }
+
+    #[tokio::test]
+    async fn ccproxy_usage_attribution_direct_non_stream_persists_and_stays_off_upstream() {
+        let (headers_tx, mut headers_rx) = mpsc::channel(1);
+        let app = Router::new()
+            .route(
+                "/chat/completions",
+                post(move |State(sender): State<mpsc::Sender<HeaderMap>>, headers: HeaderMap| async move {
+                    sender.send(headers).await.expect("test receiver should remain open");
+                    (
+                        [("x-upstream", "kept")],
+                        axum::Json(json!({
+                            "id": "chatcmpl_test",
+                            "object": "chat.completion",
+                            "model": "backend-model",
+                            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                            "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16}
+                        })),
+                    )
+                }),
+            )
+            .with_state(headers_tx);
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("listener should be nonblocking");
+        let address = listener.local_addr().expect("listener should have address");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                tokio::net::TcpListener::from_std(listener).expect("tokio listener should convert"),
+                app,
+            )
+            .await
+            .expect("mock upstream should serve");
+        });
+
+        let directory = tempdir().expect("test temp directory should exist");
+        let store = Arc::new(
+            MainStore::new(directory.path().join("ccproxy.db"))
+                .expect("test store should initialize"),
+        );
+        let response = handle_direct_forward(
+            workflow_attribution_headers(),
+            bytes::Bytes::from_static(
+                br#"{"model":"alias","messages":[{"role":"user","content":"hello"}]}"#,
+            ),
+            proxy_model(format!("http://{address}")),
+            false,
+            store.clone(),
+            false,
+        )
+        .await
+        .expect("direct handler should succeed");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+        assert!(!response.headers().contains_key("content-length"));
+        let upstream_headers = headers_rx
+            .recv()
+            .await
+            .expect("upstream should receive request");
+        for name in [
+            "x-cs-workflow-session-id",
+            "x-cs-workflow-task-run-id",
+            "x-cs-workflow-segment-id",
+            "x-cs-root-session-id",
+            "x-cs-root-task-run-id",
+            "x-cs-request-kind",
+        ] {
+            assert!(!upstream_headers.contains_key(name));
+        }
+
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .expect("telemetry flush task should join")
+            .expect("telemetry should flush");
+        let stat = runtime
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT workflow_session_id, workflow_task_run_id, workflow_segment_id,
+                            root_session_id, root_task_run_id, request_kind, input_tokens, output_tokens
+                     FROM ccproxy_stats",
+                    [],
+                    |row| Ok((
+                        row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i32>(2)?,
+                        row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?, row.get::<_, i64>(7)?,
+                    )),
+                )?)
+            })
+            .await
+            .expect("attributed stat should persist");
+        assert_eq!(
+            stat,
+            (
+                "workflow-session".to_string(),
+                "workflow-session:task:1".to_string(),
+                3,
+                "root-session".to_string(),
+                "root-session:task:1".to_string(),
+                "react".to_string(),
+                12,
+                4
+            )
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn ccproxy_usage_attribution_direct_stream_persists_after_body_consumption() {
+        let app = Router::new().route("/chat/completions", post(|| async {
+            axum::response::Response::builder()
+                .header("content-type", "text/event-stream")
+                .header("x-upstream", "kept")
+                .body(Body::from(concat!(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}\n\n",
+                    "data: [DONE]\n\n"
+                )))
+                .unwrap()
+        }));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
+                .await
+                .unwrap();
+        });
+        let directory = tempdir().unwrap();
+        let store = Arc::new(MainStore::new(directory.path().join("ccproxy-stream.db")).unwrap());
+        let response = handle_direct_forward(
+            workflow_attribution_headers(),
+            bytes::Bytes::from_static(br#"{"model":"alias","messages":[{"role":"user","content":"hello"}],"stream":true}"#),
+            proxy_model(format!("http://{address}")), true, store.clone(), false,
+        ).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let _body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let runtime = store.db_runtime().unwrap();
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .unwrap()
+            .unwrap();
+        let stat = runtime.read(|conn| Ok(conn.query_row(
+            "SELECT workflow_session_id, request_kind, input_tokens, output_tokens FROM ccproxy_stats", [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?)),
+        )?)).await.unwrap();
+        assert_eq!(
+            stat,
+            ("workflow-session".to_string(), "react".to_string(), 12, 4)
+        );
+        server.abort();
+    }
 
     #[test]
     fn direct_stream_response_is_logged_when_stream_ends() {

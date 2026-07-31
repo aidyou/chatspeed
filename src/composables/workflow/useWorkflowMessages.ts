@@ -16,6 +16,7 @@ import {
 import { useSubAgentSummaries } from './useSubAgentSummaries'
 import { resolveWorkflowToolIcon } from './toolIcons'
 import { isWorkflowTodoTool } from './toolClassification'
+import { normalizeUsageSummary } from './usageSummary'
 import { isAutoExecuteWorkflowTool } from './toolApproval'
 import { useI18n } from 'vue-i18n'
 import * as Diff from 'diff'
@@ -801,7 +802,10 @@ export function useWorkflowMessages(options = {}) {
           typeof summary?.contextPercent === 'number' ? summary.contextPercent : null,
         result: resultContent,
         resultMarkdown,
-        hasResult
+        hasResult,
+        usageSummary: normalizeUsageSummary(
+          completionResult.usage_summary || completionData.usage_summary || completion?.usage_summary
+        )
       }
     }
 

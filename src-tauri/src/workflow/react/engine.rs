@@ -9,6 +9,7 @@ use tokio::time::{sleep, Duration};
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
+use crate::ai::traits::chat::WorkflowUsageAttribution;
 use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
@@ -1106,6 +1107,17 @@ impl WorkflowExecutor {
         let session_id_clone = session_id.clone();
         let session_id_clone2 = session_id.clone();
         let session_id_clone3 = session_id.clone();
+        let parent_session_id = main_store
+            .get_workflow(&session_id)
+            .ok()
+            .and_then(|workflow| workflow.and_then(|workflow| workflow.parent_session_id));
+        let workflow_task_run_id = main_store
+            .workflow_current_task_run_id(&session_id)
+            .unwrap_or_else(|_| format!("{session_id}:task:1"));
+        let root_session_id = parent_session_id.unwrap_or_else(|| session_id.clone());
+        let root_task_run_id = main_store
+            .workflow_current_task_run_id(&root_session_id)
+            .unwrap_or_else(|_| format!("{root_session_id}:task:1"));
         let chat_state_clone = chat_state.clone();
         let chat_state_clone2 = chat_state.clone();
         let chat_state_clone3 = chat_state.clone();
@@ -1198,11 +1210,19 @@ impl WorkflowExecutor {
                 chat_state_clone,
                 initial_provider_id,
                 initial_model_name.clone(),
+                WorkflowUsageAttribution {
+                    workflow_session_id: session_id_clone2.clone(),
+                    workflow_task_run_id: workflow_task_run_id.clone(),
+                    workflow_segment_id: 1,
+                    root_session_id: root_session_id.clone(),
+                    root_task_run_id: root_task_run_id.clone(),
+                    request_kind: "compression".to_string(),
+                },
             ),
             path_guard,
             skill_scanner,
             llm_processor: LlmProcessor::new(
-                session_id_clone2,
+                session_id_clone2.clone(),
                 agent_config.clone(),
                 child_agents_for_llm,
                 HashMap::new(),
@@ -1213,14 +1233,20 @@ impl WorkflowExecutor {
                 false,  // Temporary, will be updated below
                 vec![], // MCP tool summaries will be set in init_internal
                 allowed_paths.first().cloned(),
+                workflow_task_run_id.clone(),
+                root_session_id.clone(),
+                root_task_run_id.clone(),
             ),
             intelligence_manager: IntelligenceManager::new(
-                session_id_clone3,
+                session_id_clone3.clone(),
                 chat_state_clone3,
                 initial_provider_id,
                 initial_model_name.clone(),
                 audit_provider_id,
                 audit_model_name,
+                workflow_task_run_id,
+                root_session_id,
+                root_task_run_id,
             ),
             discovered_skills: HashMap::new(),
             available_skills: HashMap::new(),
@@ -1666,6 +1692,9 @@ impl WorkflowExecutor {
                     self.llm_processor.active_model_name.clone(),
                     self.llm_processor.active_provider_id,
                     self.llm_processor.active_model_name.clone(),
+                    self.llm_processor.workflow_task_run_id.clone(),
+                    self.llm_processor.root_session_id.clone(),
+                    self.llm_processor.root_task_run_id.clone(),
                 );
                 let gateway = self.gateway.clone();
                 let session_id = self.session_id.clone();
@@ -4231,13 +4260,14 @@ impl WorkflowExecutor {
                                 && reinforced.approval_status.as_deref() != Some("rejected")
                         })
                     {
-                        self.record_task_completed(tool_call_id).await;
+                        self.record_task_completed(tool_call_id).await?;
                     }
                     if queued_applied {
                         log::info!(
                             "[Workflow][session={}][phase=queue] Finish tool completed, but queued user messages were applied in the same turn; continuing on the hot executor instead of entering Completed",
                             self.session_id
                         );
+                        self.refresh_workflow_task_run_attribution();
                         self.update_state(WorkflowState::Thinking).await?;
                         sleep(Duration::from_millis(50)).await;
                         continue;
@@ -4289,6 +4319,7 @@ impl WorkflowExecutor {
                     self.consecutive_no_tool_calls = 0;
                     self.loop_detector.reset_tool_call_history();
                     self.loop_detector.reset_no_tool_response_history();
+                    self.refresh_workflow_task_run_attribution();
                     self.update_state(WorkflowState::Thinking).await?;
                     continue;
                 }
@@ -4671,30 +4702,94 @@ impl WorkflowExecutor {
         }
     }
 
-    pub(crate) async fn record_task_completed(&self, tool_call_id: &str) {
+    fn refresh_workflow_task_run_attribution(&mut self) {
+        let task_run_id = self
+            .context
+            .main_store
+            .workflow_current_task_run_id(&self.session_id)
+            .unwrap_or_else(|_| format!("{}:task:1", self.session_id));
+        self.llm_processor.workflow_task_run_id = task_run_id.clone();
+        self.compressor
+            .workflow_usage_attribution
+            .workflow_task_run_id = task_run_id.clone();
+        self.intelligence_manager.workflow_task_run_id = task_run_id.clone();
+
+        if self.llm_processor.root_session_id == self.session_id {
+            self.llm_processor.root_task_run_id = task_run_id.clone();
+            self.compressor.workflow_usage_attribution.root_task_run_id = task_run_id.clone();
+            self.intelligence_manager.root_task_run_id = task_run_id;
+        }
+    }
+
+    pub(crate) async fn record_task_completed(
+        &self,
+        tool_call_id: &str,
+    ) -> Result<(), WorkflowEngineError> {
         let segment_id = self.context.current_segment_id;
+        let task_run_id = self.llm_processor.workflow_task_run_id.clone();
+        let root_session_id = self.llm_processor.root_session_id.clone();
+        let root_task_run_id = self.llm_processor.root_task_run_id.clone();
+        let store = self.context.main_store.as_ref();
+        let duration_ms = store
+            .workflow_task_phase_started_at_ms(&self.session_id)?
+            .map(|started_at_ms| (chrono::Utc::now().timestamp_millis() - started_at_ms).max(0));
+        let usage_summary = store.summarize_workflow_task_usage(
+            &self.session_id,
+            &task_run_id,
+            &root_session_id,
+            &root_task_run_id,
+            "completed",
+            duration_ms,
+            false,
+        )?;
+        let summary_json = serde_json::to_value(&usage_summary).map_err(|error| {
+            WorkflowEngineError::General(format!("serialize workflow usage summary: {error}"))
+        })?;
+
+        // The durable summary and its completion-message projection must succeed before this
+        // workflow can publish task_completed or transition to Completed. Repeating this path is
+        // safe because the summary snapshot uses an idempotent task-run upsert.
+        store.upsert_workflow_task_usage(
+            &self.session_id,
+            &task_run_id,
+            &root_session_id,
+            &root_task_run_id,
+            "completed",
+            None,
+            None,
+            usage_summary.duration_ms,
+            &usage_summary,
+        )?;
+        if !store.attach_usage_summary_to_tool_call(
+            &self.session_id,
+            tool_call_id,
+            &summary_json,
+        )? {
+            return Err(WorkflowEngineError::General(format!(
+                "completion usage finalization could not locate tool call {tool_call_id}"
+            )));
+        }
+
         let event = WorkflowEvent::task_completed(
             self.session_id.clone(),
             tool_call_id.to_string(),
             segment_id,
+            Some(&usage_summary),
         );
-        if let Err(error) = self.append_event(&event) {
-            log::error!(
-                "[Workflow][session={}][phase=completion][event=task_completed] Failed to persist event for tool_call_id={}: {}",
-                self.session_id,
-                tool_call_id,
-                error
-            );
-        }
+        self.append_event(&event)?;
+        // The event is the durable completion projection. UI delivery is best-effort because a
+        // gateway failure must not invalidate that committed event or advance the task run into
+        // a retry with a different identity; clients recover it through replay/cold loading.
         if let Err(error) = self
             .dispatch_ui_payload(GatewayPayload::TaskCompleted {
                 tool_call_id: tool_call_id.to_string(),
                 segment_id,
+                usage_summary: Some(usage_summary),
             })
             .await
         {
             log::warn!(
-                "[Workflow][session={}][phase=completion][event=task_completed] Failed to dispatch UI payload for tool_call_id={}: {}",
+                "[Workflow][session={}][phase=completion][event=task_completed] UI dispatch failed; durable replay will recover it for tool_call_id={}: {}",
                 self.session_id,
                 tool_call_id,
                 error
@@ -4706,6 +4801,7 @@ impl WorkflowExecutor {
             tool_call_id,
             segment_id
         );
+        Ok(())
     }
 
     fn find_completed_sub_agent_result_for_prompt(

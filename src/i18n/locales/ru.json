@@ -889,6 +889,20 @@
   },
   "workflow": {
     "allowedShellCommands": "Разрешённые Shell-команды",
+    "costAnalysis": {
+      "cache": "Кэш",
+      "duration": "{minutes} мин. {seconds} сек.",
+      "input": "Ввод",
+      "output": "Вывод",
+      "partial": "Цены или атрибуция неполные.",
+      "ratePerMillion": "{rate} / млн",
+      "self": "Основная задача",
+      "tokens": "{count} токенов",
+      "unknownDuration": "--",
+      "unpriced": "Без цены",
+      "unpricedRate": "-- / млн",
+      "withSubAgents": "С подзадачами"
+    },
     "terminal": {
       "closeConfirmMessage": "Закрыть этот сеанс терминала? Выполняемые команды будут прерваны.",
       "closeConfirmTitle": "Закрыть терминал",

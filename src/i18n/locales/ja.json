@@ -889,6 +889,20 @@
   },
   "workflow": {
     "allowedShellCommands": "許可された Shell コマンド",
+    "costAnalysis": {
+      "cache": "キャッシュ",
+      "duration": "{minutes}分 {seconds}秒",
+      "input": "入力",
+      "output": "出力",
+      "partial": "価格または帰属情報が不完全です。",
+      "ratePerMillion": "{rate} / M",
+      "self": "メインタスク",
+      "tokens": "{count} トークン",
+      "unknownDuration": "--",
+      "unpriced": "価格未設定",
+      "unpricedRate": "-- / M",
+      "withSubAgents": "サブエージェントを含む"
+    },
     "terminal": {
       "closeConfirmMessage": "このターミナルセッションを閉じますか？実行中のコマンドは中断されます。",
       "closeConfirmTitle": "ターミナルを閉じる",

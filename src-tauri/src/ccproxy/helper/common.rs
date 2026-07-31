@@ -1045,7 +1045,73 @@ pub fn get_msg_id() -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::{should_forward_header, ModelResolver};
+    use crate::ccproxy::types::{ChatProtocol, ProxyModel};
     use indexmap::IndexMap;
+
+    fn proxy_model() -> ProxyModel {
+        ProxyModel {
+            client_alias: "alias".to_string(),
+            provider_id: 1,
+            provider: "provider".to_string(),
+            chat_protocol: ChatProtocol::OpenAI,
+            base_url: "http://127.0.0.1".to_string(),
+            model: "model".to_string(),
+            api_key: String::new(),
+            model_metadata: None,
+            custom_params: None,
+            prompt_injection: "off".to_string(),
+            prompt_injection_position: None,
+            prompt_text: String::new(),
+            tool_filter: Default::default(),
+            prompt_replace: Vec::new(),
+            temp_ratio: 1.0,
+            max_tokens: None,
+            temperature: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            top_p: None,
+            top_k: None,
+            stop: Vec::new(),
+            tool_compat_mode: None,
+        }
+    }
+
+    #[test]
+    fn ccproxy_usage_attribution_headers_are_never_forwarded_upstream() {
+        let mut client_headers = http::HeaderMap::new();
+        for name in [
+            "x-cs-workflow-session-id",
+            "x-cs-workflow-task-run-id",
+            "x-cs-workflow-segment-id",
+            "x-cs-root-session-id",
+            "x-cs-root-task-run-id",
+            "x-cs-request-kind",
+        ] {
+            client_headers.insert(name, "internal".parse().unwrap());
+            assert!(!should_forward_header(name));
+        }
+        client_headers.insert("x-request-id", "forwarded".parse().unwrap());
+
+        let mut upstream_headers = reqwest::header::HeaderMap::new();
+        ModelResolver::inject_proxy_headers(
+            &mut upstream_headers,
+            &client_headers,
+            &proxy_model(),
+            "message-id",
+        );
+        assert_eq!(upstream_headers.get("x-request-id").unwrap(), "forwarded");
+        for name in [
+            "x-cs-workflow-session-id",
+            "x-cs-workflow-task-run-id",
+            "x-cs-workflow-segment-id",
+            "x-cs-root-session-id",
+            "x-cs-root-task-run-id",
+            "x-cs-request-kind",
+        ] {
+            assert!(!upstream_headers.contains_key(name));
+        }
+    }
 
     #[test]
     fn test_wildmatch_logic() {

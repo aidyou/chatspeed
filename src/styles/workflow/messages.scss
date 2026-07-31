@@ -351,6 +351,24 @@
             gap: var(--cs-space-xs);
             padding: var(--cs-space-xs) 0;
 
+            &.finish-task-display--expandable {
+              width: auto;
+              border: 0;
+              background: transparent;
+              cursor: pointer;
+
+              .finish-task-cost-arrow {
+                margin-left: 15px;
+                opacity: 0;
+                transition: opacity 0.15s ease, transform 0.15s ease;
+              }
+
+              &:hover .finish-task-cost-arrow,
+              &:focus-visible .finish-task-cost-arrow {
+                opacity: 1;
+              }
+            }
+
             .finish-icon {
               color: var(--el-color-success);
             }
@@ -366,6 +384,64 @@
             margin: var(--cs-space-xs) 0 0 28px;
             font-family: var(--cs-font-family);
             color: var(--cs-text-color-primary);
+          }
+
+          .workflow-cost-analysis {
+            display: flex;
+            flex-direction: column;
+            gap: var(--cs-space-sm);
+            margin: var(--cs-space-sm) 0 0 28px;
+            padding: var(--cs-space);
+            border: 1px solid var(--cs-border-color);
+            border-radius: var(--cs-border-radius-md);
+            background: var(--cs-bg-color-light);
+            color: var(--cs-text-color-primary);
+            font-size: var(--cs-font-size-sm);
+
+            &__summary,
+            &__row,
+            &__model-header,
+            &__model-tokens,
+            &__model-rates {
+              display: flex;
+              flex-wrap: wrap;
+              align-items: center;
+              gap: var(--cs-space-sm);
+            }
+
+            &__summary,
+            &__model-tokens,
+            &__model-rates {
+              color: var(--cs-text-color-secondary);
+              font-size: var(--cs-font-size-xs);
+            }
+
+            &__row,
+            &__model-header {
+              justify-content: space-between;
+            }
+
+            &__models {
+              display: flex;
+              flex-direction: column;
+              gap: var(--cs-space-xs);
+              padding-top: var(--cs-space-sm);
+              border-top: 1px solid var(--cs-border-color-lighter);
+            }
+
+            &__model {
+              display: flex;
+              flex-direction: column;
+              gap: var(--cs-space-xs);
+              padding: var(--cs-space-sm);
+              border-radius: var(--cs-border-radius-sm);
+              background: var(--cs-fill-color-light);
+            }
+
+            &__warning {
+              margin: 0;
+              color: var(--el-color-warning);
+            }
           }
 
           .tool-detail {
@@ -616,10 +692,22 @@
               text-transform: lowercase;
             }
 
+            &__cost,
             &__task {
               padding: 10px 12px;
               border-radius: 6px;
               background: var(--cs-bg-color);
+            }
+
+            &__cost-toggle {
+              display: inline-flex;
+              align-items: center;
+              gap: 15px;
+              padding: 0;
+              border: 0;
+              color: var(--cs-text-color-primary);
+              background: transparent;
+              cursor: pointer;
             }
 
             &__result,
@@ -907,6 +995,51 @@
       font-size: 13px;
       color: var(--cs-text-color-secondary);
     }
+  }
+}
+
+// Cost analysis is rendered from the durable backend snapshot.
+.workflow-cost-analysis {
+  display: grid;
+  gap: var(--cs-space-xs);
+  margin-top: var(--cs-space-xs);
+  padding: var(--cs-space-sm);
+  border: 1px solid var(--cs-border-color-light);
+  border-radius: var(--cs-border-radius-md);
+  color: var(--cs-text-color-primary);
+  background: var(--cs-bg-color-light);
+  font-size: var(--cs-font-size-xs);
+
+  &__summary,
+  &__row,
+  &__model-header,
+  &__model-tokens,
+  &__model-rates {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--cs-space-sm);
+    flex-wrap: wrap;
+  }
+
+  &__models {
+    display: grid;
+    gap: var(--cs-space-xs);
+  }
+
+  &__model {
+    padding-top: var(--cs-space-xs);
+    border-top: 1px solid var(--cs-border-color-lighter);
+  }
+
+  &__model-tokens,
+  &__model-rates,
+  &__warning {
+    margin: 0;
+    color: var(--cs-text-color-secondary);
+  }
+
+  &__warning {
+    color: var(--el-color-warning);
   }
 }
 

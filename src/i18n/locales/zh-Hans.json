@@ -889,6 +889,20 @@
   },
   "workflow": {
     "allowedShellCommands": "允许的 Shell 命令",
+    "costAnalysis": {
+      "cache": "缓存",
+      "duration": "{minutes} 分 {seconds} 秒",
+      "input": "输入",
+      "output": "输出",
+      "partial": "定价或归属信息不完整。",
+      "ratePerMillion": "{rate} / 百万 Tokens",
+      "self": "主任务",
+      "tokens": "{count} Tokens",
+      "unknownDuration": "--",
+      "unpriced": "未定价",
+      "unpricedRate": "-- / 百万 Tokens",
+      "withSubAgents": "含子代理"
+    },
     "terminal": {
       "closeConfirmMessage": "关闭此终端会话？正在运行的命令将被中断。",
       "closeConfirmTitle": "关闭终端",

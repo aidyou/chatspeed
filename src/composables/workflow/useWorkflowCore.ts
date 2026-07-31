@@ -1144,7 +1144,8 @@ export function useWorkflowCore({
                     workflowStore.recordTaskCompleted(
                         sessionId,
                         payload.tool_call_id,
-                        payload.segment_id
+                        payload.segment_id,
+                        payload.usage_summary
                     )
                 } else if (payload.type === 'queued_user_message_removed') {
                     markSessionLiveFromNonTerminalEvent()

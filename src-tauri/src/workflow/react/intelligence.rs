@@ -1,6 +1,6 @@
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
-use crate::ai::traits::chat::{ChatMetadata, MessageType};
+use crate::ai::traits::chat::{ChatMetadata, MessageType, WorkflowUsageAttribution};
 use crate::db::WorkflowMessage;
 use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::context::ContextManager;
@@ -22,6 +22,9 @@ pub struct IntelligenceManager {
     pub audit_model_name: String,
     pub approval_provider_id: i64,
     pub approval_model_name: String,
+    pub workflow_task_run_id: String,
+    pub root_session_id: String,
+    pub root_task_run_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +186,9 @@ impl IntelligenceManager {
         active_model_name: String,
         audit_provider_id: i64,
         audit_model_name: String,
+        workflow_task_run_id: String,
+        root_session_id: String,
+        root_task_run_id: String,
     ) -> Self {
         Self {
             session_id,
@@ -195,6 +201,9 @@ impl IntelligenceManager {
             audit_model_name,
             approval_provider_id: active_provider_id,
             approval_model_name: active_model_name,
+            workflow_task_run_id,
+            root_session_id,
+            root_task_run_id,
         }
     }
 
@@ -271,6 +280,14 @@ impl IntelligenceManager {
         let session_id_review = self.session_id.clone() + "_approval_reviewer";
         let provider_id = self.approval_provider_id;
         let model_name = self.approval_model_name.clone();
+        let workflow_usage_attribution = WorkflowUsageAttribution {
+            workflow_session_id: self.session_id.clone(),
+            workflow_task_run_id: self.workflow_task_run_id.clone(),
+            workflow_segment_id: context.current_segment_id,
+            root_session_id: self.root_session_id.clone(),
+            root_task_run_id: self.root_task_run_id.clone(),
+            request_kind: "smart_approval".to_string(),
+        };
 
         tokio::spawn(async move {
             if let Err(e) = chat_interface
@@ -282,6 +299,7 @@ impl IntelligenceManager {
                     None,
                     Some(ChatMetadata {
                         reasoning: Some(true),
+                        workflow_usage_attribution: Some(workflow_usage_attribution),
                         ..Default::default()
                     }),
                     move |chunk| {
@@ -425,7 +443,17 @@ impl IntelligenceManager {
                     session_id_title,
                     messages.clone(),
                     None,
-                    None,
+                    Some(ChatMetadata {
+                        workflow_usage_attribution: Some(WorkflowUsageAttribution {
+                            workflow_session_id: self.session_id.clone(),
+                            workflow_task_run_id: self.workflow_task_run_id.clone(),
+                            workflow_segment_id: 1,
+                            root_session_id: self.root_session_id.clone(),
+                            root_task_run_id: self.root_task_run_id.clone(),
+                            request_kind: "title_generation".to_string(),
+                        }),
+                        ..Default::default()
+                    }),
                     move |_chunk| {},
                 )
                 .await

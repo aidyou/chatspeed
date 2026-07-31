@@ -988,15 +988,46 @@ pub async fn routes(
 // ----------------------------------------------------------------------------
 
 /// Middleware for authenticating requests.
+fn is_trusted_internal_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-cs-internal-request")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "true")
+        && headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .is_some_and(|token| {
+                token.trim() == crate::constants::INTERNAL_CCPROXY_API_KEY.read().as_str()
+            })
+}
+
+fn strip_untrusted_workflow_attribution_headers(headers: &mut HeaderMap) {
+    for header in [
+        "x-cs-workflow-session-id",
+        "x-cs-workflow-task-run-id",
+        "x-cs-workflow-segment-id",
+        "x-cs-root-session-id",
+        "x-cs-root-task-run-id",
+        "x-cs-request-kind",
+    ] {
+        headers.remove(header);
+    }
+}
+
 async fn authenticate_request_middleware(
     State(state): State<Arc<SharedState>>,
     headers: HeaderMap,
     Query(query): Query<CcproxyQuery>,
-    req: http::Request<axum::body::Body>,
+    mut req: http::Request<axum::body::Body>,
     next: Next,
     is_local: bool,
 ) -> Result<Response, Response> {
     let path = req.uri().path().to_string();
+    let is_trusted_internal_request = is_trusted_internal_request(&headers);
+    if !is_trusted_internal_request {
+        strip_untrusted_workflow_attribution_headers(req.headers_mut());
+    }
     match authenticate_request(
         headers,
         query,
@@ -1038,4 +1069,47 @@ fn log_registered_routes() {
     log::info!("[MCP]");
     log::info!("  - MCP Http Streamable Proxy: /mcp/http");
     log::info!("-------------------------------------");
+}
+
+#[cfg(test)]
+mod usage_attribution_tests {
+    use super::*;
+
+    #[test]
+    fn authenticated_internal_requests_keep_workflow_attribution_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-cs-internal-request", "true".parse().unwrap());
+        headers.insert(
+            "authorization",
+            format!(
+                "Bearer {}",
+                crate::constants::INTERNAL_CCPROXY_API_KEY.read()
+            )
+            .parse()
+            .unwrap(),
+        );
+        headers.insert(
+            "x-cs-workflow-session-id",
+            "workflow-session".parse().unwrap(),
+        );
+
+        assert!(is_trusted_internal_request(&headers));
+        assert!(headers.contains_key("x-cs-workflow-session-id"));
+    }
+
+    #[test]
+    fn external_requests_cannot_preserve_workflow_attribution_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-cs-workflow-session-id",
+            "victim-session".parse().unwrap(),
+        );
+        headers.insert("x-cs-root-task-run-id", "victim-task".parse().unwrap());
+
+        assert!(!is_trusted_internal_request(&headers));
+        strip_untrusted_workflow_attribution_headers(&mut headers);
+
+        assert!(!headers.contains_key("x-cs-workflow-session-id"));
+        assert!(!headers.contains_key("x-cs-root-task-run-id"));
+    }
 }

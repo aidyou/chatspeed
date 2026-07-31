@@ -1,6 +1,8 @@
 use crate::ai::error::AiError;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
-use crate::ai::traits::chat::{ChatMetadata, CustomHeader, MCPToolDeclaration, MessageType};
+use crate::ai::traits::chat::{
+    ChatMetadata, CustomHeader, MCPToolDeclaration, MessageType, WorkflowUsageAttribution,
+};
 use crate::db::{Agent, WorkflowMessage};
 use crate::workflow::react::agents_md::AgentsMdScanner;
 use crate::workflow::react::context::ContextManager;
@@ -41,6 +43,9 @@ pub struct LlmProcessor {
     pub reasoning: bool,
     pub mcp_tool_summaries: Vec<MCPToolDeclaration>,
     pub mcp_tool_loader_available: bool,
+    pub workflow_task_run_id: String,
+    pub root_session_id: String,
+    pub root_task_run_id: String,
     // Cached prompt inputs that should remain stable for the workflow lifetime.
     cached_global_agents_path: Option<PathBuf>,
     cached_project_agents_path: Option<PathBuf>,
@@ -262,6 +267,9 @@ impl LlmProcessor {
         reasoning: bool,
         mcp_tool_summaries: Vec<MCPToolDeclaration>,
         project_root: Option<PathBuf>,
+        workflow_task_run_id: String,
+        root_session_id: String,
+        root_task_run_id: String,
     ) -> Self {
         let (cached_global_agents, cached_project_agents) =
             AgentsMdScanner::scan(project_root.clone());
@@ -282,6 +290,9 @@ impl LlmProcessor {
             reasoning,
             mcp_tool_summaries,
             mcp_tool_loader_available: false,
+            workflow_task_run_id,
+            root_session_id,
+            root_task_run_id,
             cached_global_agents_path,
             cached_project_agents_path,
             cached_global_agents,
@@ -477,6 +488,14 @@ impl LlmProcessor {
                         } else {
                             None
                         },
+                        workflow_usage_attribution: Some(WorkflowUsageAttribution {
+                            workflow_session_id: self.session_id.clone(),
+                            workflow_task_run_id: self.workflow_task_run_id.clone(),
+                            workflow_segment_id: context.current_segment_id,
+                            root_session_id: self.root_session_id.clone(),
+                            root_task_run_id: self.root_task_run_id.clone(),
+                            request_kind: "react".to_string(),
+                        }),
                         ..Default::default()
                     }),
                     move |chunk| {
@@ -1678,6 +1697,9 @@ mod tests {
             reasoning: true,
             mcp_tool_summaries: Vec::new(),
             mcp_tool_loader_available: false,
+            workflow_task_run_id: "test-session:task:1".to_string(),
+            root_session_id: "test-session".to_string(),
+            root_task_run_id: "test-session:task:1".to_string(),
             cached_global_agents_path: None,
             cached_project_agents_path: None,
             cached_global_agents: None,

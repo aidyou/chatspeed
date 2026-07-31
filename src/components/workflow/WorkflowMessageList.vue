@@ -434,6 +434,21 @@
                 </div>
 
                 <div
+                  v-if="getSubAgentUsageSummary(message)"
+                  class="sub-agent-card__cost">
+                  <button
+                    type="button"
+                    class="sub-agent-card__cost-toggle"
+                    @click="$emit('toggle-expand', getSubAgentCostExpandId(message))">
+                    {{ $t('workflow.costAnalysis.self') }}
+                    <cs name="arrow-right" size="14px" />
+                  </button>
+                  <WorkflowCostAnalysis
+                    v-if="isSubAgentCostExpanded(message)"
+                    :summary="getSubAgentUsageSummary(message)" />
+                </div>
+
+                <div
                   class="sub-agent-card__task"
                   :class="{ expanded: isSubAgentTaskExpanded(message) }">
                   <div
@@ -508,15 +523,28 @@
 
             <!-- complete_workflow special display -->
             <template v-else-if="isFinishTaskMessage(message)">
-              <div class="tool-line finish-task-display">
+              <button
+                v-if="getFinishTaskUsageSummary(message)"
+                type="button"
+                class="tool-line finish-task-display finish-task-display--expandable"
+                @click="$emit('toggle-expand', getFinishTaskCostExpandId(message))">
                 <cs
                   :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
                   size="14px"
                   class="tool-type-icon finish-icon" />
-                <span class="finish-text">
-                  {{ getFinishTaskLabel(message) }}
-                </span>
+                <span class="finish-text">{{ getFinishTaskLabel(message) }}</span>
+                <cs name="arrow-right" size="14px" class="finish-task-cost-arrow" />
+              </button>
+              <div v-else class="tool-line finish-task-display">
+                <cs
+                  :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
+                  size="14px"
+                  class="tool-type-icon finish-icon" />
+                <span class="finish-text">{{ getFinishTaskLabel(message) }}</span>
               </div>
+              <WorkflowCostAnalysis
+                v-if="getFinishTaskUsageSummary(message) && isFinishTaskCostExpanded(message)"
+                :summary="getFinishTaskUsageSummary(message)" />
             </template>
 
             <!-- Normal tool call display -->
@@ -935,6 +963,8 @@ import {
   shouldRenderSubAgentCard
 } from '@/composables/workflow/messageProjectionRules'
 import { isWorkflowMcpTool } from '@/composables/workflow/toolClassification'
+import { normalizeUsageSummary } from '@/composables/workflow/usageSummary'
+import WorkflowCostAnalysis from './WorkflowCostAnalysis.vue'
 import ApprovalDialog from './ApprovalDialog.vue'
 import FilePreviewDiff from './FilePreviewDiff.vue'
 import MarkdownSimple from './MarkdownSimple.vue'
@@ -2214,6 +2244,20 @@ const getFinishTaskLabel = message => {
   return t('workflow.finishTask')
 }
 
+const getFinishTaskUsageSummary = message => {
+  if (!message?.isApproved || message?.toolDisplay?.isError) return null
+  return normalizeUsageSummary(message?.metadata?.usage_summary)
+}
+
+const getFinishTaskCostExpandId = message => `${message?.displayId || message?.id || 'finish'}:cost`
+
+const isFinishTaskCostExpanded = message =>
+  props.isMessageExpanded({
+    displayId: getFinishTaskCostExpandId(message),
+    metadata: {},
+    toolDisplay: {}
+  })
+
 const getVisibleUserContent = message => props.removeSystemReminder(message?.message || '')
 
 const getUserMessageExpandId = message => `${message?.displayId || message?.id || 'user'}:user`
@@ -2383,6 +2427,23 @@ const getChoiceGroups = message =>
 // than a literal `sub_agent_run` row, so card visibility must not be narrowed
 // locally during future template refactors.
 const isSubAgentRunMessage = message => shouldRenderSubAgentCard(message)
+
+const getSubAgentCostExpandId = message => `${message?.displayId || message?.id || 'sub-agent'}:cost`
+
+const getSubAgentUsageSummary = message => {
+  const card = message?.subAgentCard
+  const terminal = ['completed', 'failed', 'cancelled', 'interrupted'].includes(
+    String(card?.status || '').toLowerCase()
+  )
+  return terminal ? card?.usageSummary || null : null
+}
+
+const isSubAgentCostExpanded = message =>
+  props.isMessageExpanded({
+    displayId: getSubAgentCostExpandId(message),
+    metadata: {},
+    toolDisplay: {}
+  })
 
 const getSubAgentStatusLabel = message => {
   const status = String(message?.subAgentCard?.status || 'running').toLowerCase()

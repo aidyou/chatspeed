@@ -889,6 +889,20 @@
   },
   "workflow": {
     "allowedShellCommands": "允許的 Shell 指令",
+    "costAnalysis": {
+      "cache": "快取",
+      "duration": "{minutes} 分 {seconds} 秒",
+      "input": "輸入",
+      "output": "輸出",
+      "partial": "定價或歸屬資訊不完整。",
+      "ratePerMillion": "{rate} / 百萬 Tokens",
+      "self": "主任務",
+      "tokens": "{count} Tokens",
+      "unknownDuration": "--",
+      "unpriced": "未定價",
+      "unpricedRate": "-- / 百萬 Tokens",
+      "withSubAgents": "含子代理"
+    },
     "terminal": {
       "closeConfirmMessage": "要關閉此終端機工作階段嗎？執行中的命令將被中斷。",
       "closeConfirmTitle": "關閉終端機",

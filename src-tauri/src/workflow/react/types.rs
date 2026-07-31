@@ -106,6 +106,8 @@ pub enum GatewayPayload {
     TaskCompleted {
         tool_call_id: String,
         segment_id: i32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage_summary: Option<crate::workflow::react::usage::WorkflowUsageSummary>,
     },
     SyncTodo {
         todo_list: serde_json::Value,
@@ -424,6 +426,8 @@ pub struct SubAgentCompletion {
     pub error: Option<String>,
     #[serde(default)]
     pub tool_calls_count: usize,
+    #[serde(default)]
+    pub usage_summary: Option<crate::workflow::react::usage::WorkflowUsageSummary>,
     pub completed_at_ms: i64,
     #[serde(default)]
     pub consumed: bool,
@@ -444,6 +448,9 @@ impl SubAgentCompletion {
         }
         if let Some(error) = &self.error {
             result["error"] = serde_json::json!(error);
+        }
+        if let Some(usage_summary) = &self.usage_summary {
+            result["usage_summary"] = serde_json::json!(usage_summary);
         }
         result
     }
@@ -556,6 +563,7 @@ mod tests {
         let payload = GatewayPayload::TaskCompleted {
             tool_call_id: "call_complete_123".to_string(),
             segment_id: 7,
+            usage_summary: None,
         };
         let serialized = serde_json::to_value(payload).unwrap();
         assert_eq!(serialized["type"], "task_completed");

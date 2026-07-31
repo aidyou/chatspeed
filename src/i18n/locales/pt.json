@@ -889,6 +889,20 @@
   },
   "workflow": {
     "allowedShellCommands": "Comandos Shell permitidos",
+    "costAnalysis": {
+      "cache": "Cache",
+      "duration": "{minutes} min {seconds} s",
+      "input": "Entrada",
+      "output": "Saída",
+      "partial": "Os preços ou a atribuição estão incompletos.",
+      "ratePerMillion": "{rate} / M",
+      "self": "Tarefa principal",
+      "tokens": "{count} tokens",
+      "unknownDuration": "--",
+      "unpriced": "Sem preço",
+      "unpricedRate": "-- / M",
+      "withSubAgents": "Com subagentes"
+    },
     "terminal": {
       "closeConfirmMessage": "Fechar esta sessão de terminal? Os comandos em execução serão interrompidos.",
       "closeConfirmTitle": "Fechar terminal",

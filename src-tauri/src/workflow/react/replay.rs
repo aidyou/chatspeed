@@ -303,6 +303,10 @@ impl EventReducer {
                         .get("tool_calls_count")
                         .and_then(|value| value.as_u64())
                         .unwrap_or(0) as usize,
+                    usage_summary: result_payload
+                        .get("usage_summary")
+                        .cloned()
+                        .and_then(|value| serde_json::from_value(value).ok()),
                     completed_at_ms: 0,
                     consumed: false,
                 };

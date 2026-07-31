@@ -1122,12 +1122,11 @@ impl MainStore {
         })
     }
 
-    pub fn list_nonterminal_child_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
+    pub fn list_child_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
         self.db_runtime()?.read_blocking(|conn| {
             let mut statement = conn.prepare(
                 "SELECT * FROM workflows
                  WHERE parent_session_id IS NOT NULL
-                   AND LOWER(status) NOT IN ('completed', 'error', 'failed', 'cancelled')
                  ORDER BY created_at ASC",
             )?;
             let rows = statement.query_map([], |row| Ok(Workflow::from(row)))?;
@@ -1997,6 +1996,104 @@ impl MainStore {
             let mut persisted = msg;
             persisted.id = Some(conn.last_insert_rowid());
             Ok(persisted)
+        })
+    }
+
+    pub fn workflow_current_task_run_id(&self, session_id: &str) -> Result<String, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let completed_count: i64 = conn.query_row(
+                "SELECT COUNT(1) FROM workflow_events
+                 WHERE session_id = ?1 AND event_type = 'task_completed'",
+                params![session_id],
+                |row| row.get(0),
+            )?;
+            Ok(format!("{session_id}:task:{}", completed_count + 1))
+        })
+    }
+
+    pub fn workflow_task_phase_started_at_ms(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<i64>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let started_at: Option<String> = conn.query_row(
+                "SELECT MAX(created_at) FROM workflow_events
+                     WHERE session_id = ?1 AND event_type = 'task_completed'",
+                params![session_id],
+                |row| row.get(0),
+            )?;
+            let started_at = started_at.or_else(|| {
+                conn.query_row(
+                    "SELECT created_at FROM workflows WHERE id = ?1",
+                    params![session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+            });
+            Ok(started_at.and_then(|value| {
+                chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S")
+                    .ok()
+                    .map(|timestamp| timestamp.and_utc().timestamp_millis())
+            }))
+        })
+    }
+
+    pub fn workflow_started_at_ms(&self, session_id: &str) -> Result<Option<i64>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let created_at: Option<String> = conn
+                .query_row(
+                    "SELECT created_at FROM workflows WHERE id = ?1",
+                    params![session_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten();
+            Ok(created_at.and_then(|value| {
+                chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S")
+                    .ok()
+                    .map(|timestamp| timestamp.and_utc().timestamp_millis())
+            }))
+        })
+    }
+
+    pub fn attach_usage_summary_to_tool_call(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        usage_summary: &Value,
+    ) -> Result<bool, StoreError> {
+        let session_id = session_id.to_string();
+        let tool_call_id = tool_call_id.to_string();
+        let usage_summary = usage_summary.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let metadata_json: Option<String> = conn
+                .query_row(
+                    "SELECT metadata FROM workflow_messages
+                     WHERE session_id = ?1
+                       AND json_extract(metadata, '$.tool_call_id') = ?2
+                     ORDER BY id DESC LIMIT 1",
+                    params![session_id, tool_call_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(metadata_json) = metadata_json else {
+                return Ok(false);
+            };
+            let mut metadata: Value = serde_json::from_str(&metadata_json)?;
+            metadata["usage_summary"] = usage_summary;
+            let metadata_json = serde_json::to_string(&metadata)?;
+            conn.execute(
+                "UPDATE workflow_messages SET metadata = ?1
+                 WHERE session_id = ?2
+                   AND json_extract(metadata, '$.tool_call_id') = ?3",
+                params![metadata_json, session_id, tool_call_id],
+            )?;
+            Ok(true)
         })
     }
 

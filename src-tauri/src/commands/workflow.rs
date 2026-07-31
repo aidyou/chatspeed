@@ -21,7 +21,8 @@ use crate::workflow::react::replay::{
     replay_events_to_execution_context, restore_execution_context, RecoveryResult,
 };
 use crate::workflow::react::runtime_observation::{
-    runtime_observation_metadata, RuntimeObservationType,
+    runtime_observation_metadata, runtime_observation_metadata_with_visibility,
+    RuntimeObservationLlmVisibility, RuntimeObservationType, RuntimeObservationUiVisibility,
 };
 use crate::workflow::react::signals::SignalType;
 use crate::workflow::react::types::{
@@ -154,7 +155,10 @@ fn spawn_workflow_title_generation_if_missing(
         provider_id,
         model_name.clone(),
         provider_id,
-        model_name,
+        model_name.clone(),
+        format!("{session_id}:task:1"),
+        session_id.clone(),
+        format!("{session_id}:task:1"),
     );
     tokio::spawn(async move {
         if let Ok(title) = intelligence_manager
@@ -1790,8 +1794,222 @@ fn durable_child_terminal_state(
     Ok(terminal_workflow_state(&context.state))
 }
 
-fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate::db::StoreError> {
-    let child_workflows = store.list_nonterminal_child_workflows()?;
+fn reconcile_durable_child_completion(
+    store: &MainStore,
+    child: &Workflow,
+    terminal_status: WorkflowState,
+) -> Result<(), crate::db::StoreError> {
+    let Some(child_id) = child.id.as_deref() else {
+        return Ok(());
+    };
+    let Some(parent_session_id) = child.parent_session_id.as_deref() else {
+        return Ok(());
+    };
+    let status = match terminal_status {
+        WorkflowState::Completed => "completed",
+        WorkflowState::Cancelled => "cancelled",
+        WorkflowState::Error => "failed",
+        _ => return Ok(()),
+    };
+    let task_run_id = store
+        .workflow_current_task_run_id(child_id)
+        .unwrap_or_else(|_| format!("{child_id}:task:1"));
+    let duration_ms = store
+        .workflow_started_at_ms(child_id)
+        .ok()
+        .flatten()
+        .map(|started_at_ms| (chrono::Utc::now().timestamp_millis() - started_at_ms).max(0));
+    let root_task_run_id = store
+        .workflow_current_task_run_id(parent_session_id)
+        .unwrap_or_else(|_| format!("{parent_session_id}:task:1"));
+    let usage_summary = match store.load_workflow_task_usage(child_id, &task_run_id)? {
+        Some(summary) => summary,
+        None => {
+            let summary = store.summarize_workflow_task_usage(
+                child_id,
+                &task_run_id,
+                parent_session_id,
+                &root_task_run_id,
+                status,
+                duration_ms,
+                true,
+            )?;
+            store.upsert_workflow_task_usage(
+                child_id,
+                &task_run_id,
+                parent_session_id,
+                &root_task_run_id,
+                status,
+                None,
+                None,
+                summary.duration_ms,
+                &summary,
+            )?;
+            summary
+        }
+    };
+    let result = json!({
+        "status": status,
+        "task_id": child_id,
+        "summary": "Sub-agent terminal completion recovered after restart",
+        "tool_calls_count": 0,
+        "usage_summary": usage_summary,
+    });
+
+    let mut parent_context = store
+        .get_execution_context(parent_session_id)?
+        .unwrap_or_else(|| ExecutionContext {
+            session_id: parent_session_id.to_string(),
+            state: RuntimeState::Waiting,
+            wait_reason: Some(WaitReason::SubAgent),
+            current_segment_id: 1,
+            current_step: 0,
+            max_steps: 0,
+            pending_tools: Vec::new(),
+            last_action_summary: None,
+            current_context_tokens: None,
+            max_context_tokens: None,
+            last_event_id: None,
+            version: ExecutionContext::CURRENT_VERSION.to_string(),
+            waiting_on_sub_agent_id: Some(child_id.to_string()),
+            sub_agent_sessions: vec![child_id.to_string()],
+            pending_sub_agent_completions: Vec::new(),
+            pending_final_review: None,
+            pending_completion_reports: Vec::new(),
+            removed_queued_user_message_ids: Vec::new(),
+        });
+    let already_projected = parent_context
+        .pending_sub_agent_completions
+        .iter()
+        .any(|completion| {
+            completion.sub_agent_id == child_id && completion.usage_summary.is_some()
+        });
+    if !already_projected {
+        parent_context
+            .pending_sub_agent_completions
+            .retain(|completion| completion.sub_agent_id != child_id);
+        parent_context
+            .pending_sub_agent_completions
+            .push(SubAgentCompletion {
+                sub_agent_id: child_id.to_string(),
+                parent_session_id: parent_session_id.to_string(),
+                status: status.to_string(),
+                result: result["result"].as_str().map(str::to_string),
+                summary: result["summary"].as_str().map(str::to_string),
+                error: result["error"].as_str().map(str::to_string),
+                tool_calls_count: 0,
+                usage_summary: serde_json::from_value(result["usage_summary"].clone()).ok(),
+                completed_at_ms: chrono::Utc::now().timestamp_millis(),
+                consumed: false,
+            });
+        store.upsert_execution_context(&parent_context)?;
+    }
+
+    // The parent completion may already be durable while the original event or live signal
+    // failed. Re-deliver on every reconciliation so a live waiting parent converges without a
+    // restart; parent-side resolution consumes duplicate signals idempotently.
+    if let Err(error) = WorkflowManager::send_signal_to_session(
+        parent_session_id,
+        json!({
+            "type": "sub_agent_complete",
+            "sub_agent_id": child_id,
+            "result": result,
+        })
+        .to_string(),
+    ) {
+        log::warn!(
+            "[Workflow][session={}][phase=reconcile][event=sub_agent_completion] Live recovery signal failed; durable completion remains replayable: {}",
+            child_id,
+            error
+        );
+    }
+
+    let has_event = store
+        .list_workflow_events(parent_session_id)?
+        .iter()
+        .any(|event| {
+            matches!(
+                event.event_type.as_str(),
+                "sub_agent_completed" | "sub_agent_failed" | "sub_agent_interrupted"
+            ) && event.event_data["sub_agent_id"].as_str() == Some(child_id)
+                && event.event_data["result"]["usage_summary"].is_object()
+        });
+    if !has_event {
+        store.append_workflow_event(&WorkflowEvent::sub_agent_completed(
+            parent_session_id.to_string(),
+            child_id.to_string(),
+            status.to_string(),
+            result.clone(),
+        ))?;
+    }
+
+    let is_background = store
+        .list_workflow_events(parent_session_id)?
+        .iter()
+        .any(|event| {
+            event.event_type == "sub_agent_started"
+                && event.event_data["sub_agent_id"].as_str() == Some(child_id)
+                && event.event_data["execution_mode"].as_str() == Some("background")
+        });
+    if is_background {
+        let has_background_projection = store
+            .get_workflow_snapshot(parent_session_id)?
+            .messages
+            .iter()
+            .any(|message| {
+                message.source_event_type.as_deref() == Some("sub_agent_completed")
+                    && message.metadata.as_ref().is_some_and(|metadata| {
+                        metadata["sub_agent_id"].as_str() == Some(child_id)
+                            && metadata["execution_mode"].as_str() == Some("background")
+                    })
+            });
+        if !has_background_projection {
+            let segment_id = parent_context.current_segment_id;
+            let summary = result["summary"].as_str().unwrap_or_default();
+            let mut metadata = runtime_observation_metadata_with_visibility(
+                RuntimeObservationType::SubAgentCompletion,
+                RuntimeObservationLlmVisibility::Hide,
+                RuntimeObservationUiVisibility::Hide,
+                json!({
+                    "sub_agent_id": child_id,
+                    "execution_mode": "background",
+                    "result": result,
+                    "summary": summary,
+                    "execution_status": status,
+                }),
+            );
+            metadata["sub_agent_id"] = json!(child_id);
+            metadata["execution_mode"] = json!("background");
+            metadata["result"] = result.clone();
+            metadata["summary"] = json!(summary);
+            metadata["execution_status"] = json!(status);
+            store.add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: parent_session_id.to_string(),
+                role: "user".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "runtime_observation".to_string(),
+                message_subtype: Some("sub_agent_completion".to_string()),
+                segment_id,
+                source_event_type: Some("sub_agent_completed".to_string()),
+                metadata: Some(metadata),
+                attached_context: None,
+                step_type: Some(StepType::Observe.to_string()),
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn reconcile_interrupted_child_workflows(
+    store: &MainStore,
+) -> Result<(), crate::db::StoreError> {
+    let child_workflows = store.list_child_workflows()?;
     let mut decisions = Vec::new();
 
     for child in child_workflows {
@@ -1809,10 +2027,11 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
     for (child, child_id, terminal_status) in decisions {
         if let Some(terminal_status) = terminal_status {
             log::info!(
-                "[Workflow][session={}][phase=reconcile][event=child_terminal_durable] Preserving durable terminal child state={:?}",
+                "[Workflow][session={}][phase=reconcile][event=child_terminal_durable] Recovering durable terminal child state={:?}",
                 child_id,
                 terminal_status
             );
+            reconcile_durable_child_completion(store, &child, terminal_status.clone())?;
             store.update_workflow_status(&child_id, &terminal_status.to_string())?;
             continue;
         }
@@ -1856,6 +2075,41 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
         store.upsert_execution_context(&context)?;
 
         if let Some(parent_session_id) = child.parent_session_id.clone() {
+            let task_run_id = store
+                .workflow_current_task_run_id(&child_id)
+                .unwrap_or_else(|_| format!("{child_id}:task:1"));
+            let duration_ms =
+                store
+                    .workflow_started_at_ms(&child_id)
+                    .ok()
+                    .flatten()
+                    .map(|started_at_ms| {
+                        (chrono::Utc::now().timestamp_millis() - started_at_ms).max(0)
+                    });
+            let root_task_run_id = store
+                .workflow_current_task_run_id(&parent_session_id)
+                .unwrap_or_else(|_| format!("{parent_session_id}:task:1"));
+            let usage_summary = store.summarize_workflow_task_usage(
+                &child_id,
+                &task_run_id,
+                &parent_session_id,
+                &root_task_run_id,
+                "interrupted",
+                duration_ms,
+                true,
+            )?;
+            store.upsert_workflow_task_usage(
+                &child_id,
+                &task_run_id,
+                &parent_session_id,
+                &root_task_run_id,
+                "interrupted",
+                None,
+                None,
+                usage_summary.duration_ms,
+                &usage_summary,
+            )?;
+            let usage_summary = Some(usage_summary);
             let event = WorkflowEvent::sub_agent_interrupted(
                 parent_session_id.clone(),
                 child_id.clone(),
@@ -1887,7 +2141,8 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                                 "status": "interrupted",
                                 "task_id": child_id.clone(),
                                 "error": "Sub-agent interrupted by application restart",
-                                "tool_calls_count": context.pending_tools.len()
+                                "tool_calls_count": context.pending_tools.len(),
+                                "usage_summary": usage_summary.clone()
                             },
                         }),
                     );
@@ -1897,7 +2152,8 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                         "status": "interrupted",
                         "task_id": child_id.clone(),
                         "error": "Sub-agent interrupted by application restart",
-                        "tool_calls_count": context.pending_tools.len()
+                        "tool_calls_count": context.pending_tools.len(),
+                        "usage_summary": usage_summary.clone()
                     });
                     metadata["execution_status"] = json!("interrupted");
                     metadata["is_error"] = json!(true);
@@ -1935,6 +2191,7 @@ fn reconcile_interrupted_child_workflows(store: &MainStore) -> Result<(), crate:
                         summary: None,
                         error: Some(message.clone()),
                         tool_calls_count: 0,
+                        usage_summary,
                         completed_at_ms: chrono::Utc::now().timestamp_millis(),
                         consumed: true,
                     });
@@ -5381,6 +5638,150 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_interrupted_child_persists_usage_under_parent_current_task_run() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow("parent-usage", "Parent task", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "child-usage",
+                "Child task",
+                "agent-test",
+                None,
+                Some("parent-usage"),
+            )
+            .expect("failed to create child workflow");
+
+        reconcile_interrupted_child_workflows(&store).expect("failed to reconcile child workflows");
+
+        let summary = store
+            .load_workflow_task_usage("child-usage", "child-usage:task:1")
+            .expect("failed to load child usage summary")
+            .expect("reconciled child usage summary should be durable");
+        assert_eq!(summary.terminal_status, "interrupted");
+
+        let root_task_run_id = store
+            .workflow_current_task_run_id("parent-usage")
+            .expect("failed to resolve parent task run");
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(move |conn| {
+                let root: (String, String) = conn.query_row(
+                    "SELECT root_session_id, root_task_run_id FROM workflow_task_usage
+                     WHERE session_id = 'child-usage' AND task_run_id = 'child-usage:task:1'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(root, ("parent-usage".to_string(), root_task_run_id));
+                Ok(())
+            })
+            .expect("failed to verify child usage root attribution");
+    }
+
+    #[test]
+    fn reconcile_terminal_child_redelivers_signal_after_prior_parent_projection() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow("signal-parent", "Parent task", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "signal-child",
+                "Child task",
+                "agent-test",
+                None,
+                Some("signal-parent"),
+            )
+            .expect("failed to create child workflow");
+        let mut child_context = ExecutionContext::new("signal-child".to_string());
+        child_context.state = RuntimeState::Completed;
+        store
+            .upsert_execution_context(&child_context)
+            .expect("failed to persist completed child state");
+
+        // Simulate a failure after the parent completion row was written but before the event or
+        // live signal. The first reconciliation establishes the durable completion with no live
+        // parent channel; the second must still re-deliver once the parent is running.
+        reconcile_interrupted_child_workflows(&store)
+            .expect("failed to create durable parent completion projection");
+        let parent = store
+            .get_execution_context("signal-parent")
+            .expect("failed to load parent context")
+            .expect("parent completion projection should be durable");
+        assert!(parent
+            .pending_sub_agent_completions
+            .iter()
+            .any(|completion| completion.sub_agent_id == "signal-child"));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        WorkflowManager::register_session_signal_tx("signal-parent".to_string(), tx);
+        reconcile_interrupted_child_workflows(&store)
+            .expect("failed to re-deliver terminal child completion");
+        let signal: Value = serde_json::from_str(
+            &rx.try_recv()
+                .expect("live parent must receive recovered child completion"),
+        )
+        .expect("recovered signal should be valid JSON");
+        assert_eq!(signal["type"], "sub_agent_complete");
+        assert_eq!(signal["sub_agent_id"], "signal-child");
+        assert!(signal["result"]["usage_summary"].is_object());
+        WorkflowManager::unregister_session_signal_tx("signal-parent");
+    }
+
+    #[test]
+    fn reconcile_terminal_background_child_restores_hidden_completion_projection() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow("background-parent", "Parent task", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "background-child",
+                "Child task",
+                "agent-test",
+                None,
+                Some("background-parent"),
+            )
+            .expect("failed to create child workflow");
+        store
+            .append_workflow_event(&WorkflowEvent::sub_agent_started(
+                "background-parent".to_string(),
+                "background-child".to_string(),
+                "background".to_string(),
+            ))
+            .expect("failed to persist background start event");
+        let mut child_context = ExecutionContext::new("background-child".to_string());
+        child_context.state = RuntimeState::Completed;
+        store
+            .upsert_execution_context(&child_context)
+            .expect("failed to persist completed child state");
+
+        reconcile_interrupted_child_workflows(&store).expect("failed to recover background child");
+        reconcile_interrupted_child_workflows(&store).expect("recovery must be idempotent");
+
+        let hidden_projections = store
+            .get_workflow_snapshot("background-parent")
+            .expect("failed to load recovered parent messages")
+            .messages
+            .into_iter()
+            .filter(|message| {
+                message.source_event_type.as_deref() == Some("sub_agent_completed")
+                    && message.metadata.as_ref().is_some_and(|metadata| {
+                        metadata["sub_agent_id"].as_str() == Some("background-child")
+                            && metadata["execution_mode"].as_str() == Some("background")
+                            && metadata["result"]["usage_summary"].is_object()
+                    })
+            })
+            .count();
+        assert_eq!(hidden_projections, 1);
+    }
+
+    #[test]
     fn reconcile_interrupted_child_preserves_terminal_snapshot() {
         let store = create_test_store();
         seed_agent(&store, "agent-test");
@@ -5413,16 +5814,24 @@ mod tests {
 
         let parent = store
             .get_execution_context("parent-session")
-            .expect("failed to load parent context");
-        assert!(parent.is_none());
+            .expect("failed to load parent context")
+            .expect("recovery must persist the parent completion projection");
+        assert!(parent
+            .pending_sub_agent_completions
+            .iter()
+            .any(|completion| {
+                completion.sub_agent_id == "subagent_completed_snapshot"
+                    && completion.status == "completed"
+                    && completion.usage_summary.is_some()
+            }));
 
-        let interrupted_events = store
+        let completion_events = store
             .list_workflow_events("parent-session")
             .expect("failed to load parent events")
             .into_iter()
-            .filter(|event| event.event_type == "sub_agent_interrupted")
+            .filter(|event| event.event_type == "sub_agent_completed")
             .count();
-        assert_eq!(interrupted_events, 0);
+        assert_eq!(completion_events, 1);
     }
 
     #[test]
@@ -5479,20 +5888,28 @@ mod tests {
                 .expect("child workflow should exist");
             assert_eq!(child.status, expected_status);
 
-            let interrupted_events = store
+            let completion_events = store
                 .list_workflow_events(&parent_id)
                 .expect("failed to load parent events")
                 .into_iter()
-                .filter(|record| record.event_type == "sub_agent_interrupted")
+                .filter(|record| {
+                    matches!(
+                        record.event_type.as_str(),
+                        "sub_agent_completed" | "sub_agent_failed" | "sub_agent_interrupted"
+                    )
+                })
                 .count();
-            assert_eq!(interrupted_events, 0);
-            let parent_messages = store
-                .get_workflow_snapshot(&parent_id)
-                .expect("failed to load parent snapshot")
-                .messages;
-            assert!(parent_messages.iter().all(|message| {
-                message.source_event_type.as_deref() != Some("sub_agent_interrupted")
-            }));
+            assert_eq!(completion_events, 1);
+            let parent_context = store
+                .get_execution_context(&parent_id)
+                .expect("failed to load parent context")
+                .expect("terminal child recovery must persist parent context");
+            assert!(parent_context
+                .pending_sub_agent_completions
+                .iter()
+                .any(|completion| {
+                    completion.sub_agent_id == child_id && completion.usage_summary.is_some()
+                }));
         }
     }
 

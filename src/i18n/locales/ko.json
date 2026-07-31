@@ -889,6 +889,20 @@
   },
   "workflow": {
     "allowedShellCommands": "허용된 Shell 명령",
+    "costAnalysis": {
+      "cache": "캐시",
+      "duration": "{minutes}분 {seconds}초",
+      "input": "입력",
+      "output": "출력",
+      "partial": "가격 또는 귀속 정보가 불완전합니다.",
+      "ratePerMillion": "{rate} / 백만",
+      "self": "주 작업",
+      "tokens": "{count} 토큰",
+      "unknownDuration": "--",
+      "unpriced": "가격 미설정",
+      "unpricedRate": "-- / 백만",
+      "withSubAgents": "하위 에이전트 포함"
+    },
     "terminal": {
       "closeConfirmMessage": "이 터미널 세션을 닫을까요? 실행 중인 명령이 중단됩니다.",
       "closeConfirmTitle": "터미널 닫기",

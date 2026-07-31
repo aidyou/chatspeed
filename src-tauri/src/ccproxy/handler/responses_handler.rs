@@ -219,21 +219,30 @@ async fn direct_forward_responses(
 
     {
         let store = main_store_arc.as_ref();
-        let _ = store.record_ccproxy_stat(CcproxyStat {
-            id: None,
-            client_model: proxy_model.client_alias.clone(),
-            backend_model: model_name,
-            provider_id: Some(proxy_model.provider_id),
-            provider: provider_name,
-            protocol: ChatProtocol::OpenAI.to_string(),
-            tool_compat_mode: 0,
-            status_code: status_code.as_u16() as i32,
-            error_message,
-            input_tokens,
-            output_tokens,
-            cache_tokens,
-            request_at: None,
-        });
+        let _ = store.record_ccproxy_stat(
+            CcproxyStat {
+                id: None,
+                workflow_session_id: None,
+                workflow_task_run_id: None,
+                workflow_segment_id: None,
+                root_session_id: None,
+                root_task_run_id: None,
+                request_kind: None,
+                client_model: proxy_model.client_alias.clone(),
+                backend_model: model_name,
+                provider_id: Some(proxy_model.provider_id),
+                provider: provider_name,
+                protocol: ChatProtocol::OpenAI.to_string(),
+                tool_compat_mode: 0,
+                status_code: status_code.as_u16() as i32,
+                error_message,
+                input_tokens,
+                output_tokens,
+                cache_tokens,
+                request_at: None,
+            }
+            .with_workflow_attribution(&client_headers),
+        );
     }
 
     Ok(response)

@@ -100,6 +100,29 @@ fn test_p0_sub_agent_cancelled_triggers_parent_convergence() {
 }
 
 #[test]
+fn test_p0_sub_agent_interrupted_triggers_parent_convergence() {
+    let mut waiting_on = Some("subagent_1".to_string());
+    let mut sub_agent_sessions = vec!["subagent_1".to_string()];
+
+    let resolution = resolve_sub_agent_completion(
+        &mut waiting_on,
+        &mut sub_agent_sessions,
+        "subagent_1",
+        &serde_json::json!({
+            "status": "interrupted",
+            "error": "application restarted"
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(resolution.status, "interrupted");
+    assert_eq!(resolution.content, "application restarted");
+    assert!(resolution.is_error);
+    assert_eq!(waiting_on, None);
+    assert!(sub_agent_sessions.is_empty());
+}
+
+#[test]
 fn test_p0_parent_knows_waiting_task_after_restart() {
     let (_dir, store) = create_test_store();
 

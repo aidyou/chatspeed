@@ -22,7 +22,7 @@ use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResul
 use crate::workflow::react::orchestrator::spawn_call_sub_agent;
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
 use crate::workflow::react::types::{
-    GatewayPayload, PendingCompletionReport, StepType, WorkflowState,
+    GatewayPayload, PendingCompletionReport, StepType, SubAgentCompletion, WorkflowState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +46,21 @@ struct CompletionReportClaimDictionary {
 }
 
 impl WorkflowExecutor {
+    fn active_sub_agent_ids(
+        sub_agent_sessions: &[String],
+        pending_sub_agent_completions: &[SubAgentCompletion],
+    ) -> Vec<String> {
+        sub_agent_sessions
+            .iter()
+            .filter(|sub_agent_id| {
+                !pending_sub_agent_completions
+                    .iter()
+                    .any(|completion| &completion.sub_agent_id == *sub_agent_id)
+            })
+            .cloned()
+            .collect()
+    }
+
     pub(crate) fn capture_pending_completion_report(&mut self, text_part: &str) -> bool {
         if !Self::is_valid_finish_task_summary(text_part) {
             return false;
@@ -795,12 +810,6 @@ Return the final verdict ONLY by calling `submit_result`.\n\
 
         let (review_verdict, approved, summary, required_fixes) =
             Self::parse_final_review_verdict(result);
-        self.pending_final_review = None;
-        self.pending_completion_reports.clear();
-        self.sub_agent_sessions.retain(|id| id != sub_agent_id);
-        if self.sub_agent_id.as_deref() == Some(sub_agent_id) {
-            self.sub_agent_id = None;
-        }
 
         if approved {
             let completion_tool_call_id = crate::ccproxy::get_tool_id();
@@ -824,9 +833,22 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 })),
             )
             .await?;
-            self.record_task_completed(&completion_tool_call_id).await;
+            self.record_task_completed(&completion_tool_call_id).await?;
+            self.pending_final_review = None;
+            self.pending_completion_reports.clear();
+            self.sub_agent_sessions.retain(|id| id != sub_agent_id);
+            if self.sub_agent_id.as_deref() == Some(sub_agent_id) {
+                self.sub_agent_id = None;
+            }
             self.update_state(WorkflowState::Completed).await?;
             return Ok(true);
+        }
+
+        self.pending_final_review = None;
+        self.pending_completion_reports.clear();
+        self.sub_agent_sessions.retain(|id| id != sub_agent_id);
+        if self.sub_agent_id.as_deref() == Some(sub_agent_id) {
+            self.sub_agent_id = None;
         }
 
         let mut content = format!(
@@ -1942,6 +1964,27 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }
         }
 
+        let active_sub_agents = Self::active_sub_agent_ids(
+            &self.sub_agent_sessions,
+            &self.pending_sub_agent_completions,
+        );
+        if !active_sub_agents.is_empty() {
+            return Ok(Some(ReinforcedResult {
+                content: format!(
+                    "<SYSTEM_REMINDER>Block: active sub-agents must reach a terminal state before complete_workflow can produce a stable combined usage summary: {}.</SYSTEM_REMINDER>",
+                    active_sub_agents.join(", ")
+                ),
+                llm_content: None,
+                title: "Active Sub-Agents".to_string(),
+                summary: "Wait for active sub-agents before completing the task".to_string(),
+                is_error: true,
+                error_type: Some("ActiveSubAgents".into()),
+                display_type: "text".to_string(),
+                approval_status: None,
+                observation_kind: None,
+            }));
+        }
+
         let pending_source = self.pending_completion_reports.iter().find(|pending| {
             pending.segment_id == self.context.current_segment_id
                 && pending.content_hash
@@ -2362,7 +2405,7 @@ mod tests {
     use crate::db::WorkflowMessage;
     use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_READ_FILE, TOOL_WRITE_FILE};
     use crate::workflow::react::policy::ExecutionPhase;
-    use crate::workflow::react::types::PendingCompletionReport;
+    use crate::workflow::react::types::{PendingCompletionReport, SubAgentCompletion};
     use serde_json::json;
 
     fn report(text: &str, message_id: i64, segment_id: i32) -> PendingCompletionReport {
@@ -2420,6 +2463,29 @@ mod tests {
         assert!(
             WorkflowExecutor::resolve_completion_report(&json!({}), reasoning, &[], 1,).is_err()
         );
+    }
+
+    #[test]
+    fn active_sub_agents_gate_completion_until_each_has_a_terminal_projection() {
+        let child = "child-running".to_string();
+        assert_eq!(
+            WorkflowExecutor::active_sub_agent_ids(std::slice::from_ref(&child), &[]),
+            vec![child.clone()]
+        );
+
+        let terminal = SubAgentCompletion {
+            sub_agent_id: child.clone(),
+            parent_session_id: "parent".to_string(),
+            status: "completed".to_string(),
+            result: Some("done".to_string()),
+            summary: Some("done".to_string()),
+            error: None,
+            tool_calls_count: 0,
+            usage_summary: None,
+            completed_at_ms: 0,
+            consumed: false,
+        };
+        assert!(WorkflowExecutor::active_sub_agent_ids(&[child], &[terminal]).is_empty());
     }
 
     #[test]

@@ -16,6 +16,7 @@ mod proxy_group;
 mod sql;
 mod types;
 mod workflow;
+pub mod workflow_usage;
 
 pub use agent::{Agent, AgentConfig};
 pub use automation::{

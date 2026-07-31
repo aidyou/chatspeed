@@ -1932,8 +1932,14 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
-  const recordTaskCompleted = (sessionId, toolCallId, segmentId) => {
+  const recordTaskCompleted = (sessionId, toolCallId, segmentId, usageSummary = null) => {
     if (!sessionId || !toolCallId || currentWorkflowId.value !== sessionId) return;
+    if (usageSummary && typeof usageSummary === 'object') {
+      patchToolMessage(toolCallId, (message, meta) => ({
+        ...message,
+        metadata: { ...meta, usage_summary: usageSummary }
+      }));
+    }
     lastTaskCompletion.value = {
       sessionId,
       toolCallId,

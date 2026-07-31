@@ -53,6 +53,13 @@ pub struct Conversation {
 #[serde(rename_all = "camelCase")]
 pub struct CcproxyStat {
     pub id: Option<i64>,
+    /// Workflow ownership is populated only for internal workflow model requests.
+    pub workflow_session_id: Option<String>,
+    pub workflow_task_run_id: Option<String>,
+    pub workflow_segment_id: Option<i32>,
+    pub root_session_id: Option<String>,
+    pub root_task_run_id: Option<String>,
+    pub request_kind: Option<String>,
     /// User-configured proxy alias (e.g., "code-small") or model_id for direct header requests
     pub client_model: String,
     /// Actual backend model ID (e.g., "Qwen/Qwen3-Next-80B-A3B-Instruct")
@@ -68,6 +75,125 @@ pub struct CcproxyStat {
     pub output_tokens: i64,
     pub cache_tokens: i64,
     pub request_at: Option<String>,
+}
+
+impl CcproxyStat {
+    pub fn with_workflow_attribution(mut self, headers: &http::HeaderMap) -> Self {
+        let read = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+
+        let workflow_session_id = read("x-cs-workflow-session-id");
+        let workflow_task_run_id = read("x-cs-workflow-task-run-id");
+        let root_session_id = read("x-cs-root-session-id");
+        let root_task_run_id = read("x-cs-root-task-run-id");
+        let request_kind = read("x-cs-request-kind");
+        let workflow_segment_id =
+            read("x-cs-workflow-segment-id").and_then(|value| value.parse::<i32>().ok());
+
+        if workflow_session_id.is_some()
+            && workflow_task_run_id.is_some()
+            && root_session_id.is_some()
+            && root_task_run_id.is_some()
+            && request_kind.is_some()
+        {
+            self.workflow_session_id = workflow_session_id;
+            self.workflow_task_run_id = workflow_task_run_id;
+            self.workflow_segment_id = workflow_segment_id;
+            self.root_session_id = root_session_id;
+            self.root_task_run_id = root_task_run_id;
+            self.request_kind = request_kind;
+        }
+
+        self
+    }
+}
+
+#[cfg(test)]
+mod ccproxy_usage_attribution_tests {
+    use super::*;
+
+    fn stat() -> CcproxyStat {
+        CcproxyStat {
+            id: None,
+            workflow_session_id: None,
+            workflow_task_run_id: None,
+            workflow_segment_id: None,
+            root_session_id: None,
+            root_task_run_id: None,
+            request_kind: None,
+            client_model: "client".to_string(),
+            backend_model: "backend".to_string(),
+            provider_id: Some(1),
+            provider: "provider".to_string(),
+            protocol: "openai".to_string(),
+            tool_compat_mode: 0,
+            status_code: 200,
+            error_message: None,
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_tokens: 2,
+            request_at: None,
+        }
+    }
+
+    #[test]
+    fn direct_and_unified_stat_paths_preserve_complete_workflow_attribution() {
+        let mut headers = http::HeaderMap::new();
+        for (name, value) in [
+            ("x-cs-workflow-session-id", "workflow-session"),
+            ("x-cs-workflow-task-run-id", "workflow-session:task:3"),
+            ("x-cs-workflow-segment-id", "7"),
+            ("x-cs-root-session-id", "root-session"),
+            ("x-cs-root-task-run-id", "root-session:task:3"),
+            ("x-cs-request-kind", "react"),
+        ] {
+            headers.insert(name, value.parse().expect("test header should parse"));
+        }
+
+        // Both direct response recording and unified response recording call this shared
+        // constructor; stream guards consume the same six header names.
+        let attributed = stat().with_workflow_attribution(&headers);
+        assert_eq!(
+            attributed.workflow_session_id.as_deref(),
+            Some("workflow-session")
+        );
+        assert_eq!(
+            attributed.workflow_task_run_id.as_deref(),
+            Some("workflow-session:task:3")
+        );
+        assert_eq!(attributed.workflow_segment_id, Some(7));
+        assert_eq!(attributed.root_session_id.as_deref(), Some("root-session"));
+        assert_eq!(
+            attributed.root_task_run_id.as_deref(),
+            Some("root-session:task:3")
+        );
+        assert_eq!(attributed.request_kind.as_deref(), Some("react"));
+    }
+
+    #[test]
+    fn incomplete_workflow_attribution_is_not_persisted() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            "x-cs-workflow-session-id",
+            "workflow-session".parse().unwrap(),
+        );
+        headers.insert(
+            "x-cs-workflow-task-run-id",
+            "workflow-session:task:3".parse().unwrap(),
+        );
+
+        let attributed = stat().with_workflow_attribution(&headers);
+        assert!(attributed.workflow_session_id.is_none());
+        assert!(attributed.workflow_task_run_id.is_none());
+        assert!(attributed.root_session_id.is_none());
+        assert!(attributed.request_kind.is_none());
+    }
 }
 
 // =================================================

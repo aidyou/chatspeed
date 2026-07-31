@@ -208,13 +208,19 @@ impl WorkflowEvent {
         )
     }
 
-    pub fn task_completed(session_id: String, tool_call_id: String, segment_id: i32) -> Self {
+    pub fn task_completed(
+        session_id: String,
+        tool_call_id: String,
+        segment_id: i32,
+        usage_summary: Option<&crate::workflow::react::usage::WorkflowUsageSummary>,
+    ) -> Self {
         Self::new(
             WorkflowEventType::TaskCompleted,
             session_id,
             serde_json::json!({
                 "tool_call_id": tool_call_id,
-                "segment_id": segment_id
+                "segment_id": segment_id,
+                "usage_summary": usage_summary,
             }),
         )
     }
@@ -355,6 +361,7 @@ mod tests {
             "test-session".to_string(),
             "call_complete_123".to_string(),
             4,
+            None,
         );
         assert_eq!(event.event_type, WorkflowEventType::TaskCompleted);
         assert_eq!(event.event_data["tool_call_id"], "call_complete_123");

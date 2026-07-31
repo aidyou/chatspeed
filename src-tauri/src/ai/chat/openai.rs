@@ -1506,6 +1506,35 @@ impl AiChatTrait for OpenAIChat {
             }
         }
 
+        if let Some(attribution) = &merged_metadata.workflow_usage_attribution {
+            if let Some(headers_obj) = headers_json.as_object_mut() {
+                headers_obj.insert(
+                    "x-cs-workflow-session-id".to_string(),
+                    json!(&attribution.workflow_session_id),
+                );
+                headers_obj.insert(
+                    "x-cs-workflow-task-run-id".to_string(),
+                    json!(&attribution.workflow_task_run_id),
+                );
+                headers_obj.insert(
+                    "x-cs-workflow-segment-id".to_string(),
+                    json!(attribution.workflow_segment_id),
+                );
+                headers_obj.insert(
+                    "x-cs-root-session-id".to_string(),
+                    json!(&attribution.root_session_id),
+                );
+                headers_obj.insert(
+                    "x-cs-root-task-run-id".to_string(),
+                    json!(&attribution.root_task_run_id),
+                );
+                headers_obj.insert(
+                    "x-cs-request-kind".to_string(),
+                    json!(&attribution.request_kind),
+                );
+            }
+        }
+
         let custom_headers = process_custom_headers(&Some(merged_metadata.clone()), &chat_id);
         if let Some(headers_obj) = headers_json.as_object_mut() {
             for (k, v) in custom_headers {

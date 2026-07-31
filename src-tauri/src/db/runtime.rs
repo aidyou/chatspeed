@@ -533,8 +533,14 @@ impl DbRuntime {
                                 let transaction = connection.transaction()?;
                                 for stat in stats {
                                     transaction.execute(
-                                        "INSERT INTO ccproxy_stats (client_model, backend_model, provider_id, provider, protocol, tool_compat_mode, status_code, error_message, input_tokens, output_tokens, cache_tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                        "INSERT INTO ccproxy_stats (workflow_session_id, workflow_task_run_id, workflow_segment_id, root_session_id, root_task_run_id, request_kind, client_model, backend_model, provider_id, provider, protocol, tool_compat_mode, status_code, error_message, input_tokens, output_tokens, cache_tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                                         rusqlite::params![
+                                            stat.workflow_session_id,
+                                            stat.workflow_task_run_id,
+                                            stat.workflow_segment_id,
+                                            stat.root_session_id,
+                                            stat.root_task_run_id,
+                                            stat.request_kind,
                                             stat.client_model,
                                             stat.backend_model,
                                             stat.provider_id,
@@ -1046,6 +1052,12 @@ mod tests {
             .write(|connection| {
                 connection.execute(
                     "CREATE TABLE ccproxy_stats (
+                        workflow_session_id TEXT,
+                        workflow_task_run_id TEXT,
+                        workflow_segment_id INTEGER,
+                        root_session_id TEXT,
+                        root_task_run_id TEXT,
+                        request_kind TEXT,
                         client_model TEXT NOT NULL,
                         backend_model TEXT NOT NULL,
                         provider_id INTEGER,
@@ -1068,6 +1080,12 @@ mod tests {
             runtime
                 .enqueue_ccproxy_stat(CcproxyStat {
                     id: None,
+                    workflow_session_id: None,
+                    workflow_task_run_id: None,
+                    workflow_segment_id: None,
+                    root_session_id: None,
+                    root_task_run_id: None,
+                    request_kind: None,
                     client_model: "client".to_string(),
                     backend_model: "backend".to_string(),
                     provider_id: Some(1),
@@ -1090,6 +1108,12 @@ mod tests {
         let waiting_stat = tokio::task::spawn_blocking(move || {
             waiting_runtime.enqueue_ccproxy_stat(CcproxyStat {
                 id: None,
+                workflow_session_id: None,
+                workflow_task_run_id: None,
+                workflow_segment_id: None,
+                root_session_id: None,
+                root_task_run_id: None,
+                request_kind: None,
                 client_model: "client".to_string(),
                 backend_model: "backend".to_string(),
                 provider_id: Some(1),
@@ -1128,6 +1152,12 @@ mod tests {
         });
         let stat = || CcproxyStat {
             id: None,
+            workflow_session_id: None,
+            workflow_task_run_id: None,
+            workflow_segment_id: None,
+            root_session_id: None,
+            root_task_run_id: None,
+            request_kind: None,
             client_model: "client".to_string(),
             backend_model: "backend".to_string(),
             provider_id: Some(1),
@@ -1181,6 +1211,12 @@ mod tests {
         runtime
             .enqueue_ccproxy_stat(CcproxyStat {
                 id: None,
+                workflow_session_id: None,
+                workflow_task_run_id: None,
+                workflow_segment_id: None,
+                root_session_id: None,
+                root_task_run_id: None,
+                request_kind: None,
                 client_model: "client".to_string(),
                 backend_model: "backend".to_string(),
                 provider_id: Some(1),

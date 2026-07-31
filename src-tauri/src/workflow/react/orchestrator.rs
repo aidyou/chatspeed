@@ -219,6 +219,10 @@ fn build_sub_agent_completion(
             .get("tool_calls_count")
             .and_then(|value| value.as_u64())
             .unwrap_or(0) as usize,
+        usage_summary: result
+            .get("usage_summary")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok()),
         completed_at_ms: chrono::Utc::now().timestamp_millis(),
         consumed: false,
     }
@@ -349,17 +353,18 @@ fn extract_submit_result_payload(messages: &[WorkflowMessage]) -> Option<(String
 }
 
 fn build_terminal_sub_agent_result(
+    main_store: &MainStore,
     task_id: &str,
     final_state: crate::workflow::react::types::WorkflowState,
     run_result: &Result<(), WorkflowEngineError>,
     messages: &[WorkflowMessage],
-) -> Value {
+) -> Result<Value, WorkflowEngineError> {
     let tool_calls_count = messages
         .iter()
         .filter(|message| message.role == "tool")
         .count();
 
-    match run_result {
+    let mut result = match run_result {
         Ok(_) => {
             let status = if final_state == crate::workflow::react::types::WorkflowState::Cancelled {
                 "cancelled"
@@ -395,7 +400,66 @@ fn build_terminal_sub_agent_result(
                 "tool_calls_count": tool_calls_count
             })
         }
-    }
+    };
+
+    let terminal_status = result
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("failed");
+    let task_run_id = format!("{task_id}:task:1");
+    let root_session_id = main_store
+        .get_workflow(task_id)
+        .ok()
+        .flatten()
+        .and_then(|workflow| workflow.parent_session_id)
+        .unwrap_or_else(|| task_id.to_string());
+    let root_task_run_id = main_store
+        .workflow_current_task_run_id(&root_session_id)
+        .unwrap_or_else(|_| format!("{root_session_id}:task:1"));
+    let duration_ms = main_store
+        .workflow_started_at_ms(task_id)
+        .ok()
+        .flatten()
+        .map(|started_at_ms| (chrono::Utc::now().timestamp_millis() - started_at_ms).max(0));
+    let usage_summary = main_store
+        .summarize_workflow_task_usage(
+            task_id,
+            &task_run_id,
+            &root_session_id,
+            &root_task_run_id,
+            terminal_status,
+            duration_ms,
+            false,
+        )
+        .map_err(|error| {
+            WorkflowEngineError::General(format!(
+                "finalize sub-agent usage summary for {task_id}: {error}"
+            ))
+        })?;
+    main_store
+        .upsert_workflow_task_usage(
+            task_id,
+            &task_run_id,
+            &root_session_id,
+            &root_task_run_id,
+            terminal_status,
+            None,
+            None,
+            usage_summary.duration_ms,
+            &usage_summary,
+        )
+        .map_err(|error| {
+            WorkflowEngineError::General(format!(
+                "persist sub-agent usage summary for {task_id}: {error}"
+            ))
+        })?;
+    result["usage_summary"] = serde_json::to_value(usage_summary).map_err(|error| {
+        WorkflowEngineError::General(format!(
+            "serialize sub-agent usage summary for {task_id}: {error}"
+        ))
+    })?;
+
+    Ok(result)
 }
 
 fn render_task_output(result: &Value) -> String {
@@ -417,6 +481,26 @@ fn render_task_output(result: &Value) -> String {
             .and_then(|value| value.as_str())
             .unwrap_or("Sub-agent completed")
             .to_string(),
+    }
+}
+
+fn recover_terminal_sub_agent_finalization(main_store: &Arc<MainStore>, task_id: &str) {
+    get_sub_agent_registry().unregister_sub_agent(task_id);
+    TASK_OUTPUT_THROTTLE.remove(task_id);
+    crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(task_id);
+    BACKGROUND_TASKS.remove(task_id);
+
+    // A completed child can no longer make progress in memory. Its child workflow state and
+    // usage snapshot are durable, so hand the remaining idempotent parent projection to the
+    // same recovery path used after an application restart.
+    if let Err(error) =
+        crate::commands::workflow::reconcile_interrupted_child_workflows(main_store.as_ref())
+    {
+        log::error!(
+            "[Workflow][session={}][phase=sub_agent_completion] Deferred terminal-finalization recovery failed: {}",
+            task_id,
+            error
+        );
     }
 }
 
@@ -921,19 +1005,45 @@ pub async fn spawn_call_sub_agent(
         let result = guard.run_loop().await;
         let final_state = guard.state();
         let messages = guard.messages();
-        let completion_result = build_terminal_sub_agent_result(
+        let completion_result = match build_terminal_sub_agent_result(
+            main_store_clone.as_ref(),
             &task_id_clone,
             final_state.clone(),
             &result,
             &messages,
-        );
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                log::error!(
+                    "[Workflow][session={}][parent={}][phase=sub_agent_completion] Usage finalization failed; terminal result will not be projected: {}",
+                    task_id_clone,
+                    parent_session_id,
+                    error
+                );
+                recover_terminal_sub_agent_finalization(&main_store_clone, &task_id_clone);
+                return;
+            }
+        };
 
         let completion_status = completion_result
             .get("status")
             .and_then(|value| value.as_str())
             .unwrap_or("completed")
             .to_string();
-        if let Err(e) = append_sub_agent_event(
+        let completion =
+            build_sub_agent_completion(&parent_session_id, &task_id_clone, &completion_result);
+        if let Err(error) = persist_sub_agent_completion(&main_store_clone, completion) {
+            log::error!(
+                "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable sub-agent completion projection failed; terminal result will not be signaled: {}",
+                task_id_clone,
+                parent_session_id,
+                error
+            );
+            recover_terminal_sub_agent_finalization(&main_store_clone, &task_id_clone);
+            return;
+        }
+
+        if let Err(error) = append_sub_agent_event(
             &main_store_clone,
             WorkflowEvent::sub_agent_completed(
                 parent_session_id.clone(),
@@ -942,23 +1052,14 @@ pub async fn spawn_call_sub_agent(
                 completion_result.clone(),
             ),
         ) {
-            log::warn!(
-                "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist sub-agent completion event: {}",
-                task_id_clone,
-                parent_session_id,
-                e
-            );
-        }
-
-        let completion =
-            build_sub_agent_completion(&parent_session_id, &task_id_clone, &completion_result);
-        if let Err(e) = persist_sub_agent_completion(&main_store_clone, completion) {
             log::error!(
-                "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist sub-agent completion: {}",
+                "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable sub-agent completion event failed; terminal result will not be signaled: {}",
                 task_id_clone,
                 parent_session_id,
-                e
+                error
             );
+            recover_terminal_sub_agent_finalization(&main_store_clone, &task_id_clone);
+            return;
         }
 
         if let Err(e) = crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
@@ -1219,12 +1320,24 @@ impl ToolDefinition for TaskTool {
                     if let Err(error) = &result {
                         log::error!("Background task {} failed: {}", guard.session_id(), error);
                     }
-                    let completion_result = build_terminal_sub_agent_result(
+                    let completion_result = match build_terminal_sub_agent_result(
+                        main_store.as_ref(),
                         &task_id_clone,
                         final_state,
                         &result,
                         &messages,
-                    );
+                    ) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            log::error!(
+                                "[Workflow][session={}][phase=sub_agent_completion] Background usage finalization failed; terminal result will not be projected: {}",
+                                task_id_clone,
+                                error
+                            );
+                            recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+                            return;
+                        }
+                    };
                     let output = render_task_output(&completion_result);
                     (completion_result, output)
                 };
@@ -1240,26 +1353,30 @@ impl ToolDefinition for TaskTool {
                         &task_id_clone,
                         &completion_result,
                     );
-                    if let Err(e) = persist_sub_agent_completion(&main_store, completion) {
-                        log::warn!(
-                            "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist background sub-agent completion: {}",
+                    if let Err(error) = persist_sub_agent_completion(&main_store, completion) {
+                        log::error!(
+                            "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable background completion projection failed; terminal result will not be published: {}",
                             task_id_clone,
                             parent_session_id,
-                            e
+                            error
                         );
+                        recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+                        return;
                     }
-                    if let Err(e) = persist_background_completion_projection(
+                    if let Err(error) = persist_background_completion_projection(
                         &main_store,
                         &parent_session_id,
                         &task_id_clone,
                         &completion_result,
                     ) {
-                        log::warn!(
-                            "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist background completion projection: {}",
+                        log::error!(
+                            "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable background observation failed; terminal result will not be published: {}",
                             task_id_clone,
                             parent_session_id,
-                            e
+                            error
                         );
+                        recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+                        return;
                     }
                     let terminal_status = completion_result
                         .get("status")
@@ -1397,19 +1514,45 @@ impl ToolDefinition for TaskTool {
             let result = guard.run_loop().await;
             let final_state = guard.state();
             let messages = guard.messages();
-            let completion_result = build_terminal_sub_agent_result(
+            let completion_result = match build_terminal_sub_agent_result(
+                main_store.as_ref(),
                 &task_id_clone,
                 final_state.clone(),
                 &result,
                 &messages,
-            );
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    log::error!(
+                        "[Workflow][session={}][parent={}][phase=sub_agent_completion] Usage finalization failed; terminal result will not be projected: {}",
+                        task_id_clone,
+                        parent_id,
+                        error
+                    );
+                    recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+                    return;
+                }
+            };
 
             let completion_status = completion_result
                 .get("status")
                 .and_then(|value| value.as_str())
                 .unwrap_or("completed")
                 .to_string();
-            if let Err(e) = append_sub_agent_event(
+            let completion =
+                build_sub_agent_completion(&parent_id, &task_id_clone, &completion_result);
+            if let Err(error) = persist_sub_agent_completion(&main_store, completion) {
+                log::error!(
+                    "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable sub-agent completion projection failed; terminal result will not be signaled: {}",
+                    task_id_clone,
+                    parent_id,
+                    error
+                );
+                recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+                return;
+            }
+
+            if let Err(error) = append_sub_agent_event(
                 &main_store,
                 WorkflowEvent::sub_agent_completed(
                     parent_id.clone(),
@@ -1418,23 +1561,14 @@ impl ToolDefinition for TaskTool {
                     completion_result.clone(),
                 ),
             ) {
-                log::warn!(
-                    "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist sub-agent completion event: {}",
-                    task_id_clone,
-                    parent_id,
-                    e
-                );
-            }
-
-            let completion =
-                build_sub_agent_completion(&parent_id, &task_id_clone, &completion_result);
-            if let Err(e) = persist_sub_agent_completion(&main_store, completion) {
                 log::error!(
-                    "[Workflow][session={}][parent={}][phase=sub_agent_completion] Failed to persist sub-agent completion: {}",
+                    "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable sub-agent completion event failed; terminal result will not be signaled: {}",
                     task_id_clone,
                     parent_id,
-                    e
+                    error
                 );
+                recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+                return;
             }
 
             if let Err(e) = crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
@@ -1809,10 +1943,10 @@ impl ToolDefinition for TaskStopTool {
 #[cfg(test)]
 mod tests {
     use super::{
-        persist_background_completion_projection, remember_completed_task, stop_background_task,
-        BackgroundTask, CompletedTaskSnapshot, DefaultSubAgentFactory, SubAgentFactory,
-        TaskOutputTool, TaskTool, BACKGROUND_TASKS, COMPLETED_BACKGROUND_TASKS,
-        TASK_OUTPUT_THROTTLE,
+        build_terminal_sub_agent_result, persist_background_completion_projection,
+        remember_completed_task, stop_background_task, BackgroundTask, CompletedTaskSnapshot,
+        DefaultSubAgentFactory, SubAgentFactory, TaskOutputTool, TaskTool, BACKGROUND_TASKS,
+        COMPLETED_BACKGROUND_TASKS, TASK_OUTPUT_THROTTLE,
     };
     use crate::ai::interaction::chat_completion::ChatState;
     use crate::db::{AgentConfig, MainStore, WorkflowMessage};
@@ -1992,6 +2126,63 @@ mod tests {
             .parent()
             .expect("src-tauri should have a parent repo directory")
             .to_path_buf()
+    }
+
+    #[test]
+    fn terminal_sub_agent_result_requires_and_persists_usage_summary() {
+        let (_dir, store) = test_store();
+        let agent = crate::db::Agent::new(
+            "usage-agent".to_string(),
+            "Usage Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "Usage test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        store.add_agent(&agent).expect("failed to add agent");
+        store
+            .create_workflow("usage-parent", "parent", &agent.id, None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "usage-child",
+                "child",
+                &agent.id,
+                None,
+                Some("usage-parent"),
+            )
+            .expect("failed to create child workflow");
+
+        let result = build_terminal_sub_agent_result(
+            store.as_ref(),
+            "usage-child",
+            WorkflowState::Completed,
+            &Ok(()),
+            &[],
+        )
+        .expect("terminal child usage finalization must succeed");
+
+        assert_eq!(result["status"], "completed");
+        assert_eq!(result["usage_summary"]["terminal_status"], "completed");
+        assert!(store
+            .load_workflow_task_usage("usage-child", "usage-child:task:1")
+            .expect("failed to load child usage summary")
+            .is_some());
     }
 
     #[test]
@@ -2251,6 +2442,7 @@ mod tests {
                         summary: Some("done".to_string()),
                         error: None,
                         tool_calls_count: 1,
+                        usage_summary: None,
                         completed_at_ms: chrono::Utc::now().timestamp_millis(),
                         consumed: false,
                     }],
@@ -2506,6 +2698,7 @@ mod tests {
                         summary: Some("OCR summary".to_string()),
                         error: None,
                         tool_calls_count: 2,
+                        usage_summary: None,
                         completed_at_ms: chrono::Utc::now().timestamp_millis(),
                         consumed: false,
                     }],

@@ -1,7 +1,7 @@
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::error::AiError;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
-use crate::ai::traits::chat::ChatMetadata;
+use crate::ai::traits::chat::{ChatMetadata, WorkflowUsageAttribution};
 use crate::db::WorkflowMessage;
 use crate::tools::TOOL_ASK_USER;
 use crate::tools::TOOL_COMPLETE_WORKFLOW;
@@ -21,6 +21,7 @@ pub struct ContextCompressor {
     pub chat_state: Arc<ChatState>,
     pub provider_id: i64,
     pub model: String,
+    pub workflow_usage_attribution: WorkflowUsageAttribution,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,11 +34,17 @@ const SUPPORTED_COMPRESSION_MODES: [CompressionMode; 2] =
     [CompressionMode::Rollup, CompressionMode::Blocking];
 
 impl ContextCompressor {
-    pub fn new(chat_state: Arc<ChatState>, provider_id: i64, model: String) -> Self {
+    pub fn new(
+        chat_state: Arc<ChatState>,
+        provider_id: i64,
+        model: String,
+        workflow_usage_attribution: WorkflowUsageAttribution,
+    ) -> Self {
         Self {
             chat_state,
             provider_id,
             model,
+            workflow_usage_attribution,
         }
     }
 
@@ -164,6 +171,10 @@ impl ContextCompressor {
                     None,
                     Some(ChatMetadata {
                         stream: Some(false),
+                        workflow_usage_attribution: Some(WorkflowUsageAttribution {
+                            request_kind: "compression".to_string(),
+                            ..self.workflow_usage_attribution.clone()
+                        }),
                         ..Default::default()
                     }),
                     |_| {},

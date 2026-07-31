@@ -215,6 +215,12 @@ pub async fn handle_embedding(
     // Record stats
     if let Err(error) = store_arc.record_ccproxy_stat(CcproxyStat {
         id: None,
+        workflow_session_id: None,
+        workflow_task_run_id: None,
+        workflow_segment_id: None,
+        root_session_id: None,
+        root_task_run_id: None,
+        request_kind: None,
         client_model: proxy_alias,
         backend_model: proxy_model.model.clone(),
         provider_id: Some(proxy_model.provider_id),

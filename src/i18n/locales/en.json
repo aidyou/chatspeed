@@ -889,6 +889,20 @@
   },
   "workflow": {
     "allowedShellCommands": "Allowed Shell Commands",
+    "costAnalysis": {
+      "cache": "Cache",
+      "duration": "{minutes}m {seconds}s",
+      "input": "Input",
+      "output": "Output",
+      "partial": "Pricing or attribution is incomplete.",
+      "ratePerMillion": "{rate} / M",
+      "self": "Self",
+      "tokens": "{count} tokens",
+      "unknownDuration": "--",
+      "unpriced": "Unpriced",
+      "unpricedRate": "-- / M",
+      "withSubAgents": "With sub-agents"
+    },
     "terminal": {
       "closeConfirmMessage": "Close this terminal session? Running commands will be interrupted.",
       "closeConfirmTitle": "Close terminal",

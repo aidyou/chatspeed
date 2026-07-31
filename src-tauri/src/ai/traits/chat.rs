@@ -354,6 +354,17 @@ pub struct CustomHeader {
     pub value: String,
 }
 
+/// Internal-only ownership attached to workflow model requests for durable usage accounting.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowUsageAttribution {
+    pub workflow_session_id: String,
+    pub workflow_task_run_id: String,
+    pub workflow_segment_id: i32,
+    pub root_session_id: String,
+    pub root_task_run_id: String,
+    pub request_kind: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomParam {
@@ -400,6 +411,8 @@ pub struct ChatMetadata {
     pub proxy_password: Option<String>,
 
     // --- Internal State ---
+    #[serde(skip)]
+    pub workflow_usage_attribution: Option<WorkflowUsageAttribution>,
     pub chat_param: Option<InternalChatParam>,
 
     // --- Extensibility ---

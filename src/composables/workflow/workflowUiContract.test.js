@@ -5,6 +5,8 @@ import {
   isWorkflowMessagePendingApproval
 } from './messageProjectionRules.js'
 import { deriveInlinePendingApprovals } from '../../stores/workflowApprovalRecovery.js'
+import { readFile } from 'node:fs/promises'
+import test from 'node:test'
 
 const sessionId = 'session-approval-contract'
 const toolCallId = 'tool_571ae521'
@@ -99,3 +101,15 @@ assert.equal(
 )
 
 console.log('workflow UI contract tests passed')
+
+test('cost analysis interaction is gated by accepted completion and terminal child summaries', async () => {
+  const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
+  const styles = await readFile('src/styles/workflow/messages.scss', 'utf8')
+
+  assert.match(messageList, /!message\?\.isApproved \|\| message\?\.toolDisplay\?\.isError/)
+  assert.match(messageList, /\['completed', 'failed', 'cancelled', 'interrupted'\]/)
+  assert.match(messageList, /getSubAgentCostExpandId/)
+  assert.match(messageList, /getFinishTaskCostExpandId/)
+  assert.match(styles, /margin-left: 15px/)
+  assert.match(styles, /:hover \.finish-task-cost-arrow/)
+})

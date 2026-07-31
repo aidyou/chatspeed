@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 
 pub async fn handle_streamed_response(
+    client_headers: &http::HeaderMap,
     backend_protocol: Arc<ChatProtocol>,
     client_protocol: ChatProtocol,
     target_response: reqwest::Response,
@@ -106,17 +107,26 @@ pub async fn handle_streamed_response(
     let log_recorder_clone = log_recorder.clone();
 
     // Create the stat guard from public module
-    let stat_guard = Arc::new(StreamStatGuard {
-        log_recorder: log_recorder.clone(),
-        sse_status: sse_status.clone(),
-        main_store: main_store_arc.clone(),
-        client_model: client_model.clone(),
-        backend_model: backend_model.clone(),
-        provider_id,
-        provider: provider.clone(),
-        protocol: client_protocol.to_string(),
-        tool_compat_mode,
-    });
+    let stat_guard = Arc::new(
+        StreamStatGuard {
+            log_recorder: log_recorder.clone(),
+            sse_status: sse_status.clone(),
+            main_store: main_store_arc.clone(),
+            client_model: client_model.clone(),
+            backend_model: backend_model.clone(),
+            provider_id,
+            provider: provider.clone(),
+            protocol: client_protocol.to_string(),
+            tool_compat_mode,
+            workflow_session_id: None,
+            workflow_task_run_id: None,
+            workflow_segment_id: None,
+            root_session_id: None,
+            root_task_run_id: None,
+            request_kind: None,
+        }
+        .with_workflow_attribution(client_headers),
+    );
 
     let byte_stream = unified_stream.then(move |unified_chunk| {
         let client_protocol_inner = client_protocol.clone();
