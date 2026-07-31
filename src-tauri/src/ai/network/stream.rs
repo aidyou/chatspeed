@@ -182,6 +182,7 @@ impl StreamParser {
                                             name: call.function.name.clone().unwrap_or_default(),
                                             arguments: call.function.arguments.clone(),
                                             results: None,
+                                            responses_item_id: None,
                                         })
                                         .collect::<Vec<ToolCallDeclaration>>()
                                 });

@@ -163,6 +163,8 @@ pub struct ToolCallDeclaration {
     pub arguments: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub results: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responses_item_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -26,6 +26,20 @@ use crate::{
 
 use super::openai_responses::{self, ResponsesRequestContext};
 
+#[cfg(test)]
+pub(crate) fn parse_responses_stream_tool_call_for_test(
+    event: &Value,
+) -> Option<ToolCallDeclaration> {
+    openai_responses::parse_stream_tool_call_for_test(event)
+}
+
+#[cfg(test)]
+pub(crate) fn parse_responses_non_stream_tool_call_for_test(
+    response: &Value,
+) -> Option<ToolCallDeclaration> {
+    openai_responses::parse_non_stream_tool_call_for_test(response)
+}
+
 /// A standardized error structure for streaming to the frontend.
 #[derive(Serialize)]
 struct JsonErrorPayload<'a> {
@@ -481,6 +495,7 @@ impl OpenAIChat {
                                         name: part.name.clone(),
                                         arguments: Some(String::new()),
                                         results: None,
+                                        responses_item_id: None,
                                     });
 
                                 // Append current part's arguments
@@ -779,12 +794,16 @@ impl OpenAIChat {
                     .as_deref()
                     .map(Self::normalize_tool_arguments)
                     .unwrap_or_default();
-                json!({
+                let mut tool_call = json!({
                     "index": idx,
                     "id": tcd.id,
                     "type": "function",
-                    "function": { "name": tcd.name, "arguments": arguments_str }
-                })
+                    "function": { "name": tcd.name, "arguments": arguments_str },
+                });
+                if let Some(responses_item_id) = tcd.responses_item_id.as_ref() {
+                    tool_call["responses_item_id"] = Value::String(responses_item_id.clone());
+                }
+                tool_call
             })
             .collect();
 

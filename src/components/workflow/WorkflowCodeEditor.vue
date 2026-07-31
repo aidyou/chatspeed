@@ -2,28 +2,32 @@
   <section class="workflow-code-editor" data-workflow-code-editor>
     <header class="code-editor-header">
       <div class="code-editor-tabs" role="tablist">
-        <button
+        <div
           v-for="tab in editor.tabs.value"
           :key="tab.path"
           class="code-editor-tab"
           :class="{ active: tab.path === editor.activePath.value, dirty: tab.dirty }"
-          type="button"
-          role="tab"
-          :aria-selected="tab.path === editor.activePath.value"
-          :title="tab.path"
-          @click="editor.setActive(tab.path)"
         >
-          <span class="dirty-dot" aria-hidden="true" />
-          <span class="tab-name">{{ tab.name }}</span>
+          <button
+            class="tab-select"
+            type="button"
+            role="tab"
+            :aria-selected="tab.path === editor.activePath.value"
+            :title="tab.path"
+            @click="editor.setActive(tab.path)"
+          >
+            <span class="dirty-dot" aria-hidden="true" />
+            <span class="tab-name">{{ tab.name }}</span>
+          </button>
           <button
             class="tab-close"
             type="button"
             :aria-label="t('workflow.codeEditor.closeTab', { name: tab.name })"
-            @click.stop="editor.closeTab(tab.path)"
+            @click="editor.closeTab(tab.path)"
           >
             ×
           </button>
-        </button>
+        </div>
       </div>
       <div class="code-editor-actions" v-if="activeTab">
         <el-tooltip :content="t('workflow.codeEditor.saveShortcut', { shortcut: editor.saveShortcutLabel.value })">
@@ -296,7 +300,6 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   background: var(--cs-bg-color);
   color: var(--cs-text-secondary);
-  cursor: pointer;
 
   &.active {
     color: var(--cs-text-primary);
@@ -306,6 +309,19 @@ onBeforeUnmount(() => {
   &.dirty .dirty-dot {
     background: var(--cs-warning-color, #e6a23c);
   }
+}
+
+.tab-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 
 .dirty-dot {

@@ -831,7 +831,7 @@ async fn global_message_processor_loop(
                                 }
                             }
 
-                            let tool_result_msg_for_history = json!({
+                            let mut tool_result_msg_for_history = json!({
                                 "role": "tool",
                                 "tool_call_id": tc_id_clone.clone(),
                                 "name": t_name_clone.clone(),
@@ -843,6 +843,16 @@ async fn global_message_processor_loop(
                                     )
                                 ),
                             });
+                            if let Some(responses_item_id) =
+                                tool_decl_to_execute.responses_item_id.as_ref()
+                            {
+                                if let Some(obj) = tool_result_msg_for_history.as_object_mut() {
+                                    obj.insert(
+                                        "responses_item_id".to_string(),
+                                        Value::String(responses_item_id.clone()),
+                                    );
+                                }
+                            }
 
                             let mut new_metadata =
                                 metadata_clone.clone().unwrap_or_else(|| json!({}));

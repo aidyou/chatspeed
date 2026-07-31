@@ -149,6 +149,36 @@ impl LlmProcessor {
             .then_with(|| left.cmp(right))
     }
 
+    fn normalize_tool_call_id(
+        tool_call_obj: &mut serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), String> {
+        let is_responses_tool_call = tool_call_obj
+            .get("responses_item_id")
+            .and_then(|value| value.as_str())
+            .is_some_and(|item_id| !item_id.trim().is_empty());
+        let existing_id = tool_call_obj
+            .get("id")
+            .and_then(|value| value.as_str())
+            .filter(|id| !id.trim().is_empty());
+
+        if is_responses_tool_call {
+            if existing_id.is_none() {
+                return Err(
+                    "LLM returned Responses tool call without its original call ID".to_string(),
+                );
+            }
+            return Ok(());
+        }
+
+        if existing_id.is_none_or(|id| !id.starts_with("tool_")) {
+            tool_call_obj.insert(
+                "id".to_string(),
+                serde_json::json!(crate::ccproxy::get_tool_id()),
+            );
+        }
+        Ok(())
+    }
+
     fn normalize_and_validate_tool_calls(
         raw: &str,
         allowed_tool_names: &HashSet<String>,
@@ -185,13 +215,7 @@ impl LlmProcessor {
                     .or_else(|| tool_call_obj.get("name").and_then(|v| v.as_str()));
                 validate_name(tool_name)?;
 
-                let existing_id = tool_call_obj.get("id").and_then(|v| v.as_str());
-                if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
-                    tool_call_obj.insert(
-                        "id".to_string(),
-                        serde_json::json!(crate::ccproxy::get_tool_id()),
-                    );
-                }
+                Self::normalize_tool_call_id(tool_call_obj)?;
                 tool_call_obj.insert("index".to_string(), serde_json::json!(i));
             }
         } else if let Some(tool_wrapper) = tool_calls_val.get_mut("tool") {
@@ -205,13 +229,7 @@ impl LlmProcessor {
                 .or_else(|| tool_obj.get("name").and_then(|v| v.as_str()));
             validate_name(tool_name)?;
 
-            let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
-            if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
-                tool_obj.insert(
-                    "id".to_string(),
-                    serde_json::json!(crate::ccproxy::get_tool_id()),
-                );
-            }
+            Self::normalize_tool_call_id(tool_obj)?;
             tool_obj.insert("index".to_string(), serde_json::json!(0));
         } else if tool_calls_val.is_object() {
             let Some(tool_obj) = tool_calls_val.as_object_mut() else {
@@ -225,13 +243,7 @@ impl LlmProcessor {
                 .or_else(|| tool_obj.get("name").and_then(|v| v.as_str()));
             validate_name(tool_name)?;
 
-            let existing_id = tool_obj.get("id").and_then(|v| v.as_str());
-            if existing_id.map_or(true, |id| !id.starts_with("tool_")) {
-                tool_obj.insert(
-                    "id".to_string(),
-                    serde_json::json!(crate::ccproxy::get_tool_id()),
-                );
-            }
+            Self::normalize_tool_call_id(tool_obj)?;
             tool_obj.insert("index".to_string(), serde_json::json!(0));
         }
 
@@ -1483,9 +1495,134 @@ mod tests {
     use crate::workflow::react::security::PathGuard;
     use crate::workflow::react::skills::SkillManifest;
     use serde_json::json;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::{Arc, RwLock};
+
+    #[test]
+    fn workflow_responses_tool_calls_preserve_original_call_ids() {
+        let allowed = ["web_search", "read_file"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        let normalized = LlmProcessor::normalize_and_validate_tool_calls(
+            &json!({
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_search",
+                        "responses_item_id": "fc_search",
+                        "type": "function",
+                        "function": { "name": "web_search", "arguments": "{}" }
+                    },
+                    {
+                        "id": "call_read",
+                        "responses_item_id": "fc_read",
+                        "type": "function",
+                        "function": { "name": "read_file", "arguments": "{}" }
+                    }
+                ]
+            })
+            .to_string(),
+            &allowed,
+        )
+        .expect("Responses tool calls should normalize");
+
+        assert_eq!(normalized[0]["id"], "call_search");
+        assert_eq!(normalized[0]["responses_item_id"], "fc_search");
+        assert_eq!(normalized[0]["index"], 0);
+        assert_eq!(normalized[1]["id"], "call_read");
+        assert_eq!(normalized[1]["responses_item_id"], "fc_read");
+        assert_eq!(normalized[1]["index"], 1);
+    }
+
+    #[test]
+    fn workflow_rejects_missing_call_id_from_stream_and_non_stream_responses_parsers() {
+        let fixtures = [
+            crate::ai::chat::openai::parse_responses_stream_tool_call_for_test(&json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "fc_stream",
+                    "type": "function_call",
+                    "name": "web_search",
+                    "arguments": "{}"
+                }
+            }))
+            .expect("stream parser should collect the function call"),
+            crate::ai::chat::openai::parse_responses_non_stream_tool_call_for_test(&json!({
+                "output": [{
+                    "id": "fc_non_stream",
+                    "type": "function_call",
+                    "name": "web_search",
+                    "arguments": "{}"
+                }]
+            }))
+            .expect("non-stream parser should collect the function call"),
+        ];
+        let allowed = ["web_search"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+
+        for call in fixtures {
+            let raw = json!([{
+                "id": call.id,
+                "responses_item_id": call.responses_item_id,
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    "arguments": call.arguments.unwrap_or_default()
+                }
+            }])
+            .to_string();
+            let error = LlmProcessor::normalize_and_validate_tool_calls(&raw, &allowed)
+                .expect_err("Responses parser output without call_id must be rejected");
+
+            assert!(error.contains("original call ID"));
+        }
+    }
+
+    #[test]
+    fn workflow_responses_tool_call_requires_original_call_id() {
+        let allowed = ["web_search"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        let error = LlmProcessor::normalize_and_validate_tool_calls(
+            &json!([{
+                "responses_item_id": "fc_search",
+                "type": "function",
+                "function": { "name": "web_search", "arguments": "{}" }
+            }])
+            .to_string(),
+            &allowed,
+        )
+        .expect_err("Responses tool calls without call IDs must be rejected");
+
+        assert!(error.contains("original call ID"));
+    }
+
+    #[test]
+    fn workflow_non_responses_tool_call_keeps_legacy_internal_id_normalization() {
+        let allowed = ["web_search"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        let normalized = LlmProcessor::normalize_and_validate_tool_calls(
+            &json!([{
+                "id": "call_search",
+                "type": "function",
+                "function": { "name": "web_search", "arguments": "{}" }
+            }])
+            .to_string(),
+            &allowed,
+        )
+        .expect("Chat Completions tool call should normalize");
+
+        assert!(normalized[0]["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("tool_")));
+    }
 
     #[test]
     fn tenth_llm_failure_is_terminal_without_another_backoff() {
@@ -2223,6 +2360,62 @@ mod tests {
             history[0]["reasoning_content"].as_str().unwrap_or_default(),
             "First hidden step\n\nSecond hidden step"
         );
+    }
+
+    #[test]
+    fn normalize_history_preserves_responses_tool_call_pairing() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Search and read", None, None),
+            message(
+                "assistant",
+                "",
+                Some("think"),
+                Some(json!({
+                    "tool_calls": [
+                        {
+                            "id": "call_search",
+                            "responses_item_id": "fc_search",
+                            "type": "function",
+                            "function": { "name": "web_search", "arguments": "{}" }
+                        },
+                        {
+                            "id": "call_read",
+                            "responses_item_id": "fc_read",
+                            "type": "function",
+                            "function": { "name": "read_file", "arguments": "{}" }
+                        }
+                    ]
+                })),
+            ),
+            message(
+                "tool",
+                "search result",
+                Some("observe"),
+                Some(json!({
+                    "tool_call_id": "call_search",
+                    "tool_name": "web_search"
+                })),
+            ),
+            message(
+                "tool",
+                "file result",
+                Some("observe"),
+                Some(json!({
+                    "tool_call_id": "call_read",
+                    "tool_name": "read_file"
+                })),
+            ),
+        ]);
+
+        assert_eq!(history[1]["tool_calls"][0]["id"], "call_search");
+        assert_eq!(
+            history[1]["tool_calls"][0]["responses_item_id"],
+            "fc_search"
+        );
+        assert_eq!(history[1]["tool_calls"][1]["id"], "call_read");
+        assert_eq!(history[1]["tool_calls"][1]["responses_item_id"], "fc_read");
+        assert_eq!(history[2]["tool_call_id"], "call_search");
+        assert_eq!(history[3]["tool_call_id"], "call_read");
     }
 
     #[test]

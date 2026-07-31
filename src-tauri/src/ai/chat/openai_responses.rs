@@ -95,17 +95,21 @@ impl ResponsesToolAccumulator {
             .entry(index)
             .or_insert_with(|| ToolCallDeclaration {
                 index,
-                id: call_id.or(item_id).unwrap_or_default().to_string(),
+                id: call_id.unwrap_or_default().to_string(),
                 name: name.unwrap_or_default().to_string(),
                 arguments: Some(String::new()),
                 results: None,
+                responses_item_id: item_id.map(str::to_string),
             });
 
         if call.id.is_empty() {
-            call.id = call_id.or(item_id).unwrap_or_default().to_string();
+            call.id = call_id.unwrap_or_default().to_string();
         }
         if call.name.is_empty() {
             call.name = name.unwrap_or_default().to_string();
+        }
+        if call.responses_item_id.is_none() {
+            call.responses_item_id = item_id.map(str::to_string);
         }
         call
     }
@@ -259,6 +263,14 @@ fn reasoning_effort(
         })
 }
 
+fn finish_reason_for_tool_calls(has_tool_calls: bool) -> FinishReason {
+    if has_tool_calls {
+        FinishReason::ToolCalls
+    } else {
+        FinishReason::Complete
+    }
+}
+
 fn collect_instructions(messages: &[Value]) -> Option<String> {
     let instructions = messages
         .iter()
@@ -305,12 +317,21 @@ fn convert_message_to_input_items(message: &Value) -> Vec<Value> {
             if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
                 for tool_call in tool_calls {
                     let function = tool_call.get("function").unwrap_or(&Value::Null);
-                    items.push(json!({
+                    let mut function_call = json!({
                         "type": "function_call",
                         "call_id": tool_call.get("id").and_then(Value::as_str).unwrap_or_default(),
                         "name": function.get("name").and_then(Value::as_str).unwrap_or_default(),
                         "arguments": function.get("arguments").and_then(Value::as_str).unwrap_or_default(),
-                    }));
+                    });
+                    if let Some(item_id) = tool_call
+                        .get("responses_item_id")
+                        .or_else(|| tool_call.get("responsesItemId"))
+                        .and_then(Value::as_str)
+                        .filter(|item_id| !item_id.is_empty())
+                    {
+                        function_call["id"] = Value::String(item_id.to_string());
+                    }
+                    items.push(function_call);
                 }
             }
             items
@@ -543,6 +564,7 @@ pub(crate) fn handle_non_stream_response_text(
         &mut accumulated_tool_calls,
     );
 
+    let finish_reason = finish_reason_for_tool_calls(!accumulated_tool_calls.is_empty());
     emit_collected_response(
         chat_id,
         content,
@@ -550,7 +572,7 @@ pub(crate) fn handle_non_stream_response_text(
         accumulated_tool_calls,
         usage_from_response(&parsed),
         metadata_option,
-        FinishReason::Complete,
+        finish_reason,
         callback,
     )
 }
@@ -655,7 +677,8 @@ async fn handle_stream_response(
     }
 
     let mut accumulated_tool_calls = tool_accumulator.into_calls();
-    if !accumulated_tool_calls.is_empty() {
+    let has_tool_calls = !accumulated_tool_calls.is_empty();
+    if has_tool_calls {
         OpenAIChat::emit_tool_calls(
             &mut accumulated_tool_calls,
             &content,
@@ -665,6 +688,7 @@ async fn handle_stream_response(
             &callback,
         );
     }
+    let finish_reason = finish_reason_for_tool_calls(has_tool_calls);
 
     callback(ChatResponse::new_with_arc(
         chat_id.clone(),
@@ -680,7 +704,7 @@ async fn handle_stream_response(
             );
             meta.to_value()
         },
-        Some(FinishReason::Complete),
+        Some(finish_reason),
     ));
 
     Ok(json!({
@@ -952,7 +976,6 @@ fn collect_response_item(
                     index,
                     id: item
                         .get("call_id")
-                        .or_else(|| item.get("id"))
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string(),
@@ -968,6 +991,7 @@ fn collect_response_item(
                             .to_string(),
                     ),
                     results: None,
+                    responses_item_id: item.get("id").and_then(Value::as_str).map(str::to_string),
                 },
             );
         }
@@ -1062,6 +1086,46 @@ fn emit_collected_response(
         "content": content
     })
     .to_string())
+}
+
+#[cfg(test)]
+pub(super) fn parse_stream_tool_call_for_test(event: &Value) -> Option<ToolCallDeclaration> {
+    let mut content = String::new();
+    let mut reasoning_content = String::new();
+    let mut token_usage = TokenUsage::default();
+    let mut tool_accumulator = ResponsesToolAccumulator::default();
+    let callback = |response: Arc<ChatResponse>| drop(response);
+
+    process_stream_event(
+        event,
+        &mut content,
+        &mut reasoning_content,
+        &mut token_usage,
+        &mut tool_accumulator,
+        "test_chat",
+        &None,
+        "test",
+        &callback,
+    )
+    .ok()?;
+
+    tool_accumulator.into_calls().remove(&0)
+}
+
+#[cfg(test)]
+pub(super) fn parse_non_stream_tool_call_for_test(response: &Value) -> Option<ToolCallDeclaration> {
+    let mut content = String::new();
+    let mut reasoning_content = String::new();
+    let mut accumulated_tool_calls = HashMap::new();
+
+    collect_response_output(
+        response,
+        &mut content,
+        &mut reasoning_content,
+        &mut accumulated_tool_calls,
+    );
+
+    accumulated_tool_calls.remove(&0)
 }
 
 #[cfg(test)]
@@ -1175,6 +1239,51 @@ mod tests {
         assert_eq!(payload["input"][1]["name"], "lookup");
         assert_eq!(payload["input"][2]["type"], "function_call_output");
         assert_eq!(payload["input"][2]["call_id"], "call_1");
+    }
+
+    #[test]
+    fn build_payload_replays_responses_function_call_for_stateless_continuation() {
+        let metadata = ChatMetadata::default();
+        let params = json!({});
+        let tools = None;
+        let messages = vec![
+            json!({
+                "role": "assistant",
+                "content": "Need a lookup",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "responses_item_id": "fc_1",
+                    "function": { "name": "lookup", "arguments": "{\"query\":\"x\"}" }
+                }]
+            }),
+            json!({
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "responses_item_id": "fc_1",
+                "content": "found"
+            }),
+        ];
+
+        let payload = build_responses_payload(ResponsesRequestContext {
+            model: "gpt-4.1",
+            messages: &messages,
+            tools: &tools,
+            metadata: &metadata,
+            model_metadata: &None,
+            params: &params,
+            stream: false,
+        });
+
+        assert_eq!(payload["input"][0]["role"], "assistant");
+        assert_eq!(payload["input"][1]["type"], "function_call");
+        assert_eq!(payload["input"][1]["id"], "fc_1");
+        assert_eq!(payload["input"][1]["call_id"], "call_1");
+        assert_eq!(payload["input"][1]["name"], "lookup");
+        assert_eq!(payload["input"][1]["arguments"], "{\"query\":\"x\"}");
+        assert_eq!(payload["input"][2]["type"], "function_call_output");
+        assert_eq!(payload["input"][2]["call_id"], "call_1");
+        assert!(payload["input"][2].get("id").is_none());
     }
 
     #[test]
@@ -1325,7 +1434,7 @@ mod tests {
             "output": [
                 { "type": "reasoning", "summary": [{ "type": "summary_text", "text": "think" }] },
                 { "type": "message", "content": [{ "type": "output_text", "text": "answer" }] },
-                { "type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{\"query\":\"x\"}" }
+                { "id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{\"query\":\"x\"}" }
             ],
             "usage": { "input_tokens": 3, "output_tokens": 5, "total_tokens": 8 }
         });
@@ -1362,11 +1471,18 @@ mod tests {
                 .count(),
             1
         );
+        let tool_calls = emitted
+            .iter()
+            .find(|response| response.r#type == MessageType::ToolCalls)
+            .and_then(|response| serde_json::from_str::<Value>(&response.chunk).ok())
+            .expect("serialized tool calls");
+        assert_eq!(tool_calls["tool_calls"][0]["id"], "call_1");
+        assert_eq!(tool_calls["tool_calls"][0]["responses_item_id"], "fc_1");
         let finished = emitted
             .iter()
             .find(|response| response.r#type == MessageType::Finished)
             .expect("finished response");
-        assert_eq!(finished.finish_reason, Some(FinishReason::Complete));
+        assert_eq!(finished.finish_reason, Some(FinishReason::ToolCalls));
         let metadata = finished.metadata.as_ref().expect("usage metadata");
         assert_eq!(metadata["tokens"]["total"], 8);
         assert_eq!(metadata["tokens"]["prompt"], 3);
@@ -1668,6 +1784,45 @@ mod tests {
     }
 
     #[test]
+    fn stream_function_call_without_call_id_does_not_reuse_item_id() {
+        let call = parse_stream_tool_call_for_test(&json!({
+            "type": "response.output_item.done",
+            "item": {
+                "id": "fc_missing_call_id",
+                "type": "function_call",
+                "name": "lookup",
+                "arguments": "{}"
+            }
+        }))
+        .expect("stream function call should be collected");
+
+        assert!(call.id.is_empty());
+        assert_eq!(
+            call.responses_item_id.as_deref(),
+            Some("fc_missing_call_id")
+        );
+    }
+
+    #[test]
+    fn non_stream_function_call_without_call_id_does_not_reuse_item_id() {
+        let call = parse_non_stream_tool_call_for_test(&json!({
+            "output": [{
+                "id": "fc_missing_call_id",
+                "type": "function_call",
+                "name": "lookup",
+                "arguments": "{}"
+            }]
+        }))
+        .expect("non-stream function call should be collected");
+
+        assert!(call.id.is_empty());
+        assert_eq!(
+            call.responses_item_id.as_deref(),
+            Some("fc_missing_call_id")
+        );
+    }
+
+    #[test]
     fn non_stream_output_collection_extracts_text_reasoning_tool_and_usage() {
         let response = json!({
             "output": [
@@ -1735,6 +1890,10 @@ mod tests {
         assert_eq!(call.id, "call_1");
         assert_eq!(call.name, "lookup");
         assert_eq!(call.arguments.as_deref(), Some("{\"query\":\"x\"}"));
+        assert_eq!(
+            finish_reason_for_tool_calls(!calls.is_empty()),
+            FinishReason::ToolCalls
+        );
     }
 
     #[test]
