@@ -640,61 +640,33 @@
     </div>
   </div>
 
-  <!-- advanced settings -->
+  <!-- experimental settings -->
   <div class="card">
-    <div class="title">{{ $t('settings.general.advancedSettings') }}</div>
+    <div class="title">{{ $t('settings.general.experimentalSettings') }}</div>
     <div class="list">
-      <!--<div class="item">
-        <div class="label">{{ $t('settings.general.wordSelectionToolbar') }}</div>
-        <div class="value">
-          <el-switch
-            v-model="settings.wordSelectionToolbar"
-            @change="onWordSelectionToolbarChange" />
-        </div>
-      </div>-->
       <div class="item">
-        <div class="label">{{ $t('settings.general.autoStart') }}</div>
-        <div class="value">
-          <el-switch v-model="settings.autoStart" @change="onAutoStartChange" />
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.enableResponsesApi') }}
+            <small class="tooltip">{{ $t('settings.general.enableResponsesApiTooltip') }}</small>
+          </div>
         </div>
-      </div>
-      <div class="item">
-        <div class="label">{{ $t('settings.general.autoUpdate') }}</div>
         <div class="value">
-          <el-switch v-model="settings.autoUpdate" @change="onAutoUpdateChange" />
+          <el-switch v-model="settings.enableResponsesApi" @change="onEnableResponsesApiChange" />
         </div>
       </div>
       <div class="item">
         <div class="label">
           <div class="label-text">
-            {{ $t('settings.general.workflowPreventIdleSleep') }}
-            <small class="tooltip">{{ $t('settings.general.workflowPreventIdleSleepTooltip') }}</small>
+            {{ $t('settings.general.enableResponsesReasoningSummary') }}
+            <small class="tooltip">{{ $t('settings.general.enableResponsesReasoningSummaryTooltip') }}</small>
           </div>
         </div>
         <div class="value">
           <el-switch
-            v-model="settings.workflowPreventIdleSleep"
-            @change="onWorkflowPreventIdleSleepChange" />
-        </div>
-      </div>
-      <div class="item update-item">
-        <div class="label">
-          <div class="update-meta">
-            <div class="update-version">
-              {{ $t('settings.general.currentVersion') }}: {{ currentVersion || '--' }}
-            </div>
-            <div class="update-status">{{ manualUpdateStatus }}</div>
-          </div>
-        </div>
-        <div class="value">
-          <el-button
-            type="primary"
-            plain
-            :loading="isCheckingForUpdates"
-            :disabled="isManualUpdateDownloading"
-            @click="onManualUpdateClick">
-            {{ manualUpdateButtonText }}
-          </el-button>
+            v-model="settings.enableResponsesReasoningSummary"
+            :disabled="!settings.enableResponsesApi"
+            @change="onEnableResponsesReasoningSummaryChange" />
         </div>
       </div>
     </div>
@@ -794,7 +766,66 @@
     </div>
   </div>
 
-  <!-- API key protection -->
+  <!-- advanced settings -->
+  <div class="card">
+    <div class="title">{{ $t('settings.general.advancedSettings') }}</div>
+    <div class="list">
+      <!--<div class="item">
+        <div class="label">{{ $t('settings.general.wordSelectionToolbar') }}</div>
+        <div class="value">
+          <el-switch
+            v-model="settings.wordSelectionToolbar"
+            @change="onWordSelectionToolbarChange" />
+        </div>
+      </div>-->
+      <div class="item">
+        <div class="label">{{ $t('settings.general.autoStart') }}</div>
+        <div class="value">
+          <el-switch v-model="settings.autoStart" @change="onAutoStartChange" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.autoUpdate') }}</div>
+        <div class="value">
+          <el-switch v-model="settings.autoUpdate" @change="onAutoUpdateChange" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.workflowPreventIdleSleep') }}
+            <small class="tooltip">{{ $t('settings.general.workflowPreventIdleSleepTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-switch
+            v-model="settings.workflowPreventIdleSleep"
+            @change="onWorkflowPreventIdleSleepChange" />
+        </div>
+      </div>
+      <div class="item update-item">
+        <div class="label">
+          <div class="update-meta">
+            <div class="update-version">
+              {{ $t('settings.general.currentVersion') }}: {{ currentVersion || '--' }}
+            </div>
+            <div class="update-status">{{ manualUpdateStatus }}</div>
+          </div>
+        </div>
+        <div class="value">
+          <el-button
+            type="primary"
+            plain
+            :loading="isCheckingForUpdates"
+            :disabled="isManualUpdateDownloading"
+            @click="onManualUpdateClick">
+            {{ manualUpdateButtonText }}
+          </el-button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="title">{{ $t('settings.general.apiKeyProtection.title') }}</div>
     <div class="list">
@@ -1333,6 +1364,14 @@ const onConversationTitleGenModelIdChange = value => {
 const onConversationTitleGenModelModelChange = value => {
   settingStore.settings.conversationTitleGenModel.model = value || ''
   setSetting('conversationTitleGenModel', settingStore.settings.conversationTitleGenModel)
+}
+
+const onEnableResponsesApiChange = value => {
+  setSetting('enableResponsesApi', Boolean(value))
+}
+
+const onEnableResponsesReasoningSummaryChange = value => {
+  setSetting('enableResponsesReasoningSummary', Boolean(value))
 }
 
 /**

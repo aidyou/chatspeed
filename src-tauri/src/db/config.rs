@@ -2,7 +2,8 @@ use super::types::{AiSkill, ModelConfig};
 use crate::constants::{CFG_WINDOW_POSITION, HTTP_SERVER_DIR};
 use crate::db::api_key_crypto::{
     activate_key_file, encrypt_api_key, generate_key_file, inspect_encryption_status,
-    ApiKeyEncryptionStatus, API_KEY_ENCRYPTION_CONFIG_KEY, API_KEY_FILE_CONFIG_KEY,
+    is_sensitive_config_key, ApiKeyEncryptionStatus, API_KEY_ENCRYPTION_CONFIG_KEY,
+    API_KEY_FILE_CONFIG_KEY,
 };
 use crate::db::error::StoreError;
 use crate::db::main_store::MainStore;
@@ -40,11 +41,19 @@ impl MainStore {
         let value = value.clone();
         self.db_runtime()?.write_blocking({
             let key = key.clone();
-            let value = value.to_string();
+            let value = value.clone();
             move |conn| {
+                let stored_value = if is_sensitive_config_key(&key) {
+                    let secret = value.as_str().ok_or_else(|| {
+                        StoreError::InvalidData(format!("Invalid secret config value for '{key}'"))
+                    })?;
+                    Value::String(encrypt_api_key(conn, secret)?)
+                } else {
+                    value
+                };
                 conn.execute(
                     "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
-                    [key, value],
+                    [key, stored_value.to_string()],
                 )?;
                 Ok(())
             }

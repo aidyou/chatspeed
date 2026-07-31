@@ -995,6 +995,16 @@ impl OpenAIChat {
         }
     }
 
+    fn should_use_responses_api(
+        base_endpoint: &str,
+        model_metadata: &Option<Value>,
+        responses_api_enabled: bool,
+    ) -> bool {
+        responses_api_enabled
+            && base_endpoint != "/compat_mode/v1/chat/completions"
+            && openai_responses::supports_responses_api(model_metadata)
+    }
+
     /// Determines the appropriate API endpoint based on tools and function call settings
     fn get_endpoint(
         messages: &[Value],
@@ -1080,6 +1090,32 @@ mod tests {
             OpenAIChat::get_endpoint(&[], &tools, &function_call_model_detail, "gpt-test"),
             "/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn responses_api_requires_opt_in_and_provider_support() {
+        let responses_metadata = Some(json!({ "supportsResponsesApi": true }));
+
+        assert!(!OpenAIChat::should_use_responses_api(
+            "/v1/chat/completions",
+            &responses_metadata,
+            false,
+        ));
+        assert!(OpenAIChat::should_use_responses_api(
+            "/v1/chat/completions",
+            &responses_metadata,
+            true,
+        ));
+        assert!(!OpenAIChat::should_use_responses_api(
+            "/compat_mode/v1/chat/completions",
+            &responses_metadata,
+            true,
+        ));
+        assert!(!OpenAIChat::should_use_responses_api(
+            "/v1/chat/completions",
+            &None,
+            true,
+        ));
     }
 
     #[test]
@@ -1486,8 +1522,12 @@ impl AiChatTrait for OpenAIChat {
 
         let base_endpoint =
             Self::get_endpoint(&messages, &tools, &model_detail.models, &final_model);
-        let use_responses_api = base_endpoint != "/compat_mode/v1/chat/completions"
-            && openai_responses::supports_responses_api(&model_detail.metadata);
+        let use_responses_api = Self::should_use_responses_api(
+            base_endpoint,
+            &model_detail.metadata,
+            self.main_store
+                .get_config(crate::constants::CFG_ENABLE_RESPONSES_API, false),
+        );
         if use_responses_api {
             payload = openai_responses::build_responses_payload(ResponsesRequestContext {
                 model: &final_model,
@@ -1497,6 +1537,10 @@ impl AiChatTrait for OpenAIChat {
                 model_metadata: &model_detail.metadata,
                 params: &params,
                 stream: stream_enabled,
+                enable_reasoning_summary: self.main_store.get_config(
+                    crate::constants::CFG_ENABLE_RESPONSES_REASONING_SUMMARY,
+                    false,
+                ),
             });
         }
         let selected_endpoint = if use_responses_api {

@@ -17,6 +17,8 @@ pub const V2_ENCRYPTED_VALUE_PREFIX: &str = "aes_2|";
 pub const API_KEY_ENCRYPTION_CONFIG_KEY: &str = "api_key_encryption_key";
 pub const API_KEY_FILE_CONFIG_KEY: &str = "api_key_file";
 
+const SENSITIVE_CONFIG_KEYS: [&str; 3] = ["google_api_key", "serper_api_key", "tavily_api_key"];
+
 const KEY_FILE_TYPE: &str = "chatspeed-api-key";
 const KEY_FILE_VERSION: u32 = 1;
 const V2_AAD_CONTEXT: &str = "chatspeed:ai_model.api_key:aes_2";
@@ -73,6 +75,10 @@ enum StoredValue<'a> {
     Unsupported,
 }
 
+pub fn is_sensitive_config_key(key: &str) -> bool {
+    SENSITIVE_CONFIG_KEYS.contains(&key)
+}
+
 pub fn encrypt_api_key(conn: &Connection, api_key: &str) -> Result<String, StoreError> {
     match configured_key(conn) {
         Ok(Some(key)) => {
@@ -96,9 +102,12 @@ pub fn decrypt_api_key(conn: &Connection, value: &str) -> Result<String, StoreEr
         StoredValue::V2 { .. } => {
             decrypt_with_keys(conn, value, configured_key(conn)?.as_ref(), None)
         }
-        StoredValue::Plaintext | StoredValue::LegacyV1 | StoredValue::Unsupported => {
+        StoredValue::Plaintext | StoredValue::LegacyV1 => {
             decrypt_with_keys(conn, value, None, None)
         }
+        StoredValue::Unsupported => Err(StoreError::InvalidData(
+            "Unsupported or malformed encrypted API key value".to_string(),
+        )),
     }
 }
 
@@ -247,11 +256,17 @@ pub fn activate_key_file(conn: &mut Connection, path: &Path) -> Result<(), Store
     let target_key = read_key_file(&canonical_path)?;
     let current_key = configured_key(conn).ok().flatten();
     let rows = stored_api_key_rows(conn)?;
+    let config_rows = stored_sensitive_config_rows(conn)?;
     let mut encrypted_rows = Vec::with_capacity(rows.len());
+    let mut encrypted_config_rows = Vec::with_capacity(config_rows.len());
 
     for (id, value) in rows {
         let plaintext = decrypt_with_keys(conn, &value, current_key.as_ref(), Some(&target_key))?;
         encrypted_rows.push((id, encrypt_v2(&target_key, &plaintext)?));
+    }
+    for (key, value) in config_rows {
+        let plaintext = decrypt_with_keys(conn, &value, current_key.as_ref(), Some(&target_key))?;
+        encrypted_config_rows.push((key, encrypt_v2(&target_key, &plaintext)?));
     }
 
     let tx = conn.transaction()?;
@@ -259,6 +274,12 @@ pub fn activate_key_file(conn: &mut Connection, path: &Path) -> Result<(), Store
         tx.execute(
             "UPDATE ai_model SET api_key = ?1 WHERE id = ?2",
             params![encrypted_value, id],
+        )?;
+    }
+    for (key, encrypted_value) in encrypted_config_rows {
+        tx.execute(
+            "UPDATE config SET value = ?1 WHERE key = ?2",
+            params![serde_json::to_string(&encrypted_value)?, key],
         )?;
     }
     tx.execute(
@@ -313,7 +334,9 @@ fn delete_legacy_master_key(conn: &Connection) -> Result<bool, StoreError> {
 
 pub fn upgrade_plaintext_api_keys(conn: &Connection) -> Result<(), StoreError> {
     let rows = stored_api_key_rows(conn)?;
+    let config_rows = stored_sensitive_config_rows(conn)?;
     let mut plaintext_keys = Vec::new();
+    let mut plaintext_config_values = Vec::new();
     for (id, api_key) in rows {
         match classify_value(&api_key) {
             StoredValue::Plaintext => plaintext_keys.push((id, api_key)),
@@ -321,8 +344,15 @@ pub fn upgrade_plaintext_api_keys(conn: &Connection) -> Result<(), StoreError> {
             StoredValue::Unsupported => {}
         }
     }
+    for (key, value) in config_rows {
+        match classify_value(&value) {
+            StoredValue::Plaintext => plaintext_config_values.push((key, value)),
+            StoredValue::LegacyV1 | StoredValue::V2 { .. } => {}
+            StoredValue::Unsupported => {}
+        }
+    }
 
-    if plaintext_keys.is_empty() {
+    if plaintext_keys.is_empty() && plaintext_config_values.is_empty() {
         return Ok(());
     }
 
@@ -332,6 +362,13 @@ pub fn upgrade_plaintext_api_keys(conn: &Connection) -> Result<(), StoreError> {
         conn.execute(
             "UPDATE ai_model SET api_key = ?1 WHERE id = ?2",
             params![encrypted_api_key, id],
+        )?;
+    }
+    for (key, value) in plaintext_config_values {
+        let encrypted_value = encrypt_legacy_value(&master_key, &value)?;
+        conn.execute(
+            "UPDATE config SET value = ?1 WHERE key = ?2",
+            params![serde_json::to_string(&encrypted_value)?, key],
         )?;
     }
     Ok(())
@@ -503,15 +540,42 @@ fn api_keys_locked_error() -> StoreError {
 }
 
 fn stored_api_key_values(conn: &Connection) -> Result<Vec<String>, StoreError> {
-    Ok(stored_api_key_rows(conn)?
+    let mut values = stored_api_key_rows(conn)?
         .into_iter()
         .map(|(_, value)| value)
-        .collect())
+        .collect::<Vec<_>>();
+    values.extend(stored_sensitive_config_values(conn)?);
+    Ok(values)
 }
 
 fn stored_api_key_rows(conn: &Connection) -> Result<Vec<(i64, String)>, StoreError> {
     let mut statement = conn.prepare("SELECT id, api_key FROM ai_model ORDER BY id")?;
     let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
+}
+
+fn stored_sensitive_config_values(conn: &Connection) -> Result<Vec<String>, StoreError> {
+    Ok(stored_sensitive_config_rows(conn)?
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect())
+}
+
+fn stored_sensitive_config_rows(conn: &Connection) -> Result<Vec<(String, String)>, StoreError> {
+    let placeholders = std::iter::repeat("?")
+        .take(SENSITIVE_CONFIG_KEYS.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut statement = conn.prepare(&format!(
+        "SELECT key, value FROM config WHERE key IN ({placeholders}) ORDER BY key"
+    ))?;
+    let rows = statement.query_map(SENSITIVE_CONFIG_KEYS, |row| {
+        let key: String = row.get(0)?;
+        let value: String = row.get(1)?;
+        let value = serde_json::from_str(&value).map_err(|_| rusqlite::Error::InvalidQuery)?;
+        Ok((key, value))
+    })?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(StoreError::from)
 }
@@ -622,6 +686,70 @@ mod tests {
         assert!(encrypted.starts_with(LEGACY_ENCRYPTED_VALUE_PREFIX));
         assert_eq!(decrypt_api_key(&conn, &encrypted).unwrap(), plaintext);
         assert_eq!(decrypt_api_key(&conn, "legacy-key").unwrap(), "legacy-key");
+    }
+
+    #[test]
+    fn plaintext_search_provider_keys_upgrade_to_legacy_encryption() {
+        let conn = Connection::open_in_memory().expect("failed to open database");
+        create_tables(&conn);
+        for (key, value) in [
+            ("google_api_key", "google-secret"),
+            ("serper_api_key", "serper-secret"),
+            ("tavily_api_key", "tavily-secret"),
+        ] {
+            conn.execute(
+                "INSERT INTO config (key, value) VALUES (?1, ?2)",
+                params![key, serde_json::to_string(value).unwrap()],
+            )
+            .expect("failed to insert plaintext search provider key");
+        }
+
+        upgrade_plaintext_api_keys(&conn).expect("failed to encrypt search provider keys");
+
+        for (key, expected) in [
+            ("google_api_key", "google-secret"),
+            ("serper_api_key", "serper-secret"),
+            ("tavily_api_key", "tavily-secret"),
+        ] {
+            let stored: String = conn
+                .query_row("SELECT value FROM config WHERE key = ?1", [key], |row| {
+                    row.get(0)
+                })
+                .expect("missing encrypted search provider key");
+            let encrypted: String = serde_json::from_str(&stored).expect("invalid stored JSON");
+            assert!(encrypted.starts_with(LEGACY_ENCRYPTED_VALUE_PREFIX));
+            assert_eq!(decrypt_api_key(&conn, &encrypted).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn key_file_migrates_search_provider_keys_to_v2() {
+        let mut conn = Connection::open_in_memory().expect("failed to open database");
+        create_tables(&conn);
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES (?1, ?2)",
+            params![
+                "google_api_key",
+                serde_json::to_string("google-secret").unwrap()
+            ],
+        )
+        .expect("failed to insert plaintext search provider key");
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let key_path = temp_dir.path().join("test.csk");
+        generate_key_file(&key_path).expect("failed to generate key file");
+
+        activate_key_file(&mut conn, &key_path).expect("failed to activate key file");
+
+        let stored: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'google_api_key'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("missing encrypted search provider key");
+        let encrypted: String = serde_json::from_str(&stored).expect("invalid stored JSON");
+        assert!(encrypted.starts_with(V2_ENCRYPTED_VALUE_PREFIX));
+        assert_eq!(decrypt_api_key(&conn, &encrypted).unwrap(), "google-secret");
     }
 
     #[test]

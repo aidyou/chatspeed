@@ -9,7 +9,10 @@ use serde_json::Value;
 use std::{collections::HashMap, path::Path, sync::Mutex as StdMutex};
 
 use super::{
-    api_key_crypto::{decrypt_api_key, inspect_encryption_status},
+    api_key_crypto::{
+        decrypt_api_key, inspect_encryption_status, is_sensitive_config_key,
+        API_KEY_ENCRYPTION_CONFIG_KEY,
+    },
     mcp::Mcp,
     sql::migrations::manager,
     types::{Config, ModelConfig},
@@ -656,21 +659,11 @@ impl MainStore {
                 StoreError::from(e)
             })?;
         let rows = stmt
-            .query_map(
-                [crate::db::api_key_crypto::API_KEY_ENCRYPTION_CONFIG_KEY],
-                |row| {
-                    let key: String = row.get("key")?;
-                    let value_str: String = row.get("value")?;
-                    let value: Value = serde_json::from_str(&value_str).unwrap_or_else(|e| {
-                        error!(
-                            "Failed to parse JSON for config key '{}': {}. Value: '{}'",
-                            key, e, value_str
-                        );
-                        Value::Null
-                    });
-                    Ok((key, value))
-                },
-            )
+            .query_map([API_KEY_ENCRYPTION_CONFIG_KEY], |row| {
+                let key: String = row.get("key")?;
+                let value_str: String = row.get("value")?;
+                Ok((key, value_str))
+            })
             .map_err(|e| {
                 error!("Failed to query rows for all config: {}", e);
                 StoreError::from(e)
@@ -678,7 +671,32 @@ impl MainStore {
 
         let mut config_map = HashMap::new();
         for row in rows {
-            let (key, value) = row?;
+            let (key, value_str) = row?;
+            let value: Value = serde_json::from_str(&value_str).unwrap_or_else(|e| {
+                error!(
+                    "Failed to parse JSON for config key '{}': {}. Value: '{}'",
+                    key, e, value_str
+                );
+                Value::Null
+            });
+            let value = if is_sensitive_config_key(&key) {
+                match value {
+                    Value::String(secret) => match decrypt_api_key(conn, &secret) {
+                        Ok(secret) => Value::String(secret),
+                        Err(error) => {
+                            log::warn!("Unable to decrypt secret config key '{}': {}", key, error);
+                            Value::String(String::new())
+                        }
+                    },
+                    value => {
+                        return Err(StoreError::InvalidData(format!(
+                            "Invalid secret config value for '{key}': {value}"
+                        )))
+                    }
+                }
+            } else {
+                value
+            };
             config_map.insert(key, value);
         }
 

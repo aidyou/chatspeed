@@ -135,25 +135,27 @@ fn handle_shortcut(app: &AppHandle, shortcut_key: &str) {
         }
         CFG_MOVE_WINDOW_LEFT_SHORTCUT => {
             if let Err(e) =
-                crate::commands::window::move_window_to_screen_edge(app.clone(), "main", "left")
+                crate::commands::window::move_window_to_screen_edge(app.clone(), "workflow", "left")
             {
-                log::error!("Failed to move window left: {}", e);
+                log::error!("Failed to move workflow window left: {}", e);
             }
-            activate_window(app, "main");
+            activate_window(app, "workflow");
         }
         CFG_MOVE_WINDOW_RIGHT_SHORTCUT => {
-            if let Err(e) =
-                crate::commands::window::move_window_to_screen_edge(app.clone(), "main", "right")
-            {
-                log::error!("Failed to move window right: {}", e);
+            if let Err(e) = crate::commands::window::move_window_to_screen_edge(
+                app.clone(),
+                "workflow",
+                "right",
+            ) {
+                log::error!("Failed to move workflow window right: {}", e);
             }
-            activate_window(app, "main");
+            activate_window(app, "workflow");
         }
         CFG_CENTER_WINDOW_SHORTCUT => {
-            if let Err(e) = crate::commands::window::center_window(app.clone(), "main") {
-                log::error!("Failed to center window: {}", e);
+            if let Err(e) = crate::commands::window::center_window(app.clone(), "workflow") {
+                log::error!("Failed to center workflow window: {}", e);
             }
-            activate_window(app, "main");
+            activate_window(app, "workflow");
         }
         CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT => toggle_assistant_window(app),
         CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT => {

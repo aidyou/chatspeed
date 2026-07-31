@@ -25,6 +25,7 @@ pub(crate) struct ResponsesRequestContext<'a> {
     pub model_metadata: &'a Option<Value>,
     pub params: &'a Value,
     pub stream: bool,
+    pub enable_reasoning_summary: bool,
 }
 
 #[derive(Debug, Default)]
@@ -204,6 +205,15 @@ pub(crate) fn build_responses_payload(ctx: ResponsesRequestContext<'_>) -> Value
                 "reasoning".to_string(),
                 json!({ "effort": reasoning_effort }),
             );
+        }
+
+        if ctx.enable_reasoning_summary {
+            let reasoning = obj
+                .entry("reasoning".to_string())
+                .or_insert_with(|| json!({}));
+            if let Some(reasoning) = reasoning.as_object_mut() {
+                reasoning.insert("summary".to_string(), json!("auto"));
+            }
         }
 
         if let Some(tools) = ctx.tools.as_ref() {
@@ -1193,6 +1203,7 @@ mod tests {
             model_metadata: &None,
             params: &params,
             stream: true,
+            enable_reasoning_summary: false,
         });
 
         assert_eq!(payload["model"], "gpt-4.1");
@@ -1231,6 +1242,7 @@ mod tests {
             model_metadata: &None,
             params: &params,
             stream: false,
+            enable_reasoning_summary: false,
         });
 
         assert_eq!(payload["input"][0]["role"], "assistant");
@@ -1273,6 +1285,7 @@ mod tests {
             model_metadata: &None,
             params: &params,
             stream: false,
+            enable_reasoning_summary: false,
         });
 
         assert_eq!(payload["input"][0]["role"], "assistant");
@@ -1342,6 +1355,7 @@ mod tests {
             })),
             params: &params,
             stream: false,
+            enable_reasoning_summary: false,
         });
 
         assert_eq!(payload["max_output_tokens"], 2048);
@@ -1382,12 +1396,32 @@ mod tests {
             model_metadata: &None,
             params: &json!({}),
             stream: false,
+            enable_reasoning_summary: false,
         });
 
         assert_eq!(payload["reasoning"]["effort"], "medium");
         assert!(payload.get("reasoning_effort").is_none());
         assert!(payload.get("thinking").is_none());
         assert!(payload.get("thinking_budget").is_none());
+        assert!(payload["reasoning"].get("summary").is_none());
+    }
+
+    #[test]
+    fn build_payload_requests_reasoning_summary_when_enabled() {
+        let messages = vec![json!({ "role": "user", "content": "hello" })];
+
+        let payload = build_responses_payload(ResponsesRequestContext {
+            model: "gpt-4.1",
+            messages: &messages,
+            tools: &None,
+            metadata: &ChatMetadata::default(),
+            model_metadata: &None,
+            params: &json!({}),
+            stream: false,
+            enable_reasoning_summary: true,
+        });
+
+        assert_eq!(payload["reasoning"]["summary"], "auto");
     }
 
     #[test]
@@ -1413,6 +1447,7 @@ mod tests {
             })),
             params: &json!({}),
             stream: false,
+            enable_reasoning_summary: false,
         });
 
         assert_eq!(payload["reasoning"]["effort"], "high");
