@@ -108,7 +108,7 @@ impl ContextManager {
             && approval_status != "rejected"
     }
 
-    fn is_successful_completion_message(message: &WorkflowMessage) -> bool {
+    pub(crate) fn is_successful_completion_message(message: &WorkflowMessage) -> bool {
         if message.role != "tool" {
             return false;
         }

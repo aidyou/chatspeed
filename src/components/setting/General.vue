@@ -113,6 +113,44 @@
     </div>
   </div>
 
+  <!-- network settings -->
+  <div class="card">
+    <div class="title">{{ $t('settings.general.networkSettings') }}</div>
+    <div class="list">
+      <div class="item">
+        <div class="label">{{ $t('settings.general.proxyType') }}</div>
+        <div class="value">
+          <el-select v-model="settings.proxyType" class="auto-width-select" placement="bottom"
+            @change="onProxyTypeChange">
+            <el-option v-for="(label, type) in proxyTypes" :key="type" :label="label" :value="type">
+            </el-option>
+          </el-select>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.proxyServer') }}</div>
+        <div class="value">
+          <el-input v-model="settings.proxyServer" @change="onProxyServerChange"
+            :placeholder="$t('settings.general.proxyServerPlaceholder')" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.proxyUsername') }}</div>
+        <div class="value">
+          <el-input v-model="settings.proxyUsername" @change="onProxyUsernameChange"
+            :placeholder="$t('settings.general.proxyUsernamePlaceholder')" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.proxyPassword') }}</div>
+        <div class="value">
+          <el-input v-model="settings.proxyPassword" @change="onProxyPasswordChange"
+            :placeholder="$t('settings.general.proxyPasswordPlaceholder')" />
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- conversation settings -->
   <div class="card">
     <div class="title">{{ $t('settings.general.conversationSettings') }}</div>
@@ -227,6 +265,7 @@
     </div>
   </div>
 
+  <!-- search engine -->
   <div class="card">
     <div class="title">{{ $t('settings.general.searchEngine') }}</div>
     <div class="list">
@@ -316,44 +355,6 @@
         <div class="value" style="width: 300px">
           <el-input type="password" v-model="settings.tavilyApiKey" @input="onTavilyApiKeyChange"
             :placeholder="$t('settings.general.search.tavilyApiKey')" />
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- network settings -->
-  <div class="card">
-    <div class="title">{{ $t('settings.general.networkSettings') }}</div>
-    <div class="list">
-      <div class="item">
-        <div class="label">{{ $t('settings.general.proxyType') }}</div>
-        <div class="value">
-          <el-select v-model="settings.proxyType" class="auto-width-select" placement="bottom"
-            @change="onProxyTypeChange">
-            <el-option v-for="(label, type) in proxyTypes" :key="type" :label="label" :value="type">
-            </el-option>
-          </el-select>
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">{{ $t('settings.general.proxyServer') }}</div>
-        <div class="value">
-          <el-input v-model="settings.proxyServer" @change="onProxyServerChange"
-            :placeholder="$t('settings.general.proxyServerPlaceholder')" />
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">{{ $t('settings.general.proxyUsername') }}</div>
-        <div class="value">
-          <el-input v-model="settings.proxyUsername" @change="onProxyUsernameChange"
-            :placeholder="$t('settings.general.proxyUsernamePlaceholder')" />
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">{{ $t('settings.general.proxyPassword') }}</div>
-        <div class="value">
-          <el-input v-model="settings.proxyPassword" @change="onProxyPasswordChange"
-            :placeholder="$t('settings.general.proxyPasswordPlaceholder')" />
         </div>
       </div>
     </div>
@@ -640,38 +641,6 @@
     </div>
   </div>
 
-  <!-- experimental settings -->
-  <div class="card">
-    <div class="title">{{ $t('settings.general.experimentalSettings') }}</div>
-    <div class="list">
-      <div class="item">
-        <div class="label">
-          <div class="label-text">
-            {{ $t('settings.general.enableResponsesApi') }}
-            <small class="tooltip">{{ $t('settings.general.enableResponsesApiTooltip') }}</small>
-          </div>
-        </div>
-        <div class="value">
-          <el-switch v-model="settings.enableResponsesApi" @change="onEnableResponsesApiChange" />
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">
-          <div class="label-text">
-            {{ $t('settings.general.enableResponsesReasoningSummary') }}
-            <small class="tooltip">{{ $t('settings.general.enableResponsesReasoningSummaryTooltip') }}</small>
-          </div>
-        </div>
-        <div class="value">
-          <el-switch
-            v-model="settings.enableResponsesReasoningSummary"
-            :disabled="!settings.enableResponsesApi"
-            @change="onEnableResponsesReasoningSummaryChange" />
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- sensitive data settings -->
   <div class="card">
     <div class="title">{{ $t('settings.general.sensitiveFiltering.title') }}</div>
@@ -766,66 +735,7 @@
     </div>
   </div>
 
-  <!-- advanced settings -->
-  <div class="card">
-    <div class="title">{{ $t('settings.general.advancedSettings') }}</div>
-    <div class="list">
-      <!--<div class="item">
-        <div class="label">{{ $t('settings.general.wordSelectionToolbar') }}</div>
-        <div class="value">
-          <el-switch
-            v-model="settings.wordSelectionToolbar"
-            @change="onWordSelectionToolbarChange" />
-        </div>
-      </div>-->
-      <div class="item">
-        <div class="label">{{ $t('settings.general.autoStart') }}</div>
-        <div class="value">
-          <el-switch v-model="settings.autoStart" @change="onAutoStartChange" />
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">{{ $t('settings.general.autoUpdate') }}</div>
-        <div class="value">
-          <el-switch v-model="settings.autoUpdate" @change="onAutoUpdateChange" />
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">
-          <div class="label-text">
-            {{ $t('settings.general.workflowPreventIdleSleep') }}
-            <small class="tooltip">{{ $t('settings.general.workflowPreventIdleSleepTooltip') }}</small>
-          </div>
-        </div>
-        <div class="value">
-          <el-switch
-            v-model="settings.workflowPreventIdleSleep"
-            @change="onWorkflowPreventIdleSleepChange" />
-        </div>
-      </div>
-      <div class="item update-item">
-        <div class="label">
-          <div class="update-meta">
-            <div class="update-version">
-              {{ $t('settings.general.currentVersion') }}: {{ currentVersion || '--' }}
-            </div>
-            <div class="update-status">{{ manualUpdateStatus }}</div>
-          </div>
-        </div>
-        <div class="value">
-          <el-button
-            type="primary"
-            plain
-            :loading="isCheckingForUpdates"
-            :disabled="isManualUpdateDownloading"
-            @click="onManualUpdateClick">
-            {{ manualUpdateButtonText }}
-          </el-button>
-        </div>
-      </div>
-    </div>
-  </div>
-
+  <!-- key protection -->
   <div class="card">
     <div class="title">{{ $t('settings.general.apiKeyProtection.title') }}</div>
     <div class="list">
@@ -892,6 +802,98 @@
             <el-option v-for="backup in backups" :key="backup.value" :label="backup.label" :value="backup.value">
             </el-option>
           </el-select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- experimental settings -->
+  <div class="card">
+    <div class="title">{{ $t('settings.general.experimentalSettings') }}</div>
+    <div class="list">
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.enableResponsesApi') }}
+            <small class="tooltip">{{ $t('settings.general.enableResponsesApiTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-switch v-model="settings.enableResponsesApi" @change="onEnableResponsesApiChange" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.enableResponsesReasoningSummary') }}
+            <small class="tooltip">{{ $t('settings.general.enableResponsesReasoningSummaryTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-switch
+            v-model="settings.enableResponsesReasoningSummary"
+            :disabled="!settings.enableResponsesApi"
+            @change="onEnableResponsesReasoningSummaryChange" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- advanced settings -->
+  <div class="card">
+    <div class="title">{{ $t('settings.general.advancedSettings') }}</div>
+    <div class="list">
+      <!--<div class="item">
+        <div class="label">{{ $t('settings.general.wordSelectionToolbar') }}</div>
+        <div class="value">
+          <el-switch
+            v-model="settings.wordSelectionToolbar"
+            @change="onWordSelectionToolbarChange" />
+        </div>
+      </div>-->
+      <div class="item">
+        <div class="label">{{ $t('settings.general.autoStart') }}</div>
+        <div class="value">
+          <el-switch v-model="settings.autoStart" @change="onAutoStartChange" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.autoUpdate') }}</div>
+        <div class="value">
+          <el-switch v-model="settings.autoUpdate" @change="onAutoUpdateChange" />
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.workflowPreventIdleSleep') }}
+            <small class="tooltip">{{ $t('settings.general.workflowPreventIdleSleepTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value">
+          <el-switch
+            v-model="settings.workflowPreventIdleSleep"
+            @change="onWorkflowPreventIdleSleepChange" />
+        </div>
+      </div>
+      <div class="item update-item">
+        <div class="label">
+          <div class="update-meta">
+            <div class="update-version">
+              {{ $t('settings.general.currentVersion') }}: {{ currentVersion || '--' }}
+            </div>
+            <div class="update-status">{{ manualUpdateStatus }}</div>
+          </div>
+        </div>
+        <div class="value">
+          <el-button
+            type="primary"
+            plain
+            :loading="isCheckingForUpdates"
+            :disabled="isManualUpdateDownloading"
+            @click="onManualUpdateClick">
+            {{ manualUpdateButtonText }}
+          </el-button>
         </div>
       </div>
     </div>

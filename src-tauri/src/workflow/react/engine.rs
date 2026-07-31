@@ -788,12 +788,43 @@ impl WorkflowExecutor {
         }
     }
 
+    fn workflow_completion_is_resolving(
+        last_message: Option<&WorkflowMessage>,
+        pending_final_review: Option<&crate::workflow::react::types::PendingFinalReview>,
+    ) -> bool {
+        let final_review_observation_pending = pending_final_review.is_some_and(|pending| {
+            last_message.is_some_and(|message| {
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("sub_agent_id"))
+                    .and_then(Value::as_str)
+                    == Some(pending.sub_agent_id.as_str())
+            })
+        });
+        let workflow_just_completed =
+            last_message.is_some_and(ContextManager::is_successful_completion_message);
+
+        final_review_observation_pending || workflow_just_completed
+    }
+
     async fn maybe_run_blocking_compression_after_message(
         &mut self,
         role: &str,
         step_type: Option<&StepType>,
         needs_compression: bool,
     ) -> Result<bool, WorkflowEngineError> {
+        if Self::workflow_completion_is_resolving(
+            self.context.messages.last(),
+            self.pending_final_review.as_ref(),
+        ) {
+            log::info!(
+                "[Workflow][session={}][phase=compression] Skipping compression while final workflow completion is being resolved",
+                self.session_id
+            );
+            return Ok(false);
+        }
+
         if needs_compression {
             if let Some((compression_candidate, compressed_until_message_id)) =
                 self.context.build_pressure_compression_candidate()
@@ -6002,10 +6033,10 @@ impl WorkflowExecutor {
         }
 
         // --- 2. Slash Command Auto-Activation (For User Messages) ---
-        // We do this BEFORE adding the user message to ensure the skill instructions
-        // appear immediately before the query that triggered them.
+        // Skill instructions are request-local AI guidance. Keep them out of the durable
+        // transcript and UI projection, then consume them with the next LLM call.
         if role == "user" {
-            let _ = self.check_and_auto_activate_skills(&content).await;
+            self.check_and_auto_activate_skills(&content)?;
 
             // [Bug Fix] If user sends a message while the session is Paused, AwaitingUser or AwaitingApproval,
             // automatically transition back to Thinking state so the loop can resume.
@@ -6066,7 +6097,7 @@ impl WorkflowExecutor {
     }
 
     /// Automatically detects and activates skills triggered by slash commands in user input.
-    pub(crate) async fn check_and_auto_activate_skills(
+    pub(crate) fn check_and_auto_activate_skills(
         &mut self,
         content: &str,
     ) -> Result<(), WorkflowEngineError> {
@@ -6098,22 +6129,14 @@ impl WorkflowExecutor {
                     &skill.name
                 );
 
-                // Add as a system message to the context so the LLM sees it immediately.
-                // It is added AFTER the user message in history, but since we are about to call the LLM,
-                // it will effectively act as the most recent instruction.
-                self.context
-                    .add_message(
-                        "user".to_string(),
-                        activated_content,
-                        None,
-                        None,
-                        Some(StepType::Think),
-                        self.current_step as i32,
-                        false,
-                        None,
-                        None,
-                    )
-                    .await?;
+                if let Some(existing) = self.next_llm_runtime_reminder.as_mut() {
+                    if !existing.is_empty() {
+                        existing.push('\n');
+                    }
+                    existing.push_str(&activated_content);
+                } else {
+                    self.next_llm_runtime_reminder = Some(activated_content);
+                }
             }
         }
 
@@ -8406,6 +8429,136 @@ mod recovery_tests {
             },
             _ => panic!("Expected SafeFailed, got {:?}", result),
         }
+    }
+
+    #[tokio::test]
+    async fn slash_command_skill_activation_is_request_local_ai_context() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "slash-skill-runtime-context";
+        let agent = Agent::new(
+            "slash-skill-agent".to_string(),
+            "Slash Skill Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store);
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            chat_state.main_store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(12).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.available_skills.insert(
+            "help".to_string(),
+            SkillManifest {
+                name: "help".to_string(),
+                version: "1.0.0".to_string(),
+                source: "builtin".to_string(),
+                description: "Help".to_string(),
+                tools: Vec::new(),
+                instructions: "Use the help workflow.".to_string(),
+                skill_dir: Some(PathBuf::from("/skills/help")),
+                references: Vec::new(),
+            },
+        );
+
+        executor
+            .check_and_auto_activate_skills("/help show commands")
+            .expect("skill activation should succeed");
+
+        let reminder = executor
+            .next_llm_runtime_reminder
+            .as_deref()
+            .expect("skill instructions should be queued for the next LLM call");
+        assert!(reminder.contains("<activated_skill name=\"help\""));
+        assert!(executor.context.messages.is_empty());
+    }
+
+    #[test]
+    fn compression_is_skipped_while_final_completion_is_resolving() {
+        let completion_message = WorkflowMessage {
+            id: Some(1),
+            session_id: "completion-resolution".to_string(),
+            role: "tool".to_string(),
+            message: "Task finished successfully.".to_string(),
+            reasoning: None,
+            message_kind: "tool".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(json!({
+                "tool_name": TOOL_COMPLETE_WORKFLOW,
+                "execution_status": "completed"
+            })),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 1,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        assert!(WorkflowExecutor::workflow_completion_is_resolving(
+            Some(&completion_message),
+            None,
+        ));
+
+        let review_observation = WorkflowMessage {
+            role: "user".to_string(),
+            message: "Reviewer result".to_string(),
+            metadata: Some(json!({"sub_agent_id": "reviewer-1"})),
+            ..completion_message.clone()
+        };
+        let pending_review = crate::workflow::react::types::PendingFinalReview {
+            sub_agent_id: "reviewer-1".to_string(),
+            completion_summary: "Completed and verified.".to_string(),
+        };
+        assert!(WorkflowExecutor::workflow_completion_is_resolving(
+            Some(&review_observation),
+            Some(&pending_review),
+        ));
+
+        let unrelated_observation = WorkflowMessage {
+            metadata: Some(json!({"sub_agent_id": "other-agent"})),
+            ..review_observation
+        };
+        assert!(!WorkflowExecutor::workflow_completion_is_resolving(
+            Some(&unrelated_observation),
+            Some(&pending_review),
+        ));
     }
 
     #[test]
