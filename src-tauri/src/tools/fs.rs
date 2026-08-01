@@ -448,6 +448,24 @@ fn escape_xml_attribute(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+fn content_uses_crlf_dominant_line_endings(content: &str) -> bool {
+    let mut crlf_count = 0usize;
+    let mut lf_only_count = 0usize;
+    let bytes = content.as_bytes();
+
+    for index in 0..bytes.len() {
+        if bytes[index] == b'\n' {
+            if index > 0 && bytes[index - 1] == b'\r' {
+                crlf_count += 1;
+            } else {
+                lf_only_count += 1;
+            }
+        }
+    }
+
+    crlf_count > lf_only_count
+}
+
 fn execute_edit_file(
     path_str: &str,
     old_str_unix: &str,
@@ -472,11 +490,17 @@ fn execute_edit_file(
 
     let mut final_content = String::new();
     let mut match_found = false;
+    let file_uses_crlf = content_uses_crlf_dominant_line_endings(&raw_content);
     let old_str_win = old_str_unix.replace("\n", "\r\n");
     let new_str_win = new_str_unix.replace("\n", "\r\n");
+    let new_str_for_file = if file_uses_crlf {
+        new_str_win.as_str()
+    } else {
+        new_str_unix
+    };
     let mut start_line = 0;
 
-    if raw_content.contains(&old_str_win) {
+    if old_str_unix.contains('\n') && raw_content.contains(&old_str_win) {
         let matches: Vec<usize> = raw_content
             .match_indices(&old_str_win)
             .map(|(i, _)| i)
@@ -509,9 +533,9 @@ fn execute_edit_file(
 
         start_line = raw_content[..matches[0]].lines().count();
         final_content = if replace_all {
-            raw_content.replace(old_str_unix, new_str_unix)
+            raw_content.replace(old_str_unix, new_str_for_file)
         } else {
-            raw_content.replacen(old_str_unix, new_str_unix, 1)
+            raw_content.replacen(old_str_unix, new_str_for_file, 1)
         };
         match_found = true;
     }
@@ -1237,6 +1261,24 @@ mod tests {
         (temp_dir, relative)
     }
 
+    #[test]
+    fn test_content_uses_crlf_dominant_line_endings() {
+        assert!(!content_uses_crlf_dominant_line_endings("line1\nline2\n"));
+        assert!(content_uses_crlf_dominant_line_endings(
+            "line1\r\nline2\r\n"
+        ));
+        assert!(!content_uses_crlf_dominant_line_endings(
+            "line1\nline2\r\nline3\n"
+        ));
+        assert!(content_uses_crlf_dominant_line_endings(
+            "line1\r\nline2\nline3\r\n"
+        ));
+        assert!(!content_uses_crlf_dominant_line_endings(
+            "line1\nline2\r\n"
+        ));
+        assert!(!content_uses_crlf_dominant_line_endings("single line"));
+    }
+
     #[tokio::test]
     async fn test_read_file_basic() {
         let tool = ReadFile::default();
@@ -1799,6 +1841,88 @@ mod tests {
         tool.call(params).await.unwrap();
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(content, "line1\ninserted_block\nline5");
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_single_line_replacement_preserves_lf_file_endings() {
+        let tool = EditFile::default();
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        fs::write(&path, "line1\nTARGET\nline3").unwrap();
+
+        tool.call(json!({
+            "file_path": path,
+            "old_string": "TARGET",
+            "new_string": "inserted1\ninserted2"
+        }))
+        .await
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "line1\ninserted1\ninserted2\nline3");
+        assert!(!content.contains('\r'));
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_single_line_replacement_preserves_crlf_file_endings() {
+        let tool = EditFile::default();
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        fs::write(&path, "line1\r\nTARGET\r\nline3").unwrap();
+
+        tool.call(json!({
+            "file_path": path,
+            "old_string": "TARGET",
+            "new_string": "inserted1\ninserted2"
+        }))
+        .await
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "line1\r\ninserted1\r\ninserted2\r\nline3");
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_single_line_replacement_uses_dominant_lf_file_endings() {
+        let tool = EditFile::default();
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        fs::write(&path, "line1\nTARGET\nline3\r\nline4\nline5").unwrap();
+
+        tool.call(json!({
+            "file_path": path,
+            "old_string": "TARGET",
+            "new_string": "inserted1\ninserted2"
+        }))
+        .await
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("inserted1\ninserted2"));
+        assert!(!content.contains("inserted1\r\ninserted2"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_single_line_replacement_uses_dominant_crlf_file_endings() {
+        let tool = EditFile::default();
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        fs::write(&path, "line1\r\nTARGET\r\nline3\nline4\r\nline5").unwrap();
+
+        tool.call(json!({
+            "file_path": path,
+            "old_string": "TARGET",
+            "new_string": "inserted1\ninserted2"
+        }))
+        .await
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("inserted1\r\ninserted2"));
     }
 
     #[tokio::test]
