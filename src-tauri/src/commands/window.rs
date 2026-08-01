@@ -52,6 +52,11 @@ struct SettingWindowPayload {
     setting_type: String,
 }
 
+#[derive(serde::Serialize, Clone)]
+struct ShowWindowPayload<'a> {
+    window_label: &'a str,
+}
+
 /// Opens the settings window via event system
 ///
 /// IMPORTANT: We use events instead of direct window creation to avoid deadlocks
@@ -154,7 +159,12 @@ pub fn open_proxy_switcher_window(app_handle: tauri::AppHandle) -> Result<()> {
 /// ```
 #[command]
 pub fn show_window(app_handle: tauri::AppHandle, window_label: &str) -> Result<()> {
-    crate::window::show_and_focus_window(&app_handle, window_label);
+    app_handle
+        .emit("show-window", ShowWindowPayload { window_label })
+        .map_err(|e| AppError::General {
+            message: t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+        })?;
+
     Ok(())
 }
 

@@ -346,7 +346,7 @@ body {
   width: 100vw;
   overflow: hidden;
   background: var(--cs-bg-color);
-  border-radius: var(--cs-border-radius-lg);
+  border-radius: 0;
   box-sizing: border-box;
 
   .titlebar {
@@ -357,11 +357,19 @@ body {
     user-select: none;
     background: transparent;
     box-sizing: border-box;
-    border-radius: var(--cs-border-radius-lg) var(--cs-border-radius-lg) 0 0;
+    border-radius: 0;
     position: fixed;
     top: 0;
     left: 0;
     z-index: var(--cs-titlebar-zindex);
+  }
+
+  &.macos {
+    border-radius: var(--cs-border-radius-lg);
+
+    .titlebar {
+      border-radius: var(--cs-border-radius-lg) var(--cs-border-radius-lg) 0 0;
+    }
   }
 
   &.linux,

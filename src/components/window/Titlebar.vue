@@ -464,6 +464,7 @@ init()
 
   &.reverse-layout {
     flex-direction: row-reverse !important;
+    border-radius: 0;
 
     .window-controls {
       flex-direction: row-reverse !important;

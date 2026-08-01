@@ -474,6 +474,11 @@ struct SettingWindowPayload {
 }
 
 #[derive(Deserialize)]
+struct ShowWindowPayload {
+    window_label: String,
+}
+
+#[derive(Deserialize)]
 struct UrlWindowPayload {
     url: String,
 }
@@ -655,7 +660,25 @@ pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
     // Register proxy switcher window creation event
     let app_handle_clone = app_handle.clone();
     app_handle.listen("create-proxy-switcher-window", move |_| {
-        toggle_proxy_switcher_window(&app_handle_clone);
+        let app = app_handle_clone.clone();
+        spawn_window_task(Box::pin(async move {
+            toggle_proxy_switcher_window(&app);
+            Ok(())
+        }));
+    });
+
+    // Register managed window show event
+    let app_handle_clone = app_handle.clone();
+    app_handle.listen("show-window", move |event| {
+        let app = app_handle_clone.clone();
+        let window_label = serde_json::from_str::<ShowWindowPayload>(event.payload())
+            .map(|payload| payload.window_label)
+            .unwrap_or_else(|_| "main".to_string());
+
+        spawn_window_task(Box::pin(async move {
+            show_and_focus_window(&app, &window_label);
+            Ok(())
+        }));
     });
 
     // Register URL window creation event
