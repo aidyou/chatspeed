@@ -13,10 +13,20 @@ use crate::workflow::react::manager::WorkflowManager;
 use crate::workflow::react::orchestrator::SubAgentFactory;
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
 use serde_json::{json, Value};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 use tokio::process::Command;
+
+#[cfg(target_os = "windows")]
+fn configure_no_window(command: &mut Command) {
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_no_window(_command: &mut Command) {}
 
 pub fn normalize_datetime_for_db(datetime: DateTime<Local>) -> String {
     datetime.format("%Y-%m-%d %H:%M:%S").to_string()
@@ -526,6 +536,8 @@ async fn execute_shell_command(command_text: &str) -> Result<std::process::Outpu
         command.args(["-c", command_text]);
         command
     };
+
+    configure_no_window(&mut command);
 
     command
         .output()

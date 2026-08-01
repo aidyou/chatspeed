@@ -1,24 +1,32 @@
 <template>
   <section class="workflow-cost-analysis">
     <div class="workflow-cost-analysis__summary">
-      <span>{{ formatDuration(summary.durationMs) }}</span>
-      <span>{{ t('workflow.costAnalysis.tokens', { count: formatTokens(summary.withSubAgents.totalTokens) }) }}</span>
+      <span class="workflow-cost-analysis__summary-item">
+        {{ formatDuration(summary.durationMs) }}
+      </span>
+      <span class="workflow-cost-analysis__summary-item">
+        {{ t('workflow.costAnalysis.tokens', { count: formatTokens(summary.withSubAgents.totalTokens) }) }}
+      </span>
     </div>
-    <div class="workflow-cost-analysis__row">
-      <span>{{ t('workflow.costAnalysis.self') }}</span>
-      <span>{{ formatCost(summary.selfUsage.estimatedCost) }}</span>
-      <span>{{ formatRate(summary.selfUsage.effectiveCostPerMillion) }}</span>
+
+    <div class="workflow-cost-analysis__totals">
+      <div class="workflow-cost-analysis__row workflow-cost-analysis__row--primary">
+        <span class="workflow-cost-analysis__row-label">{{ t('workflow.costAnalysis.self') }}</span>
+        <strong class="workflow-cost-analysis__row-cost">{{ formatCost(summary.selfUsage.estimatedCost) }}</strong>
+        <span class="workflow-cost-analysis__row-rate">{{ formatRate(summary.selfUsage.effectiveCostPerMillion) }}</span>
+      </div>
+      <div v-if="summary.hasSubAgents" class="workflow-cost-analysis__row">
+        <span class="workflow-cost-analysis__row-label">{{ t('workflow.costAnalysis.withSubAgents') }}</span>
+        <strong class="workflow-cost-analysis__row-cost">{{ formatCost(summary.withSubAgents.estimatedCost) }}</strong>
+        <span class="workflow-cost-analysis__row-rate">{{ formatRate(summary.withSubAgents.effectiveCostPerMillion) }}</span>
+      </div>
     </div>
-    <div v-if="summary.hasSubAgents" class="workflow-cost-analysis__row">
-      <span>{{ t('workflow.costAnalysis.withSubAgents') }}</span>
-      <span>{{ formatCost(summary.withSubAgents.estimatedCost) }}</span>
-      <span>{{ formatRate(summary.withSubAgents.effectiveCostPerMillion) }}</span>
-    </div>
+
     <div v-if="summary.modelBreakdowns.length" class="workflow-cost-analysis__models">
       <div v-for="model in summary.modelBreakdowns" :key="modelKey(model)" class="workflow-cost-analysis__model">
         <div class="workflow-cost-analysis__model-header">
-          <span>{{ model.backendModel }}</span>
-          <span>{{ formatCost(model.estimatedCost) }}</span>
+          <span class="workflow-cost-analysis__model-name">{{ model.backendModel }}</span>
+          <strong class="workflow-cost-analysis__model-cost">{{ formatCost(model.estimatedCost) }}</strong>
         </div>
         <div class="workflow-cost-analysis__model-tokens">
           <span>{{ t('workflow.costAnalysis.input') }} {{ formatTokens(model.inputTokens) }}</span>
@@ -43,7 +51,7 @@
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
-const props = defineProps({ summary: { type: Object, required: true } })
+defineProps({ summary: { type: Object, required: true } })
 const formatTokens = value => new Intl.NumberFormat().format(value || 0)
 const modelKey = model => `${model.providerId ?? 'unknown'}:${model.backendModel}`
 const formatCost = value =>

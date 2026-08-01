@@ -346,7 +346,7 @@
 
           // complete_workflow special display
           .finish-task-display {
-            display: flex;
+            display: inline-flex;
             align-items: center;
             gap: var(--cs-space-xs);
             padding: var(--cs-space-xs) 0;
@@ -369,6 +369,12 @@
               }
             }
 
+            &.finish-task-display--in-card {
+              margin-bottom: var(--cs-space-xs);
+              padding: 0;
+              font-family: var(--cs-font-family-mono, monospace);
+            }
+
             .finish-icon {
               color: var(--el-color-success);
             }
@@ -387,61 +393,7 @@
           }
 
           .workflow-cost-analysis {
-            display: flex;
-            flex-direction: column;
-            gap: var(--cs-space-sm);
-            margin: var(--cs-space-sm) 0 0 28px;
-            padding: var(--cs-space);
-            border: 1px solid var(--cs-border-color);
-            border-radius: var(--cs-border-radius-md);
-            background: var(--cs-bg-color-light);
-            color: var(--cs-text-color-primary);
-            font-size: var(--cs-font-size-sm);
-
-            &__summary,
-            &__row,
-            &__model-header,
-            &__model-tokens,
-            &__model-rates {
-              display: flex;
-              flex-wrap: wrap;
-              align-items: center;
-              gap: var(--cs-space-sm);
-            }
-
-            &__summary,
-            &__model-tokens,
-            &__model-rates {
-              color: var(--cs-text-color-secondary);
-              font-size: var(--cs-font-size-xs);
-            }
-
-            &__row,
-            &__model-header {
-              justify-content: space-between;
-            }
-
-            &__models {
-              display: flex;
-              flex-direction: column;
-              gap: var(--cs-space-xs);
-              padding-top: var(--cs-space-sm);
-              border-top: 1px solid var(--cs-border-color-lighter);
-            }
-
-            &__model {
-              display: flex;
-              flex-direction: column;
-              gap: var(--cs-space-xs);
-              padding: var(--cs-space-sm);
-              border-radius: var(--cs-border-radius-sm);
-              background: var(--cs-fill-color-light);
-            }
-
-            &__warning {
-              margin: 0;
-              color: var(--el-color-warning);
-            }
+            margin-left: 28px;
           }
 
           .tool-detail {
@@ -1000,46 +952,145 @@
 
 // Cost analysis is rendered from the durable backend snapshot.
 .workflow-cost-analysis {
+  --cost-analysis-accent: color-mix(in srgb, var(--el-color-success) 84%, var(--el-color-primary));
+  --cost-analysis-accent-soft: color-mix(in srgb, var(--cost-analysis-accent) 13%, transparent);
+
+  position: relative;
   display: grid;
-  gap: var(--cs-space-xs);
+  gap: var(--cs-space-sm);
   margin-top: var(--cs-space-xs);
-  padding: var(--cs-space-sm);
-  border: 1px solid var(--cs-border-color-light);
-  border-radius: var(--cs-border-radius-md);
+  padding: var(--cs-space) var(--cs-space) var(--cs-space) calc(var(--cs-space) + 4px);
+  border: 1px solid color-mix(in srgb, var(--cost-analysis-accent) 18%, var(--cs-border-color));
+  border-radius: var(--cs-border-radius-lg);
   color: var(--cs-text-color-primary);
-  background: var(--cs-bg-color-light);
+  background:
+    linear-gradient(90deg, var(--cost-analysis-accent-soft), transparent 42%),
+    var(--cs-bg-color-light);
+  box-shadow: inset 3px 0 0 var(--cost-analysis-accent);
+  font-family: var(--cs-font-family);
   font-size: var(--cs-font-size-xs);
+  overflow: hidden;
+
+  &::before {
+    content: '';
+    position: absolute;
+    inset: var(--cs-space-xs) auto var(--cs-space-xs) var(--cs-space-xs);
+    width: 1px;
+    border-radius: var(--cs-border-radius-full);
+    background: linear-gradient(
+      180deg,
+      transparent,
+      color-mix(in srgb, var(--cost-analysis-accent) 45%, transparent),
+      transparent
+    );
+  }
 
   &__summary,
-  &__row,
-  &__model-header,
-  &__model-tokens,
-  &__model-rates {
+  &__totals,
+  &__models {
+    position: relative;
+    z-index: 1;
+  }
+
+  &__summary {
     display: flex;
-    justify-content: space-between;
-    gap: var(--cs-space-sm);
     flex-wrap: wrap;
+    align-items: center;
+    gap: var(--cs-space-xs);
+    color: var(--cs-text-color-secondary);
+  }
+
+  &__summary-item {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 2px var(--cs-space-sm);
+    border: 1px solid color-mix(in srgb, var(--cost-analysis-accent) 16%, var(--cs-border-color-light));
+    border-radius: var(--cs-border-radius-full);
+    background: color-mix(in srgb, var(--cs-bg-color) 82%, transparent);
+    line-height: 1.35;
+  }
+
+  &__totals {
+    display: grid;
+    gap: var(--cs-space-xs);
+  }
+
+  &__row,
+  &__model-header {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) auto;
+    align-items: baseline;
+    gap: var(--cs-space-xs) var(--cs-space-sm);
+  }
+
+  &__row-rate {
+    grid-column: 1 / -1;
+    color: var(--cs-text-color-secondary);
+  }
+
+  &__row-cost,
+  &__model-cost {
+    color: var(--cost-analysis-accent);
+    font-family: var(--cs-font-family-mono, monospace);
+    font-size: var(--cs-font-size-sm);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  &__row-label,
+  &__model-name {
+    min-width: 0;
+    color: var(--cs-text-color-primary);
+    font-weight: 600;
+    overflow-wrap: anywhere;
   }
 
   &__models {
     display: grid;
     gap: var(--cs-space-xs);
+    padding-top: var(--cs-space-sm);
+    border-top: 1px dashed color-mix(in srgb, var(--cost-analysis-accent) 22%, var(--cs-border-color-lighter));
   }
 
   &__model {
-    padding-top: var(--cs-space-xs);
-    border-top: 1px solid var(--cs-border-color-lighter);
+    display: grid;
+    gap: var(--cs-space-xs);
+    padding: var(--cs-space-sm);
+    border-radius: var(--cs-border-radius-md);
+    background: color-mix(in srgb, var(--cs-bg-color) 86%, transparent);
   }
 
   &__model-tokens,
-  &__model-rates,
-  &__warning {
-    margin: 0;
+  &__model-rates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--cs-space-2xs) var(--cs-space-sm);
     color: var(--cs-text-color-secondary);
+    line-height: 1.55;
   }
 
   &__warning {
+    position: relative;
+    z-index: 1;
+    margin: 0;
     color: var(--el-color-warning);
+    font-weight: 600;
+  }
+}
+
+.sub-agent-card .workflow-cost-analysis {
+  margin-left: 0;
+}
+
+@media (max-width: 640px) {
+  .workflow-cost-analysis {
+    margin-left: 0;
+
+    &__row,
+    &__model-header {
+      grid-template-columns: 1fr;
+    }
   }
 }
 

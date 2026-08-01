@@ -14,6 +14,8 @@ use crate::error::{AppError, Result};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::time::UNIX_EPOCH;
 
@@ -487,6 +489,7 @@ pub async fn open_path_in_file_manager(path: &str) -> Result<()> {
     let mut command = {
         let mut command = Command::new("explorer");
         command.arg(path);
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         command
     };
 

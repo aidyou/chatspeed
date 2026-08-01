@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Read;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, RwLock};
@@ -16,6 +18,14 @@ const MAX_GIT_OUTPUT_BYTES: usize = 512 * 1024;
 const MAX_UNTRACKED_FILE_BYTES: usize = 256 * 1024;
 const MAX_GIT_BRANCHES: usize = 100;
 const GIT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(target_os = "windows")]
+fn configure_no_window(command: &mut Command) {
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_no_window(_command: &mut Command) {}
 
 fn primary_directory(path_guard: Option<&Arc<RwLock<PathGuard>>>) -> Result<PathBuf, ToolError> {
     path_guard
@@ -228,7 +238,8 @@ pub(crate) fn run_git_command(
     workspace_root: &Path,
     args: &[String],
 ) -> Result<(i32, String, String), ToolError> {
-    let mut child = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-c")
         .arg("core.fsmonitor=false")
         .arg("-c")
@@ -245,7 +256,9 @@ pub(crate) fn run_git_command(
         .env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_CONFIG_COUNT")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_no_window(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {}", e)))?;
     let stdout = child

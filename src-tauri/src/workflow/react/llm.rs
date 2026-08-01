@@ -21,6 +21,8 @@ use crate::workflow::react::types::GatewayPayload;
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -31,6 +33,14 @@ use crate::workflow::react::prompts::{
     CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT,
     FINAL_AUDIT_COMPLETION_REPORT_PROMPT, PLANNING_MODE_PROMPT,
 };
+
+#[cfg(target_os = "windows")]
+fn configure_no_window(command: &mut std::process::Command) {
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_no_window(_command: &mut std::process::Command) {}
 
 pub struct LlmProcessor {
     pub session_id: String,
@@ -1347,8 +1357,10 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
             std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
         };
         let os_version = if platform == "windows" {
-            std::process::Command::new("cmd")
-                .args(["/c", "ver"])
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/c", "ver"]);
+            configure_no_window(&mut command);
+            command
                 .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .unwrap_or_else(|_| "Windows".into())

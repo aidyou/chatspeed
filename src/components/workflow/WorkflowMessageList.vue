@@ -401,6 +401,30 @@
             ]">
             <template v-if="isSubAgentRunMessage(message) && message.subAgentCard">
               <div class="sub-agent-card">
+                <button
+                  v-if="isFinishTaskMessage(message)"
+                  type="button"
+                  class="tool-line finish-task-display finish-task-display--in-card"
+                  :class="{ 'finish-task-display--expandable': getFinishTaskUsageSummary(message) }"
+                  @click="
+                    getFinishTaskUsageSummary(message) &&
+                    $emit('toggle-expand', getFinishTaskCostExpandId(message))
+                  ">
+                  <cs
+                    :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
+                    size="14px"
+                    class="tool-type-icon finish-icon" />
+                  <span class="finish-text">{{ getFinishTaskLabel(message) }}</span>
+                  <cs
+                    v-if="getFinishTaskUsageSummary(message)"
+                    name="arrow-right"
+                    size="14px"
+                    class="finish-task-cost-arrow" />
+                </button>
+                <WorkflowCostAnalysis
+                  v-if="getFinishTaskUsageSummary(message) && isFinishTaskCostExpanded(message)"
+                  :summary="getFinishTaskUsageSummary(message)" />
+
                 <div class="sub-agent-card__header">
                   <div class="sub-agent-card__title-wrap">
                     <div class="sub-agent-card__title">

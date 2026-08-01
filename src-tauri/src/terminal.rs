@@ -8,6 +8,8 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -581,9 +583,11 @@ fn terminal_session_members(_: i32) -> Vec<i32> {
 #[cfg(windows)]
 fn terminate_child_tree(child: &mut dyn portable_pty::Child) {
     if let Some(process_id) = child.process_id() {
-        let _ = std::process::Command::new("taskkill")
+        let mut command = std::process::Command::new("taskkill");
+        command
             .args(["/PID", &process_id.to_string(), "/T", "/F"])
-            .output();
+            .creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let _ = command.output();
     }
     let _ = child.kill();
     let _ = child.wait();

@@ -242,7 +242,10 @@ pub(crate) fn get_available_shells() -> Vec<ShellDescriptor> {
     #[cfg(windows)]
     {
         for name in ["pwsh.exe", "powershell.exe", "cmd.exe"] {
-            if let Ok(output) = Command::new("where").arg(name).output() {
+            let mut command = Command::new("where");
+            command.arg(name);
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            if let Ok(output) = command.output() {
                 let path = String::from_utf8_lossy(&output.stdout)
                     .lines()
                     .next()

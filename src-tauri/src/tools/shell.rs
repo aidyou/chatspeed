@@ -17,6 +17,8 @@ use crate::workflow::react::types::GatewayPayload;
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{json, Value};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -731,6 +733,7 @@ impl ToolDefinition for ShellExecute {
         let cmd_future = if cfg!(target_os = "windows") {
             let mut command = Command::new("cmd");
             command.args(["/C", command_str]);
+            configure_no_window(&mut command);
             if let Some(dir) = &working_dir {
                 command.current_dir(dir);
             }
@@ -764,6 +767,14 @@ impl ToolDefinition for ShellExecute {
         }
     }
 }
+
+#[cfg(target_os = "windows")]
+fn configure_no_window(command: &mut Command) {
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_no_window(_command: &mut Command) {}
 
 #[cfg(unix)]
 fn configure_process_group(command: &mut Command) {
@@ -1558,6 +1569,7 @@ impl ShellExecute {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true);
+            configure_no_window(&mut command);
             if let Some(dir) = &working_dir {
                 command.current_dir(dir);
             }

@@ -110,6 +110,32 @@ test('cost analysis interaction is gated by accepted completion and terminal chi
   assert.match(messageList, /\['completed', 'failed', 'cancelled', 'interrupted'\]/)
   assert.match(messageList, /getSubAgentCostExpandId/)
   assert.match(messageList, /getFinishTaskCostExpandId/)
+  assert.match(messageList, /finish-task-display--in-card/)
   assert.match(styles, /margin-left: 15px/)
   assert.match(styles, /:hover \.finish-task-cost-arrow/)
+})
+
+test('tool activity grouping keeps only explicit independent segments as boundaries', async () => {
+  const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
+
+  assert.match(
+    messageList,
+    /const currentIsPendingThought = isThinkOnlyAssistantMessage\(current\)[\s\S]*?collapsed\.push\(buildToolGroupMessage\(\[\], index, thoughts, true\)\)/,
+    'a thought without a prior visible tool group can become its own ongoing group'
+  )
+  assert.match(
+    messageList,
+    /while \(nextIndex < messages\.length && !isToolGroupBoundaryMessage\(messages\[nextIndex\]\)\)/,
+    'non-independent thoughts and tools must be collected into one tool group until a boundary appears'
+  )
+  assert.doesNotMatch(
+    messageList,
+    /isCollapsedToolGroupMessage\(current\) && current\.metadata\?\.tool_group_is_ongoing/,
+    'ongoing thought groups must remain eligible to merge back into adjacent non-independent tool activity'
+  )
+  assert.match(
+    messageList,
+    /if \(message\.role === 'assistant'\) \{\s*return !!props\.removeSystemReminder\(message\?\.message \|\| ''\)\.trim\(\)/,
+    'a visible assistant text message must split tool groups, so an immediately preceding thought is not swallowed'
+  )
 })
