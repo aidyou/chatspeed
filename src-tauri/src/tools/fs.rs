@@ -514,9 +514,9 @@ fn execute_edit_file(
 
         start_line = raw_content[..matches[0]].lines().count();
         final_content = if replace_all {
-            raw_content.replace(&old_str_win, &new_str_win)
+            raw_content.replace(&old_str_win, new_str_for_file)
         } else {
-            raw_content.replacen(&old_str_win, &new_str_win, 1)
+            raw_content.replacen(&old_str_win, new_str_for_file, 1)
         };
         match_found = true;
     } else if raw_content.contains(old_str_unix) {
@@ -561,7 +561,7 @@ fn execute_edit_file(
                 normalized_file.replacen(old_str_unix, new_str_unix, 1)
             };
 
-            final_content = if raw_content.contains("\r\n") {
+            final_content = if file_uses_crlf {
                 replaced_normalized.replace("\n", "\r\n")
             } else {
                 replaced_normalized
@@ -700,7 +700,8 @@ impl ToolDefinition for WriteFile {
         - For other authorized directories, use an absolute path.\n\
         - ALWAYS prefer editing existing files in the codebase. Only use this tool when you are creating a new file that does not already exist.\n\
         - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the user.\n\
-        - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked."
+        - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.\n\
+        - Normalize CRLF line endings to LF when creating or overwriting files; use `edit_file` for intentionally preserving an existing CRLF file."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::FileSystem
@@ -782,7 +783,8 @@ impl ToolDefinition for WriteFile {
             fs::create_dir_all(parent).ok();
         }
 
-        fs::write(&path, content)
+        let normalized_content = content.replace("\r\n", "\n").replace('\r', "\n");
+        fs::write(&path, normalized_content.as_bytes())
             .map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
 
         let display_path = display_path_for_tool_output(&path, self.path_guard.as_ref());
@@ -795,10 +797,10 @@ impl ToolDefinition for WriteFile {
             Some(json!({
                 "file_path": result_path_for_tool_output(&path),
                 "display_path": display_path,
-                "bytes_written": content.len(),
+                "bytes_written": normalized_content.len(),
                 "overwritten": overwritten,
                 "old_string": old_content,
-                "content": content,
+                "content": normalized_content,
                 "backup_path": backup_path.as_ref().map(|value| {
                     display_ai_temp_path(value)
                         .unwrap_or_else(|| value.to_string_lossy().to_string())
@@ -1587,6 +1589,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_file_new_normalizes_crlf_to_lf() {
+        let tool = WriteFile::default();
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("test.txt");
+
+        let result = tool
+            .call(json!({
+                "file_path": path.to_string_lossy().to_string(),
+                "content": "line1\r\nline2\rline3"
+            }))
+            .await
+            .unwrap();
+
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["bytes_written"].as_u64().unwrap(), 17);
+        assert_eq!(structured["content"].as_str(), Some("line1\nline2\nline3"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "line1\nline2\nline3");
+    }
+
+    #[tokio::test]
     async fn test_write_file_new_with_overwrite_flag_does_not_report_overwrite() {
         let tool = WriteFile::default();
         let temp_dir = tempdir().unwrap();
@@ -1923,6 +1945,27 @@ mod tests {
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("inserted1\r\ninserted2"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_normalized_fallback_uses_dominant_lf_file_endings() {
+        let tool = EditFile::default();
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_string_lossy().to_string();
+
+        fs::write(&path, "line1\nold1\r\nold2\nline4").unwrap();
+
+        tool.call(json!({
+            "file_path": path,
+            "old_string": "old1\nold2",
+            "new_string": "new1\nnew2"
+        }))
+        .await
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "line1\nnew1\nnew2\nline4");
+        assert!(!content.contains('\r'));
     }
 
     #[tokio::test]

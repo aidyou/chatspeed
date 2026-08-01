@@ -125,6 +125,16 @@ test('tool activity grouping keeps only explicit independent segments as boundar
   )
   assert.match(
     messageList,
+    /currentIsPendingThought && isStandaloneOngoingThoughtRun\(messages, index\)/,
+    'a thought followed by later tool activity must start grouped instead of flashing outside the tool group'
+  )
+  assert.match(
+    messageList,
+    /if \(getCollapsibleToolGroupKind\(message\) \|\| isCollapsedToolGroupMessage\(message\)\) return false/,
+    'standalone ongoing thought groups must stop being standalone once tool activity appears after them'
+  )
+  assert.match(
+    messageList,
     /while \(nextIndex < messages\.length && !isToolGroupBoundaryMessage\(messages\[nextIndex\]\)\)/,
     'non-independent thoughts and tools must be collected into one tool group until a boundary appears'
   )
@@ -137,5 +147,10 @@ test('tool activity grouping keeps only explicit independent segments as boundar
     messageList,
     /if \(message\.role === 'assistant'\) \{\s*return !!props\.removeSystemReminder\(message\?\.message \|\| ''\)\.trim\(\)/,
     'a visible assistant text message must split tool groups, so an immediately preceding thought is not swallowed'
+  )
+  assert.match(
+    messageList,
+    /const getToolGroupIcon = \(kind, messages\) => \{\s*if \(messages\.some\(isCollapsibleMutationToolMessage\)\) return TOOL_GROUP_ICONS\.mutation_tools/,
+    'a mixed tool group containing file edits must prefer the edit icon'
   )
 })

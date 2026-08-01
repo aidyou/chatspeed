@@ -646,20 +646,27 @@
 
             &__cost,
             &__task {
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
               padding: 10px 12px;
               border-radius: 6px;
               background: var(--cs-bg-color);
             }
 
             &__cost-toggle {
-              display: inline-flex;
-              align-items: center;
-              gap: 15px;
-              padding: 0;
-              border: 0;
-              color: var(--cs-text-color-primary);
-              background: transparent;
+              display: flex;
+              align-items: flex-start;
+              justify-content: space-between;
+              gap: 12px;
+              min-width: 0;
               cursor: pointer;
+              user-select: none;
+            }
+
+            &__cost-heading {
+              display: flex;
+              min-width: 0;
             }
 
             &__result,
@@ -682,12 +689,14 @@
               align-items: flex-start;
               justify-content: space-between;
               gap: 12px;
+              min-width: 0;
               cursor: pointer;
               user-select: none;
             }
 
             &__task-heading,
-            &__result-heading {
+            &__result-heading,
+            &__cost-heading {
               display: flex;
               flex-direction: column;
               gap: 4px;
@@ -705,7 +714,8 @@
             }
 
             &__task-chevron,
-            &__result-chevron {
+            &__result-chevron,
+            &__cost-chevron {
               color: var(--cs-text-color-secondary);
               margin-top: 2px;
               flex-shrink: 0;
@@ -739,7 +749,8 @@
             }
 
             &__task-chevron.expanded,
-            &__result-chevron.expanded {
+            &__result-chevron.expanded,
+            &__cost-chevron.expanded {
               transform: rotate(180deg);
             }
 
@@ -1081,6 +1092,23 @@
 
 .sub-agent-card .workflow-cost-analysis {
   margin-left: 0;
+  color: var(--cs-text-color-primary);
+  font-size: var(--cs-font-size-xs);
+  font-weight: 400;
+
+  &__summary,
+  &__model-tokens,
+  &__model-rates {
+    color: var(--cs-text-color-primary);
+  }
+
+  &__row-label,
+  &__row-rate,
+  &__model-name,
+  &__model-tokens,
+  &__model-rates {
+    font-weight: 400;
+  }
 }
 
 @media (max-width: 640px) {

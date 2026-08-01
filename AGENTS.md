@@ -17,6 +17,7 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 - Ask before broad refactors, dependency additions, schema migrations, destructive actions, or behavior changes outside the request.
 - For small localized fixes, proceed directly.
 - Prefer the narrowest useful verification. If you cannot run verification, say so.
+- When editing or adding files or modules, test only the affected page, module, or focused behavior. Do not run whole-repository tests unless the user explicitly asks, because they are prone to timing out.
 
 ## CodeGraph Usage
 

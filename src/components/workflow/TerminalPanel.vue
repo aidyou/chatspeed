@@ -454,7 +454,7 @@ onBeforeUnmount(() => {
 .workflow-terminal__content {
   flex: 1;
   min-height: 0;
-  padding: var(--cs-space-sm);
+  padding: 0;
   overflow: hidden;
   box-sizing: border-box;
 }
@@ -462,9 +462,13 @@ onBeforeUnmount(() => {
 .workflow-terminal__content :deep(.xterm) {
   width: 100%;
   height: 100%;
+  padding: var(--cs-space-sm);
+  box-sizing: border-box;
+  background: inherit;
 }
 
 .workflow-terminal__content :deep(.xterm-screen) {
   max-width: 100%;
+  padding-bottom: var(--cs-space-sm);
 }
 </style>

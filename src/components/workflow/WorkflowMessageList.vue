@@ -401,30 +401,6 @@
             ]">
             <template v-if="isSubAgentRunMessage(message) && message.subAgentCard">
               <div class="sub-agent-card">
-                <button
-                  v-if="isFinishTaskMessage(message)"
-                  type="button"
-                  class="tool-line finish-task-display finish-task-display--in-card"
-                  :class="{ 'finish-task-display--expandable': getFinishTaskUsageSummary(message) }"
-                  @click="
-                    getFinishTaskUsageSummary(message) &&
-                    $emit('toggle-expand', getFinishTaskCostExpandId(message))
-                  ">
-                  <cs
-                    :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
-                    size="14px"
-                    class="tool-type-icon finish-icon" />
-                  <span class="finish-text">{{ getFinishTaskLabel(message) }}</span>
-                  <cs
-                    v-if="getFinishTaskUsageSummary(message)"
-                    name="arrow-right"
-                    size="14px"
-                    class="finish-task-cost-arrow" />
-                </button>
-                <WorkflowCostAnalysis
-                  v-if="getFinishTaskUsageSummary(message) && isFinishTaskCostExpanded(message)"
-                  :summary="getFinishTaskUsageSummary(message)" />
-
                 <div class="sub-agent-card__header">
                   <div class="sub-agent-card__title-wrap">
                     <div class="sub-agent-card__title">
@@ -458,21 +434,6 @@
                       }}</span>
                     </div>
                   </div>
-                </div>
-
-                <div
-                  v-if="getSubAgentUsageSummary(message)"
-                  class="sub-agent-card__cost">
-                  <button
-                    type="button"
-                    class="sub-agent-card__cost-toggle"
-                    @click="$emit('toggle-expand', getSubAgentCostExpandId(message))">
-                    {{ $t('workflow.costAnalysis.self') }}
-                    <cs name="arrow-right" size="14px" />
-                  </button>
-                  <WorkflowCostAnalysis
-                    v-if="isSubAgentCostExpanded(message)"
-                    :summary="getSubAgentUsageSummary(message)" />
                 </div>
 
                 <div
@@ -544,6 +505,29 @@
                   <div v-if="isSubAgentResultExpanded(message)" class="sub-agent-card__result-body">
                     <MarkdownSimple :content="message.subAgentCard.resultMarkdown" />
                   </div>
+                </div>
+
+                <div
+                  v-if="getSubAgentUsageSummary(message)"
+                  class="sub-agent-card__cost"
+                  :class="{ expanded: isSubAgentCostExpanded(message) }">
+                  <div
+                    class="sub-agent-card__cost-toggle"
+                    @click="$emit('toggle-expand', getSubAgentCostExpandId(message))">
+                    <div class="sub-agent-card__cost-heading">
+                      <span class="sub-agent-card__label">Cost</span>
+                    </div>
+                    <div class="sub-agent-card__section-actions">
+                      <cs
+                        name="double-arrow-down"
+                        size="14px"
+                        class="sub-agent-card__cost-chevron"
+                        :class="{ expanded: isSubAgentCostExpanded(message) }" />
+                    </div>
+                  </div>
+                  <WorkflowCostAnalysis
+                    v-if="isSubAgentCostExpanded(message)"
+                    :summary="getSubAgentUsageSummary(message)" />
                 </div>
               </div>
             </template>
@@ -1808,6 +1792,11 @@ const TOOL_GROUP_ICONS = {
   todo_tools: 'todo'
 }
 
+const getToolGroupIcon = (kind, messages) => {
+  if (messages.some(isCollapsibleMutationToolMessage)) return TOOL_GROUP_ICONS.mutation_tools
+  return TOOL_GROUP_ICONS[kind] || 'tool'
+}
+
 const buildToolGroupMessage = (messages, index, thoughts = [], isOngoing = false) => {
   const kinds = new Set(messages.map(getCollapsibleToolGroupKind).filter(Boolean))
   const [singleKind] = kinds
@@ -1828,7 +1817,7 @@ const buildToolGroupMessage = (messages, index, thoughts = [], isOngoing = false
       tool_group_is_ongoing: isOngoing
     },
     groupDisplay: {
-      icon: TOOL_GROUP_ICONS[kind] || 'tool',
+      icon: getToolGroupIcon(kind, messages),
       thoughtSummary: getToolGroupThoughtSummary(thoughtCount),
       errorSummary: getToolGroupErrorSummary(errorCount),
       summary: buildToolGroupSummary(messages)
@@ -1874,6 +1863,16 @@ const isToolGroupOngoingBoundaryMessage = message => {
 const hasOngoingToolGroupAfter = (messages, startIndex) => {
   for (let index = startIndex; index < messages.length; index += 1) {
     if (isToolGroupOngoingBoundaryMessage(messages[index])) return false
+  }
+  return true
+}
+
+const isStandaloneOngoingThoughtRun = (messages, startIndex) => {
+  for (let index = startIndex; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (isToolGroupOngoingBoundaryMessage(message)) return false
+    if (getCollapsibleToolGroupKind(message) || isCollapsedToolGroupMessage(message)) return false
+    if (!isThinkOnlyAssistantMessage(message)) return false
   }
   return true
 }
@@ -1952,11 +1951,11 @@ const collapseToolActivityGroups = messages => {
       let nextIndex = index
       const currentIsPendingThought = isThinkOnlyAssistantMessage(current)
 
-      if (currentIsPendingThought && hasOngoingToolGroupAfter(messages, index + 1)) {
+      if (currentIsPendingThought && isStandaloneOngoingThoughtRun(messages, index)) {
         while (
           nextIndex < messages.length &&
           isThinkOnlyAssistantMessage(messages[nextIndex]) &&
-          hasOngoingToolGroupAfter(messages, nextIndex + 1)
+          isStandaloneOngoingThoughtRun(messages, nextIndex)
         ) {
           collectToolActivityMessage(messages[nextIndex], nextIndex, thoughts, tools)
           nextIndex += 1
