@@ -55,10 +55,11 @@
     </header>
     <div
       v-for="tab in terminal.tabs"
-      :key="tab.sessionId"
       v-show="tab.sessionId === terminal.activeSessionId"
-      :ref="element => setHost(tab.sessionId, element)"
       class="workflow-terminal__content"
+      :key="tab.sessionId"
+      :ref="element => setHost(tab.sessionId, element)"
+      :style="{ '--workflow-terminal-background': terminalTheme.background }"
       @mousedown="focus(tab.sessionId)" />
   </section>
 </template>
@@ -167,6 +168,7 @@ const mountTab = (tab: TerminalTab) => {
     convertEol: false,
     fontSize: 13,
     scrollback: Math.min(Math.max(100, Number(preferences.outputLineLimit || 2000)), 20000),
+    overviewRuler: { width: 10 },
     theme: terminalTheme.value
   })
   const fit = new FitAddon()
@@ -470,5 +472,9 @@ onBeforeUnmount(() => {
 .workflow-terminal__content :deep(.xterm-screen) {
   max-width: 100%;
   padding-bottom: var(--cs-space-sm);
+}
+
+.workflow-terminal__content :deep(.xterm-viewport) {
+  background-color: var(--workflow-terminal-background);
 }
 </style>

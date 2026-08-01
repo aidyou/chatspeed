@@ -2,6 +2,33 @@
 
 # Release Notes
 
+## [2.0.11]
+
+### 🚀 New Features
+
+- **Workflow code editor**:
+  - Added an embedded code editor with file-tree integration, editable file previews, and expanded syntax highlighting support.
+- **OpenAI Responses and Workflow drafts**:
+  - Added OpenAI Responses protocol support and persisted input drafts so unfinished Workflow prompts are restored reliably.
+- **Usage and cost analysis**:
+  - Added end-to-end usage tracking for Workflow and CCProxy requests, including token, cache, throughput, and cost summaries.
+- **Credential protection**: Search-provider credentials are now protected through encrypted local storage.
+
+### 🪄 Improvements
+
+- **Workflow reliability and safety**:
+  - Preserved runtime preferences and execution state across recovery, and enforced scoped file access for Workflow tools and code editing.
+  - Refined tool activity, compact sidebar tooltips, code-editor interactions, and terminal presentation; the embedded terminal now synchronizes its viewport background with the active theme and uses a 10px custom scrollbar.
+- **Tool and protocol handling**:
+  - Preserved file line endings during tool edits and kept OpenAI Responses tool-call IDs intact across streaming and conversion.
+
+### 🐞 Bug Fixes
+
+- **Windows integration**: Prevented command windows from flashing for Git, Shell, terminal, and automation operations, and corrected managed-window show handling.
+- **Workflow display and persistence**: Fixed stale compact tooltips and improved line-ending preservation and activity-state rendering in Workflow messages.
+
+---
+
 ## [2.0.10]
 
 ### 🚀 New Features
