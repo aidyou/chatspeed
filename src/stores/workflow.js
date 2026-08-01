@@ -142,6 +142,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const workflows = ref([]);
   const currentWorkflowId = ref(null);
   const messages = ref([]);
+  const isLoadingMessages = ref(false);
   const messageWindowBeforeId = ref(null);
   const hiddenEarlierMessageCount = ref(0);
   const hiddenCompletedTaskCount = ref(0);
@@ -1240,6 +1241,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const selectWorkflow = async (workflowId) => {
     console.log('workflowStore: selecting workflow', workflowId);
     const requestRevision = ++messageLoadRevision;
+    isLoadingMessages.value = true;
 
     // 清理前一个会话的临时状态
     if (currentWorkflowId.value && currentWorkflowId.value !== workflowId) {
@@ -1308,6 +1310,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0;
       hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
       clearApprovalSubmissionsForSession(workflowId);
+      isLoadingMessages.value = false;
 
       // 重建 Task Ledger
       if (taskLedgerEnabled.value) {
@@ -1372,6 +1375,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
       canRewindTail.value = false;
       // 清理 Task Ledger
       clearTaskLedger(workflowId);
+    } finally {
+      if (currentWorkflowId.value === workflowId && messageLoadRevision === requestRevision) {
+        isLoadingMessages.value = false;
+      }
     }
   };
 
@@ -1907,6 +1914,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     lastTaskCompletion.value = null;
     persistLastSelectedWorkflowId('');
     messages.value = [];
+    isLoadingMessages.value = false;
     messageWindowBeforeId.value = null;
     hiddenEarlierMessageCount.value = 0;
     hiddenCompletedTaskCount.value = 0;
@@ -1953,6 +1961,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     workflows,
     currentWorkflowId,
     messages,
+    isLoadingMessages,
     messageWindowBeforeId,
     hiddenEarlierMessageCount,
     hiddenCompletedTaskCount,

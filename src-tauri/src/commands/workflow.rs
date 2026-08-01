@@ -24,6 +24,7 @@ use crate::workflow::react::runtime_observation::{
     runtime_observation_metadata, runtime_observation_metadata_with_visibility,
     RuntimeObservationLlmVisibility, RuntimeObservationType, RuntimeObservationUiVisibility,
 };
+use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
 use crate::workflow::react::signals::SignalType;
 use crate::workflow::react::types::{
     ExecutionContext, GatewayPayload, RuntimeState, StepType, SubAgentCompletion, WaitReason,
@@ -31,6 +32,7 @@ use crate::workflow::react::types::{
 };
 use chrono::{DateTime, Local};
 use glob::glob;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -4853,7 +4855,7 @@ pub async fn update_workflow_todo_list(
         .map_err(|e| e.to_string())
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct WorkspaceFile {
     pub name: String,
     pub relative_path: String,
@@ -4894,6 +4896,35 @@ fn path_contains_obviously_ignored_component(path: &Path) -> bool {
     })
 }
 
+fn build_workspace_ignore_scope(base: &Path, file_name: &str) -> Option<Gitignore> {
+    let ignore_file = base.join(file_name);
+    if !ignore_file.is_file() {
+        return None;
+    }
+
+    let mut builder = GitignoreBuilder::new(base);
+    if builder.add(&ignore_file).is_some() {
+        return None;
+    }
+    builder.build().ok()
+}
+
+fn workspace_path_is_ignored_by(
+    matcher: Option<&Gitignore>,
+    relative_path: &Path,
+    is_dir: bool,
+) -> bool {
+    matcher.is_some_and(|matcher| matcher.matched(relative_path, is_dir).is_ignore())
+}
+
+fn workspace_path_is_allowed_by_chatspeed(
+    matcher: Option<&Gitignore>,
+    relative_path: &Path,
+    is_dir: bool,
+) -> bool {
+    matcher.is_some_and(|matcher| matcher.matched(relative_path, is_dir).is_whitelist())
+}
+
 #[tauri::command]
 pub async fn search_workspace_files(
     paths: Vec<String>,
@@ -4908,8 +4939,14 @@ pub async fn search_workspace_files(
             continue;
         }
 
+        let chatspeed_ignore = build_workspace_ignore_scope(&base, CHATSPEED_IGNORE_FILE);
+        let gitignore = build_workspace_ignore_scope(&base, ".gitignore");
+        let has_chatspeed_ignore = chatspeed_ignore.is_some();
+
         let mut builder = ignore::WalkBuilder::new(&base);
-        builder.standard_filters(true).hidden(false);
+        builder
+            .standard_filters(!has_chatspeed_ignore)
+            .hidden(false);
         builder.filter_entry(|entry| {
             entry
                 .path()
@@ -4932,11 +4969,24 @@ pub async fn search_workspace_files(
                 continue;
             }
 
-            let rel_path = path
-                .strip_prefix(&base)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .to_string();
+            let relative_path = path.strip_prefix(&base).unwrap_or(&path);
+            let is_dir = entry
+                .file_type()
+                .map(|ft| ft.is_dir())
+                .unwrap_or_else(|| path.is_dir());
+            let allowed_by_chatspeed = workspace_path_is_allowed_by_chatspeed(
+                chatspeed_ignore.as_ref(),
+                relative_path,
+                is_dir,
+            );
+            if workspace_path_is_ignored_by(chatspeed_ignore.as_ref(), relative_path, is_dir)
+                || (!allowed_by_chatspeed
+                    && workspace_path_is_ignored_by(gitignore.as_ref(), relative_path, is_dir))
+            {
+                continue;
+            }
+
+            let rel_path = relative_path.to_string_lossy().to_string();
             let name_lower = name.to_lowercase();
 
             let mut score = 0;
@@ -5616,6 +5666,45 @@ mod tests {
             _temp_dir: dir,
             store,
         }
+    }
+
+    #[tokio::test]
+    async fn search_workspace_files_allows_csignore_whitelisted_gitignored_directory() {
+        let root = tempdir().expect("failed to create temp dir");
+        let root_path = root
+            .path()
+            .canonicalize()
+            .expect("failed to canonicalize root");
+        let dev_data = root_path.join("dev_data");
+        std::fs::create_dir(&dev_data).expect("failed to create dev_data");
+        std::fs::write(root_path.join(".gitignore"), "dev_data/\n")
+            .expect("failed to write .gitignore");
+        std::fs::write(
+            root_path.join(CHATSPEED_IGNORE_FILE),
+            "!dev_data/\n!dev_data/**\n",
+        )
+        .expect("failed to write .csignore");
+        std::fs::write(dev_data.join("fixture.txt"), "fixture").expect("failed to write fixture");
+
+        let results = search_workspace_files(
+            vec![root_path.to_string_lossy().to_string()],
+            "dev_data".to_string(),
+        )
+        .await
+        .expect("search should succeed");
+
+        assert!(
+            results
+                .iter()
+                .any(|file| file.relative_path == "dev_data" && file.is_directory),
+            "dev_data directory should be available in @ file suggestions: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|file| file.relative_path == "dev_data/fixture.txt"),
+            "files inside dev_data should be available in @ file suggestions: {results:?}"
+        );
     }
 
     fn seed_agent(store: &MainStore, agent_id: &str) {

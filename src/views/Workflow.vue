@@ -193,6 +193,7 @@
                 :key="currentWorkflowId || 'workflow-empty'"
                 ref="messageListRef"
                 :messages="enhancedMessages"
+                :is-loading="workflowStore.isLoadingMessages"
                 :hidden-earlier-message-count="hiddenEarlierMessageCount"
                 :hidden-completed-task-group-count="hiddenCompletedTaskGroupCount"
                 :is-running="isRunning"

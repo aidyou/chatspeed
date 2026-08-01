@@ -4,7 +4,27 @@
     ref="messagesRef"
     :data-workflow-id="props.currentWorkflowId || null"
     @scroll.passive="handleScroll">
-    <a
+    <div v-if="props.isLoading" class="message-skeleton" aria-busy="true">
+      <el-skeleton animated>
+        <template #template>
+          <div class="message-skeleton__message message-skeleton__message--assistant">
+            <el-skeleton-item variant="text" class="message-skeleton__line message-skeleton__line--wide" />
+            <el-skeleton-item variant="text" class="message-skeleton__line" />
+            <el-skeleton-item variant="text" class="message-skeleton__line message-skeleton__line--short" />
+          </div>
+          <div class="message-skeleton__message message-skeleton__message--user">
+            <el-skeleton-item variant="text" class="message-skeleton__line message-skeleton__line--medium" />
+          </div>
+          <div class="message-skeleton__message message-skeleton__message--assistant">
+            <el-skeleton-item variant="text" class="message-skeleton__line message-skeleton__line--medium" />
+            <el-skeleton-item variant="text" class="message-skeleton__line message-skeleton__line--short" />
+          </div>
+        </template>
+      </el-skeleton>
+    </div>
+
+    <template v-else>
+      <a
       v-if="props.hiddenEarlierMessageCount > 0"
       class="history-window-indicator"
       @click="revealEarlierMessages">
@@ -555,6 +575,7 @@
               </div>
               <WorkflowCostAnalysis
                 v-if="getFinishTaskUsageSummary(message) && isFinishTaskCostExpanded(message)"
+                class="finish-task-cost-card"
                 :summary="getFinishTaskUsageSummary(message)" />
             </template>
 
@@ -957,6 +978,7 @@
         </button>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -991,6 +1013,10 @@ const props = defineProps({
   messages: {
     type: Array,
     default: () => []
+  },
+  isLoading: {
+    type: Boolean,
+    default: false
   },
   hiddenEarlierMessageCount: {
     type: Number,
@@ -1832,10 +1858,12 @@ const isToolGroupBoundaryMessage = message => {
   if (isCollapsedToolGroupMessage(message)) return false
   if (message.role === 'user') return true
   if (isContextSnapshotMessage(message) || isManualClearContextMessage(message)) return true
-  if (isCompletionReportMessage(message)) return true
+  if (isCompletionReportMessage(message) || isFinishTaskMessage(message)) return true
   if (isExplorationBatchMessage(message)) return true
   if (message.role === 'assistant') {
-    return !!props.removeSystemReminder(message?.message || '').trim()
+    return (
+      !isThinkOnlyAssistantMessage(message) && !!props.removeSystemReminder(message?.message || '').trim()
+    )
   }
   if (message.role === 'tool') {
     if (!getCollapsibleToolGroupKind(message)) return true
@@ -1851,7 +1879,9 @@ const isToolGroupOngoingBoundaryMessage = message => {
   if (isCompletionReportMessage(message) || isFinishTaskMessage(message)) return true
   if (isExplorationBatchMessage(message)) return true
   if (message.role === 'assistant') {
-    return !!props.removeSystemReminder(message?.message || '').trim()
+    return (
+      !isThinkOnlyAssistantMessage(message) && !!props.removeSystemReminder(message?.message || '').trim()
+    )
   }
   if (message.role === 'tool') {
     if (isApprovalPending(message)) return true

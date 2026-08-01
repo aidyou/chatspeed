@@ -110,9 +110,32 @@ test('cost analysis interaction is gated by accepted completion and terminal chi
   assert.match(messageList, /\['completed', 'failed', 'cancelled', 'interrupted'\]/)
   assert.match(messageList, /getSubAgentCostExpandId/)
   assert.match(messageList, /getFinishTaskCostExpandId/)
-  assert.match(messageList, /finish-task-display--in-card/)
+  assert.match(messageList, /finish-task-cost-card/)
+  assert.doesNotMatch(messageList, /finish-task-display--in-card/)
   assert.match(styles, /margin-left: 15px/)
   assert.match(styles, /:hover \.finish-task-cost-arrow/)
+})
+
+test('message history loading renders an Element Plus skeleton from the store loading state', async () => {
+  const [messageList, workflowView, workflowStore, styles] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/stores/workflow.js', 'utf8'),
+    readFile('src/styles/workflow/messages.scss', 'utf8')
+  ])
+
+  assert.match(messageList, /v-if="props\.isLoading" class="message-skeleton"/)
+  assert.match(messageList, /<el-skeleton animated>/)
+  assert.match(workflowView, /:is-loading="workflowStore\.isLoadingMessages"/)
+  assert.match(
+    workflowStore,
+    /const requestRevision = \+\+messageLoadRevision;\s*isLoadingMessages\.value = true;/
+  )
+  assert.match(
+    workflowStore,
+    /messages\.value = appendMissingPendingToolMessages\([\s\S]*?isLoadingMessages\.value = false;/
+  )
+  assert.match(styles, /\.message-skeleton/)
 })
 
 test('tool activity grouping keeps only explicit independent segments as boundaries', async () => {
@@ -138,6 +161,11 @@ test('tool activity grouping keeps only explicit independent segments as boundar
     /while \(nextIndex < messages\.length && !isToolGroupBoundaryMessage\(messages\[nextIndex\]\)\)/,
     'non-independent thoughts and tools must be collected into one tool group until a boundary appears'
   )
+  assert.match(
+    messageList,
+    /if \(isCompletionReportMessage\(message\) \|\| isFinishTaskMessage\(message\)\) return true/,
+    'completion tool messages must split tool groups so the finish-task badge remains visible after history is expanded'
+  )
   assert.doesNotMatch(
     messageList,
     /isCollapsedToolGroupMessage\(current\) && current\.metadata\?\.tool_group_is_ongoing/,
@@ -145,8 +173,18 @@ test('tool activity grouping keeps only explicit independent segments as boundar
   )
   assert.match(
     messageList,
-    /if \(message\.role === 'assistant'\) \{\s*return !!props\.removeSystemReminder\(message\?\.message \|\| ''\)\.trim\(\)/,
-    'a visible assistant text message must split tool groups, so an immediately preceding thought is not swallowed'
+    /return !content && !!reasoning/,
+    'only assistant messages without visible content may be treated as thought-only tool activity'
+  )
+  assert.doesNotMatch(
+    messageList,
+    /return isThinkStep \? !!\(content \|\| reasoning\) : !content && !!reasoning/,
+    'stepType Think must not make visible assistant output collapse into a tool group'
+  )
+  assert.match(
+    messageList,
+    /if \(message\.role === 'assistant'\) \{\s*return \([\s\S]*?!isThinkOnlyAssistantMessage\(message\) && !!props\.removeSystemReminder\(message\?\.message \|\| ''\)\.trim\(\)[\s\S]*?\)/,
+    'a visible non-thought assistant text message must still split tool groups, while thought text does not'
   )
   assert.match(
     messageList,
