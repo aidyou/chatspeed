@@ -8,6 +8,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use rust_i18n::t;
 use std::borrow::Cow;
 use std::fs;
+use std::io::ErrorKind;
 
 use crate::error::{AppError, Result};
 
@@ -22,6 +23,14 @@ use std::time::UNIX_EPOCH;
 use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
 
 const EDITOR_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+
+#[cfg(target_os = "windows")]
+fn configure_no_window(command: &mut Command) {
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_no_window(_command: &mut Command) {}
 
 #[derive(Debug, Serialize)]
 pub struct EditorFileInfo {
@@ -206,13 +215,21 @@ fn git_working_dir(path: &str) -> &Path {
 }
 
 fn get_repo_root(path: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    configure_no_window(&mut command);
+    let output = match command
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(git_working_dir(path))
         .output()
-        .map_err(|e| AppError::General {
-            message: format!("Failed to execute git: {}", e),
-        })?;
+    {
+        Ok(output) => output,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(AppError::General {
+                message: format!("Failed to execute git: {}", e),
+            })
+        }
+    };
 
     if !output.status.success() {
         return Ok(None);
@@ -229,13 +246,21 @@ pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
         return Ok(HashMap::new());
     };
 
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    configure_no_window(&mut command);
+    let output = match command
         .args(["-c", "status.relativePaths=false", "status", "--porcelain"])
         .current_dir(git_working_dir(path))
         .output()
-        .map_err(|e| AppError::General {
-            message: format!("Failed to execute git: {}", e),
-        })?;
+    {
+        Ok(output) => output,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => {
+            return Err(AppError::General {
+                message: format!("Failed to execute git: {}", e),
+            })
+        }
+    };
 
     if !output.status.success() {
         return Ok(HashMap::new()); // Not a git repo or other error, return empty
@@ -288,13 +313,21 @@ pub async fn read_git_base_text_file(file_path: &str) -> Result<Option<String>> 
     }
 
     let spec = format!("HEAD:{}", relative_path);
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    configure_no_window(&mut command);
+    let output = match command
         .args(["show", &spec])
         .current_dir(repo_root_path)
         .output()
-        .map_err(|e| AppError::General {
-            message: format!("Failed to execute git: {}", e),
-        })?;
+    {
+        Ok(output) => output,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(AppError::General {
+                message: format!("Failed to execute git: {}", e),
+            })
+        }
+    };
 
     if !output.status.success() {
         return Ok(None);
