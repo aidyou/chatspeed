@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { readFile, readdir } from 'node:fs/promises'
 import test from 'node:test'
+import { EditorState } from '@codemirror/state'
+import { insertTab } from '@codemirror/commands'
 import { ref } from 'vue'
 
 import {
@@ -21,13 +23,57 @@ test('editor language mapping covers user requested file extensions', () => {
     const language = resolveEditorLanguage(`example.${extension}`)
     assert.equal(language.supported, true, `${extension} should be supported`)
     assert.equal(typeof language.load, 'function')
+    assert.doesNotThrow(() => language.load(), `${extension} should load`)
   }
 
   assert.equal(resolveEditorLanguage('main.rs').label, 'Rust')
   assert.equal(resolveEditorLanguage('main.go').label, 'Go')
   assert.equal(resolveEditorLanguage('index.ts').label, 'TypeScript')
+  assert.equal(resolveEditorLanguage('README.md').label, 'Markdown')
+  assert.equal(resolveEditorLanguage('config.toml').label, 'TOML')
+  assert.equal(resolveEditorLanguage('deployment.yaml').label, 'YAML')
   assert.equal(resolveEditorLanguage('script.sh').label, 'Shell')
+  assert.equal(resolveEditorLanguage('httpd.conf').label, 'Apache Config')
+  assert.equal(resolveEditorLanguage('.htaccess').label, 'Apache Config')
+  assert.equal(resolveEditorLanguage('nginx.conf').label, 'Nginx Config')
+  assert.equal(resolveEditorLanguage('Dockerfile').label, 'Dockerfile')
   assert.equal(resolveEditorLanguage('program.zig').label, 'Zig')
+
+  for (const [path, label] of [
+    ['README.mdx', 'Markdown'],
+    ['config.toml', 'TOML'],
+    ['deployment.yml', 'YAML'],
+    ['script.zsh', 'Shell'],
+    ['sites-enabled/example.conf', 'Apache Config'],
+    ['.htaccess', 'Apache Config'],
+    ['nginx.conf', 'Nginx Config'],
+    ['Dockerfile', 'Dockerfile'],
+    ['app.env', 'Environment'],
+    ['application.properties', 'Configuration'],
+    ['query.sql', 'SQL'],
+    ['schema.proto', 'Protocol Buffers'],
+    ['script.ps1', 'PowerShell'],
+    ['CMakeLists.txt', 'CMake']
+  ]) {
+    const language = resolveEditorLanguage(path)
+    assert.equal(language.label, label, `${path} should use ${label}`)
+    assert.doesNotThrow(() => language.load(), `${path} extension should load`)
+  }
+})
+
+test('tab command inserts a tab at the cursor without indenting the line', () => {
+  let state = EditorState.create({ doc: 'alpha', selection: { anchor: 2 } })
+
+  const handled = insertTab({
+    state,
+    dispatch(transaction) {
+      state = transaction.state
+    }
+  })
+
+  assert.equal(handled, true)
+  assert.equal(state.doc.toString(), 'al\tpha')
+  assert.equal(state.selection.main.head, 3)
 })
 
 test('editor state handles tabs, dirty state, successful save, and conflicts', async () => {
@@ -131,7 +177,9 @@ test('workflow code editor source contracts keep CodeMirror, shortcuts, and tab 
   assert.equal(WORKFLOW_EDITOR_MAX_BYTES <= 5 * 1024 * 1024, true)
   assert.match(component, /EditorView/)
   assert.match(component, /EditorView\.updateListener/)
-  assert.match(component, /indentWithTab/)
+  assert.match(component, /key: 'Tab'/)
+  assert.match(component, /run: insertTab/)
+  assert.doesNotMatch(component, /indentWithTab/)
   assert.match(component, /key: 'Mod-s'/)
   assert.match(component, /EditorView\.lineWrapping/)
   assert.match(component, /\.cm-gutters/)
