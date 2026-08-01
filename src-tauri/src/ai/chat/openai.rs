@@ -1099,7 +1099,7 @@ mod tests {
         assert!(!OpenAIChat::should_use_responses_api(
             "/v1/chat/completions",
             &responses_metadata,
-            false,
+            super::openai_responses::RESPONSES_API_ENABLED,
         ));
         assert!(OpenAIChat::should_use_responses_api(
             "/v1/chat/completions",
@@ -1554,8 +1554,7 @@ impl AiChatTrait for OpenAIChat {
         let use_responses_api = Self::should_use_responses_api(
             base_endpoint,
             &model_detail.metadata,
-            self.main_store
-                .get_config(crate::constants::CFG_ENABLE_RESPONSES_API, false),
+            openai_responses::RESPONSES_API_ENABLED,
         );
         if use_responses_api {
             payload = openai_responses::build_responses_payload(ResponsesRequestContext {
@@ -1566,10 +1565,7 @@ impl AiChatTrait for OpenAIChat {
                 model_metadata: &model_detail.metadata,
                 params: &params,
                 stream: stream_enabled,
-                enable_reasoning_summary: self.main_store.get_config(
-                    crate::constants::CFG_ENABLE_RESPONSES_REASONING_SUMMARY,
-                    false,
-                ),
+                enable_reasoning_summary: false,
             });
         }
         let selected_endpoint = if use_responses_api {

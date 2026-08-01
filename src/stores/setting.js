@@ -35,8 +35,6 @@ const defaultSettings = {
   // chat settings
   historyMessages: 5,
   conversationTitleGenModel: { id: '', model: '' },
-  enableResponsesApi: false,
-  enableResponsesReasoningSummary: false,
   sendMessageKey: 'Enter',
   // shortcut settings
   mainWindowVisibleShortcut: null,

@@ -45,8 +45,6 @@ pub const CFG_BUILTIN_AGENTS_LAST_SYNCED_APP_VERSION: &str =
     "builtin_agents_last_synced_app_version";
 pub const CFG_SEARCH_ENGINE: &str = "search_engine";
 pub const CFG_SCRAPER_DEBUG_MODE: &str = "scraper_debug_mode";
-pub const CFG_ENABLE_RESPONSES_API: &str = "enable_responses_api";
-pub const CFG_ENABLE_RESPONSES_REASONING_SUMMARY: &str = "enable_responses_reasoning_summary";
 pub const DEFAULT_WEB_SEARCH_TOOL: &str = "WebSearch";
 pub const DEFAULT_WEB_FETCH_TOOL: &str = "WebFetch";
 // pub const CFG_SCRAPER_CONCURRENCY_COUNT: &str = "scraper_concurrency_count";

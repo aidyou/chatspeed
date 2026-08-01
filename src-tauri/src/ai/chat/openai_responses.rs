@@ -17,6 +17,10 @@ use super::openai::OpenAIChat;
 
 const RESPONSES_ENDPOINT: &str = "/v1/responses";
 
+// Keep disabled because Responses API cache hit rates currently increase request costs.
+// Re-enable only if upstream requires Responses API exclusively or its cache behavior becomes reliable.
+pub(crate) const RESPONSES_API_ENABLED: bool = false;
+
 pub(crate) struct ResponsesRequestContext<'a> {
     pub model: &'a str,
     pub messages: &'a [Value],

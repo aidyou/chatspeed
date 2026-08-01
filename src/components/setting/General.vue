@@ -807,38 +807,6 @@
     </div>
   </div>
 
-  <!-- experimental settings -->
-  <div class="card">
-    <div class="title">{{ $t('settings.general.experimentalSettings') }}</div>
-    <div class="list">
-      <div class="item">
-        <div class="label">
-          <div class="label-text">
-            {{ $t('settings.general.enableResponsesApi') }}
-            <small class="tooltip">{{ $t('settings.general.enableResponsesApiTooltip') }}</small>
-          </div>
-        </div>
-        <div class="value">
-          <el-switch v-model="settings.enableResponsesApi" @change="onEnableResponsesApiChange" />
-        </div>
-      </div>
-      <div class="item">
-        <div class="label">
-          <div class="label-text">
-            {{ $t('settings.general.enableResponsesReasoningSummary') }}
-            <small class="tooltip">{{ $t('settings.general.enableResponsesReasoningSummaryTooltip') }}</small>
-          </div>
-        </div>
-        <div class="value">
-          <el-switch
-            v-model="settings.enableResponsesReasoningSummary"
-            :disabled="!settings.enableResponsesApi"
-            @change="onEnableResponsesReasoningSummaryChange" />
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- advanced settings -->
   <div class="card">
     <div class="title">{{ $t('settings.general.advancedSettings') }}</div>
@@ -1366,14 +1334,6 @@ const onConversationTitleGenModelIdChange = value => {
 const onConversationTitleGenModelModelChange = value => {
   settingStore.settings.conversationTitleGenModel.model = value || ''
   setSetting('conversationTitleGenModel', settingStore.settings.conversationTitleGenModel)
-}
-
-const onEnableResponsesApiChange = value => {
-  setSetting('enableResponsesApi', Boolean(value))
-}
-
-const onEnableResponsesReasoningSummaryChange = value => {
-  setSetting('enableResponsesReasoningSummary', Boolean(value))
 }
 
 /**

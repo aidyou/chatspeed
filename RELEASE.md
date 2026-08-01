@@ -8,8 +8,8 @@
 
 - **Workflow code editor**:
   - Added an embedded code editor with file-tree integration, editable file previews, and expanded syntax highlighting support.
-- **OpenAI Responses and Workflow drafts**:
-  - Added OpenAI Responses protocol support and persisted input drafts so unfinished Workflow prompts are restored reliably.
+- **Workflow drafts**:
+  - Persisted input drafts so unfinished Workflow prompts are restored reliably.
 - **Usage and cost analysis**:
   - Added end-to-end usage tracking for Workflow and CCProxy requests, including token, cache, throughput, and cost summaries.
 - **Credential protection**: Search-provider credentials are now protected through encrypted local storage.

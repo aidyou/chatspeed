@@ -8,8 +8,8 @@
 
 - **Workflow 代码编辑器**：
   - 新增内嵌代码编辑器，集成文件树、可编辑文件预览，并扩展语法高亮支持。
-- **OpenAI Responses 与 Workflow 草稿**：
-  - 新增 OpenAI Responses 协议支持，并持久化输入草稿，可靠恢复未完成的 Workflow 提示词。
+- **Workflow 草稿**：
+  - 持久化输入草稿，可靠恢复未完成的 Workflow 提示词。
 - **用量与成本分析**：
   - 新增 Workflow 和 CCProxy 请求的端到端用量追踪，包括 Token、缓存、吞吐量和成本汇总。
 - **凭据保护**：搜索服务提供商凭据现通过本地加密存储保护。
