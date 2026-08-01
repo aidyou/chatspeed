@@ -26,6 +26,8 @@
           <el-tooltip
             v-for="wf in compactActiveWorkflows"
             :key="wf.id"
+            :visible="visibleCompactWorkflowTooltipId === wf.id"
+            :persistent="false"
             placement="right"
             :hide-after="0"
             :enterable="false"
@@ -51,7 +53,9 @@
                 getWorkflowStatusClass(wf.status),
                 { active: wf.id === currentWorkflowId, disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId }
               ]"
-              @click="$emit('select-workflow', wf.id)">
+              @mouseenter="visibleCompactWorkflowTooltipId = wf.id"
+              @mouseleave="hideCompactWorkflowTooltip"
+              @click="selectCompactWorkflow(wf.id)">
               <span class="compact-sidebar-item__badge">
                 {{ getPrimaryRootInitials(wf) }}
               </span>
@@ -68,6 +72,8 @@
           <el-tooltip
             v-for="wf in compactRecentWorkflows"
             :key="wf.id"
+            :visible="visibleCompactWorkflowTooltipId === wf.id"
+            :persistent="false"
             placement="right"
             :hide-after="0"
             :enterable="false"
@@ -93,7 +99,9 @@
                 getWorkflowStatusClass(wf.status),
                 { active: wf.id === currentWorkflowId, disabled: !canSwitchWorkflow && wf.id !== currentWorkflowId }
               ]"
-              @click="$emit('select-workflow', wf.id)">
+              @mouseenter="visibleCompactWorkflowTooltipId = wf.id"
+              @mouseleave="hideCompactWorkflowTooltip"
+              @click="selectCompactWorkflow(wf.id)">
               <span class="compact-sidebar-item__badge">
                 {{ getPrimaryRootInitials(wf) }}
               </span>
@@ -317,7 +325,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import FileTree from './FileTree.vue'
 
@@ -404,6 +412,7 @@ const compactSidebarTab = computed(() =>
 )
 const searchQuery = ref('')
 const automationSearchQuery = ref('')
+const visibleCompactWorkflowTooltipId = ref(null)
 const hoveredWorkflowIndex = ref(null)
 const selectedPrimaryRootFilter = ref('')
 const runningStatuses = new Set(['thinking', 'executing', 'auditing', 'running', 'stopping'])
@@ -490,6 +499,15 @@ const getWorkflowStatusLabel = (status) => {
 const isActiveWorkflow = workflow =>
   !stoppedStatuses.has(String(workflow.status || '').toLowerCase())
 
+const hideCompactWorkflowTooltip = () => {
+  visibleCompactWorkflowTooltipId.value = null
+}
+
+const selectCompactWorkflow = (workflowId) => {
+  hideCompactWorkflowTooltip()
+  emit('select-workflow', workflowId)
+}
+
 const getAutomationStatusClass = (automation) =>
   automation.enabled ? 'completed' : 'paused'
 
@@ -574,6 +592,18 @@ const compactRecentWorkflows = computed(() =>
     .filter((workflow) => !isActiveWorkflow(workflow))
     .slice(0, 5)
 )
+
+watch(
+  () => [
+    props.sidebarCollapsed,
+    compactSidebarTab.value,
+    compactActiveWorkflows.value.map(workflow => workflow.id).join(','),
+    compactRecentWorkflows.value.map(workflow => workflow.id).join(',')
+  ],
+  hideCompactWorkflowTooltip
+)
+
+onBeforeUnmount(hideCompactWorkflowTooltip)
 
 const filteredAutomations = computed(() => {
   return props.automations.filter((automation) => {

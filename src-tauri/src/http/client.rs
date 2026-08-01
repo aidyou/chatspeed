@@ -515,7 +515,6 @@ pub async fn get_real_url(short_url: &str) -> Result<String, Box<dyn std::error:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[tokio::test]
     async fn test_basic_get() {
@@ -546,17 +545,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_download() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let download_path = temp_dir.path().join("test_download.jpg");
         let client = HttpClient::new(None).unwrap();
-        let config =
-            HttpConfig::get("https://httpbin.org/image/jpeg").download_to("test_download.jpg");
+        let config = HttpConfig::get("https://httpbin.org/image/jpeg")
+            .download_to(download_path.to_string_lossy());
 
         let result = client.send_request(config).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
         assert_eq!(response.status, 200);
-        assert!(Path::new("test_download.jpg").exists());
-        std::fs::remove_file("test_download.jpg").unwrap();
+        assert!(download_path.exists());
     }
 
     #[tokio::test]
