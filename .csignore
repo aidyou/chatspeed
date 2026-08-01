@@ -1,0 +1,8 @@
+# ChatSpeed workflow file access rules.
+# Syntax follows .gitignore-style patterns. Lines starting with # are comments.
+# Add allow rules with ! for files that are ignored by git but should remain
+# accessible to ChatSpeed tools and workflow @ file selection.
+
+!dev_data/
+!dev_data/**
+!.cs

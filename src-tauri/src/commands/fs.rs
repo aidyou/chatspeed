@@ -1,9 +1,10 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::libs::fs::{get_file_name, save_thumbnail_image};
 use crate::HTTP_SERVER;
 use crate::HTTP_SERVER_TMP_DIR;
 use crate::HTTP_SERVER_UPLOAD_DIR;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use rust_i18n::t;
 use std::borrow::Cow;
 use std::fs;
@@ -16,6 +17,8 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::time::UNIX_EPOCH;
 
+use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
+
 const EDITOR_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
@@ -23,7 +26,7 @@ pub struct EditorFileInfo {
     pub path: String,
     pub name: String,
     pub size: u64,
-    pub modified_at_ms: u128,
+    pub modified_at_ms: u64,
     pub is_file: bool,
 }
 
@@ -33,20 +36,22 @@ pub struct EditorFileContent {
     pub name: String,
     pub content: String,
     pub size: u64,
-    pub modified_at_ms: u128,
+    pub modified_at_ms: u64,
 }
 
-fn metadata_modified_at_ms(metadata: &fs::Metadata) -> Result<u128> {
+fn metadata_modified_at_ms(metadata: &fs::Metadata) -> Result<u64> {
     let modified = metadata.modified().map_err(|e| AppError::General {
         message: t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
     })?;
-
-    modified
+    let duration = modified
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
         .map_err(|e| AppError::General {
             message: t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
-        })
+        })?;
+
+    u64::try_from(duration.as_millis()).map_err(|e| AppError::General {
+        message: t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+    })
 }
 
 fn editor_file_name(path: &Path) -> String {
@@ -146,6 +151,47 @@ fn should_skip_list_dir_entry(name: &str) -> bool {
         || name_lower.ends_with(".pyc")
         || name_lower == "thumbs.db"
         || name_lower == ".ds_store"
+}
+
+fn build_ignore_scope(path: &Path, file_name: &str) -> Option<(PathBuf, Gitignore)> {
+    for base_dir in path.ancestors() {
+        let ignore_file = base_dir.join(file_name);
+        if !ignore_file.is_file() {
+            continue;
+        }
+        let mut builder = GitignoreBuilder::new(base_dir);
+        if builder.add(&ignore_file).is_some() {
+            continue;
+        }
+        if let Ok(matcher) = builder.build() {
+            return Some((base_dir.to_path_buf(), matcher));
+        }
+    }
+    None
+}
+
+fn is_ignored_by_scope(matcher: Option<&(PathBuf, Gitignore)>, path: &Path, is_dir: bool) -> bool {
+    let Some((base_dir, matcher)) = matcher else {
+        return false;
+    };
+    path.strip_prefix(base_dir)
+        .ok()
+        .map(|relative| matcher.matched(relative, is_dir).is_ignore())
+        .unwrap_or(false)
+}
+
+fn is_whitelisted_by_scope(
+    matcher: Option<&(PathBuf, Gitignore)>,
+    path: &Path,
+    is_dir: bool,
+) -> bool {
+    let Some((base_dir, matcher)) = matcher else {
+        return false;
+    };
+    path.strip_prefix(base_dir)
+        .ok()
+        .map(|relative| matcher.matched(relative, is_dir).is_whitelist())
+        .unwrap_or(false)
 }
 
 fn git_working_dir(path: &str) -> &Path {
@@ -257,15 +303,20 @@ pub async fn read_git_base_text_file(file_path: &str) -> Result<Option<String>> 
 #[tauri::command]
 pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
     let mut list = Vec::new();
+    let root_path = Path::new(path);
+    let chatspeed_ignore = build_ignore_scope(root_path, CHATSPEED_IGNORE_FILE);
+    let gitignore = build_ignore_scope(root_path, ".gitignore");
+    let has_chatspeed_ignore = chatspeed_ignore.is_some();
 
     // Get git status for the directory if it's a git repo
     let git_statuses = get_git_status(path).await.unwrap_or_default();
 
-    // Use ignore crate to respect .gitignore and filter common files
+    // Use ignore crate with git filters disabled when .csignore exists
+    // so explicitly allowed git-ignored data can appear in workflow file lists.
     let mut walker = ignore::WalkBuilder::new(path);
     walker
         .max_depth(Some(1)) // Only current directory
-        .standard_filters(true) // Respect .gitignore, .ignore, etc.
+        .standard_filters(!has_chatspeed_ignore) // Respect .gitignore unless ChatSpeed rules are present
         .hidden(false); // We want to see hidden files unless they are ignored by git
 
     for result in walker.build() {
@@ -288,6 +339,13 @@ pub async fn list_dir(path: &str) -> Result<Vec<Value>> {
         }
 
         let is_dir = path_buf.is_dir();
+        let allowed_by_chatspeed =
+            is_whitelisted_by_scope(chatspeed_ignore.as_ref(), path_buf, is_dir);
+        if is_ignored_by_scope(chatspeed_ignore.as_ref(), path_buf, is_dir)
+            || (!allowed_by_chatspeed && is_ignored_by_scope(gitignore.as_ref(), path_buf, is_dir))
+        {
+            continue;
+        }
         let path_str = path_buf.to_string_lossy().to_string();
 
         // Find git status for this file (keys in git_statuses are absolute paths)
@@ -388,7 +446,7 @@ pub async fn read_text_file_for_editor(
 pub async fn write_text_file_for_editor(
     file_path: &str,
     content: &str,
-    expected_modified_at_ms: u128,
+    expected_modified_at_ms: u64,
     expected_size: u64,
 ) -> Result<EditorFileInfo> {
     let metadata = ensure_editor_file(file_path)?;

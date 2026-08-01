@@ -460,6 +460,7 @@ onBeforeUnmount(() => {
 }
 
 .workflow-terminal__content :deep(.xterm) {
+  width: 100%;
   height: 100%;
 }
 

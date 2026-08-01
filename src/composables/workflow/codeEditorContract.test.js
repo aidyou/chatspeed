@@ -33,10 +33,12 @@ test('editor language mapping covers user requested file extensions', () => {
 test('editor state handles tabs, dirty state, successful save, and conflicts', async () => {
   const calls = []
   const notifications = []
+  const saveErrors = []
   const editor = useWorkflowCodeEditor({
     t: (key, params = {}) => `${key}${params.name ? `:${params.name}` : ''}${params.error ? `:${params.error}` : ''}`,
     usesCommandKey: ref(false),
     notify: (message, type) => notifications.push({ message, type }),
+    saveError: (message, title, options) => saveErrors.push({ message, title, options }),
     confirm: async () => true,
     invoke: async (command, payload) => {
       calls.push({ command, payload })
@@ -63,12 +65,18 @@ test('editor state handles tabs, dirty state, successful save, and conflicts', a
   editor.updateContent('/tmp/example.rs', 'changed')
   assert.equal(editor.activeTab.value.dirty, true)
   await editor.saveTab('/tmp/example.rs')
+  const saveCall = calls.find(call => call.command === 'write_text_file_for_editor')
+  assert.ok(saveCall)
+  assert.equal(typeof saveCall.payload.expectedModifiedAtMs, 'number')
+  assert.equal(saveCall.payload.expectedModifiedAtMs, 100)
   assert.equal(editor.activeTab.value.dirty, false)
   assert.equal(editor.activeTab.value.modifiedAtMs, 200)
+  assert.deepEqual(notifications, [{ message: 'workflow.codeEditor.saveSuccess:example.rs', type: 'success' }])
 
   const conflictEditor = useWorkflowCodeEditor({
     t: key => key,
     notify: (message, type) => notifications.push({ message, type }),
+    saveError: (message, title, options) => saveErrors.push({ message, title, options }),
     confirm: async () => true,
     invoke: async command => {
       if (command === 'read_text_file_for_editor') {
@@ -83,6 +91,30 @@ test('editor state handles tabs, dirty state, successful save, and conflicts', a
   assert.equal(conflictEditor.activeTab.value.conflict, true)
   assert.equal(conflictEditor.activeTab.value.content, 'user edit')
   assert.equal(conflictEditor.activeTab.value.dirty, true)
+  assert.deepEqual(saveErrors, [{
+    message: 'workflow.codeEditor.externalChangeMessage',
+    title: 'common.warning',
+    options: { confirmButtonText: 'common.confirm', type: 'warning' }
+  }])
+
+  const failedSaveEditor = useWorkflowCodeEditor({
+    t: (key, params = {}) => `${key}${params.error ? `:${params.error}` : ''}`,
+    saveError: (message, title, options) => saveErrors.push({ message, title, options }),
+    invoke: async command => {
+      if (command === 'read_text_file_for_editor') {
+        return { name: 'failed.ts', content: 'base', size: 4, modified_at_ms: 10 }
+      }
+      throw new Error('Permission denied')
+    }
+  })
+  await failedSaveEditor.openFile('/tmp/failed.ts')
+  failedSaveEditor.updateContent('/tmp/failed.ts', 'user edit')
+  await assert.rejects(() => failedSaveEditor.saveTab('/tmp/failed.ts'))
+  assert.deepEqual(saveErrors[1], {
+    message: 'workflow.codeEditor.saveFailed:Permission denied',
+    title: 'common.error',
+    options: { confirmButtonText: 'common.confirm', type: 'error' }
+  })
 })
 
 test('workflow code editor source contracts keep CodeMirror, shortcuts, and tab escape hint', async () => {

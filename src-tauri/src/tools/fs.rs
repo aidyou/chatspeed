@@ -59,6 +59,32 @@ fn result_path_for_tool_output(path: &Path) -> String {
     display_ai_temp_path(path).unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
+fn validate_tool_path_for_listing(
+    path: &Path,
+    path_guard: Option<&Arc<RwLock<PathGuard>>>,
+) -> Result<(), ToolError> {
+    if let Some(path_guard) = path_guard {
+        let guard = path_guard
+            .read()
+            .map_err(|e| ToolError::ExecutionFailed(format!("PathGuard lock poisoned: {}", e)))?;
+        guard
+            .validate_for_listing(path, false)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Security Error: {}", e)))?;
+    }
+    Ok(())
+}
+
+fn is_tool_path_allowed(
+    path: &Path,
+    is_dir: bool,
+    path_guard: Option<&Arc<RwLock<PathGuard>>>,
+) -> bool {
+    path_guard
+        .and_then(|path_guard| path_guard.read().ok())
+        .map(|guard| guard.is_chatspeed_allowed(path, is_dir).unwrap_or(false))
+        .unwrap_or(true)
+}
+
 fn format_read_file_open_error(path_str: &str, error: &std::io::Error) -> ToolError {
     match error.kind() {
         std::io::ErrorKind::NotFound => ToolError::IoError(format!(
@@ -202,6 +228,7 @@ fn execute_read_file(
     }
 
     let resolved_path = resolve_tool_path(path_str, path_guard);
+    validate_tool_path_for_listing(&resolved_path, path_guard)?;
     let display_path = display_path_for_tool_output(&resolved_path, path_guard);
     let result_path = result_path_for_tool_output(&resolved_path);
     let path = resolved_path.as_path();
@@ -435,6 +462,7 @@ fn execute_edit_file(
     }
 
     let resolved_path = resolve_tool_path(path_str, path_guard);
+    validate_tool_path_for_listing(&resolved_path, path_guard)?;
     let raw_content = fs::read_to_string(&resolved_path).map_err(|e| {
         ToolError::IoError(format!(
             "Read failed: {}. Ensure the file exists and is readable.",
@@ -687,6 +715,7 @@ impl ToolDefinition for WriteFile {
             .ok_or(ToolError::InvalidParams("content is required".to_string()))?;
         let overwrite = params["overwrite"].as_bool().unwrap_or(false);
         let path = resolve_tool_path(path_str, self.path_guard.as_ref());
+        validate_tool_path_for_listing(&path, self.path_guard.as_ref())?;
         let mut backup_path: Option<PathBuf> = None;
         let mut overwritten = false;
         let mut old_content: Option<String> = None;
@@ -1069,7 +1098,7 @@ impl ToolDefinition for ListDir {
         - Returns one path per line. Paths under the primary working directory are shown as relative paths; entries in other authorized directories remain absolute.\n\
         - By default, lists only the immediate children of the directory.\n\
         - Set recursive=true to walk descendants recursively.\n\
-        - Respects .gitignore and standard ignore filters, while still showing hidden files unless skipped explicitly.\n\
+        - Respects .gitignore by default; when a `.csignore` file exists under an authorized root, ChatSpeed uses that file instead so git-ignored working data can still be listed when explicitly allowed.\n\
         - Skips common noisy entries such as node_modules, .git, __pycache__, .pyc, .DS_Store, and thumbs.db.\n\
         - Output is capped at 1000 entries."
     }
@@ -1105,6 +1134,7 @@ impl ToolDefinition for ListDir {
         let recursive = params["recursive"].as_bool().unwrap_or(false);
         let mut entries = vec![];
         let path = resolve_tool_path(path_str, self.path_guard.as_ref());
+        validate_tool_path_for_listing(&path, self.path_guard.as_ref())?;
         let display_path = display_path_for_tool_output(&path, self.path_guard.as_ref());
 
         if !path.exists() {
@@ -1120,9 +1150,10 @@ impl ToolDefinition for ListDir {
             )));
         }
 
-        // Use ignore crate to respect .gitignore
+        // Use ignore crate with git filters disabled so PathGuard can apply
+        // .gitignore or .csignore consistently for all workflow file surfaces.
         let mut builder = ignore::WalkBuilder::new(&path);
-        builder.standard_filters(true).hidden(false);
+        builder.standard_filters(false).hidden(false);
         if !recursive {
             builder.max_depth(Some(1));
         }
@@ -1142,10 +1173,14 @@ impl ToolDefinition for ListDir {
             if should_skip_list_dir_entry(&name) {
                 continue;
             }
+            let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+            if !is_tool_path_allowed(entry.path(), is_dir, self.path_guard.as_ref()) {
+                continue;
+            }
 
             entries.push(ListedEntry {
                 display_path: display_path_for_tool_output(entry.path(), self.path_guard.as_ref()),
-                is_dir: entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false),
+                is_dir,
             });
             if entries.len() >= 1000 {
                 break;

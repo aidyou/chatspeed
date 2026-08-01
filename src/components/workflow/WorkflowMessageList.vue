@@ -116,6 +116,9 @@
               <span v-if="message.groupDisplay.thoughtSummary" class="tool-group__thought-count">
                 {{ message.groupDisplay.thoughtSummary }}
               </span>
+              <span v-if="message.groupDisplay.errorSummary" class="tool-group__error-count">
+                {{ message.groupDisplay.errorSummary }}
+              </span>
               <span class="tool-group__summary-text">{{ message.groupDisplay.summary }}</span>
               <button
                 type="button"
@@ -1617,6 +1620,13 @@ const getToolGroupThoughtSummary = count => {
   return t('workflow.toolGroups.thoughtChangeCount', { count })
 }
 
+const getToolGroupErrorSummary = count => {
+  if (!count) return ''
+  return t('workflow.toolGroups.errorCount', { count })
+}
+
+const isToolGroupErrorMessage = message => !!(message?.toolDisplay?.isError || message?.isRejected)
+
 const truncateToolGroupText = (value, maxLength = 48) => {
   const text = String(value || '')
     .replace(/\s+/g, ' ')
@@ -1777,15 +1787,17 @@ const TOOL_GROUP_ICONS = {
 const buildToolGroupMessage = (messages, index, thoughts = [], isOngoing = false) => {
   const kinds = new Set(messages.map(getCollapsibleToolGroupKind).filter(Boolean))
   const [singleKind] = kinds
-  const kind = kinds.size === 1 ? singleKind : 'mixed_tools'
+  const kind = messages.length > 0 && kinds.size === 1 ? singleKind : 'mixed_tools'
   const thoughtCount = thoughts.length
+  const errorCount = messages.filter(isToolGroupErrorMessage).length
+  const seedMessage = messages[0] || thoughts[0] || {}
 
   return {
-    ...messages[0],
+    ...seedMessage,
     role: 'assistant',
-    displayId: getCollapsedToolGroupExpandId(messages, index),
+    displayId: getCollapsedToolGroupExpandId(messages.length > 0 ? messages : thoughts, index),
     metadata: {
-      ...(messages[0]?.metadata || {}),
+      ...(seedMessage?.metadata || {}),
       message_kind: 'tool_group',
       tool_group_kind: kind,
       tool_group_thought_count: thoughtCount,
@@ -1794,6 +1806,7 @@ const buildToolGroupMessage = (messages, index, thoughts = [], isOngoing = false
     groupDisplay: {
       icon: TOOL_GROUP_ICONS[kind] || 'tool',
       thoughtSummary: getToolGroupThoughtSummary(thoughtCount),
+      errorSummary: getToolGroupErrorSummary(errorCount),
       summary: buildToolGroupSummary(messages)
     },
     groupedThoughts: thoughts,
@@ -1813,7 +1826,6 @@ const isToolGroupBoundaryMessage = message => {
   }
   if (message.role === 'tool') {
     if (!getCollapsibleToolGroupKind(message)) return true
-    if (message?.toolDisplay?.isError || message?.isRejected) return true
   }
   return false
 }
@@ -1831,7 +1843,6 @@ const isToolGroupOngoingBoundaryMessage = message => {
   if (message.role === 'tool') {
     if (isApprovalPending(message)) return true
     if (!getCollapsibleToolGroupKind(message)) return true
-    if (message?.toolDisplay?.isError || message?.isRejected) return true
   }
   return false
 }
@@ -1915,6 +1926,21 @@ const collapseToolActivityGroups = messages => {
       const thoughts = []
       const tools = []
       let nextIndex = index
+      const currentIsPendingThought = isThinkOnlyAssistantMessage(current)
+
+      if (currentIsPendingThought && hasOngoingToolGroupAfter(messages, index + 1)) {
+        while (
+          nextIndex < messages.length &&
+          isThinkOnlyAssistantMessage(messages[nextIndex]) &&
+          hasOngoingToolGroupAfter(messages, nextIndex + 1)
+        ) {
+          collectToolActivityMessage(messages[nextIndex], nextIndex, thoughts, tools)
+          nextIndex += 1
+        }
+        collapsed.push(buildToolGroupMessage([], index, thoughts, true))
+        index = nextIndex
+        continue
+      }
 
       while (nextIndex < messages.length && !isToolGroupBoundaryMessage(messages[nextIndex])) {
         collectToolActivityMessage(messages[nextIndex], nextIndex, thoughts, tools)
@@ -3329,15 +3355,24 @@ defineExpose({
   min-width: 0;
 }
 
-.tool-group__thought-count {
+.tool-group__thought-count,
+.tool-group__error-count {
   flex: 0 0 auto;
   padding: 1px var(--cs-space-xs);
   border-radius: var(--cs-border-radius-full);
-  background: color-mix(in srgb, var(--el-color-primary) 12%, transparent);
-  color: var(--el-color-primary);
   font-size: var(--cs-font-size-xs);
   font-weight: 600;
   line-height: 1.6;
+}
+
+.tool-group__thought-count {
+  background: color-mix(in srgb, var(--el-color-primary) 12%, transparent);
+  color: var(--el-color-primary);
+}
+
+.tool-group__error-count {
+  background: color-mix(in srgb, var(--el-color-danger) 12%, transparent);
+  color: var(--el-color-danger);
 }
 
 .tool-group__summary-text {

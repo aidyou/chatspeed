@@ -55,6 +55,32 @@ fn result_path_for_tool_output(path: &Path) -> String {
     display_ai_temp_path(path).unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
+fn validate_search_path(
+    path: &Path,
+    path_guard: Option<&Arc<RwLock<PathGuard>>>,
+) -> Result<(), ToolError> {
+    if let Some(path_guard) = path_guard {
+        let guard = path_guard
+            .read()
+            .map_err(|e| ToolError::ExecutionFailed(format!("PathGuard lock poisoned: {}", e)))?;
+        guard
+            .validate_for_listing(path, false)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Security Error: {}", e)))?;
+    }
+    Ok(())
+}
+
+fn is_search_path_allowed(
+    path: &Path,
+    is_dir: bool,
+    path_guard: Option<&Arc<RwLock<PathGuard>>>,
+) -> bool {
+    path_guard
+        .and_then(|path_guard| path_guard.read().ok())
+        .map(|guard| guard.is_chatspeed_allowed(path, is_dir).unwrap_or(false))
+        .unwrap_or(true)
+}
+
 #[derive(Clone, Default)]
 pub struct Glob {
     path_guard: Option<Arc<RwLock<PathGuard>>>,
@@ -77,7 +103,7 @@ impl ToolDefinition for Glob {
         - Supports glob patterns like \"**/*.js\", \"src/**/*.ts\", or \"**/{Cargo.toml,package.json}\"\n\
         - Returns matching file paths, capped at 1000 matches\n\
         - Paths under the primary working directory are shown as relative paths; matches in other authorized directories remain absolute\n\
-        - Automatically respects .gitignore and other ignore files\n\
+        - Automatically respects .gitignore by default; when a `.csignore` file exists under an authorized root, ChatSpeed uses that file instead so git-ignored working data can still be searched when explicitly allowed\n\
         - Use this tool before grep/read_file when you need to discover likely files by extension, directory, or filename\n\
         - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the sub_agent_run tool instead\n\
         - You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful."
@@ -113,6 +139,7 @@ impl ToolDefinition for Glob {
             .ok_or(ToolError::InvalidParams("pattern required".to_string()))?;
         let base_path_str = params["path"].as_str().unwrap_or(".");
         let base_path = resolve_tool_path(base_path_str, self.path_guard.as_ref());
+        validate_search_path(&base_path, self.path_guard.as_ref())?;
         let display_base_path = display_path_for_tool_output(&base_path, self.path_guard.as_ref());
 
         // Prepare the glob matcher
@@ -127,9 +154,10 @@ impl ToolDefinition for Glob {
         const MAX_RESULTS: usize = 1000;
         let mut truncated = false;
 
-        // Use ignore crate to respect .gitignore and filter common files
+        // Use ignore crate with git filters disabled so PathGuard can apply
+        // .gitignore or .csignore consistently for all workflow file surfaces.
         let walker = ignore::WalkBuilder::new(&base_path)
-            .standard_filters(true)
+            .standard_filters(self.path_guard.is_none())
             .hidden(false)
             .build();
 
@@ -141,6 +169,9 @@ impl ToolDefinition for Glob {
 
             let path = entry.path();
             if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                if !is_search_path_allowed(path, false, self.path_guard.as_ref()) {
+                    continue;
+                }
                 // Get relative path for matching
                 let rel_path = path.strip_prefix(&base_path).unwrap_or(path);
 
@@ -153,6 +184,8 @@ impl ToolDefinition for Glob {
                 }
             }
         }
+
+        results.sort();
 
         if results.is_empty() {
             Ok(ToolCallResult::success(
@@ -262,6 +295,7 @@ impl ToolDefinition for Grep {
         let re = Regex::new(pattern_str)
             .map_err(|e| ToolError::InvalidParams(format!("Invalid regex: {}", e)))?;
         let path = resolve_tool_path(search_path, self.path_guard.as_ref());
+        validate_search_path(&path, self.path_guard.as_ref())?;
         let display_path = display_path_for_tool_output(&path, self.path_guard.as_ref());
         let mut matches = vec![];
         let mut truncated = false;
@@ -274,7 +308,8 @@ impl ToolDefinition for Grep {
         }
 
         if path.is_file() {
-            if Self::matches_glob(&path, path.parent(), glob_set.as_ref())
+            if is_search_path_allowed(&path, false, self.path_guard.as_ref())
+                && Self::matches_glob(&path, path.parent(), glob_set.as_ref())
                 && Self::is_searchable_text_file(&path)
             {
                 truncated = Self::search_in_file(
@@ -287,9 +322,10 @@ impl ToolDefinition for Grep {
                 )?;
             }
         } else if path.is_dir() {
-            // Use ignore crate to respect .gitignore
+            // Use ignore crate with git filters disabled so PathGuard can apply
+            // .gitignore or .csignore consistently for all workflow file surfaces.
             let walker = ignore::WalkBuilder::new(&path)
-                .standard_filters(true)
+                .standard_filters(self.path_guard.is_none())
                 .hidden(false)
                 .build();
 
@@ -300,6 +336,9 @@ impl ToolDefinition for Grep {
                 };
 
                 if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    if !is_search_path_allowed(entry.path(), false, self.path_guard.as_ref()) {
+                        continue;
+                    }
                     if !Self::matches_glob(entry.path(), Some(&path), glob_set.as_ref()) {
                         continue;
                     }

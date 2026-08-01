@@ -52,6 +52,11 @@ async function defaultNotify(message, type) {
   return showMessage(message, type)
 }
 
+async function defaultSaveError(message, title, alertOptions) {
+  const { ElMessageBox } = await import('element-plus')
+  return ElMessageBox.alert(message, title, alertOptions)
+}
+
 export function isEditorConflictError(error) {
   const text = toErrorText(error).toLowerCase()
   return text.includes('changed on disk')
@@ -65,6 +70,7 @@ export function useWorkflowCodeEditor(options = {}) {
   const invoke = options.invoke || invokeWrapper
   const notify = options.notify || defaultNotify
   const confirm = options.confirm || defaultConfirm
+  const saveError = options.saveError || defaultSaveError
   const usesCommandKey = options.usesCommandKey || ref(false)
 
   const tabs = ref([])
@@ -151,9 +157,23 @@ export function useWorkflowCodeEditor(options = {}) {
       tab.error = message
       if (isEditorConflictError(error)) {
         tab.conflict = true
-        notify(t('workflow.codeEditor.externalChangeMessage', { name: tab.name }), 'warning')
+        void Promise.resolve(saveError(
+          t('workflow.codeEditor.externalChangeMessage', { name: tab.name }),
+          t('common.warning'),
+          {
+            confirmButtonText: t('common.confirm'),
+            type: 'warning'
+          }
+        )).catch(() => {})
       } else {
-        notify(t('workflow.codeEditor.saveFailed', { error: message }), 'error')
+        void Promise.resolve(saveError(
+          t('workflow.codeEditor.saveFailed', { error: message }),
+          t('common.error'),
+          {
+            confirmButtonText: t('common.confirm'),
+            type: 'error'
+          }
+        )).catch(() => {})
       }
       throw error
     } finally {

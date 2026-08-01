@@ -136,7 +136,9 @@ assert.match(
 )
 assert.match(workflowMessageStyles, /background: linear-gradient\(/)
 assert.match(workflowMessageStyles, /color-mix\(in srgb, var\(--cs-text-color-primary\)/)
-assert.match(workflowMessageStyles, /animation: tool-group-title-shimmer 1\.3s ease-in-out infinite/)
+assert.match(workflowMessageStyles, /animation: tool-group-title-shimmer 3s ease-in-out infinite/)
+assert.match(workflowMessageStyles, /50% \{[\s\S]*background-position: 0 0/)
+assert.match(workflowMessageStyles, /100% \{[\s\S]*background-position: 0 0/)
 assert.match(
   themeVariables,
   /:root\.light[\s\S]*--cs-shimmer-inverse-color: rgba\(255, 255, 255, 0\.55\)/

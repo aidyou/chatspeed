@@ -27,14 +27,17 @@ const SENSITIVE_SYSTEM_PATHS: &[&str] = &[
     "C:\\Program Files (x86)",
 ];
 
-struct GitignoreScope {
+pub const CHATSPEED_IGNORE_FILE: &str = ".csignore";
+
+struct IgnoreScope {
     base_dir: PathBuf,
     matcher: Gitignore,
 }
 
 struct AuthorizedRoot {
     path: PathBuf,
-    gitignore_scopes: Vec<GitignoreScope>,
+    gitignore_scopes: Vec<IgnoreScope>,
+    chatspeed_scopes: Vec<IgnoreScope>,
 }
 
 pub struct PathGuard {
@@ -82,43 +85,50 @@ impl PathGuard {
                 }
             };
 
-            let mut gitignore_scopes = Vec::new();
-            // Scan for .gitignore up to 3 levels deep to avoid massive stalls
-            for entry in walkdir::WalkDir::new(&root)
-                .max_depth(3)
-                .follow_links(false)
-                .into_iter()
-                .filter_entry(|e| {
-                    let name = e.file_name().to_string_lossy();
-                    name != ".git" && name != "node_modules"
-                })
-                .filter_map(|e| e.ok())
-            {
-                if entry.file_name() == ".gitignore" {
-                    let Some(base_dir) = entry.path().parent().map(Path::to_path_buf) else {
-                        continue;
-                    };
-                    let mut builder = GitignoreBuilder::new(&base_dir);
-                    if builder.add(entry.path()).is_some() {
-                        continue;
-                    }
-                    if let Ok(matcher) = builder.build() {
-                        gitignore_scopes.push(GitignoreScope { base_dir, matcher });
-                    }
-                }
-            }
-            gitignore_scopes.sort_by(|a, b| {
-                b.base_dir
-                    .components()
-                    .count()
-                    .cmp(&a.base_dir.components().count())
-            });
+            let gitignore_scopes = Self::collect_ignore_scopes(&root, ".gitignore");
+            let chatspeed_scopes = Self::collect_ignore_scopes(&root, CHATSPEED_IGNORE_FILE);
             roots_with_ignore.push(AuthorizedRoot {
                 path: root,
                 gitignore_scopes,
+                chatspeed_scopes,
             });
         }
         roots_with_ignore
+    }
+
+    fn collect_ignore_scopes(root: &Path, file_name: &str) -> Vec<IgnoreScope> {
+        let mut scopes = Vec::new();
+        // Scan up to 3 levels deep to avoid massive stalls on large workspaces.
+        for entry in walkdir::WalkDir::new(root)
+            .max_depth(3)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                name != ".git" && name != "node_modules"
+            })
+            .filter_map(|e| e.ok())
+        {
+            if entry.file_name() == file_name {
+                let Some(base_dir) = entry.path().parent().map(Path::to_path_buf) else {
+                    continue;
+                };
+                let mut builder = GitignoreBuilder::new(&base_dir);
+                if builder.add(entry.path()).is_some() {
+                    continue;
+                }
+                if let Ok(matcher) = builder.build() {
+                    scopes.push(IgnoreScope { base_dir, matcher });
+                }
+            }
+        }
+        scopes.sort_by(|a, b| {
+            b.base_dir
+                .components()
+                .count()
+                .cmp(&a.base_dir.components().count())
+        });
+        scopes
     }
 
     pub fn workspace_roots(&self) -> Vec<PathBuf> {
@@ -238,6 +248,50 @@ impl PathGuard {
         is_write: bool,
         is_delete: bool,
     ) -> Result<PathBuf, WorkflowEngineError> {
+        self.validate_with_ignore(target, is_planning_phase, is_write, is_delete)
+    }
+
+    pub fn validate_for_listing(
+        &self,
+        target: &Path,
+        is_planning_phase: bool,
+    ) -> Result<PathBuf, WorkflowEngineError> {
+        self.validate_with_ignore(target, is_planning_phase, false, false)
+    }
+
+    pub fn is_chatspeed_allowed(
+        &self,
+        target: &Path,
+        _is_dir: bool,
+    ) -> Result<bool, WorkflowEngineError> {
+        let resolved_target = resolve_ai_temp_path(target);
+        let abs_path = if resolved_target.is_absolute() {
+            resolved_target
+        } else {
+            match &self.primary_root {
+                Some(root) => root.join(resolved_target),
+                None => return Ok(false),
+            }
+        };
+        let requested_path = Self::normalize_requested_path(&abs_path);
+        let final_path = Self::resolve_physical_path(&requested_path);
+
+        for root in self.sandbox_roots.iter().chain(self.workspace_roots.iter()) {
+            if final_path.starts_with(&root.path) {
+                self.check_ignore_rules(root, &final_path)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn validate_with_ignore(
+        &self,
+        target: &Path,
+        is_planning_phase: bool,
+        is_write: bool,
+        is_delete: bool,
+    ) -> Result<PathBuf, WorkflowEngineError> {
         let resolved_target = resolve_ai_temp_path(target);
         let abs_path = if resolved_target.is_absolute() {
             resolved_target
@@ -266,7 +320,7 @@ impl PathGuard {
         // 1. Check Sandbox (Always OK for everything)
         for root in &self.sandbox_roots {
             if final_path.starts_with(&root.path) {
-                self.check_gitignore(root, &final_path)?;
+                self.check_ignore_rules(root, &final_path)?;
                 return Ok(final_path);
             }
         }
@@ -301,7 +355,7 @@ impl PathGuard {
                         final_path
                     )));
                 }
-                self.check_gitignore(root, &final_path)?;
+                self.check_ignore_rules(root, &final_path)?;
                 return Ok(final_path);
             }
         }
@@ -312,12 +366,14 @@ impl PathGuard {
         )))
     }
 
-    fn check_gitignore(
+    fn check_ignore_scope(
         &self,
-        root: &AuthorizedRoot,
+        scopes: &[IgnoreScope],
         path: &Path,
-    ) -> Result<(), WorkflowEngineError> {
-        for scope in &root.gitignore_scopes {
+        is_dir_override: Option<bool>,
+        denied_by: &str,
+    ) -> Result<bool, WorkflowEngineError> {
+        for scope in scopes {
             if !path.starts_with(&scope.base_dir) {
                 continue;
             }
@@ -330,17 +386,56 @@ impl PathGuard {
                         let is_dir = if i < components.len() - 1 {
                             true
                         } else {
-                            path.is_dir()
+                            is_dir_override.unwrap_or_else(|| path.is_dir())
                         };
-                        if scope.matcher.matched(&current_p, is_dir).is_ignore() {
+                        let matched = scope.matcher.matched(&current_p, is_dir);
+                        if matched.is_ignore() {
                             return Err(WorkflowEngineError::Security(format!(
-                                "Path Denied: {:?} is ignored by .gitignore",
-                                path
+                                "Path Denied: {:?} is ignored by {}",
+                                path, denied_by
                             )));
+                        }
+                        if matched.is_whitelist() {
+                            return Ok(true);
                         }
                     }
                 }
             }
+        }
+        Ok(false)
+    }
+
+    fn check_gitignore(
+        &self,
+        root: &AuthorizedRoot,
+        path: &Path,
+    ) -> Result<(), WorkflowEngineError> {
+        self.check_ignore_scope(&root.gitignore_scopes, path, None, ".gitignore")
+            .map(|_| ())
+    }
+
+    fn check_chatspeed_ignore(
+        &self,
+        root: &AuthorizedRoot,
+        path: &Path,
+        is_dir: bool,
+    ) -> Result<bool, WorkflowEngineError> {
+        self.check_ignore_scope(
+            &root.chatspeed_scopes,
+            path,
+            Some(is_dir),
+            CHATSPEED_IGNORE_FILE,
+        )
+    }
+
+    fn check_ignore_rules(
+        &self,
+        root: &AuthorizedRoot,
+        path: &Path,
+    ) -> Result<(), WorkflowEngineError> {
+        let allowed_by_chatspeed = self.check_chatspeed_ignore(root, path, path.is_dir())?;
+        if !allowed_by_chatspeed {
+            self.check_gitignore(root, path)?;
         }
         Ok(())
     }
@@ -396,6 +491,58 @@ mod tests {
         assert!(guard
             .validate(&root_path.join("../outside.txt"), false, false, false)
             .is_err());
+    }
+
+    #[test]
+    fn test_path_guard_csignore_allows_gitignored_file() {
+        let root = tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        fs::create_dir(root_path.join("dev_data")).unwrap();
+        fs::write(root_path.join(".gitignore"), "dev_data/\n").unwrap();
+        fs::write(
+            root_path.join(CHATSPEED_IGNORE_FILE),
+            "# ChatSpeed can access dev data\n!dev_data/\n!dev_data/**\n",
+        )
+        .unwrap();
+        fs::write(root_path.join("dev_data/fixture.txt"), "fixture").unwrap();
+        let guard = PathGuard::new(vec![root_path.clone()], vec![], vec![]);
+
+        assert!(guard
+            .validate(&root_path.join("dev_data/fixture.txt"), false, false, false)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_path_guard_csignore_denies_path() {
+        let root = tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        fs::write(root_path.join(CHATSPEED_IGNORE_FILE), "private/\n").unwrap();
+        fs::create_dir(root_path.join("private")).unwrap();
+        fs::write(root_path.join("private/secret.txt"), "secret").unwrap();
+        let guard = PathGuard::new(vec![root_path.clone()], vec![], vec![]);
+
+        assert!(guard
+            .validate(&root_path.join("private/secret.txt"), false, false, false)
+            .is_err());
+    }
+
+    #[test]
+    fn test_path_guard_listing_uses_csignore_not_gitignore() {
+        let root = tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        fs::create_dir(root_path.join("dev_data")).unwrap();
+        fs::write(root_path.join(".gitignore"), "dev_data/\n").unwrap();
+        fs::write(
+            root_path.join(CHATSPEED_IGNORE_FILE),
+            "!dev_data/\n!dev_data/**\n",
+        )
+        .unwrap();
+        fs::write(root_path.join("dev_data/fixture.txt"), "fixture").unwrap();
+        let guard = PathGuard::new(vec![root_path.clone()], vec![], vec![]);
+
+        assert!(guard
+            .validate_for_listing(&root_path.join("dev_data"), false)
+            .is_ok());
     }
 
     #[test]
