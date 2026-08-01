@@ -32,7 +32,6 @@ use crate::workflow::react::types::{
 };
 use chrono::{DateTime, Local};
 use glob::glob;
-use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -4896,35 +4895,6 @@ fn path_contains_obviously_ignored_component(path: &Path) -> bool {
     })
 }
 
-fn build_workspace_ignore_scope(base: &Path, file_name: &str) -> Option<Gitignore> {
-    let ignore_file = base.join(file_name);
-    if !ignore_file.is_file() {
-        return None;
-    }
-
-    let mut builder = GitignoreBuilder::new(base);
-    if builder.add(&ignore_file).is_some() {
-        return None;
-    }
-    builder.build().ok()
-}
-
-fn workspace_path_is_ignored_by(
-    matcher: Option<&Gitignore>,
-    relative_path: &Path,
-    is_dir: bool,
-) -> bool {
-    matcher.is_some_and(|matcher| matcher.matched(relative_path, is_dir).is_ignore())
-}
-
-fn workspace_path_is_allowed_by_chatspeed(
-    matcher: Option<&Gitignore>,
-    relative_path: &Path,
-    is_dir: bool,
-) -> bool {
-    matcher.is_some_and(|matcher| matcher.matched(relative_path, is_dir).is_whitelist())
-}
-
 #[tauri::command]
 pub async fn search_workspace_files(
     paths: Vec<String>,
@@ -4939,13 +4909,9 @@ pub async fn search_workspace_files(
             continue;
         }
 
-        let chatspeed_ignore = build_workspace_ignore_scope(&base, CHATSPEED_IGNORE_FILE);
-        let gitignore = build_workspace_ignore_scope(&base, ".gitignore");
-        let has_chatspeed_ignore = chatspeed_ignore.is_some();
-
         let mut builder = ignore::WalkBuilder::new(&base);
         builder
-            .standard_filters(!has_chatspeed_ignore)
+            .add_custom_ignore_filename(CHATSPEED_IGNORE_FILE)
             .hidden(false);
         builder.filter_entry(|entry| {
             entry
@@ -4970,22 +4936,6 @@ pub async fn search_workspace_files(
             }
 
             let relative_path = path.strip_prefix(&base).unwrap_or(&path);
-            let is_dir = entry
-                .file_type()
-                .map(|ft| ft.is_dir())
-                .unwrap_or_else(|| path.is_dir());
-            let allowed_by_chatspeed = workspace_path_is_allowed_by_chatspeed(
-                chatspeed_ignore.as_ref(),
-                relative_path,
-                is_dir,
-            );
-            if workspace_path_is_ignored_by(chatspeed_ignore.as_ref(), relative_path, is_dir)
-                || (!allowed_by_chatspeed
-                    && workspace_path_is_ignored_by(gitignore.as_ref(), relative_path, is_dir))
-            {
-                continue;
-            }
-
             let rel_path = relative_path.to_string_lossy().to_string();
             let name_lower = name.to_lowercase();
 
@@ -5676,6 +5626,7 @@ mod tests {
             .canonicalize()
             .expect("failed to canonicalize root");
         let dev_data = root_path.join("dev_data");
+        std::fs::create_dir(root_path.join(".git")).expect("failed to mark git root");
         std::fs::create_dir(&dev_data).expect("failed to create dev_data");
         std::fs::write(root_path.join(".gitignore"), "dev_data/\n")
             .expect("failed to write .gitignore");
@@ -5704,6 +5655,42 @@ mod tests {
                 .iter()
                 .any(|file| file.relative_path == "dev_data/fixture.txt"),
             "files inside dev_data should be available in @ file suggestions: {results:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_workspace_files_respects_nested_gitignore_when_csignore_is_unspecified() {
+        let root = tempdir().expect("failed to create temp dir");
+        let root_path = root
+            .path()
+            .canonicalize()
+            .expect("failed to canonicalize root");
+        let nested = root_path.join("src-tauri");
+        let target = nested.join("target");
+        std::fs::create_dir(root_path.join(".git")).expect("failed to mark git root");
+        std::fs::create_dir_all(&target).expect("failed to create nested target");
+        std::fs::write(
+            root_path.join(CHATSPEED_IGNORE_FILE),
+            "!dev_data/\n!dev_data/**\n",
+        )
+        .expect("failed to write .csignore");
+        std::fs::write(nested.join(".gitignore"), "/target/\n")
+            .expect("failed to write nested .gitignore");
+        std::fs::write(target.join("artifact.txt"), "artifact")
+            .expect("failed to write ignored artifact");
+
+        let results = search_workspace_files(
+            vec![root_path.to_string_lossy().to_string()],
+            "target".to_string(),
+        )
+        .await
+        .expect("search should succeed");
+
+        assert!(
+            results
+                .iter()
+                .all(|file| !file.relative_path.starts_with("src-tauri/target")),
+            "paths unspecified by .csignore must fall back to nested .gitignore rules: {results:?}"
         );
     }
 
