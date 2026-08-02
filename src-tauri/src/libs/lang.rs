@@ -3,43 +3,30 @@ use phf::phf_map;
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Retrieves the system's locale and standardizes it.
-///
-/// This function obtains the current system locale string and converts it
-/// to a standardized language code based on predefined rules. If the locale
-/// is not within the predefined range, the original locale string is returned.
+/// Returns a supported interface locale or falls back to English.
+pub fn normalize_interface_locale(locale: &str) -> &str {
+    match locale {
+        "en" | "ja" | "zh-Hans" | "zh-Hant" => locale,
+        _ => "en",
+    }
+}
+
+/// Retrieves the system locale and maps it to a supported interface locale.
 pub fn get_system_locale() -> String {
-    // Get the current system locale
     let locale = Locale::current().to_string();
+    let normalized = if locale.starts_with("en-") || locale == "en" {
+        "en"
+    } else if locale.starts_with("ja-") || locale == "ja" {
+        "ja"
+    } else {
+        match locale.as_str() {
+            "zh-CN" | "zh-SG" => "zh-Hans",
+            "zh-TW" | "zh-HK" | "zh-MO" => "zh-Hant",
+            _ => "en",
+        }
+    };
 
-    if locale.starts_with("en-") || locale == "en" {
-        return "en".to_string();
-    }
-    if locale.starts_with("fr-") || locale == "fr" {
-        return "fr".to_string();
-    }
-    if locale.starts_with("de-") || locale == "de" {
-        return "de".to_string();
-    }
-    if locale.starts_with("es-") || locale == "es" {
-        return "es".to_string();
-    }
-    if locale.starts_with("ja-") || locale == "ja" {
-        return "ja".to_string();
-    }
-    if locale.starts_with("ko-") || locale == "ko" {
-        return "ko".to_string();
-    }
-
-    // If not one of the above, use the more specific matching from before.
-    match locale.as_str() {
-        // Simplified Chinese retains zh-CN
-        "zh-CN" => "zh-Hans".to_string(),
-        // Traditional Chinese is unified to zh-HK
-        "zh-TW" | "zh-HK" | "zh-MO" | "zh-SG" => "zh-Hant".to_string(),
-        // Other languages retain their original form
-        _ => locale,
-    }
+    normalized.to_string()
 }
 
 /// Loads available languages from the i18n configuration file
@@ -137,4 +124,23 @@ pub fn lang_to_iso_639_1(lang: &str) -> Result<&'static str, String> {
         .get(lang)
         .copied()
         .ok_or(format!("Language not supported: {}", lang))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_interface_locale;
+
+    #[test]
+    fn normalizes_supported_interface_locales() {
+        for locale in ["en", "ja", "zh-Hans", "zh-Hant"] {
+            assert_eq!(normalize_interface_locale(locale), locale);
+        }
+    }
+
+    #[test]
+    fn falls_back_to_english_for_unsupported_interface_locales() {
+        for locale in ["de", "fr", "es", "pt", "ru", "ko", "", "en-US"] {
+            assert_eq!(normalize_interface_locale(locale), "en");
+        }
+    }
 }

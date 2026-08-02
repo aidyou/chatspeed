@@ -8,6 +8,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { sendSyncState } from '@/libs/sync'
 import { isEmpty, snakeToCamel, camelToSnake } from '@/libs/util'
 import { mapBrowserLangToStandard } from '@/i18n/langUtils'
+import { normalizeInterfaceLocale } from '@/i18n/supportedLocales'
 import i18n from '@/i18n'
 
 const windowLabel = getCurrentWebviewWindow().label
@@ -134,6 +135,10 @@ export const useSettingStore = defineStore('setting', () => {
    * @returns {Promise<void>} A promise that resolves when the setting is successfully updated.
    */
   const setSetting = async (key, value) => {
+    if (key === 'interfaceLanguage') {
+      value = normalizeInterfaceLocale(value)
+    }
+
     // Convert camelCase to snake_case
     const dbKey = camelToSnake(key)
 
@@ -200,6 +205,7 @@ export const useSettingStore = defineStore('setting', () => {
             Object.keys(result).forEach(x => {
               settings.value[snakeToCamel(x)] = result[x]
             })
+            settings.value.interfaceLanguage = normalizeInterfaceLocale(settings.value.interfaceLanguage)
             console.debug('settings', settings.value)
           }
           resolve()

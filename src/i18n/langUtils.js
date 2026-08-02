@@ -1,4 +1,5 @@
 import { langs, softwareLanguages } from './langs'
+import { normalizeInterfaceLocale } from './supportedLocales'
 
 // 映射函数
 export function mapBrowserLangToStandard(browserLang) {
@@ -9,15 +10,8 @@ export function mapBrowserLangToStandard(browserLang) {
     return lowerBrowserLang.includes('hant') ? 'zh-Hant' : 'zh-Hans'
   }
 
-  // 常规匹配
-  for (const langCode in langs) {
-    if (lowerBrowserLang.startsWith(langCode)) {
-      return langCode
-    }
-  }
-
-  // 如果没有匹配，返回默认语言（例如英语）
-  return 'en'
+  const baseLanguage = lowerBrowserLang.split('-')[0]
+  return normalizeInterfaceLocale(baseLanguage)
 }
 
 /**

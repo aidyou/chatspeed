@@ -694,12 +694,17 @@ pub async fn run() -> crate::error::Result<()> {
             // Setup language and reconcile OS-managed settings with persisted preferences.
             {
                 let c = main_store.as_ref();
-                let user_lang =
+                let stored_lang =
                     c.get_config(CFG_INTERFACE_LANGUAGE, libs::lang::get_system_locale());
-                if !user_lang.is_empty() {
-                    set_locale(&user_lang);
-                    log::info!("Set interace language to {}", user_lang);
+                let user_lang = libs::lang::normalize_interface_locale(&stored_lang).to_string();
+                if stored_lang != user_lang {
+                    let normalized_value = serde_json::Value::String(user_lang.clone());
+                    if let Err(error) = c.set_config(CFG_INTERFACE_LANGUAGE, &normalized_value) {
+                        log::error!("Failed to persist normalized interface language: {}", error);
+                    }
                 }
+                set_locale(&user_lang);
+                log::info!("Set interface language to {}", user_lang);
 
                 let auto_start = c.get_config(CFG_AUTO_START, false);
                 let autolaunch = app.autolaunch();

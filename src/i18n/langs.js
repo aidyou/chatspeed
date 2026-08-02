@@ -1,4 +1,5 @@
 import i18n from './index'
+import { SUPPORTED_INTERFACE_LOCALES } from './supportedLocales'
 
 export const langs = {
   "ar": {
@@ -172,8 +173,7 @@ export const langs = {
  * @returns {Object} Language configuration object
  */
 export const softwareLanguages = () => {
-  const available = ['de', 'en', 'es', 'fr', 'ja', 'ko', 'pt', 'ru', 'zh-Hans', 'zh-Hant']
-  return available.reduce((acc, lang) => {
+  return SUPPORTED_INTERFACE_LOCALES.reduce((acc, lang) => {
     acc[lang] = { code: lang, ...langs[lang] }
     return acc
   }, {})

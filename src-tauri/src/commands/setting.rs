@@ -127,6 +127,14 @@ pub fn set_config(
     value: Value,
 ) -> Result<()> {
     let should_refresh_tray = crate::shortcut::is_shortcut_key(key);
+    let value = if key == CFG_INTERFACE_LANGUAGE {
+        Value::String(
+            crate::libs::lang::normalize_interface_locale(value.as_str().unwrap_or_default())
+                .to_string(),
+        )
+    } else {
+        value
+    };
 
     {
         let config_store = &*state;
@@ -142,7 +150,8 @@ pub fn set_config(
                 CFG_INTERFACE_LANGUAGE => {
                     let lang =
                         config_store.get_config::<String>(CFG_INTERFACE_LANGUAGE, "en".to_string());
-                    set_locale(&lang);
+                    let lang = crate::libs::lang::normalize_interface_locale(&lang);
+                    set_locale(lang);
                     #[cfg(debug_assertions)]
                     log::debug!("Language set to: {}", lang);
                 }
