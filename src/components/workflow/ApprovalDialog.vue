@@ -20,13 +20,16 @@
             :context-data="detailsObject || null" />
         </div>
         <div v-else-if="isShellAction" class="shell-view">
+          <div class="shell-command-frame">
+            <span class="shell-command-frame__prompt" aria-hidden="true">$</span>
+            <MarkdownSimple :content="shellMarkdown" class-name="approval-markdown" />
+          </div>
           <div v-if="shellExecutionRows.length" class="shell-execution-plan">
             <div v-for="row in shellExecutionRows" :key="row.label" class="shell-execution-plan__row">
               <span class="shell-execution-plan__label">{{ row.label }}</span>
               <span class="shell-execution-plan__value">{{ row.value }}</span>
             </div>
           </div>
-          <MarkdownSimple :content="shellMarkdown" class-name="approval-markdown" />
         </div>
         <div v-else-if="isMarkdownAction" class="markdown-view">
           <MarkdownSimple :content="markdownContent" class-name="approval-markdown" />
@@ -350,11 +353,41 @@ const onReject = () => {
       overflow-y: auto;
     }
 
-    .shell-view,
+    .shell-view {
+      display: grid;
+      gap: var(--cs-space-sm);
+      max-height: min(36vh, 320px);
+      overflow: auto;
+    }
+
     .markdown-view {
       max-height: min(36vh, 320px);
       overflow: auto;
+    }
 
+    .shell-command-frame {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
+      gap: var(--cs-space-sm);
+      min-width: 0;
+
+      &__prompt {
+        color: var(--cs-color-primary);
+        font-family: var(--cs-font-family-mono);
+        font-size: var(--cs-font-size);
+        font-weight: 700;
+        line-height: 1.5;
+        user-select: none;
+      }
+
+      :deep(.approval-markdown) {
+        min-width: 0;
+      }
+    }
+
+    .shell-view,
+    .markdown-view {
       :deep(pre) {
         white-space: pre-wrap;
         word-break: break-word;
@@ -368,6 +401,15 @@ const onReject = () => {
         overflow-wrap: anywhere;
         background: none;
         padding: var(--cs-space-sm);
+      }
+    }
+
+    .shell-view .shell-command-frame {
+      :deep(pre),
+      :deep(pre code.hljs) {
+        padding: 0;
+        font-size: var(--cs-font-size);
+        line-height: 1.5;
       }
     }
 
@@ -404,29 +446,33 @@ const onReject = () => {
     }
 
     .shell-execution-plan {
-      display: flex;
-      flex-direction: column;
-      gap: var(--cs-space-xs);
-      padding: var(--cs-space-sm);
-      margin-bottom: var(--cs-space-sm);
-      border: 1px solid var(--cs-border-color);
-      border-radius: var(--cs-border-radius-sm);
-      background: var(--cs-bg-color-light);
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: var(--cs-space-sm) var(--cs-space-md);
+      padding-top: var(--cs-space-sm);
+      border-top: 1px solid var(--cs-border-color);
 
       &__row {
         display: grid;
-        grid-template-columns: 128px minmax(0, 1fr);
-        gap: var(--cs-space-sm);
+        gap: var(--cs-space-xxs);
+        min-width: 0;
         font-size: var(--cs-font-size-sm);
       }
 
       &__label {
         color: var(--cs-text-color-secondary);
+        font-size: var(--cs-font-size-xs);
+        letter-spacing: 0.04em;
+        line-height: 1.2;
+        text-transform: uppercase;
       }
 
       &__value {
+        overflow-wrap: anywhere;
         color: var(--cs-text-color-primary);
-        word-break: break-word;
+        font-family: var(--cs-font-family-mono);
+        font-size: var(--cs-font-size-sm);
+        line-height: 1.4;
       }
     }
 
