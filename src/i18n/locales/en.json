@@ -1104,6 +1104,7 @@
       "editFile": "Edit file",
       "errorCount": "Error x{count}",
       "expand": "Expand",
+      "fetchSubAgentResult": "Fetch execution result",
       "fileSearch": "Search files",
       "readFile": "Read file",
       "readWeb": "Fetch web content",
@@ -1211,6 +1212,12 @@
     "stopConfirmMessage": "Stop the current workflow? Any operation in progress will be interrupted.",
     "stopConfirmTitle": "Stop workflow",
     "stopping": "Stopping",
+    "subAgent": {
+      "statusCancelled": "Cancelled",
+      "statusCompleted": "Completed",
+      "statusFailed": "Error",
+      "statusRunning": "Running"
+    },
     "thinking": "Thinking...",
     "thinkingExpanded": "Thinking Process",
     "thoughtCompleted": "Thought completed",

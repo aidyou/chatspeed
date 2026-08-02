@@ -420,7 +420,34 @@
               message.toolDisplay.isError ? 'status-error' : 'status-success'
             ]">
             <template v-if="isSubAgentRunMessage(message) && message.subAgentCard">
-              <div class="sub-agent-card">
+              <div
+                class="tool-line title-wrap expandable tool-group__summary"
+                :class="{ expanded: isSubAgentCardExpanded(message) }"
+                @click="$emit('toggle-expand', getSubAgentCardExpandId(message))">
+                <cs name="skill-relation-chart" size="15px" class="tool-type-icon" />
+                <span
+                  class="sub-agent-card__toggle-status"
+                  :class="getSubAgentStatusBadgeClass(message)">
+                  <cs name="loading" class="cs-spin" v-if="subagentIsRunning(message)" />
+                  {{ getSubAgentStatusLabel(message) }}
+                </span>
+                <span class="tool-group__summary-text">Delegated Task</span>
+                <button
+                  type="button"
+                  class="tool-group__expand-button"
+                  :aria-label="$t('workflow.toolGroups.expand')"
+                  @click.stop="$emit('toggle-expand', getSubAgentCardExpandId(message))">
+                  <cs name="caret-down" size="14px" />
+                </button>
+              </div>
+
+              <div
+                v-if="isSubAgentCardExpanded(message)"
+                class="sub-agent-card"
+                :class="{
+                  'is-expanded': isSubAgentCardExpanded(message),
+                  'is-collapsed': !isSubAgentCardExpanded(message)
+                }">
                 <div class="sub-agent-card__header">
                   <div class="sub-agent-card__title-wrap">
                     <div class="sub-agent-card__title">
@@ -1623,7 +1650,6 @@ const NON_COLLAPSIBLE_TOOL_NAMES = new Set([
   'submit_plan',
   'complete_workflow',
   'sub_agent_run',
-  'sub_agent_output',
   'sub_agent_stop'
 ])
 const TODO_TOOL_NAMES = new Set(['todo_create', 'todo_list', 'todo_update', 'todo_get'])
@@ -1635,6 +1661,7 @@ const TOOL_GROUP_LABEL_KEYS = {
   list_dir: 'workflow.toolGroups.readFile',
   read_file: 'workflow.toolGroups.readFile',
   skill: 'workflow.toolGroups.useSkill',
+  sub_agent_output: 'workflow.toolGroups.fetchSubAgentResult',
   web_fetch: 'workflow.toolGroups.readWeb',
   web_search: 'workflow.toolGroups.fileSearch',
   write_file: 'workflow.toolGroups.editFile'
@@ -1730,11 +1757,15 @@ const isCollapsibleMcpToolMessage = message => {
   return isCollapsibleToolMessage(message) && isWorkflowMcpTool(toolName)
 }
 
+const isCollapsibleSubAgentResultToolMessage = message =>
+  isCollapsibleToolMessage(message) && getMessageToolName(message) === 'sub_agent_output'
+
 const getCollapsibleToolGroupKind = message => {
   if (isCollapsibleReadOnlyToolMessage(message)) return 'readonly_tools'
   if (isCollapsibleTodoToolMessage(message)) return 'todo_tools'
   if (isCollapsibleCommandToolMessage(message)) return 'command_tools'
   if (isCollapsibleMutationToolMessage(message)) return 'mutation_tools'
+  if (isCollapsibleSubAgentResultToolMessage(message)) return 'sub_agent_result_tools'
   if (isCollapsibleMcpToolMessage(message)) return 'mcp_tools'
   return isCollapsibleToolMessage(message) ? 'other_tools' : null
 }
@@ -1815,6 +1846,7 @@ const TOOL_GROUP_ICONS = {
   mcp_tools: 'mcp',
   mutation_tools: 'edit',
   readonly_tools: 'search',
+  sub_agent_result_tools: 'skill-relation-chart',
   todo_tools: 'todo'
 }
 
@@ -2023,7 +2055,9 @@ const visibleMessages = computed(() =>
         collapseAssistantCompletionPairs(
           collapseRepeatedFinishTaskErrors(
             props.messages.filter(
-              message => !isHiddenSystemObservation(message) || isManualClearContextMessage(message)
+              message =>
+                (!isHiddenSystemObservation(message) || isManualClearContextMessage(message)) &&
+                !isContextSnapshotMessage(message)
             )
           )
         )
@@ -2507,7 +2541,15 @@ const getChoiceGroups = message =>
 // locally during future template refactors.
 const isSubAgentRunMessage = message => shouldRenderSubAgentCard(message)
 
+const getSubAgentCardExpandId = message => `${message?.displayId || message?.id || 'sub-agent'}:card`
 const getSubAgentCostExpandId = message => `${message?.displayId || message?.id || 'sub-agent'}:cost`
+
+const isSubAgentCardExpanded = message =>
+  props.isMessageExpanded({
+    displayId: getSubAgentCardExpandId(message),
+    metadata: {},
+    toolDisplay: {}
+  })
 
 const getSubAgentUsageSummary = message => {
   const card = message?.subAgentCard
@@ -2526,15 +2568,16 @@ const isSubAgentCostExpanded = message =>
 
 const getSubAgentStatusLabel = message => {
   const status = String(message?.subAgentCard?.status || 'running').toLowerCase()
-  if (status === 'completed') return 'Completed'
-  if (status === 'failed') return 'Failed'
-  if (status === 'cancelled' || status === 'interrupted') return 'Stopped'
-  return 'Running'
+  if (['completed', 'success'].includes(status)) return t('workflow.subAgent.statusCompleted')
+  if (['failed', 'error'].includes(status)) return t('workflow.subAgent.statusFailed')
+  if (['cancelled', 'interrupted', 'stopped'].includes(status)) {
+    return t('workflow.subAgent.statusCancelled')
+  }
+  return t('workflow.subAgent.statusRunning')
 }
 
-const subagentIsRunning=(message)=>{
-  return String(message?.subAgentCard?.status || '').toLowerCase() === 'running';
-}
+const subagentIsRunning = message =>
+  String(message?.subAgentCard?.status || '').toLowerCase() === 'running'
 
 const getSubAgentLiveContext = message => {
   const card = message?.subAgentCard || {}
@@ -2577,6 +2620,18 @@ const subAgentStatusClass = message => {
   if (status === 'failed') return 'is-failed'
   if (status === 'cancelled' || status === 'interrupted') return 'is-stopped'
   return 'is-running'
+}
+
+const getSubAgentStatusBadgeClass = message => {
+  const status = String(message?.subAgentCard?.status || 'running').toLowerCase()
+  if (['completed', 'success'].includes(status)) {
+    return 'tool-group__thought-count sub-agent-card__toggle-status--completed'
+  }
+  if (['failed', 'error'].includes(status)) return 'tool-group__error-count'
+  if (['cancelled', 'interrupted', 'stopped'].includes(status)) {
+    return 'tool-group__thought-count sub-agent-card__toggle-status--cancelled'
+  }
+  return 'tool-group__thought-count'
 }
 
 const getSubAgentResultPreview = message => {
@@ -3302,6 +3357,16 @@ defineExpose({
 
 .user-message-toggle__icon.expanded {
   transform: rotate(180deg);
+}
+
+.tool-group__thought-count.sub-agent-card__toggle-status--completed {
+  background: color-mix(in srgb, var(--el-color-success) 12%, transparent);
+  color: var(--el-color-success);
+}
+
+.tool-group__thought-count.sub-agent-card__toggle-status--cancelled {
+  background: color-mix(in srgb, var(--cs-text-color-secondary) 12%, transparent);
+  color: var(--cs-text-color-secondary);
 }
 
 .exploration-card {

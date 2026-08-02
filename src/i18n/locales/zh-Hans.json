@@ -1104,6 +1104,7 @@
       "editFile": "编辑文件",
       "errorCount": "错误 x{count}",
       "expand": "展开",
+      "fetchSubAgentResult": "获取执行结果",
       "fileSearch": "搜索文件",
       "readFile": "读取文件",
       "readWeb": "读取网页",
@@ -1211,6 +1212,12 @@
     "stopConfirmMessage": "确定要停止当前工作流吗？正在执行的操作将被中断。",
     "stopConfirmTitle": "停止工作流",
     "stopping": "停止中",
+    "subAgent": {
+      "statusCancelled": "已取消",
+      "statusCompleted": "已完成",
+      "statusFailed": "出错",
+      "statusRunning": "执行中"
+    },
     "thinking": "思考中...",
     "thinkingExpanded": "思考过程",
     "thoughtCompleted": "已思考",

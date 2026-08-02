@@ -1104,6 +1104,7 @@
       "editFile": "ファイルを編集",
       "errorCount": "エラー x{count}",
       "expand": "展開",
+      "fetchSubAgentResult": "実行結果を取得",
       "fileSearch": "ファイルを検索",
       "readFile": "ファイルを読む",
       "readWeb": "Web コンテンツを取得",
@@ -1211,6 +1212,12 @@
     "stopConfirmMessage": "現在のワークフローを停止しますか？実行中の操作は中断されます。",
     "stopConfirmTitle": "ワークフローを停止",
     "stopping": "停止中",
+    "subAgent": {
+      "statusCancelled": "キャンセル済み",
+      "statusCompleted": "完了",
+      "statusFailed": "エラー",
+      "statusRunning": "実行中"
+    },
     "thinking": "思考中…",
     "thinkingExpanded": "思考過程",
     "thoughtCompleted": "思考完了",

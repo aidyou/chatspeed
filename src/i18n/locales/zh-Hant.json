@@ -1104,6 +1104,7 @@
       "editFile": "編輯檔案",
       "errorCount": "錯誤 x{count}",
       "expand": "展開",
+      "fetchSubAgentResult": "取得執行結果",
       "fileSearch": "搜尋檔案",
       "readFile": "讀取檔案",
       "readWeb": "讀取網頁",
@@ -1211,6 +1212,12 @@
     "stopConfirmMessage": "確定要停止目前的工作流程嗎？執行中的操作將會中斷。",
     "stopConfirmTitle": "停止工作流程",
     "stopping": "停止中",
+    "subAgent": {
+      "statusCancelled": "已取消",
+      "statusCompleted": "已完成",
+      "statusFailed": "出錯",
+      "statusRunning": "執行中"
+    },
     "thinking": "思考中...",
     "thinkingExpanded": "思考過程",
     "thoughtCompleted": "思考完成",
