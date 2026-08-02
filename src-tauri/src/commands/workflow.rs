@@ -1245,6 +1245,10 @@ fn build_agent_config_from_agent(
         config.shell_policy = serde_json::from_str(policy_str).ok();
     }
 
+    if let Some(sandbox_str) = &agent.sandbox_config {
+        config.sandbox_config = crate::tools::AgentSandboxConfig::from_json(sandbox_str);
+    }
+
     if let Some(val) = allowed_paths {
         config.allowed_paths = serde_json::from_value::<Vec<String>>(val.clone()).ok();
     } else if let Some(paths_str) = &agent.allowed_paths {
@@ -1458,7 +1462,7 @@ fn merge_inherited_workflow_config(
         .collect(),
     );
 
-    // Shell is an Agent capability. If bash is unavailable, do not inherit rules.
+    // Shell is an Agent capability. If bash is unavailable, do not inherit rules or sandbox state.
     merged.shell_policy = if is_tool_allowed(crate::tools::TOOL_BASH) {
         merge_shell_allow_rules(
             agent_config.shell_policy.clone(),
@@ -1466,6 +1470,14 @@ fn merge_inherited_workflow_config(
         )
     } else {
         agent_config.shell_policy.clone()
+    };
+    merged.sandbox_config = if is_tool_allowed(crate::tools::TOOL_BASH) {
+        inherited_config
+            .sandbox_config
+            .clone()
+            .or(agent_config.sandbox_config.clone())
+    } else {
+        None
     };
 
     merged.max_contexts = agent_config.max_contexts;
@@ -1573,6 +1585,10 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
     }
     if config.shell_policy.is_none() && defaults.shell_policy.is_some() {
         config.shell_policy = defaults.shell_policy;
+        changed = true;
+    }
+    if config.sandbox_config.is_none() && defaults.sandbox_config.is_some() {
+        config.sandbox_config = defaults.sandbox_config;
         changed = true;
     }
     if config.auto_approve.is_none() && defaults.auto_approve.is_some() {

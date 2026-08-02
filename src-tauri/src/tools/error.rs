@@ -45,6 +45,10 @@ pub enum ToolError {
     #[error("{}", t!("tools.error.execution_failed", details = .0))]
     ExecutionFailed(String),
 
+    /// A sandbox backend failed in a structured, non-fallback way.
+    #[error("sandbox failure: {0:?}")]
+    SandboxFailure(crate::tools::SandboxFailure),
+
     /// A non-recoverable error that should terminate the workflow.
     #[error("{}", t!("tools.error.fatal", details = .0))]
     Fatal(String),

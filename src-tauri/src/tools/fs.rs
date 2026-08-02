@@ -1275,9 +1275,7 @@ mod tests {
         assert!(content_uses_crlf_dominant_line_endings(
             "line1\r\nline2\nline3\r\n"
         ));
-        assert!(!content_uses_crlf_dominant_line_endings(
-            "line1\nline2\r\n"
-        ));
+        assert!(!content_uses_crlf_dominant_line_endings("line1\nline2\r\n"));
         assert!(!content_uses_crlf_dominant_line_endings("single line"));
     }
 

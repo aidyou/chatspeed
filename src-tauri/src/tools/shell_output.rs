@@ -130,10 +130,28 @@ pub(crate) fn build_shell_tool_result(
     ToolCallResult::success(Some(prepared.display_content), Some(structured_content))
 }
 
+pub(crate) fn build_shell_tool_result_with_metadata(
+    command_str: &str,
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+    execution_plan: Option<serde_json::Value>,
+) -> ToolCallResult {
+    let mut result = build_shell_tool_result(command_str, exit_code, stdout, stderr);
+    if let Some(plan) = execution_plan {
+        if let Some(content) = result.structured_content.as_mut() {
+            content["execution_plan"] = plan;
+        }
+    }
+    result
+}
+
+#[allow(dead_code)]
 pub(crate) fn build_compound_shell_tool_result(
     exit_code: i32,
     stages: &[CompoundShellStageResult],
     persisted: PersistedToolOutput,
+    execution_plan: Option<serde_json::Value>,
 ) -> ToolCallResult {
     let mut display_sections = Vec::new();
     let mut llm_sections = Vec::new();
@@ -166,7 +184,7 @@ pub(crate) fn build_compound_shell_tool_result(
 
     let display_content = truncate_with_marker(&display_sections.join("\n\n"), MAX_DISPLAY_CHARS);
     let llm_content = truncate_with_marker(&llm_sections.join("\n\n"), COMPOUND_LLM_MAX_CHARS);
-    let structured_content = json!({
+    let mut structured_content = json!({
         "exit_code": exit_code,
         "llm_content": llm_content,
         "persisted_output": {
@@ -176,6 +194,9 @@ pub(crate) fn build_compound_shell_tool_result(
         },
         "stages": stage_metadata,
     });
+    if let Some(plan) = execution_plan {
+        structured_content["execution_plan"] = plan;
+    }
 
     ToolCallResult::success(Some(display_content), Some(structured_content))
 }
@@ -529,6 +550,7 @@ mod tests {
                 path: "/tmp/test-compound".to_string(),
                 file_size_bytes: 123,
             },
+            None,
         );
         let content = result.content.expect("display content missing");
         let structured = result
@@ -573,6 +595,7 @@ mod tests {
                 path: "/tmp/test-compound".to_string(),
                 file_size_bytes: 30_000,
             },
+            None,
         );
         let structured = result
             .structured_content

@@ -10,6 +10,7 @@ pub mod mcp;
 pub mod message;
 pub mod note;
 pub mod proxy_group;
+pub mod sandbox;
 pub mod sensitive;
 pub mod setting;
 pub mod terminal;

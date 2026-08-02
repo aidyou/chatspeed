@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import test from 'node:test'
 
 const read = path => readFile(new URL(`../../../${path}`, import.meta.url), 'utf8')
@@ -121,7 +121,14 @@ test('terminal preferences bound output, preserve terminal input, and use detect
 })
 
 test('every shipped locale contains the terminal label and toolbar strings', async () => {
-  for (const locale of ['en', 'zh-Hans', 'zh-Hant', 'de', 'es', 'fr', 'ja', 'ko', 'pt', 'ru']) {
+  const shippedLocales = (await readdir('src/i18n/locales'))
+    .filter(file => file.endsWith('.json'))
+    .map(file => file.replace(/\.json$/, ''))
+    .sort()
+
+  assert.deepEqual(shippedLocales, ['en', 'ja', 'zh-Hans', 'zh-Hant'])
+
+  for (const locale of shippedLocales) {
     const content = await read(`src/i18n/locales/${locale}.json`)
     assert.match(content, /"terminal"\s*:\s*\{/)
     assert.match(content, /"title"\s*:/)

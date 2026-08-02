@@ -772,6 +772,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .shell_policy
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
+            sandbox_config: None,
             approval_level: agent_config.approval_level.clone(),
             auto_approve: agent_config
                 .auto_approve

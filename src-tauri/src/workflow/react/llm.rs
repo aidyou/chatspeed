@@ -1676,6 +1676,7 @@ mod tests {
             auto_approve: None,
             models: None,
             shell_policy: None,
+            sandbox_config: None,
             allowed_paths: None,
             final_audit: Some(false),
             approval_level: None,

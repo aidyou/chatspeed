@@ -20,6 +20,12 @@
             :context-data="detailsObject || null" />
         </div>
         <div v-else-if="isShellAction" class="shell-view">
+          <div v-if="shellExecutionRows.length" class="shell-execution-plan">
+            <div v-for="row in shellExecutionRows" :key="row.label" class="shell-execution-plan__row">
+              <span class="shell-execution-plan__label">{{ row.label }}</span>
+              <span class="shell-execution-plan__value">{{ row.value }}</span>
+            </div>
+          </div>
           <MarkdownSimple :content="shellMarkdown" class-name="approval-markdown" />
         </div>
         <div v-else-if="isMarkdownAction" class="markdown-view">
@@ -269,6 +275,29 @@ const extractShellCommand = payload => {
 
 const shellCommand = computed(() => extractShellCommand(detailPayload.value))
 const shellMarkdown = computed(() => `\`\`\`bash\n${shellCommand.value || ''}\n\`\`\``)
+const formatShellValue = value => {
+  if (value == null || value === '') return ''
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.join(', ')
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+const shellExecutionRows = computed(() => {
+  const details = detailsObject.value || {}
+  const rows = [
+    ['workflow.approval.executionBackend', details.execution_backend],
+    ['workflow.approval.runtime', details.runtime],
+    ['workflow.approval.profile', details.sandbox_profile],
+    ['workflow.approval.image', details.sandbox_image],
+    ['workflow.approval.network', details.network?.mode],
+    ['workflow.approval.workspaceAccess', details.workspace_access],
+    ['workflow.approval.limits', details.limits],
+    ['workflow.approval.fallbackReason', details.fallback_reason]
+  ]
+  return rows
+    .map(([labelKey, value]) => ({ label: t(labelKey), value: formatShellValue(value) }))
+    .filter(row => row.value)
+})
 
 const copyPlanMarkdown = async () => {
   try {
@@ -371,6 +400,33 @@ const onReject = () => {
       .markdown-view {
         max-height: none;
         overflow: visible;
+      }
+    }
+
+    .shell-execution-plan {
+      display: flex;
+      flex-direction: column;
+      gap: var(--cs-space-xs);
+      padding: var(--cs-space-sm);
+      margin-bottom: var(--cs-space-sm);
+      border: 1px solid var(--cs-border-color);
+      border-radius: var(--cs-border-radius-sm);
+      background: var(--cs-bg-color-light);
+
+      &__row {
+        display: grid;
+        grid-template-columns: 128px minmax(0, 1fr);
+        gap: var(--cs-space-sm);
+        font-size: var(--cs-font-size-sm);
+      }
+
+      &__label {
+        color: var(--cs-text-color-secondary);
+      }
+
+      &__value {
+        color: var(--cs-text-color-primary);
+        word-break: break-word;
       }
     }
 

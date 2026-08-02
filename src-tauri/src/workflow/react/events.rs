@@ -188,6 +188,7 @@ impl WorkflowEvent {
         tool_call_id: String,
         tool_name: String,
         error: String,
+        error_details: Option<Value>,
     ) -> Self {
         Self::new(
             WorkflowEventType::ToolFailed,
@@ -195,7 +196,8 @@ impl WorkflowEvent {
             serde_json::json!({
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "error": error
+                "error": error,
+                "error_details": error_details
             }),
         )
     }
@@ -366,6 +368,27 @@ mod tests {
         assert_eq!(event.event_type, WorkflowEventType::TaskCompleted);
         assert_eq!(event.event_data["tool_call_id"], "call_complete_123");
         assert_eq!(event.event_data["segment_id"], 4);
+    }
+
+    #[test]
+    fn tool_failed_preserves_structured_error_details() {
+        let details = serde_json::json!({
+            "backend": "docker",
+            "reason": "timed_out",
+            "execution_plan": { "backend": "docker", "tool_call_id": "call_123" }
+        });
+        let event = WorkflowEvent::tool_failed(
+            "test-session".to_string(),
+            "call_123".to_string(),
+            "bash".to_string(),
+            "sandbox failure".to_string(),
+            Some(details.clone()),
+        );
+
+        assert_eq!(event.event_type, WorkflowEventType::ToolFailed);
+        assert_eq!(event.event_data["tool_call_id"], "call_123");
+        assert_eq!(event.event_data["error_details"], details);
+        assert_eq!(event.event_data["error_details"]["execution_plan"]["backend"], "docker");
     }
 
     #[test]

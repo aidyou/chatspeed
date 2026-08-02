@@ -583,6 +583,106 @@
             </div>
           </div>
         </el-tab-pane>
+
+        <el-tab-pane v-if="canConfigureSandbox" :label="$t('settings.agent.sandboxConfig')" name="sandbox">
+          <div class="security-group sandbox-config-group">
+            <div class="shell-policy-header">
+              <h3>{{ $t('settings.agent.sandboxConfig') }}</h3>
+              <div class="shell-policy-actions">
+                <el-button size="small" :loading="sandboxRuntimeLoading" @click="refreshSandboxRuntimeStatus">
+                  {{ $t('settings.agent.sandboxRuntimeRefresh') }}
+                </el-button>
+              </div>
+            </div>
+            <p class="security-tip">{{ $t('settings.agent.sandboxConfigTip') }}</p>
+            <div v-if="sandboxRuntimeStatus" class="sandbox-runtime-status">
+              <div v-for="runtime in sandboxRuntimeRows" :key="runtime.key" class="sandbox-runtime-status__item">
+                <span class="sandbox-runtime-status__name">{{ runtime.label }}</span>
+                <el-tag size="small" :type="runtime.tagType">{{ runtime.stateLabel }}</el-tag>
+                <span class="sandbox-runtime-status__detail">{{ runtime.detail }}</span>
+              </div>
+            </div>
+            <el-form-item :label="$t('settings.agent.sandboxExecutionMode')">
+              <el-select v-model="agentForm.sandboxConfig.executionMode" style="width: 100%">
+                <el-option :label="$t('settings.agent.sandboxExecutionModeAuto')" value="auto" />
+                <el-option :label="$t('settings.agent.sandboxExecutionModeSandboxOnly')" value="sandbox_only" />
+                <el-option :label="$t('settings.agent.sandboxExecutionModeHostOnly')" value="host_only" />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="$t('settings.agent.sandboxRuntimePreference')">
+              <el-select v-model="agentForm.sandboxConfig.runtimePreference" style="width: 100%">
+                <el-option :label="$t('settings.agent.sandboxRuntimeAuto')" value="auto" />
+                <el-option :label="$t('settings.agent.sandboxRuntimeMsb')" value="msb" />
+                <el-option :label="$t('settings.agent.sandboxRuntimeDocker')" value="docker" />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="$t('settings.agent.sandboxDefaultProfile')">
+              <el-select v-model="agentForm.sandboxConfig.defaultProfile" style="width: 100%">
+                <el-option
+                  v-for="profile in sandboxProfiles"
+                  :key="profile.name"
+                  :label="profile.name"
+                  :value="profile.name" />
+              </el-select>
+            </el-form-item>
+            <div class="sandbox-profile-list">
+              <el-card v-for="profile in sandboxProfiles" :key="profile.name" class="sandbox-profile-card" shadow="never">
+                <template #header>
+                  <div class="sandbox-profile-header">
+                    <span>{{ profile.name }}</span>
+                    <el-switch v-model="profile.config.enabled" size="small" />
+                  </div>
+                </template>
+                <el-form-item :label="$t('settings.agent.sandboxImage')">
+                  <el-input v-model="profile.config.image" />
+                </el-form-item>
+                <el-form-item :label="$t('settings.agent.sandboxProfileRuntime')">
+                  <el-select v-model="profile.config.runtimePreference" style="width: 100%">
+                    <el-option :label="$t('settings.agent.sandboxRuntimeAuto')" value="auto" />
+                    <el-option :label="$t('settings.agent.sandboxRuntimeMsb')" value="msb" />
+                    <el-option :label="$t('settings.agent.sandboxRuntimeDocker')" value="docker" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item :label="$t('settings.agent.sandboxNetworkMode')">
+                  <el-select v-model="profile.config.network.mode" style="width: 100%">
+                    <el-option :label="$t('settings.agent.sandboxNetworkNone')" value="none" />
+                    <el-option :label="$t('settings.agent.sandboxNetworkPublic')" value="public" />
+                    <el-option :label="$t('settings.agent.sandboxNetworkAllowlist')" value="allowlist" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item
+                  v-if="profile.config.network.mode === 'allowlist'"
+                  :label="$t('settings.agent.sandboxNetworkAllowlistHosts')">
+                  <el-select
+                    v-model="profile.config.network.allowlist"
+                    multiple
+                    filterable
+                    allow-create
+                    default-first-option
+                    style="width: 100%"
+                    :placeholder="$t('settings.agent.sandboxNetworkAllowlistPlaceholder')" />
+                </el-form-item>
+                <el-form-item :label="$t('settings.agent.sandboxWorkspaceAccess')">
+                  <el-select v-model="profile.config.workspaceAccess" style="width: 100%">
+                    <el-option :label="$t('settings.agent.sandboxWorkspaceReadWrite')" value="read_write" />
+                    <el-option :label="$t('settings.agent.sandboxWorkspaceReadOnly')" value="read_only" />
+                  </el-select>
+                </el-form-item>
+                <div class="sandbox-resource-row">
+                  <el-form-item :label="$t('settings.agent.sandboxCpus')">
+                    <el-input-number v-model="profile.config.resources.cpus" :min="1" :max="16" />
+                  </el-form-item>
+                  <el-form-item :label="$t('settings.agent.sandboxMemoryMb')">
+                    <el-input-number v-model="profile.config.resources.memoryMb" :min="64" :step="64" />
+                  </el-form-item>
+                  <el-form-item :label="$t('settings.agent.sandboxTimeoutMs')">
+                    <el-input-number v-model="profile.config.resources.timeoutMs" :min="1000" :step="1000" />
+                  </el-form-item>
+                </div>
+              </el-card>
+            </div>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-form>
     <template #footer>
@@ -632,6 +732,8 @@ const activeTab = ref('basic')
 const systemSkills = ref([])
 const skillSearchKeyword = ref('')
 const defaultShellPolicies = ref([])
+const sandboxRuntimeStatus = ref(null)
+const sandboxRuntimeLoading = ref(false)
 const shouldBackfillSelectedSkills = ref(false)
 const groupedPrimaryAgents = ref([])
 const groupedChildAgents = ref({})
@@ -691,6 +793,69 @@ const agentThinkingLevelOptions = [
   { value: 'high', label: 'settings.model.reasoningHigh' }
 ]
 
+const defaultSandboxProfiles = () => ({
+  busybox: {
+    enabled: true,
+    runtimePreference: 'auto',
+    image: 'busybox:latest',
+    network: { mode: 'none', allowlist: [] },
+    resources: { cpus: 1, memoryMb: 256, timeoutMs: 120000 },
+    workspaceAccess: 'read_write',
+    workdir: '/workspace'
+  },
+  python: {
+    enabled: true,
+    runtimePreference: 'auto',
+    image: 'python:3.12-alpine',
+    network: { mode: 'none', allowlist: [] },
+    resources: { cpus: 2, memoryMb: 1024, timeoutMs: 300000 },
+    workspaceAccess: 'read_write',
+    workdir: '/workspace'
+  }
+})
+
+const defaultSandboxConfig = () => ({
+  executionMode: 'auto',
+  runtimePreference: 'auto',
+  defaultProfile: 'busybox',
+  profiles: defaultSandboxProfiles()
+})
+
+const normalizeSandboxProfile = profile => ({
+  enabled: profile?.enabled !== false,
+  runtimePreference: profile?.runtimePreference || 'auto',
+  image: profile?.image || '',
+  network: {
+    mode: profile?.network?.mode || 'none',
+    allowlist: Array.isArray(profile?.network?.allowlist) ? profile.network.allowlist : []
+  },
+  resources: {
+    cpus: profile?.resources?.cpus ?? null,
+    memoryMb: profile?.resources?.memoryMb ?? null,
+    timeoutMs: profile?.resources?.timeoutMs ?? null
+  },
+  workspaceAccess: profile?.workspaceAccess || 'read_write',
+  workdir: profile?.workdir || '/workspace'
+})
+
+const normalizeSandboxConfig = config => {
+  const defaults = defaultSandboxConfig()
+  const sourceProfiles = config?.profiles && typeof config.profiles === 'object' ? config.profiles : {}
+  const profiles = { ...defaults.profiles }
+  Object.entries(sourceProfiles).forEach(([name, profile]) => {
+    const trimmedName = String(name || '').trim()
+    if (!trimmedName) return
+    profiles[trimmedName] = normalizeSandboxProfile(profile)
+  })
+
+  return {
+    executionMode: config?.executionMode || defaults.executionMode,
+    runtimePreference: config?.runtimePreference || defaults.runtimePreference,
+    defaultProfile: config?.defaultProfile || defaults.defaultProfile,
+    profiles
+  }
+}
+
 const defaultFormData = {
   name: '',
   description: '',
@@ -704,6 +869,7 @@ const defaultFormData = {
   imageRecognitionPrompt: '',
   availableTools: [],
   allowShell: false,
+  sandboxConfig: defaultSandboxConfig(),
   autoApprove: [],
   skillEnabled: true,
   selectedSkills: [],
@@ -718,7 +884,7 @@ const defaultFormData = {
   approvalLevel: 'default'
 }
 
-const agentForm = ref({ ...defaultFormData })
+const agentForm = ref({ ...defaultFormData, sandboxConfig: defaultSandboxConfig() })
 
 // Model config temporary state
 const modelModes = reactive({
@@ -882,6 +1048,34 @@ const isSystemPromptsLocked = computed(() => isSystemAgentReadOnly.value)
 const canConfigureShellPolicy = computed(
   () => agentForm.value.role !== AGENT_ROLE.CHILD && agentForm.value.allowShell
 )
+const canConfigureSandbox = computed(
+  () => agentForm.value.role !== AGENT_ROLE.CHILD && agentForm.value.allowShell
+)
+const sandboxProfiles = computed(() => {
+  const config = agentForm.value.sandboxConfig || normalizeSandboxConfig(null)
+  return Object.entries(config.profiles || {}).map(([name, profile]) => ({
+    name,
+    config: profile
+  }))
+})
+const sandboxStateTagType = state => {
+  if (state === 'ready') return 'success'
+  if (state === 'ready_missing_image') return 'warning'
+  return 'danger'
+}
+const sandboxRuntimeRows = computed(() => {
+  const status = sandboxRuntimeStatus.value || {}
+  return [
+    { key: 'msb', label: t('settings.agent.sandboxRuntimeMsb'), status: status.msb },
+    { key: 'docker', label: t('settings.agent.sandboxRuntimeDocker'), status: status.docker }
+  ].map(item => ({
+    key: item.key,
+    label: item.label,
+    stateLabel: t(`settings.agent.sandboxStatus${item.status?.state || 'unknown'}`),
+    tagType: sandboxStateTagType(item.status?.state),
+    detail: item.status?.reason || item.status?.version || ''
+  }))
+})
 
 // Function to sort tool IDs by their names
 const sortToolIdsByName = toolIds => {
@@ -1129,6 +1323,41 @@ const loadDefaultShellPolicies = async () => {
   await ensureDefaultShellPoliciesLoaded()
 }
 
+const sandboxStatusPayload = () => ({
+  sandboxConfig: normalizeSandboxConfig(agentForm.value.sandboxConfig)
+})
+
+const refreshSandboxRuntimeStatus = async () => {
+  if (!canConfigureSandbox.value) return
+  sandboxRuntimeLoading.value = true
+  try {
+    sandboxRuntimeStatus.value = await invokeWrapper(
+      'refresh_sandbox_runtime_status',
+      sandboxStatusPayload()
+    )
+  } catch (error) {
+    console.error('Failed to refresh sandbox runtime status:', error)
+    showMessage(t('settings.agent.sandboxRuntimeRefreshFailed'), 'error')
+  } finally {
+    sandboxRuntimeLoading.value = false
+  }
+}
+
+const loadSandboxRuntimeStatus = async () => {
+  if (!canConfigureSandbox.value || sandboxRuntimeStatus.value) return
+  sandboxRuntimeLoading.value = true
+  try {
+    sandboxRuntimeStatus.value = await invokeWrapper(
+      'get_sandbox_runtime_status',
+      sandboxStatusPayload()
+    )
+  } catch (error) {
+    console.error('Failed to load sandbox runtime status:', error)
+  } finally {
+    sandboxRuntimeLoading.value = false
+  }
+}
+
 const setSelectedSkillsFromSource = selectedSkills => {
   if (Array.isArray(selectedSkills)) {
     shouldBackfillSelectedSkills.value = false
@@ -1181,6 +1410,7 @@ const normalizeAgentFormForSave = form => {
     normalized.utilityModel = defaultAgentModelConfig()
     normalized.allowedPaths = []
     normalized.shellPolicy = []
+    normalized.sandboxConfig = null
     normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
     normalized.autoApprove = normalized.autoApprove.filter(tool => tool !== 'bash')
     normalized.skillEnabled = false
@@ -1200,9 +1430,19 @@ const normalizeAgentFormForSave = form => {
 
     if (normalized.allowShell) {
       normalized.availableTools = [...new Set([...normalized.availableTools, 'bash'])]
+      normalized.sandboxConfig = normalizeSandboxConfig(normalized.sandboxConfig)
+      normalized.sandboxConfig.profiles = Object.fromEntries(
+        Object.entries(normalized.sandboxConfig.profiles)
+          .map(([name, profile]) => [name.trim(), normalizeSandboxProfile(profile)])
+          .filter(([name, profile]) => name && profile.image.trim())
+      )
+      if (!normalized.sandboxConfig.profiles[normalized.sandboxConfig.defaultProfile]) {
+        normalized.sandboxConfig.defaultProfile = Object.keys(normalized.sandboxConfig.profiles)[0] || 'busybox'
+      }
     } else {
       normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
       normalized.autoApprove = normalized.autoApprove.filter(tool => tool !== 'bash')
+      normalized.sandboxConfig = null
     }
   }
 
@@ -1320,7 +1560,11 @@ const editAgent = async id => {
       const agentData = await agentStore.getAgent(id)
       if (!agentData) return
       editId.value = id
-      agentForm.value = { ...defaultFormData, ...agentData }
+      agentForm.value = {
+        ...defaultFormData,
+        ...agentData,
+        sandboxConfig: normalizeSandboxConfig(agentData.sandboxConfig)
+      }
       agentForm.value.allowShell = Array.isArray(agentForm.value.availableTools)
         ? agentForm.value.availableTools.includes('bash')
         : false
@@ -1415,7 +1659,7 @@ const editAgent = async id => {
     }
   } else {
     editId.value = null
-    agentForm.value = { ...defaultFormData }
+    agentForm.value = { ...defaultFormData, sandboxConfig: defaultSandboxConfig() }
     allModelRoles.forEach(role => (modelModes[role.key] = 'provider'))
     agentForm.value.availableTools = availableTools.value
       .map(tool => tool.id)
@@ -1451,6 +1695,7 @@ const copyAgent = async id => {
     agentForm.value = {
       ...defaultFormData,
       ...agentData,
+      sandboxConfig: normalizeSandboxConfig(agentData.sandboxConfig),
       id: null,
       isSystem: false,
       disabled: true,
@@ -1705,6 +1950,7 @@ watch(
 
     agentForm.value.allowedPaths = []
     agentForm.value.shellPolicy = []
+    agentForm.value.sandboxConfig = defaultSandboxConfig()
     agentForm.value.skillEnabled = false
     agentForm.value.selectedSkills = []
     agentForm.value.imageRecognitionPrompt = ''
@@ -1748,6 +1994,21 @@ watch(
       agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
         tool => tool !== 'bash'
       )
+      agentForm.value.sandboxConfig = defaultSandboxConfig()
+      if (activeTab.value === 'sandbox') {
+        activeTab.value = 'security'
+      }
+    } else {
+      agentForm.value.sandboxConfig = normalizeSandboxConfig(agentForm.value.sandboxConfig)
+    }
+  }
+)
+
+watch(
+  activeTab,
+  tab => {
+    if (tab === 'sandbox') {
+      loadSandboxRuntimeStatus()
     }
   }
 )
@@ -1984,6 +2245,69 @@ watch(
     margin-bottom: 12px;
     margin-top: -8px;
     line-height: 1.4;
+  }
+
+  .sandbox-profile-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cs-space-md);
+  }
+
+  .sandbox-runtime-status {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cs-space-xs);
+    padding: var(--cs-space-sm);
+    margin-bottom: var(--cs-space-md);
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius-md);
+    background-color: var(--cs-bg-color-light);
+
+    &__item {
+      display: flex;
+      align-items: center;
+      gap: var(--cs-space-sm);
+      min-width: 0;
+    }
+
+    &__name {
+      width: 132px;
+      font-weight: 600;
+      color: var(--cs-text-color-primary);
+    }
+
+    &__detail {
+      flex: 1;
+      min-width: 0;
+      color: var(--cs-text-color-secondary);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .sandbox-profile-card {
+    border-color: var(--cs-border-color);
+    background-color: var(--cs-bg-color-light);
+  }
+
+  .sandbox-profile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    color: var(--cs-text-color-primary);
+  }
+
+  .sandbox-resource-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--cs-space-sm);
+
+    .el-form-item {
+      margin-bottom: 0;
+    }
   }
 
   .shell-policy-list {

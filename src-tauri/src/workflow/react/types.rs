@@ -101,6 +101,8 @@ pub enum GatewayPayload {
         error: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         error_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error_details: Option<serde_json::Value>,
     },
     /// A top-level workflow task passed all completion checks and any configured final review.
     TaskCompleted {

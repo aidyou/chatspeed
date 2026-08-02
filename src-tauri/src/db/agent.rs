@@ -9,7 +9,7 @@ use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
 // Re-export ShellPolicyRule for backward compatibility
-pub use crate::tools::ShellPolicyRule;
+pub use crate::tools::{AgentSandboxConfig, ShellPolicyRule};
 
 pub const SUB_AGENT_ROLE_EXPLORER: &str = "explorer";
 pub const SUB_AGENT_ROLE_FINAL_REVIEWER: &str = "final_reviewer";
@@ -27,6 +27,7 @@ pub fn is_supported_sub_agent_role(role: &str) -> bool {
 pub struct AgentConfig {
     pub allowed_paths: Option<Vec<String>>,
     pub shell_policy: Option<Vec<ShellPolicyRule>>,
+    pub sandbox_config: Option<AgentSandboxConfig>,
     pub approval_level: Option<String>,
     pub auto_approve: Option<Vec<String>>,
     pub auto_approve_plan: Option<bool>,
@@ -129,6 +130,8 @@ pub struct Agent {
     pub models: Option<AgentModels>,
     /// Shell command whitelist/blacklist (JSON array of {pattern, decision})
     pub shell_policy: Option<String>,
+    /// Shell sandbox execution configuration (JSON object)
+    pub sandbox_config: Option<String>,
     /// JSON array of authorized directory paths
     pub allowed_paths: Option<String>,
     /// Whether the agent's tasks require final audit
@@ -199,6 +202,7 @@ impl Agent {
             auto_approve,
             models,
             shell_policy,
+            sandbox_config: None,
             allowed_paths,
             final_audit,
             approval_level,
@@ -242,6 +246,11 @@ impl Agent {
             // Merge shell_policy (Vec<ShellPolicyRule> -> JSON string)
             if let Some(policy) = config.shell_policy {
                 self.shell_policy = serde_json::to_string(&policy).ok();
+            }
+
+            // Merge sandbox_config (AgentSandboxConfig -> JSON string)
+            if let Some(sandbox_config) = config.sandbox_config {
+                self.sandbox_config = sandbox_config.to_json();
             }
 
             // Merge allowed_paths (Vec<String> -> JSON string)
@@ -324,6 +333,7 @@ impl From<&Row<'_>> for Agent {
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok()),
             shell_policy: row.get("shell_policy").ok(),
+            sandbox_config: row.get("sandbox_config").ok(),
             allowed_paths: row.get("allowed_paths").ok(),
             final_audit: row.get("final_audit").ok(),
             approval_level: row.get("approval_level").ok(),
@@ -365,17 +375,17 @@ impl MainStore {
             )?;
             let models = agent.models.as_ref().and_then(|models| serde_json::to_string(models).ok());
             transaction.execute(
-                "INSERT INTO agents (id, name, description, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+                "INSERT INTO agents (id, name, description, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, sandbox_config, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
                 params![
                     agent.id, agent.name, agent.description,
                     agent.role.unwrap_or_else(|| "primary".to_string()),
                     agent.parent_agent_id, agent.sub_agent_role, agent.system_prompt,
                     agent.planning_prompt, agent.image_recognition_prompt, agent.available_tools,
-                    agent.auto_approve, models, agent.shell_policy, agent.allowed_paths,
-                    agent.final_audit, agent.approval_level, agent.skill_enabled,
-                    agent.selected_skills, agent.mcp_tool_exposure, agent.phase,
-                    agent.is_system, agent.disabled, agent.version.unwrap_or(0),
+                    agent.auto_approve, models, agent.shell_policy, agent.sandbox_config,
+                    agent.allowed_paths, agent.final_audit, agent.approval_level,
+                    agent.skill_enabled, agent.selected_skills, agent.mcp_tool_exposure,
+                    agent.phase, agent.is_system, agent.disabled, agent.version.unwrap_or(0),
                     agent.sort_index.unwrap_or(sort_index + 1), agent.max_contexts,
                 ],
             )?;
@@ -423,11 +433,11 @@ impl MainStore {
                     name = ?1, description = ?2, role = ?3, parent_agent_id = ?4,
                     sub_agent_role = ?5, system_prompt = ?6, planning_prompt = ?7,
                     image_recognition_prompt = ?8, available_tools = ?9, auto_approve = ?10,
-                    models = ?11, shell_policy = ?12, allowed_paths = ?13, final_audit = ?14,
-                    approval_level = ?15, skill_enabled = ?16, selected_skills = ?17,
-                    mcp_tool_exposure = ?18, phase = ?19, is_system = ?20, disabled = ?21,
-                    version = ?22, sort_index = ?23, max_contexts = ?24,
-                    updated_at = CURRENT_TIMESTAMP WHERE id = ?25",
+                    models = ?11, shell_policy = ?12, sandbox_config = ?13, allowed_paths = ?14,
+                    final_audit = ?15, approval_level = ?16, skill_enabled = ?17,
+                    selected_skills = ?18, mcp_tool_exposure = ?19, phase = ?20,
+                    is_system = ?21, disabled = ?22, version = ?23, sort_index = ?24,
+                    max_contexts = ?25, updated_at = CURRENT_TIMESTAMP WHERE id = ?26",
                 params![
                     effective_name,
                     agent.description,
@@ -441,6 +451,7 @@ impl MainStore {
                     agent.auto_approve,
                     models,
                     agent.shell_policy,
+                    agent.sandbox_config,
                     agent.allowed_paths,
                     agent.final_audit,
                     agent.approval_level,
@@ -684,6 +695,7 @@ mod tests {
             auto_approve: Some("[]".to_string()),
             models: None,
             shell_policy: Some("[]".to_string()),
+            sandbox_config: None,
             allowed_paths: Some("[]".to_string()),
             final_audit: Some(false),
             approval_level: Some("default".to_string()),
@@ -737,6 +749,54 @@ mod tests {
         assert_eq!(
             stored.mcp_tool_exposure,
             Some(serde_json::json!(["server__MCP__important_tool"]).to_string())
+        );
+    }
+
+    #[test]
+    fn test_sandbox_config_persists_with_agent() {
+        let (_temp_dir, store) = create_test_store();
+        let mut agent = make_agent("agent-sandbox", "Sandbox Agent", None);
+        agent.available_tools = Some(serde_json::json!([crate::tools::TOOL_BASH]).to_string());
+        agent.sandbox_config = Some(
+            serde_json::json!({
+                "executionMode": "sandbox_only",
+                "runtimePreference": "docker",
+                "defaultProfile": "busybox",
+                "profiles": {
+                    "busybox": {
+                        "enabled": true,
+                        "runtimePreference": "docker",
+                        "image": "busybox:latest",
+                        "network": { "mode": "allowlist", "allowlist": ["example.com"] },
+                        "resources": { "cpus": 1, "memoryMb": 256, "timeoutMs": 120000 },
+                        "workspaceAccess": "read_write",
+                        "workdir": "/workspace"
+                    }
+                }
+            })
+            .to_string(),
+        );
+
+        store.add_agent(&agent).expect("failed to add agent");
+        let stored = store
+            .get_agent("agent-sandbox")
+            .expect("failed to load agent")
+            .expect("agent should exist");
+
+        let parsed = stored
+            .sandbox_config
+            .as_deref()
+            .and_then(AgentSandboxConfig::from_json)
+            .expect("sandbox config should parse");
+        assert_eq!(parsed.default_profile, "busybox");
+        assert_eq!(
+            parsed
+                .profiles
+                .get("busybox")
+                .expect("busybox profile")
+                .network
+                .allowlist,
+            vec!["example.com".to_string()]
         );
     }
 

@@ -235,6 +235,7 @@ pub(crate) fn classify_shell_stage(command: &str) -> Option<ShellStage> {
     })
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SafeCompoundStage {
     Navigation {
@@ -248,11 +249,13 @@ pub(crate) enum SafeCompoundStage {
     },
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SafeCompoundCommand {
     pub stages: Vec<SafeCompoundStage>,
 }
 
+#[allow(dead_code)]
 const MAX_SAFE_COMPOUND_STAGES: usize = 16;
 
 fn split_safe_and_then_stages(command: &str) -> Option<Vec<String>> {
@@ -494,6 +497,7 @@ fn is_shell_builtin_or_keyword(command: &str) -> bool {
     )
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_safe_compound_command(command: &str) -> Option<SafeCompoundCommand> {
     use super::output_reducer::supports_command_output_reduction;
 

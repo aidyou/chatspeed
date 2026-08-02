@@ -10,6 +10,7 @@ use crate::{
     ai::interaction::chat_completion::ChatState,
     builtin_agents::load_default_shell_policy_from_resources,
     db::{agent::is_supported_sub_agent_role, Agent, MainStore},
+    tools::AgentSandboxConfig,
 };
 
 fn filter_tool_list_json(raw: Option<String>, blocked_tool: &str) -> Option<String> {
@@ -53,6 +54,13 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) {
     if !has_bash {
         agent.auto_approve =
             filter_tool_list_json(agent.auto_approve.clone(), crate::tools::TOOL_BASH);
+        agent.sandbox_config = None;
+    } else {
+        agent.sandbox_config = agent
+            .sandbox_config
+            .as_deref()
+            .and_then(AgentSandboxConfig::from_json)
+            .and_then(|config| config.validate().ok().and_then(|_| config.to_json()));
     }
 
     let role = agent.role.as_deref();
@@ -81,6 +89,7 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) {
     agent.auto_approve = filter_tool_list_json(agent.auto_approve.clone(), crate::tools::TOOL_BASH);
     agent.allowed_paths = Some("[]".to_string());
     agent.shell_policy = Some("[]".to_string());
+    agent.sandbox_config = None;
     agent.skill_enabled = Some(false);
     agent.selected_skills = Some("[]".to_string());
 
@@ -314,6 +323,88 @@ mod tests {
         .expect("auto approve json");
         assert_eq!(available_tools, vec![crate::tools::TOOL_READ_FILE]);
         assert!(auto_approve.is_empty());
+    }
+
+    #[test]
+    fn no_shell_and_child_agents_cannot_persist_sandbox_config() {
+        let sandbox_config = serde_json::json!({
+            "executionMode": "sandbox_only",
+            "runtimePreference": "docker",
+            "defaultProfile": "busybox",
+            "profiles": {
+                "busybox": {
+                    "enabled": true,
+                    "image": "busybox:latest",
+                    "network": { "mode": "none" },
+                    "workspaceAccess": "read_write"
+                }
+            }
+        })
+        .to_string();
+
+        let mut no_shell = Agent::new(
+            "no-shell".to_string(),
+            "No Shell".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            String::new(),
+            None,
+            None,
+            Some(serde_json::json!([crate::tools::TOOL_READ_FILE]).to_string()),
+            Some(serde_json::json!([crate::tools::TOOL_BASH]).to_string()),
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            Some(false),
+            Some("default".to_string()),
+            Some(true),
+            Some("[]".to_string()),
+            Some("standard".to_string()),
+            Some(false),
+            Some(false),
+            None,
+        );
+        no_shell.sandbox_config = Some(sandbox_config.clone());
+
+        sanitize_agent_for_persistence(&mut no_shell);
+        assert!(no_shell.sandbox_config.is_none());
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(no_shell.auto_approve.as_deref().unwrap())
+                .expect("auto approve json"),
+            Vec::<String>::new()
+        );
+
+        let mut child = Agent::new(
+            "child".to_string(),
+            "Child".to_string(),
+            None,
+            Some("child".to_string()),
+            Some("parent".to_string()),
+            String::new(),
+            Some("planning".to_string()),
+            None,
+            Some(serde_json::json!([crate::tools::TOOL_BASH]).to_string()),
+            Some(serde_json::json!([crate::tools::TOOL_BASH]).to_string()),
+            None,
+            Some("[{\"pattern\":\"^git status$\",\"decision\":\"allow\"}]".to_string()),
+            Some(serde_json::json!(["/tmp"]).to_string()),
+            Some(false),
+            Some("default".to_string()),
+            Some(true),
+            Some(serde_json::json!(["help"]).to_string()),
+            Some("standard".to_string()),
+            Some(false),
+            Some(false),
+            None,
+        );
+        child.sandbox_config = Some(sandbox_config);
+
+        sanitize_agent_for_persistence(&mut child);
+        assert!(child.sandbox_config.is_none());
+        assert_eq!(child.available_tools.as_deref(), Some("[]"));
+        assert_eq!(child.allowed_paths.as_deref(), Some("[]"));
+        assert_eq!(child.shell_policy.as_deref(), Some("[]"));
     }
 }
 

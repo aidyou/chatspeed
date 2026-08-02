@@ -25,6 +25,7 @@ import { sendSyncState } from '@/libs/sync';
  * @property {string} models - Unified JSON string for all models.
  * @property {number} maxContexts - The maximum context length.
  * @property {string[]} mcpToolExposure - MCP tool names exposed with full parameter schemas in workflows.
+ * @property {Object | null} sandboxConfig - Shell sandbox execution configuration.
  * @property {string} approvalLevel - Approval level (default, smart, full).
  * @property {string} subAgentRole - Stable responsibility of a child agent, or an empty string.
  */
@@ -95,6 +96,7 @@ const _transformFromBackend = (backendAgent) => {
     utilityModel: models.utility,
     // These are JSON strings, need to parse
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
+    sandboxConfig: backendAgent.sandbox_config ? JSON.parse(backendAgent.sandbox_config) : null,
     allowedPaths: backendAgent.allowed_paths ? JSON.parse(backendAgent.allowed_paths) : [],
 
     models: backendAgent.models || null,
@@ -156,6 +158,7 @@ const _transformToBackend = (frontendAgent) => {
     available_tools: JSON.stringify(frontendAgent.availableTools || []),
     auto_approve: JSON.stringify(frontendAgent.autoApprove || []),
     shell_policy: JSON.stringify(frontendAgent.shellPolicy || []),
+    sandbox_config: frontendAgent.sandboxConfig ? JSON.stringify(frontendAgent.sandboxConfig) : null,
     allowed_paths: JSON.stringify(frontendAgent.allowedPaths || []),
     // Struct object
     models: modelsObj,

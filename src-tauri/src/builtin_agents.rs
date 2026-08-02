@@ -331,6 +331,7 @@ fn definition_to_agent(
             manifest.config.shell_policy.as_ref(),
             default_shell_policy,
         )?),
+        sandbox_config: None,
         allowed_paths: serialize_json(&manifest.config.allowed_paths),
         final_audit: manifest.config.final_audit,
         approval_level: manifest.config.approval_level.clone(),

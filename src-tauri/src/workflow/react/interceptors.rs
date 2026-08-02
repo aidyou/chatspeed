@@ -1760,7 +1760,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             return Ok(None);
         }
 
-        self.handle_approval_interception(id, TOOL_SUBMIT_PLAN, args, None)
+        self.handle_approval_interception(id, TOOL_SUBMIT_PLAN, args, None, None)
             .await
     }
 
@@ -2085,39 +2085,129 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }))
     }
 
+    fn resolve_shell_execution_plan(
+        &self,
+        id: &str,
+        command_str: &str,
+    ) -> crate::tools::ShellExecutionPlan {
+        let sandbox_config = self
+            .agent_config
+            .sandbox_config
+            .as_deref()
+            .and_then(crate::tools::AgentSandboxConfig::from_json);
+        let runtime_status =
+            crate::tools::SandboxRuntimeDetector::new(crate::tools::SandboxDetectorOptions {
+                required_images: sandbox_config
+                    .as_ref()
+                    .map(crate::tools::AgentSandboxConfig::required_images)
+                    .unwrap_or_default(),
+                ..crate::tools::SandboxDetectorOptions::default()
+            })
+            .detect();
+        let primary_root = self
+            .path_guard
+            .read()
+            .ok()
+            .and_then(|guard| guard.get_primary_root().map(|path| path.to_path_buf()));
+        crate::tools::ShellExecutionResolver::resolve(
+            id,
+            command_str,
+            sandbox_config.as_ref(),
+            &runtime_status,
+            primary_root.as_deref(),
+        )
+    }
+
+    fn shell_execution_approval_details(
+        plan: &crate::tools::ShellExecutionPlan,
+        command_str: &str,
+    ) -> serde_json::Value {
+        let mut details = serde_json::to_value(plan.approval_details())
+            .unwrap_or_else(|_| serde_json::json!({ "command": command_str }));
+        if let Some(object) = details.as_object_mut() {
+            object.insert(
+                "execution_plan".to_string(),
+                serde_json::to_value(plan).unwrap_or_else(|_| serde_json::Value::Null),
+            );
+        }
+        details
+    }
+
     pub(crate) async fn handle_bash_security_intercept(
         &mut self,
         id: &str,
         args: &serde_json::Value,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         let command_str = args["command"].as_str().unwrap_or("");
-        if !self.auto_approve.contains(TOOL_BASH) {
-            let custom_rules: Vec<crate::tools::ShellPolicyRule> = self
-                .agent_config
-                .shell_policy
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or_default();
-            let policy_engine =
-                crate::tools::ShellPolicyEngine::new(self.path_guard.clone(), custom_rules);
+        let custom_rules: Vec<crate::tools::ShellPolicyRule> = self
+            .agent_config
+            .shell_policy
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+        let policy_engine =
+            crate::tools::ShellPolicyEngine::new(self.path_guard.clone(), custom_rules);
+        let shell_policy_decision =
+            policy_engine.check(command_str, self.policy.phase == ExecutionPhase::Planning);
+        if let crate::tools::ShellDecision::Deny(reason) = &shell_policy_decision {
+            return Ok(Some(ReinforcedResult {
+                content: format!(
+                    "Command blocked by security policy: {}. You may try an alternative command, modify the approach, or ask the user to adjust the policy if this restriction is blocking a legitimate task.",
+                    reason
+                ),
+                llm_content: None,
+                title: format!("Run({})", command_str),
+                summary: "Blocked".to_string(),
+                is_error: true,
+                error_type: Some("Security".to_string()),
+                display_type: "text".to_string(),
+                approval_status: None,
+                observation_kind: None,
+            }));
+        }
 
-            match policy_engine.check(command_str, self.policy.phase == ExecutionPhase::Planning) {
+        let execution_plan = self.resolve_shell_execution_plan(id, command_str);
+        if execution_plan.status == crate::tools::ShellExecutionPlanStatus::Denied {
+            return Ok(Some(ReinforcedResult {
+                content: format!(
+                    "Command cannot run in the configured shell sandbox and sandbox-only mode prevents host fallback: {}",
+                    execution_plan
+                        .fallback_reason
+                        .as_ref()
+                        .map(|reason| format!("{:?}", reason))
+                        .unwrap_or_else(|| "unknown".to_string())
+                ),
+                llm_content: None,
+                title: format!("Run({})", command_str),
+                summary: "Sandbox unavailable".to_string(),
+                is_error: true,
+                error_type: Some("Sandbox".to_string()),
+                display_type: "text".to_string(),
+                approval_status: None,
+                observation_kind: None,
+            }));
+        }
+        let requires_host_review =
+            execution_plan.risk_floor == crate::tools::ShellExecutionRiskFloor::HostHighRisk;
+        if requires_host_review {
+            return self
+                .handle_approval_interception(
+                    id,
+                    TOOL_BASH,
+                    args,
+                    Some(command_str.to_string()),
+                    Some(Self::shell_execution_approval_details(
+                        &execution_plan,
+                        command_str,
+                    )),
+                )
+                .await;
+        }
+        if !self.auto_approve.contains(TOOL_BASH) {
+            match shell_policy_decision {
                 crate::tools::ShellDecision::Allow => {}
-                crate::tools::ShellDecision::Deny(reason) => {
-                    return Ok(Some(ReinforcedResult {
-                        content: format!(
-                            "Command blocked by security policy: {}. You may try an alternative command, modify the approach, or ask the user to adjust the policy if this restriction is blocking a legitimate task.",
-                            reason
-                        ),
-                        llm_content: None,
-                        title: format!("Run({})", command_str),
-                        summary: "Blocked".to_string(),
-                        is_error: true,
-                        error_type: Some("Security".to_string()),
-                        display_type: "text".to_string(),
-                        approval_status: None,
-                        observation_kind: None,
-                    }));
+                crate::tools::ShellDecision::Deny(_) => {
+                    unreachable!("deny handled before sandbox planning")
                 }
                 crate::tools::ShellDecision::Review(reason) => {
                     if self.policy.approval_level == ApprovalLevel::Full {
@@ -2188,6 +2278,10 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                                     TOOL_BASH,
                                     args,
                                     Some(display_content),
+                                    Some(Self::shell_execution_approval_details(
+                                        &execution_plan,
+                                        command_str,
+                                    )),
                                 )
                                 .await;
                         }
@@ -2205,6 +2299,10 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                                 TOOL_BASH,
                                 args,
                                 Some(display_content),
+                                Some(Self::shell_execution_approval_details(
+                                    &execution_plan,
+                                    command_str,
+                                )),
                             )
                             .await;
                     }
@@ -2220,13 +2318,15 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         name: &str,
         args: &serde_json::Value,
         display_content: Option<String>,
+        structured_details: Option<serde_json::Value>,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         // 1. Determine what to show the user in the UI (Generate Diffs for File Ops)
         let mut display_type = "text".to_string();
         let (content_str, details_value) = if let Some(custom) = display_content {
             (
                 custom.clone(),
-                normalize_preview_details(serde_json::json!(custom)),
+                structured_details
+                    .unwrap_or_else(|| normalize_preview_details(serde_json::json!(custom))),
             )
         } else {
             match name {
@@ -2299,9 +2399,21 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         };
 
         // 2. Stash the full tool name, arguments, and details for later request_confirm_broadcast
+        let stashed_arguments = if name == TOOL_BASH {
+            let mut enriched = args.clone();
+            if let Some(object) = enriched.as_object_mut() {
+                object.insert(
+                    "__chatspeed_approved_shell_execution_details".to_string(),
+                    details_value.clone(),
+                );
+            }
+            enriched
+        } else {
+            args.clone()
+        };
         let stash_obj = json!({
             "name": name,
-            "arguments": args,
+            "arguments": stashed_arguments,
             "details": details_value.clone(),
             "display_type": display_type.clone()
         });
@@ -2649,10 +2761,6 @@ mod tests {
             (
                 "已更新 `src/workflow.rs` 的完成处理逻辑。\n相关测试已经验证通过，目前没有已知限制。",
                 "已更新 `src/workflow.rs` 的完成处理逻辑。\n相关测试尚未运行，目前没有已知限制。",
-            ),
-            (
-                "Se actualizó `src/workflow.rs`.\nLas pruebas pasaron y no quedan limitaciones conocidas.",
-                "Se actualizó `src/workflow.rs`.\nLas pruebas no se ejecutaron y no quedan limitaciones conocidas.",
             ),
             (
                 "`src/workflow.rs` を更新しました。\nテストに合格し、既知の制限はありません。",

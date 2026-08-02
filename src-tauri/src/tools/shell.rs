@@ -2,11 +2,11 @@ use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::libs::ai_temp::ToolOutputWriter;
 use crate::tools::helper::is_node_build_command;
 use crate::tools::helper::{
-    classify_shell_stage, parse_safe_compound_command, shell_tokens, split_shell_command_segments,
-    SafeCompoundCommand, SafeCompoundStage, ShellStage,
+    classify_shell_stage, shell_tokens, split_shell_command_segments, SafeCompoundCommand,
+    SafeCompoundStage, ShellStage,
 };
 use crate::tools::shell_output::{
-    build_compound_shell_tool_result, build_shell_tool_result, prepare_shell_output,
+    build_compound_shell_tool_result, build_shell_tool_result_with_metadata, prepare_shell_output,
     should_collect_stderr_line_as_stdout, AnsiOutputSanitizer, CompoundShellStageResult,
 };
 use crate::tools::{NativeToolResult, ToolCategory, ToolDefinition, ToolError};
@@ -620,6 +620,7 @@ pub struct ShellExecute {
     policy_engine: ShellPolicyEngine,
     tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
     planning_mode: bool,
+    sandbox_config: Option<crate::tools::AgentSandboxConfig>,
     gateway: Option<Arc<dyn Gateway>>,
     session_id: Option<String>,
 }
@@ -635,9 +636,18 @@ impl ShellExecute {
             policy_engine: ShellPolicyEngine::new(path_guard, custom_rules),
             tsid_generator,
             planning_mode,
+            sandbox_config: None,
             gateway: None,
             session_id: None,
         }
+    }
+
+    pub fn with_sandbox_config(
+        mut self,
+        sandbox_config: Option<crate::tools::AgentSandboxConfig>,
+    ) -> Self {
+        self.sandbox_config = sandbox_config;
+        self
     }
 
     /// Sets the gateway for real-time output streaming
@@ -722,12 +732,45 @@ impl ToolDefinition for ShellExecute {
                 .await;
         }
 
-        if let Some(plan) = (!cfg!(target_os = "windows"))
-            .then(|| parse_safe_compound_command(command_str))
-            .flatten()
-        {
-            return self.call_safe_compound(plan, timeout_ms, working_dir).await;
+        let tool_id = params
+            .get(crate::constants::INTERNAL_PARAM_TOOL_CALL_ID)
+            .and_then(|v| v.as_str())
+            .unwrap_or("bash");
+        let execution_plan = self.execution_plan_for_params(&params, tool_id, command_str)?;
+        if execution_plan.status == crate::tools::ShellExecutionPlanStatus::Denied {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Sandbox execution denied before spawn: {:?}",
+                execution_plan.fallback_reason
+            )));
         }
+        let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, timeout_ms);
+        let execution_plan_metadata = serde_json::to_value(&execution_plan).ok();
+
+        if let Some(sandbox_command) =
+            crate::tools::sandbox_command_for_plan(&execution_plan, command_str)?
+        {
+            let output =
+                run_sandbox_output_with_timeout(sandbox_command, &execution_plan, timeout_ms).await;
+            return match output {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let exit_code = output.status.code().unwrap_or(-1);
+                    Ok(build_shell_tool_result_with_metadata(
+                        command_str,
+                        exit_code,
+                        &stdout,
+                        &stderr,
+                        execution_plan_metadata.clone(),
+                    ))
+                }
+                Err(error) => Err(error),
+            };
+        }
+
+        // Execute host compound commands through the platform shell as one command.
+        // `parse_safe_compound_command` remains available for policy/output analysis,
+        // but AC-9 requires backend execution to preserve original shell semantics.
 
         // Fallback to standard execution
         let cmd_future = if cfg!(target_os = "windows") {
@@ -752,11 +795,12 @@ impl ToolDefinition for ShellExecute {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let exit_code = output.status.code().unwrap_or(-1);
-                Ok(build_shell_tool_result(
+                Ok(build_shell_tool_result_with_metadata(
                     command_str,
                     exit_code,
                     &stdout,
                     &stderr,
+                    execution_plan_metadata.clone(),
                 ))
             }
             Ok(Err(e)) => Err(ToolError::ExecutionFailed(format!("Spawn failed: {}", e))),
@@ -834,6 +878,120 @@ async fn terminate_stage_process(child: &mut Child, process_guard: &mut StagePro
     let _ = child.wait().await;
 }
 
+struct SandboxCleanupGuard {
+    plan: Option<crate::tools::ShellExecutionPlan>,
+    active: bool,
+}
+
+impl SandboxCleanupGuard {
+    fn new(plan: Option<crate::tools::ShellExecutionPlan>) -> Self {
+        Self { plan, active: true }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+
+    fn cleanup_required(plan: &crate::tools::ShellExecutionPlan) -> bool {
+        matches!(plan.backend, crate::tools::ShellExecutionBackendKind::Msb)
+    }
+
+    async fn cleanup_after_success(&mut self) {
+        let should_cleanup = self.plan.as_ref().is_some_and(Self::cleanup_required);
+        if should_cleanup {
+            self.cleanup_now().await;
+        } else {
+            self.disarm();
+        }
+    }
+
+    async fn cleanup_now(&mut self) {
+        if !self.active {
+            return;
+        }
+        if let Some(plan) = self.plan.as_ref() {
+            cleanup_sandbox_execution(plan).await;
+        }
+        self.active = false;
+    }
+}
+
+impl Drop for SandboxCleanupGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let Some(plan) = self.plan.as_ref() else {
+            return;
+        };
+        let Some(argv) = crate::tools::sandbox_cleanup_argv_for_plan(plan) else {
+            return;
+        };
+        let mut iter = argv.into_iter();
+        let Some(program) = iter.next() else {
+            return;
+        };
+        let _ = std::process::Command::new(program)
+            .args(iter)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+}
+
+async fn cleanup_sandbox_execution(plan: &crate::tools::ShellExecutionPlan) {
+    if let Some(mut cleanup) = crate::tools::sandbox_cleanup_command_for_plan(plan) {
+        configure_no_window(&mut cleanup);
+        let _ = timeout(Duration::from_secs(10), cleanup.status()).await;
+    }
+}
+
+async fn run_sandbox_output_with_timeout(
+    mut command: Command,
+    plan: &crate::tools::ShellExecutionPlan,
+    timeout_ms: u64,
+) -> Result<std::process::Output, ToolError> {
+    configure_process_group(&mut command);
+    let child = command.spawn().map_err(|error| {
+        sandbox_failure_error(
+            plan,
+            crate::tools::SandboxFailureReason::SpawnFailed,
+            format!("Sandbox spawn failed: {error}"),
+        )
+    })?;
+    let mut cleanup_guard = SandboxCleanupGuard::new(Some(plan.clone()));
+    match timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
+        Ok(result) => match result {
+            Ok(output) => {
+                cleanup_guard.cleanup_after_success().await;
+                Ok(output)
+            }
+            Err(error) => Err(sandbox_failure_error(
+                plan,
+                crate::tools::SandboxFailureReason::RunnerFailed,
+                format!("Sandbox execution failed: {error}"),
+            )),
+        },
+        Err(_) => {
+            cleanup_guard.cleanup_now().await;
+            Err(sandbox_failure_error(
+                plan,
+                crate::tools::SandboxFailureReason::TimedOut,
+                format!("Command timed out after {timeout_ms}ms"),
+            ))
+        }
+    }
+}
+
+fn sandbox_failure_error(
+    plan: &crate::tools::ShellExecutionPlan,
+    reason: crate::tools::SandboxFailureReason,
+    message: impl Into<String>,
+) -> ToolError {
+    ToolError::SandboxFailure(crate::tools::SandboxFailure::from_plan(plan, reason, message))
+}
+
+#[allow(dead_code)]
 async fn run_stage_with_deadline(
     command_str: &str,
     cwd: &Path,
@@ -920,6 +1078,7 @@ async fn run_stage_with_deadline(
     Ok((status.code().unwrap_or(-1), stdout, stderr))
 }
 
+#[allow(dead_code)]
 async fn send_tool_stream(gateway: &dyn Gateway, session_id: &str, tool_id: &str, output: &str) {
     let _ = gateway
         .send(
@@ -990,6 +1149,7 @@ fn node_build_stderr_stream_name(exit_code: i32) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 fn format_compound_raw_section(
     index: usize,
     command: &str,
@@ -1004,11 +1164,13 @@ fn format_compound_raw_section(
 }
 
 impl ShellExecute {
+    #[allow(dead_code)]
     async fn call_safe_compound(
         &self,
         plan: SafeCompoundCommand,
         timeout_ms: u64,
         working_dir: Option<PathBuf>,
+        execution_plan_metadata: Option<serde_json::Value>,
     ) -> NativeToolResult {
         let mut cwd = match working_dir {
             Some(path) => path,
@@ -1161,9 +1323,11 @@ impl ShellExecute {
             final_exit_code,
             &records,
             persisted,
+            execution_plan_metadata,
         ))
     }
 
+    #[allow(dead_code)]
     async fn call_safe_compound_streaming(
         &self,
         plan: SafeCompoundCommand,
@@ -1172,6 +1336,7 @@ impl ShellExecute {
         gateway: &dyn Gateway,
         session_id: &str,
         tool_id: &str,
+        execution_plan_metadata: Option<serde_json::Value>,
     ) -> NativeToolResult {
         let mut cwd = match working_dir {
             Some(path) => path,
@@ -1352,10 +1517,12 @@ impl ShellExecute {
             final_exit_code,
             &records,
             persisted,
+            execution_plan_metadata,
         ))
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
     async fn stream_safe_stage(
         &self,
         command_str: &str,
@@ -1508,12 +1675,258 @@ impl ShellExecute {
         }
     }
 
+    fn approved_shell_execution_plan(
+        &self,
+        params: &Value,
+    ) -> Result<Option<crate::tools::ShellExecutionPlan>, ToolError> {
+        let Some(details) = params.get("__chatspeed_approved_shell_execution_details") else {
+            return Ok(None);
+        };
+        let Some(plan_value) = details.get("execution_plan") else {
+            return Err(ToolError::ExecutionFailed(
+                "Approved shell execution details do not include an execution_plan; re-approval is required".to_string(),
+            ));
+        };
+        serde_json::from_value(plan_value.clone())
+            .map(Some)
+            .map_err(|error| {
+                ToolError::ExecutionFailed(format!(
+                    "Approved shell execution plan is invalid and must be re-approved: {error}"
+                ))
+            })
+    }
+
+    fn execution_plan_for_params(
+        &self,
+        params: &Value,
+        tool_call_id: &str,
+        command_str: &str,
+    ) -> Result<crate::tools::ShellExecutionPlan, ToolError> {
+        if let Some(plan) = self.approved_shell_execution_plan(params)? {
+            if plan.tool_call_id != tool_call_id || plan.command != command_str {
+                return Err(ToolError::ExecutionFailed(
+                    "Approved shell execution plan is bound to a different tool call or command; re-approval is required".to_string(),
+                ));
+            }
+            let current = self.resolve_execution_plan(tool_call_id, command_str);
+            if plan != current {
+                return Err(ToolError::ExecutionFailed(
+                    "Approved shell execution plan no longer matches current sandbox resolution; re-approval is required".to_string(),
+                ));
+            }
+            return Ok(plan);
+        }
+        Ok(self.resolve_execution_plan(tool_call_id, command_str))
+    }
+
+    fn resolve_execution_plan(
+        &self,
+        tool_call_id: &str,
+        command_str: &str,
+    ) -> crate::tools::ShellExecutionPlan {
+        let runtime_status =
+            crate::tools::SandboxRuntimeDetector::new(crate::tools::SandboxDetectorOptions {
+                required_images: self
+                    .sandbox_config
+                    .as_ref()
+                    .map(crate::tools::AgentSandboxConfig::required_images)
+                    .unwrap_or_default(),
+                ..crate::tools::SandboxDetectorOptions::default()
+            })
+            .detect();
+        let primary_root = self.default_working_dir();
+        crate::tools::ShellExecutionResolver::resolve(
+            tool_call_id,
+            command_str,
+            self.sandbox_config.as_ref(),
+            &runtime_status,
+            primary_root.as_deref(),
+        )
+    }
+
     fn default_working_dir(&self) -> Option<std::path::PathBuf> {
         self.policy_engine
             .path_guard
             .read()
             .ok()
             .and_then(|guard| guard.get_primary_root().map(|path| path.to_path_buf()))
+    }
+
+    async fn call_with_streaming_command(
+        &self,
+        command_str: &str,
+        timeout_ms: u64,
+        mut command: Command,
+        gateway: &dyn Gateway,
+        session_id: &str,
+        tool_id: &str,
+        execution_plan: Option<crate::tools::ShellExecutionPlan>,
+    ) -> NativeToolResult {
+        configure_process_group(&mut command);
+        let mut child = command.spawn().map_err(|e| {
+            if let Some(plan) = execution_plan.as_ref() {
+                sandbox_failure_error(
+                    plan,
+                    crate::tools::SandboxFailureReason::SpawnFailed,
+                    format!("Failed to spawn sandbox command: {}", e),
+                )
+            } else {
+                ToolError::ExecutionFailed(format!("Failed to spawn command: {}", e))
+            }
+        })?;
+        let mut process_guard = StageProcessGuard::new(&child);
+        let mut sandbox_cleanup_guard = SandboxCleanupGuard::new(execution_plan.clone());
+
+        let stdout = child.stdout.take().ok_or(ToolError::ExecutionFailed(
+            "Failed to capture stdout".to_string(),
+        ))?;
+        let stderr = child.stderr.take().ok_or(ToolError::ExecutionFailed(
+            "Failed to capture stderr".to_string(),
+        ))?;
+
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stderr_reader = BufReader::new(stderr).lines();
+        let mut full_stdout = String::new();
+        let mut full_stderr = String::new();
+        let mut stdout_sanitizer = AnsiOutputSanitizer::default();
+        let mut stderr_sanitizer = AnsiOutputSanitizer::default();
+        let mut stdout_eof = false;
+        let mut stderr_eof = false;
+        let mut last_stream_name: Option<&'static str> = None;
+        let start_time = std::time::Instant::now();
+
+        loop {
+            let timeout_remaining =
+                timeout_ms.saturating_sub(start_time.elapsed().as_millis() as u64);
+            if timeout_remaining == 0 {
+                terminate_stage_process(&mut child, &mut process_guard).await;
+                sandbox_cleanup_guard.cleanup_now().await;
+                return Err(if let Some(plan) = execution_plan.as_ref() {
+                    sandbox_failure_error(
+                        plan,
+                        crate::tools::SandboxFailureReason::TimedOut,
+                        format!("Command timed out after {}ms", timeout_ms),
+                    )
+                } else {
+                    ToolError::ExecutionFailed(format!(
+                        "Command timed out after {}ms",
+                        timeout_ms
+                    ))
+                });
+            }
+
+            if stdout_eof && stderr_eof {
+                if let Some(status) = child.try_wait().map_err(|e| {
+                    ToolError::ExecutionFailed(format!("Failed to check process status: {}", e))
+                })? {
+                    let exit_code = status.code().unwrap_or(-1);
+                    let _ = gateway
+                        .send(
+                            session_id,
+                            GatewayPayload::ToolStream {
+                                tool_id: tool_id.to_string(),
+                                output: if last_stream_name.is_some() {
+                                    format!("\nExit code: {}", exit_code)
+                                } else {
+                                    format!("Exit code: {}", exit_code)
+                                },
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64,
+                            },
+                        )
+                        .await;
+                    sandbox_cleanup_guard.cleanup_after_success().await;
+                    process_guard.disarm();
+                    return Ok(build_shell_tool_result_with_metadata(
+                        command_str,
+                        exit_code,
+                        &full_stdout,
+                        &full_stderr,
+                        execution_plan
+                            .as_ref()
+                            .and_then(|plan| serde_json::to_value(plan).ok()),
+                    ));
+                }
+            }
+
+            let mut got_output = false;
+            tokio::select! {
+                line = stdout_reader.next_line(), if !stdout_eof => {
+                    match line {
+                        Ok(Some(l)) => {
+                            let l = stdout_sanitizer.sanitize(&format!("{l}\n"));
+                            if !l.is_empty() {
+                                full_stdout.push_str(&l);
+                                let _ = gateway.send(session_id, GatewayPayload::ToolStream {
+                                    tool_id: tool_id.to_string(),
+                                    output: format_tool_stream_output(last_stream_name, "stdout", l.trim_end_matches('\n')),
+                                    timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+                                }).await;
+                                last_stream_name = Some("stdout");
+                                got_output = true;
+                            }
+                        }
+                        Ok(None) => stdout_eof = true,
+                        Err(e) => log::warn!("Error reading stdout: {}", e),
+                    }
+                }
+                line = stderr_reader.next_line(), if !stderr_eof => {
+                    match line {
+                        Ok(Some(l)) => {
+                            let l = stderr_sanitizer.sanitize(&format!("{l}\n"));
+                            if !l.is_empty() {
+                                if should_collect_stderr_line_as_stdout(command_str, &l) {
+                                    full_stdout.push_str(&l);
+                                    let _ = gateway.send(session_id, GatewayPayload::ToolStream {
+                                        tool_id: tool_id.to_string(),
+                                        output: format_tool_stream_output(last_stream_name, "stdout", l.trim_end_matches('\n')),
+                                        timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+                                    }).await;
+                                    last_stream_name = Some("stdout");
+                                } else {
+                                    full_stderr.push_str(&l);
+                                    let _ = gateway.send(session_id, GatewayPayload::ToolStream {
+                                        tool_id: tool_id.to_string(),
+                                        output: format_tool_stream_output(last_stream_name, "stderr", l.trim_end_matches('\n')),
+                                        timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+                                    }).await;
+                                    last_stream_name = Some("stderr");
+                                }
+                                got_output = true;
+                            }
+                        }
+                        Ok(None) => stderr_eof = true,
+                        Err(e) => log::warn!("Error reading stderr: {}", e),
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    if let Some(status) = child.try_wait().map_err(|e| ToolError::ExecutionFailed(format!("Failed to check process status: {}", e)))? {
+                        let exit_code = status.code().unwrap_or(-1);
+                        let _ = gateway.send(session_id, GatewayPayload::ToolStream {
+                            tool_id: tool_id.to_string(),
+                            output: if last_stream_name.is_some() { format!("\nExit code: {}", exit_code) } else { format!("Exit code: {}", exit_code) },
+                            timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+                        }).await;
+                        sandbox_cleanup_guard.cleanup_after_success().await;
+                        process_guard.disarm();
+                        return Ok(build_shell_tool_result_with_metadata(
+                            command_str,
+                            exit_code,
+                            &full_stdout,
+                            &full_stderr,
+                            execution_plan
+                                .as_ref()
+                                .and_then(|plan| serde_json::to_value(plan).ok()),
+                        ));
+                    }
+                }
+            }
+            if !got_output {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
     }
 
     /// Execute a command while capturing stdout and stderr concurrently.
@@ -1528,7 +1941,6 @@ impl ShellExecute {
         let configured_gateway = self.gateway.as_ref().ok_or(ToolError::ExecutionFailed(
             "Gateway not configured for streaming".to_string(),
         ))?;
-        let gateway = ResultOnlyShellGateway::new(configured_gateway.as_ref());
         let session_id = self.session_id.as_ref().ok_or(ToolError::ExecutionFailed(
             "Session ID not configured for streaming".to_string(),
         ))?;
@@ -1545,22 +1957,36 @@ impl ShellExecute {
                 )
             });
         let working_dir = self.default_working_dir();
+        let execution_plan = self.execution_plan_for_params(&params, &tool_id, command_str)?;
+        if execution_plan.status == crate::tools::ShellExecutionPlanStatus::Denied {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Sandbox execution denied before spawn: {:?}",
+                execution_plan.fallback_reason
+            )));
+        }
+        let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, timeout_ms);
 
-        if let Some(plan) = (!cfg!(target_os = "windows"))
-            .then(|| parse_safe_compound_command(command_str))
-            .flatten()
+        if let Some(sandbox_command) =
+            crate::tools::sandbox_command_for_plan(&execution_plan, command_str)?
         {
             return self
-                .call_safe_compound_streaming(
-                    plan,
+                .call_with_streaming_command(
+                    command_str,
                     timeout_ms,
-                    working_dir,
-                    &gateway,
+                    sandbox_command,
+                    configured_gateway.as_ref(),
                     session_id,
                     &tool_id,
+                    Some(execution_plan.clone()),
                 )
                 .await;
         }
+
+        let gateway = ResultOnlyShellGateway::new(configured_gateway.as_ref());
+        let execution_plan_metadata = serde_json::to_value(&execution_plan).ok();
+        // Execute host compound commands through the platform shell as one command.
+        // `parse_safe_compound_command` remains available for policy/output analysis,
+        // but AC-9 requires backend execution to preserve original shell semantics.
 
         let mut child = if cfg!(target_os = "windows") {
             let mut command = Command::new("cmd");
@@ -1675,11 +2101,12 @@ impl ShellExecute {
                             )
                             .await;
                         process_guard.disarm();
-                        return Ok(build_shell_tool_result(
+                        return Ok(build_shell_tool_result_with_metadata(
                             command_str,
                             exit_code,
                             &full_stdout,
                             &full_stderr,
+                            execution_plan_metadata.clone(),
                         ));
                     }
                     Ok(None) => {
@@ -1848,11 +2275,12 @@ impl ShellExecute {
                                 )
                                 .await;
                             process_guard.disarm();
-                            return Ok(build_shell_tool_result(
+                            return Ok(build_shell_tool_result_with_metadata(
                                 command_str,
                                 exit_code,
                                 &full_stdout,
                                 &full_stderr,
+                                execution_plan_metadata.clone(),
                             ));
                         }
                         Ok(None) => {
@@ -1879,10 +2307,19 @@ impl ShellExecute {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::helper::parse_safe_compound_command;
     use crate::tools::shell_output::{strip_ansi_escape_sequences, AnsiOutputSanitizer};
+    use crate::tools::{
+        SandboxFailureReason, SandboxMountPlan, SandboxNetworkPolicy, SandboxResourceLimits,
+        SandboxRuntime, ShellExecutionBackendKind, ShellExecutionPlan, ShellExecutionPlanStatus,
+        ShellExecutionRiskFloor, WorkspaceAccess,
+    };
     use crate::workflow::react::security::PathGuard;
-    use std::sync::Mutex;
+    use std::process::Stdio;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
     fn shell_decisions_round_trip_as_policy_strings() {
@@ -2102,8 +2539,18 @@ mod tests {
         // This simulates: git diff broadcast/src/common/account_manager.rs broadcast/src/main.rs broadcast/src/server.rs
         // with base directory /Volumes/dev/personal/dev/rust/rsctp
 
-        // Use the actual authorized directory
-        let authorized_root = std::path::PathBuf::from("/Volumes/dev/personal/dev/rust/rsctp");
+        // Use a temporary authorized directory so the test is portable.
+        let temp_root = tempdir().unwrap();
+        let authorized_root = temp_root.path().canonicalize().unwrap();
+        for relative in [
+            "broadcast/src/common/account_manager.rs",
+            "broadcast/src/main.rs",
+            "broadcast/src/server.rs",
+        ] {
+            let path = authorized_root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "// test").unwrap();
+        }
         let current_dir = std::env::current_dir().unwrap();
         let guard = Arc::new(RwLock::new(PathGuard::new(
             vec![authorized_root.clone(), current_dir.clone()],
@@ -2467,6 +2914,43 @@ mod tests {
         )
     }
 
+    fn sandbox_test_plan(
+        backend: ShellExecutionBackendKind,
+        runtime: SandboxRuntime,
+        project_root: &Path,
+    ) -> ShellExecutionPlan {
+        ShellExecutionPlan {
+            tool_call_id: format!("{runtime:?}-stream-test"),
+            command: "printf 'out\\n'; printf 'err\\n' >&2".to_string(),
+            backend,
+            runtime: Some(runtime),
+            profile: Some("busybox".to_string()),
+            image: Some("busybox:latest".to_string()),
+            network: Some(SandboxNetworkPolicy::default()),
+            resources: Some(SandboxResourceLimits::default()),
+            workspace_access: Some(WorkspaceAccess::ReadOnly),
+            mounts: vec![SandboxMountPlan {
+                host_path: project_root.display().to_string(),
+                guest_path: "/workspace".to_string(),
+                access: WorkspaceAccess::ReadOnly,
+            }],
+            workdir: Some("/workspace".to_string()),
+            fallback_reason: None,
+            risk_floor: ShellExecutionRiskFloor::Normal,
+            status: ShellExecutionPlanStatus::Ready,
+        }
+    }
+
+    fn local_streaming_test_command() -> Command {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "printf 'out\\n'; printf 'err\\n' >&2"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        command
+    }
+
     fn initialize_test_git_repository(project_root: &Path) {
         let status = std::process::Command::new("git")
             .args(["init", "--quiet"])
@@ -2484,13 +2968,11 @@ mod tests {
         let nested = project_root.join("nested");
         std::fs::create_dir(&nested).unwrap();
         initialize_test_git_repository(&nested);
-        let shell = test_shell_execute(project_root);
-
+        let shell = test_shell_execute(project_root.clone());
+        let plan = parse_safe_compound_command("cd nested && /bin/pwd && git status --short")
+            .expect("command should be syntactically safe");
         let result = shell
-            .call(json!({
-                "command": "cd nested && /bin/pwd && git status --short",
-                "timeout": 10_000,
-            }))
+            .call_safe_compound(plan, 10_000, Some(project_root), None)
             .await
             .unwrap();
         let structured = result
@@ -2520,17 +3002,52 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn host_shell_call_executes_compound_command_as_single_unit() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let nested = project_root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        initialize_test_git_repository(&nested);
+        let shell = test_shell_execute(project_root);
+
+        let result = shell
+            .call(json!({
+                "command": "cd nested && /bin/pwd && git status --short",
+                "timeout": 10_000,
+            }))
+            .await
+            .unwrap();
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+
+        assert_eq!(structured["exit_code"].as_i64(), Some(0));
+        assert!(
+            structured.get("stages").is_none(),
+            "host ShellExecute::call must not split compound commands into stage execution"
+        );
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm content missing");
+        assert!(llm_content.contains(nested.to_string_lossy().as_ref()));
+        assert_eq!(
+            structured["execution_plan"]["backend"].as_str(),
+            Some("host")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn safe_compound_execution_short_circuits_after_failure() {
         let temp_root = tempdir().unwrap();
         let project_root = temp_root.path().canonicalize().unwrap();
         initialize_test_git_repository(&project_root);
         let shell = test_shell_execute(project_root.clone());
 
+        let plan = parse_safe_compound_command("/usr/bin/false && git status && /usr/bin/touch marker")
+            .expect("command should be syntactically safe");
         let result = shell
-            .call(json!({
-                "command": "/usr/bin/false && git status && /usr/bin/touch marker",
-                "timeout": 10_000,
-            }))
+            .call_safe_compound(plan, 10_000, Some(project_root.clone()), None)
             .await
             .unwrap();
         let structured = result
@@ -2568,12 +3085,18 @@ mod tests {
         let shell = test_shell_execute(project_root.clone())
             .with_gateway(gateway.clone(), "test-session".to_string());
 
+        let plan = parse_safe_compound_command("/bin/echo first && /usr/bin/false && git status --short")
+            .expect("command should be syntactically safe");
         let result = shell
-            .call(json!({
-                "command": "/bin/echo first && /usr/bin/false && git status --short",
-                "timeout": 10_000,
-                crate::constants::INTERNAL_PARAM_TOOL_CALL_ID: "tool-safe-compound",
-            }))
+            .call_safe_compound_streaming(
+                plan,
+                10_000,
+                Some(project_root.clone()),
+                gateway.as_ref(),
+                "test-session",
+                "tool-safe-compound",
+                None,
+            )
             .await
             .unwrap();
         let structured = result
@@ -2584,8 +3107,8 @@ mod tests {
 
         let streams = gateway.streams.lock().unwrap().clone();
         assert!(
-            streams.is_empty(),
-            "bash must return only its terminal result and emit no live stream events"
+            streams.iter().any(|(_, output)| output.contains("Stage 1:")),
+            "direct safe compound streaming helper should emit stage stream events"
         );
 
         let model_path = structured["persisted_output"]["path"]
@@ -2702,11 +3225,10 @@ mod tests {
         write_long_running_child_script(&project_root);
         let shell = test_shell_execute(project_root.clone());
 
+        let plan = parse_safe_compound_command("sh spawn-child.sh && git status --short")
+            .expect("command should be syntactically safe");
         let result = shell
-            .call(json!({
-                "command": "sh spawn-child.sh && git status --short",
-                "timeout": 150,
-            }))
+            .call_safe_compound(plan, 150, Some(project_root.clone()), None)
             .await;
 
         assert!(
@@ -2741,6 +3263,379 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn msb_streaming_command_delivers_live_stdout_stderr_and_terminal_result() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let gateway = RecordingGateway::default();
+        let shell = test_shell_execute(project_root.clone());
+        let plan = sandbox_test_plan(
+            ShellExecutionBackendKind::Msb,
+            SandboxRuntime::Msb,
+            &project_root,
+        );
+
+        let command_str = plan.command.clone();
+        let result = shell
+            .call_with_streaming_command(
+                &command_str,
+                10_000,
+                local_streaming_test_command(),
+                &gateway,
+                "test-session",
+                "tool-msb-stream",
+                Some(plan),
+            )
+            .await
+            .unwrap();
+
+        let streams = gateway.streams.lock().unwrap().clone();
+        assert!(streams.iter().any(|(_, output)| output.contains("out")), "{streams:?}");
+        assert!(
+            streams
+                .iter()
+                .any(|(_, output)| output.contains("stderr:") && output.contains("err")),
+            "{streams:?}"
+        );
+        assert!(
+            streams.iter().any(|(_, output)| output.contains("Exit code: 0")),
+            "{streams:?}"
+        );
+        let structured = result.structured_content.expect("structured content missing");
+        assert_eq!(structured["exit_code"].as_i64(), Some(0));
+        assert_eq!(
+            structured["execution_plan"]["backend"].as_str(),
+            Some("msb")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn docker_streaming_command_delivers_live_stdout_stderr_and_terminal_result() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let gateway = RecordingGateway::default();
+        let shell = test_shell_execute(project_root.clone());
+        let plan = sandbox_test_plan(
+            ShellExecutionBackendKind::Docker,
+            SandboxRuntime::Docker,
+            &project_root,
+        );
+
+        let command_str = plan.command.clone();
+        let result = shell
+            .call_with_streaming_command(
+                &command_str,
+                10_000,
+                local_streaming_test_command(),
+                &gateway,
+                "test-session",
+                "tool-docker-stream",
+                Some(plan),
+            )
+            .await
+            .unwrap();
+
+        let streams = gateway.streams.lock().unwrap().clone();
+        assert!(streams.iter().any(|(_, output)| output.contains("out")), "{streams:?}");
+        assert!(
+            streams
+                .iter()
+                .any(|(_, output)| output.contains("stderr:") && output.contains("err")),
+            "{streams:?}"
+        );
+        assert!(
+            streams.iter().any(|(_, output)| output.contains("Exit code: 0")),
+            "{streams:?}"
+        );
+        let structured = result.structured_content.expect("structured content missing");
+        assert_eq!(structured["exit_code"].as_i64(), Some(0));
+        assert_eq!(
+            structured["execution_plan"]["backend"].as_str(),
+            Some("docker")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sandbox_streaming_spawn_failure_is_structured_with_execution_plan() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let gateway = RecordingGateway::default();
+        let shell = test_shell_execute(project_root.clone());
+        let plan = sandbox_test_plan(
+            ShellExecutionBackendKind::Msb,
+            SandboxRuntime::Msb,
+            &project_root,
+        );
+        let command_str = plan.command.clone();
+        let mut command = Command::new("/definitely/missing/chatspeed-sandbox-runner");
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        let result = shell
+            .call_with_streaming_command(
+                &command_str,
+                10_000,
+                command,
+                &gateway,
+                "test-session",
+                "tool-msb-spawn-failure",
+                Some(plan),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(ToolError::SandboxFailure(failure))
+                if failure.reason == SandboxFailureReason::SpawnFailed
+                    && failure.backend == ShellExecutionBackendKind::Msb
+                    && failure.execution_plan
+                        .as_ref()
+                        .and_then(|plan| plan.get("backend"))
+                        .and_then(|value| value.as_str()) == Some("msb")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sandbox_timeout_invokes_docker_cleanup_for_named_container() {
+        let _env_guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let temp_root = tempdir().unwrap();
+        let bin_dir = temp_root.path().join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let log_path = temp_root.path().join("docker.log");
+        let docker_path = bin_dir.join("docker");
+        std::fs::write(
+            &docker_path,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> {}\nif [ \"$1\" = \"run\" ]; then sleep 5; fi\nexit 0\n",
+                log_path.display()
+            ),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&docker_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&docker_path, permissions).unwrap();
+        }
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin_dir.display(),
+                original_path
+                    .as_ref()
+                    .map(|value| value.to_string_lossy())
+                    .unwrap_or_default()
+            ),
+        );
+
+        let plan = ShellExecutionPlan {
+            tool_call_id: "cleanup-test".to_string(),
+            command: "sleep 5".to_string(),
+            backend: ShellExecutionBackendKind::Docker,
+            runtime: Some(SandboxRuntime::Docker),
+            profile: Some("busybox".to_string()),
+            image: Some("busybox:latest".to_string()),
+            network: Some(SandboxNetworkPolicy::default()),
+            resources: Some(SandboxResourceLimits::default()),
+            workspace_access: Some(WorkspaceAccess::ReadOnly),
+            mounts: vec![SandboxMountPlan {
+                host_path: temp_root.path().display().to_string(),
+                guest_path: "/workspace".to_string(),
+                access: WorkspaceAccess::ReadOnly,
+            }],
+            workdir: Some("/workspace".to_string()),
+            fallback_reason: None,
+            risk_floor: ShellExecutionRiskFloor::Normal,
+            status: ShellExecutionPlanStatus::Ready,
+        };
+        let command = crate::tools::sandbox_command_for_plan(&plan, "sleep 5")
+            .unwrap()
+            .unwrap();
+        let result = run_sandbox_output_with_timeout(command, &plan, 50).await;
+
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        assert!(matches!(
+            result,
+            Err(ToolError::SandboxFailure(failure))
+                if failure.backend == ShellExecutionBackendKind::Docker
+                    && failure.reason == SandboxFailureReason::TimedOut
+                    && failure.message.contains("timed out after 50ms")
+        ));
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        assert!(
+            log.contains("run --rm --name chatspeed-shell-cleanup-test"),
+            "{log}"
+        );
+        assert!(log.contains("rm -f chatspeed-shell-cleanup-test"), "{log}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sandbox_output_future_drop_still_schedules_cleanup() {
+        let _env_guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let temp_root = tempdir().unwrap();
+        let bin_dir = temp_root.path().join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let log_path = temp_root.path().join("docker-drop.log");
+        let docker_path = bin_dir.join("docker");
+        std::fs::write(
+            &docker_path,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> {}\nif [ \"$1\" = \"run\" ]; then sleep 5; fi\nexit 0\n",
+                log_path.display()
+            ),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&docker_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&docker_path, permissions).unwrap();
+        }
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin_dir.display(),
+                original_path
+                    .as_ref()
+                    .map(|value| value.to_string_lossy())
+                    .unwrap_or_default()
+            ),
+        );
+        let plan = ShellExecutionPlan {
+            tool_call_id: "drop-cleanup-test".to_string(),
+            command: "sleep 5".to_string(),
+            backend: ShellExecutionBackendKind::Docker,
+            runtime: Some(SandboxRuntime::Docker),
+            profile: Some("busybox".to_string()),
+            image: Some("busybox:latest".to_string()),
+            network: Some(SandboxNetworkPolicy::default()),
+            resources: Some(SandboxResourceLimits::default()),
+            workspace_access: Some(WorkspaceAccess::ReadOnly),
+            mounts: vec![SandboxMountPlan {
+                host_path: temp_root.path().display().to_string(),
+                guest_path: "/workspace".to_string(),
+                access: WorkspaceAccess::ReadOnly,
+            }],
+            workdir: Some("/workspace".to_string()),
+            fallback_reason: None,
+            risk_floor: ShellExecutionRiskFloor::Normal,
+            status: ShellExecutionPlanStatus::Ready,
+        };
+        let command = crate::tools::sandbox_command_for_plan(&plan, "sleep 5")
+            .unwrap()
+            .unwrap();
+        let task = tokio::spawn(async move {
+            let _ = run_sandbox_output_with_timeout(command, &plan, 5_000).await;
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        task.abort();
+        let _ = task.await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        assert!(
+            log.contains("run --rm --name chatspeed-shell-drop-cleanup-test"),
+            "{log}"
+        );
+        assert!(
+            log.contains("rm -f chatspeed-shell-drop-cleanup-test"),
+            "{log}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn successful_msb_output_invokes_cleanup_for_named_instance() {
+        let _env_guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let temp_root = tempdir().unwrap();
+        let bin_dir = temp_root.path().join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let log_path = temp_root.path().join("msb-success-cleanup.log");
+        let msb_path = bin_dir.join("msb");
+        std::fs::write(
+            &msb_path,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> {}\nif [ \"$1\" = \"run\" ]; then echo ok; exit 0; fi\nexit 0\n",
+                log_path.display()
+            ),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&msb_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&msb_path, permissions).unwrap();
+        }
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin_dir.display(),
+                original_path
+                    .as_ref()
+                    .map(|value| value.to_string_lossy())
+                    .unwrap_or_default()
+            ),
+        );
+        let plan = ShellExecutionPlan {
+            tool_call_id: "msb-success-cleanup-test".to_string(),
+            command: "echo ok".to_string(),
+            backend: ShellExecutionBackendKind::Msb,
+            runtime: Some(SandboxRuntime::Msb),
+            profile: Some("busybox".to_string()),
+            image: Some("busybox:latest".to_string()),
+            network: Some(SandboxNetworkPolicy::default()),
+            resources: Some(SandboxResourceLimits::default()),
+            workspace_access: Some(WorkspaceAccess::ReadOnly),
+            mounts: vec![SandboxMountPlan {
+                host_path: temp_root.path().display().to_string(),
+                guest_path: "/workspace".to_string(),
+                access: WorkspaceAccess::ReadOnly,
+            }],
+            workdir: Some("/workspace".to_string()),
+            fallback_reason: None,
+            risk_floor: ShellExecutionRiskFloor::Normal,
+            status: ShellExecutionPlanStatus::Ready,
+        };
+        let command = crate::tools::sandbox_command_for_plan(&plan, "echo ok")
+            .unwrap()
+            .unwrap();
+        let result = run_sandbox_output_with_timeout(command, &plan, 5_000).await;
+
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        assert!(result.is_ok());
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        assert!(
+            log.contains("run --quiet --no-tty --name chatspeed-shell-msb-success-cleanup-test"),
+            "{log}"
+        );
+        assert!(
+            log.contains("remove --force --quiet chatspeed-shell-msb-success-cleanup-test"),
+            "{log}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn simple_command_timeout_kills_the_process_group() {
         let temp_root = tempdir().unwrap();
         let project_root = temp_root.path().canonicalize().unwrap();
@@ -2768,20 +3663,21 @@ mod tests {
         let temp_root = tempdir().unwrap();
         let project_root = temp_root.path().canonicalize().unwrap();
         initialize_test_git_repository(&project_root);
-        let shell = test_shell_execute(project_root);
+        let shell = test_shell_execute(project_root.clone());
+        let plan = parse_safe_compound_command(
+            "/bin/sleep 0.08 && /bin/sleep 0.08 && git status --short",
+        )
+        .expect("command should be syntactically safe");
         let started = Instant::now();
 
         let result = shell
-            .call(json!({
-                "command": "/bin/sleep 0.08 && /bin/sleep 0.08 && git status --short",
-                "timeout": 120,
-            }))
+            .call_safe_compound(plan, 120, Some(project_root), None)
             .await;
 
         assert!(
             matches!(result, Err(ToolError::ExecutionFailed(message)) if message.contains("timed out after 120ms"))
         );
-        assert!(started.elapsed() < Duration::from_millis(220));
+        assert!(started.elapsed() < Duration::from_millis(400));
     }
 
     #[cfg(unix)]
@@ -2796,7 +3692,7 @@ mod tests {
             .expect("command should be syntactically safe");
 
         let result = shell
-            .call_safe_compound(plan, 10_000, Some(project_root))
+            .call_safe_compound(plan, 10_000, Some(project_root), None)
             .await;
 
         assert!(matches!(result, Err(ToolError::Security(_))));

@@ -581,6 +581,11 @@ impl WorkflowExecutor {
                 .shell_policy
                 .as_deref()
                 .and_then(|policy| serde_json::from_str(policy).ok()),
+            sandbox_config: self
+                .agent_config
+                .sandbox_config
+                .as_deref()
+                .and_then(crate::tools::AgentSandboxConfig::from_json),
             approval_level: Some(self.policy.approval_level.to_string()),
             auto_approve: self
                 .agent_config
@@ -1878,6 +1883,12 @@ impl WorkflowExecutor {
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default();
 
+            let sandbox_config = self
+                .agent_config
+                .sandbox_config
+                .as_deref()
+                .and_then(crate::tools::AgentSandboxConfig::from_json);
+
             tm.register_tool(Arc::new(
                 ShellExecute::new(
                     self.path_guard.clone(),
@@ -1885,6 +1896,7 @@ impl WorkflowExecutor {
                     custom_rules,
                     self.policy.phase == ExecutionPhase::Planning,
                 )
+                .with_sandbox_config(sandbox_config)
                 .with_gateway(self.gateway.clone(), self.session_id.clone()),
             ))
             .await?;
@@ -4555,6 +4567,7 @@ impl WorkflowExecutor {
                 tool_name: tool_name.to_string(),
                 error: error.to_string(),
                 error_type: Some(Self::tool_error_type(error).to_string()),
+                error_details: Self::tool_error_details(error),
             },
         };
 
@@ -4565,6 +4578,13 @@ impl WorkflowExecutor {
                 tool_call_id,
                 e
             );
+        }
+    }
+
+    fn tool_error_details(error: &crate::tools::ToolError) -> Option<serde_json::Value> {
+        match error {
+            crate::tools::ToolError::SandboxFailure(failure) => serde_json::to_value(failure).ok(),
+            _ => None,
         }
     }
 
@@ -4580,6 +4600,7 @@ impl WorkflowExecutor {
             crate::tools::ToolError::IoError(_) => "Io",
             crate::tools::ToolError::AuthError(_) => "AuthError",
             crate::tools::ToolError::ExecutionFailed(_) => "Other",
+            crate::tools::ToolError::SandboxFailure(_) => "SandboxFailure",
             crate::tools::ToolError::Fatal(_) => "Fatal",
             crate::tools::ToolError::McpServerNotFound(_) => "McpServerNotFound",
             crate::tools::ToolError::Serialization(_) => "Serialization",
@@ -4607,6 +4628,7 @@ impl WorkflowExecutor {
                 tool_call_id.to_string(),
                 tool_name.to_string(),
                 error.to_string(),
+                Self::tool_error_details(error),
             ),
         };
         if let Err(e) = self.append_event(&event) {
@@ -4634,6 +4656,7 @@ impl WorkflowExecutor {
                     .llm_content
                     .clone()
                     .unwrap_or_else(|| reinforced.content.clone()),
+                None,
             )
         } else {
             WorkflowEvent::tool_completed(
@@ -4676,6 +4699,7 @@ impl WorkflowExecutor {
                     .clone()
                     .unwrap_or_else(|| reinforced.content.clone()),
                 error_type: reinforced.error_type.clone(),
+                error_details: None,
             }
         } else {
             GatewayPayload::ToolCompleted {
@@ -5644,7 +5668,7 @@ impl WorkflowExecutor {
 
         if self.should_intercept_for_approval(name, args) {
             return self
-                .handle_approval_interception(id, name, args, None)
+                .handle_approval_interception(id, name, args, None, None)
                 .await;
         }
 
@@ -8823,7 +8847,8 @@ mod recovery_tests {
             patterns,
             vec![
                 "^cargo check($| .*)".to_string(),
-                "^git status($| .*)".to_string()
+                "^git status($| .*)".to_string(),
+                "^head($| .*)".to_string()
             ]
         );
     }
