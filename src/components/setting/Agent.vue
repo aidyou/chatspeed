@@ -161,6 +161,7 @@
     :show-close="false"
     :close-on-click-modal="false"
     :close-on-press-escape="false"
+    destroy-on-close
     @closed="onAgentDialogClose">
     <el-form :model="agentForm" :rules="agentRules" ref="formRef" label-width="100px">
       <el-tabs v-model="activeTab">
@@ -508,7 +509,7 @@
           </el-form-item>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.agent.security')" name="security">
+        <el-tab-pane :label="$t('settings.agent.security')" name="security" lazy>
           <div class="security-group">
             <div class="shell-policy-header">
               <h3>{{ $t('settings.agent.authorizedPaths') }}</h3>
@@ -563,28 +564,45 @@
             </div>
             <div class="shell-policy-list" ref="shellPolicyListRef">
               <div
-                v-for="(rule, index) in agentForm.shellPolicy"
-                :key="index"
+                v-for="entry in paginatedShellPolicies"
+                :key="entry.index"
                 class="shell-policy-item">
                 <el-input
-                  v-model="rule.pattern"
+                  v-model="entry.rule.pattern"
                   size="small"
                   :placeholder="$t('settings.agent.shellPolicyPattern')"
                   style="flex: 1" />
-                <el-select v-model="rule.decision" size="small" style="width: 130px">
+                <el-select v-model="entry.rule.decision" size="small" style="width: 130px">
                   <el-option :label="$t('settings.agent.shellDecisionAllow')" value="allow" />
                   <el-option :label="$t('settings.agent.shellDecisionReview')" value="review" />
                   <el-option :label="$t('settings.agent.shellDecisionDeny')" value="deny" />
                 </el-select>
-                <el-button type="danger" size="small" circle @click="removeShellPolicyRule(index)">
+                <el-button
+                  type="danger"
+                  size="small"
+                  circle
+                  @click="removeShellPolicyRule(entry.index)">
                   <cs name="trash" size="12px" />
                 </el-button>
               </div>
             </div>
+            <el-pagination
+              v-if="agentForm.shellPolicy.length > SHELL_POLICY_PAGE_SIZE"
+              v-model:current-page="shellPolicyPage"
+              class="shell-policy-pagination"
+              :page-size="SHELL_POLICY_PAGE_SIZE"
+              :total="agentForm.shellPolicy.length"
+              layout="prev, pager, next, total"
+              small
+              background />
           </div>
         </el-tab-pane>
 
-        <el-tab-pane v-if="canConfigureSandbox" :label="$t('settings.agent.sandboxConfig')" name="sandbox">
+        <el-tab-pane
+          v-if="canConfigureSandbox"
+          :label="$t('settings.agent.sandboxConfig')"
+          name="sandbox"
+          lazy>
           <div class="security-group sandbox-config-group">
             <div class="shell-policy-header">
               <h3>{{ $t('settings.agent.sandboxConfig') }}</h3>
@@ -723,9 +741,11 @@ const settingStore = useSettingStore()
 const workflowStore = useWorkflowStore()
 const { agents, availableTools } = storeToRefs(agentStore)
 const ALWAYS_ENABLED_SKILL_NAMES = ['help']
+const SHELL_POLICY_PAGE_SIZE = 50
 
 const formRef = ref(null)
 const shellPolicyListRef = ref(null)
+const shellPolicyPage = ref(1)
 const agentDialogVisible = ref(false)
 const editId = ref(null)
 const activeTab = ref('basic')
@@ -1051,6 +1071,14 @@ const canConfigureShellPolicy = computed(
 const canConfigureSandbox = computed(
   () => agentForm.value.role !== AGENT_ROLE.CHILD && agentForm.value.allowShell
 )
+const paginatedShellPolicies = computed(() => {
+  const policies = Array.isArray(agentForm.value.shellPolicy) ? agentForm.value.shellPolicy : []
+  const startIndex = (shellPolicyPage.value - 1) * SHELL_POLICY_PAGE_SIZE
+  return policies.slice(startIndex, startIndex + SHELL_POLICY_PAGE_SIZE).map((rule, offset) => ({
+    rule,
+    index: startIndex + offset
+  }))
+})
 const sandboxProfiles = computed(() => {
   const config = agentForm.value.sandboxConfig || normalizeSandboxConfig(null)
   return Object.entries(config.profiles || {}).map(([name, profile]) => ({
@@ -1199,6 +1227,7 @@ const ensureDefaultShellPoliciesLoaded = async () => {
 const addShellPolicyRule = () => {
   if (!agentForm.value.shellPolicy) agentForm.value.shellPolicy = []
   agentForm.value.shellPolicy.push({ pattern: '', decision: 'review' })
+  shellPolicyPage.value = Math.ceil(agentForm.value.shellPolicy.length / SHELL_POLICY_PAGE_SIZE)
 
   // Use setTimeout to avoid ResizeObserver loop errors
   // Wait for Vue's DOM update to complete
@@ -1249,6 +1278,11 @@ const removeAuthorizedPath = index => {
 
 const removeShellPolicyRule = index => {
   agentForm.value.shellPolicy.splice(index, 1)
+  const lastPage = Math.max(
+    1,
+    Math.ceil(agentForm.value.shellPolicy.length / SHELL_POLICY_PAGE_SIZE)
+  )
+  shellPolicyPage.value = Math.min(shellPolicyPage.value, lastPage)
 }
 
 const clearShellPolicyRules = () => {
@@ -1262,6 +1296,7 @@ const clearShellPolicyRules = () => {
     }
   ).then(() => {
     agentForm.value.shellPolicy = []
+    shellPolicyPage.value = 1
   })
 }
 
@@ -1553,6 +1588,7 @@ const parseModelField = (field, key) => {
 const editAgent = async id => {
   formRef.value?.resetFields()
   activeTab.value = 'basic'
+  shellPolicyPage.value = 1
   await Promise.all([ensureDefaultShellPoliciesLoaded(), loadAvailableMcpTools()])
 
   if (id) {
@@ -1689,6 +1725,7 @@ const editAgent = async id => {
 
 const copyAgent = async id => {
   try {
+    shellPolicyPage.value = 1
     await ensureDefaultShellPoliciesLoaded()
     const agentData = await agentStore.getAgent(id)
     if (!agentData) return
@@ -1905,6 +1942,7 @@ const toggleAgentStatus = async agent => {
 const onAgentDialogClose = () => {
   // Reset active tab to basic when dialog closes
   activeTab.value = 'basic'
+  shellPolicyPage.value = 1
   skillSearchKeyword.value = ''
   // Clear form validation errors
   formRef.value?.resetFields()
@@ -2308,6 +2346,11 @@ watch(
     .el-form-item {
       margin-bottom: 0;
     }
+  }
+
+  .shell-policy-pagination {
+    justify-content: flex-end;
+    margin-top: var(--cs-space-sm);
   }
 
   .shell-policy-list {

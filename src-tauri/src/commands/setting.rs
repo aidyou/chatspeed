@@ -64,6 +64,22 @@ pub struct RestoreSettingResponse {
     pub restart_recommended: bool,
 }
 
+const MACHINE_SPECIFIC_CONFIG_KEYS: &[&str] = &[
+    "backup_dir",
+    API_KEY_FILE_CONFIG_KEY,
+    CFG_WINDOW_POSITION,
+    CFG_WINDOW_SIZE,
+    CFG_ASSISTANT_WINDOW_SIZE,
+    CFG_WORKFLOW_WINDOW_SIZE,
+    CFG_WORKFLOW_WINDOW_POSITION,
+    CFG_CCPROXY_PORT,
+    CFG_CCPROXY_LISTEN,
+    "proxy_type",
+    "proxy_server",
+    "proxy_username",
+    "proxy_password",
+];
+
 // =================================================
 // About Configuration
 // =================================================
@@ -813,20 +829,8 @@ pub async fn restore_setting(
     state: State<'_, Arc<MainStore>>,
     backup_dir: String,
 ) -> Result<RestoreSettingResponse> {
-    // 1. Define configuration keys that are machine-specific and should be preserved
-    let machine_specific_keys = [
-        "backup_dir",
-        API_KEY_FILE_CONFIG_KEY,
-        CFG_WINDOW_POSITION,
-        CFG_WINDOW_SIZE,
-        CFG_ASSISTANT_WINDOW_SIZE,
-        CFG_WORKFLOW_WINDOW_SIZE,
-        CFG_WORKFLOW_WINDOW_POSITION,
-        "proxy_type",
-        "proxy_server",
-        "proxy_username",
-        "proxy_password",
-    ];
+    // 1. Preserve machine-specific configuration from the current installation.
+    // Remote backups must not replace local paths, network bindings, or proxy settings.
 
     // 2. Prepare paths and backup instance
     let theme_dir = HTTP_SERVER_THEME_DIR.read().clone();
@@ -864,7 +868,7 @@ pub async fn restore_setting(
     {
         let config_store = state.inner().as_ref();
         config_store
-            .atomic_restore(&temp_db_file, &main_db_path, &machine_specific_keys)
+            .atomic_restore(&temp_db_file, &main_db_path, MACHINE_SPECIFIC_CONFIG_KEYS)
             .map_err(AppError::Db)?;
     }
 
@@ -929,6 +933,50 @@ pub fn update_tray(app: AppHandle) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn restore_preserves_local_ccproxy_binding_settings() {
+        let temp_dir = tempdir().unwrap();
+        let main_path = temp_dir.path().join("main.db");
+        let staged_path = temp_dir.path().join("staged.db");
+        let main_store = MainStore::new(&main_path).unwrap();
+        main_store
+            .set_config(CFG_CCPROXY_PORT, &serde_json::json!(11436))
+            .unwrap();
+        main_store
+            .set_config(CFG_CCPROXY_LISTEN, &serde_json::json!("127.0.0.1"))
+            .unwrap();
+        main_store
+            .set_config("restore_test", &serde_json::json!("local-value"))
+            .unwrap();
+
+        let staged_store = MainStore::new(&staged_path).unwrap();
+        staged_store
+            .set_config(CFG_CCPROXY_PORT, &serde_json::json!(11435))
+            .unwrap();
+        staged_store
+            .set_config(CFG_CCPROXY_LISTEN, &serde_json::json!("0.0.0.0"))
+            .unwrap();
+        staged_store
+            .set_config("restore_test", &serde_json::json!("remote-value"))
+            .unwrap();
+        drop(staged_store);
+
+        main_store
+            .atomic_restore(&staged_path, &main_path, MACHINE_SPECIFIC_CONFIG_KEYS)
+            .unwrap();
+
+        assert_eq!(main_store.get_config(CFG_CCPROXY_PORT, 0), 11436);
+        assert_eq!(
+            main_store.get_config(CFG_CCPROXY_LISTEN, String::new()),
+            "127.0.0.1"
+        );
+        assert_eq!(
+            main_store.get_config("restore_test", String::new()),
+            "remote-value"
+        );
+    }
 
     #[test]
     fn test_upload_logo() {

@@ -2,7 +2,9 @@ use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::libs::ai_temp::{display_ai_temp_path, resolve_ai_temp_path};
 use crate::tools::llm_output::{preview_grep_lines_for_llm, preview_path_lines_for_llm};
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
-use crate::workflow::react::security::PathGuard;
+#[cfg(test)]
+use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
+use crate::workflow::react::security::{workspace_walk_builder, PathGuard};
 use async_trait::async_trait;
 use globset::{Glob as GlobPattern, GlobSet, GlobSetBuilder};
 use regex::Regex;
@@ -81,6 +83,10 @@ fn is_search_path_allowed(
         .unwrap_or(true)
 }
 
+fn configure_search_walker(base_path: &Path) -> ignore::Walk {
+    workspace_walk_builder(base_path).build()
+}
+
 #[derive(Clone, Default)]
 pub struct Glob {
     path_guard: Option<Arc<RwLock<PathGuard>>>,
@@ -103,7 +109,7 @@ impl ToolDefinition for Glob {
         - Supports glob patterns like \"**/*.js\", \"src/**/*.ts\", or \"**/{Cargo.toml,package.json}\"\n\
         - Returns matching file paths, capped at 1000 matches\n\
         - Paths under the primary working directory are shown as relative paths; matches in other authorized directories remain absolute\n\
-        - Automatically respects .gitignore by default; when a `.csignore` file exists under an authorized root, ChatSpeed uses that file instead so git-ignored working data can still be searched when explicitly allowed\n\
+        - Automatically respects .gitignore; `.csignore` rules are merged at higher precedence so explicitly allowed git-ignored working data remains searchable without reopening unrelated ignored directories\n\
         - Use this tool before grep/read_file when you need to discover likely files by extension, directory, or filename\n\
         - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the sub_agent_run tool instead\n\
         - You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful."
@@ -154,12 +160,9 @@ impl ToolDefinition for Glob {
         const MAX_RESULTS: usize = 1000;
         let mut truncated = false;
 
-        // Use ignore crate with git filters disabled so PathGuard can apply
-        // .gitignore or .csignore consistently for all workflow file surfaces.
-        let walker = ignore::WalkBuilder::new(&base_path)
-            .standard_filters(self.path_guard.is_none())
-            .hidden(false)
-            .build();
+        // Let the ignore walker merge .gitignore and .csignore so excluded
+        // directories are pruned before their contents are visited.
+        let walker = configure_search_walker(&base_path);
 
         for result in walker {
             let entry = match result {
@@ -322,12 +325,9 @@ impl ToolDefinition for Grep {
                 )?;
             }
         } else if path.is_dir() {
-            // Use ignore crate with git filters disabled so PathGuard can apply
-            // .gitignore or .csignore consistently for all workflow file surfaces.
-            let walker = ignore::WalkBuilder::new(&path)
-                .standard_filters(self.path_guard.is_none())
-                .hidden(false)
-                .build();
+            // Let the ignore walker merge .gitignore and .csignore so excluded
+            // directories are pruned before their contents are visited.
+            let walker = configure_search_walker(&path);
 
             for result in walker {
                 let entry = match result {
@@ -633,6 +633,73 @@ mod tests {
 
         assert!(files.len() >= 1);
         assert!(files.iter().any(|f| f.contains("nested.txt")));
+    }
+
+    #[tokio::test]
+    async fn search_walker_merges_csignore_without_reopening_other_gitignored_directories() {
+        let temp_dir = tempdir().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::create_dir(root.join("dev_data")).unwrap();
+        fs::create_dir(root.join("target")).unwrap();
+        fs::create_dir(root.join("node_modules")).unwrap();
+        fs::write(
+            root.join(".gitignore"),
+            "dev_data/\ntarget/\nnode_modules/\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join(CHATSPEED_IGNORE_FILE),
+            "!dev_data/\n!dev_data/**\n",
+        )
+        .unwrap();
+        fs::write(root.join("dev_data/fixture.txt"), "needle").unwrap();
+        fs::write(root.join("target/ignored.txt"), "needle").unwrap();
+        fs::write(root.join("node_modules/ignored.txt"), "needle").unwrap();
+
+        let visited_paths = configure_search_walker(&root)
+            .filter_map(Result::ok)
+            .map(|entry| entry.path().to_path_buf())
+            .collect::<Vec<_>>();
+        assert!(visited_paths.contains(&root.join("dev_data")));
+        assert!(visited_paths.contains(&root.join("dev_data/fixture.txt")));
+        assert!(!visited_paths.contains(&root.join("target")));
+        assert!(!visited_paths.contains(&root.join("target/ignored.txt")));
+        assert!(!visited_paths.contains(&root.join("node_modules")));
+        assert!(!visited_paths.contains(&root.join("node_modules/ignored.txt")));
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![root.clone()],
+            vec![],
+            vec![],
+        )));
+
+        let glob_result = Glob::new(Some(guard.clone()))
+            .call(json!({
+                "pattern": "**/*.txt",
+                "path": root.to_string_lossy()
+            }))
+            .await
+            .unwrap()
+            .content
+            .unwrap();
+        assert!(glob_result.contains("dev_data/fixture.txt"));
+        assert!(!glob_result.contains("target/ignored.txt"));
+        assert!(!glob_result.contains("node_modules/ignored.txt"));
+
+        let grep_result = Grep::new(Some(guard))
+            .call(json!({
+                "pattern": "needle",
+                "path": root.to_string_lossy(),
+                "output_mode": "files_with_matches"
+            }))
+            .await
+            .unwrap()
+            .content
+            .unwrap();
+        assert!(grep_result.contains("dev_data/fixture.txt"));
+        assert!(!grep_result.contains("target/ignored.txt"));
+        assert!(!grep_result.contains("node_modules/ignored.txt"));
     }
 
     #[tokio::test]

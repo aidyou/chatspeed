@@ -2,7 +2,9 @@ use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::libs::ai_temp::{display_ai_temp_path, resolve_ai_temp_path};
 use crate::tools::llm_output::preview_path_lines_for_llm;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
-use crate::workflow::react::security::PathGuard;
+#[cfg(test)]
+use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
+use crate::workflow::react::security::{workspace_walk_builder, PathGuard};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::fs;
@@ -100,16 +102,6 @@ fn format_read_file_open_error(path_str: &str, error: &std::io::Error) -> ToolEr
             path_str, error
         )),
     }
-}
-
-fn should_skip_list_dir_entry(name: &str) -> bool {
-    let name_lower = name.to_lowercase();
-    name == "node_modules"
-        || name == ".git"
-        || name == "__pycache__"
-        || name_lower.ends_with(".pyc")
-        || name_lower == "thumbs.db"
-        || name_lower == ".ds_store"
 }
 
 fn planning_note_path(planning_root: &Path) -> PathBuf {
@@ -1124,7 +1116,7 @@ impl ToolDefinition for ListDir {
         - Returns one path per line. Paths under the primary working directory are shown as relative paths; entries in other authorized directories remain absolute.\n\
         - By default, lists only the immediate children of the directory.\n\
         - Set recursive=true to walk descendants recursively.\n\
-        - Respects .gitignore by default; when a `.csignore` file exists under an authorized root, ChatSpeed uses that file instead so git-ignored working data can still be listed when explicitly allowed.\n\
+        - Respects .gitignore; `.csignore` rules are merged at higher precedence so explicitly allowed git-ignored working data can be listed without reopening unrelated ignored directories.\n\
         - Skips common noisy entries such as node_modules, .git, __pycache__, .pyc, .DS_Store, and thumbs.db.\n\
         - Output is capped at 1000 entries."
     }
@@ -1176,10 +1168,8 @@ impl ToolDefinition for ListDir {
             )));
         }
 
-        // Use ignore crate with git filters disabled so PathGuard can apply
-        // .gitignore or .csignore consistently for all workflow file surfaces.
-        let mut builder = ignore::WalkBuilder::new(&path);
-        builder.standard_filters(false).hidden(false);
+        // Use the same ignore semantics as workflow @ suggestions and the sidebar tree.
+        let mut builder = workspace_walk_builder(&path);
         if !recursive {
             builder.max_depth(Some(1));
         }
@@ -1195,10 +1185,6 @@ impl ToolDefinition for ListDir {
                 continue;
             }
 
-            let name = entry.file_name().to_string_lossy();
-            if should_skip_list_dir_entry(&name) {
-                continue;
-            }
             let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
             if !is_tool_path_allowed(entry.path(), is_dir, self.path_guard.as_ref()) {
                 continue;
@@ -2257,6 +2243,35 @@ mod tests {
         assert!(content.contains("visible.txt"));
         assert!(!content.contains(".git"));
         assert!(!content.contains("__pycache__"));
+    }
+
+    #[tokio::test]
+    async fn test_list_dir_merges_csignore_without_reopening_other_ignored_directories() {
+        let temp_dir = tempdir().unwrap();
+        let root = temp_dir.path();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::create_dir(root.join("dev_data")).unwrap();
+        fs::create_dir(root.join("target")).unwrap();
+        fs::write(root.join(".gitignore"), "dev_data/\ntarget/\n").unwrap();
+        fs::write(
+            root.join(CHATSPEED_IGNORE_FILE),
+            "!dev_data/\n!dev_data/**\n",
+        )
+        .unwrap();
+        fs::write(root.join("dev_data/fixture.txt"), "").unwrap();
+        fs::write(root.join("target/ignored.txt"), "").unwrap();
+
+        let result = ListDir::default()
+            .call(json!({
+                "path": root.to_string_lossy(),
+                "recursive": true
+            }))
+            .await
+            .unwrap();
+        let content = result.content.unwrap();
+
+        assert!(content.contains("dev_data/fixture.txt"));
+        assert!(!content.contains("target"));
     }
 
     #[tokio::test]

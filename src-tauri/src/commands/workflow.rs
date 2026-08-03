@@ -24,6 +24,8 @@ use crate::workflow::react::runtime_observation::{
     runtime_observation_metadata, runtime_observation_metadata_with_visibility,
     RuntimeObservationLlmVisibility, RuntimeObservationType, RuntimeObservationUiVisibility,
 };
+use crate::workflow::react::security::workspace_walk_builder;
+#[cfg(test)]
 use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
 use crate::workflow::react::signals::SignalType;
 use crate::workflow::react::types::{
@@ -1066,12 +1068,10 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
             } else if path.is_dir() {
                 let mut entries = Vec::new();
 
-                // Use ignore crate to respect .gitignore
-                let mut walker = ignore::WalkBuilder::new(&path);
-                walker
-                    .max_depth(Some(1))
-                    .standard_filters(true)
-                    .hidden(false);
+                // Keep referenced-directory expansion aligned with @ suggestions,
+                // the sidebar tree, and native file tools.
+                let mut walker = workspace_walk_builder(&path);
+                walker.max_depth(Some(1));
 
                 for result in walker.build() {
                     let entry = match result {
@@ -1089,18 +1089,6 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
                     }
 
                     let name = entry.file_name().to_string_lossy().to_string();
-                    let name_lower = name.to_lowercase();
-
-                    // Manual filters
-                    if name == "node_modules"
-                        || name == ".git"
-                        || name == "__pycache__"
-                        || name_lower.ends_with(".pyc")
-                        || name_lower == "thumbs.db"
-                        || name_lower == ".ds_store"
-                    {
-                        continue;
-                    }
 
                     if let Ok(meta) = entry.metadata() {
                         let mtime = meta
@@ -4880,37 +4868,6 @@ pub struct WorkspaceFile {
     pub score: i32,
 }
 
-fn is_obviously_ignored_name(name: &str) -> bool {
-    let name_lower = name.to_ascii_lowercase();
-    matches!(
-        name,
-        ".git"
-            | ".svn"
-            | ".hg"
-            | "node_modules"
-            | "__pycache__"
-            | ".turbo"
-            | ".next"
-            | ".nuxt"
-            | ".svelte-kit"
-            | "dist"
-            | "coverage"
-    ) || name_lower.ends_with(".pyc")
-        || matches!(
-            name_lower.as_str(),
-            ".ds_store" | "thumbs.db" | "desktop.ini"
-        )
-}
-
-fn path_contains_obviously_ignored_component(path: &Path) -> bool {
-    path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .is_some_and(is_obviously_ignored_name)
-    })
-}
-
 #[tauri::command]
 pub async fn search_workspace_files(
     paths: Vec<String>,
@@ -4925,18 +4882,7 @@ pub async fn search_workspace_files(
             continue;
         }
 
-        let mut builder = ignore::WalkBuilder::new(&base);
-        builder
-            .add_custom_ignore_filename(CHATSPEED_IGNORE_FILE)
-            .hidden(false);
-        builder.filter_entry(|entry| {
-            entry
-                .path()
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_none_or(|name| !is_obviously_ignored_name(name))
-        });
-        let walker = builder.build();
+        let walker = workspace_walk_builder(&base).build();
 
         for result in walker {
             let entry = match result {
@@ -4946,10 +4892,6 @@ pub async fn search_workspace_files(
 
             let path = entry.path().to_path_buf();
             let name = entry.file_name().to_string_lossy().to_string();
-
-            if path_contains_obviously_ignored_component(&path) {
-                continue;
-            }
 
             let relative_path = path.strip_prefix(&base).unwrap_or(&path);
             let rel_path = relative_path.to_string_lossy().to_string();

@@ -29,6 +29,46 @@ const SENSITIVE_SYSTEM_PATHS: &[&str] = &[
 
 pub const CHATSPEED_IGNORE_FILE: &str = ".csignore";
 
+pub fn is_workspace_noise_name(name: &str) -> bool {
+    let name_lower = name.to_ascii_lowercase();
+    matches!(
+        name,
+        ".git"
+            | ".svn"
+            | ".hg"
+            | "node_modules"
+            | "target"
+            | "__pycache__"
+            | ".venv"
+            | ".turbo"
+            | ".next"
+            | ".nuxt"
+            | ".svelte-kit"
+            | "dist"
+            | "coverage"
+    ) || name_lower.ends_with(".pyc")
+        || matches!(
+            name_lower.as_str(),
+            ".ds_store" | "thumbs.db" | "desktop.ini"
+        )
+}
+
+pub fn workspace_walk_builder(path: &Path) -> ignore::WalkBuilder {
+    let mut builder = ignore::WalkBuilder::new(path);
+    builder
+        .standard_filters(true)
+        .hidden(false)
+        .add_custom_ignore_filename(CHATSPEED_IGNORE_FILE);
+    builder.filter_entry(|entry| {
+        entry.depth() == 0
+            || entry
+                .file_name()
+                .to_str()
+                .is_none_or(|name| !is_workspace_noise_name(name))
+    });
+    builder
+}
+
 struct IgnoreScope {
     base_dir: PathBuf,
     matcher: Gitignore,
@@ -103,9 +143,11 @@ impl PathGuard {
             .max_depth(3)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| {
-                let name = e.file_name().to_string_lossy();
-                name != ".git" && name != "node_modules"
+            .filter_entry(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_none_or(|name| !is_workspace_noise_name(name))
             })
             .filter_map(|e| e.ok())
         {
@@ -524,6 +566,28 @@ mod tests {
         assert!(guard
             .validate(&root_path.join("private/secret.txt"), false, false, false)
             .is_err());
+    }
+
+    #[test]
+    fn ignore_scope_collection_prunes_dependency_and_build_directories() {
+        let root = tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        for directory in ["target", "node_modules", "__pycache__", ".venv"] {
+            let nested = root_path.join(directory).join("nested");
+            fs::create_dir_all(&nested).unwrap();
+            fs::write(nested.join(CHATSPEED_IGNORE_FILE), "private/\n").unwrap();
+        }
+        fs::create_dir(root_path.join("src")).unwrap();
+        fs::write(
+            root_path.join("src").join(CHATSPEED_IGNORE_FILE),
+            "private/\n",
+        )
+        .unwrap();
+
+        let scopes = PathGuard::collect_ignore_scopes(&root_path, CHATSPEED_IGNORE_FILE);
+
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].base_dir, root_path.join("src"));
     }
 
     #[test]

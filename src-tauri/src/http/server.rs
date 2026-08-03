@@ -11,7 +11,7 @@ use axum::{
 };
 use rust_i18n::t;
 use std::{
-    net::{AddrParseError, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, Once},
 };
@@ -277,16 +277,17 @@ pub async fn start_http_server(
 }
 
 async fn try_available_port(ip: &str, start_port: u16) -> Result<TcpListener, String> {
+    let bind_ip: IpAddr = ip
+        .parse()
+        .map_err(|e| format!("Failed to parse listen address {ip}: {e}"))?;
     let mut attempts = 0;
     const MAX_ATTEMPTS: u32 = 3;
 
     let mut start_port = start_port;
     loop {
         attempts += 1;
-        let port = find_available_port(ip, start_port, 65535)?;
-        let addr: SocketAddr = format!("{}:{}", ip, port)
-            .parse()
-            .map_err(|e: AddrParseError| format!("Failed to parse address: {}", e))?;
+        let port = find_available_port(bind_ip, start_port, 65535)?;
+        let addr = SocketAddr::new(bind_ip, port);
 
         log::info!("Found available port: {} (attempt {})", port, attempts);
 
@@ -304,7 +305,7 @@ async fn try_available_port(ip: &str, start_port: u16) -> Result<TcpListener, St
                     attempts
                 );
                 if attempts >= MAX_ATTEMPTS {
-                    start_port += 1;
+                    start_port = port.saturating_add(1);
                 }
                 // Small delay before retry
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -313,33 +314,33 @@ async fn try_available_port(ip: &str, start_port: u16) -> Result<TcpListener, St
         }
     }
 }
+
 /// Attempts to find an available port starting from `start_port` up to `max_port`.
 ///
-/// # Arguments
-/// * `start_port` - The starting port number to try.
-/// * `max_port` - The maximum port number to try.
-///
-/// # Returns
-/// * `Result<u16, String>` - An available port number or an error message.
-fn find_available_port(ip: &str, start_port: u16, max_port: u16) -> Result<u16, String> {
-    use std::net::{SocketAddr, TcpListener};
+/// Probing both active loopback listeners and the wildcard address is intentional.
+/// On macOS, listeners bound to `0.0.0.0:PORT` and `127.0.0.1:PORT` can otherwise
+/// coexist, causing requests for the same loopback port to cross processes.
+fn find_available_port(bind_ip: IpAddr, start_port: u16, max_port: u16) -> Result<u16, String> {
+    let (loopback_ip, wildcard_ip) = match bind_ip {
+        IpAddr::V4(_) => (
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        ),
+        IpAddr::V6(_) => (
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        ),
+    };
 
     for port in start_port..=max_port {
-        let addr: SocketAddr = format!("{}:{}", ip, port)
-            .parse()
-            .map_err(|e| format!("Invalid address format: {}", e))?;
+        let loopback_addr = SocketAddr::new(loopback_ip, port);
+        if std::net::TcpStream::connect_timeout(&loopback_addr, Duration::from_millis(10)).is_ok() {
+            continue;
+        }
 
-        match TcpListener::bind(addr) {
-            Ok(listener) => {
-                // Get the actual bound port (in case we used port 0)
-                let bound_port = listener
-                    .local_addr()
-                    .map_err(|e| format!("Failed to get local address: {}", e))?
-                    .port();
-                drop(listener); // Close the listener immediately
-                return Ok(bound_port);
-            }
-            Err(_) => continue,
+        let wildcard_addr = SocketAddr::new(wildcard_ip, port);
+        if std::net::TcpListener::bind(wildcard_addr).is_ok() {
+            return Ok(port);
         }
     }
     Err(t!(
@@ -485,4 +486,35 @@ async fn handle_save_png(body: Bytes) -> Response {
         t!("http.server_file_saved_successfully").to_string(),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_search_skips_ipv4_wildcard_listener_for_loopback_bind() {
+        let listener = std::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let occupied_port = listener.local_addr().unwrap().port();
+
+        assert!(find_available_port(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            occupied_port,
+            occupied_port,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn port_search_skips_ipv4_loopback_listener_for_wildcard_bind() {
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let occupied_port = listener.local_addr().unwrap().port();
+
+        assert!(find_available_port(
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            occupied_port,
+            occupied_port,
+        )
+        .is_err());
+    }
 }

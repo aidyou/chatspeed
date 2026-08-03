@@ -431,7 +431,7 @@
                   <cs name="loading" class="cs-spin" v-if="subagentIsRunning(message)" />
                   {{ getSubAgentStatusLabel(message) }}
                 </span>
-                <span class="tool-group__summary-text">Delegated Task</span>
+                <span class="tool-group__summary-text">{{ message.subAgentCard.agent }}</span>
                 <button
                   type="button"
                   class="tool-group__expand-button"
