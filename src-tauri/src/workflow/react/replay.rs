@@ -420,7 +420,7 @@ pub fn restore_execution_context(main_store: Arc<MainStore>, session_id: &str) -
     match snapshot_result {
         Ok(Some(ctx)) => {
             if ctx.version == ExecutionContext::CURRENT_VERSION {
-                log::info!(
+                log::trace!(
                     "[Workflow][session={}] workflow.restore.snapshot_hit - state={:?}, wait_reason={:?}",
                     session_id,
                     ctx.state,

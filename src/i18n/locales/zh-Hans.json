@@ -959,7 +959,7 @@
       "executionBackend": "执行端",
       "executionBackends": {
         "docker": "Docker",
-        "host": "主机",
+        "host": "本机",
         "msb": "macOS 沙箱"
       },
       "expectedEvidence": "预期证据",
@@ -969,7 +969,7 @@
         "missing_image": "缺少沙箱镜像",
         "profile_unavailable": "沙箱配置不可用",
         "runtime_unavailable": "沙箱运行时不可用",
-        "sandbox_config_missing": "未配置沙箱"
+        "sandbox_config_missing": "缺少沙箱配置"
       },
       "files": "文件",
       "image": "镜像",

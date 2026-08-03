@@ -2366,7 +2366,7 @@ impl MainStore {
             let _ = sanitize_wait_reason_for_runtime_state(
                 &session_id, &context.state, &mut context.wait_reason,
             );
-            log::info!(
+            log::trace!(
                 "[Workflow][session={}] snapshot.read - state={:?}, wait_reason={:?}, pending_tools={}",
                 session_id, context.state, context.wait_reason, context.pending_tools.len()
             );
@@ -2465,6 +2465,48 @@ impl MainStore {
                 event_id
             );
             Ok(event_id)
+        })
+    }
+
+    pub fn get_child_reconciliation_state(
+        &self,
+        parent_session_id: &str,
+        child_id: &str,
+    ) -> Result<(bool, bool, bool), StoreError> {
+        let parent_session_id = parent_session_id.to_string();
+        let child_id = child_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let (has_terminal_event, is_background, has_background_projection):
+                (bool, bool, bool) = conn.query_row(
+                "SELECT
+                    EXISTS(
+                        SELECT 1
+                        FROM workflow_events
+                        WHERE session_id = ?1
+                          AND event_type IN ('sub_agent_completed', 'sub_agent_failed', 'sub_agent_interrupted')
+                          AND json_extract(event_data, '$.sub_agent_id') = ?2
+                          AND json_type(event_data, '$.result.usage_summary') = 'object'
+                    ),
+                    EXISTS(
+                        SELECT 1
+                        FROM workflow_events
+                        WHERE session_id = ?1
+                          AND event_type = 'sub_agent_started'
+                          AND json_extract(event_data, '$.sub_agent_id') = ?2
+                          AND json_extract(event_data, '$.execution_mode') = 'background'
+                    ),
+                    EXISTS(
+                        SELECT 1
+                        FROM workflow_messages
+                        WHERE session_id = ?1
+                          AND source_event_type = 'sub_agent_completed'
+                          AND json_extract(metadata, '$.sub_agent_id') = ?2
+                          AND json_extract(metadata, '$.execution_mode') = 'background'
+                    )",
+                params![parent_session_id, child_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            Ok((has_terminal_event, is_background, has_background_projection))
         })
     }
 

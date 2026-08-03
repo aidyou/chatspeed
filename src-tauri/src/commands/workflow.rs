@@ -1863,19 +1863,64 @@ fn reconcile_durable_child_completion(
     store: &MainStore,
     child: &Workflow,
     terminal_status: WorkflowState,
-) -> Result<(), crate::db::StoreError> {
+) -> Result<bool, crate::db::StoreError> {
     let Some(child_id) = child.id.as_deref() else {
-        return Ok(());
+        return Ok(false);
     };
     let Some(parent_session_id) = child.parent_session_id.as_deref() else {
-        return Ok(());
+        return Ok(false);
     };
     let status = match terminal_status {
         WorkflowState::Completed => "completed",
         WorkflowState::Cancelled => "cancelled",
         WorkflowState::Error => "failed",
-        _ => return Ok(()),
+        _ => return Ok(false),
     };
+    let mut parent_context = store
+        .get_execution_context(parent_session_id)?
+        .unwrap_or_else(|| ExecutionContext {
+            session_id: parent_session_id.to_string(),
+            state: RuntimeState::Waiting,
+            wait_reason: Some(WaitReason::SubAgent),
+            current_segment_id: 1,
+            current_step: 0,
+            max_steps: 0,
+            pending_tools: Vec::new(),
+            last_action_summary: None,
+            current_context_tokens: None,
+            max_context_tokens: None,
+            last_event_id: None,
+            version: ExecutionContext::CURRENT_VERSION.to_string(),
+            waiting_on_sub_agent_id: Some(child_id.to_string()),
+            sub_agent_sessions: vec![child_id.to_string()],
+            pending_sub_agent_completions: Vec::new(),
+            pending_final_review: None,
+            pending_completion_reports: Vec::new(),
+            removed_queued_user_message_ids: Vec::new(),
+        });
+    let existing_completion = parent_context
+        .pending_sub_agent_completions
+        .iter()
+        .find(|completion| completion.sub_agent_id == child_id);
+    let already_projected =
+        existing_completion.is_some_and(|completion| completion.usage_summary.is_some());
+    let should_signal = matches!(&parent_context.state, RuntimeState::Waiting)
+        && matches!(
+            parent_context.wait_reason.as_ref(),
+            Some(WaitReason::SubAgent)
+        )
+        && parent_context.waiting_on_sub_agent_id.as_deref() == Some(child_id)
+        && existing_completion.is_none_or(|completion| !completion.consumed);
+    let (has_event, is_background, has_background_projection) =
+        store.get_child_reconciliation_state(parent_session_id, child_id)?;
+    if already_projected
+        && has_event
+        && (!is_background || has_background_projection)
+        && !should_signal
+    {
+        return Ok(false);
+    }
+
     let task_run_id = store
         .workflow_current_task_run_id(child_id)
         .unwrap_or_else(|_| format!("{child_id}:task:1"));
@@ -1920,34 +1965,6 @@ fn reconcile_durable_child_completion(
         "usage_summary": usage_summary,
     });
 
-    let mut parent_context = store
-        .get_execution_context(parent_session_id)?
-        .unwrap_or_else(|| ExecutionContext {
-            session_id: parent_session_id.to_string(),
-            state: RuntimeState::Waiting,
-            wait_reason: Some(WaitReason::SubAgent),
-            current_segment_id: 1,
-            current_step: 0,
-            max_steps: 0,
-            pending_tools: Vec::new(),
-            last_action_summary: None,
-            current_context_tokens: None,
-            max_context_tokens: None,
-            last_event_id: None,
-            version: ExecutionContext::CURRENT_VERSION.to_string(),
-            waiting_on_sub_agent_id: Some(child_id.to_string()),
-            sub_agent_sessions: vec![child_id.to_string()],
-            pending_sub_agent_completions: Vec::new(),
-            pending_final_review: None,
-            pending_completion_reports: Vec::new(),
-            removed_queued_user_message_ids: Vec::new(),
-        });
-    let already_projected = parent_context
-        .pending_sub_agent_completions
-        .iter()
-        .any(|completion| {
-            completion.sub_agent_id == child_id && completion.usage_summary.is_some()
-        });
     if !already_projected {
         parent_context
             .pending_sub_agent_completions
@@ -1969,35 +1986,35 @@ fn reconcile_durable_child_completion(
         store.upsert_execution_context(&parent_context)?;
     }
 
-    // The parent completion may already be durable while the original event or live signal
-    // failed. Re-deliver on every reconciliation so a live waiting parent converges without a
-    // restart; parent-side resolution consumes duplicate signals idempotently.
-    if let Err(error) = WorkflowManager::send_signal_to_session(
-        parent_session_id,
-        json!({
-            "type": "sub_agent_complete",
-            "sub_agent_id": child_id,
-            "result": result,
-        })
-        .to_string(),
-    ) {
-        log::warn!(
-            "[Workflow][session={}][phase=reconcile][event=sub_agent_completion] Live recovery signal failed; durable completion remains replayable: {}",
-            child_id,
-            error
-        );
+    // Re-deliver only while the parent is durably waiting for this child. A missing live channel
+    // is normal during cold recovery; the durable completion will be applied when the executor
+    // is restored.
+    if should_signal {
+        if let Err(error) = WorkflowManager::send_signal_to_session(
+            parent_session_id,
+            json!({
+                "type": "sub_agent_complete",
+                "sub_agent_id": child_id,
+                "result": result,
+            })
+            .to_string(),
+        ) {
+            if error.contains("signal channel not found") {
+                log::trace!(
+                    "[Workflow][session={}][phase=reconcile][event=sub_agent_completion] Live recovery channel unavailable; durable completion remains replayable: {}",
+                    child_id,
+                    error
+                );
+            } else {
+                log::warn!(
+                    "[Workflow][session={}][phase=reconcile][event=sub_agent_completion] Live recovery signal failed; durable completion remains replayable: {}",
+                    child_id,
+                    error
+                );
+            }
+        }
     }
 
-    let has_event = store
-        .list_workflow_events(parent_session_id)?
-        .iter()
-        .any(|event| {
-            matches!(
-                event.event_type.as_str(),
-                "sub_agent_completed" | "sub_agent_failed" | "sub_agent_interrupted"
-            ) && event.event_data["sub_agent_id"].as_str() == Some(child_id)
-                && event.event_data["result"]["usage_summary"].is_object()
-        });
     if !has_event {
         store.append_workflow_event(&WorkflowEvent::sub_agent_completed(
             parent_session_id.to_string(),
@@ -2007,67 +2024,46 @@ fn reconcile_durable_child_completion(
         ))?;
     }
 
-    let is_background = store
-        .list_workflow_events(parent_session_id)?
-        .iter()
-        .any(|event| {
-            event.event_type == "sub_agent_started"
-                && event.event_data["sub_agent_id"].as_str() == Some(child_id)
-                && event.event_data["execution_mode"].as_str() == Some("background")
-        });
-    if is_background {
-        let has_background_projection = store
-            .get_workflow_snapshot(parent_session_id)?
-            .messages
-            .iter()
-            .any(|message| {
-                message.source_event_type.as_deref() == Some("sub_agent_completed")
-                    && message.metadata.as_ref().is_some_and(|metadata| {
-                        metadata["sub_agent_id"].as_str() == Some(child_id)
-                            && metadata["execution_mode"].as_str() == Some("background")
-                    })
-            });
-        if !has_background_projection {
-            let segment_id = parent_context.current_segment_id;
-            let summary = result["summary"].as_str().unwrap_or_default();
-            let mut metadata = runtime_observation_metadata_with_visibility(
-                RuntimeObservationType::SubAgentCompletion,
-                RuntimeObservationLlmVisibility::Hide,
-                RuntimeObservationUiVisibility::Hide,
-                json!({
-                    "sub_agent_id": child_id,
-                    "execution_mode": "background",
-                    "result": result,
-                    "summary": summary,
-                    "execution_status": status,
-                }),
-            );
-            metadata["sub_agent_id"] = json!(child_id);
-            metadata["execution_mode"] = json!("background");
-            metadata["result"] = result.clone();
-            metadata["summary"] = json!(summary);
-            metadata["execution_status"] = json!(status);
-            store.add_workflow_message(&WorkflowMessage {
-                id: None,
-                session_id: parent_session_id.to_string(),
-                role: "user".to_string(),
-                message: String::new(),
-                reasoning: None,
-                message_kind: "runtime_observation".to_string(),
-                message_subtype: Some("sub_agent_completion".to_string()),
-                segment_id,
-                source_event_type: Some("sub_agent_completed".to_string()),
-                metadata: Some(metadata),
-                attached_context: None,
-                step_type: Some(StepType::Observe.to_string()),
-                step_index: 0,
-                is_error: false,
-                error_type: None,
-                created_at: None,
-            })?;
-        }
+    if is_background && !has_background_projection {
+        let segment_id = parent_context.current_segment_id;
+        let summary = result["summary"].as_str().unwrap_or_default();
+        let mut metadata = runtime_observation_metadata_with_visibility(
+            RuntimeObservationType::SubAgentCompletion,
+            RuntimeObservationLlmVisibility::Hide,
+            RuntimeObservationUiVisibility::Hide,
+            json!({
+                "sub_agent_id": child_id,
+                "execution_mode": "background",
+                "result": result,
+                "summary": summary,
+                "execution_status": status,
+            }),
+        );
+        metadata["sub_agent_id"] = json!(child_id);
+        metadata["execution_mode"] = json!("background");
+        metadata["result"] = result.clone();
+        metadata["summary"] = json!(summary);
+        metadata["execution_status"] = json!(status);
+        store.add_workflow_message(&WorkflowMessage {
+            id: None,
+            session_id: parent_session_id.to_string(),
+            role: "user".to_string(),
+            message: String::new(),
+            reasoning: None,
+            message_kind: "runtime_observation".to_string(),
+            message_subtype: Some("sub_agent_completion".to_string()),
+            segment_id,
+            source_event_type: Some("sub_agent_completed".to_string()),
+            metadata: Some(metadata),
+            attached_context: None,
+            step_type: Some(StepType::Observe.to_string()),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        })?;
     }
-    Ok(())
+    Ok(true)
 }
 
 fn reconcile_child_workflows(
@@ -2090,13 +2086,16 @@ fn reconcile_child_workflows(
 
     for (child, child_id, terminal_status) in decisions {
         if let Some(terminal_status) = terminal_status {
-            log::info!(
-                "[Workflow][session={}][phase=reconcile][event=child_terminal_durable] Recovering durable terminal child state={:?}",
-                child_id,
-                terminal_status
-            );
-            reconcile_durable_child_completion(store, &child, terminal_status.clone())?;
-            store.update_workflow_status(&child_id, &terminal_status.to_string())?;
+            let reconciled =
+                reconcile_durable_child_completion(store, &child, terminal_status.clone())?;
+            if reconciled {
+                log::info!(
+                    "[Workflow][session={}][phase=reconcile][event=child_terminal_durable] Recovered durable terminal child state={:?}",
+                    child_id,
+                    terminal_status
+                );
+                store.update_workflow_status(&child_id, &terminal_status.to_string())?;
+            }
             continue;
         }
 
@@ -5899,6 +5898,58 @@ mod tests {
         assert_eq!(signal["sub_agent_id"], "signal-child");
         assert!(signal["result"]["usage_summary"].is_object());
         WorkflowManager::unregister_session_signal_tx("signal-parent");
+    }
+
+    #[test]
+    fn reconcile_terminal_parent_does_not_receive_redundant_child_signal() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow("completed-parent", "Parent task", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "completed-child",
+                "Child task",
+                "agent-test",
+                None,
+                Some("completed-parent"),
+            )
+            .expect("failed to create child workflow");
+
+        let mut parent_context = ExecutionContext::new("completed-parent".to_string());
+        parent_context.state = RuntimeState::Completed;
+        store
+            .upsert_execution_context(&parent_context)
+            .expect("failed to persist completed parent state");
+        let mut child_context = ExecutionContext::new("completed-child".to_string());
+        child_context.state = RuntimeState::Completed;
+        store
+            .upsert_execution_context(&child_context)
+            .expect("failed to persist completed child state");
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        WorkflowManager::register_session_signal_tx("completed-parent".to_string(), tx);
+        reconcile_interrupted_child_workflows(&store)
+            .expect("failed to reconcile completed parent child");
+        reconcile_interrupted_child_workflows(&store)
+            .expect("repeated reconciliation should converge");
+
+        assert!(
+            rx.try_recv().is_err(),
+            "terminal parent must not receive a redundant child completion signal"
+        );
+        let completion_events = store
+            .list_workflow_events("completed-parent")
+            .expect("failed to load parent completion events")
+            .into_iter()
+            .filter(|event| {
+                event.event_type == "sub_agent_completed"
+                    && event.event_data["sub_agent_id"].as_str() == Some("completed-child")
+            })
+            .count();
+        assert_eq!(completion_events, 1);
+        WorkflowManager::unregister_session_signal_tx("completed-parent");
     }
 
     #[test]

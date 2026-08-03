@@ -6,7 +6,8 @@ use crate::libs::ai_temp::{
 use crate::tools::helper::{
     contains_unquoted_shell_operator, detect_json_stdout, is_git_log_command,
     is_go_build_or_test_command, is_node_build_command, reduce_command_output,
-    reduce_priority_log_output, should_reduce_priority_log,
+    reduce_priority_log_output, shell_tokens, should_reduce_priority_log,
+    split_shell_command_segments,
 };
 use crate::tools::ToolCallResult;
 use serde_json::json;
@@ -214,6 +215,91 @@ pub(crate) fn should_collect_stderr_line_as_stdout(command_str: &str, line: &str
         && line.starts_with("go: downloading ")
 }
 
+fn command_explicitly_terminates_processes(command_str: &str) -> bool {
+    command_explicitly_terminates_processes_at_depth(command_str, 0)
+}
+
+fn command_explicitly_terminates_processes_at_depth(command_str: &str, depth: usize) -> bool {
+    split_shell_command_segments(command_str)
+        .into_iter()
+        .filter_map(|segment| shell_tokens(&segment))
+        .any(|tokens| tokens_explicitly_terminate_processes(&tokens, depth))
+}
+
+fn tokens_explicitly_terminate_processes(tokens: &[String], depth: usize) -> bool {
+    if depth > 2 {
+        return false;
+    }
+
+    let Some(index) = tokens
+        .iter()
+        .position(|token| !token.contains('=') || token.starts_with('=') || token.ends_with('='))
+    else {
+        return false;
+    };
+    let executable = std::path::Path::new(&tokens[index])
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or(&tokens[index])
+        .to_ascii_lowercase();
+    let executable = executable.trim_end_matches(".exe");
+    if matches!(executable, "kill" | "pkill" | "killall" | "taskkill") {
+        return true;
+    }
+
+    if executable == "env" {
+        let nested = tokens[index + 1..].iter().position(|token| {
+            !token.starts_with('-')
+                && (!token.contains('=') || token.starts_with('=') || token.ends_with('='))
+        });
+        return nested.is_some_and(|nested| {
+            tokens_explicitly_terminate_processes(&tokens[index + 1 + nested..], depth + 1)
+        });
+    }
+
+    if matches!(executable, "sh" | "bash" | "zsh" | "dash" | "ksh") {
+        let arguments = &tokens[index + 1..];
+        if let Some(script_index) = arguments.iter().position(|argument| argument == "-c") {
+            return arguments.get(script_index + 1).is_some_and(|script| {
+                command_explicitly_terminates_processes_at_depth(script, depth + 1)
+            });
+        }
+    }
+
+    false
+}
+
+pub(crate) fn should_suppress_incidental_termination_stderr(command_str: &str, line: &str) -> bool {
+    if command_explicitly_terminates_processes(command_str) {
+        return false;
+    }
+
+    let trimmed = line.trim();
+    let lowercase = trimmed.to_ascii_lowercase();
+    let stale_kill_probe = lowercase.starts_with("kill:")
+        && (lowercase.contains("no such process") || trimmed.contains("没有那个进程"));
+    if stale_kill_probe {
+        return true;
+    }
+
+    let Some((shell, notification)) = trimmed.split_once(": line ") else {
+        return false;
+    };
+    let shell = std::path::Path::new(shell)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or(shell);
+    matches!(shell, "sh" | "bash" | "zsh" | "dash" | "ksh")
+        && (notification.contains(" Terminated:") || notification.contains(" Killed:"))
+}
+
+fn filter_incidental_termination_stderr(command_str: &str, stderr: String) -> String {
+    stderr
+        .split_inclusive('\n')
+        .filter(|line| !should_suppress_incidental_termination_stderr(command_str, line))
+        .collect()
+}
+
 pub(crate) fn normalize_shell_output_streams(
     command_str: &str,
     exit_code: i32,
@@ -221,7 +307,8 @@ pub(crate) fn normalize_shell_output_streams(
     stderr: &str,
 ) -> (String, String) {
     let stdout = strip_ansi_escape_sequences(stdout);
-    let stderr = strip_ansi_escape_sequences(stderr);
+    let stderr =
+        filter_incidental_termination_stderr(command_str, strip_ansi_escape_sequences(stderr));
 
     if exit_code != 0 || stderr.trim().is_empty() || contains_unquoted_shell_operator(command_str) {
         return (stdout, stderr);
@@ -501,7 +588,8 @@ fn truncate_with_marker(content: &str, max_len: usize) -> String {
 mod tests {
     use super::{
         build_compound_shell_tool_result, build_shell_tool_result, normalize_shell_output_streams,
-        prepare_shell_output, should_render_stderr_line_as_stdout, strip_ansi_escape_sequences,
+        prepare_shell_output, should_render_stderr_line_as_stdout,
+        should_suppress_incidental_termination_stderr, strip_ansi_escape_sequences,
         CompoundShellStageResult,
     };
     use crate::libs::ai_temp::{
@@ -1274,6 +1362,64 @@ mod tests {
             strip_ansi_escape_sequences("\u{0090}secret\u{7}payload\u{009C}visible"),
             "visible"
         );
+    }
+
+    #[test]
+    fn incidental_process_termination_diagnostics_are_removed() {
+        let stderr = "warning: keep this\nkill: 75228: No such process\nkill: (3553517): 没有那个进程\nsh: line 1: 31589 Terminated: 15          pnpm tauri dev > /tmp/chatspeed.log 2>&1\n";
+        let (_, normalized_stderr) =
+            normalize_shell_output_streams("cargo test --lib", 0, "", stderr);
+
+        assert_eq!(normalized_stderr, "warning: keep this\n");
+        let result = build_shell_tool_result(
+            "cargo test --lib",
+            143,
+            "",
+            "kill: 75228: No such process\n",
+        );
+        assert_eq!(result.content.as_deref(), Some("Exit code: 143\n"));
+        assert!(should_suppress_incidental_termination_stderr(
+            "cargo test --lib",
+            "bash: line 2: 99 Killed: 9 sleep 30"
+        ));
+    }
+
+    #[test]
+    fn explicit_ai_kill_commands_preserve_process_diagnostics() {
+        for command in [
+            "kill -TERM 31589",
+            "cd src-tauri && pkill chatspeed",
+            "/usr/bin/killall node",
+            "taskkill /PID 31589 /F",
+            "env TARGET=31589 kill -TERM 31589",
+            "sh -c 'kill -TERM 31589'",
+        ] {
+            let diagnostic = "kill: 31589: No such process\n";
+            let (_, normalized_stderr) = normalize_shell_output_streams(command, 1, "", diagnostic);
+            assert_eq!(normalized_stderr, diagnostic, "{command}");
+            assert!(!should_suppress_incidental_termination_stderr(
+                command, diagnostic
+            ));
+        }
+    }
+
+    #[test]
+    fn incidental_termination_filter_keeps_unrelated_failures() {
+        let diagnostic = "error: process terminated unexpectedly\n";
+        let (_, normalized_stderr) =
+            normalize_shell_output_streams("cargo test --lib", 1, "", diagnostic);
+        assert_eq!(normalized_stderr, diagnostic);
+        let (_, crlf_stderr) = normalize_shell_output_streams(
+            "cargo test --lib",
+            1,
+            "",
+            "error: first\r\nerror: second\r\n",
+        );
+        assert_eq!(crlf_stderr, "error: first\r\nerror: second\r\n");
+        assert!(!should_suppress_incidental_termination_stderr(
+            "echo kill",
+            diagnostic
+        ));
     }
 
     #[test]

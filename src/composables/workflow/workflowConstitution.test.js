@@ -510,6 +510,12 @@ assert.match(approvalDialog, /await writeClipboard\(planMarkdown\.value\)/)
 assert.match(approvalDialog, /<cs name="copy" \/>/)
 assert.match(approvalDialog, /workflow\.approval\.executionBackends/)
 assert.match(approvalDialog, /workflow\.approval\.fallbackReasons/)
+const zhHansLocale = JSON.parse(readProjectFile('src/i18n/locales/zh-Hans.json'))
+assert.equal(zhHansLocale.workflow.approval.executionBackends.host, '本机')
+assert.equal(
+  zhHansLocale.workflow.approval.fallbackReasons.sandbox_config_missing,
+  '缺少沙箱配置'
+)
 assert.doesNotMatch(
   approvalDialog,
   /action: String|props\.action|normalizedAction|isFileChangePayload/

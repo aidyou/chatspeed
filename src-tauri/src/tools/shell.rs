@@ -13,7 +13,7 @@ use crate::tools::shell_output::{
 };
 use crate::tools::shell_output::{
     build_shell_tool_result_with_metadata, should_collect_stderr_line_as_stdout,
-    AnsiOutputSanitizer,
+    should_suppress_incidental_termination_stderr, AnsiOutputSanitizer,
 };
 use crate::tools::{NativeToolResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::error::WorkflowEngineError;
@@ -1689,8 +1689,11 @@ impl ShellExecute {
                     match line {
                         Ok(Some(line)) => {
                             let raw_line = format!("{line}\n");
-                            full_stderr.push_str(&raw_line);
                             let line = stderr_sanitizer.sanitize(&raw_line);
+                            if should_suppress_incidental_termination_stderr(command_str, &line) {
+                                continue;
+                            }
+                            full_stderr.push_str(&raw_line);
                             if !line.is_empty() {
                                 if should_collect_stderr_line_as_stdout(command_str, &line) {
                                     send_tool_stream(
@@ -1925,7 +1928,9 @@ impl ShellExecute {
                     match line {
                         Ok(Some(l)) => {
                             let l = stderr_sanitizer.sanitize(&format!("{l}\n"));
-                            if !l.is_empty() {
+                            if !l.is_empty()
+                                && !should_suppress_incidental_termination_stderr(command_str, &l)
+                            {
                                 if should_collect_stderr_line_as_stdout(command_str, &l) {
                                     full_stdout.push_str(&l);
                                     let _ = gateway.send(session_id, GatewayPayload::ToolStream {
@@ -2218,7 +2223,9 @@ impl ShellExecute {
                     match line {
                         Ok(Some(l)) => {
                             let l = stderr_sanitizer.sanitize(&format!("{l}\n"));
-                            if l.is_empty() {
+                            if l.is_empty()
+                                || should_suppress_incidental_termination_stderr(command_str, &l)
+                            {
                                 continue;
                             }
                             let timestamp = std::time::SystemTime::now()
