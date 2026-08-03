@@ -3196,7 +3196,9 @@ impl WorkflowExecutor {
                             );
                                 continue;
                             }
-                            WorkflowSignal::UserMessage { content, .. } => {
+                            WorkflowSignal::UserMessage {
+                                content, metadata, ..
+                            } => {
                                 let user_content = content.clone();
                                 self.add_message_and_notify_internal(
                                     "user".to_string(),
@@ -3206,7 +3208,7 @@ impl WorkflowExecutor {
                                     None,
                                     false,
                                     None,
-                                    None,
+                                    metadata,
                                 )
                                 .await?;
                                 let event = WorkflowEvent::user_input_received(
@@ -3714,7 +3716,9 @@ impl WorkflowExecutor {
                                     error
                                 );
                                 }
-                                WorkflowSignal::UserMessage { content, .. } => {
+                                WorkflowSignal::UserMessage {
+                                    content, metadata, ..
+                                } => {
                                     let user_content = content.clone();
                                     self.add_message_and_notify_internal(
                                         "user".to_string(),
@@ -3724,7 +3728,7 @@ impl WorkflowExecutor {
                                         None,
                                         false,
                                         None,
-                                        None,
+                                        metadata,
                                     )
                                     .await?;
                                     let event = WorkflowEvent::user_input_received(

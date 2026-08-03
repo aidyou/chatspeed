@@ -2269,7 +2269,9 @@ const submitAskUserResponse = async content => {
 
   askUserSubmitting.value = true
   try {
-    await coreOnSendMessage(content)
+    await coreOnSendMessage(content, {
+      metadata: { ui_visibility: 'hide' }
+    })
   } finally {
     askUserSubmitting.value = false
   }

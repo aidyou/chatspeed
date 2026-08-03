@@ -102,6 +102,46 @@ assert.equal(
 
 console.log('workflow UI contract tests passed')
 
+test('ask-user responses stay in the workflow chain but are hidden from the transcript UI', async () => {
+  const [workflowView, workflowCore, workflowMessages, messageList, workflowEngine] =
+    await Promise.all([
+      readFile('src/views/Workflow.vue', 'utf8'),
+      readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8'),
+      readFile('src/composables/workflow/useWorkflowMessages.ts', 'utf8'),
+      readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+      readFile('src-tauri/src/workflow/react/engine.rs', 'utf8')
+    ])
+
+  assert.match(
+    workflowView,
+    /const submitAskUserResponse = async content => \{[\s\S]*?coreOnSendMessage\(content, \{\s*metadata: \{ ui_visibility: 'hide' \}/,
+    'ask-user answers must use the existing hidden-message metadata instead of content-based filtering'
+  )
+  assert.match(
+    workflowCore,
+    /if \(options\.metadata\) \{\s*signalPayload\.metadata = options\.metadata/,
+    'hidden-message metadata must continue through the user-message signal sent to the runtime'
+  )
+  const awaitingUserMetadataWrites = workflowEngine.match(
+    /WorkflowSignal::UserMessage \{\s*content, metadata, \.\.\s*\}[\s\S]*?add_message_and_notify_internal\([\s\S]*?metadata,\s*\)/g
+  )
+  assert.equal(
+    awaitingUserMetadataWrites?.length,
+    2,
+    'both awaiting-user signal branches must persist the structured UI metadata with the answer'
+  )
+  assert.match(
+    workflowMessages,
+    /m\.metadata\?\.ui_visibility === 'hide'[\s\S]*?return false/,
+    'the workflow message projection must hide messages marked with ui_visibility=hide'
+  )
+  assert.match(
+    messageList,
+    /const uiVisibility = message\?\.metadata\?\.ui_visibility\s*if \(uiVisibility === 'hide'\) return true/,
+    'the message list must retain its existing hidden-message safeguard'
+  )
+})
+
 test('cost analysis interaction is gated by accepted completion and terminal child summaries', async () => {
   const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
   const styles = await readFile('src/styles/workflow/messages.scss', 'utf8')
