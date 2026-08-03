@@ -85,6 +85,25 @@ assert.match(
   messageList,
   /isWorkflowMessagePendingApproval\(message, pendingApprovalIdSet\.value\)/
 )
+assert.equal(
+  messageList.match(/class="bash-command-frame"/g)?.length,
+  3,
+  'all Bash result projections must use the approval-style command frame'
+)
+assert.equal(
+  messageList.match(/class="bash-command-frame__prompt" aria-hidden="true">\$<\/span>/g)?.length,
+  3,
+  'all Bash result projections must show the approval-style shell prompt'
+)
+const bashCommandStyles = sourceSection(
+  workflowMessageStyles,
+  '            .bash-command-frame {',
+  '            .tool-stream-output {'
+)
+assert.match(bashCommandStyles, /grid-template-columns: auto minmax\(0, 1fr\)/)
+assert.match(bashCommandStyles, /&__prompt \{[\s\S]*color: var\(--cs-color-primary\)/)
+assert.match(bashCommandStyles, /\.bash-command \{[\s\S]*border: 0/)
+assert.match(bashCommandStyles, /\.bash-command \{[\s\S]*background: transparent/)
 const toolGroupProjection = sourceSection(
   messageList,
   'const isToolWaitingApproval',

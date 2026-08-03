@@ -208,10 +208,12 @@
                   <span class="expand-hint">(click to expand)</span>
                 </div>
                 <div v-if="isToolMessageExpanded(tool)" class="tool-detail tool-detail--expanded">
-                  <pre
-                    v-if="isBashToolCall(tool)"
-                    class="bash-command"
-                    aria-label="Bash command"><code class="hljs" v-html="getHighlightedBashCommand(tool)"></code></pre>
+                  <div v-if="isBashToolCall(tool)" class="bash-command-frame">
+                    <span class="bash-command-frame__prompt" aria-hidden="true">$</span>
+                    <pre class="bash-command" aria-label="Bash command"><code
+                      class="hljs"
+                      v-html="getHighlightedBashCommand(tool)"></code></pre>
+                  </div>
                   <div
                     v-if="
                       tool.metadata?.tool_call_id &&
@@ -381,12 +383,12 @@
                   <div
                     v-if="isExplorationToolExpanded(message, groupIndex, toolIndex)"
                     class="tool-detail tool-detail--expanded">
-                    <pre
-                      v-if="isBashToolCall(tool)"
-                      class="bash-command"
-                      aria-label="Bash command"><code
+                    <div v-if="isBashToolCall(tool)" class="bash-command-frame">
+                      <span class="bash-command-frame__prompt" aria-hidden="true">$</span>
+                      <pre class="bash-command" aria-label="Bash command"><code
                         class="hljs"
                         v-html="getHighlightedBashCommand(tool)"></code></pre>
+                    </div>
                     <MarkdownSimple
                       v-if="
                         shouldShowExplorationToolRawContent(tool) && tool.displayType === 'diff'
@@ -634,12 +636,14 @@
                 <span class="expand-hint">(click to expand)</span>
               </div>
               <div v-if="isToolMessageExpanded(message)" class="tool-detail tool-detail--expanded">
-                <pre
+                <div
                   v-if="isBashToolCall(message) && !isApprovalPending(message)"
-                  class="bash-command"
-                  aria-label="Bash command"><code
+                  class="bash-command-frame">
+                  <span class="bash-command-frame__prompt" aria-hidden="true">$</span>
+                  <pre class="bash-command" aria-label="Bash command"><code
                     class="hljs"
                     v-html="getHighlightedBashCommand(message)"></code></pre>
+                </div>
                 <!-- Tool Stream Output (for bash commands) -->
                 <div
                   v-if="

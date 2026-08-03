@@ -534,23 +534,47 @@
               overflow: auto;
             }
 
+            .bash-command-frame {
+              display: grid;
+              grid-template-columns: auto minmax(0, 1fr);
+              align-items: start;
+              gap: var(--cs-space-sm);
+              min-width: 0;
+              margin-bottom: var(--cs-space-sm);
+
+              &__prompt {
+                color: var(--cs-color-primary);
+                font-family: var(--cs-font-family-mono);
+                font-size: var(--cs-font-size);
+                font-weight: 700;
+                line-height: 1.5;
+                user-select: none;
+              }
+            }
+
             .bash-command {
-              margin: 0 0 var(--cs-space-sm);
-              padding: var(--cs-space);
+              min-width: 0;
+              margin: 0;
+              padding: 0;
               overflow: auto;
-              border: 1px solid var(--cs-border-color);
-              border-radius: var(--cs-border-radius-md);
+              border: 0;
+              border-radius: 0;
+              background: transparent;
               color: var(--cs-text-color-regular);
-              font-size: 12px;
-              line-height: 1.6;
+              font-size: var(--cs-font-size);
+              line-height: 1.5;
               white-space: pre-wrap;
               word-break: break-word;
+              overflow-wrap: anywhere;
 
               code {
                 display: block;
                 padding: 0;
                 background: transparent;
                 font-family: inherit;
+                white-space: inherit;
+                word-break: inherit;
+                overflow-wrap: inherit;
               }
             }
 
