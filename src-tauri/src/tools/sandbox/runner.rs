@@ -130,6 +130,13 @@ fn build_msb_argv(
     match plan.network.as_ref().map(|network| &network.mode) {
         Some(SandboxNetworkMode::None) | None => argv.push("--no-net".to_string()),
         Some(SandboxNetworkMode::Public) => {}
+        Some(SandboxNetworkMode::Host) => {
+            return Err(sandbox_failure(
+                plan,
+                SandboxFailureReason::UnsupportedNetwork,
+                "Microsandbox host networking is not supported; select Docker for host-accessible ports",
+            ));
+        }
         Some(SandboxNetworkMode::Allowlist) => {
             return Err(sandbox_failure(
                 plan,
@@ -207,6 +214,9 @@ fn build_docker_argv(
             argv.extend(["--network".to_string(), "none".to_string()]);
         }
         Some(SandboxNetworkMode::Public) => {}
+        Some(SandboxNetworkMode::Host) => {
+            argv.extend(["--network".to_string(), "host".to_string()]);
+        }
         Some(SandboxNetworkMode::Allowlist) => unreachable!(),
     }
     for mount in &plan.mounts {
@@ -334,6 +344,36 @@ mod tests {
         assert!(!argv
             .iter()
             .any(|arg| arg.contains("/.ssh") || arg.contains("/home/")));
+    }
+
+    #[test]
+    fn docker_host_network_exposes_container_ports_to_the_host() {
+        let mut plan = plan(ShellExecutionBackendKind::Docker);
+        plan.network = Some(SandboxNetworkPolicy {
+            mode: SandboxNetworkMode::Host,
+            allowlist: Vec::new(),
+        });
+        let argv = sandbox_argv_for_plan(&plan, "python -m http.server 8000")
+            .unwrap()
+            .unwrap();
+        assert!(argv
+            .windows(2)
+            .any(|pair| pair[0] == "--network" && pair[1] == "host"));
+    }
+
+    #[test]
+    fn msb_host_network_is_rejected_not_widened() {
+        let mut plan = plan(ShellExecutionBackendKind::Msb);
+        plan.network = Some(SandboxNetworkPolicy {
+            mode: SandboxNetworkMode::Host,
+            allowlist: Vec::new(),
+        });
+        assert!(matches!(
+            sandbox_command_for_plan(&plan, "python -m http.server 8000"),
+            Err(ToolError::SandboxFailure(failure))
+                if failure.reason == SandboxFailureReason::UnsupportedNetwork
+                    && failure.backend == ShellExecutionBackendKind::Msb
+        ));
     }
 
     #[test]

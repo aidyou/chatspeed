@@ -233,6 +233,15 @@ pub fn take_stashed_user_messages(
     Vec::new()
 }
 
+/// Removes the oldest runtime signal captured by a temporary signal consumer.
+/// Waiting handlers use this before receiving from the live channel so approval
+/// decisions submitted while a previous approved tool is running preserve FIFO order.
+pub fn take_stashed_runtime_signal(session_id: &str) -> Option<String> {
+    stashed_runtime_signals()
+        .get_mut(session_id)
+        .and_then(|mut entry| entry.pop_front())
+}
+
 /// Drains runtime signals captured by temporary signal consumers in FIFO order.
 pub fn take_stashed_runtime_signals(session_id: &str) -> Vec<String> {
     if let Some((_, mut queue)) = stashed_runtime_signals().remove(session_id) {
@@ -248,7 +257,8 @@ pub fn take_stashed_runtime_signals(session_id: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        remove_stashed_user_message, restore_stashed_user_message_tombstones, stash_user_message,
+        remove_stashed_user_message, restore_stashed_user_message_tombstones, stash_runtime_signal,
+        stash_user_message, take_stashed_runtime_signal, take_stashed_runtime_signals,
         take_stashed_user_messages,
     };
 
@@ -279,6 +289,24 @@ mod tests {
             None,
         ));
         assert!(take_stashed_user_messages(session_id).is_empty());
+    }
+
+    #[test]
+    fn stashed_runtime_signals_are_consumed_in_fifo_order() {
+        let session_id = "stashed-runtime-signal-test";
+        stash_runtime_signal(session_id, "approval-1".to_string());
+        stash_runtime_signal(session_id, "approval-2".to_string());
+
+        assert_eq!(
+            take_stashed_runtime_signal(session_id).as_deref(),
+            Some("approval-1")
+        );
+        assert_eq!(
+            take_stashed_runtime_signal(session_id).as_deref(),
+            Some("approval-2")
+        );
+        assert_eq!(take_stashed_runtime_signal(session_id), None);
+        assert!(take_stashed_runtime_signals(session_id).is_empty());
     }
 
     #[test]

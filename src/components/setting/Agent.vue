@@ -643,61 +643,40 @@
                   :value="profile.name" />
               </el-select>
             </el-form-item>
-            <div class="sandbox-profile-list">
-              <el-card v-for="profile in sandboxProfiles" :key="profile.name" class="sandbox-profile-card" shadow="never">
-                <template #header>
-                  <div class="sandbox-profile-header">
-                    <span>{{ profile.name }}</span>
+            <div class="sandbox-profile-section">
+              <div class="sandbox-profile-toolbar">
+                <span>{{ $t('settings.agent.sandboxProfiles') }}</span>
+                <el-button size="small" type="primary" plain @click="openSandboxProfileEditor()">
+                  {{ $t('settings.agent.sandboxProfileAdd') }}
+                </el-button>
+              </div>
+              <div class="sandbox-profile-list">
+                <div
+                  v-for="profile in paginatedSandboxProfiles"
+                  :key="profile.name"
+                  class="sandbox-profile-row">
+                  <span class="sandbox-profile-row__name">{{ profile.name }}</span>
+                  <div class="sandbox-profile-row__actions">
                     <el-switch v-model="profile.config.enabled" size="small" />
+                    <el-button size="small" text @click="openSandboxProfileEditor(profile)">
+                      {{ $t('common.edit') }}
+                    </el-button>
                   </div>
-                </template>
-                <el-form-item :label="$t('settings.agent.sandboxImage')">
-                  <el-input v-model="profile.config.image" />
-                </el-form-item>
-                <el-form-item :label="$t('settings.agent.sandboxProfileRuntime')">
-                  <el-select v-model="profile.config.runtimePreference" style="width: 100%">
-                    <el-option :label="$t('settings.agent.sandboxRuntimeAuto')" value="auto" />
-                    <el-option :label="$t('settings.agent.sandboxRuntimeMsb')" value="msb" />
-                    <el-option :label="$t('settings.agent.sandboxRuntimeDocker')" value="docker" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item :label="$t('settings.agent.sandboxNetworkMode')">
-                  <el-select v-model="profile.config.network.mode" style="width: 100%">
-                    <el-option :label="$t('settings.agent.sandboxNetworkNone')" value="none" />
-                    <el-option :label="$t('settings.agent.sandboxNetworkPublic')" value="public" />
-                    <el-option :label="$t('settings.agent.sandboxNetworkAllowlist')" value="allowlist" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item
-                  v-if="profile.config.network.mode === 'allowlist'"
-                  :label="$t('settings.agent.sandboxNetworkAllowlistHosts')">
-                  <el-select
-                    v-model="profile.config.network.allowlist"
-                    multiple
-                    filterable
-                    allow-create
-                    default-first-option
-                    style="width: 100%"
-                    :placeholder="$t('settings.agent.sandboxNetworkAllowlistPlaceholder')" />
-                </el-form-item>
-                <el-form-item :label="$t('settings.agent.sandboxWorkspaceAccess')">
-                  <el-select v-model="profile.config.workspaceAccess" style="width: 100%">
-                    <el-option :label="$t('settings.agent.sandboxWorkspaceReadWrite')" value="read_write" />
-                    <el-option :label="$t('settings.agent.sandboxWorkspaceReadOnly')" value="read_only" />
-                  </el-select>
-                </el-form-item>
-                <div class="sandbox-resource-row">
-                  <el-form-item :label="$t('settings.agent.sandboxCpus')">
-                    <el-input-number v-model="profile.config.resources.cpus" :min="1" :max="16" />
-                  </el-form-item>
-                  <el-form-item :label="$t('settings.agent.sandboxMemoryMb')">
-                    <el-input-number v-model="profile.config.resources.memoryMb" :min="64" :step="64" />
-                  </el-form-item>
-                  <el-form-item :label="$t('settings.agent.sandboxTimeoutMs')">
-                    <el-input-number v-model="profile.config.resources.timeoutMs" :min="1000" :step="1000" />
-                  </el-form-item>
                 </div>
-              </el-card>
+              </div>
+              <el-empty
+                v-if="!sandboxProfiles.length"
+                :description="$t('settings.agent.sandboxProfilesEmpty')"
+                :image-size="48" />
+              <el-pagination
+                v-if="sandboxProfiles.length > SANDBOX_PROFILE_PAGE_SIZE"
+                v-model:current-page="sandboxProfilePage"
+                class="sandbox-profile-pagination"
+                :page-size="SANDBOX_PROFILE_PAGE_SIZE"
+                :total="sandboxProfiles.length"
+                layout="prev, pager, next"
+                small
+                background />
             </div>
           </div>
         </el-tab-pane>
@@ -708,6 +687,73 @@
         <el-button @click="agentDialogVisible = false">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" @click="updateAgent">{{ $t('common.save') }}</el-button>
       </span>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="sandboxProfileEditorVisible"
+    width="560px"
+    append-to-body
+    :title="$t(sandboxProfileEditorName ? 'settings.agent.sandboxProfileEdit' : 'settings.agent.sandboxProfileAdd')"
+    :close-on-click-modal="false">
+    <el-form label-width="120px">
+      <el-form-item :label="$t('settings.agent.sandboxProfileName')" required>
+        <el-input
+          v-model="sandboxProfileDraft.name"
+          :disabled="!!sandboxProfileEditorName"
+          maxlength="64" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.agent.sandboxImage')" required>
+        <el-input v-model="sandboxProfileDraft.config.image" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.agent.sandboxProfileRuntime')">
+        <el-select v-model="sandboxProfileDraft.config.runtimePreference" style="width: 100%">
+          <el-option :label="$t('settings.agent.sandboxRuntimeAuto')" value="auto" />
+          <el-option :label="$t('settings.agent.sandboxRuntimeMsb')" value="msb" />
+          <el-option :label="$t('settings.agent.sandboxRuntimeDocker')" value="docker" />
+        </el-select>
+      </el-form-item>
+      <el-form-item :label="$t('settings.agent.sandboxNetworkMode')">
+        <el-select v-model="sandboxProfileDraft.config.network.mode" style="width: 100%">
+          <el-option :label="$t('settings.agent.sandboxNetworkNone')" value="none" />
+          <el-option :label="$t('settings.agent.sandboxNetworkPublic')" value="public" />
+          <el-option :label="$t('settings.agent.sandboxNetworkHost')" value="host" />
+          <el-option :label="$t('settings.agent.sandboxNetworkAllowlist')" value="allowlist" />
+        </el-select>
+      </el-form-item>
+      <el-form-item
+        v-if="sandboxProfileDraft.config.network.mode === 'allowlist'"
+        :label="$t('settings.agent.sandboxNetworkAllowlistHosts')">
+        <el-select
+          v-model="sandboxProfileDraft.config.network.allowlist"
+          multiple
+          filterable
+          allow-create
+          default-first-option
+          style="width: 100%"
+          :placeholder="$t('settings.agent.sandboxNetworkAllowlistPlaceholder')" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.agent.sandboxWorkspaceAccess')">
+        <el-select v-model="sandboxProfileDraft.config.workspaceAccess" style="width: 100%">
+          <el-option :label="$t('settings.agent.sandboxWorkspaceReadWrite')" value="read_write" />
+          <el-option :label="$t('settings.agent.sandboxWorkspaceReadOnly')" value="read_only" />
+        </el-select>
+      </el-form-item>
+      <div class="sandbox-resource-row">
+        <el-form-item :label="$t('settings.agent.sandboxCpus')">
+          <el-input-number v-model="sandboxProfileDraft.config.resources.cpus" :min="1" :max="16" />
+        </el-form-item>
+        <el-form-item :label="$t('settings.agent.sandboxMemoryMb')">
+          <el-input-number v-model="sandboxProfileDraft.config.resources.memoryMb" :min="64" :step="64" />
+        </el-form-item>
+        <el-form-item :label="$t('settings.agent.sandboxTimeoutMs')">
+          <el-input-number v-model="sandboxProfileDraft.config.resources.timeoutMs" :min="1000" :step="1000" />
+        </el-form-item>
+      </div>
+    </el-form>
+    <template #footer>
+      <el-button @click="sandboxProfileEditorVisible = false">{{ $t('common.cancel') }}</el-button>
+      <el-button type="primary" @click="saveSandboxProfile">{{ $t('common.save') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -741,11 +787,27 @@ const settingStore = useSettingStore()
 const workflowStore = useWorkflowStore()
 const { agents, availableTools } = storeToRefs(agentStore)
 const ALWAYS_ENABLED_SKILL_NAMES = ['help']
+const SANDBOX_PROFILE_PAGE_SIZE = 5
 const SHELL_POLICY_PAGE_SIZE = 50
 
 const formRef = ref(null)
 const shellPolicyListRef = ref(null)
 const shellPolicyPage = ref(1)
+const sandboxProfilePage = ref(1)
+const sandboxProfileEditorVisible = ref(false)
+const sandboxProfileEditorName = ref('')
+const sandboxProfileDraft = ref({
+  name: '',
+  config: {
+    enabled: true,
+    runtimePreference: 'auto',
+    image: '',
+    network: { mode: 'none', allowlist: [] },
+    resources: { cpus: 1, memoryMb: 256, timeoutMs: 120000 },
+    workspaceAccess: 'read_write',
+    workdir: '/workspace'
+  }
+})
 const agentDialogVisible = ref(false)
 const editId = ref(null)
 const activeTab = ref('basic')
@@ -1086,6 +1148,47 @@ const sandboxProfiles = computed(() => {
     config: profile
   }))
 })
+const paginatedSandboxProfiles = computed(() => {
+  const startIndex = (sandboxProfilePage.value - 1) * SANDBOX_PROFILE_PAGE_SIZE
+  return sandboxProfiles.value.slice(startIndex, startIndex + SANDBOX_PROFILE_PAGE_SIZE)
+})
+const openSandboxProfileEditor = (profile = null) => {
+  sandboxProfileEditorName.value = profile?.name || ''
+  sandboxProfileDraft.value = {
+    name: profile?.name || '',
+    config: normalizeSandboxProfile(profile?.config)
+  }
+  sandboxProfileEditorVisible.value = true
+}
+
+const saveSandboxProfile = () => {
+  const name = String(sandboxProfileDraft.value.name || '').trim()
+  const image = String(sandboxProfileDraft.value.config?.image || '').trim()
+  if (!name) {
+    showMessage(t('settings.agent.sandboxProfileNameRequired'), 'warning')
+    return
+  }
+  if (!image) {
+    showMessage(t('settings.agent.sandboxImageRequired'), 'warning')
+    return
+  }
+  const profiles = agentForm.value.sandboxConfig.profiles
+  if (!sandboxProfileEditorName.value && profiles[name]) {
+    showMessage(t('settings.agent.sandboxProfileNameExists'), 'warning')
+    return
+  }
+  profiles[name] = normalizeSandboxProfile({
+    ...sandboxProfileDraft.value.config,
+    image
+  })
+  if (!agentForm.value.sandboxConfig.defaultProfile) {
+    agentForm.value.sandboxConfig.defaultProfile = name
+  }
+  sandboxProfileEditorVisible.value = false
+  const profileIndex = sandboxProfiles.value.findIndex(profile => profile.name === name)
+  sandboxProfilePage.value = Math.floor(profileIndex / SANDBOX_PROFILE_PAGE_SIZE) + 1
+}
+
 const sandboxStateTagType = state => {
   if (state === 'ready') return 'success'
   if (state === 'ready_missing_image') return 'warning'
@@ -1589,6 +1692,8 @@ const editAgent = async id => {
   formRef.value?.resetFields()
   activeTab.value = 'basic'
   shellPolicyPage.value = 1
+  sandboxProfilePage.value = 1
+  sandboxProfileEditorVisible.value = false
   await Promise.all([ensureDefaultShellPoliciesLoaded(), loadAvailableMcpTools()])
 
   if (id) {
@@ -2285,10 +2390,55 @@ watch(
     line-height: 1.4;
   }
 
-  .sandbox-profile-list {
+  .sandbox-profile-section {
+    display: grid;
+    gap: var(--cs-space-sm);
+  }
+
+  .sandbox-profile-toolbar,
+  .sandbox-profile-row {
     display: flex;
-    flex-direction: column;
-    gap: var(--cs-space-md);
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cs-space-sm);
+  }
+
+  .sandbox-profile-toolbar {
+    font-weight: 600;
+    color: var(--cs-text-color-primary);
+  }
+
+  .sandbox-profile-list {
+    display: grid;
+    gap: var(--cs-space-xs);
+  }
+
+  .sandbox-profile-row {
+    min-height: 42px;
+    padding: 0 var(--cs-space-sm);
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius-md);
+    background-color: var(--cs-bg-color-light);
+
+    &__name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+      color: var(--cs-text-color-primary);
+    }
+
+    &__actions {
+      display: flex;
+      align-items: center;
+      gap: var(--cs-space-xs);
+      flex-shrink: 0;
+    }
+  }
+
+  .sandbox-profile-pagination {
+    justify-content: flex-end;
   }
 
   .sandbox-runtime-status {
@@ -2323,19 +2473,6 @@ watch(
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-  }
-
-  .sandbox-profile-card {
-    border-color: var(--cs-border-color);
-    background-color: var(--cs-bg-color-light);
-  }
-
-  .sandbox-profile-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-weight: 600;
-    color: var(--cs-text-color-primary);
   }
 
   .sandbox-resource-row {

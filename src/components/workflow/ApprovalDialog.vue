@@ -278,9 +278,11 @@ const extractShellCommand = payload => {
 
 const shellCommand = computed(() => extractShellCommand(detailPayload.value))
 const shellMarkdown = computed(() => `\`\`\`bash\n${shellCommand.value || ''}\n\`\`\``)
-const formatShellValue = value => {
+const formatShellValue = (value, translationGroup = '') => {
   if (value == null || value === '') return ''
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') {
+    return translationGroup ? t(`${translationGroup}.${value}`) : value
+  }
   if (Array.isArray(value)) return value.join(', ')
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
@@ -288,17 +290,28 @@ const formatShellValue = value => {
 const shellExecutionRows = computed(() => {
   const details = detailsObject.value || {}
   const rows = [
-    ['workflow.approval.executionBackend', details.execution_backend],
+    [
+      'workflow.approval.executionBackend',
+      details.execution_backend,
+      'workflow.approval.executionBackends'
+    ],
     ['workflow.approval.runtime', details.runtime],
     ['workflow.approval.profile', details.sandbox_profile],
     ['workflow.approval.image', details.sandbox_image],
     ['workflow.approval.network', details.network?.mode],
     ['workflow.approval.workspaceAccess', details.workspace_access],
     ['workflow.approval.limits', details.limits],
-    ['workflow.approval.fallbackReason', details.fallback_reason]
+    [
+      'workflow.approval.fallbackReason',
+      details.fallback_reason,
+      'workflow.approval.fallbackReasons'
+    ]
   ]
   return rows
-    .map(([labelKey, value]) => ({ label: t(labelKey), value: formatShellValue(value) }))
+    .map(([labelKey, value, translationGroup]) => ({
+      label: t(labelKey),
+      value: formatShellValue(value, translationGroup)
+    }))
     .filter(row => row.value)
 })
 

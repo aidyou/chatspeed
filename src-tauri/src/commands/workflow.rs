@@ -931,32 +931,36 @@ fn format_large_file_read_plan_block(
     )
 }
 
+const MAX_AT_MENTION_TARGETS: usize = 10;
+
+fn parse_at_mention_capture(capture: &regex::Captures<'_>) -> Option<String> {
+    if let Some(quoted) = capture.get(1) {
+        let mut value = String::new();
+        let mut chars = quoted.as_str().chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                if let Some(escaped) = chars.next() {
+                    value.push(escaped);
+                } else {
+                    value.push(ch);
+                }
+            } else {
+                value.push(ch);
+            }
+        }
+        return Some(value);
+    }
+
+    capture.get(2).map(|unquoted| unquoted.as_str().to_string())
+}
+
 fn parse_at_mentions(prompt: &str) -> Vec<String> {
     let mention_re =
         Regex::new(r#"@\"((?:\\.|[^\"\\])*)\"|@([^\s]+)"#).expect("at-mention regex must compile");
 
     mention_re
         .captures_iter(prompt)
-        .filter_map(|capture| {
-            if let Some(quoted) = capture.get(1) {
-                let mut value = String::new();
-                let mut chars = quoted.as_str().chars();
-                while let Some(ch) = chars.next() {
-                    if ch == '\\' {
-                        if let Some(escaped) = chars.next() {
-                            value.push(escaped);
-                        } else {
-                            value.push(ch);
-                        }
-                    } else {
-                        value.push(ch);
-                    }
-                }
-                return Some(value);
-            }
-
-            capture.get(2).map(|unquoted| unquoted.as_str().to_string())
-        })
+        .filter_map(|capture| parse_at_mention_capture(&capture))
         .collect()
 }
 
@@ -973,6 +977,23 @@ fn is_path_within_allowed_roots(path: &Path, allowed_roots: &[PathBuf]) -> Optio
         .iter()
         .any(|root| canonical_path.starts_with(root))
         .then_some(canonical_path)
+}
+
+fn format_at_mention_path(path: &Path, allowed_roots: &[PathBuf]) -> String {
+    if let Some(primary_root) = allowed_roots.first() {
+        if let Ok(relative) = path.strip_prefix(primary_root) {
+            return relative.to_string_lossy().into_owned();
+        }
+    }
+    path.to_string_lossy().into_owned()
+}
+
+fn format_at_mention_token(path: &str) -> String {
+    if path.chars().any(char::is_whitespace) {
+        format!("@\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        format!("@{path}")
+    }
 }
 
 fn resolve_at_mention_targets(pattern: &str, allowed_roots: &[PathBuf]) -> Vec<PathBuf> {
@@ -1002,7 +1023,43 @@ fn resolve_at_mention_targets(pattern: &str, allowed_roots: &[PathBuf]) -> Vec<P
         }
     }
 
-    targets.into_iter().collect()
+    let mut targets = targets.into_iter().collect::<Vec<_>>();
+    targets.sort();
+    targets
+}
+
+fn normalize_at_mentions(prompt: &str, allowed_roots: &[PathBuf]) -> String {
+    let mention_re =
+        Regex::new(r#"@\"((?:\\.|[^\"\\])*)\"|@([^\s]+)"#).expect("at-mention regex must compile");
+    let mut normalized_targets: std::collections::HashMap<PathBuf, String> =
+        std::collections::HashMap::new();
+    mention_re
+        .replace_all(prompt, |capture: &regex::Captures<'_>| {
+            let Some(pattern) = parse_at_mention_capture(capture) else {
+                return capture[0].to_string();
+            };
+            let targets = resolve_at_mention_targets(&pattern, allowed_roots);
+            if targets.is_empty() {
+                return capture[0].to_string();
+            }
+            targets
+                .into_iter()
+                .filter_map(|path| {
+                    if let Some(token) = normalized_targets.get(&path) {
+                        return Some(token.clone());
+                    }
+                    if normalized_targets.len() >= MAX_AT_MENTION_TARGETS {
+                        return None;
+                    }
+                    let display_path = format_at_mention_path(&path, allowed_roots);
+                    let token = format_at_mention_token(&display_path);
+                    normalized_targets.insert(path, token.clone());
+                    Some(token)
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .into_owned()
 }
 
 fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String) {
@@ -1010,17 +1067,17 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
     let allowed_roots = canonical_allowed_roots(allowed_paths);
 
     let mut injections = Vec::new();
-    let mut handled_patterns = std::collections::HashSet::new();
+    let mut handled_targets = std::collections::HashSet::new();
 
     for pattern in parse_at_mentions(prompt) {
-        if !handled_patterns.insert(pattern.clone()) {
-            continue;
-        }
-
         for path in resolve_at_mention_targets(&pattern, &allowed_roots) {
-            if injections.len() >= 20 {
+            if !handled_targets.insert(path.clone()) {
+                continue;
+            }
+            if injections.len() >= MAX_AT_MENTION_TARGETS {
                 break;
             }
+            let display_path = format_at_mention_path(&path, &allowed_roots);
 
             if path.is_file() {
                 let metadata = match fs::metadata(&path) {
@@ -1034,18 +1091,18 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
                     let reminder = if let Some(plan) = build_large_file_read_plan(&path) {
                         format!(
                             "{}\n{}",
-                            format_large_file_read_plan_block(&pattern, size, &plan),
-                            format_large_file_read_plan(&pattern, size, &plan)
+                            format_large_file_read_plan_block(&display_path, size, &plan),
+                            format_large_file_read_plan(&display_path, size, &plan)
                         )
                     } else {
                         format!(
                             "The user referenced a large file {}. If you only need specific symbols or sections, prefer 'grep' first. When you need to read the complete file, use sequential 'read_file' calls with 'offset' and 'limit' parameters.",
-                            pattern
+                            display_path
                         )
                     };
                     injections.push(format!(
                         "\n<file_content path={:?}>\n[File too large to show full content]\n{}\n</file_content>\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
-                        pattern, info, reminder
+                        display_path, info, reminder
                     ));
                 } else {
                     match fs::read(&path) {
@@ -1053,12 +1110,12 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
                             if let Ok(content) = String::from_utf8(bytes) {
                                 injections.push(format!(
                                     "\n<file_content path={:?}>\n{}\n</file_content>\n",
-                                    pattern, content
+                                    display_path, content
                                 ));
                             } else {
                                 injections.push(format!(
                                     "\n<file_content path={:?}>\n[Binary File or Invalid Encoding]\nMetadata: {}\n</file_content>\n<SYSTEM_REMINDER>The user referenced a binary file {} that cannot be displayed as text directly.</SYSTEM_REMINDER>",
-                                    pattern, info, pattern
+                                    display_path, info, display_path
                                 ));
                             }
                         }
@@ -1128,7 +1185,7 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
 
                 injections.push(format!(
                     "\n<list_dir path={:?}>\n{}\n</list_dir>\n",
-                    pattern, list_str
+                    display_path, list_str
                 ));
             }
         }
@@ -1142,7 +1199,10 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
         attached_context.push_str("\n<SYSTEM_REMINDER>Above is the technical context for the files/directories referenced in your prompt. Please use this information to answer the request accurately.</SYSTEM_REMINDER>\n");
     }
 
-    (prompt.to_string(), attached_context)
+    (
+        normalize_at_mentions(prompt, &allowed_roots),
+        attached_context,
+    )
 }
 
 fn allowed_paths_from_workflow_snapshot(snapshot: &WorkflowSnapshot) -> Vec<String> {
@@ -1176,13 +1236,17 @@ fn inject_at_mentions_into_signal(signal: &str, allowed_paths: &[String]) -> Str
         .get("content")
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
     else {
         return signal.to_string();
     };
 
-    let (_, mention_context) = inject_at_mentions(content, allowed_paths);
+    let (normalized_content, mention_context) = inject_at_mentions(&content, allowed_paths);
+    if normalized_content != content {
+        parsed["content"] = json!(normalized_content);
+    }
     if mention_context.is_empty() {
-        return signal.to_string();
+        return serde_json::to_string(&parsed).unwrap_or_else(|_| signal.to_string());
     }
 
     let existing = parsed
@@ -6203,6 +6267,81 @@ mod tests {
     }
 
     #[test]
+    fn test_inject_at_mentions_deduplicates_canonical_targets() {
+        let root = tempdir().unwrap();
+        let file_path = root.path().join("sample.txt");
+        std::fs::write(&file_path, "unique mention content").unwrap();
+        let prompt = format!(
+            "Review @sample.txt and @sample.txt and @\"{}\"",
+            file_path.display()
+        );
+
+        let (normalized_prompt, attached) =
+            inject_at_mentions(&prompt, &[root.path().to_string_lossy().to_string()]);
+
+        assert_eq!(
+            normalized_prompt,
+            "Review @sample.txt and @sample.txt and @sample.txt"
+        );
+        assert_eq!(attached.matches("unique mention content").count(), 1);
+        assert_eq!(
+            attached
+                .matches("<file_content path=\"sample.txt\">")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_inject_at_mentions_limits_wildcard_expansion_to_ten_targets() {
+        let root = tempdir().unwrap();
+        for index in 0..25 {
+            std::fs::write(
+                root.path().join(format!("file-{index:02}.txt")),
+                index.to_string(),
+            )
+            .unwrap();
+        }
+
+        let (normalized_prompt, attached) = inject_at_mentions(
+            "Review @*.txt",
+            &[root.path().to_string_lossy().to_string()],
+        );
+
+        assert_eq!(
+            normalized_prompt.matches('@').count(),
+            MAX_AT_MENTION_TARGETS
+        );
+        assert_eq!(
+            attached.matches("<file_content path=").count(),
+            MAX_AT_MENTION_TARGETS
+        );
+    }
+
+    #[test]
+    fn test_inject_at_mentions_formats_secondary_root_as_canonical_absolute_path() {
+        let primary_root = tempdir().unwrap();
+        let secondary_root = tempdir().unwrap();
+        let secondary_file = secondary_root.path().join("secondary file.txt");
+        std::fs::write(&secondary_file, "secondary content").unwrap();
+        let prompt = format!("Review @\"{}\"", secondary_file.display());
+
+        let (normalized_prompt, attached) = inject_at_mentions(
+            &prompt,
+            &[
+                primary_root.path().to_string_lossy().to_string(),
+                secondary_root.path().to_string_lossy().to_string(),
+            ],
+        );
+        let canonical_file = std::fs::canonicalize(&secondary_file).unwrap();
+        let display_path = canonical_file.to_string_lossy();
+
+        assert_eq!(normalized_prompt, format!("Review @\"{display_path}\""));
+        assert!(attached.contains(&format!("<file_content path=\"{display_path}\">")));
+        assert!(attached.contains("secondary content"));
+    }
+
+    #[test]
     fn test_inject_at_mentions_supports_quoted_authorized_paths() {
         let primary_parent = tempdir().unwrap();
         let primary_root = primary_parent.path().join("primary root ");
@@ -6314,6 +6453,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&enriched).unwrap();
         let attached_context = parsed["attached_context"].as_str().unwrap_or_default();
 
+        assert_eq!(parsed["content"], "Please review @sample.txt");
         assert!(attached_context.contains("existing context"));
         assert!(
             attached_context.contains("<file_content path=\"sample.txt\">")

@@ -2187,22 +2187,6 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 observation_kind: None,
             }));
         }
-        let requires_host_review =
-            execution_plan.risk_floor == crate::tools::ShellExecutionRiskFloor::HostHighRisk;
-        if requires_host_review {
-            return self
-                .handle_approval_interception(
-                    id,
-                    TOOL_BASH,
-                    args,
-                    Some(command_str.to_string()),
-                    Some(Self::shell_execution_approval_details(
-                        &execution_plan,
-                        command_str,
-                    )),
-                )
-                .await;
-        }
         if !self.auto_approve.contains(TOOL_BASH) {
             match shell_policy_decision {
                 crate::tools::ShellDecision::Allow => {}

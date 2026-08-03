@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
@@ -159,7 +159,7 @@ impl TerminalManager {
                 return Err(format!("terminal_writer_failed:{error}"));
             }
         };
-        install_session_prompt(&mut writer, &shell);
+        install_session_prompt(&mut writer, &shell, &cwd);
         // Let the login shell apply its profile and prompt hook, then start the visible session
         // with a clean screen without writing anything to user configuration files.
         let clear_command = if cfg!(windows) { "cls\r\n" } else { "clear\n" };
@@ -186,7 +186,16 @@ impl TerminalManager {
             session_id: session_id.clone(),
             shell_name: shell.name,
             shell_path: shell.path,
-            cwd: cwd.to_string_lossy().into_owned(),
+            cwd: {
+                #[cfg(windows)]
+                {
+                    windows_display_path(&cwd)
+                }
+                #[cfg(not(windows))]
+                {
+                    cwd.to_string_lossy().into_owned()
+                }
+            },
             alive: true,
         };
         let reader_metadata = metadata.clone();
@@ -594,21 +603,38 @@ fn terminate_child_tree(child: &mut dyn portable_pty::Child) {
 }
 
 #[cfg(windows)]
-fn windows_prompt_bootstrap(is_cmd: bool) -> &'static str {
+fn windows_display_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{unc}");
+    }
+    value.strip_prefix(r"\\?\").unwrap_or(&value).to_string()
+}
+
+#[cfg(windows)]
+fn windows_prompt_bootstrap(is_cmd: bool, cwd: &Path) -> String {
+    let cwd = windows_display_path(cwd);
     if is_cmd {
-        "PROMPT \u{1b}]7;file://%COMPUTERNAME%/$P\u{7}$P$G\r\n"
+        format!(
+            "cd /d \"{}\"\r\nPROMPT \u{1b}]7;file://%COMPUTERNAME%/$P\u{7}$P$G\r\n",
+            cwd.replace('"', "\"\"")
+        )
     } else {
-        "function prompt { $path = (Get-Location).Path.Replace('\\','/'); Write-Host -NoNewline \"`e]7;file://$env:COMPUTERNAME/$path`a\"; \"$((Get-Location).Path) > \" }\r\n"
+        format!(
+            "Set-Location -LiteralPath '{}'; function prompt {{ $path = $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath -replace '^Microsoft\\.PowerShell\\.Core\\\\FileSystem::','' -replace '^\\\\\\\\\\?\\\\',''; $uriPath = $path.Replace('\\','/'); Write-Host -NoNewline ([char]27 + \"]7;file://$env:COMPUTERNAME/$uriPath\" + [char]7); \"$path > \" }}\r\n",
+            cwd.replace('\'', "''")
+        )
     }
 }
 
-fn install_session_prompt(writer: &mut (dyn Write + Send), shell: &ShellDescriptor) {
+fn install_session_prompt(writer: &mut (dyn Write + Send), shell: &ShellDescriptor, cwd: &Path) {
     #[cfg(unix)]
     {
+        let _ = cwd;
         let command = match shell.name.as_str() {
-            "zsh" => "autoload -Uz add-zsh-hook; _cs_terminal_osc7(){ print -n $'\\e]7;file://'${HOST:-localhost}${PWD}$'\\a'; }; add-zsh-hook precmd _cs_terminal_osc7; PROMPT='%d > '\n",
+            "zsh" => "autoload -Uz add-zsh-hook; _cs_terminal_osc7(){ print -n $'\\e]7;file://'${HOST:-localhost}${PWD}$'\\a'; }; add-zsh-hook precmd _cs_terminal_osc7; PROMPT='%~ > '\n",
             "bash" => "__cs_terminal_osc7(){ printf '\\033]7;file://%s%s\\007' \"${HOSTNAME:-localhost}\" \"$PWD\"; }; PROMPT_COMMAND=\"__cs_terminal_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}\"; PS1='\\w > '\n",
-            "fish" => "function __cs_terminal_osc7 --on-event fish_prompt; printf '\\e]7;file://%s%s\\a' \"$HOSTNAME\" \"$PWD\"; end; function fish_prompt; printf '%s > ' \"$PWD\"; end\n",
+            "fish" => "function __cs_terminal_osc7 --on-event fish_prompt; printf '\\e]7;file://%s%s\\a' \"$HOSTNAME\" \"$PWD\"; end; function fish_prompt; set -l display_path (string replace -- \"$HOME\" '~' \"$PWD\"); printf '%s > ' \"$display_path\"; end\n",
             _ => "PS1='\\w > '\n",
         };
         let _ = writer
@@ -618,7 +644,7 @@ fn install_session_prompt(writer: &mut (dyn Write + Send), shell: &ShellDescript
 
     #[cfg(windows)]
     {
-        let command = windows_prompt_bootstrap(shell.name.eq_ignore_ascii_case("cmd.exe"));
+        let command = windows_prompt_bootstrap(shell.name.eq_ignore_ascii_case("cmd.exe"), cwd);
         let _ = writer
             .write_all(command.as_bytes())
             .and_then(|_| writer.flush());
@@ -661,6 +687,8 @@ fn validated_size(cols: Option<u16>, rows: Option<u16>) -> Result<PtySize, Strin
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{
         build_shell_command, install_session_prompt, resolve_initial_cwd, validated_size,
         ShellDescriptor, DEFAULT_COLS, DEFAULT_ROWS,
@@ -710,28 +738,44 @@ mod tests {
         assert_eq!(fish_arguments, vec!["/usr/bin/fish", "-i"]);
 
         let mut bootstrap = Vec::new();
-        install_session_prompt(&mut bootstrap, &bash);
+        install_session_prompt(&mut bootstrap, &bash, Path::new("/workspace"));
         let bootstrap = String::from_utf8(bootstrap).expect("bootstrap must be UTF-8");
         assert!(bootstrap.contains("PROMPT_COMMAND"));
         assert!(bootstrap.contains("PS1='\\w > '"));
         assert!(bootstrap.contains("]7;file://"));
 
         let mut fish_bootstrap = Vec::new();
-        install_session_prompt(&mut fish_bootstrap, &fish);
+        install_session_prompt(&mut fish_bootstrap, &fish, Path::new("/workspace"));
         let fish_bootstrap =
             String::from_utf8(fish_bootstrap).expect("fish bootstrap must be UTF-8");
         assert!(fish_bootstrap.contains("fish_prompt"));
         assert!(fish_bootstrap.contains("]7;file://"));
+        assert!(fish_bootstrap.contains("string replace -- \"$HOME\" '~' \"$PWD\""));
+        assert!(bootstrap.contains("PS1='\\w > '"));
+
+        let zsh = ShellDescriptor {
+            name: "zsh".to_string(),
+            path: "/bin/zsh".to_string(),
+        };
+        let mut zsh_bootstrap = Vec::new();
+        install_session_prompt(&mut zsh_bootstrap, &zsh, Path::new("/workspace"));
+        let zsh_bootstrap = String::from_utf8(zsh_bootstrap).expect("zsh bootstrap must be UTF-8");
+        assert!(zsh_bootstrap.contains("PROMPT='%~ > '"));
     }
 
     #[cfg(windows)]
     #[test]
     fn windows_prompt_bootstraps_emit_valid_file_uris() {
-        let cmd = super::windows_prompt_bootstrap(true);
-        let powershell = super::windows_prompt_bootstrap(false);
+        let cmd = super::windows_prompt_bootstrap(true, Path::new(r"C:\repo"));
+        let powershell = super::windows_prompt_bootstrap(false, Path::new(r"\\?\C:\repo"));
+        assert!(cmd.contains("cd /d \"C:\\repo\""));
         assert!(cmd.contains("file://%COMPUTERNAME%/$P"));
-        assert!(powershell.contains("file://$env:COMPUTERNAME/$path"));
-        assert!(powershell.contains("Replace('\\\\','/')"));
+        assert!(powershell.contains("Set-Location -LiteralPath 'C:\\repo'"));
+        assert!(powershell.contains("file://$env:COMPUTERNAME/$uriPath"));
+        assert!(powershell.contains("CurrentFileSystemLocation.ProviderPath"));
+        assert!(powershell.contains("Microsoft\\\\.PowerShell"));
+        assert!(powershell.contains("[char]27"));
+        assert!(!powershell.contains("`e]7"));
     }
 
     #[cfg(unix)]
@@ -1046,10 +1090,10 @@ mod tests {
             path: "/bin/zsh".to_string(),
         };
         let mut bootstrap = Vec::new();
-        install_session_prompt(&mut bootstrap, &shell);
+        install_session_prompt(&mut bootstrap, &shell, Path::new("/workspace"));
         let bootstrap = String::from_utf8(bootstrap).expect("bootstrap must be UTF-8");
         assert!(bootstrap.contains("add-zsh-hook"));
-        assert!(bootstrap.contains("PROMPT='%d > '"));
+        assert!(bootstrap.contains("PROMPT='%~ > '"));
         assert!(bootstrap.contains("]7;file://"));
     }
 }

@@ -16,3 +16,15 @@ test('agent shell policy editor defers and bounds expensive control rendering', 
   assert.match(source, /v-for="entry in paginatedShellPolicies"/)
   assert.doesNotMatch(source, /v-for="\(rule, index\) in agentForm\.shellPolicy"/)
 })
+
+test('sandbox profiles use a bounded compact list and a dedicated editor', async () => {
+  const source = await readAgentComponent()
+
+  assert.match(source, /const SANDBOX_PROFILE_PAGE_SIZE = 5/)
+  assert.match(source, /v-for="profile in paginatedSandboxProfiles"/)
+  assert.match(source, /v-model:current-page="sandboxProfilePage"/)
+  assert.match(source, /v-model="sandboxProfileEditorVisible"/)
+  assert.match(source, /const openSandboxProfileEditor =/)
+  assert.match(source, /const saveSandboxProfile =/)
+  assert.doesNotMatch(source, /<el-card v-for="profile in sandboxProfiles"/)
+})

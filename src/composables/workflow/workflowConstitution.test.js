@@ -489,6 +489,8 @@ assert.match(approvalDialog, /v-if="isPlanApproval" class="plan-details-actions"
 assert.match(approvalDialog, /const copyPlanMarkdown = async/)
 assert.match(approvalDialog, /await writeClipboard\(planMarkdown\.value\)/)
 assert.match(approvalDialog, /<cs name="copy" \/>/)
+assert.match(approvalDialog, /workflow\.approval\.executionBackends/)
+assert.match(approvalDialog, /workflow\.approval\.fallbackReasons/)
 assert.doesNotMatch(
   approvalDialog,
   /action: String|props\.action|normalizedAction|isFileChangePayload/

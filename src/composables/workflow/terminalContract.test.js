@@ -54,16 +54,20 @@ test('terminal panel keeps one xterm instance per tab across view transitions', 
 })
 
 test('shell switching is transactional and OSC 7 preserves Windows drive paths', async () => {
-  const [panel, composable] = await Promise.all([
+  const [panel, composable, manager] = await Promise.all([
     read('src/components/workflow/TerminalPanel.vue'),
-    read('src/composables/workflow/useTerminal.ts')
+    read('src/composables/workflow/useTerminal.ts'),
+    read('src-tauri/src/terminal.rs')
   ])
 
   assert.match(composable, /const replacement = toTab\(await invokeWrapper\('terminal_create'/)
+  assert.match(composable, /cwd: tab\.cwd, shellPath/)
   assert.match(composable, /await invokeWrapper\('terminal_close', \{ sessionId: tab\.sessionId \}\)/)
   assert.match(composable, /await invokeWrapper\('terminal_close', \{ sessionId: replacement\.sessionId \}\)\.catch/)
   assert.match(panel, /const cwdFromOsc7/)
   assert.match(panel, /pathname\.slice\(1\)\.replaceAll\('\/',/)
+  assert.match(manager, /CurrentFileSystemLocation\.ProviderPath/)
+  assert.match(manager, /\[char\]27/)
 })
 
 test('terminal preferences bound output, preserve terminal input, and use detected shell choices', async () => {
@@ -114,6 +118,9 @@ test('terminal preferences bound output, preserve terminal input, and use detect
   assert.match(panel, /event\.isComposing \|\| event\.key === 'Process' \|\| event\.keyCode === 229/)
   assert.match(panel, /matchesTerminalShortcut/)
   assert.match(panel, /closeConfirmMessage/)
+  assert.match(panel, /@command="confirmShellSwitch"/)
+  assert.match(panel, /switchShellConfirmMessage/)
+  assert.match(panel, /await terminal\.restartWithShell\(shellPath\)/)
   assert.match(workflow, /terminalClearShortcut/)
   assert.match(workflow, /commandOrControlPressed/)
   assert.match(workflow, /<TerminalPanel :terminal="terminal" :preferences="terminalPreferences" \/>/)
@@ -136,5 +143,7 @@ test('every shipped locale contains the terminal label and toolbar strings', asy
     assert.match(content, /"terminalSettings"\s*:/)
     assert.match(content, /"terminalClearShortcut"\s*:/)
     assert.match(content, /"closeConfirmTitle"\s*:/)
+    assert.match(content, /"switchShellConfirmTitle"\s*:/)
+    assert.match(content, /"switchShellConfirmMessage"\s*:/)
   }
 })

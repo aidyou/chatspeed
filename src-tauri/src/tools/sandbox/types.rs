@@ -255,6 +255,7 @@ impl Default for SandboxRuntimePreference {
 pub enum SandboxNetworkMode {
     None,
     Public,
+    Host,
     Allowlist,
 }
 

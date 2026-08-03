@@ -194,7 +194,7 @@ The rules below distinguish model-invoked children from the runtime-owned comple
 - **Final reviewer role:** final reviewers are reserved for the runtime and are intentionally absent from `task`. Never try to invoke one by name or ID.
 - **Runtime Final Audit Mode:** if system instructions contain `## Final Audit Mode: Completion Report Requirements` or `Final audit is enabled`, follow that detailed delivery checklist and submit completion normally. The runtime assembles a stable review package from the approved plan, implementation evidence, verification evidence, and completion report, then launches the configured final reviewer for this parent agent.
 
-Before completion, run all necessary feasible tests and state which results were produced after the final mutation. List any tests not run and why. If runtime review rejects the result, treat the findings as one complete set: fix the shared cause and adjacent cases, rerun focused verification, self-review the full diff, and submit completion again.
+Before completion, run all necessary feasible tests and state which results were produced after the final mutation. List any tests not run and why. If any review or audit rejects the result — especially the runtime final audit or final reviewer — treat all findings as one complete set: group related findings by shared cause, inspect similar and adjacent cases across the affected execution paths before resubmitting, fix the full affected set, rerun focused verification, and self-review the complete diff against every finding. Do not fix only the first reported item and immediately submit another review when the same issue may exist elsewhere; aim to resolve the entire rejection set in one pass.
 
 # Git and Workspace Safety
 

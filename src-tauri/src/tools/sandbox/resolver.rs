@@ -38,7 +38,15 @@ impl ShellExecutionResolver {
             );
         };
 
-        if !profile.enabled || profile.image.trim().is_empty() || primary_root.is_none() {
+        let Some(primary_root) = primary_root else {
+            return fallback_or_denied(
+                tool_call_id,
+                command,
+                config,
+                HostFallbackReason::ProfileUnavailable,
+            );
+        };
+        if !profile.enabled || profile.image.trim().is_empty() {
             return fallback_or_denied(
                 tool_call_id,
                 command,
@@ -51,10 +59,31 @@ impl ShellExecutionResolver {
             merge_runtime_preference(&config.runtime_preference, &profile.runtime_preference);
         let candidates = runtime_candidates(&preference);
         for runtime in candidates {
+            if matches!(profile.network.mode, super::types::SandboxNetworkMode::Host)
+                && runtime == SandboxRuntime::Msb
+            {
+                continue;
+            }
             let status = runtime_status_for(&runtime, runtime_status);
             if !runtime_can_run_profile(status, &profile.image) {
                 continue;
             }
+            let host_path = primary_root.display().to_string();
+            let guest_path = if primary_root.is_absolute()
+                && primary_root
+                    .components()
+                    .next()
+                    .is_some_and(|component| matches!(component, std::path::Component::RootDir))
+            {
+                host_path.clone()
+            } else {
+                "/workspace".to_string()
+            };
+            let configured_workdir = profile.workdir.as_deref().map(str::trim);
+            let workdir = match configured_workdir {
+                Some("") | None | Some("/workspace") => guest_path.clone(),
+                Some(value) => value.to_string(),
+            };
             return ShellExecutionPlan {
                 tool_call_id: tool_call_id.to_string(),
                 command: command.to_string(),
@@ -69,16 +98,11 @@ impl ShellExecutionResolver {
                 resources: Some(profile.resources.clone()),
                 workspace_access: Some(profile.workspace_access.clone()),
                 mounts: vec![SandboxMountPlan {
-                    host_path: primary_root.unwrap().display().to_string(),
-                    guest_path: "/workspace".to_string(),
+                    host_path,
+                    guest_path,
                     access: profile.workspace_access.clone(),
                 }],
-                workdir: Some(
-                    profile
-                        .workdir
-                        .clone()
-                        .unwrap_or_else(|| "/workspace".to_string()),
-                ),
+                workdir: Some(workdir),
                 fallback_reason: None,
                 risk_floor: ShellExecutionRiskFloor::Normal,
                 status: ShellExecutionPlanStatus::Ready,
@@ -402,6 +426,9 @@ mod tests {
         );
         assert_eq!(plan.backend, ShellExecutionBackendKind::Msb);
         assert_eq!(plan.mounts.len(), 1);
+        assert_eq!(plan.mounts[0].host_path, "/project");
+        assert_eq!(plan.mounts[0].guest_path, "/project");
+        assert_eq!(plan.workdir.as_deref(), Some("/project"));
         assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
     }
 

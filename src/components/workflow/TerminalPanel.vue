@@ -35,7 +35,7 @@
             <cs :name="terminal.fullscreen ? 'fullscreen' : 'fullscreen-off'" />
           </button>
         </el-tooltip>
-        <el-dropdown trigger="click" @command="terminal.restartWithShell">
+        <el-dropdown trigger="click" @command="confirmShellSwitch">
           <button class="workflow-terminal__shell" type="button">
             <cs name="bash" />{{ terminal.activeTab?.shellName }}
             <cs name="caret-down" />
@@ -295,6 +295,20 @@ const reconcile = async () => {
   mountTab(terminal.activeTab)
   syncSize(terminal.activeTab.sessionId)
   focus(terminal.activeTab.sessionId)
+}
+
+const confirmShellSwitch = async (shellPath: string) => {
+  if (!terminal.activeTab || terminal.activeTab.shellPath === shellPath) return
+  try {
+    await ElMessageBox.confirm(
+      t('workflow.terminal.switchShellConfirmMessage'),
+      t('workflow.terminal.switchShellConfirmTitle'),
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  await terminal.restartWithShell(shellPath)
 }
 
 const closeTab = async (sessionId: string) => {

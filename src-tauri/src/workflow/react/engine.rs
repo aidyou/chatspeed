@@ -43,8 +43,8 @@ use crate::workflow::react::{
     security::PathGuard,
     signals::{
         parse_runtime_signal, remove_stashed_user_message, restore_stashed_user_message_tombstones,
-        stash_runtime_signal, take_stashed_runtime_signals, take_stashed_user_messages,
-        RuntimeSignal, SignalType,
+        stash_runtime_signal, take_stashed_runtime_signal, take_stashed_runtime_signals,
+        take_stashed_user_messages, RuntimeSignal, SignalType,
     },
     sinks::{DBSink, Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
@@ -2604,9 +2604,19 @@ impl WorkflowExecutor {
                     wait_reason_enum
                 );
 
-                    let signal_str = signal_rx.recv().await.ok_or_else(|| {
-                        WorkflowEngineError::General("Signal channel closed".into())
-                    })?;
+                    let signal_str = if let Some(signal) =
+                        take_stashed_runtime_signal(&self.session_id)
+                    {
+                        log::info!(
+                            "[Workflow][session={}][phase=wait][event=stashed_signal_received] Consuming deferred runtime signal before waiting on the live channel",
+                            self.session_id
+                        );
+                        signal
+                    } else {
+                        signal_rx.recv().await.ok_or_else(|| {
+                            WorkflowEngineError::General("Signal channel closed".into())
+                        })?
+                    };
 
                     let workflow_signal = WorkflowSignal::parse(&signal_str);
 
