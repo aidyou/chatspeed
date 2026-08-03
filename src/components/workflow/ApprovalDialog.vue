@@ -278,10 +278,23 @@ const extractShellCommand = payload => {
 
 const shellCommand = computed(() => extractShellCommand(detailPayload.value))
 const shellMarkdown = computed(() => `\`\`\`bash\n${shellCommand.value || ''}\n\`\`\``)
-const formatShellValue = (value, translationGroup = '') => {
+const SHELL_EXECUTION_BACKEND_TRANSLATION_KEYS = {
+  docker: 'workflow.approval.executionBackends.docker',
+  host: 'workflow.approval.executionBackends.host',
+  msb: 'workflow.approval.executionBackends.msb'
+}
+const SHELL_FALLBACK_REASON_TRANSLATION_KEYS = {
+  host_only_mode: 'workflow.approval.fallbackReasons.host_only_mode',
+  missing_image: 'workflow.approval.fallbackReasons.missing_image',
+  profile_unavailable: 'workflow.approval.fallbackReasons.profile_unavailable',
+  runtime_unavailable: 'workflow.approval.fallbackReasons.runtime_unavailable',
+  sandbox_config_missing: 'workflow.approval.fallbackReasons.sandbox_config_missing'
+}
+const formatShellValue = (value, translationKeys = null) => {
   if (value == null || value === '') return ''
   if (typeof value === 'string') {
-    return translationGroup ? t(`${translationGroup}.${value}`) : value
+    const translationKey = translationKeys?.[value]
+    return translationKey ? t(translationKey) : value
   }
   if (Array.isArray(value)) return value.join(', ')
   if (typeof value === 'object') return JSON.stringify(value)
@@ -293,7 +306,7 @@ const shellExecutionRows = computed(() => {
     [
       'workflow.approval.executionBackend',
       details.execution_backend,
-      'workflow.approval.executionBackends'
+      SHELL_EXECUTION_BACKEND_TRANSLATION_KEYS
     ],
     ['workflow.approval.runtime', details.runtime],
     ['workflow.approval.profile', details.sandbox_profile],
@@ -304,13 +317,13 @@ const shellExecutionRows = computed(() => {
     [
       'workflow.approval.fallbackReason',
       details.fallback_reason,
-      'workflow.approval.fallbackReasons'
+      SHELL_FALLBACK_REASON_TRANSLATION_KEYS
     ]
   ]
   return rows
-    .map(([labelKey, value, translationGroup]) => ({
+    .map(([labelKey, value, translationKeys]) => ({
       label: t(labelKey),
-      value: formatShellValue(value, translationGroup)
+      value: formatShellValue(value, translationKeys)
     }))
     .filter(row => row.value)
 })

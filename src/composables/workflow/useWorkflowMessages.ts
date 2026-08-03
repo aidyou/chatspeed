@@ -32,7 +32,7 @@ import {
  * Handles enhanced messages, tool formatting, and expansion states
  */
 const DEFAULT_VISIBLE_TASK_GROUPS = 1
-const DEFAULT_VISIBLE_TASK_MESSAGES = 200
+const DEFAULT_VISIBLE_TASK_MESSAGES = 300
 
 export function useWorkflowMessages(options = {}) {
   const { t } = useI18n()
@@ -180,7 +180,13 @@ export function useWorkflowMessages(options = {}) {
     }
 
     const persistedId = pickPreferredText(message?.id)
-    if (persistedId) return `${workflowId}:message:${persistedId}`
+    if (persistedId) {
+      const messageKind = pickPreferredText(meta.message_kind, meta.messageKind) || message?.messageKind || message?.role || 'message'
+      const messageSubtype =
+        pickPreferredText(meta.subtype, message?.messageSubtype, message?.message_subtype) || 'default'
+      const toolCallId = pickPreferredText(meta.tool_call_id, meta.toolCallId)
+      return [workflowId, 'message', persistedId, message?.role || 'message', messageKind, messageSubtype, toolCallId].join(':')
+    }
 
     const messageKind = pickPreferredText(meta.message_kind, meta.messageKind) || message?.role || 'message'
     const segmentId = getMessageSegmentId(message)
@@ -432,13 +438,9 @@ export function useWorkflowMessages(options = {}) {
     return true
   }
 
-  const visibleCompletedTaskGroupCount = computed(() => {
-    const hasOpenTaskFrame = hasOpenWorkflowTaskFrame(
-      taskWindowState.value.completedGroups,
-      taskWindowState.value.activeMessages
-    )
-    return Math.max(0, visibleTaskGroupCount.value - (hasOpenTaskFrame ? 1 : 0))
-  })
+  const visibleCompletedTaskGroupCount = computed(
+    () => visibleTaskGroupsState.value.groups.filter(group => group.isCompleted).length
+  )
 
   const loadedHiddenCompletedTaskGroupCount = computed(() =>
     Math.max(

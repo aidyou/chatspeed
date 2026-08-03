@@ -207,7 +207,10 @@
                   <span class="summary-text">{{ getToolSummaryText(tool) }}</span>
                   <span class="expand-hint">(click to expand)</span>
                 </div>
-                <div v-if="isToolMessageExpanded(tool)" class="tool-detail tool-detail--expanded">
+                <div
+                  v-if="isToolMessageExpanded(tool)"
+                  class="tool-detail tool-detail--expanded"
+                  :class="getToolDetailClass(tool)">
                   <div v-if="isBashToolCall(tool)" class="bash-command-frame">
                     <span class="bash-command-frame__prompt" aria-hidden="true">$</span>
                     <pre class="bash-command" aria-label="Bash command"><code
@@ -382,7 +385,8 @@
                   </div>
                   <div
                     v-if="isExplorationToolExpanded(message, groupIndex, toolIndex)"
-                    class="tool-detail tool-detail--expanded">
+                    class="tool-detail tool-detail--expanded"
+                    :class="getToolDetailClass(tool)">
                     <div v-if="isBashToolCall(tool)" class="bash-command-frame">
                       <span class="bash-command-frame__prompt" aria-hidden="true">$</span>
                       <pre class="bash-command" aria-label="Bash command"><code
@@ -635,7 +639,10 @@
                 <span class="summary-text">{{ getToolSummaryText(message) }}</span>
                 <span class="expand-hint">(click to expand)</span>
               </div>
-              <div v-if="isToolMessageExpanded(message)" class="tool-detail tool-detail--expanded">
+              <div
+                v-if="isToolMessageExpanded(message)"
+                class="tool-detail tool-detail--expanded"
+                :class="getToolDetailClass(message)">
                 <div
                   v-if="isBashToolCall(message) && !isApprovalPending(message)"
                   class="bash-command-frame">
@@ -1418,6 +1425,14 @@ const getMessageToolName = message => {
       message?.metadata?.tool_call?.function?.name ||
       ''
   ).toLowerCase()
+}
+
+const getToolDetailClass = message => {
+  const toolName =
+    getMessageToolName(message) || String(message?.toolName || message?.name || '').toLowerCase()
+  if (!toolName) return ''
+  const normalizedToolName = toolName.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  return normalizedToolName
 }
 
 const getToolCallArguments = message => {

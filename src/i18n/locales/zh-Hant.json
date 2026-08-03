@@ -956,7 +956,7 @@
       "acceptanceCriteria": "驗收標準",
       "covers": "涵蓋",
       "dependsOn": "依賴",
-      "executionBackend": "執行端",
+      "executionBackend": "執行後端",
       "executionBackends": {
         "docker": "Docker",
         "host": "主機",

@@ -80,6 +80,17 @@ const messageList = readProjectFile('src/components/workflow/WorkflowMessageList
 const workflowMessageStyles = readProjectFile('src/styles/workflow/messages.scss')
 const themeVariables = readProjectFile('src/style/element/css-vars.css')
 assert.match(messageList, /:tool-name="getMessageToolName\(message\)"/)
+assert.equal(
+  messageList.match(/:class="getToolDetailClass\((?:tool|message)\)"/g)?.length,
+  3,
+  'all expanded tool detail projections must expose a normalized tool-name class'
+)
+assert.match(messageList, /return normalizedToolName/)
+assert.match(
+  workflowMessageStyles,
+  /&\.ask_user \{[\s\S]*padding: 0;[\s\S]*background: none;[\s\S]*border-radius: 0;/
+)
+assert.match(workflowMessageStyles, /&\.ask_user \{[\s\S]*\.choice-container \{[\s\S]*padding: 5px;/)
 assert.doesNotMatch(messageList, /:action="message\.metadata\?\.tool_name/)
 assert.match(
   messageList,
@@ -508,10 +519,16 @@ assert.match(approvalDialog, /v-if="isPlanApproval" class="plan-details-actions"
 assert.match(approvalDialog, /const copyPlanMarkdown = async/)
 assert.match(approvalDialog, /await writeClipboard\(planMarkdown\.value\)/)
 assert.match(approvalDialog, /<cs name="copy" \/>/)
-assert.match(approvalDialog, /workflow\.approval\.executionBackends/)
-assert.match(approvalDialog, /workflow\.approval\.fallbackReasons/)
+assert.match(approvalDialog, /workflow\.approval\.executionBackends\.host/)
+assert.match(approvalDialog, /workflow\.approval\.fallbackReasons\.host_only_mode/)
 const zhHansLocale = JSON.parse(readProjectFile('src/i18n/locales/zh-Hans.json'))
+assert.equal(zhHansLocale.workflow.approval.executionBackend, '执行后端')
 assert.equal(zhHansLocale.workflow.approval.executionBackends.host, '本机')
+assert.equal(zhHansLocale.workflow.approval.fallbackReason, '回退原因')
+assert.equal(
+  zhHansLocale.workflow.approval.fallbackReasons.host_only_mode,
+  '仅主机模式'
+)
 assert.equal(
   zhHansLocale.workflow.approval.fallbackReasons.sandbox_config_missing,
   '缺少沙箱配置'

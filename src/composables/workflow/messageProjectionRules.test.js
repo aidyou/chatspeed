@@ -284,6 +284,40 @@ assert.deepEqual(
   'history page merging must be idempotent across numeric and string persisted IDs'
 )
 
+const unsafeIntegerCompletionId = Number('871982461364473856')
+const unsafeIntegerMarkerId = Number('871982461364473857')
+assert.equal(
+  unsafeIntegerCompletionId,
+  unsafeIntegerMarkerId,
+  'the regression fixture must reproduce adjacent i64 ids colliding as JS numbers'
+)
+const collidingPersistedMessages = mergeWorkflowMessagePages(
+  [
+    {
+      id: unsafeIntegerCompletionId,
+      role: 'tool',
+      message: 'Finished',
+      metadata: { tool_name: 'complete_workflow', tool_call_id: 'tool_476bc7ec' }
+    },
+    {
+      id: unsafeIntegerMarkerId,
+      role: 'system',
+      messageKind: 'summary',
+      messageSubtype: 'manual_clear_context',
+      message: ''
+    }
+  ],
+  []
+)
+assert.deepEqual(
+  collidingPersistedMessages.map(message => [message.role, message.metadata?.tool_name || message.messageSubtype]),
+  [
+    ['tool', 'complete_workflow'],
+    ['system', 'manual_clear_context']
+  ],
+  'adjacent i64 id precision collisions must not let a clear-context marker replace complete_workflow'
+)
+
 const visibleCompletion = collectSubAgentCompletions(
   [
     {
@@ -462,6 +496,32 @@ assert.equal(
   'groups after the sliced boundary must retain their identity'
 )
 
+const boundaryCompletion = {
+  id: 'boundary-completion',
+  role: 'tool',
+  metadata: { tool_name: 'complete_workflow' }
+}
+const boundaryWindow = selectVisibleWorkflowMessageWindow(
+  [
+    {
+      id: 'boundary-group',
+      messages: [
+        { id: 'hidden-message' },
+        boundaryCompletion,
+        clearContextMarker,
+        ...Array.from({ length: 299 }, (_, index) => ({ id: `active-${index + 1}` }))
+      ]
+    }
+  ],
+  300
+)
+assert.equal(boundaryWindow.hiddenMessageCount, 1)
+assert.deepEqual(
+  boundaryWindow.groups[0].messages.slice(0, 2).map(message => message.id),
+  ['boundary-completion', 'clear-context-marker'],
+  'the visible-message limit must keep complete_workflow with its following new-session marker'
+)
+
 const longRunningTaskMessages = Array.from({ length: 5000 }, (_, index) => ({
   id: `long-task-message-${index + 1}`
 }))
@@ -537,7 +597,8 @@ const taskOneCompletion = {
   id: 'task-1-completion',
   role: 'tool',
   toolCallId: 'completion-1',
-  isAcceptedCompletion: true
+  isAcceptedCompletion: true,
+  metadata: { tool_name: 'complete_workflow' }
 }
 const taskTwoUser = { id: 'task-2-user', role: 'user' }
 
@@ -606,15 +667,21 @@ assert.equal(
   true,
   'a trailing new-session marker must open an empty active task frame'
 )
+const clearedContextVisibleGroups = selectVisibleWorkflowTaskGroups(
+  incrementalState.completedGroups,
+  null,
+  1,
+  true
+)
 assert.deepEqual(
-  selectVisibleWorkflowTaskGroups(
-    incrementalState.completedGroups,
-    null,
-    1,
-    true
-  ),
-  [],
-  'clearing context must immediately hide the previous completed task and its marker'
+  clearedContextVisibleGroups,
+  incrementalState.completedGroups,
+  'an empty task frame must not consume the only visible task slot after clearing context'
+)
+assert.deepEqual(
+  clearedContextVisibleGroups[0].messages.map(message => message.id),
+  ['task-1-user', 'task-1-completion', 'clear-context-marker'],
+  'the completed task call must remain immediately above its trailing new-session marker'
 )
 
 const refreshedMessages = [
@@ -635,6 +702,68 @@ assert.equal(
   ).length,
   1,
   'snapshot refresh must not duplicate the merged marker'
+)
+const activeBoundaryGroups = selectVisibleWorkflowTaskGroups(
+  incrementalState.completedGroups,
+  {
+    id: 'active-task',
+    isCompleted: false,
+    messages: incrementalState.activeMessages
+  },
+  1,
+  true
+)
+assert.deepEqual(
+  activeBoundaryGroups.flatMap(group => group.messages.map(message => message.id)),
+  ['task-1-completion', 'clear-context-marker', 'task-2-user'],
+  'the default task window must bridge complete_workflow and the new-session divider into active work'
+)
+const exactBoundaryWindow = selectVisibleWorkflowMessageWindow(
+  [
+    activeBoundaryGroups[0],
+    {
+      ...activeBoundaryGroups[1],
+      messages: [
+        taskTwoUser,
+        ...Array.from({ length: 298 }, (_, index) => ({ id: `task-2-message-${index + 2}` }))
+      ]
+    }
+  ],
+  300
+)
+assert.deepEqual(
+  exactBoundaryWindow.groups
+    .flatMap(group => group.messages)
+    .slice(0, 3)
+    .map(message => message.id),
+  ['task-1-completion', 'clear-context-marker', 'task-2-user'],
+  'complete_workflow must remain immediately before the new-session divider at the 300-message edge'
+)
+
+const completedAfterClearContext = {
+  id: 'task-2-completion',
+  isCompleted: true,
+  messages: [
+    taskTwoUser,
+    { id: 'task-2-tool', role: 'tool' },
+    { id: 'task-2-completion-message', role: 'tool', metadata: { tool_name: 'complete_workflow' } }
+  ]
+}
+const laterCompletedTask = {
+  id: 'task-3-completed',
+  isCompleted: true,
+  messages: [{ id: 'task-3-user', role: 'user' }, { id: 'task-3-completion', role: 'tool', metadata: { tool_name: 'complete_workflow' } }]
+}
+const visibleUserQuestionGroups = selectVisibleWorkflowTaskGroups(
+  [incrementalState.completedGroups[0], completedAfterClearContext, laterCompletedTask],
+  null,
+  2,
+  false
+)
+assert.deepEqual(
+  visibleUserQuestionGroups.flatMap(group => group.messages.map(message => message.id)).slice(0, 3),
+  ['task-1-completion', 'clear-context-marker', 'task-2-user'],
+  'revealing a task that starts after clear-context must include the preceding completion boundary'
 )
 
 const earlierTaskUser = { id: 'task-0-user', role: 'user' }

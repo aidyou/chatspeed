@@ -1629,19 +1629,29 @@ impl MainStore {
             } else {
                 completion_boundary_ids.get(1).copied()
             };
-            let hidden_completed_task_count = if has_active_messages {
-                completion_boundary_ids.len()
+            let hidden_completed_task_count = completion_boundary_ids.len().saturating_sub(1);
+            // Include the latest completion boundary only when active messages follow it.
+            // The extra row keeps pagination bounded while preserving the cost-bearing
+            // completion tool next to a following manual clear-context marker.
+            let includes_active_completion_boundary =
+                has_active_messages && lower_boundary_id.is_some();
+            let query_lower_boundary_id = if includes_active_completion_boundary {
+                lower_boundary_id.map(|id| id.saturating_sub(1))
             } else {
-                completion_boundary_ids.len().saturating_sub(1)
+                lower_boundary_id
             };
-            let limit = message_limit.max(1) as i64;
+            let page_limit = message_limit.max(1);
 
             let total_message_count = conn.query_row(
                 "SELECT COUNT(*) FROM workflow_messages
                  WHERE session_id = ?1 AND (?2 IS NULL OR id > ?2)",
-                params![session_id, lower_boundary_id],
+                params![session_id, query_lower_boundary_id],
                 |row| row.get::<_, i64>(0),
             )? as usize;
+            let includes_completion_at_page_edge = includes_active_completion_boundary
+                && total_message_count <= page_limit.saturating_add(1);
+            let limit =
+                page_limit.saturating_add(usize::from(includes_completion_at_page_edge)) as i64;
             let mut message_statement = conn.prepare(
                 "SELECT * FROM workflow_messages
                  WHERE session_id = ?1 AND (?2 IS NULL OR id > ?2)
@@ -1649,7 +1659,7 @@ impl MainStore {
                  LIMIT ?3",
             )?;
             let rows = message_statement
-                .query_map(params![session_id, lower_boundary_id, limit], |row| {
+                .query_map(params![session_id, query_lower_boundary_id, limit], |row| {
                     Ok(WorkflowMessage::from(row))
                 })?;
             let mut messages = rows.collect::<Result<Vec<_>, _>>()?;
@@ -1713,16 +1723,22 @@ impl MainStore {
                     break;
                 }
             }
-            let limit = message_limit.max(1) as i64;
+            let includes_completion_boundary = lower_boundary_id.is_some();
+            let query_lower_boundary_id = lower_boundary_id.map(|id| id.saturating_sub(1));
+            let page_limit = message_limit.max(1);
 
             let total_message_count = conn.query_row(
                 "SELECT COUNT(*) FROM workflow_messages
                  WHERE session_id = ?1
                    AND id < ?2
                    AND (?3 IS NULL OR id > ?3)",
-                params![session_id, before_message_id, lower_boundary_id],
+                params![session_id, before_message_id, query_lower_boundary_id],
                 |row| row.get::<_, i64>(0),
             )? as usize;
+            let includes_completion_at_page_edge =
+                includes_completion_boundary && total_message_count <= page_limit.saturating_add(1);
+            let limit =
+                page_limit.saturating_add(usize::from(includes_completion_at_page_edge)) as i64;
             let mut message_statement = conn.prepare(
                 "SELECT * FROM workflow_messages
                  WHERE session_id = ?1
@@ -1732,7 +1748,12 @@ impl MainStore {
                  LIMIT ?4",
             )?;
             let rows = message_statement.query_map(
-                params![session_id, before_message_id, lower_boundary_id, limit],
+                params![
+                    session_id,
+                    before_message_id,
+                    query_lower_boundary_id,
+                    limit
+                ],
                 |row| Ok(WorkflowMessage::from(row)),
             )?;
             let mut messages = rows.collect::<Result<Vec<_>, _>>()?;
@@ -1777,6 +1798,12 @@ impl MainStore {
                 let message = message?;
                 if is_completed_workflow_task_boundary(&message) {
                     if completion_count >= target_completion_count {
+                        // A manual clear-context marker visually belongs after this
+                        // completion. Keep the adjacent boundary together instead of
+                        // starting the next task window with an orphan divider.
+                        if messages.last().is_some_and(is_manual_clear_context_message) {
+                            messages.push(message);
+                        }
                         break;
                     }
                     if before_message_id.is_none() && completion_count == 0 && !messages.is_empty()
@@ -3168,10 +3195,10 @@ mod tests {
                 .iter()
                 .map(|message| message.message.as_str())
                 .collect::<Vec<_>>(),
-            vec!["active-task"]
+            vec!["task-3-completed", "active-task"]
         );
         assert_eq!(recent_message_page.hidden_message_count, 0);
-        assert_eq!(recent_message_page.hidden_completed_task_count, 3);
+        assert_eq!(recent_message_page.hidden_completed_task_count, 2);
 
         let earlier = store
             .get_workflow_message_window("window-session", recent.before_message_id, 2)
@@ -3250,6 +3277,193 @@ mod tests {
         );
         assert_eq!(completed_message_page.hidden_message_count, 0);
         assert_eq!(completed_message_page.hidden_completed_task_count, 1);
+
+        store
+            .create_workflow(
+                "clear-context-task-window",
+                "Clear-context task window",
+                "agent-window",
+                None,
+                None,
+            )
+            .expect("failed to create clear-context task workflow");
+        add_window_test_message(
+            &store,
+            "clear-context-task-window",
+            "previous-task-input",
+            false,
+        );
+        add_window_test_message(
+            &store,
+            "clear-context-task-window",
+            "previous-task-completed",
+            true,
+        );
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "clear-context-task-window".to_string(),
+                role: "system".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({ "subtype": "manual_clear_context" })),
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add task-window clear-context marker");
+        add_window_test_message(
+            &store,
+            "clear-context-task-window",
+            "current-task-input",
+            false,
+        );
+        add_window_test_message(
+            &store,
+            "clear-context-task-window",
+            "current-task-completed",
+            true,
+        );
+        add_window_test_message(
+            &store,
+            "clear-context-task-window",
+            "next-task-input",
+            false,
+        );
+
+        let clear_context_window = store
+            .get_workflow_message_window("clear-context-task-window", None, 1)
+            .expect("failed to load clear-context task window");
+        assert_eq!(
+            clear_context_window
+                .messages
+                .iter()
+                .map(|message| {
+                    if is_completed_workflow_task_boundary(message) {
+                        "complete_workflow"
+                    } else if is_manual_clear_context_message(message) {
+                        "manual_clear_context"
+                    } else {
+                        message.message.as_str()
+                    }
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                "complete_workflow",
+                "manual_clear_context",
+                "current-task-input",
+                "complete_workflow",
+                "next-task-input"
+            ],
+            "the previous completion must stay immediately before the new-session divider"
+        );
+    }
+
+    #[test]
+    fn test_recent_workflow_message_page_keeps_completion_before_clear_context() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-clear-context-boundary");
+        store
+            .create_workflow(
+                "clear-context-boundary-session",
+                "Clear context boundary query",
+                "agent-clear-context-boundary",
+                None,
+                None,
+            )
+            .expect("failed to create workflow");
+
+        add_window_test_message(
+            &store,
+            "clear-context-boundary-session",
+            "completed-task",
+            true,
+        );
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "clear-context-boundary-session".to_string(),
+                role: "system".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({ "subtype": "manual_clear_context" })),
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add clear-context marker");
+        for index in 1..=299 {
+            add_window_test_message(
+                &store,
+                "clear-context-boundary-session",
+                &format!("active-message-{index}"),
+                false,
+            );
+        }
+
+        let recent = store
+            .get_recent_workflow_message_page("clear-context-boundary-session", 300)
+            .expect("failed to load recent clear-context page");
+        assert_eq!(recent.messages.len(), 301);
+        assert_eq!(recent.hidden_message_count, 0);
+        assert_eq!(recent.hidden_completed_task_count, 0);
+        let completion_index = recent
+            .messages
+            .iter()
+            .position(is_completed_workflow_task_boundary)
+            .expect("recent page must retain the completion tool boundary");
+        assert_eq!(completion_index, 0);
+        assert_eq!(
+            recent.messages[completion_index + 1]
+                .message_subtype
+                .as_deref(),
+            Some("manual_clear_context")
+        );
+        assert_eq!(recent.messages[300].message, "active-message-299");
+
+        let next_page_cursor = add_window_test_message(
+            &store,
+            "clear-context-boundary-session",
+            "next-page-cursor",
+            false,
+        );
+        let earlier = store
+            .get_earlier_workflow_message_page(
+                "clear-context-boundary-session",
+                next_page_cursor
+                    .id
+                    .expect("cursor message must be persisted"),
+                300,
+            )
+            .expect("failed to load earlier clear-context page");
+        assert_eq!(earlier.messages.len(), 301);
+        let earlier_completion_index = earlier
+            .messages
+            .iter()
+            .position(is_completed_workflow_task_boundary)
+            .expect("earlier page must retain the completion tool boundary");
+        assert_eq!(earlier_completion_index, 0);
+        assert_eq!(
+            earlier.messages[earlier_completion_index + 1]
+                .message_subtype
+                .as_deref(),
+            Some("manual_clear_context")
+        );
+        assert_eq!(earlier.messages[300].message, "active-message-299");
     }
 
     #[test]

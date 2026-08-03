@@ -31,11 +31,25 @@ export const isWorkflowManualClearContextMessage = message =>
   message?.messageKind === 'summary' &&
   message?.messageSubtype === 'manual_clear_context'
 
+const getWorkflowMessageIdentityDiscriminator = message => {
+  const metadata = message?.metadata || {}
+  const toolCallId = String(metadata.tool_call_id || metadata.toolCallId || '').trim()
+  return [
+    message?.role || '',
+    message?.messageKind || message?.message_kind || metadata.message_kind || metadata.messageKind || '',
+    message?.messageSubtype || message?.message_subtype || metadata.subtype || '',
+    toolCallId
+  ].join(':')
+}
+
 const hasSameWorkflowMessageIdentity = (left, right) => {
   const leftId = left?.id ?? left?.displayId
   const rightId = right?.id ?? right?.displayId
   if (leftId !== null && leftId !== undefined && rightId !== null && rightId !== undefined) {
-    return String(leftId) === String(rightId)
+    return (
+      String(leftId) === String(rightId) &&
+      getWorkflowMessageIdentityDiscriminator(left) === getWorkflowMessageIdentityDiscriminator(right)
+    )
   }
   return left === right
 }
@@ -119,16 +133,59 @@ export const hasOpenWorkflowTaskFrame = (completedGroups = [], activeMessages = 
   )
 }
 
+const buildClearContextBoundaryGroup = group => {
+  const messages = group?.messages || []
+  const trailingMarker = messages[messages.length - 1]
+  if (!isWorkflowManualClearContextMessage(trailingMarker)) return null
+
+  let completionIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isWorkflowCompletionMessage(messages[index])) {
+      completionIndex = index
+      break
+    }
+  }
+  if (completionIndex < 0) return null
+
+  return {
+    ...group,
+    id: `${group.id}:clear-context-boundary`,
+    messages: messages.slice(completionIndex)
+  }
+}
+
 export const selectVisibleWorkflowTaskGroups = (
   completedGroups = [],
   activeGroup = null,
   visibleGroupCount = 1,
   hasOpenTaskFrame = Boolean(activeGroup)
 ) => {
-  const completedLimit = Math.max(0, visibleGroupCount - (hasOpenTaskFrame ? 1 : 0))
+  const hasVisibleActiveGroup = hasOpenTaskFrame && Boolean(activeGroup)
+  const completedLimit = Math.max(0, visibleGroupCount - (hasVisibleActiveGroup ? 1 : 0))
   const visibleCompletedGroups = completedLimit
     ? completedGroups.slice(-completedLimit)
     : []
+
+  // Keep the completion cost card attached to its clear-context divider even
+  // when the default one-task window otherwise shows only the active task.
+  if (hasVisibleActiveGroup && !visibleCompletedGroups.length) {
+    const boundaryGroup = buildClearContextBoundaryGroup(
+      completedGroups[completedGroups.length - 1]
+    )
+    if (boundaryGroup) visibleCompletedGroups.push(boundaryGroup)
+  }
+
+  const firstVisibleCompletedGroup = visibleCompletedGroups[0]
+  const firstVisibleCompletedIndex = firstVisibleCompletedGroup
+    ? completedGroups.findIndex(group => group === firstVisibleCompletedGroup)
+    : -1
+  if (firstVisibleCompletedIndex > 0) {
+    const previousBoundaryGroup = buildClearContextBoundaryGroup(
+      completedGroups[firstVisibleCompletedIndex - 1]
+    )
+    if (previousBoundaryGroup) visibleCompletedGroups.unshift(previousBoundaryGroup)
+  }
+
   return activeGroup ? [...visibleCompletedGroups, activeGroup] : visibleCompletedGroups
 }
 
@@ -148,14 +205,25 @@ export const selectVisibleWorkflowMessageWindow = (groups = [], visibleMessageCo
   for (const group of groups) {
     const messages = group?.messages || []
     if (remainingHiddenCount >= messages.length) {
+      const isClearContextBoundaryGroup =
+        isWorkflowCompletionMessage(messages[0]) &&
+        isWorkflowManualClearContextMessage(messages[messages.length - 1])
+      if (isClearContextBoundaryGroup) visibleGroups.push(group)
       remainingHiddenCount -= messages.length
       continue
     }
 
     if (remainingHiddenCount > 0) {
+      let visibleStartIndex = remainingHiddenCount
+      if (
+        isWorkflowManualClearContextMessage(messages[visibleStartIndex]) &&
+        isWorkflowCompletionMessage(messages[visibleStartIndex - 1])
+      ) {
+        visibleStartIndex -= 1
+      }
       visibleGroups.push({
         ...group,
-        messages: messages.slice(remainingHiddenCount)
+        messages: messages.slice(visibleStartIndex)
       })
       remainingHiddenCount = 0
       continue
@@ -164,9 +232,13 @@ export const selectVisibleWorkflowMessageWindow = (groups = [], visibleMessageCo
     visibleGroups.push(group)
   }
 
+  const visibleMessageTotal = visibleGroups.reduce(
+    (total, group) => total + (group?.messages?.length || 0),
+    0
+  )
   return {
     groups: visibleGroups,
-    hiddenMessageCount: Math.max(0, totalMessageCount - normalizedLimit)
+    hiddenMessageCount: Math.max(0, totalMessageCount - visibleMessageTotal)
   }
 }
 
@@ -175,6 +247,12 @@ export const getWorkflowPersistedMessageId = message => {
   if (value === null || value === undefined || value === '') return null
   const normalized = String(value).trim()
   return /^\d+$/.test(normalized) ? normalized : null
+}
+
+export const getWorkflowPersistedMessageMergeKey = message => {
+  const persistedMessageId = getWorkflowPersistedMessageId(message)
+  if (!persistedMessageId) return null
+  return `${persistedMessageId}:${getWorkflowMessageIdentityDiscriminator(message)}`
 }
 
 /**
@@ -187,15 +265,15 @@ export const mergeWorkflowMessagePages = (earlierMessages = [], currentMessages 
   const persistedMessageIndex = new Map()
 
   for (const message of [...earlierMessages, ...currentMessages]) {
-    const persistedMessageId = getWorkflowPersistedMessageId(message)
-    if (!persistedMessageId) {
+    const persistedMessageKey = getWorkflowPersistedMessageMergeKey(message)
+    if (!persistedMessageKey) {
       merged.push(message)
       continue
     }
 
-    const existingIndex = persistedMessageIndex.get(persistedMessageId)
+    const existingIndex = persistedMessageIndex.get(persistedMessageKey)
     if (existingIndex === undefined) {
-      persistedMessageIndex.set(persistedMessageId, merged.length)
+      persistedMessageIndex.set(persistedMessageKey, merged.length)
       merged.push(message)
     } else {
       merged[existingIndex] = message

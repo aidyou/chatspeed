@@ -956,7 +956,7 @@
       "acceptanceCriteria": "Acceptance Criteria",
       "covers": "Covers",
       "dependsOn": "Depends on",
-      "executionBackend": "Execution endpoint",
+      "executionBackend": "Execution backend",
       "executionBackends": {
         "docker": "Docker",
         "host": "Host",

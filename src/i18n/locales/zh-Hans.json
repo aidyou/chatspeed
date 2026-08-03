@@ -956,7 +956,7 @@
       "acceptanceCriteria": "验收标准",
       "covers": "覆盖",
       "dependsOn": "依赖",
-      "executionBackend": "执行端",
+      "executionBackend": "执行后端",
       "executionBackends": {
         "docker": "Docker",
         "host": "本机",

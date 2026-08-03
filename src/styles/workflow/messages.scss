@@ -436,6 +436,18 @@
             border-radius: var(--cs-border-radius-md);
             font-family: var(--cs-font-family-mono, monospace);
 
+            &.ask_user {
+              padding: 0;
+              background: none;
+              border-radius: 0;
+              max-width: 800px;
+              min-width: 400px;
+
+              .choice-container {
+                padding: 5px;
+              }
+            }
+
             .choice-container {
               padding: 12px;
               background: var(--cs-bg-color-light);

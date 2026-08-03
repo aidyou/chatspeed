@@ -956,7 +956,7 @@
       "acceptanceCriteria": "受け入れ基準",
       "covers": "対象",
       "dependsOn": "依存先",
-      "executionBackend": "実行先",
+      "executionBackend": "実行バックエンド",
       "executionBackends": {
         "docker": "Docker",
         "host": "ホスト",

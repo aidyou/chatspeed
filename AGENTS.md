@@ -8,6 +8,7 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 - Reuse existing patterns before adding abstractions.
 - Do not stage, commit, branch, or rewrite git history unless explicitly asked.
 - Git commit messages must be in English.
+- Unless the user explicitly requests it, do not proactively commit the `chatspeed-docs` or `website` submodules.
 - Unless explicitly requested otherwise, reply in the same language as the user's message.
 - Final reports should be concise and include what changed, what was verified, and any remaining risk.
 
