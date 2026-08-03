@@ -357,7 +357,10 @@ mod tests {
             reason_code: Some("ready".to_string()),
             reason: Some("ready".to_string()),
             images: images.into_iter().map(ToString::to_string).collect(),
-            missing_images: missing_images.into_iter().map(ToString::to_string).collect(),
+            missing_images: missing_images
+                .into_iter()
+                .map(ToString::to_string)
+                .collect(),
             checked_at_ms: None,
         }
     }

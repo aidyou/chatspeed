@@ -1026,7 +1026,9 @@ fn sandbox_failure_error(
     reason: crate::tools::SandboxFailureReason,
     message: impl Into<String>,
 ) -> ToolError {
-    ToolError::SandboxFailure(crate::tools::SandboxFailure::from_plan(plan, reason, message))
+    ToolError::SandboxFailure(crate::tools::SandboxFailure::from_plan(
+        plan, reason, message,
+    ))
 }
 
 #[allow(dead_code)]
@@ -1846,10 +1848,7 @@ impl ShellExecute {
                         format!("Command timed out after {}ms", timeout_ms),
                     )
                 } else {
-                    ToolError::ExecutionFailed(format!(
-                        "Command timed out after {}ms",
-                        timeout_ms
-                    ))
+                    ToolError::ExecutionFailed(format!("Command timed out after {}ms", timeout_ms))
                 });
             }
 
@@ -3082,8 +3081,9 @@ mod tests {
         initialize_test_git_repository(&project_root);
         let shell = test_shell_execute(project_root.clone());
 
-        let plan = parse_safe_compound_command("/usr/bin/false && git status && /usr/bin/touch marker")
-            .expect("command should be syntactically safe");
+        let plan =
+            parse_safe_compound_command("/usr/bin/false && git status && /usr/bin/touch marker")
+                .expect("command should be syntactically safe");
         let result = shell
             .call_safe_compound(plan, 10_000, Some(project_root.clone()), None)
             .await
@@ -3123,8 +3123,9 @@ mod tests {
         let shell = test_shell_execute(project_root.clone())
             .with_gateway(gateway.clone(), "test-session".to_string());
 
-        let plan = parse_safe_compound_command("/bin/echo first && /usr/bin/false && git status --short")
-            .expect("command should be syntactically safe");
+        let plan =
+            parse_safe_compound_command("/bin/echo first && /usr/bin/false && git status --short")
+                .expect("command should be syntactically safe");
         let result = shell
             .call_safe_compound_streaming(
                 plan,
@@ -3145,7 +3146,9 @@ mod tests {
 
         let streams = gateway.streams.lock().unwrap().clone();
         assert!(
-            streams.iter().any(|(_, output)| output.contains("Stage 1:")),
+            streams
+                .iter()
+                .any(|(_, output)| output.contains("Stage 1:")),
             "direct safe compound streaming helper should emit stage stream events"
         );
 
@@ -3327,7 +3330,10 @@ mod tests {
             .unwrap();
 
         let streams = gateway.streams.lock().unwrap().clone();
-        assert!(streams.iter().any(|(_, output)| output.contains("out")), "{streams:?}");
+        assert!(
+            streams.iter().any(|(_, output)| output.contains("out")),
+            "{streams:?}"
+        );
         assert!(
             streams
                 .iter()
@@ -3335,10 +3341,14 @@ mod tests {
             "{streams:?}"
         );
         assert!(
-            streams.iter().any(|(_, output)| output.contains("Exit code: 0")),
+            streams
+                .iter()
+                .any(|(_, output)| output.contains("Exit code: 0")),
             "{streams:?}"
         );
-        let structured = result.structured_content.expect("structured content missing");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
         assert_eq!(structured["exit_code"].as_i64(), Some(0));
         assert_eq!(
             structured["execution_plan"]["backend"].as_str(),
@@ -3374,7 +3384,10 @@ mod tests {
             .unwrap();
 
         let streams = gateway.streams.lock().unwrap().clone();
-        assert!(streams.iter().any(|(_, output)| output.contains("out")), "{streams:?}");
+        assert!(
+            streams.iter().any(|(_, output)| output.contains("out")),
+            "{streams:?}"
+        );
         assert!(
             streams
                 .iter()
@@ -3382,10 +3395,14 @@ mod tests {
             "{streams:?}"
         );
         assert!(
-            streams.iter().any(|(_, output)| output.contains("Exit code: 0")),
+            streams
+                .iter()
+                .any(|(_, output)| output.contains("Exit code: 0")),
             "{streams:?}"
         );
-        let structured = result.structured_content.expect("structured content missing");
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
         assert_eq!(structured["exit_code"].as_i64(), Some(0));
         assert_eq!(
             structured["execution_plan"]["backend"].as_str(),
@@ -3766,10 +3783,9 @@ mod tests {
         let project_root = temp_root.path().canonicalize().unwrap();
         initialize_test_git_repository(&project_root);
         let shell = test_shell_execute(project_root.clone());
-        let plan = parse_safe_compound_command(
-            "/bin/sleep 0.08 && /bin/sleep 0.08 && git status --short",
-        )
-        .expect("command should be syntactically safe");
+        let plan =
+            parse_safe_compound_command("/bin/sleep 0.08 && /bin/sleep 0.08 && git status --short")
+                .expect("command should be syntactically safe");
         let started = Instant::now();
 
         let result = shell

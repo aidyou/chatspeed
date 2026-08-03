@@ -388,7 +388,10 @@ mod tests {
         assert_eq!(event.event_type, WorkflowEventType::ToolFailed);
         assert_eq!(event.event_data["tool_call_id"], "call_123");
         assert_eq!(event.event_data["error_details"], details);
-        assert_eq!(event.event_data["error_details"]["execution_plan"]["backend"], "docker");
+        assert_eq!(
+            event.event_data["error_details"]["execution_plan"]["backend"],
+            "docker"
+        );
     }
 
     #[test]
