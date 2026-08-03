@@ -18,8 +18,8 @@ use std::{collections::HashMap, str::FromStr, sync::Arc, vec};
 pub struct CcproxyQuery {
     pub key: Option<String>,
     // Axum deserializes this external compatibility parameter without a Rust field read.
-    #[allow(dead_code)]
-    pub debug: Option<bool>,
+    #[serde(rename = "debug")]
+    pub _debug: Option<bool>,
 }
 
 /// Macro to unify sampling parameter merging logic across different data structures (JSON Map vs Struct).

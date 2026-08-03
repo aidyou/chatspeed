@@ -34,6 +34,7 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 - Rust/Tauri: use `Result` and `?`; avoid `unwrap()` and `expect()` in normal production code.
 - Frontend: use Vue 3 Composition API, `<script setup>`, Element Plus, Pinia, and SCSS.
 - Keep the final code clean. Temporary checks during development are fine, but the final result must not leave warnings such as unused variables, unused imports, dead code, or similar avoidable issues.
+- Do not use `#[allow(dead_code)]` in final code. Mark code used exclusively by tests with `#[cfg(test)]`; delete genuinely unused code. Temporary intermediate code during active development is allowed, but it must be removed or resolved before completion.
 - All created or modified code files must use LF line endings.
 - All code comments, Rust docs, and developer-facing code documentation must be in English unless a file explicitly requires another language.
 - CSS: prefer existing variables from `src/style/element/css-vars.css`; use semantic `--cs-*` tokens instead of hard-coded values when possible.

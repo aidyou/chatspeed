@@ -1,13 +1,19 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
+#[cfg(test)]
 use crate::libs::ai_temp::ToolOutputWriter;
 use crate::tools::helper::is_node_build_command;
 use crate::tools::helper::{
-    classify_shell_stage, shell_tokens, split_shell_command_segments, SafeCompoundCommand,
-    SafeCompoundStage, ShellStage,
+    classify_shell_stage, shell_tokens, split_shell_command_segments, ShellStage,
+};
+#[cfg(test)]
+use crate::tools::helper::{SafeCompoundCommand, SafeCompoundStage};
+#[cfg(test)]
+use crate::tools::shell_output::{
+    build_compound_shell_tool_result, prepare_shell_output, CompoundShellStageResult,
 };
 use crate::tools::shell_output::{
-    build_compound_shell_tool_result, build_shell_tool_result_with_metadata, prepare_shell_output,
-    should_collect_stderr_line_as_stdout, AnsiOutputSanitizer, CompoundShellStageResult,
+    build_shell_tool_result_with_metadata, should_collect_stderr_line_as_stdout,
+    AnsiOutputSanitizer,
 };
 use crate::tools::{NativeToolResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::error::WorkflowEngineError;
@@ -19,11 +25,17 @@ use regex::Regex;
 use serde_json::{json, Value};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+#[cfg(test)]
+use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::time::{timeout, Duration, Instant};
+#[cfg(test)]
+use tokio::time::Instant;
+use tokio::time::{timeout, Duration};
 
 /// Decision levels for shell auditing
 #[derive(Debug, PartialEq, Clone)]
@@ -1031,7 +1043,7 @@ fn sandbox_failure_error(
     ))
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 async fn run_stage_with_deadline(
     command_str: &str,
     cwd: &Path,
@@ -1118,7 +1130,7 @@ async fn run_stage_with_deadline(
     Ok((status.code().unwrap_or(-1), stdout, stderr))
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 async fn send_tool_stream(gateway: &dyn Gateway, session_id: &str, tool_id: &str, output: &str) {
     let _ = gateway
         .send(
@@ -1189,7 +1201,7 @@ fn node_build_stderr_stream_name(exit_code: i32) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn format_compound_raw_section(
     index: usize,
     command: &str,
@@ -1204,7 +1216,7 @@ fn format_compound_raw_section(
 }
 
 impl ShellExecute {
-    #[allow(dead_code)]
+    #[cfg(test)]
     async fn call_safe_compound(
         &self,
         plan: SafeCompoundCommand,
@@ -1367,7 +1379,7 @@ impl ShellExecute {
         ))
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     async fn call_safe_compound_streaming(
         &self,
         plan: SafeCompoundCommand,
@@ -1561,8 +1573,8 @@ impl ShellExecute {
         ))
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)]
     async fn stream_safe_stage(
         &self,
         command_str: &str,

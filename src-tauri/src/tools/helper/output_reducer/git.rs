@@ -23,6 +23,7 @@ impl CommandOutputReducer for GitReducer {
         sole_git_command_tokens(normalized_command).is_some()
     }
 
+    #[cfg(test)]
     fn supports(&self, normalized_command: &str) -> bool {
         git_command(normalized_command).is_some()
     }

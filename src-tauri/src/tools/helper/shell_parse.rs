@@ -235,7 +235,7 @@ pub(crate) fn classify_shell_stage(command: &str) -> Option<ShellStage> {
     })
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SafeCompoundStage {
     Navigation {
@@ -249,15 +249,16 @@ pub(crate) enum SafeCompoundStage {
     },
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SafeCompoundCommand {
     pub stages: Vec<SafeCompoundStage>,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 const MAX_SAFE_COMPOUND_STAGES: usize = 16;
 
+#[cfg(test)]
 fn split_safe_and_then_stages(command: &str) -> Option<Vec<String>> {
     let mut stages = Vec::new();
     let mut stage_start = 0;
@@ -319,6 +320,7 @@ fn split_safe_and_then_stages(command: &str) -> Option<Vec<String>> {
     (stages.len() <= MAX_SAFE_COMPOUND_STAGES).then_some(stages)
 }
 
+#[cfg(test)]
 fn strip_safe_stage_redirections(command: &str) -> Option<String> {
     const ALLOWED_REDIRECTIONS: [&str; 7] = [
         "2> /dev/null",
@@ -403,6 +405,7 @@ fn strip_safe_stage_redirections(command: &str) -> Option<String> {
     (!in_single_quote && !in_double_quote).then_some(sanitized)
 }
 
+#[cfg(test)]
 fn is_safe_environment_assignment(token: &str) -> bool {
     let Some((name, _)) = token.split_once('=') else {
         return false;
@@ -414,6 +417,7 @@ fn is_safe_environment_assignment(token: &str) -> bool {
         && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
+#[cfg(test)]
 fn is_shell_builtin_or_keyword(command: &str) -> bool {
     matches!(
         command,
@@ -497,7 +501,7 @@ fn is_shell_builtin_or_keyword(command: &str) -> bool {
     )
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn parse_safe_compound_command(command: &str) -> Option<SafeCompoundCommand> {
     use super::output_reducer::supports_command_output_reduction;
 

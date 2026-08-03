@@ -1,6 +1,7 @@
+#[cfg(test)]
+use crate::libs::ai_temp::PersistedToolOutput;
 use crate::libs::ai_temp::{
-    persist_large_tool_output, persist_tool_output, PersistedToolOutput,
-    LARGE_TOOL_OUTPUT_CHAR_LIMIT,
+    persist_large_tool_output, persist_tool_output, LARGE_TOOL_OUTPUT_CHAR_LIMIT,
 };
 use crate::tools::helper::{
     contains_unquoted_shell_operator, detect_json_stdout, is_git_log_command,
@@ -15,6 +16,7 @@ const GENERIC_LLM_MAX_LINES: usize = 40;
 const EXPLICIT_SHAPED_LLM_MAX_LINES: usize = 240;
 const EXPLICIT_SHAPED_LLM_MAX_CHARS: usize = 20_000;
 const KSP_LLM_PRESERVE_CHARS: usize = 15_000;
+#[cfg(test)]
 const COMPOUND_LLM_MAX_CHARS: usize = 20_000;
 
 #[derive(Debug, Clone)]
@@ -25,6 +27,7 @@ pub(crate) struct PreparedShellOutput {
     pub output_was_reduced: bool,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct CompoundShellStageResult {
     pub index: usize,
@@ -146,7 +149,7 @@ pub(crate) fn build_shell_tool_result_with_metadata(
     result
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn build_compound_shell_tool_result(
     exit_code: i32,
     stages: &[CompoundShellStageResult],

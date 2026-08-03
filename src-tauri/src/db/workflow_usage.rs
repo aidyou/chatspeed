@@ -231,7 +231,6 @@ impl MainStore {
         })
     }
 
-    #[allow(dead_code)]
     pub fn load_workflow_task_usage(
         &self,
         session_id: &str,

@@ -866,7 +866,7 @@ pub async fn routes(
                 req.headers().clone(),
                 Query(CcproxyQuery {
                     key: None,
-                    debug: None,
+                    _debug: None,
                 }),
                 req,
                 next,

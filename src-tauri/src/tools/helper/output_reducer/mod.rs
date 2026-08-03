@@ -20,7 +20,7 @@ pub(crate) struct CommandOutputReduction {
 pub(crate) trait CommandOutputReducer {
     fn matches(&self, normalized_command: &str) -> bool;
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn supports(&self, normalized_command: &str) -> bool {
         self.matches(normalized_command)
     }
@@ -45,7 +45,7 @@ fn command_output_reducers() -> [&'static dyn CommandOutputReducer; 4] {
     ]
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn supports_command_output_reduction(normalized_command: &str) -> bool {
     command_output_reducers()
         .iter()
