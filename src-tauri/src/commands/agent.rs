@@ -41,7 +41,7 @@ fn filter_git_inspection_tools_for_role(raw: Option<String>, role: Option<&str>)
     Some(serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string()))
 }
 
-fn sanitize_agent_for_persistence(agent: &mut Agent) {
+fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
     let available_tools = agent
         .available_tools
         .as_deref()
@@ -50,17 +50,21 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) {
     let has_bash = available_tools
         .iter()
         .any(|tool| tool == crate::tools::TOOL_BASH);
+    let role = agent.role.as_deref();
 
-    if !has_bash {
+    if !has_bash || role == Some("child") {
         agent.auto_approve =
             filter_tool_list_json(agent.auto_approve.clone(), crate::tools::TOOL_BASH);
         agent.sandbox_config = None;
-    } else {
-        agent.sandbox_config = agent
-            .sandbox_config
-            .as_deref()
-            .and_then(AgentSandboxConfig::from_json)
-            .and_then(|config| config.validate().ok().and_then(|_| config.to_json()));
+    } else if let Some(raw_config) = agent.sandbox_config.as_deref() {
+        let config = AgentSandboxConfig::from_json(raw_config)
+            .ok_or_else(|| "sandbox config is not valid JSON".to_string())?;
+        config.validate()?;
+        agent.sandbox_config = Some(
+            config
+                .to_json()
+                .ok_or_else(|| "failed to serialize sandbox config".to_string())?,
+        );
     }
 
     let role = agent.role.as_deref();
@@ -79,7 +83,7 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) {
     agent.auto_approve = filter_git_inspection_tools_for_role(agent.auto_approve.clone(), role);
 
     if role != Some("child") {
-        return;
+        return Ok(());
     }
 
     agent.planning_prompt = None;
@@ -98,6 +102,7 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) {
         models.vision = None;
         models.utility = None;
     }
+    Ok(())
 }
 
 #[tauri::command]
@@ -109,7 +114,7 @@ pub async fn add_agent(
     agent.id = tsid_generator.generate().map_err(|e| e.to_string())?;
     agent.is_system = Some(false);
     agent.version = Some(agent.version.unwrap_or(0));
-    sanitize_agent_for_persistence(&mut agent);
+    sanitize_agent_for_persistence(&mut agent)?;
     validate_sub_agent_role(&agent)?;
     let store = &*state;
     let id = store.add_agent(&agent).map_err(|e| e.to_string())?;
@@ -149,7 +154,7 @@ pub async fn update_agent(state: State<'_, Arc<MainStore>>, agent: Agent) -> Res
             updated
         };
     let mut effective_agent = effective_agent;
-    sanitize_agent_for_persistence(&mut effective_agent);
+    sanitize_agent_for_persistence(&mut effective_agent)?;
     validate_sub_agent_role(&effective_agent)?;
     store
         .update_agent(&effective_agent)
@@ -312,7 +317,7 @@ mod tests {
             None,
         );
 
-        sanitize_agent_for_persistence(&mut agent);
+        sanitize_agent_for_persistence(&mut agent).expect("sanitize primary agent");
         let available_tools = serde_json::from_str::<Vec<String>>(
             agent.available_tools.as_deref().expect("available tools"),
         )
@@ -367,13 +372,33 @@ mod tests {
         );
         no_shell.sandbox_config = Some(sandbox_config.clone());
 
-        sanitize_agent_for_persistence(&mut no_shell);
+        sanitize_agent_for_persistence(&mut no_shell).expect("sanitize no-shell agent");
         assert!(no_shell.sandbox_config.is_none());
         assert_eq!(
             serde_json::from_str::<Vec<String>>(no_shell.auto_approve.as_deref().unwrap())
                 .expect("auto approve json"),
             Vec::<String>::new()
         );
+
+        no_shell.available_tools = Some(serde_json::json!([crate::tools::TOOL_BASH]).to_string());
+        no_shell.sandbox_config = Some(
+            serde_json::json!({
+                "executionMode": "auto",
+                "runtimePreference": "auto",
+                "defaultProfile": "busybox",
+                "profiles": {
+                    "busybox": {
+                        "enabled": true,
+                        "image": "busybox:latest",
+                        "commandPatterns": ["^git(?=\\s|$)"],
+                        "network": { "mode": "none" },
+                        "workspaceAccess": "read_write"
+                    }
+                }
+            })
+            .to_string(),
+        );
+        assert!(sanitize_agent_for_persistence(&mut no_shell).is_err());
 
         let mut child = Agent::new(
             "child".to_string(),
@@ -400,7 +425,7 @@ mod tests {
         );
         child.sandbox_config = Some(sandbox_config);
 
-        sanitize_agent_for_persistence(&mut child);
+        sanitize_agent_for_persistence(&mut child).expect("sanitize child agent");
         assert!(child.sandbox_config.is_none());
         assert_eq!(child.available_tools.as_deref(), Some("[]"));
         assert_eq!(child.allowed_paths.as_deref(), Some("[]"));

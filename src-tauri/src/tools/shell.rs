@@ -689,7 +689,7 @@ impl ToolDefinition for ShellExecute {
           - The command argument is required.\n\
           - Commands run in the workflow's primary allowed root when available; shell state such as `cd` does not persist between tool calls.\n\
           - If you need a different working directory, include it in the command itself (for example: `cd \"path\" && npm test`).\n\
-          - You can specify an optional timeout in milliseconds. Defaults to 120000ms and is capped at 600000ms.\n\
+          - You can specify an optional timeout in milliseconds. When omitted, sandbox execution uses the Profile timeout; otherwise it defaults to 120000ms. Values are capped at 600000ms.\n\
           - Large output is returned as a preview and saved to a temporary file that can be inspected with read_file or grep. Non-zero exits include stderr in the result."
     }
 
@@ -709,7 +709,7 @@ impl ToolDefinition for ShellExecute {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "The command to execute" },
-                    "timeout": { "type": "number", "description": "Optional timeout in milliseconds. Defaults to 120000 and is capped at 600000." },
+                    "timeout": { "type": "number", "description": "Optional AI-selected timeout in milliseconds. When omitted, uses the sandbox profile timeout, then defaults to 120000. Capped at 600000." },
                     "description": { "type": "string", "description": "Clear description of what this command does." }
                 },
                 "required": ["command"]
@@ -734,13 +734,13 @@ impl ToolDefinition for ShellExecute {
             _ => {} // Allow and Review both proceed to execution
         }
 
-        let timeout_ms = params["timeout"].as_u64().unwrap_or(120_000).min(600_000);
+        let requested_timeout_ms = params.get("timeout").and_then(Value::as_u64);
         let working_dir = self.default_working_dir();
 
         // Use streaming execution if gateway is configured
         if self.gateway.is_some() && self.session_id.is_some() {
             return self
-                .call_with_streaming(command_str, timeout_ms, params.clone())
+                .call_with_streaming(command_str, requested_timeout_ms, params.clone())
                 .await;
         }
 
@@ -755,7 +755,7 @@ impl ToolDefinition for ShellExecute {
                 execution_plan.fallback_reason
             )));
         }
-        let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, timeout_ms);
+        let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, requested_timeout_ms);
         let execution_plan_metadata = serde_json::to_value(&execution_plan).ok();
 
         if let Some(sandbox_command) =
@@ -1987,7 +1987,7 @@ impl ShellExecute {
     async fn call_with_streaming(
         &self,
         command_str: &str,
-        timeout_ms: u64,
+        requested_timeout_ms: Option<u64>,
         params: Value,
     ) -> NativeToolResult {
         use std::process::Stdio;
@@ -2018,7 +2018,7 @@ impl ShellExecute {
                 execution_plan.fallback_reason
             )));
         }
-        let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, timeout_ms);
+        let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, requested_timeout_ms);
 
         if let Some(sandbox_command) =
             crate::tools::sandbox_command_for_plan(&execution_plan, command_str)?

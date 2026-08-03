@@ -621,63 +621,78 @@
               </div>
             </div>
             <el-form-item :label="$t('settings.agent.sandboxExecutionMode')">
-              <el-select v-model="agentForm.sandboxConfig.executionMode" style="width: 100%">
+              <el-select
+                v-model="agentForm.sandboxConfig.executionMode"
+                style="width: 100%"
+                @change="onSandboxExecutionModeChange">
                 <el-option :label="$t('settings.agent.sandboxExecutionModeAuto')" value="auto" />
                 <el-option :label="$t('settings.agent.sandboxExecutionModeSandboxOnly')" value="sandbox_only" />
                 <el-option :label="$t('settings.agent.sandboxExecutionModeHostOnly')" value="host_only" />
               </el-select>
             </el-form-item>
-            <el-form-item :label="$t('settings.agent.sandboxRuntimePreference')">
-              <el-select v-model="agentForm.sandboxConfig.runtimePreference" style="width: 100%">
-                <el-option :label="$t('settings.agent.sandboxRuntimeAuto')" value="auto" />
-                <el-option :label="$t('settings.agent.sandboxRuntimeMsb')" value="msb" />
-                <el-option :label="$t('settings.agent.sandboxRuntimeDocker')" value="docker" />
-              </el-select>
-            </el-form-item>
-            <el-form-item :label="$t('settings.agent.sandboxDefaultProfile')">
-              <el-select v-model="agentForm.sandboxConfig.defaultProfile" style="width: 100%">
-                <el-option
-                  v-for="profile in sandboxProfiles"
-                  :key="profile.name"
-                  :label="profile.name"
-                  :value="profile.name" />
-              </el-select>
-            </el-form-item>
-            <div class="sandbox-profile-section">
-              <div class="sandbox-profile-toolbar">
-                <span>{{ $t('settings.agent.sandboxProfiles') }}</span>
-                <el-button size="small" type="primary" plain @click="openSandboxProfileEditor()">
-                  {{ $t('settings.agent.sandboxProfileAdd') }}
-                </el-button>
-              </div>
-              <div class="sandbox-profile-list">
-                <div
-                  v-for="profile in paginatedSandboxProfiles"
-                  :key="profile.name"
-                  class="sandbox-profile-row">
-                  <span class="sandbox-profile-row__name">{{ profile.name }}</span>
-                  <div class="sandbox-profile-row__actions">
-                    <el-switch v-model="profile.config.enabled" size="small" />
-                    <el-button size="small" text @click="openSandboxProfileEditor(profile)">
-                      {{ $t('common.edit') }}
-                    </el-button>
+            <template v-if="sandboxProfilesVisible">
+              <el-form-item :label="$t('settings.agent.sandboxRuntimePreference')">
+                <el-select
+                  v-model="agentForm.sandboxConfig.runtimePreference"
+                  style="width: 100%"
+                  @change="onSandboxRuntimePreferenceChange">
+                  <el-option :label="$t('settings.agent.sandboxRuntimeAuto')" value="auto" />
+                  <el-option :label="$t('settings.agent.sandboxRuntimeMsb')" value="msb" />
+                  <el-option :label="$t('settings.agent.sandboxRuntimeDocker')" value="docker" />
+                </el-select>
+              </el-form-item>
+              <el-form-item :label="$t('settings.agent.sandboxDefaultProfile')">
+                <el-select v-model="agentForm.sandboxConfig.defaultProfile" style="width: 100%">
+                  <el-option
+                    v-for="profile in availableSandboxProfiles"
+                    :key="profile.name"
+                    :label="sandboxProfileDisplayName(profile)"
+                    :value="profile.name" />
+                </el-select>
+              </el-form-item>
+              <div class="sandbox-profile-section">
+                <div class="sandbox-profile-toolbar">
+                  <span>{{ $t('settings.agent.sandboxProfiles') }}</span>
+                  <el-button size="small" type="primary" plain @click="openSandboxProfileEditor()">
+                    {{ $t('settings.agent.sandboxProfileAdd') }}
+                  </el-button>
+                </div>
+                <div class="sandbox-profile-list">
+                  <div
+                    v-for="profile in paginatedSandboxProfiles"
+                    :key="profile.name"
+                    class="sandbox-profile-row">
+                    <span class="sandbox-profile-row__name">{{ sandboxProfileDisplayName(profile) }}</span>
+                    <div class="sandbox-profile-row__actions">
+                      <el-switch v-model="profile.config.enabled" size="small" />
+                      <el-button size="small" text @click="openSandboxProfileEditor(profile)">
+                        {{ $t('settings.agent.sandboxProfileEdit') }}
+                      </el-button>
+                      <el-button
+                        size="small"
+                        text
+                        type="danger"
+                        @click="deleteSandboxProfile(profile)">
+                        {{ $t('settings.agent.sandboxProfileDelete') }}
+                      </el-button>
+                    </div>
                   </div>
                 </div>
+                <el-empty
+                  v-if="!sandboxProfiles.length"
+                  :description="$t('settings.agent.sandboxProfilesEmpty')"
+                  :image-size="48" />
+                <el-pagination
+                  v-if="sandboxProfiles.length > SANDBOX_PROFILE_PAGE_SIZE"
+                  v-model:current-page="sandboxProfilePage"
+                  class="sandbox-profile-pagination"
+                  :page-size="SANDBOX_PROFILE_PAGE_SIZE"
+                  :total="sandboxProfiles.length"
+                  layout="prev, pager, next"
+                  small
+                  background />
               </div>
-              <el-empty
-                v-if="!sandboxProfiles.length"
-                :description="$t('settings.agent.sandboxProfilesEmpty')"
-                :image-size="48" />
-              <el-pagination
-                v-if="sandboxProfiles.length > SANDBOX_PROFILE_PAGE_SIZE"
-                v-model:current-page="sandboxProfilePage"
-                class="sandbox-profile-pagination"
-                :page-size="SANDBOX_PROFILE_PAGE_SIZE"
-                :total="sandboxProfiles.length"
-                layout="prev, pager, next"
-                small
-                background />
-            </div>
+            </template>
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -703,15 +718,53 @@
           :disabled="!!sandboxProfileEditorName"
           maxlength="64" />
       </el-form-item>
-      <el-form-item :label="$t('settings.agent.sandboxImage')" required>
-        <el-input v-model="sandboxProfileDraft.config.image" />
-      </el-form-item>
-      <el-form-item :label="$t('settings.agent.sandboxProfileRuntime')">
-        <el-select v-model="sandboxProfileDraft.config.runtimePreference" style="width: 100%">
+      <el-form-item :label="$t('settings.agent.sandboxProfileRuntime')" required>
+        <el-select
+          v-model="sandboxProfileDraft.config.runtimePreference"
+          style="width: 100%"
+          @change="onSandboxProfileRuntimeChange">
           <el-option :label="$t('settings.agent.sandboxRuntimeAuto')" value="auto" />
           <el-option :label="$t('settings.agent.sandboxRuntimeMsb')" value="msb" />
           <el-option :label="$t('settings.agent.sandboxRuntimeDocker')" value="docker" />
         </el-select>
+      </el-form-item>
+      <el-form-item :label="$t('settings.agent.sandboxImage')" required>
+        <el-select
+          v-model="sandboxProfileDraft.config.image"
+          style="width: 100%"
+          filterable
+          :loading="sandboxRuntimeLoading"
+          :no-data-text="$t('settings.agent.sandboxImagesEmpty')">
+          <el-option
+            v-for="option in sandboxProfileImageOptions"
+            :key="`${option.runtime}:${option.image}`"
+            :label="option.label"
+            :value="option.image" />
+        </el-select>
+      </el-form-item>
+      <el-form-item :label="$t('settings.agent.sandboxProfileCapabilities')">
+        <el-select
+          v-model="sandboxProfileDraft.config.capabilities"
+          multiple
+          filterable
+          style="width: 100%"
+          @change="onSandboxCapabilitiesChange">
+          <el-option
+            v-for="capability in SANDBOX_CAPABILITY_OPTIONS"
+            :key="capability"
+            :label="$t(`settings.agent.sandboxCapability${capability}`)"
+            :value="capability" />
+        </el-select>
+      </el-form-item>
+      <el-form-item :label="$t('settings.agent.sandboxCommandPatterns')" required>
+        <el-select
+          v-model="sandboxProfileDraft.config.commandPatterns"
+          multiple
+          filterable
+          allow-create
+          default-first-option
+          style="width: 100%"
+          :placeholder="$t('settings.agent.sandboxCommandPatternsPlaceholder')" />
       </el-form-item>
       <el-form-item :label="$t('settings.agent.sandboxNetworkMode')">
         <el-select v-model="sandboxProfileDraft.config.network.mode" style="width: 100%">
@@ -788,6 +841,131 @@ const workflowStore = useWorkflowStore()
 const { agents, availableTools } = storeToRefs(agentStore)
 const ALWAYS_ENABLED_SKILL_NAMES = ['help']
 const SANDBOX_PROFILE_PAGE_SIZE = 5
+const SANDBOX_CAPABILITY_PRESETS = {
+  common: ['.*'],
+  bun: ['^bun(?:\\s|$)'],
+  ccpp: [
+    '^cc(?:\\s|$)',
+    '^c\\+\\+(?:\\s|$)',
+    '^clang(?:\\s|$)',
+    '^clang\\+\\+(?:\\s|$)',
+    '^cmake(?:\\s|$)',
+    '^make(?:\\s|$)',
+    '^ninja(?:\\s|$)',
+    '^gcc(?:\\s|$)',
+    '^g\\+\\+(?:\\s|$)'
+  ],
+  dart: ['^dart(?:\\s|$)', '^flutter(?:\\s|$)'],
+  deno: ['^deno(?:\\s|$)'],
+  dotnet: ['^dotnet(?:\\s|$)', '^nuget(?:\\s|$)', '^msbuild(?:\\s|$)'],
+  elixir: ['^elixir(?:\\s|$)', '^iex(?:\\s|$)', '^mix(?:\\s|$)'],
+  erlang: ['^erl(?:\\s|$)', '^erlc(?:\\s|$)', '^rebar3(?:\\s|$)'],
+  git: ['^git(?:\\s|$)'],
+  go: ['^go(?:\\s|$)'],
+  java: [
+    '^java(?:\\s|$)',
+    '^javac(?:\\s|$)',
+    '^mvn(?:\\s|$)',
+    '^mvnw(?:\\s|$)',
+    '^gradle(?:\\s|$)',
+    '^gradlew(?:\\s|$)'
+  ],
+  kotlin: ['^kotlin(?:\\s|$)', '^kotlinc(?:\\s|$)'],
+  lua: ['^lua(?:\\s|$)', '^luajit(?:\\s|$)', '^luarocks(?:\\s|$)'],
+  node: [
+    '^node(?:\\s|$)',
+    '^npm(?:\\s|$)',
+    '^pnpm(?:\\s|$)',
+    '^yarn(?:\\s|$)',
+    '^npx(?:\\s|$)'
+  ],
+  perl: ['^perl(?:\\s|$)', '^cpan(?:\\s|$)', '^prove(?:\\s|$)'],
+  php: ['^php(?:\\s|$)', '^composer(?:\\s|$)'],
+  python: [
+    '^python(?:\\s|$)',
+    '^python3(?:\\s|$)',
+    '^pip(?:\\s|$)',
+    '^pip3(?:\\s|$)'
+  ],
+  r: ['^R(?:\\s|$)', '^Rscript(?:\\s|$)'],
+  ruby: [
+    '^ruby(?:\\s|$)',
+    '^gem(?:\\s|$)',
+    '^bundle(?:\\s|$)',
+    '^bundler(?:\\s|$)',
+    '^rake(?:\\s|$)',
+    '^rails(?:\\s|$)'
+  ],
+  rust: [
+    '^cargo(?:\\s|$)',
+    '^rustc(?:\\s|$)',
+    '^rustup(?:\\s|$)',
+    '^rustfmt(?:\\s|$)',
+    '^rustdoc(?:\\s|$)',
+    '^cargo-fmt(?:\\s|$)',
+    '^cargo-clippy(?:\\s|$)',
+    '^clippy-driver(?:\\s|$)',
+    '^cargo-miri(?:\\s|$)',
+    '^miri(?:\\s|$)',
+    '^rust-analyzer(?:\\s|$)',
+    '^rust-gdb(?:\\s|$)',
+    '^rust-gdbgui(?:\\s|$)',
+    '^rust-lldb(?:\\s|$)'
+  ],
+  shell: [
+    '^bash(?:\\s|$)',
+    '^sh(?:\\s|$)',
+    '^zsh(?:\\s|$)',
+    '^echo(?:\\s|$)',
+    '^printf(?:\\s|$)',
+    '^pwd(?:\\s|$)',
+    '^ls(?:\\s|$)',
+    '^cat(?:\\s|$)',
+    '^head(?:\\s|$)',
+    '^tail(?:\\s|$)',
+    '^wc(?:\\s|$)',
+    '^grep(?:\\s|$)',
+    '^rg(?:\\s|$)',
+    '^find(?:\\s|$)',
+    '^sed(?:\\s|$)',
+    '^awk(?:\\s|$)',
+    '^sort(?:\\s|$)',
+    '^uniq(?:\\s|$)',
+    '^cut(?:\\s|$)',
+    '^tr(?:\\s|$)',
+    '^cp(?:\\s|$)',
+    '^mv(?:\\s|$)',
+    '^rm(?:\\s|$)',
+    '^mkdir(?:\\s|$)',
+    '^touch(?:\\s|$)',
+    '^chmod(?:\\s|$)',
+    '^ln(?:\\s|$)',
+    '^readlink(?:\\s|$)',
+    '^realpath(?:\\s|$)',
+    '^basename(?:\\s|$)',
+    '^dirname(?:\\s|$)',
+    '^env(?:\\s|$)',
+    '^which(?:\\s|$)',
+    '^date(?:\\s|$)',
+    '^sleep(?:\\s|$)',
+    '^test(?:\\s|$)',
+    '^true(?:\\s|$)',
+    '^false(?:\\s|$)',
+    '^diff(?:\\s|$)',
+    '^patch(?:\\s|$)',
+    '^tar(?:\\s|$)',
+    '^gzip(?:\\s|$)',
+    '^gunzip(?:\\s|$)',
+    '^zip(?:\\s|$)',
+    '^unzip(?:\\s|$)',
+    '^curl(?:\\s|$)',
+    '^wget(?:\\s|$)'
+  ],
+  swift: ['^swift(?:\\s|$)', '^swiftc(?:\\s|$)'],
+  tauri: ['^tauri(?:\\s|$)'],
+  zig: ['^zig(?:\\s|$)']
+}
+const SANDBOX_CAPABILITY_OPTIONS = Object.keys(SANDBOX_CAPABILITY_PRESETS)
 const SHELL_POLICY_PAGE_SIZE = 50
 
 const formRef = ref(null)
@@ -800,6 +978,8 @@ const sandboxProfileDraft = ref({
   name: '',
   config: {
     enabled: true,
+    capabilities: [],
+    commandPatterns: [],
     runtimePreference: 'auto',
     image: '',
     network: { mode: 'none', allowlist: [] },
@@ -878,6 +1058,8 @@ const agentThinkingLevelOptions = [
 const defaultSandboxProfiles = () => ({
   busybox: {
     enabled: true,
+    capabilities: ['common'],
+    commandPatterns: ['.*'],
     runtimePreference: 'auto',
     image: 'busybox:latest',
     network: { mode: 'none', allowlist: [] },
@@ -887,6 +1069,8 @@ const defaultSandboxProfiles = () => ({
   },
   python: {
     enabled: true,
+    capabilities: ['python'],
+    commandPatterns: ['^python(?:\\s|$)', '^python3(?:\\s|$)', '^pip(?:\\s|$)', '^pip3(?:\\s|$)'],
     runtimePreference: 'auto',
     image: 'python:3.12-alpine',
     network: { mode: 'none', allowlist: [] },
@@ -905,6 +1089,10 @@ const defaultSandboxConfig = () => ({
 
 const normalizeSandboxProfile = profile => ({
   enabled: profile?.enabled !== false,
+  capabilities: Array.isArray(profile?.capabilities) ? [...new Set(profile.capabilities)] : [],
+  commandPatterns: Array.isArray(profile?.commandPatterns)
+    ? [...new Set(profile.commandPatterns)]
+    : [],
   runtimePreference: profile?.runtimePreference || 'auto',
   image: profile?.image || '',
   network: {
@@ -922,8 +1110,9 @@ const normalizeSandboxProfile = profile => ({
 
 const normalizeSandboxConfig = config => {
   const defaults = defaultSandboxConfig()
-  const sourceProfiles = config?.profiles && typeof config.profiles === 'object' ? config.profiles : {}
-  const profiles = { ...defaults.profiles }
+  const hasSourceProfiles = config?.profiles && typeof config.profiles === 'object'
+  const sourceProfiles = hasSourceProfiles ? config.profiles : defaults.profiles
+  const profiles = {}
   Object.entries(sourceProfiles).forEach(([name, profile]) => {
     const trimmedName = String(name || '').trim()
     if (!trimmedName) return
@@ -933,7 +1122,7 @@ const normalizeSandboxConfig = config => {
   return {
     executionMode: config?.executionMode || defaults.executionMode,
     runtimePreference: config?.runtimePreference || defaults.runtimePreference,
-    defaultProfile: config?.defaultProfile || defaults.defaultProfile,
+    defaultProfile: config?.defaultProfile ?? Object.keys(profiles)[0] ?? '',
     profiles
   }
 }
@@ -1141,6 +1330,9 @@ const paginatedShellPolicies = computed(() => {
     index: startIndex + offset
   }))
 })
+const sandboxProfilesVisible = computed(
+  () => agentForm.value.sandboxConfig?.executionMode !== 'host_only'
+)
 const sandboxProfiles = computed(() => {
   const config = agentForm.value.sandboxConfig || normalizeSandboxConfig(null)
   return Object.entries(config.profiles || {}).map(([name, profile]) => ({
@@ -1148,17 +1340,123 @@ const sandboxProfiles = computed(() => {
     config: profile
   }))
 })
+const runtimeKeysForPreference = preference => {
+  if (preference === 'msb' || preference === 'docker') return [preference]
+  const configPreference = agentForm.value.sandboxConfig?.runtimePreference
+  if (configPreference === 'msb' || configPreference === 'docker') return [configPreference]
+  return ['msb', 'docker']
+}
+const runtimeImages = runtime => {
+  const images = sandboxRuntimeStatus.value?.[runtime]?.images
+  return Array.isArray(images) ? [...new Set(images.filter(Boolean))] : []
+}
+const profileRuntimeKey = profile => {
+  const keys = runtimeKeysForPreference(profile.config?.runtimePreference)
+  const availableRuntime = keys.find(runtime => runtimeImages(runtime).includes(profile.config?.image))
+  if (availableRuntime) return availableRuntime
+  return profile.config?.runtimePreference === 'auto'
+    ? 'auto'
+    : profile.config?.runtimePreference || 'auto'
+}
+const sandboxProfileDisplayName = profile => `${profile.name}(${profileRuntimeKey(profile)})`
+const availableSandboxProfiles = computed(() => {
+  if (!sandboxRuntimeStatus.value) return sandboxProfiles.value
+  return sandboxProfiles.value.filter(profile =>
+    runtimeKeysForPreference(profile.config?.runtimePreference).some(runtime =>
+      runtimeImages(runtime).includes(profile.config?.image)
+    )
+  )
+})
+const sandboxProfileImageOptions = computed(() => {
+  const runtimesByImage = new Map()
+  runtimeKeysForPreference(sandboxProfileDraft.value.config?.runtimePreference).forEach(runtime => {
+    runtimeImages(runtime).forEach(image => {
+      const runtimes = runtimesByImage.get(image) || []
+      runtimes.push(runtime)
+      runtimesByImage.set(image, runtimes)
+    })
+  })
+  return [...runtimesByImage.entries()].map(([image, runtimes]) => ({
+    image,
+    runtime: runtimes.join('-'),
+    label: `${image} (${runtimes.join('/')})`
+  }))
+})
 const paginatedSandboxProfiles = computed(() => {
   const startIndex = (sandboxProfilePage.value - 1) * SANDBOX_PROFILE_PAGE_SIZE
   return sandboxProfiles.value.slice(startIndex, startIndex + SANDBOX_PROFILE_PAGE_SIZE)
 })
-const openSandboxProfileEditor = (profile = null) => {
+const selectFirstAvailableDefaultProfile = () => {
+  const current = agentForm.value.sandboxConfig?.defaultProfile
+  if (availableSandboxProfiles.value.some(profile => profile.name === current)) return
+  const firstProfile = availableSandboxProfiles.value[0]
+  if (firstProfile) agentForm.value.sandboxConfig.defaultProfile = firstProfile.name
+}
+const onSandboxExecutionModeChange = async mode => {
+  if (mode !== 'host_only') await onSandboxRuntimePreferenceChange()
+}
+const onSandboxRuntimePreferenceChange = async () => {
+  await loadSandboxRuntimeStatus()
+  selectFirstAvailableDefaultProfile()
+}
+const onSandboxProfileRuntimeChange = async () => {
+  await loadSandboxRuntimeStatus()
+  const currentImage = sandboxProfileDraft.value.config.image
+  if (!sandboxProfileImageOptions.value.some(option => option.image === currentImage)) {
+    sandboxProfileDraft.value.config.image = sandboxProfileImageOptions.value[0]?.image || ''
+  }
+}
+const onSandboxCapabilitiesChange = capabilities => {
+  const selected = [...new Set(capabilities)]
+  const existingPatterns = sandboxProfileDraft.value.config.commandPatterns || []
+  const hadCommonPattern = existingPatterns.includes('.*')
+  if (selected.includes('common')) {
+    if (selected.length === 1 || !hadCommonPattern) {
+      sandboxProfileDraft.value.config.capabilities = ['common']
+      sandboxProfileDraft.value.config.commandPatterns = ['.*']
+      return
+    }
+    sandboxProfileDraft.value.config.capabilities = selected.filter(item => item !== 'common')
+  }
+
+  const patterns = new Set(existingPatterns.filter(pattern => pattern !== '.*'))
+  sandboxProfileDraft.value.config.capabilities.forEach(capability => {
+    const presets = SANDBOX_CAPABILITY_PRESETS[capability] || []
+    presets.forEach(pattern => patterns.add(pattern))
+  })
+  sandboxProfileDraft.value.config.commandPatterns = [...patterns]
+}
+const openSandboxProfileEditor = async (profile = null) => {
   sandboxProfileEditorName.value = profile?.name || ''
   sandboxProfileDraft.value = {
     name: profile?.name || '',
     config: normalizeSandboxProfile(profile?.config)
   }
   sandboxProfileEditorVisible.value = true
+  await loadSandboxRuntimeStatus()
+  if (!profile) await onSandboxProfileRuntimeChange()
+}
+
+const deleteSandboxProfile = profile => {
+  ElMessageBox.confirm(
+    t('settings.agent.sandboxProfileDeleteConfirm', { name: profile.name }),
+    t('settings.agent.sandboxProfileDeleteTitle'),
+    {
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
+      type: 'warning'
+    }
+  )
+    .then(() => {
+      const config = agentForm.value.sandboxConfig
+      delete config.profiles[profile.name]
+      if (config.defaultProfile === profile.name) {
+        config.defaultProfile = Object.keys(config.profiles)[0] || ''
+      }
+      const maxPage = Math.max(1, Math.ceil(sandboxProfiles.value.length / SANDBOX_PROFILE_PAGE_SIZE))
+      sandboxProfilePage.value = Math.min(sandboxProfilePage.value, maxPage)
+    })
+    .catch(() => {})
 }
 
 const saveSandboxProfile = () => {
@@ -1168,8 +1466,35 @@ const saveSandboxProfile = () => {
     showMessage(t('settings.agent.sandboxProfileNameRequired'), 'warning')
     return
   }
-  if (!image) {
+  if (
+    !image ||
+    !sandboxProfileImageOptions.value.some(option => option.image === image)
+  ) {
     showMessage(t('settings.agent.sandboxImageRequired'), 'warning')
+    return
+  }
+  const capabilities = [...new Set(
+    (sandboxProfileDraft.value.config.capabilities || [])
+      .map(capability => String(capability).trim().toLowerCase())
+      .filter(Boolean)
+  )]
+  const commandPatterns = [...new Set(
+    (sandboxProfileDraft.value.config.commandPatterns || [])
+      .map(pattern => String(pattern).trim())
+      .filter(Boolean)
+  )]
+  if (!commandPatterns.length) {
+    showMessage(t('settings.agent.sandboxCommandPatternsRequired'), 'warning')
+    return
+  }
+  if (commandPatterns.includes('.*') && commandPatterns.length > 1) {
+    showMessage(t('settings.agent.sandboxCommonPatternExclusive'), 'warning')
+    return
+  }
+  try {
+    commandPatterns.forEach(pattern => new RegExp(pattern))
+  } catch {
+    showMessage(t('settings.agent.sandboxCommandPatternInvalid'), 'warning')
     return
   }
   const profiles = agentForm.value.sandboxConfig.profiles
@@ -1179,6 +1504,8 @@ const saveSandboxProfile = () => {
   }
   profiles[name] = normalizeSandboxProfile({
     ...sandboxProfileDraft.value.config,
+    capabilities,
+    commandPatterns,
     image
   })
   if (!agentForm.value.sandboxConfig.defaultProfile) {
@@ -1199,13 +1526,19 @@ const sandboxRuntimeRows = computed(() => {
   return [
     { key: 'msb', label: t('settings.agent.sandboxRuntimeMsb'), status: status.msb },
     { key: 'docker', label: t('settings.agent.sandboxRuntimeDocker'), status: status.docker }
-  ].map(item => ({
-    key: item.key,
-    label: item.label,
-    stateLabel: t(`settings.agent.sandboxStatus${item.status?.state || 'unknown'}`),
-    tagType: sandboxStateTagType(item.status?.state),
-    detail: item.status?.reason || item.status?.version || ''
-  }))
+  ].map(item => {
+    const hasImages = Array.isArray(item.status?.images) && item.status.images.length > 0
+    const displayState = item.status?.state === 'ready_missing_image' && hasImages
+      ? 'ready'
+      : item.status?.state || 'unknown'
+    return {
+      key: item.key,
+      label: item.label,
+      stateLabel: t(`settings.agent.sandboxStatus${displayState}`),
+      tagType: sandboxStateTagType(displayState),
+      detail: item.status?.version || item.status?.reason || ''
+    }
+  })
 })
 
 // Function to sort tool IDs by their names
@@ -1473,6 +1806,7 @@ const refreshSandboxRuntimeStatus = async () => {
       'refresh_sandbox_runtime_status',
       sandboxStatusPayload()
     )
+    if (sandboxProfilesVisible.value) selectFirstAvailableDefaultProfile()
   } catch (error) {
     console.error('Failed to refresh sandbox runtime status:', error)
     showMessage(t('settings.agent.sandboxRuntimeRefreshFailed'), 'error')
@@ -1489,6 +1823,7 @@ const loadSandboxRuntimeStatus = async () => {
       'get_sandbox_runtime_status',
       sandboxStatusPayload()
     )
+    if (sandboxProfilesVisible.value) selectFirstAvailableDefaultProfile()
   } catch (error) {
     console.error('Failed to load sandbox runtime status:', error)
   } finally {
@@ -1575,7 +1910,7 @@ const normalizeAgentFormForSave = form => {
           .filter(([name, profile]) => name && profile.image.trim())
       )
       if (!normalized.sandboxConfig.profiles[normalized.sandboxConfig.defaultProfile]) {
-        normalized.sandboxConfig.defaultProfile = Object.keys(normalized.sandboxConfig.profiles)[0] || 'busybox'
+        normalized.sandboxConfig.defaultProfile = Object.keys(normalized.sandboxConfig.profiles)[0] || ''
       }
     } else {
       normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
@@ -1694,6 +2029,7 @@ const editAgent = async id => {
   shellPolicyPage.value = 1
   sandboxProfilePage.value = 1
   sandboxProfileEditorVisible.value = false
+  sandboxRuntimeStatus.value = null
   await Promise.all([ensureDefaultShellPoliciesLoaded(), loadAvailableMcpTools()])
 
   if (id) {
@@ -1960,7 +2296,10 @@ const updateAgent = () => {
         // Refresh the agents list from the store to update the UI
         await agentStore.fetchAgents()
       } catch (error) {
-        showMessage(t('settings.agent.saveFailed'), 'error')
+        showMessage(
+          t('settings.agent.saveFailed', { error: error?.message || String(error) }),
+          'error'
+        )
       }
     }
   })
@@ -2049,6 +2388,7 @@ const onAgentDialogClose = () => {
   activeTab.value = 'basic'
   shellPolicyPage.value = 1
   skillSearchKeyword.value = ''
+  sandboxRuntimeStatus.value = null
   // Clear form validation errors
   formRef.value?.resetFields()
 }
@@ -2137,7 +2477,6 @@ watch(
       agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
         tool => tool !== 'bash'
       )
-      agentForm.value.sandboxConfig = defaultSandboxConfig()
       if (activeTab.value === 'sandbox') {
         activeTab.value = 'security'
       }

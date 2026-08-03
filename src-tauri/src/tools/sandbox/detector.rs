@@ -395,8 +395,29 @@ fn images_from_json_value(value: &Value) -> Vec<String> {
     match value {
         Value::Array(items) => items.iter().flat_map(images_from_json_value).collect(),
         Value::Object(map) => {
-            let candidates = ["name", "image", "reference", "repository", "tag"];
-            for key in candidates {
+            if let Some(reference) = map.get("reference").and_then(Value::as_str) {
+                if !reference.trim().is_empty() {
+                    return vec![reference.to_string()];
+                }
+            }
+            let repository = map
+                .get("repository")
+                .or_else(|| map.get("Repository"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let tag = map
+                .get("tag")
+                .or_else(|| map.get("Tag"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !repository.trim().is_empty() {
+                return if tag.trim().is_empty() || tag == "<none>" {
+                    vec![repository.to_string()]
+                } else {
+                    vec![format!("{repository}:{tag}")]
+                };
+            }
+            for key in ["name", "image"] {
                 if let Some(text) = map.get(key).and_then(Value::as_str) {
                     if !text.trim().is_empty() {
                         return vec![text.to_string()];
@@ -434,6 +455,15 @@ mod tests {
         );
         assert_eq!(
             parse_image_list(r#"[{"name":"busybox:latest"},{"image":"python:3.12-alpine"}]"#),
+            vec![
+                "busybox:latest".to_string(),
+                "python:3.12-alpine".to_string()
+            ]
+        );
+        assert_eq!(
+            parse_image_list(
+                r#"[{"repository":"busybox","tag":"latest"},{"Repository":"python","Tag":"3.12-alpine"}]"#
+            ),
             vec![
                 "busybox:latest".to_string(),
                 "python:3.12-alpine".to_string()

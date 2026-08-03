@@ -133,14 +133,12 @@ pub enum HostFallbackReason {
 #[serde(rename_all = "snake_case")]
 pub enum ShellExecutionRiskFloor {
     Normal,
-    HostHighRisk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellExecutionPlanStatus {
     Ready,
-    NeedsApproval,
     Denied,
 }
 
@@ -312,6 +310,10 @@ pub struct SandboxResourceLimits {
 pub struct SandboxProfileConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command_patterns: Vec<String>,
     #[serde(default)]
     pub runtime_preference: SandboxRuntimePreference,
     pub image: String,
@@ -381,8 +383,13 @@ impl AgentSandboxConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.default_profile.trim().is_empty() {
-            return Err("default_profile cannot be empty".to_string());
+        if !self.profiles.is_empty() && self.default_profile.trim().is_empty() {
+            return Err("default_profile cannot be empty when profiles are configured".to_string());
+        }
+        if !self.default_profile.trim().is_empty()
+            && !self.profiles.contains_key(&self.default_profile)
+        {
+            return Err("default_profile must reference an existing profile".to_string());
         }
 
         for (name, profile) in &self.profiles {
@@ -391,6 +398,21 @@ impl AgentSandboxConfig {
             }
             if profile.image.trim().is_empty() {
                 return Err(format!("profile {name} image cannot be empty"));
+            }
+            if profile.command_patterns.len() > 1
+                && profile
+                    .command_patterns
+                    .iter()
+                    .any(|pattern| pattern.trim() == ".*")
+            {
+                return Err(format!(
+                    "profile {name} cannot combine the common fallback pattern with specific patterns"
+                ));
+            }
+            for pattern in &profile.command_patterns {
+                regex::Regex::new(pattern).map_err(|error| {
+                    format!("profile {name} command pattern is invalid: {error}")
+                })?;
             }
             if matches!(profile.network.mode, SandboxNetworkMode::Allowlist)
                 && profile

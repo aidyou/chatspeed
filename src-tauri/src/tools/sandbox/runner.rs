@@ -100,12 +100,15 @@ pub fn sandbox_argv_for_plan(
     }
 }
 
-pub fn effective_timeout_ms(plan: &ShellExecutionPlan, requested_timeout_ms: u64) -> u64 {
-    plan.resources
-        .as_ref()
-        .and_then(|resources| resources.timeout_ms)
-        .map(|profile_timeout| profile_timeout.min(requested_timeout_ms))
-        .unwrap_or(requested_timeout_ms)
+pub fn effective_timeout_ms(plan: &ShellExecutionPlan, requested_timeout_ms: Option<u64>) -> u64 {
+    requested_timeout_ms
+        .or_else(|| {
+            plan.resources
+                .as_ref()
+                .and_then(|resources| resources.timeout_ms)
+        })
+        .unwrap_or(120_000)
+        .min(600_000)
 }
 
 fn build_msb_argv(
@@ -151,9 +154,6 @@ fn build_msb_argv(
         }
         if let Some(memory_mb) = resources.memory_mb {
             argv.extend(["--memory".to_string(), format!("{}M", memory_mb)]);
-        }
-        if let Some(timeout_ms) = resources.timeout_ms {
-            argv.extend(["--timeout".to_string(), format!("{}ms", timeout_ms)]);
         }
     }
     for mount in &plan.mounts {
@@ -310,11 +310,12 @@ mod tests {
         assert!(argv
             .windows(2)
             .any(|pair| pair[0] == "--memory" && pair[1] == "128M"));
+        assert!(!argv.iter().any(|arg| arg == "--timeout"));
         assert!(argv
             .windows(3)
             .any(|window| window[0] == "sh" && window[1] == "-lc" && window[2] == "echo hi"));
         assert_eq!(
-            effective_timeout_ms(&plan(ShellExecutionBackendKind::Msb), 120_000),
+            effective_timeout_ms(&plan(ShellExecutionBackendKind::Msb), None),
             120_000
         );
     }
@@ -377,13 +378,15 @@ mod tests {
     }
 
     #[test]
-    fn effective_timeout_uses_stricter_profile_limit() {
+    fn effective_timeout_uses_ai_override_or_profile_default() {
         let mut plan = plan(ShellExecutionBackendKind::Msb);
         let mut resources = plan.resources.clone().unwrap();
         resources.timeout_ms = Some(30_000);
         plan.resources = Some(resources);
-        assert_eq!(effective_timeout_ms(&plan, 120_000), 30_000);
-        assert_eq!(effective_timeout_ms(&plan, 10_000), 10_000);
+        assert_eq!(effective_timeout_ms(&plan, None), 30_000);
+        assert_eq!(effective_timeout_ms(&plan, Some(10_000)), 10_000);
+        assert_eq!(effective_timeout_ms(&plan, Some(90_000)), 90_000);
+        assert_eq!(effective_timeout_ms(&plan, Some(900_000)), 600_000);
     }
 
     #[test]

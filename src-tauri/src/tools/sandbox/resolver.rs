@@ -128,20 +128,128 @@ fn choose_profile<'a>(
     config: &'a AgentSandboxConfig,
     command: &str,
 ) -> Option<(String, &'a super::types::SandboxProfileConfig)> {
+    let match_units = command_match_units(command);
+
+    if let Some(default_profile) = config.profiles.get(&config.default_profile) {
+        if default_profile.enabled
+            && !is_common_profile(default_profile)
+            && profile_matches_all_units(default_profile, &match_units)
+        {
+            return Some((config.default_profile.clone(), default_profile));
+        }
+    }
+
+    if let Some((name, profile)) = config.profiles.iter().find(|(_, profile)| {
+        profile.enabled
+            && !is_common_profile(profile)
+            && profile_matches_all_units(profile, &match_units)
+    }) {
+        return Some((name.clone(), profile));
+    }
+
+    // Profiles saved before commandPatterns was introduced keep the previous
+    // capability inference until they are edited and migrated by the UI.
     let required = command_capabilities(command);
+    if !required.is_empty() {
+        if let Some((name, profile)) = config.profiles.iter().find(|(name, profile)| {
+            profile.enabled
+                && profile.command_patterns.is_empty()
+                && !is_common_profile(profile)
+                && profile_satisfies(name, profile, &required)
+        }) {
+            return Some((name.clone(), profile));
+        }
+    }
+
     if let Some(profile) = config.profiles.get(&config.default_profile) {
-        if profile.enabled && profile_satisfies(&config.default_profile, &profile.image, &required)
+        if profile.enabled
+            && (is_common_profile(profile)
+                || profile_matches_all_units(profile, &match_units)
+                || (profile.command_patterns.is_empty()
+                    && profile_satisfies(&config.default_profile, profile, &required)))
         {
             return Some((config.default_profile.clone(), profile));
         }
     }
+
     config
         .profiles
         .iter()
-        .find(|(name, profile)| {
-            profile.enabled && profile_satisfies(name, &profile.image, &required)
-        })
+        .find(|(_, profile)| profile.enabled && is_common_profile(profile))
         .map(|(name, profile)| (name.clone(), profile))
+}
+
+fn profile_matches_all_units(
+    profile: &super::types::SandboxProfileConfig,
+    match_units: &[String],
+) -> bool {
+    if match_units.is_empty() || profile.command_patterns.is_empty() {
+        return false;
+    }
+    let patterns = profile
+        .command_patterns
+        .iter()
+        .filter_map(|pattern| regex::Regex::new(pattern).ok())
+        .collect::<Vec<_>>();
+    !patterns.is_empty()
+        && match_units
+            .iter()
+            .all(|unit| patterns.iter().any(|pattern| pattern.is_match(unit)))
+}
+
+fn is_common_profile(profile: &super::types::SandboxProfileConfig) -> bool {
+    profile
+        .command_patterns
+        .iter()
+        .any(|pattern| pattern.trim() == ".*")
+        || (profile.command_patterns.is_empty()
+            && profile.capabilities.len() == 1
+            && profile.capabilities[0].eq_ignore_ascii_case("common"))
+}
+
+fn command_match_units(command: &str) -> Vec<String> {
+    let mut units = Vec::new();
+    for segment in split_shell_command_segments(command) {
+        collect_segment_match_units(&segment, &mut units);
+    }
+    units
+}
+
+fn collect_segment_match_units(segment: &str, units: &mut Vec<String>) {
+    let Some(tokens) = shell_tokens(segment) else {
+        return;
+    };
+    let index = leading_command_index(&tokens);
+    if index >= tokens.len() {
+        return;
+    }
+    let executable = tokens[index].as_str();
+    if matches!(executable, "cd" | "pushd" | "popd" | "tee" | "xargs") {
+        return;
+    }
+
+    units.push(tokens[index..].join(" "));
+
+    if matches!(executable, "npm" | "pnpm" | "yarn" | "npx" | "cargo") {
+        let subcommands = tokens[index + 1..]
+            .iter()
+            .filter(|token| !token.starts_with('-'))
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        if subcommands.first() == Some(&"tauri") {
+            units.push(subcommands.join(" "));
+        } else if subcommands.first() == Some(&"run") && subcommands.get(1) == Some(&"tauri") {
+            units.push(subcommands[1..].join(" "));
+        }
+    }
+
+    if matches!(executable, "sh" | "bash" | "zsh") {
+        if let Some(script) = shell_c_script(&tokens, index + 1) {
+            for nested in split_shell_command_segments(script) {
+                collect_segment_match_units(&nested, units);
+            }
+        }
+    }
 }
 
 fn command_capabilities(command: &str) -> Vec<&'static str> {
@@ -190,6 +298,24 @@ fn collect_tokens_executables(tokens: &[String], executables: &mut Vec<String>) 
     }
     push_executable(executables, command);
 
+    if matches!(command, "npm" | "pnpm" | "yarn" | "npx" | "cargo") {
+        let subcommand = tokens
+            .iter()
+            .skip(index + 1)
+            .find(|token| !token.starts_with('-'))
+            .map(String::as_str);
+        if subcommand == Some("tauri")
+            || (subcommand == Some("run")
+                && tokens
+                    .iter()
+                    .skip(index + 2)
+                    .find(|token| !token.starts_with('-'))
+                    .is_some_and(|token| token == "tauri"))
+        {
+            push_executable(executables, "tauri");
+        }
+    }
+
     if matches!(command, "sh" | "bash" | "zsh") {
         if let Some(script) = shell_c_script(tokens, index + 1) {
             for nested in split_shell_command_segments(script) {
@@ -221,23 +347,47 @@ fn executable_capabilities(executable: &str) -> &'static [&'static str] {
     match executable {
         "python" | "python3" | "pip" | "pip3" => &["python"],
         "node" | "npm" | "pnpm" | "yarn" | "npx" => &["node"],
-        "cargo" | "rustc" | "rustup" => &["rust"],
+        "cargo" | "rustc" | "rustup" | "rustfmt" | "rustdoc" | "cargo-fmt" | "cargo-clippy"
+        | "clippy-driver" | "cargo-miri" | "miri" | "rust-analyzer" | "rust-gdb"
+        | "rust-gdbgui" | "rust-lldb" => &["rust"],
         "tauri" => &["tauri"],
+        "git" => &["git"],
         "go" => &["go"],
         "php" | "composer" => &["php"],
         _ => &[],
     }
 }
 
-fn profile_satisfies(profile_name: &str, image: &str, required: &[&'static str]) -> bool {
+fn profile_satisfies(
+    profile_name: &str,
+    profile: &super::types::SandboxProfileConfig,
+    required: &[&'static str],
+) -> bool {
+    let capabilities = profile_capabilities(profile_name, profile);
     required
         .iter()
-        .all(|capability| profile_capabilities(profile_name, image).contains(capability))
+        .all(|capability| capabilities.iter().any(|available| available == capability))
 }
 
-fn profile_capabilities(profile_name: &str, image: &str) -> Vec<&'static str> {
-    let text = format!("{} {}", profile_name.to_lowercase(), image.to_lowercase());
-    let mut capabilities = vec!["common"];
+fn profile_capabilities(
+    profile_name: &str,
+    profile: &super::types::SandboxProfileConfig,
+) -> Vec<String> {
+    if !profile.capabilities.is_empty() {
+        return profile
+            .capabilities
+            .iter()
+            .map(|capability| capability.trim().to_ascii_lowercase())
+            .filter(|capability| !capability.is_empty())
+            .collect();
+    }
+
+    let text = format!(
+        "{} {}",
+        profile_name.to_lowercase(),
+        profile.image.to_lowercase()
+    );
+    let mut capabilities = vec!["common".to_string()];
     for (needle, capability) in [
         ("busybox", "common"),
         ("alpine", "common"),
@@ -245,11 +395,12 @@ fn profile_capabilities(profile_name: &str, image: &str) -> Vec<&'static str> {
         ("node", "node"),
         ("rust", "rust"),
         ("tauri", "tauri"),
+        ("git", "git"),
         ("go", "go"),
         ("php", "php"),
     ] {
-        if text.contains(needle) && !capabilities.contains(&capability) {
-            capabilities.push(capability);
+        if text.contains(needle) && !capabilities.iter().any(|item| item == capability) {
+            capabilities.push(capability.to_string());
         }
     }
     capabilities
@@ -337,8 +488,8 @@ fn host_plan(tool_call_id: &str, command: &str, reason: HostFallbackReason) -> S
         mounts: Vec::new(),
         workdir: None,
         fallback_reason: Some(reason),
-        risk_floor: ShellExecutionRiskFloor::HostHighRisk,
-        status: ShellExecutionPlanStatus::NeedsApproval,
+        risk_floor: ShellExecutionRiskFloor::Normal,
+        status: ShellExecutionPlanStatus::Ready,
     }
 }
 
@@ -395,6 +546,8 @@ mod tests {
             "busybox".to_string(),
             SandboxProfileConfig {
                 enabled: true,
+                capabilities: vec!["common".to_string()],
+                command_patterns: vec![".*".to_string()],
                 runtime_preference: SandboxRuntimePreference::Auto,
                 image: "busybox:latest".to_string(),
                 network: SandboxNetworkPolicy::default(),
@@ -446,7 +599,8 @@ mod tests {
             Some(Path::new("/project")),
         );
         assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
-        assert_eq!(plan.status, ShellExecutionPlanStatus::NeedsApproval);
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+        assert_eq!(plan.risk_floor, ShellExecutionRiskFloor::Normal);
         assert_eq!(plan.fallback_reason, Some(HostFallbackReason::MissingImage));
     }
 
@@ -464,7 +618,8 @@ mod tests {
             Some(Path::new("/project")),
         );
         assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
-        assert_eq!(plan.status, ShellExecutionPlanStatus::NeedsApproval);
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+        assert_eq!(plan.risk_floor, ShellExecutionRiskFloor::Normal);
         assert_eq!(plan.fallback_reason, Some(HostFallbackReason::MissingImage));
     }
 
@@ -509,11 +664,19 @@ mod tests {
         assert_eq!(plan.risk_floor, ShellExecutionRiskFloor::Normal);
     }
 
-    fn add_profile(config: &mut AgentSandboxConfig, name: &str, image: &str) {
+    fn add_profile(
+        config: &mut AgentSandboxConfig,
+        name: &str,
+        image: &str,
+        capabilities: &[&str],
+        command_patterns: &[&str],
+    ) {
         config.profiles.insert(
             name.to_string(),
             SandboxProfileConfig {
                 enabled: true,
+                capabilities: capabilities.iter().map(ToString::to_string).collect(),
+                command_patterns: command_patterns.iter().map(ToString::to_string).collect(),
                 runtime_preference: SandboxRuntimePreference::Auto,
                 image: image.to_string(),
                 network: SandboxNetworkPolicy::default(),
@@ -527,7 +690,17 @@ mod tests {
     #[test]
     fn compound_command_selects_one_superset_profile_without_splitting() {
         let mut config = config(ShellExecutionMode::Auto);
-        add_profile(&mut config, "node-rust", "node-rust:latest");
+        add_profile(
+            &mut config,
+            "node-rust",
+            "node-rust:latest",
+            &[],
+            &[
+                r"^(?:node|npm|pnpm|yarn|npx)(?:\s|$)",
+                r"^(?:cargo|rustc|rustup)(?:\s|$)",
+                r"^git(?:\s|$)",
+            ],
+        );
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(
                 SandboxRuntime::Msb,
@@ -550,7 +723,7 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_compound_profile_uses_structured_host_fallback() {
+    fn common_profile_is_the_final_sandbox_fallback() {
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
             docker: ready_status(SandboxRuntime::Docker, vec![]),
@@ -562,9 +735,29 @@ mod tests {
             &status,
             Some(Path::new("/project")),
         );
+        assert_eq!(plan.backend, ShellExecutionBackendKind::Msb);
+        assert_eq!(plan.profile.as_deref(), Some("busybox"));
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+    }
+
+    #[test]
+    fn unavailable_compound_profile_without_common_uses_host_fallback() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config.profiles.remove("busybox");
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let plan = ShellExecutionResolver::resolve(
+            "tool-1",
+            "pnpm build && cargo test",
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
+        );
         assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
-        assert_eq!(plan.status, ShellExecutionPlanStatus::NeedsApproval);
-        assert_eq!(plan.risk_floor, ShellExecutionRiskFloor::HostHighRisk);
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+        assert_eq!(plan.risk_floor, ShellExecutionRiskFloor::Normal);
         assert_eq!(
             plan.fallback_reason,
             Some(HostFallbackReason::ProfileUnavailable)
@@ -598,6 +791,18 @@ mod tests {
             vec!["node", "rust"]
         );
         assert_eq!(
+            command_capabilities("rustfmt --check src/lib.rs"),
+            vec!["rust"]
+        );
+        assert_eq!(
+            command_capabilities("cargo check && git diff src-tauri"),
+            vec!["rust", "git"]
+        );
+        assert_eq!(
+            command_capabilities("pnpm tauri build && cargo check && git diff"),
+            vec!["node", "tauri", "rust", "git"]
+        );
+        assert_eq!(
             command_capabilities("bash -c 'python --version && node --version'"),
             vec!["python", "node"]
         );
@@ -608,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn host_only_creates_host_high_risk_plan() {
+    fn host_only_uses_host_without_overriding_shell_policy() {
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
             docker: ready_status(SandboxRuntime::Docker, vec!["busybox:latest"]),
@@ -621,7 +826,7 @@ mod tests {
             Some(Path::new("/project")),
         );
         assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
-        assert_eq!(plan.risk_floor, ShellExecutionRiskFloor::HostHighRisk);
-        assert_eq!(plan.status, ShellExecutionPlanStatus::NeedsApproval);
+        assert_eq!(plan.risk_floor, ShellExecutionRiskFloor::Normal);
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
     }
 }
