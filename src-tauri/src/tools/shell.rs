@@ -773,25 +773,22 @@ impl ToolDefinition for ShellExecute {
         // but AC-9 requires backend execution to preserve original shell semantics.
 
         // Fallback to standard execution
-        let cmd_future = if cfg!(target_os = "windows") {
+        let mut command = if cfg!(target_os = "windows") {
             let mut command = Command::new("cmd");
             command.args(["/C", command_str]);
             configure_no_window(&mut command);
-            if let Some(dir) = &working_dir {
-                command.current_dir(dir);
-            }
-            command.output()
+            command
         } else {
             let mut command = Command::new("sh");
             command.args(["-c", command_str]);
-            if let Some(dir) = &working_dir {
-                command.current_dir(dir);
-            }
-            command.output()
+            command
         };
+        if let Some(dir) = &working_dir {
+            command.current_dir(dir);
+        }
 
-        match timeout(Duration::from_millis(timeout_ms), cmd_future).await {
-            Ok(Ok(output)) => {
+        match run_host_output_with_timeout(command, timeout_ms).await {
+            Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let exit_code = output.status.code().unwrap_or(-1);
@@ -803,11 +800,7 @@ impl ToolDefinition for ShellExecute {
                     execution_plan_metadata.clone(),
                 ))
             }
-            Ok(Err(e)) => Err(ToolError::ExecutionFailed(format!("Spawn failed: {}", e))),
-            Err(_) => Err(ToolError::ExecutionFailed(format!(
-                "Command timed out after {}ms",
-                timeout_ms
-            ))),
+            Err(error) => Err(error),
         }
     }
 }
@@ -831,6 +824,8 @@ fn configure_process_group(_command: &mut Command) {}
 struct StageProcessGuard {
     #[cfg(unix)]
     process_group_id: i32,
+    #[cfg(windows)]
+    process_id: u32,
     active: bool,
 }
 
@@ -839,6 +834,8 @@ impl StageProcessGuard {
         Self {
             #[cfg(unix)]
             process_group_id: _child.id().map_or(0, |id| id as i32),
+            #[cfg(windows)]
+            process_id: _child.id().unwrap_or(0),
             active: true,
         }
     }
@@ -859,6 +856,17 @@ impl StageProcessGuard {
             const SIGKILL: i32 = 9;
             let _ = unsafe { kill(-self.process_group_id, SIGKILL) };
         }
+        #[cfg(windows)]
+        if self.process_id > 0 {
+            let mut command = std::process::Command::new("taskkill");
+            command
+                .args(["/PID", &self.process_id.to_string(), "/T", "/F"])
+                .creation_flags(0x08000000); // CREATE_NO_WINDOW
+            let _ = command
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
         self.active = false;
     }
 }
@@ -876,6 +884,36 @@ async fn terminate_stage_process(child: &mut Child, process_guard: &mut StagePro
         let _ = child.kill().await;
     }
     let _ = child.wait().await;
+}
+
+async fn run_host_output_with_timeout(
+    mut command: Command,
+    timeout_ms: u64,
+) -> Result<std::process::Output, ToolError> {
+    use std::process::Stdio;
+
+    command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    configure_process_group(&mut command);
+    let child = command
+        .spawn()
+        .map_err(|error| ToolError::ExecutionFailed(format!("Spawn failed: {error}")))?;
+    let mut process_guard = StageProcessGuard::new(&child);
+
+    match timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
+        Ok(Ok(output)) => {
+            process_guard.disarm();
+            Ok(output)
+        }
+        Ok(Err(error)) => Err(ToolError::ExecutionFailed(format!(
+            "Failed to wait for command: {error}"
+        ))),
+        Err(_) => Err(ToolError::ExecutionFailed(format!(
+            "Command timed out after {timeout_ms}ms"
+        ))),
+    }
 }
 
 struct SandboxCleanupGuard {
@@ -3654,6 +3692,70 @@ mod tests {
         assert!(
             matches!(result, Err(ToolError::ExecutionFailed(message)) if message.contains("timed out after 150ms"))
         );
+        assert_recorded_child_stopped(&project_root).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_command_future_drop_kills_the_process_group_without_gateway() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        write_long_running_child_script(&project_root);
+        let shell = test_shell_execute(project_root.clone());
+
+        let task = tokio::spawn(async move {
+            shell
+                .call(json!({
+                    "command": "sh spawn-child.sh",
+                    "timeout": 30_000,
+                }))
+                .await
+        });
+
+        let pid_path = project_root.join("child.pid");
+        for _ in 0..100 {
+            if pid_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(pid_path.exists(), "child process did not start");
+
+        task.abort();
+        let _ = task.await;
+        assert_recorded_child_stopped(&project_root).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn streaming_command_future_drop_kills_the_process_group() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        write_long_running_child_script(&project_root);
+        let gateway = Arc::new(RecordingGateway::default());
+        let shell = test_shell_execute(project_root.clone())
+            .with_gateway(gateway, "test-session".to_string());
+
+        let task = tokio::spawn(async move {
+            shell
+                .call(json!({
+                    "command": "sh spawn-child.sh",
+                    "timeout": 30_000,
+                }))
+                .await
+        });
+
+        let pid_path = project_root.join("child.pid");
+        for _ in 0..100 {
+            if pid_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(pid_path.exists(), "child process did not start");
+
+        task.abort();
+        let _ = task.await;
         assert_recorded_child_stopped(&project_root).await;
     }
 

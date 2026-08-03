@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::time::{sleep, Duration};
@@ -42,7 +43,8 @@ use crate::workflow::react::{
     security::PathGuard,
     signals::{
         parse_runtime_signal, remove_stashed_user_message, restore_stashed_user_message_tombstones,
-        take_stashed_runtime_signals, take_stashed_user_messages, RuntimeSignal, SignalType,
+        stash_runtime_signal, take_stashed_runtime_signals, take_stashed_user_messages,
+        RuntimeSignal, SignalType,
     },
     sinks::{DBSink, Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
@@ -53,6 +55,39 @@ use crate::workflow::react::{
 };
 
 const ALWAYS_ENABLED_SKILL_NAME: &str = "help";
+
+async fn await_with_stop<F, T>(
+    session_id: &str,
+    signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+    future: F,
+) -> Result<T, WorkflowEngineError>
+where
+    F: Future<Output = T>,
+{
+    tokio::pin!(future);
+
+    loop {
+        tokio::select! {
+            biased;
+            signal = signal_rx.recv() => {
+                let Some(signal) = signal else {
+                    return Ok(future.await);
+                };
+                if matches!(parse_runtime_signal(&signal), RuntimeSignal::Stop) {
+                    log::info!(
+                        "[Workflow][session={}][phase=active_wait] Stop signal interrupted active operation",
+                        session_id
+                    );
+                    return Err(WorkflowEngineError::Cancelled(
+                        "Stopped during active operation".to_string(),
+                    ));
+                }
+                stash_runtime_signal(session_id, signal);
+            }
+            output = &mut future => return Ok(output),
+        }
+    }
+}
 
 /// Unified interface for ReAct executors (Planners and Runners).
 #[async_trait]
@@ -945,7 +980,13 @@ impl ReActExecutor for WorkflowExecutor {
                 WorkflowState::Completed | WorkflowState::Error | WorkflowState::Cancelled
             );
 
-            if !is_cancelled && !is_terminal {
+            if is_cancelled && !is_terminal {
+                log::info!(
+                    "[Workflow][session={}][phase=run_loop][event=cancelled] Transitioning workflow to cancelled after active operation was interrupted",
+                    self.session_id
+                );
+                self.update_state(WorkflowState::Cancelled).await?;
+            } else if !is_terminal {
                 log::error!(
                     "[Workflow][session={}][phase=run_loop][event=terminal_error] Transitioning workflow to error after run loop failure: {}",
                     self.session_id,
@@ -2960,22 +3001,38 @@ impl WorkflowExecutor {
                                     )
                                     .await;
 
-                                    let result = if tool_name
-                                        .contains(crate::tools::MCP_TOOL_NAME_SPLIT)
-                                    {
-                                        if self.is_mcp_tool_allowed(&tool_name) {
-                                            self.global_tool_manager
-                                                .tool_call(&tool_name, enriched_args)
-                                                .await
-                                        } else {
-                                            Err(crate::tools::ToolError::Security(format!(
-                                                "MCP tool '{}' is not available in this workflow",
-                                                tool_name
-                                            )))
-                                        }
-                                    } else {
-                                        self.tool_manager.tool_call(&tool_name, enriched_args).await
-                                    };
+                                    let mcp_tool_allowed = self.is_mcp_tool_allowed(&tool_name);
+                                    let tool_manager = self.tool_manager.clone();
+                                    let global_tool_manager = self.global_tool_manager.clone();
+                                    let tool_name_for_call = tool_name.clone();
+                                    let result = await_with_stop(
+                                        &self.session_id,
+                                        &mut signal_rx,
+                                        async move {
+                                            if tool_name_for_call
+                                                .contains(crate::tools::MCP_TOOL_NAME_SPLIT)
+                                            {
+                                                if mcp_tool_allowed {
+                                                    global_tool_manager
+                                                        .tool_call(
+                                                            &tool_name_for_call,
+                                                            enriched_args,
+                                                        )
+                                                        .await
+                                                } else {
+                                                    Err(crate::tools::ToolError::Security(format!(
+                                                        "MCP tool '{}' is not available in this workflow",
+                                                        tool_name_for_call
+                                                    )))
+                                                }
+                                            } else {
+                                                tool_manager
+                                                    .tool_call(&tool_name_for_call, enriched_args)
+                                                    .await
+                                            }
+                                        },
+                                    )
+                                    .await?;
                                     self.append_tool_terminal_event(
                                         &tool_call_id,
                                         &tool_name,
@@ -3454,20 +3511,32 @@ impl WorkflowExecutor {
                             )
                             .await;
 
-                            let result = if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
-                                if self.is_mcp_tool_allowed(&tool_name) {
-                                    self.global_tool_manager
-                                        .tool_call(&tool_name, enriched_args)
-                                        .await
-                                } else {
-                                    Err(crate::tools::ToolError::Security(format!(
-                                        "MCP tool '{}' is not available in this workflow",
-                                        tool_name
-                                    )))
-                                }
-                            } else {
-                                self.tool_manager.tool_call(&tool_name, enriched_args).await
-                            };
+                            let mcp_tool_allowed = self.is_mcp_tool_allowed(&tool_name);
+                            let tool_manager = self.tool_manager.clone();
+                            let global_tool_manager = self.global_tool_manager.clone();
+                            let tool_name_for_call = tool_name.clone();
+                            let result =
+                                await_with_stop(&self.session_id, &mut signal_rx, async move {
+                                    if tool_name_for_call
+                                        .contains(crate::tools::MCP_TOOL_NAME_SPLIT)
+                                    {
+                                        if mcp_tool_allowed {
+                                            global_tool_manager
+                                                .tool_call(&tool_name_for_call, enriched_args)
+                                                .await
+                                        } else {
+                                            Err(crate::tools::ToolError::Security(format!(
+                                                "MCP tool '{}' is not available in this workflow",
+                                                tool_name_for_call
+                                            )))
+                                        }
+                                    } else {
+                                        tool_manager
+                                            .tool_call(&tool_name_for_call, enriched_args)
+                                            .await
+                                    }
+                                })
+                                .await?;
                             self.append_tool_terminal_event(signal_id, &tool_name, &result);
                             self.dispatch_tool_terminal_payload(signal_id, &tool_name, &result)
                                 .await;
@@ -3923,7 +3992,9 @@ impl WorkflowExecutor {
                             self.session_id,
                             msg
                         );
-                        self.update_state(WorkflowState::Cancelled).await?;
+                        if self.state != WorkflowState::Cancelled {
+                            self.update_state(WorkflowState::Cancelled).await?;
+                        }
                         None
                     }
                     Err(e) => return Err(e),
@@ -5217,7 +5288,12 @@ impl WorkflowExecutor {
                 });
             }
 
-            while let Some((id, name, args, call, res)) = tool_futures.next().await {
+            loop {
+                let next_result =
+                    await_with_stop(&self.session_id, signal_rx, tool_futures.next()).await?;
+                let Some((id, name, args, call, res)) = next_result else {
+                    break;
+                };
                 self.append_tool_terminal_event(&id, &name, &res);
                 self.dispatch_tool_terminal_payload(&id, &name, &res).await;
                 let reinforced = self
@@ -5236,20 +5312,29 @@ impl WorkflowExecutor {
             // Inject internal tool_call_id for streaming tools
             let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
 
-            let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
-                if self.is_mcp_tool_allowed(&name) {
-                    self.global_tool_manager
-                        .tool_call(&name, enriched_args)
-                        .await
+            let mcp_tool_allowed = self.is_mcp_tool_allowed(&name);
+            let tool_manager = self.tool_manager.clone();
+            let global_tool_manager = self.global_tool_manager.clone();
+            let tool_name_for_call = name.clone();
+            let final_res = await_with_stop(&self.session_id, signal_rx, async move {
+                if tool_name_for_call.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                    if mcp_tool_allowed {
+                        global_tool_manager
+                            .tool_call(&tool_name_for_call, enriched_args)
+                            .await
+                    } else {
+                        Err(crate::tools::ToolError::Security(format!(
+                            "MCP tool '{}' is not available in this workflow",
+                            tool_name_for_call
+                        )))
+                    }
                 } else {
-                    Err(crate::tools::ToolError::Security(format!(
-                        "MCP tool '{}' is not available in this workflow",
-                        name
-                    )))
+                    tool_manager
+                        .tool_call(&tool_name_for_call, enriched_args)
+                        .await
                 }
-            } else {
-                self.tool_manager.tool_call(&name, enriched_args).await
-            };
+            })
+            .await?;
 
             self.append_tool_terminal_event(&id, &name, &final_res);
             self.dispatch_tool_terminal_payload(&id, &name, &final_res)
@@ -7525,6 +7610,26 @@ mod recovery_tests {
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
         (dir, Arc::new(store))
+    }
+
+    #[tokio::test]
+    async fn active_wait_stop_interrupts_without_waiting_for_operation() {
+        let (signal_tx, mut signal_rx) = mpsc::channel(1);
+        signal_tx
+            .send(r#"{"type":"stop"}"#.to_string())
+            .await
+            .expect("failed to send stop signal");
+        let started = std::time::Instant::now();
+
+        let result = await_with_stop(
+            "active-wait-stop-test",
+            &mut signal_rx,
+            tokio::time::sleep(Duration::from_secs(30)),
+        )
+        .await;
+
+        assert!(matches!(result, Err(WorkflowEngineError::Cancelled(_))));
+        assert!(started.elapsed() < Duration::from_millis(250));
     }
 
     #[tokio::test]

@@ -21,6 +21,7 @@ use crate::workflow::react::types::GatewayPayload;
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
@@ -69,6 +70,95 @@ impl LlmProcessor {
 
     fn should_schedule_retry(failure_count: u32, max_failures: u32) -> bool {
         failure_count < max_failures
+    }
+
+    async fn await_with_stop<F, T>(
+        session_id: &str,
+        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        gateway: &Arc<dyn Gateway>,
+        current_step: usize,
+        future: F,
+        cancellation_context: &'static str,
+    ) -> Result<T, WorkflowEngineError>
+    where
+        F: Future<Output = T>,
+    {
+        tokio::pin!(future);
+
+        loop {
+            tokio::select! {
+                biased;
+                signal = signal_rx.recv() => {
+                    let Some(signal) = signal else {
+                        return Ok(future.await);
+                    };
+                    match parse_runtime_signal(&signal) {
+                        RuntimeSignal::Stop => {
+                            log::info!(
+                                "[Workflow][session={}][phase=llm] Stop signal interrupted {}",
+                                session_id,
+                                cancellation_context
+                            );
+                            return Err(WorkflowEngineError::Cancelled(format!(
+                                "Stopped during {cancellation_context}"
+                            )));
+                        }
+                        RuntimeSignal::UserMessage {
+                            content,
+                            attached_context,
+                            metadata,
+                            queued_user_message_id,
+                        } => {
+                            let queued_id = queued_user_message_id.unwrap_or_else(|| {
+                                format!("queued_{}", crate::ccproxy::get_tool_id())
+                            });
+                            let is_new = stash_user_message(
+                                session_id,
+                                queued_id.clone(),
+                                content.clone(),
+                                attached_context,
+                                metadata.clone(),
+                            );
+                            if !is_new {
+                                continue;
+                            }
+                            let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
+                            if !ui_metadata.is_object() {
+                                ui_metadata = serde_json::json!({});
+                            }
+                            ui_metadata["queued_user_message_id"] = serde_json::json!(queued_id);
+                            ui_metadata["queue_status"] = serde_json::json!("queued");
+                            if let Err(error) = gateway
+                                .send(
+                                    session_id,
+                                    GatewayPayload::Message {
+                                        message_id: None,
+                                        role: "user".to_string(),
+                                        content,
+                                        reasoning: None,
+                                        step_type: None,
+                                        step_index: current_step as i32,
+                                        is_error: false,
+                                        error_type: None,
+                                        metadata: Some(ui_metadata),
+                                    },
+                                )
+                                .await
+                            {
+                                log::warn!(
+                                    "WorkflowExecutor {}: Failed to acknowledge queued message during {}: {}",
+                                    session_id,
+                                    cancellation_context,
+                                    error
+                                );
+                            }
+                        }
+                        RuntimeSignal::Other { .. } => stash_runtime_signal(session_id, signal),
+                    }
+                }
+                output = &mut future => return Ok(output),
+            }
+        }
     }
 
     fn preview_for_log(value: &str, max_chars: usize) -> String {
@@ -475,44 +565,51 @@ impl LlmProcessor {
                 }
             }
 
-            let chat_res = chat_interface
-                .chat(
-                    self.active_provider_id,
-                    &self.active_model_name,
-                    self.session_id.clone(),
-                    final_history.clone(),
-                    Some(tools.clone()),
-                    Some(ChatMetadata {
-                        reasoning: Some(self.reasoning),
-                        thinking,
-                        custom_headers: Some(custom_headers),
-                        temperature,
-                        max_tokens,
-                        extra: function_call.map(|enabled| {
-                            let mut extra = serde_json::Map::new();
-                            extra.insert("functionCall".to_string(), serde_json::json!(enabled));
-                            extra
-                        }),
-                        tool_choice: if require_tool_call && !tools.is_empty() {
-                            Some(serde_json::json!("required"))
-                        } else {
-                            None
-                        },
-                        workflow_usage_attribution: Some(WorkflowUsageAttribution {
-                            workflow_session_id: self.session_id.clone(),
-                            workflow_task_run_id: self.workflow_task_run_id.clone(),
-                            workflow_segment_id: context.current_segment_id,
-                            root_session_id: self.root_session_id.clone(),
-                            root_task_run_id: self.root_task_run_id.clone(),
-                            request_kind: "react".to_string(),
-                        }),
-                        ..Default::default()
+            let chat_future = chat_interface.chat(
+                self.active_provider_id,
+                &self.active_model_name,
+                self.session_id.clone(),
+                final_history.clone(),
+                Some(tools.clone()),
+                Some(ChatMetadata {
+                    reasoning: Some(self.reasoning),
+                    thinking,
+                    custom_headers: Some(custom_headers),
+                    temperature,
+                    max_tokens,
+                    extra: function_call.map(|enabled| {
+                        let mut extra = serde_json::Map::new();
+                        extra.insert("functionCall".to_string(), serde_json::json!(enabled));
+                        extra
                     }),
-                    move |chunk| {
-                        let _ = tx_for_chat.try_send(chunk);
+                    tool_choice: if require_tool_call && !tools.is_empty() {
+                        Some(serde_json::json!("required"))
+                    } else {
+                        None
                     },
-                )
-                .await;
+                    workflow_usage_attribution: Some(WorkflowUsageAttribution {
+                        workflow_session_id: self.session_id.clone(),
+                        workflow_task_run_id: self.workflow_task_run_id.clone(),
+                        workflow_segment_id: context.current_segment_id,
+                        root_session_id: self.root_session_id.clone(),
+                        root_task_run_id: self.root_task_run_id.clone(),
+                        request_kind: "react".to_string(),
+                    }),
+                    ..Default::default()
+                }),
+                move |chunk| {
+                    let _ = tx_for_chat.try_send(chunk);
+                },
+            );
+            let chat_res = Self::await_with_stop(
+                &self.session_id,
+                signal_rx,
+                &gateway,
+                current_step,
+                chat_future,
+                "LLM request",
+            )
+            .await?;
 
             drop(tx); // Close channel
 
@@ -602,62 +699,15 @@ impl LlmProcessor {
                                 )
                                 .await?;
 
-                            tokio::select! {
-                                _ = sleep(Duration::from_secs(wait_secs as u64)) => {},
-                                sig = signal_rx.recv() => {
-                                    if let Some(sig_str) = sig {
-                                        match parse_runtime_signal(&sig_str) {
-                                            RuntimeSignal::Stop => {
-                                                log::info!(
-                                                    "WorkflowExecutor {}: Stop signal received during empty-response retry backoff",
-                                                    self.session_id
-                                                );
-                                                return Err(WorkflowEngineError::Cancelled(
-                                                    "Stopped during empty-response retry backoff".into(),
-                                                ));
-                                            }
-                                            RuntimeSignal::UserMessage { content, attached_context, metadata, queued_user_message_id } => {
-                                                let queued_id = queued_user_message_id.unwrap_or_else(|| {
-                                                    format!("queued_{}", crate::ccproxy::get_tool_id())
-                                                });
-                                                let is_new = stash_user_message(
-                                                    &self.session_id,
-                                                    queued_id.clone(),
-                                                    content.clone(),
-                                                    attached_context,
-                                                    metadata.clone(),
-                                                );
-                                                if !is_new {
-                                                    continue;
-                                                }
-                                                let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
-                                                if !ui_metadata.is_object() {
-                                                    ui_metadata = serde_json::json!({});
-                                                }
-                                                ui_metadata["queued_user_message_id"] = serde_json::json!(queued_id);
-                                                ui_metadata["queue_status"] = serde_json::json!("queued");
-                                                let _ = gateway.send(
-                                                    &self.session_id,
-                                                    GatewayPayload::Message {
-                                                        message_id: None,
-                                                        role: "user".to_string(),
-                                                        content,
-                                                        reasoning: None,
-                                                        step_type: None,
-                                                        step_index: 0,
-                                                        is_error: false,
-                                                        error_type: None,
-                                                        metadata: Some(ui_metadata),
-                                                    },
-                                                ).await;
-                                            }
-                                            RuntimeSignal::Other { .. } => {
-                                                stash_runtime_signal(&self.session_id, sig_str);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            Self::await_with_stop(
+                                &self.session_id,
+                                signal_rx,
+                                &gateway,
+                                current_step,
+                                sleep(Duration::from_secs(wait_secs as u64)),
+                                "empty-response retry backoff",
+                            )
+                            .await?;
 
                             continue;
                         }
@@ -724,62 +774,15 @@ impl LlmProcessor {
                             )
                             .await?;
 
-                        tokio::select! {
-                            _ = sleep(Duration::from_secs(wait_secs as u64)) => {},
-                            sig = signal_rx.recv() => {
-                                if let Some(sig_str) = sig {
-                                    match parse_runtime_signal(&sig_str) {
-                                        RuntimeSignal::Stop => {
-                                            log::info!(
-                                                "WorkflowExecutor {}: Stop signal received during retry backoff",
-                                                self.session_id
-                                            );
-                                            return Err(WorkflowEngineError::Cancelled(
-                                                "Stopped during retry backoff".into(),
-                                            ));
-                                        }
-                                        RuntimeSignal::UserMessage { content, attached_context, metadata, queued_user_message_id } => {
-                                            let queued_id = queued_user_message_id.unwrap_or_else(|| {
-                                                format!("queued_{}", crate::ccproxy::get_tool_id())
-                                            });
-                                            let is_new = stash_user_message(
-                                                &self.session_id,
-                                                queued_id.clone(),
-                                                content.clone(),
-                                                attached_context,
-                                                metadata.clone(),
-                                            );
-                                            if !is_new {
-                                                continue;
-                                            }
-                                            let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
-                                            if !ui_metadata.is_object() {
-                                                ui_metadata = serde_json::json!({});
-                                            }
-                                            ui_metadata["queued_user_message_id"] = serde_json::json!(queued_id);
-                                            ui_metadata["queue_status"] = serde_json::json!("queued");
-                                            let _ = gateway.send(
-                                                &self.session_id,
-                                                GatewayPayload::Message {
-                                                    message_id: None,
-                                                    role: "user".to_string(),
-                                                    content,
-                                                    reasoning: None,
-                                                    step_type: None,
-                                                    step_index: current_step as i32,
-                                                    is_error: false,
-                                                    error_type: None,
-                                                    metadata: Some(ui_metadata),
-                                                },
-                                            ).await;
-                                        }
-                                        RuntimeSignal::Other { .. } => {
-                                            stash_runtime_signal(&self.session_id, sig_str);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        Self::await_with_stop(
+                            &self.session_id,
+                            signal_rx,
+                            &gateway,
+                            current_step,
+                            sleep(Duration::from_secs(wait_secs as u64)),
+                            "retry backoff",
+                        )
+                        .await?;
                         last_error = Some(WorkflowEngineError::Ai(e));
                         continue;
                     }
@@ -1522,9 +1525,13 @@ mod tests {
     use crate::db::Agent;
     use crate::db::WorkflowMessage;
     use crate::tools::ToolScope;
+    use crate::workflow::react::error::WorkflowEngineError;
+    use crate::workflow::react::gateway::Gateway;
     use crate::workflow::react::policy::ExecutionPolicy;
     use crate::workflow::react::security::PathGuard;
     use crate::workflow::react::skills::SkillManifest;
+    use crate::workflow::react::types::GatewayPayload;
+    use async_trait::async_trait;
     use serde_json::json;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
@@ -1659,6 +1666,51 @@ mod tests {
     fn tenth_llm_failure_is_terminal_without_another_backoff() {
         assert!(LlmProcessor::should_schedule_retry(9, 10));
         assert!(!LlmProcessor::should_schedule_retry(10, 10));
+    }
+
+    struct NoopGateway;
+
+    #[async_trait]
+    impl Gateway for NoopGateway {
+        async fn send(
+            &self,
+            _session_id: &str,
+            _payload: GatewayPayload,
+        ) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+
+        async fn inject_input(
+            &self,
+            _session_id: &str,
+            _input: String,
+        ) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn llm_retry_wait_stop_interrupts_without_waiting_for_backoff() {
+        let (signal_tx, mut signal_rx) = tokio::sync::mpsc::channel(1);
+        signal_tx
+            .send(r#"{"type":"stop"}"#.to_string())
+            .await
+            .expect("failed to send stop signal");
+        let gateway: Arc<dyn Gateway> = Arc::new(NoopGateway);
+        let started = std::time::Instant::now();
+
+        let result = LlmProcessor::await_with_stop(
+            "llm-retry-stop-test",
+            &mut signal_rx,
+            &gateway,
+            1,
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)),
+            "retry backoff",
+        )
+        .await;
+
+        assert!(matches!(result, Err(WorkflowEngineError::Cancelled(_))));
+        assert!(started.elapsed() < tokio::time::Duration::from_millis(250));
     }
 
     fn test_agent() -> Agent {
