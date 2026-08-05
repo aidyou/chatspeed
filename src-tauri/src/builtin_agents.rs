@@ -331,6 +331,8 @@ fn definition_to_agent(
             manifest.config.shell_policy.as_ref(),
             default_shell_policy,
         )?),
+        sandbox_execution_mode: crate::tools::ShellExecutionMode::HostOnly,
+        sandbox_scheme_id: None,
         sandbox_config: None,
         allowed_paths: serialize_json(&manifest.config.allowed_paths),
         final_audit: manifest.config.final_audit,

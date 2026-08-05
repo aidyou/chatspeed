@@ -52,7 +52,7 @@
           $t('common.approve')
         }}</el-button>
         <el-button
-          v-if="!isPlanApproval"
+          v-if="!isPlanApproval && !isHostFallback"
           type="success"
           @click="onApproveAll"
           :loading="loading"
@@ -60,7 +60,7 @@
           >{{ $t('common.approveAndAddToWhitelist') }}</el-button
         >
         <el-button
-          v-if="!isPlanApproval && pendingCount > 1"
+          v-if="!isPlanApproval && !isHostFallback && pendingCount > 1"
           type="warning"
           @click="onApproveAllPending"
           :loading="loading"
@@ -201,6 +201,9 @@ const isEditAction = computed(() => {
 })
 
 const isShellAction = computed(() => normalizedToolName.value === 'bash')
+const isHostFallback = computed(
+  () => detailsObject.value?.approval_kind === 'host_fallback'
+)
 const isPlanApproval = computed(() => normalizedToolName.value === 'submit_plan')
 const isMarkdownAction = computed(() => {
   if (props.displayType === 'markdown') {
@@ -284,6 +287,7 @@ const SHELL_EXECUTION_BACKEND_TRANSLATION_KEYS = {
   msb: 'workflow.approval.executionBackends.msb'
 }
 const SHELL_FALLBACK_REASON_TRANSLATION_KEYS = {
+  ambiguous_route: 'workflow.approval.fallbackReasons.ambiguous_route',
   host_only_mode: 'workflow.approval.fallbackReasons.host_only_mode',
   missing_image: 'workflow.approval.fallbackReasons.missing_image',
   profile_unavailable: 'workflow.approval.fallbackReasons.profile_unavailable',
@@ -301,19 +305,23 @@ const formatShellValue = (value, translationKeys = null) => {
   return String(value)
 }
 const shellExecutionRows = computed(() => {
-  const details = detailsObject.value || {}
+  const details = detailsObject.value?.execution_plan || detailsObject.value || {}
   const rows = [
     [
       'workflow.approval.executionBackend',
-      details.execution_backend,
+      details.execution_backend || details.backend,
       SHELL_EXECUTION_BACKEND_TRANSLATION_KEYS
     ],
     ['workflow.approval.runtime', details.runtime],
-    ['workflow.approval.profile', details.sandbox_profile],
-    ['workflow.approval.image', details.sandbox_image],
+    ['workflow.approval.profile', details.sandbox_profile || details.profile],
+    ['workflow.approval.image', details.sandbox_image || details.image],
     ['workflow.approval.network', details.network?.mode],
     ['workflow.approval.workspaceAccess', details.workspace_access],
     ['workflow.approval.limits', details.limits],
+    [
+      'workflow.approval.requiredCapabilities',
+      detailsObject.value?.required_capabilities
+    ],
     [
       'workflow.approval.fallbackReason',
       details.fallback_reason,

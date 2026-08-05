@@ -2174,6 +2174,7 @@ export function useWorkflowCore({
         canSwitchWorkflow,
         setupWorkflowEvents,
         selectWorkflow,
+        refreshCurrentWorkflowUiConfig,
         startNewWorkflow,
         onSendMessage,
         removeQueuedMessage,

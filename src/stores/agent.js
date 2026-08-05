@@ -96,7 +96,8 @@ const _transformFromBackend = (backendAgent) => {
     utilityModel: models.utility,
     // These are JSON strings, need to parse
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
-    sandboxConfig: backendAgent.sandbox_config ? JSON.parse(backendAgent.sandbox_config) : null,
+    sandboxExecutionMode: backendAgent.sandbox_execution_mode || 'host_only',
+    sandboxSchemeId: backendAgent.sandbox_scheme_id || null,
     allowedPaths: backendAgent.allowed_paths ? JSON.parse(backendAgent.allowed_paths) : [],
 
     models: backendAgent.models || null,
@@ -158,7 +159,10 @@ const _transformToBackend = (frontendAgent) => {
     available_tools: JSON.stringify(frontendAgent.availableTools || []),
     auto_approve: JSON.stringify(frontendAgent.autoApprove || []),
     shell_policy: JSON.stringify(frontendAgent.shellPolicy || []),
-    sandbox_config: frontendAgent.sandboxConfig ? JSON.stringify(frontendAgent.sandboxConfig) : null,
+    sandbox_execution_mode: frontendAgent.sandboxExecutionMode || 'host_only',
+    sandbox_scheme_id: frontendAgent.sandboxExecutionMode === 'host_only'
+      ? null
+      : (frontendAgent.sandboxSchemeId || null),
     allowed_paths: JSON.stringify(frontendAgent.allowedPaths || []),
     // Struct object
     models: modelsObj,

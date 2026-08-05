@@ -272,7 +272,10 @@ mod tests {
         ShellExecutionPlan {
             tool_call_id: "tool-1".to_string(),
             command: "echo hi && pwd".to_string(),
+            scheme_id: None,
+            scheme_revision: None,
             backend,
+            backend_origin: Default::default(),
             runtime: Some(SandboxRuntime::Docker),
             profile: Some("busybox".to_string()),
             image: Some("busybox:latest".to_string()),

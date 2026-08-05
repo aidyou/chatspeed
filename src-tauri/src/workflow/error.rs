@@ -102,6 +102,7 @@ impl From<crate::tools::ToolError> for WorkflowError {
             crate::tools::ToolError::SandboxFailure(failure) => WorkflowError::Execution(
                 serde_json::to_string(&failure).unwrap_or_else(|_| failure.message),
             ),
+            crate::tools::ToolError::HostFallbackRejected(msg, _) => WorkflowError::Execution(msg),
             crate::tools::ToolError::Fatal(msg) => WorkflowError::Execution(msg),
             crate::tools::ToolError::McpServerNotFound(name) => {
                 WorkflowError::Execution(format!("MCP server not found: {}", name))

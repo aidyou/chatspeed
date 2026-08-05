@@ -315,6 +315,7 @@
             <!-- Auto-Approved Tools & Shell Commands Popover -->
             <el-popover
               v-if="approvalLevel === 'default'"
+              v-model:visible="autoApprovedPopoverVisible"
               placement="top"
               :width="360"
               trigger="click"
@@ -330,7 +331,7 @@
                 </label>
               </template>
 
-              <div class="auto-approved-panel">
+              <div v-if="autoApprovedPopoverVisible" class="auto-approved-panel">
                 <!-- Auto-Approved Tools Section -->
                 <div class="panel-section">
                   <div class="section-header">
@@ -371,51 +372,76 @@
                     <span class="section-title">{{
                       $t('workflow.allowedShellCommands') || 'Allowed Shell Patterns'
                     }}</span>
-                    <span class="section-count">{{ allowedShellCommands.length }}</span>
+                    <span class="section-count">{{ shellPolicyRules.length }}</span>
                   </div>
-                  <el-space>
-                    <div class="section-toolbar">
-                      <el-input
-                        v-model="shellCommandSearch"
-                        size="small"
-                        clearable
-                        :placeholder="$t('common.search') || 'Search shell command pattern'" />
-                    </div>
-                    <div class="section-toolbar">
-                      <el-input
-                        v-model="newShellCommandPattern"
-                        size="small"
-                        clearable
-                        :placeholder="
-                          $t('settings.agent.shellPolicyPattern') || 'Enter shell command pattern'
-                        "
-                        @keydown.enter.prevent="addShellPolicyItem">
-                        <template #append>
-                          <el-button
-                            size="small"
-                            :disabled="!canAddShellPolicyItem"
-                            @click="addShellPolicyItem">
-                            {{ $t('settings.agent.shellPolicyAdd') || 'Add' }}
-                          </el-button>
-                        </template>
-                      </el-input>
-                    </div>
-                  </el-space>
-                  <div v-if="filteredAllowedShellCommands.length > 0" class="section-content">
+                  <div class="section-toolbar shell-policy-search">
+                    <el-input
+                      v-model="shellCommandSearch"
+                      size="small"
+                      clearable
+                      :placeholder="$t('common.search') || 'Search shell command pattern'" />
+                  </div>
+                  <div class="section-toolbar shell-policy-add-row">
+                    <el-input
+                      v-model="newShellCommandPattern"
+                      size="small"
+                      clearable
+                      :placeholder="
+                        $t('settings.agent.shellPolicyPattern') || 'Enter shell command pattern'
+                      "
+                      @keydown.enter.prevent="addShellPolicyItem" />
+                    <el-select
+                      v-model="newShellCommandDecision"
+                      size="small"
+                      class="shell-policy-decision-select">
+                      <el-option
+                        :label="$t('settings.agent.shellDecisionAllow')"
+                        value="allow" />
+                      <el-option
+                        :label="$t('settings.agent.shellDecisionDeny')"
+                        value="deny" />
+                      <el-option
+                        :label="$t('settings.agent.shellDecisionReview')"
+                        value="review" />
+                    </el-select>
+                    <el-button
+                      size="small"
+                      type="primary"
+                      :disabled="!canAddShellPolicyItem"
+                      @click="addShellPolicyItem">
+                      {{ $t('settings.agent.shellPolicyAdd') || 'Add' }}
+                    </el-button>
+                  </div>
+                  <div v-if="filteredShellPolicyRules.length > 0" class="section-content">
                     <div
-                      v-for="(cmd, idx) in filteredAllowedShellCommands"
-                      :key="idx"
+                      v-for="(rule, idx) in filteredShellPolicyRules"
+                      :key="`${rule.pattern}-${idx}`"
                       class="tool-item shell-item">
                       <div class="tool-info">
-                        <code class="tool-name shell-pattern">{{ cmd.pattern }}</code>
-                        <span v-if="cmd.description" class="tool-desc">{{ cmd.description }}</span>
+                        <code class="tool-name shell-pattern">{{ rule.pattern }}</code>
+                        <span v-if="rule.description" class="tool-desc">{{ rule.description }}</span>
                       </div>
+                      <el-select
+                        :model-value="rule.decision || 'review'"
+                        size="small"
+                        class="shell-policy-item-decision"
+                        @change="decision => updateShellPolicyDecision(rule.pattern, decision)">
+                        <el-option
+                          :label="$t('settings.agent.shellDecisionAllow')"
+                          value="allow" />
+                        <el-option
+                          :label="$t('settings.agent.shellDecisionDeny')"
+                          value="deny" />
+                        <el-option
+                          :label="$t('settings.agent.shellDecisionReview')"
+                          value="review" />
+                      </el-select>
                       <el-button
                         size="small"
                         type="danger"
                         text
                         class="remove-btn"
-                        @click="removeShellPolicyItem(cmd.pattern)">
+                        @click="removeShellPolicyItem(rule.pattern)">
                         <cs name="trash" size="12px" />
                       </el-button>
                     </div>
@@ -434,19 +460,34 @@
                         $t('workflow.shellPolicyClickRemove') || 'Click × to remove items'
                       }}</span>
                     </div>
-                    <el-tooltip
-                      placement="top"
-                      :content="$t('settings.agent.shellPolicyImportDefault')"
-                      :hide-after="0"
-                      :enterable="false">
-                      <button
-                        type="button"
-                        class="section-footer-action"
-                        :disabled="isImportingShellPolicies || !currentWorkflowId"
-                        @click="importDefaultShellPolicies">
-                        <cs name="import" size="12px" />
-                      </button>
-                    </el-tooltip>
+                    <div class="section-footer-actions">
+                      <el-tooltip
+                        placement="top"
+                        :content="$t('settings.agent.shellPolicyImportAgent')"
+                        :hide-after="0"
+                        :enterable="false">
+                        <button
+                          type="button"
+                          class="section-footer-action"
+                          :disabled="isImportingShellPolicies || !currentWorkflowId || !selectedAgent?.id"
+                          @click="importAgentShellPolicies">
+                          <cs name="import" size="12px" />
+                        </button>
+                      </el-tooltip>
+                      <el-tooltip
+                        placement="top"
+                        :content="$t('settings.agent.shellPolicyClear')"
+                        :hide-after="0"
+                        :enterable="false">
+                        <button
+                          type="button"
+                          class="section-footer-action clear-shell-policy-action"
+                          :disabled="isClearingShellPolicies || !currentWorkflowId || shellPolicyRules.length === 0"
+                          @click="clearShellPolicyRules">
+                          <cs name="trash" size="12px" />
+                        </button>
+                      </el-tooltip>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -889,9 +930,11 @@ watch(
   { immediate: true }
 )
 
-const defaultShellPolicies = ref([])
+const autoApprovedPopoverVisible = ref(false)
 const isImportingShellPolicies = ref(false)
+const isClearingShellPolicies = ref(false)
 const newShellCommandPattern = ref('')
+const newShellCommandDecision = ref('review')
 const shellCommandSearch = ref('')
 
 const workflowAvailableToolIds = computed(() => {
@@ -906,16 +949,28 @@ const autoApprovedTools = computed(() => {
     .filter(tool => availableSet.has(tool))
     .sort((a, b) => a.localeCompare(b))
 })
-const allowedShellCommands = computed(() =>
-  [...workflowStore.allowedShellCommands].sort((a, b) => a.pattern.localeCompare(b.pattern))
-)
-const filteredAllowedShellCommands = computed(() => {
-  const keyword = shellCommandSearch.value.trim().toLowerCase()
-  if (!keyword) return allowedShellCommands.value
+const shellPolicyRules = computed(() => {
+  const policy = Array.isArray(props.currentWorkflow?.agentConfig?.shellPolicy)
+    ? props.currentWorkflow.agentConfig.shellPolicy
+    : Array.isArray(props.currentWorkflow?.shellPolicy)
+      ? props.currentWorkflow.shellPolicy
+      : []
 
-  return allowedShellCommands.value.filter(cmd => {
-    const pattern = String(cmd.pattern || '').toLowerCase()
-    const description = String(cmd.description || '').toLowerCase()
+  return policy
+    .filter(rule => rule && rule.pattern)
+    .map(rule => ({ ...rule, decision: rule.decision || 'review' }))
+    .sort((a, b) => String(a.pattern).localeCompare(String(b.pattern)))
+})
+const allowedShellCommands = computed(() =>
+  shellPolicyRules.value.filter(rule => rule.decision === 'allow')
+)
+const filteredShellPolicyRules = computed(() => {
+  const keyword = shellCommandSearch.value.trim().toLowerCase()
+  if (!keyword) return shellPolicyRules.value
+
+  return shellPolicyRules.value.filter(rule => {
+    const pattern = String(rule.pattern || '').toLowerCase()
+    const description = String(rule.description || '').toLowerCase()
     return pattern.includes(keyword) || description.includes(keyword)
   })
 })
@@ -999,93 +1054,111 @@ const removeAutoApprovedTool = async toolName => {
   await toggleAutoApprovedTool(toolName, false)
 }
 
+const getCurrentShellPolicy = () =>
+  Array.isArray(props.currentWorkflow?.agentConfig?.shellPolicy)
+    ? props.currentWorkflow.agentConfig.shellPolicy
+    : Array.isArray(props.currentWorkflow?.shellPolicy)
+      ? props.currentWorkflow.shellPolicy
+      : []
+
+const saveShellPolicy = async nextPolicy => {
+  await persistAgentConfig({ shellPolicy: nextPolicy })
+  workflowStore.setShellPolicy(nextPolicy)
+}
+
 const removeShellPolicyItem = async pattern => {
+  const nextPolicy = getCurrentShellPolicy().filter(rule => rule.pattern !== pattern)
   try {
-    await invokeWrapper('remove_shell_policy_item', {
-      sessionId: props.currentWorkflowId,
-      pattern
-    })
-    workflowStore.removeShellPolicyItem(pattern)
+    await saveShellPolicy(nextPolicy)
   } catch (error) {
     console.error('Failed to remove shell policy item:', error)
   }
 }
 
-const ensureDefaultShellPoliciesLoaded = async () => {
-  if (defaultShellPolicies.value.length > 0) return
-
-  const result = await invokeWrapper('get_default_shell_policy')
-  defaultShellPolicies.value = Array.isArray(result) ? result : []
+const updateShellPolicyDecision = async (pattern, decision) => {
+  const nextPolicy = getCurrentShellPolicy().map(rule =>
+    rule.pattern === pattern ? { ...rule, decision } : rule
+  )
+  try {
+    await saveShellPolicy(nextPolicy)
+  } catch (error) {
+    console.error('Failed to update shell policy decision:', error)
+  }
 }
 
 const addShellPolicyItem = async () => {
   const pattern = newShellCommandPattern.value.trim()
   if (!props.currentWorkflowId || !pattern) return
 
-  const currentPolicy = Array.isArray(props.currentWorkflow?.agentConfig?.shellPolicy)
-    ? props.currentWorkflow.agentConfig.shellPolicy
-    : Array.isArray(props.currentWorkflow?.shellPolicy)
-      ? props.currentWorkflow.shellPolicy
-      : []
-
-  const exists = currentPolicy.some(
-    rule => rule.pattern === pattern && (rule.decision || 'review') === 'allow'
-  )
-  if (exists) {
-    showMessage(t('common.noData') || 'Pattern already exists', 'info')
+  const currentPolicy = getCurrentShellPolicy()
+  if (currentPolicy.some(rule => rule.pattern === pattern)) {
+    showMessage(t('settings.agent.shellPolicyDuplicate'), 'info')
     return
   }
 
-  const nextPolicy = [...currentPolicy, { pattern, decision: 'allow' }]
-
   try {
-    await persistAgentConfig({ shellPolicy: nextPolicy })
-    workflowStore.setShellPolicy(nextPolicy)
+    await saveShellPolicy([
+      ...currentPolicy,
+      { pattern, decision: newShellCommandDecision.value }
+    ])
     newShellCommandPattern.value = ''
   } catch (error) {
     console.error('Failed to add shell policy item:', error)
   }
 }
 
-const importDefaultShellPolicies = async () => {
-  if (!props.currentWorkflowId || isImportingShellPolicies.value) return
+const clearShellPolicyRules = async () => {
+  if (!props.currentWorkflowId || isClearingShellPolicies.value) return
 
-  isImportingShellPolicies.value = true
   try {
-    await ensureDefaultShellPoliciesLoaded()
-
-    const currentPolicy = Array.isArray(props.currentWorkflow?.agentConfig?.shellPolicy)
-      ? props.currentWorkflow.agentConfig.shellPolicy
-      : Array.isArray(props.currentWorkflow?.shellPolicy)
-        ? props.currentWorkflow.shellPolicy
-        : []
-
-    const mergedPolicy = [...currentPolicy]
-    defaultShellPolicies.value.forEach(defaultRule => {
-      const exists = mergedPolicy.some(
-        rule => rule.pattern === defaultRule.pattern && rule.decision === defaultRule.decision
-      )
-      if (!exists) {
-        mergedPolicy.push({ ...defaultRule })
+    await ElMessageBox.confirm(
+      t('settings.agent.shellPolicyClearConfirm'),
+      t('settings.agent.shellPolicyClearTitle'),
+      {
+        confirmButtonText: t('common.confirm'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning'
       }
-    })
-
-    const mergedCount = mergedPolicy.length - currentPolicy.length
-    if (mergedCount <= 0) {
-      showMessage(t('common.noData') || 'No new rules to import', 'info')
-      return
+    )
+    isClearingShellPolicies.value = true
+    await saveShellPolicy([])
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('Failed to clear shell policy:', error)
     }
+  } finally {
+    isClearingShellPolicies.value = false
+  }
+}
 
-    await persistAgentConfig({ shellPolicy: mergedPolicy })
-    workflowStore.setShellPolicy(mergedPolicy)
+const importAgentShellPolicies = async () => {
+  if (!props.currentWorkflowId || !props.selectedAgent?.id || isImportingShellPolicies.value) return
+
+  try {
+    await ElMessageBox.confirm(
+      t('settings.agent.shellPolicyImportAgentConfirm'),
+      t('settings.agent.shellPolicyImportAgentTitle'),
+      {
+        confirmButtonText: t('common.confirm'),
+        cancelButtonText: t('common.cancel'),
+        type: 'info'
+      }
+    )
+    isImportingShellPolicies.value = true
+    const agentPolicy = Array.isArray(props.selectedAgent.shellPolicy)
+      ? props.selectedAgent.shellPolicy
+      : []
+    await saveShellPolicy(agentPolicy.map(rule => ({ ...rule })))
     showMessage(t('common.saveSuccess'), 'success')
   } catch (error) {
-    console.error('Failed to import default shell policy:', error)
-    showMessage('Failed to import default shell policy', 'error')
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('Failed to import agent shell policy:', error)
+    }
   } finally {
     isImportingShellPolicies.value = false
   }
 }
+
 
 const inputRef = ref(null)
 const quickActionsDropdownRef = ref(null)
@@ -1368,6 +1441,42 @@ defineExpose({
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.shell-policy-search {
+  margin-bottom: 8px;
+}
+
+.shell-policy-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+
+  :deep(.el-input) {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+.shell-policy-decision-select,
+.shell-policy-item-decision {
+  width: 92px;
+  flex-shrink: 0;
+}
+
+.shell-policy-item-decision {
+  margin-left: auto;
+}
+
+.section-footer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.clear-shell-policy-action:hover:not(:disabled) {
+  color: var(--el-color-danger);
 }
 
 .section-toolbar {

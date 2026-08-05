@@ -1297,9 +1297,8 @@ fn build_agent_config_from_agent(
         config.shell_policy = serde_json::from_str(policy_str).ok();
     }
 
-    if let Some(sandbox_str) = &agent.sandbox_config {
-        config.sandbox_config = crate::tools::AgentSandboxConfig::from_json(sandbox_str);
-    }
+    config.sandbox_execution_mode = Some(agent.sandbox_execution_mode.clone());
+    config.sandbox_scheme_id = agent.sandbox_scheme_id.clone();
 
     if let Some(val) = allowed_paths {
         config.allowed_paths = serde_json::from_value::<Vec<String>>(val.clone()).ok();
@@ -1523,11 +1522,10 @@ fn merge_inherited_workflow_config(
     } else {
         agent_config.shell_policy.clone()
     };
+    // Sandbox scheme references are resolved at canonical task boundaries.
+    // Never let a previous workflow snapshot override the current Agent reference.
     merged.sandbox_config = if is_tool_allowed(crate::tools::TOOL_BASH) {
-        inherited_config
-            .sandbox_config
-            .clone()
-            .or(agent_config.sandbox_config.clone())
+        agent_config.sandbox_config.clone()
     } else {
         None
     };
@@ -1536,6 +1534,47 @@ fn merge_inherited_workflow_config(
     merged.sync_legacy_final_audit_flag();
     enforce_auto_approve_tool_visibility(&mut merged);
     merged
+}
+
+fn resolve_agent_sandbox_snapshot(
+    store: &MainStore,
+    agent: &Agent,
+    config: &mut AgentConfig,
+) -> Result<(), String> {
+    config.sandbox_config = None;
+    match agent.sandbox_execution_mode {
+        crate::tools::ShellExecutionMode::HostOnly => Ok(()),
+        crate::tools::ShellExecutionMode::Auto | crate::tools::ShellExecutionMode::SandboxOnly => {
+            let scheme_id = agent
+                .sandbox_scheme_id
+                .as_deref()
+                .ok_or_else(|| "sandbox execution mode requires a scheme reference".to_string())?;
+            let scheme = store
+                .get_sandbox_scheme(scheme_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("sandbox scheme {scheme_id} not found"))?;
+            if scheme.disabled {
+                return Err(format!("sandbox scheme {scheme_id} is disabled"));
+            }
+            scheme.config.validate()?;
+            let profiles = scheme
+                .config
+                .profiles
+                .into_iter()
+                .map(|profile| (profile.id.clone(), profile))
+                .collect();
+            config.sandbox_config = Some(crate::tools::AgentSandboxConfig {
+                scheme_id: Some(scheme.id),
+                scheme_revision: scheme.updated_at,
+                execution_mode: agent.sandbox_execution_mode.clone(),
+                runtime_preference: scheme.config.runtime_preference,
+                default_profile: String::new(),
+                profiles,
+                host_rules: scheme.config.host_rules,
+            });
+            Ok(())
+        }
+    }
 }
 
 fn sync_workflow_agent_config_at_tool_boundary(
@@ -1551,7 +1590,8 @@ fn sync_workflow_agent_config_at_tool_boundary(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
 
-    let agent_config = build_agent_config_from_agent(&agent, None, None);
+    let mut agent_config = build_agent_config_from_agent(&agent, None, None);
+    resolve_agent_sandbox_snapshot(store, &agent, &mut agent_config)?;
     let mut merged = workflow
         .agent_config
         .as_deref()
@@ -1764,7 +1804,11 @@ pub async fn create_workflow(
         return Err("Child agents cannot be used as top-level workflow agents".to_string());
     }
 
-    let config = build_workflow_config_for_request(&agent, &request);
+    let mut config = build_workflow_config_for_request(&agent, &request);
+    {
+        let store = &*state;
+        resolve_agent_sandbox_snapshot(store, &agent, &mut config)?;
+    }
 
     let agent_config_json = config.to_json();
 

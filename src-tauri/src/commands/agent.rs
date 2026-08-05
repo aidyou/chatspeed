@@ -10,7 +10,7 @@ use crate::{
     ai::interaction::chat_completion::ChatState,
     builtin_agents::load_default_shell_policy_from_resources,
     db::{agent::is_supported_sub_agent_role, Agent, MainStore},
-    tools::AgentSandboxConfig,
+    tools::ShellExecutionMode,
 };
 
 fn filter_tool_list_json(raw: Option<String>, blocked_tool: &str) -> Option<String> {
@@ -55,16 +55,10 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
     if !has_bash || role == Some("child") {
         agent.auto_approve =
             filter_tool_list_json(agent.auto_approve.clone(), crate::tools::TOOL_BASH);
-        agent.sandbox_config = None;
-    } else if let Some(raw_config) = agent.sandbox_config.as_deref() {
-        let config = AgentSandboxConfig::from_json(raw_config)
-            .ok_or_else(|| "sandbox config is not valid JSON".to_string())?;
-        config.validate()?;
-        agent.sandbox_config = Some(
-            config
-                .to_json()
-                .ok_or_else(|| "failed to serialize sandbox config".to_string())?,
-        );
+        agent.sandbox_execution_mode = ShellExecutionMode::HostOnly;
+        agent.sandbox_scheme_id = None;
+    } else if matches!(agent.sandbox_execution_mode, ShellExecutionMode::HostOnly) {
+        agent.sandbox_scheme_id = None;
     }
 
     let role = agent.role.as_deref();
@@ -93,7 +87,8 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
     agent.auto_approve = filter_tool_list_json(agent.auto_approve.clone(), crate::tools::TOOL_BASH);
     agent.allowed_paths = Some("[]".to_string());
     agent.shell_policy = Some("[]".to_string());
-    agent.sandbox_config = None;
+    agent.sandbox_execution_mode = ShellExecutionMode::HostOnly;
+    agent.sandbox_scheme_id = None;
     agent.skill_enabled = Some(false);
     agent.selected_skills = Some("[]".to_string());
 
@@ -105,6 +100,40 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_sandbox_scheme_reference(store: &MainStore, agent: &Agent) -> Result<(), String> {
+    match agent.sandbox_execution_mode {
+        ShellExecutionMode::HostOnly => {
+            if agent.sandbox_scheme_id.is_some() {
+                return Err("host_only agents cannot reference a sandbox scheme".to_string());
+            }
+        }
+        ShellExecutionMode::Auto | ShellExecutionMode::SandboxOnly => {
+            let scheme_id = agent.sandbox_scheme_id.as_deref().ok_or_else(|| {
+                "auto and sandbox_only agents must select a sandbox scheme".to_string()
+            })?;
+            let scheme = store
+                .get_sandbox_scheme(scheme_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "sandbox scheme not found".to_string())?;
+            if agent.sandbox_execution_mode == ShellExecutionMode::Auto
+                && scheme.config.profiles.iter().any(|profile| {
+                    profile
+                        .capabilities
+                        .iter()
+                        .any(|capability| capability.trim().eq_ignore_ascii_case("common"))
+                })
+            {
+                return Err(
+                    "auto agents cannot reference sandbox schemes with common profiles".to_string(),
+                );
+            }
+            if scheme.disabled {
+                return Err("disabled sandbox schemes cannot be assigned to agents".to_string());
+            }
+        }
+    }
+    Ok(())
+}
 #[tauri::command]
 pub async fn add_agent(
     state: State<'_, Arc<MainStore>>,
@@ -117,6 +146,7 @@ pub async fn add_agent(
     sanitize_agent_for_persistence(&mut agent)?;
     validate_sub_agent_role(&agent)?;
     let store = &*state;
+    validate_sandbox_scheme_reference(store, &agent)?;
     let id = store.add_agent(&agent).map_err(|e| e.to_string())?;
     Ok(id)
 }
@@ -156,6 +186,7 @@ pub async fn update_agent(state: State<'_, Arc<MainStore>>, agent: Agent) -> Res
     let mut effective_agent = effective_agent;
     sanitize_agent_for_persistence(&mut effective_agent)?;
     validate_sub_agent_role(&effective_agent)?;
+    validate_sandbox_scheme_reference(store, &effective_agent)?;
     store
         .update_agent(&effective_agent)
         .map_err(|e| e.to_string())?;
@@ -263,8 +294,14 @@ pub async fn get_available_tools(chat_state: State<'_, Arc<ChatState>>) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use super::{git_review_tool_metadata, sanitize_agent_for_persistence};
-    use crate::db::Agent;
+    use super::{
+        git_review_tool_metadata, sanitize_agent_for_persistence,
+        validate_sandbox_scheme_reference, ShellExecutionMode,
+    };
+    use crate::{
+        db::{Agent, MainStore, SandboxScheme},
+        tools::{SandboxNetworkPolicy, SandboxProfileConfig, SandboxSchemeConfig, WorkspaceAccess},
+    };
 
     #[test]
     fn git_review_metadata_is_child_only_and_unique() {
@@ -331,22 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn no_shell_and_child_agents_cannot_persist_sandbox_config() {
-        let sandbox_config = serde_json::json!({
-            "executionMode": "sandbox_only",
-            "runtimePreference": "docker",
-            "defaultProfile": "busybox",
-            "profiles": {
-                "busybox": {
-                    "enabled": true,
-                    "image": "busybox:latest",
-                    "network": { "mode": "none" },
-                    "workspaceAccess": "read_write"
-                }
-            }
-        })
-        .to_string();
-
+    fn no_shell_and_child_agents_cannot_persist_sandbox_scheme_references() {
         let mut no_shell = Agent::new(
             "no-shell".to_string(),
             "No Shell".to_string(),
@@ -370,10 +392,15 @@ mod tests {
             Some(false),
             None,
         );
-        no_shell.sandbox_config = Some(sandbox_config.clone());
+        no_shell.sandbox_execution_mode = ShellExecutionMode::Auto;
+        no_shell.sandbox_scheme_id = Some("scheme-1".to_string());
 
         sanitize_agent_for_persistence(&mut no_shell).expect("sanitize no-shell agent");
-        assert!(no_shell.sandbox_config.is_none());
+        assert_eq!(
+            no_shell.sandbox_execution_mode,
+            ShellExecutionMode::HostOnly
+        );
+        assert!(no_shell.sandbox_scheme_id.is_none());
         assert_eq!(
             serde_json::from_str::<Vec<String>>(no_shell.auto_approve.as_deref().unwrap())
                 .expect("auto approve json"),
@@ -381,24 +408,11 @@ mod tests {
         );
 
         no_shell.available_tools = Some(serde_json::json!([crate::tools::TOOL_BASH]).to_string());
-        no_shell.sandbox_config = Some(
-            serde_json::json!({
-                "executionMode": "auto",
-                "runtimePreference": "auto",
-                "defaultProfile": "busybox",
-                "profiles": {
-                    "busybox": {
-                        "enabled": true,
-                        "image": "busybox:latest",
-                        "commandPatterns": ["^git(?=\\s|$)"],
-                        "network": { "mode": "none" },
-                        "workspaceAccess": "read_write"
-                    }
-                }
-            })
-            .to_string(),
-        );
-        assert!(sanitize_agent_for_persistence(&mut no_shell).is_err());
+        no_shell.sandbox_execution_mode = ShellExecutionMode::Auto;
+        no_shell.sandbox_scheme_id = Some("scheme-1".to_string());
+        sanitize_agent_for_persistence(&mut no_shell).expect("sanitize bash agent");
+        assert_eq!(no_shell.sandbox_execution_mode, ShellExecutionMode::Auto);
+        assert_eq!(no_shell.sandbox_scheme_id.as_deref(), Some("scheme-1"));
 
         let mut child = Agent::new(
             "child".to_string(),
@@ -423,13 +437,77 @@ mod tests {
             Some(false),
             None,
         );
-        child.sandbox_config = Some(sandbox_config);
+        child.sandbox_execution_mode = ShellExecutionMode::SandboxOnly;
+        child.sandbox_scheme_id = Some("scheme-1".to_string());
 
         sanitize_agent_for_persistence(&mut child).expect("sanitize child agent");
-        assert!(child.sandbox_config.is_none());
+        assert_eq!(child.sandbox_execution_mode, ShellExecutionMode::HostOnly);
+        assert!(child.sandbox_scheme_id.is_none());
         assert_eq!(child.available_tools.as_deref(), Some("[]"));
         assert_eq!(child.allowed_paths.as_deref(), Some("[]"));
         assert_eq!(child.shell_policy.as_deref(), Some("[]"));
+    }
+
+    #[test]
+    fn auto_agents_cannot_reference_schemes_with_common_profiles() {
+        let store = MainStore::new(":memory:").expect("create store");
+        let scheme = SandboxScheme {
+            id: "common-scheme".to_string(),
+            name: "Common".to_string(),
+            description: String::new(),
+            config: SandboxSchemeConfig {
+                runtime_preference: Default::default(),
+                profiles: vec![SandboxProfileConfig {
+                    id: "common".to_string(),
+                    name: "Common".to_string(),
+                    enabled: true,
+                    priority: 0,
+                    capabilities: vec!["common".to_string()],
+                    command_patterns: vec![".*".to_string()],
+                    runtime_preference: Default::default(),
+                    image: "busybox:latest".to_string(),
+                    image_size_bytes: Some(1),
+                    network: SandboxNetworkPolicy::default(),
+                    resources: Default::default(),
+                    workspace_access: WorkspaceAccess::ReadWrite,
+                }],
+                host_rules: vec![],
+            },
+            disabled: false,
+            created_at: None,
+            updated_at: None,
+        };
+        store.add_sandbox_scheme(&scheme).expect("add scheme");
+
+        let mut agent = Agent::new(
+            "agent".to_string(),
+            "Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            String::new(),
+            None,
+            None,
+            Some(serde_json::json!([crate::tools::TOOL_BASH]).to_string()),
+            Some("[]".to_string()),
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            Some(false),
+            Some("default".to_string()),
+            Some(true),
+            Some("[]".to_string()),
+            Some("standard".to_string()),
+            Some(false),
+            Some(false),
+            None,
+        );
+        agent.sandbox_scheme_id = Some(scheme.id.clone());
+        agent.sandbox_execution_mode = ShellExecutionMode::Auto;
+        assert!(validate_sandbox_scheme_reference(&store, &agent).is_err());
+
+        agent.sandbox_execution_mode = ShellExecutionMode::SandboxOnly;
+        validate_sandbox_scheme_reference(&store, &agent).expect("sandbox-only common is allowed");
     }
 }
 

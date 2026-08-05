@@ -1379,6 +1379,14 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
             " - Platform: {}\n - Shell: {}\n - OS Version: {}.",
             platform, shell, os_version
         ));
+        if matches!(
+            self.agent_config.sandbox_execution_mode,
+            crate::tools::ShellExecutionMode::Auto | crate::tools::ShellExecutionMode::SandboxOnly
+        ) {
+            env_info.push_str(
+                "\n - Shell sandbox: enabled. Commands may run in a sandbox with only configured capabilities, mounted directories, and read/write permissions. Prefer simple portable shell commands and do not rely on unconfigured host tools or paths.",
+            );
+        }
 
         format!(
             "{}\n\n<SYSTEM_REMINDER>\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</SYSTEM_REMINDER>\n",
@@ -1728,6 +1736,8 @@ mod tests {
             auto_approve: None,
             models: None,
             shell_policy: None,
+            sandbox_execution_mode: crate::tools::ShellExecutionMode::HostOnly,
+            sandbox_scheme_id: None,
             sandbox_config: None,
             allowed_paths: None,
             final_audit: Some(false),
@@ -1753,7 +1763,7 @@ mod tests {
             child_agents: Vec::new(),
             available_skills: HashMap::new(),
             path_guard: Arc::new(RwLock::new(PathGuard::new(
-                vec![std::env::temp_dir()],
+                vec![crate::libs::ai_temp::ai_temp_physical_root_unchecked()],
                 vec![],
                 vec![],
             ))),
@@ -1955,6 +1965,20 @@ mod tests {
 
         assert!(!rendered.contains("Git Repository"));
         assert!(!rendered.contains("Today's date"));
+    }
+
+    #[test]
+    fn build_environment_context_describes_sandbox_limits_when_enabled() {
+        let mut processor = test_llm_processor();
+        processor.agent_config.sandbox_execution_mode = crate::tools::ShellExecutionMode::Auto;
+        let rendered = processor.build_environment_context();
+        assert!(rendered.contains("Shell sandbox: enabled"));
+        assert!(rendered.contains("simple portable shell commands"));
+
+        processor.agent_config.sandbox_execution_mode = crate::tools::ShellExecutionMode::HostOnly;
+        assert!(!processor
+            .build_environment_context()
+            .contains("Shell sandbox: enabled"));
     }
 
     #[test]

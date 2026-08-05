@@ -506,6 +506,16 @@ assert.ok(
     clearContextProjection.indexOf('if (result?.noop)'),
   'clear-context noop recovery must reconcile backend lifecycle state before returning'
 )
+assert.match(
+  clearContextProjection,
+  /if \(result\?\.noop\) \{[\s\S]*await refreshCurrentWorkflowUiConfig\(sessionId\)/,
+  'clear-context noop recovery must refresh the synchronized workflow Agent configuration'
+)
+assert.match(
+  clearContextProjection,
+  /await workflowStore\.loadMessages\(sessionId\)[\s\S]*currentWorkflowId\.value !== sessionId[\s\S]*await refreshCurrentWorkflowUiConfig\(sessionId\)/,
+  'clear-context success must refresh the synchronized Agent configuration only for the selected workflow'
+)
 assert.ok(
   clearContextProjection.indexOf('visibleTaskGroupCount.value = 1') <
     clearContextProjection.indexOf('workflowStore.addMessage({'),

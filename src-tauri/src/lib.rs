@@ -285,6 +285,12 @@ pub async fn run() -> crate::error::Result<()> {
             proxy_group_delete,
             set_active_proxy_group,
             get_active_proxy_group,
+            // sandbox schemes
+            get_sandbox_scheme_runtime_status,
+            get_sandbox_schemes,
+            add_sandbox_scheme,
+            update_sandbox_scheme,
+            delete_sandbox_scheme,
             // message
             get_conversation_by_id,
             get_all_conversations,

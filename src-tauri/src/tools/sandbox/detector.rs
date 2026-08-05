@@ -3,6 +3,7 @@ use super::types::{
     SandboxRuntimeStatusSummary,
 };
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -91,12 +92,12 @@ impl SandboxRuntimeDetector {
             );
         }
 
-        let images = match command_output(
+        let (images, image_sizes) = match command_output(
             &self.options.msb_binary,
             &["image", "list", "--format", "json"],
             &self.options,
         ) {
-            Ok(output) => parse_image_list(&output),
+            Ok(output) => (parse_image_list(&output), parse_image_sizes(&output)),
             Err(reason) => {
                 return status(
                     SandboxRuntime::Msb,
@@ -117,7 +118,7 @@ impl SandboxRuntimeDetector {
             SandboxAvailabilityState::ReadyMissingImage
         };
 
-        status(
+        status_with_image_sizes(
             SandboxRuntime::Msb,
             state,
             Some(self.options.msb_binary.clone()),
@@ -133,6 +134,7 @@ impl SandboxRuntimeDetector {
                 "Microsandbox is ready but one or more configured images are missing"
             },
             images,
+            image_sizes,
             missing,
         )
     }
@@ -196,12 +198,15 @@ impl SandboxRuntimeDetector {
             );
         }
 
-        let images = match command_output(
+        let (images, image_sizes) = match command_output(
             &self.options.docker_binary,
             &["image", "ls", "--format", "{{json .}}"],
             &self.options,
         ) {
-            Ok(output) => parse_docker_image_lines(&output),
+            Ok(output) => (
+                parse_docker_image_lines(&output),
+                parse_image_sizes(&output),
+            ),
             Err(reason) => {
                 return status(
                     SandboxRuntime::Docker,
@@ -222,7 +227,7 @@ impl SandboxRuntimeDetector {
             SandboxAvailabilityState::ReadyMissingImage
         };
 
-        status(
+        status_with_image_sizes(
             SandboxRuntime::Docker,
             state,
             Some(self.options.docker_binary.clone()),
@@ -238,6 +243,7 @@ impl SandboxRuntimeDetector {
                 "Docker is ready but one or more configured images are missing"
             },
             images,
+            image_sizes,
             missing,
         )
     }
@@ -315,6 +321,30 @@ fn status(
     images: Vec<String>,
     missing_images: Vec<String>,
 ) -> SandboxRuntimeStatus {
+    status_with_image_sizes(
+        runtime,
+        state,
+        executable,
+        version,
+        reason_code,
+        reason,
+        images,
+        BTreeMap::new(),
+        missing_images,
+    )
+}
+
+fn status_with_image_sizes(
+    runtime: SandboxRuntime,
+    state: SandboxAvailabilityState,
+    executable: Option<String>,
+    version: Option<String>,
+    reason_code: &str,
+    reason: &str,
+    images: Vec<String>,
+    image_sizes: BTreeMap<String, u64>,
+    missing_images: Vec<String>,
+) -> SandboxRuntimeStatus {
     SandboxRuntimeStatus {
         runtime,
         state,
@@ -323,6 +353,7 @@ fn status(
         reason_code: Some(reason_code.to_string()),
         reason: Some(reason.to_string()),
         images,
+        image_sizes,
         missing_images,
         checked_at_ms: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -368,6 +399,96 @@ fn supported_docker_version(version: Option<&str>) -> bool {
         return false;
     };
     version >= semver::Version::new(20, 10, 0)
+}
+
+pub fn parse_image_sizes(output: &str) -> BTreeMap<String, u64> {
+    let mut sizes = BTreeMap::new();
+    for value in output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    {
+        collect_image_sizes(&value, &mut sizes);
+    }
+    if sizes.is_empty() {
+        if let Ok(value) = serde_json::from_str::<Value>(output) {
+            collect_image_sizes(&value, &mut sizes);
+        }
+    }
+    sizes
+}
+
+fn collect_image_sizes(value: &Value, sizes: &mut BTreeMap<String, u64>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_image_sizes(item, sizes);
+            }
+        }
+        Value::Object(map) => {
+            let image = image_reference(map);
+            let size = ["size_bytes", "sizeBytes", "Size", "size"]
+                .iter()
+                .find_map(|key| map.get(*key).and_then(image_size_bytes));
+            if let (Some(image), Some(size)) = (image, size) {
+                sizes.insert(image, size);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn image_reference(map: &serde_json::Map<String, Value>) -> Option<String> {
+    if let Some(reference) = map
+        .get("reference")
+        .or_else(|| map.get("name"))
+        .or_else(|| map.get("image"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Some(reference.to_string());
+    }
+    let repository = map
+        .get("repository")
+        .or_else(|| map.get("Repository"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())?;
+    let tag = map
+        .get("tag")
+        .or_else(|| map.get("Tag"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty() && *value != "<none>");
+    Some(tag.map_or_else(
+        || repository.to_string(),
+        |tag| format!("{repository}:{tag}"),
+    ))
+}
+
+fn image_size_bytes(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(value) => value.as_u64(),
+        Value::String(value) => parse_image_size_text(value),
+        _ => None,
+    }
+}
+
+fn parse_image_size_text(value: &str) -> Option<u64> {
+    let value = value.trim();
+    if let Ok(bytes) = value.parse::<u64>() {
+        return Some(bytes);
+    }
+    let split = value.find(|character: char| !(character.is_ascii_digit() || character == '.'))?;
+    let number = value[..split].trim().parse::<f64>().ok()?;
+    let unit = value[split..].trim().to_ascii_lowercase();
+    let multiplier = match unit.as_str() {
+        "b" => 1.0,
+        "kb" | "kib" => 1024.0,
+        "mb" | "mib" => 1024.0 * 1024.0,
+        "gb" | "gib" => 1024.0 * 1024.0 * 1024.0,
+        "tb" | "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    let bytes = number * multiplier;
+    (bytes.is_finite() && bytes >= 0.0 && bytes <= u64::MAX as f64).then_some(bytes as u64)
 }
 
 pub fn parse_docker_image_lines(output: &str) -> Vec<String> {
@@ -472,6 +593,15 @@ mod tests {
         assert_eq!(
             parse_docker_image_lines("{\"Repository\":\"busybox\",\"Tag\":\"latest\"}\n"),
             vec!["busybox:latest".to_string()]
+        );
+        assert_eq!(
+            parse_image_sizes(
+                r#"[{"name":"busybox:latest","size_bytes":4096},{"Repository":"python","Tag":"3.12","Size":"72.5MB"}]"#
+            ),
+            BTreeMap::from([
+                ("busybox:latest".to_string(), 4096),
+                ("python:3.12".to_string(), 76_021_760),
+            ])
         );
     }
 

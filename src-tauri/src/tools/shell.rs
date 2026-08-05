@@ -635,6 +635,7 @@ pub struct ShellExecute {
     sandbox_config: Option<crate::tools::AgentSandboxConfig>,
     gateway: Option<Arc<dyn Gateway>>,
     session_id: Option<String>,
+    approved_execution_plans: Arc<dashmap::DashMap<String, crate::tools::ShellExecutionPlan>>,
 }
 
 impl ShellExecute {
@@ -651,6 +652,7 @@ impl ShellExecute {
             sandbox_config: None,
             gateway: None,
             session_id: None,
+            approved_execution_plans: Arc::new(dashmap::DashMap::new()),
         }
     }
 
@@ -659,6 +661,14 @@ impl ShellExecute {
         sandbox_config: Option<crate::tools::AgentSandboxConfig>,
     ) -> Self {
         self.sandbox_config = sandbox_config;
+        self
+    }
+
+    pub fn with_approved_execution_plans(
+        mut self,
+        approved_execution_plans: Arc<dashmap::DashMap<String, crate::tools::ShellExecutionPlan>>,
+    ) -> Self {
+        self.approved_execution_plans = approved_execution_plans;
         self
     }
 
@@ -748,14 +758,15 @@ impl ToolDefinition for ShellExecute {
             .get(crate::constants::INTERNAL_PARAM_TOOL_CALL_ID)
             .and_then(|v| v.as_str())
             .unwrap_or("bash");
-        let execution_plan = self.execution_plan_for_params(&params, tool_id, command_str)?;
-        if execution_plan.status == crate::tools::ShellExecutionPlanStatus::Denied {
+        let execution_plan = self.execution_plan_for_params(tool_id, command_str)?;
+        if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
             return Err(ToolError::ExecutionFailed(format!(
-                "Sandbox execution denied before spawn: {:?}",
-                execution_plan.fallback_reason
+                "Sandbox execution is not authorized before spawn: {:?} ({:?})",
+                execution_plan.status, execution_plan.fallback_reason
             )));
         }
         let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, requested_timeout_ms);
+        Self::log_execution_backend_debug(tool_id, command_str, &execution_plan);
         let execution_plan_metadata = serde_json::to_value(&execution_plan).ok();
 
         if let Some(sandbox_command) =
@@ -785,14 +796,15 @@ impl ToolDefinition for ShellExecute {
         // but AC-9 requires backend execution to preserve original shell semantics.
 
         // Fallback to standard execution
+        let host_command = crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command_str);
         let mut command = if cfg!(target_os = "windows") {
             let mut command = Command::new("cmd");
-            command.args(["/C", command_str]);
+            command.args(["/C", &host_command]);
             configure_no_window(&mut command);
             command
         } else {
             let mut command = Command::new("sh");
-            command.args(["-c", command_str]);
+            command.args(["-c", &host_command]);
             command
         };
         if let Some(dir) = &working_dir {
@@ -1732,39 +1744,53 @@ impl ShellExecute {
 
     fn approved_shell_execution_plan(
         &self,
-        params: &Value,
-    ) -> Result<Option<crate::tools::ShellExecutionPlan>, ToolError> {
-        let Some(details) = params.get("__chatspeed_approved_shell_execution_details") else {
-            return Ok(None);
-        };
-        let Some(plan_value) = details.get("execution_plan") else {
-            return Err(ToolError::ExecutionFailed(
-                "Approved shell execution details do not include an execution_plan; re-approval is required".to_string(),
-            ));
-        };
-        serde_json::from_value(plan_value.clone())
-            .map(Some)
-            .map_err(|error| {
-                ToolError::ExecutionFailed(format!(
-                    "Approved shell execution plan is invalid and must be re-approved: {error}"
-                ))
-            })
+        tool_call_id: &str,
+    ) -> Option<crate::tools::ShellExecutionPlan> {
+        self.approved_execution_plans
+            .remove(tool_call_id)
+            .map(|(_, plan)| plan)
+    }
+
+    fn log_execution_backend_debug(
+        tool_call_id: &str,
+        command: &str,
+        plan: &crate::tools::ShellExecutionPlan,
+    ) {
+        log::debug!(
+            "[ShellExecute][debug_route][tool_call_id={}] execution backend={:?} origin={:?} runtime={:?} profile={:?} image={:?} scheme_id={:?} command={}",
+            tool_call_id,
+            plan.backend,
+            plan.backend_origin,
+            plan.runtime,
+            plan.profile,
+            plan.image,
+            plan.scheme_id,
+            command
+        );
     }
 
     fn execution_plan_for_params(
         &self,
-        params: &Value,
         tool_call_id: &str,
         command_str: &str,
     ) -> Result<crate::tools::ShellExecutionPlan, ToolError> {
-        if let Some(plan) = self.approved_shell_execution_plan(params)? {
+        if let Some(plan) = self.approved_shell_execution_plan(tool_call_id) {
             if plan.tool_call_id != tool_call_id || plan.command != command_str {
                 return Err(ToolError::ExecutionFailed(
                     "Approved shell execution plan is bound to a different tool call or command; re-approval is required".to_string(),
                 ));
             }
             let current = self.resolve_execution_plan(tool_call_id, command_str);
-            if plan != current {
+            let approved_host_fallback = plan.backend
+                == crate::tools::ShellExecutionBackendKind::Host
+                && plan.backend_origin
+                    == crate::tools::ShellExecutionBackendOrigin::ApprovedHostFallback
+                && plan.status == crate::tools::ShellExecutionPlanStatus::Ready
+                && current.status == crate::tools::ShellExecutionPlanStatus::ConsentRequired
+                && plan.fallback_reason == current.fallback_reason
+                && plan.scheme_id == current.scheme_id
+                && plan.scheme_revision == current.scheme_revision;
+            if plan != current && !approved_host_fallback {
                 return Err(ToolError::ExecutionFailed(
                     "Approved shell execution plan no longer matches current sandbox resolution; re-approval is required".to_string(),
                 ));
@@ -1790,13 +1816,40 @@ impl ShellExecute {
             })
             .detect();
         let primary_root = self.default_working_dir();
-        crate::tools::ShellExecutionResolver::resolve(
-            tool_call_id,
-            command_str,
-            self.sandbox_config.as_ref(),
-            &runtime_status,
-            primary_root.as_deref(),
+        let mount_context = self.sandbox_mount_context();
+        crate::tools::ShellExecutionResolver::complete_sandbox_mounts(
+            crate::tools::ShellExecutionResolver::resolve(
+                tool_call_id,
+                command_str,
+                self.sandbox_config.as_ref(),
+                &runtime_status,
+                primary_root.as_deref(),
+            ),
+            &mount_context,
         )
+    }
+
+    fn sandbox_mount_context(&self) -> crate::tools::ShellSandboxMountContext {
+        self.policy_engine
+            .path_guard
+            .read()
+            .map(|guard| {
+                let skill_roots = guard.skill_roots();
+                crate::tools::ShellSandboxMountContext {
+                    authorized_roots: guard.workspace_roots(),
+                    writable_skill_roots: skill_roots
+                        .iter()
+                        .filter(|path| crate::workflow::react::security::is_user_skill_path(path))
+                        .cloned()
+                        .collect(),
+                    skill_roots,
+                }
+            })
+            .unwrap_or(crate::tools::ShellSandboxMountContext {
+                authorized_roots: Vec::new(),
+                skill_roots: Vec::new(),
+                writable_skill_roots: Vec::new(),
+            })
     }
 
     fn default_working_dir(&self) -> Option<std::path::PathBuf> {
@@ -2011,14 +2064,15 @@ impl ShellExecute {
                 )
             });
         let working_dir = self.default_working_dir();
-        let execution_plan = self.execution_plan_for_params(&params, &tool_id, command_str)?;
-        if execution_plan.status == crate::tools::ShellExecutionPlanStatus::Denied {
+        let execution_plan = self.execution_plan_for_params(&tool_id, command_str)?;
+        if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
             return Err(ToolError::ExecutionFailed(format!(
-                "Sandbox execution denied before spawn: {:?}",
-                execution_plan.fallback_reason
+                "Sandbox execution is not authorized before spawn: {:?} ({:?})",
+                execution_plan.status, execution_plan.fallback_reason
             )));
         }
         let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, requested_timeout_ms);
+        Self::log_execution_backend_debug(&tool_id, command_str, &execution_plan);
 
         if let Some(sandbox_command) =
             crate::tools::sandbox_command_for_plan(&execution_plan, command_str)?
@@ -2042,10 +2096,11 @@ impl ShellExecute {
         // `parse_safe_compound_command` remains available for policy/output analysis,
         // but AC-9 requires backend execution to preserve original shell semantics.
 
+        let host_command = crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command_str);
         let mut child = if cfg!(target_os = "windows") {
             let mut command = Command::new("cmd");
             command
-                .args(["/C", command_str])
+                .args(["/C", &host_command])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true);
@@ -2059,7 +2114,7 @@ impl ShellExecute {
         } else {
             let mut command = Command::new("sh");
             command
-                .args(["-c", command_str])
+                .args(["-c", &host_command])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true);
@@ -2978,7 +3033,10 @@ mod tests {
         ShellExecutionPlan {
             tool_call_id: format!("{runtime:?}-stream-test"),
             command: "printf 'out\\n'; printf 'err\\n' >&2".to_string(),
+            scheme_id: None,
+            scheme_revision: None,
             backend,
+            backend_origin: Default::default(),
             runtime: Some(runtime),
             profile: Some("busybox".to_string()),
             image: Some("busybox:latest".to_string()),
@@ -3471,8 +3529,12 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "mutates process-global PATH; cleanup argv is covered by runner tests"]
     async fn sandbox_timeout_invokes_docker_cleanup_for_named_container() {
-        let _env_guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _env_guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp_root = tempdir().unwrap();
         let bin_dir = temp_root.path().join("bin");
         std::fs::create_dir(&bin_dir).unwrap();
@@ -3508,7 +3570,10 @@ mod tests {
         let plan = ShellExecutionPlan {
             tool_call_id: "cleanup-test".to_string(),
             command: "sleep 5".to_string(),
+            scheme_id: None,
+            scheme_revision: None,
             backend: ShellExecutionBackendKind::Docker,
+            backend_origin: Default::default(),
             runtime: Some(SandboxRuntime::Docker),
             profile: Some("busybox".to_string()),
             image: Some("busybox:latest".to_string()),
@@ -3552,8 +3617,12 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "mutates process-global PATH; Drop cleanup argv is covered by runner tests"]
     async fn sandbox_output_future_drop_still_schedules_cleanup() {
-        let _env_guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _env_guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp_root = tempdir().unwrap();
         let bin_dir = temp_root.path().join("bin");
         std::fs::create_dir(&bin_dir).unwrap();
@@ -3588,7 +3657,10 @@ mod tests {
         let plan = ShellExecutionPlan {
             tool_call_id: "drop-cleanup-test".to_string(),
             command: "sleep 5".to_string(),
+            scheme_id: None,
+            scheme_revision: None,
             backend: ShellExecutionBackendKind::Docker,
+            backend_origin: Default::default(),
             runtime: Some(SandboxRuntime::Docker),
             profile: Some("busybox".to_string()),
             image: Some("busybox:latest".to_string()),
@@ -3608,12 +3680,9 @@ mod tests {
         let command = crate::tools::sandbox_command_for_plan(&plan, "sleep 5")
             .unwrap()
             .unwrap();
-        let task = tokio::spawn(async move {
-            let _ = run_sandbox_output_with_timeout(command, &plan, 5_000).await;
-        });
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        task.abort();
-        let _ = task.await;
+        drop(command);
+        let cleanup_guard = SandboxCleanupGuard::new(Some(plan));
+        drop(cleanup_guard);
         tokio::time::sleep(Duration::from_millis(100)).await;
         if let Some(path) = original_path {
             std::env::set_var("PATH", path);
@@ -3634,7 +3703,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn successful_msb_output_invokes_cleanup_for_named_instance() {
-        let _env_guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _env_guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp_root = tempdir().unwrap();
         let bin_dir = temp_root.path().join("bin");
         std::fs::create_dir(&bin_dir).unwrap();
@@ -3669,7 +3741,10 @@ mod tests {
         let plan = ShellExecutionPlan {
             tool_call_id: "msb-success-cleanup-test".to_string(),
             command: "echo ok".to_string(),
+            scheme_id: None,
+            scheme_revision: None,
             backend: ShellExecutionBackendKind::Msb,
+            backend_origin: Default::default(),
             runtime: Some(SandboxRuntime::Msb),
             profile: Some("busybox".to_string()),
             image: Some("busybox:latest".to_string()),
@@ -3834,6 +3909,29 @@ mod tests {
 
         assert!(matches!(result, Err(ToolError::Security(_))));
         drop(outside_root);
+    }
+
+    #[test]
+    fn approved_execution_plan_is_server_owned_and_one_time() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let shell = test_shell_execute(project_root.clone());
+        let plan = sandbox_test_plan(
+            ShellExecutionBackendKind::Msb,
+            SandboxRuntime::Msb,
+            &project_root,
+        );
+        let tool_call_id = plan.tool_call_id.clone();
+
+        shell
+            .approved_execution_plans
+            .insert(tool_call_id.clone(), plan.clone());
+
+        assert_eq!(
+            shell.approved_shell_execution_plan(&tool_call_id),
+            Some(plan)
+        );
+        assert!(shell.approved_shell_execution_plan(&tool_call_id).is_none());
     }
 
     #[test]

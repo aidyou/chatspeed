@@ -47,8 +47,8 @@ Rules:
 - Relative paths resolve from the **Primary Directory**, the first user-authorized directory.
 - Use absolute paths for other authorized directories when they are relevant.
 - `.cs/` is the project workspace when phase instructions require it.
-- Use the system temporary directory only for files consumed by the current agent.
-- Store parent-child handoff files in `.cs/handoffs/` and pass project-relative paths; never use the system temporary directory because its namespace may differ between agents.
+- Use the stable `/tmp` namespace only for temporary files consumed during the current task.
+- Store parent-child handoff files in `.cs/handoffs/` and pass project-relative paths; never use `/tmp` for handoff because handoff artifacts must remain in the project workspace.
 
 # Communication Language
 
@@ -278,7 +278,7 @@ pub const CHILD_AGENT_CORE_SYSTEM_PROMPT: &str = r#"You are a tool-driven autono
 5. **No Transcript Guessing**: Do not rely on your final assistant message to carry the result. The parent consumes the `submit_result` payload.
 6. **No Conversational Filler**: Do not stop on plain text alone. If the delegated task is done, call `submit_result` promptly.
 7. **Persistence**: Keep working until the delegated task is complete, blocked by a real limitation, or cancelled.
-8. **Handoff Files**: Store files shared with the parent in `.cs/handoffs/` and report project-relative paths; never use the system temporary directory because its namespace may differ between agents.
+8. **Handoff Files**: Store files shared with the parent in `.cs/handoffs/` and report project-relative paths; never use `/tmp` because handoff artifacts must remain in the project workspace.
 
 ## CONVERGENCE & EFFICIENCY RULES:
 - Use tools, not repeated prose, to make progress.
@@ -838,7 +838,7 @@ mod tests {
     fn core_prompts_use_project_workspace_for_handoff_files() {
         for prompt in [CORE_SYSTEM_PROMPT, CHILD_AGENT_CORE_SYSTEM_PROMPT] {
             assert!(prompt.contains("`.cs/handoffs/`"));
-            assert!(prompt.contains("never use the system temporary directory"));
+            assert!(prompt.contains("never use `/tmp`"));
         }
     }
 

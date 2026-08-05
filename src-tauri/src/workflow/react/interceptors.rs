@@ -2085,7 +2085,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }))
     }
 
-    fn resolve_shell_execution_plan(
+    pub(crate) fn resolve_shell_execution_plan(
         &self,
         id: &str,
         command_str: &str,
@@ -2104,33 +2104,79 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 ..crate::tools::SandboxDetectorOptions::default()
             })
             .detect();
-        let primary_root = self
+        let (primary_root, mount_context) = self
             .path_guard
             .read()
-            .ok()
-            .and_then(|guard| guard.get_primary_root().map(|path| path.to_path_buf()));
-        crate::tools::ShellExecutionResolver::resolve(
-            id,
-            command_str,
-            sandbox_config.as_ref(),
-            &runtime_status,
-            primary_root.as_deref(),
+            .map(|guard| {
+                let skill_roots = guard.skill_roots();
+                (
+                    guard.get_primary_root().map(|path| path.to_path_buf()),
+                    crate::tools::ShellSandboxMountContext {
+                        authorized_roots: guard.workspace_roots(),
+                        writable_skill_roots: skill_roots
+                            .iter()
+                            .filter(|path| {
+                                crate::workflow::react::security::is_user_skill_path(path)
+                            })
+                            .cloned()
+                            .collect(),
+                        skill_roots,
+                    },
+                )
+            })
+            .unwrap_or((
+                None,
+                crate::tools::ShellSandboxMountContext {
+                    authorized_roots: Vec::new(),
+                    skill_roots: Vec::new(),
+                    writable_skill_roots: Vec::new(),
+                },
+            ));
+        crate::tools::ShellExecutionResolver::complete_sandbox_mounts(
+            crate::tools::ShellExecutionResolver::resolve(
+                id,
+                command_str,
+                sandbox_config.as_ref(),
+                &runtime_status,
+                primary_root.as_deref(),
+            ),
+            &mount_context,
         )
     }
 
-    fn shell_execution_approval_details(
-        plan: &crate::tools::ShellExecutionPlan,
-        command_str: &str,
-    ) -> serde_json::Value {
-        let mut details = serde_json::to_value(plan.approval_details())
-            .unwrap_or_else(|_| serde_json::json!({ "command": command_str }));
-        if let Some(object) = details.as_object_mut() {
-            object.insert(
-                "execution_plan".to_string(),
-                serde_json::to_value(plan).unwrap_or_else(|_| serde_json::Value::Null),
-            );
+    pub(crate) async fn prepare_authorized_bash_execution(
+        &mut self,
+        id: &str,
+        args: &serde_json::Value,
+    ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
+        let command = args
+            .get("command")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let mut plan = self.resolve_shell_execution_plan(id, command);
+        if plan.status != crate::tools::ShellExecutionPlanStatus::ConsentRequired {
+            return Ok(None);
         }
-        details
+        let fallback_reason = plan.fallback_reason.clone();
+        let analysis = crate::tools::analyzer::analyze_shell_command(command);
+        let required_capabilities = analysis.required_capabilities;
+        plan.status = crate::tools::ShellExecutionPlanStatus::Ready;
+        plan.backend_origin = crate::tools::ShellExecutionBackendOrigin::ApprovedHostFallback;
+        let details = serde_json::json!({
+            "approval_kind": "host_fallback",
+            "command": command,
+            "execution_plan": plan,
+            "fallback_reason": fallback_reason,
+            "required_capabilities": required_capabilities,
+        });
+        self.handle_approval_interception(
+            id,
+            TOOL_BASH,
+            args,
+            Some(command.to_string()),
+            Some(details),
+        )
+        .await
     }
 
     pub(crate) async fn handle_bash_security_intercept(
@@ -2166,27 +2212,6 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
-        let execution_plan = self.resolve_shell_execution_plan(id, command_str);
-        if execution_plan.status == crate::tools::ShellExecutionPlanStatus::Denied {
-            return Ok(Some(ReinforcedResult {
-                content: format!(
-                    "Command cannot run in the configured shell sandbox and sandbox-only mode prevents host fallback: {}",
-                    execution_plan
-                        .fallback_reason
-                        .as_ref()
-                        .map(|reason| format!("{:?}", reason))
-                        .unwrap_or_else(|| "unknown".to_string())
-                ),
-                llm_content: None,
-                title: format!("Run({})", command_str),
-                summary: "Sandbox unavailable".to_string(),
-                is_error: true,
-                error_type: Some("Sandbox".to_string()),
-                display_type: "text".to_string(),
-                approval_status: None,
-                observation_kind: None,
-            }));
-        }
         if !self.auto_approve.contains(TOOL_BASH) {
             match shell_policy_decision {
                 crate::tools::ShellDecision::Allow => {}
@@ -2209,7 +2234,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                                 "WorkflowExecutor {}: Auto-approving low-risk bash command in Smart mode: {}",
                                 self.session_id, command_str
                             );
-                            return Ok(None);
+                            return self.prepare_authorized_bash_execution(id, args).await;
                         }
 
                         // In Smart mode, check if this is a read-only command before intercepting
@@ -2240,7 +2265,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                                         review.risk_level,
                                         review.reason
                                     );
-                                    return Ok(None);
+                                    return self.prepare_authorized_bash_execution(id, args).await;
                                 }
 
                                 log::info!(
@@ -2262,10 +2287,10 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                                     TOOL_BASH,
                                     args,
                                     Some(display_content),
-                                    Some(Self::shell_execution_approval_details(
-                                        &execution_plan,
-                                        command_str,
-                                    )),
+                                    Some(serde_json::json!({
+                                        "approval_kind": "shell_command",
+                                        "command": command_str,
+                                    })),
                                 )
                                 .await;
                         }
@@ -2283,17 +2308,17 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                                 TOOL_BASH,
                                 args,
                                 Some(display_content),
-                                Some(Self::shell_execution_approval_details(
-                                    &execution_plan,
-                                    command_str,
-                                )),
+                                Some(serde_json::json!({
+                                    "approval_kind": "shell_command",
+                                    "command": command_str,
+                                })),
                             )
                             .await;
                     }
                 }
             }
         }
-        Ok(None)
+        self.prepare_authorized_bash_execution(id, args).await
     }
 
     pub(crate) async fn handle_approval_interception(
@@ -2382,22 +2407,11 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }
         };
 
-        // 2. Stash the full tool name, arguments, and details for later request_confirm_broadcast
-        let stashed_arguments = if name == TOOL_BASH {
-            let mut enriched = args.clone();
-            if let Some(object) = enriched.as_object_mut() {
-                object.insert(
-                    "__chatspeed_approved_shell_execution_details".to_string(),
-                    details_value.clone(),
-                );
-            }
-            enriched
-        } else {
-            args.clone()
-        };
+        // The execution plan remains in the server-side pending approval record until the
+        // canonical ApprovalDecision handler releases it to ShellExecute.
         let stash_obj = json!({
             "name": name,
-            "arguments": stashed_arguments,
+            "arguments": args.clone(),
             "details": details_value.clone(),
             "display_type": display_type.clone()
         });

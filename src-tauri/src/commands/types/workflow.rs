@@ -17,7 +17,8 @@ pub struct AgentPayload {
     pub auto_approve: Option<String>,
     pub models: Option<crate::db::agent::AgentModels>,
     pub shell_policy: Option<String>,
-    pub sandbox_config: Option<String>,
+    pub sandbox_execution_mode: Option<crate::tools::ShellExecutionMode>,
+    pub sandbox_scheme_id: Option<String>,
     pub allowed_paths: Option<String>,
     pub final_audit: Option<bool>,
     pub approval_level: Option<String>,
@@ -56,7 +57,10 @@ impl From<AgentPayload> for Agent {
             payload.max_contexts,
         );
         agent.mcp_tool_exposure = payload.mcp_tool_exposure;
-        agent.sandbox_config = payload.sandbox_config;
+        agent.sandbox_execution_mode = payload
+            .sandbox_execution_mode
+            .unwrap_or(crate::tools::ShellExecutionMode::HostOnly);
+        agent.sandbox_scheme_id = payload.sandbox_scheme_id;
         agent.sub_agent_role = payload.sub_agent_role;
         agent
     }

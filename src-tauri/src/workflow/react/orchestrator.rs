@@ -773,6 +773,8 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
             sandbox_config: None,
+            sandbox_execution_mode: Some(crate::tools::ShellExecutionMode::HostOnly),
+            sandbox_scheme_id: None,
             approval_level: agent_config.approval_level.clone(),
             auto_approve: agent_config
                 .auto_approve

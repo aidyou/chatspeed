@@ -206,7 +206,9 @@ mod tests {
         assert!(has_column(&conn, "ccproxy_stats", "provider_id"));
         assert!(has_column(&conn, "agents", "mcp_tool_exposure"));
         assert!(has_column(&conn, "agents", "sub_agent_role"));
-        assert!(has_column(&conn, "agents", "sandbox_config"));
+        assert!(has_column(&conn, "agents", "sandbox_execution_mode"));
+        assert!(has_column(&conn, "agents", "sandbox_scheme_id"));
+        assert!(table_exists(&conn, "sandbox_schemes"));
 
         let recorded_versions: i64 = conn
             .query_row("SELECT COUNT(1) FROM db_version", [], |row| row.get(0))
@@ -240,7 +242,9 @@ mod tests {
         assert!(table_exists(&conn, "workflow_context_messages"));
         assert!(has_column(&conn, "ccproxy_stats", "provider_id"));
         assert!(has_column(&conn, "agents", "sub_agent_role"));
-        assert!(has_column(&conn, "agents", "sandbox_config"));
+        assert!(has_column(&conn, "agents", "sandbox_execution_mode"));
+        assert!(has_column(&conn, "agents", "sandbox_scheme_id"));
+        assert!(table_exists(&conn, "sandbox_schemes"));
 
         let has_v3_marker: i64 = conn
             .query_row(

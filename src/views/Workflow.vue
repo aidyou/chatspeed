@@ -905,6 +905,7 @@ const {
   upsertPendingApprovalEntry,
   canSwitchWorkflow,
   selectWorkflow,
+  refreshCurrentWorkflowUiConfig,
   startNewWorkflow,
   onSendMessage: coreOnSendMessage,
   removeQueuedMessage,
@@ -1738,6 +1739,9 @@ const onClearContextFrame = async () => {
 
     if (result?.noop) {
       await workflowStore.loadMessages(sessionId)
+      if (currentWorkflowId.value === sessionId) {
+        await refreshCurrentWorkflowUiConfig(sessionId)
+      }
       showMessage(t('workflow.clearContextFrameNoop'), 'info')
       return
     }
@@ -1758,6 +1762,7 @@ const onClearContextFrame = async () => {
     if (currentWorkflowId.value !== sessionId) {
       return
     }
+    await refreshCurrentWorkflowUiConfig(sessionId)
     visibleTaskGroupCount.value = 1
 
     if (workflowStore.currentWorkflow?.executionContext) {

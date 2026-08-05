@@ -29,6 +29,10 @@ const SENSITIVE_SYSTEM_PATHS: &[&str] = &[
 
 pub const CHATSPEED_IGNORE_FILE: &str = ".csignore";
 
+pub fn is_user_skill_path(path: &Path) -> bool {
+    dirs::home_dir().is_some_and(|home| path.starts_with(home.join(".chatspeed").join("skills")))
+}
+
 pub fn is_workspace_noise_name(name: &str) -> bool {
     let name_lower = name.to_ascii_lowercase();
     matches!(
@@ -178,6 +182,10 @@ impl PathGuard {
             .iter()
             .map(|root| root.path.clone())
             .collect()
+    }
+
+    pub fn skill_roots(&self) -> Vec<PathBuf> {
+        self.skill_roots.clone()
     }
 
     pub fn get_primary_root(&self) -> Option<&std::path::Path> {
@@ -370,10 +378,15 @@ impl PathGuard {
         // 2. Check Skill Roots
         for root in &self.skill_roots {
             if final_path.starts_with(root) {
-                // Skills: Allow Write, but BLOCKED for Delete (Requires Manual Review)
                 if is_delete {
                     return Err(WorkflowEngineError::Security(format!(
                         "PERMISSION DENIED: Deleting files in skill directory {:?} requires manual review or explicit authorization.",
+                        final_path
+                    )));
+                }
+                if is_write && !is_user_skill_path(&final_path) {
+                    return Err(WorkflowEngineError::Security(format!(
+                        "PERMISSION DENIED: Writing files outside ~/.chatspeed/skills is forbidden: {:?}",
                         final_path
                     )));
                 }
@@ -491,21 +504,28 @@ mod tests {
 
     #[test]
     fn test_path_guard_skills_permissions() {
-        let root = tempdir().unwrap();
-        let skill_path = root.path().join("skills");
-        fs::create_dir(&skill_path).unwrap();
-        let skill_path = skill_path.canonicalize().unwrap();
+        let user_skills = dirs::home_dir().unwrap().join(".chatspeed").join("skills");
+        fs::create_dir_all(&user_skills).unwrap();
+        let external_skills = tempdir().unwrap();
+        let guard = PathGuard::new(
+            vec![],
+            vec![],
+            vec![user_skills.clone(), external_skills.path().to_path_buf()],
+        );
 
-        let guard = PathGuard::new(vec![], vec![], vec![skill_path.clone()]);
-
-        // Skills: Write OK
         assert!(guard
-            .validate(&skill_path.join("new_skill.py"), false, true, false)
+            .validate(&user_skills.join("new_skill.py"), false, true, false)
             .is_ok());
-
-        // Skills: Delete DENIED (Hard block in PathGuard to force review)
         assert!(guard
-            .validate(&skill_path.join("old_skill.py"), false, true, true)
+            .validate(
+                &external_skills.path().join("new_skill.py"),
+                false,
+                true,
+                false
+            )
+            .is_err());
+        assert!(guard
+            .validate(&user_skills.join("old_skill.py"), false, true, true)
             .is_err());
     }
 
@@ -702,8 +722,9 @@ mod tests {
     }
 
     #[test]
-    fn test_path_guard_maps_tmp_alias_into_process_temp_dir() {
-        let guard = PathGuard::new(vec![], vec![std::env::temp_dir()], vec![]);
+    fn test_path_guard_maps_tmp_alias_into_stable_temp_dir() {
+        let temp_root = crate::libs::ai_temp::ai_temp_physical_root_unchecked();
+        let guard = PathGuard::new(vec![], vec![temp_root.clone()], vec![]);
         assert_eq!(
             guard
                 .validate(
@@ -713,16 +734,14 @@ mod tests {
                     false,
                 )
                 .unwrap(),
-            std::env::temp_dir()
-                .canonicalize()
-                .unwrap()
-                .join("chatspeed-security-test.txt")
+            temp_root.join("chatspeed-security-test.txt")
         );
     }
 
     #[test]
-    fn test_path_guard_treats_tmp_alias_as_authorized_root() {
-        let guard = PathGuard::new(vec![], vec![std::env::temp_dir()], vec![]);
+    fn test_path_guard_treats_tmp_alias_as_stable_temp_root() {
+        let temp_root = crate::libs::ai_temp::ai_temp_physical_root_unchecked();
+        let guard = PathGuard::new(vec![], vec![temp_root], vec![]);
         assert!(guard.is_authorized_root(Path::new("/tmp")));
     }
 }

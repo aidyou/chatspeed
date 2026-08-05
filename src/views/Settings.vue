@@ -39,7 +39,7 @@
     </el-main>
 
     <el-main v-show="settingType === 'agent'" class="main">
-      <agent />
+      <agent-management />
     </el-main>
 
     <el-main v-show="settingType === 'about'" class="main">
@@ -66,7 +66,7 @@ import model from '@/components/setting/Model.vue'
 import proxy from '@/components/setting/Proxy.vue'
 import skill from '@/components/setting/Skill.vue'
 import privacy from '@/components/setting/Privacy.vue'
-import agent from '@/components/setting/Agent.vue'
+import agentManagement from '@/components/setting/AgentManagement.vue'
 import ScraperTest from '@/components/setting/ScraperTest.vue'
 import titlebar from '@/components/window/Titlebar.vue'
 
