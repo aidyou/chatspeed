@@ -2158,8 +2158,23 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             return Ok(None);
         }
         let fallback_reason = plan.fallback_reason.clone();
-        let analysis = crate::tools::analyzer::analyze_shell_command(command);
-        let required_capabilities = analysis.required_capabilities;
+        let sandbox_route_context = self
+            .agent_config
+            .sandbox_config
+            .as_deref()
+            .and_then(crate::tools::AgentSandboxConfig::from_json)
+            .map(|config| {
+                serde_json::json!({
+                    "required_command_patterns": crate::tools::required_command_patterns(&config),
+                    "matched_command_units": crate::tools::command_match_units(command),
+                })
+            })
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "required_command_patterns": [],
+                    "matched_command_units": crate::tools::command_match_units(command),
+                })
+            });
         plan.status = crate::tools::ShellExecutionPlanStatus::Ready;
         plan.backend_origin = crate::tools::ShellExecutionBackendOrigin::ApprovedHostFallback;
         let details = serde_json::json!({
@@ -2167,7 +2182,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             "command": command,
             "execution_plan": plan,
             "fallback_reason": fallback_reason,
-            "required_capabilities": required_capabilities,
+            "required_command_patterns": sandbox_route_context["required_command_patterns"],
+            "matched_command_units": sandbox_route_context["matched_command_units"],
         });
         self.handle_approval_interception(
             id,

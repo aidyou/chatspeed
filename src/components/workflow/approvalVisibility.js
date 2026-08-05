@@ -28,5 +28,23 @@ export const isToolPendingApprovalVisible = (message, pendingApprovalIds = []) =
   return pendingIds.includes(toolCallId) || isStructuredPendingApproval(message)
 }
 
+export const shouldShowHostFallbackConfirmation = (pendingApproval, isSubmitting = false) =>
+  pendingApproval?.details?.approval_kind === 'host_fallback' && !isSubmitting
+
+export const shouldShowInlineApprovalForMessage = ({
+  message,
+  isPending = false,
+  isSubmitting = false,
+  activeHostFallbackToolCallId = ''
+} = {}) => {
+  const toolCallId = String(message?.metadata?.tool_call_id || '').trim()
+  return (
+    isPending &&
+    message?.metadata?.details?.approval_kind !== 'host_fallback' &&
+    !isSubmitting &&
+    String(activeHostFallbackToolCallId || '').trim() !== toolCallId
+  )
+}
+
 export const shouldRenderInlineApprovalWithoutExpansion = message =>
   isStructuredPendingApproval(message)

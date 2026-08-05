@@ -1,77 +1,60 @@
+use super::types::{ShellCommandAnalysis, ShellCommandStage};
 use crate::tools::helper::{leading_command_index, shell_tokens, split_shell_command_segments};
-use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShellStageCapabilities {
-    pub normalized_command: String,
-    pub executable: String,
-    pub capabilities: BTreeSet<String>,
-    pub invocation_tags: BTreeSet<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ShellCommandAnalysis {
-    pub stages: Vec<ShellStageCapabilities>,
-    pub required_capabilities: BTreeSet<String>,
-}
-
-pub fn analyze_shell_command(command: &str) -> ShellCommandAnalysis {
-    analyze_shell_command_at_depth(command, 0)
-}
-
-fn analyze_shell_command_at_depth(command: &str, depth: u8) -> ShellCommandAnalysis {
-    let mut analysis = ShellCommandAnalysis::default();
+pub(crate) fn analyze_shell_command(command: &str) -> ShellCommandAnalysis {
+    let mut stages = Vec::new();
     for segment in split_shell_command_segments(command) {
-        let Some(tokens) = shell_tokens(&segment) else {
-            continue;
-        };
-        let index = leading_command_index(&tokens);
-        let Some(executable) = tokens.get(index) else {
-            continue;
-        };
-        if matches!(executable.as_str(), "cd" | "pushd" | "popd") {
-            continue;
-        }
+        collect_stage(&segment, &mut stages);
+    }
 
-        let executable = executable
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(executable)
-            .to_ascii_lowercase();
-        let mut capabilities = executable_capabilities(&executable);
-        let mut invocation_tags = BTreeSet::new();
-        if is_tauri_invocation(&executable, &tokens[index + 1..]) {
-            capabilities.insert("rust".to_string());
-            capabilities.insert("tauri".to_string());
-            invocation_tags.insert("tauri".to_string());
-        }
-        analysis
-            .required_capabilities
-            .extend(capabilities.iter().cloned());
-        analysis.stages.push(ShellStageCapabilities {
-            normalized_command: tokens[index..].join(" "),
-            executable: executable.clone(),
-            capabilities,
-            invocation_tags,
-        });
-        if depth < 4 && matches!(executable.as_str(), "sh" | "bash" | "zsh") {
-            if let Some(script) = shell_c_script(&tokens[index + 1..]) {
-                let nested = analyze_shell_command_at_depth(script, depth + 1);
-                analysis
-                    .required_capabilities
-                    .extend(nested.required_capabilities);
-                analysis.stages.extend(nested.stages);
+    ShellCommandAnalysis { stages }
+}
+
+fn collect_stage(segment: &str, stages: &mut Vec<ShellCommandStage>) {
+    let Some(tokens) = shell_tokens(segment) else {
+        return;
+    };
+    let index = leading_command_index(&tokens);
+    if index >= tokens.len() {
+        return;
+    }
+
+    let executable = executable_name(&tokens[index]);
+    if matches!(
+        executable.as_str(),
+        "cd" | "pushd" | "popd" | "tee" | "xargs"
+    ) {
+        return;
+    }
+
+    if matches!(executable.as_str(), "sh" | "bash" | "zsh") {
+        if let Some(script) = shell_c_script(&tokens, index + 1) {
+            for nested in split_shell_command_segments(script) {
+                collect_stage(&nested, stages);
             }
+            return;
         }
     }
-    analysis
+
+    stages.push(ShellCommandStage {
+        normalized_command: tokens[index..].join(" "),
+        executable,
+    });
 }
 
-fn shell_c_script(arguments: &[String]) -> Option<&str> {
-    let mut index = 0;
-    while index < arguments.len() {
-        match arguments[index].as_str() {
-            "-c" => return arguments.get(index + 1).map(String::as_str),
+fn executable_name(token: &str) -> String {
+    token
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(token)
+        .to_ascii_lowercase()
+}
+
+fn shell_c_script(tokens: &[String], start: usize) -> Option<&str> {
+    let mut index = start;
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "-c" => return tokens.get(index + 1).map(String::as_str),
             option if option.starts_with('-') => index += 1,
             _ => return None,
         }
@@ -79,81 +62,49 @@ fn shell_c_script(arguments: &[String]) -> Option<&str> {
     None
 }
 
-fn executable_capabilities(executable: &str) -> BTreeSet<String> {
-    let capabilities: &[&str] = match executable {
-        "bash" | "sh" | "zsh" => &["bash"],
-        "python" | "python3" | "pip" | "pip3" => &["python"],
-        "node" | "npm" | "pnpm" | "yarn" | "npx" => &["node"],
-        "cargo" | "rustc" | "rustup" | "rustfmt" | "rustdoc" | "cargo-fmt" | "cargo-clippy" => {
-            &["rust"]
-        }
-        "tauri" => &["rust", "tauri"],
-        "git" => &["git"],
-        "go" => &["go"],
-        "php" | "composer" => &["php"],
-        _ => &[],
-    };
-    capabilities
-        .iter()
-        .map(|capability| (*capability).to_string())
-        .collect()
-}
-
-fn is_tauri_invocation(executable: &str, arguments: &[String]) -> bool {
-    if executable == "tauri" {
-        return true;
-    }
-    if !matches!(executable, "npm" | "pnpm" | "yarn" | "npx" | "cargo") {
-        return false;
-    }
-    let args = arguments
-        .iter()
-        .filter(|argument| !argument.starts_with('-'))
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    matches!(args.as_slice(), ["tauri", ..] | ["run", "tauri", ..])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn recognizes_tauri_without_promoting_normal_arguments() {
-        for command in [
-            "pnpm tauri build",
-            "npm run tauri dev",
-            "yarn tauri build",
-            "npx tauri build",
-            "cargo tauri build",
-            "tauri build",
-        ] {
+    fn preserves_stage_boundaries_and_does_not_promote_arguments() {
+        let analysis = analyze_shell_command(
+            "NODE_ENV=test pnpm tauri --version && node 'test file.js' && sh -c 'cargo test --lib'",
+        );
+        assert_eq!(analysis.stages.len(), 3);
+        assert_eq!(analysis.stages[0].executable, "pnpm");
+        assert_eq!(analysis.stages[1].executable, "node");
+        assert_eq!(analysis.stages[2].executable, "cargo");
+        assert_eq!(
+            analysis.stages[0].normalized_command,
+            "pnpm tauri --version"
+        );
+        assert_eq!(analysis.stages[1].normalized_command, "node test file.js");
+        assert_eq!(analysis.stages[2].normalized_command, "cargo test --lib");
+    }
+
+    #[test]
+    fn skips_navigation_and_keeps_only_executable_match_units() {
+        let analysis = analyze_shell_command("git log -n 3 && cd src-tauri/src && cargo check");
+        assert_eq!(
+            analysis
+                .stages
+                .iter()
+                .map(|stage| stage.normalized_command.as_str())
+                .collect::<Vec<_>>(),
+            vec!["git log -n 3", "cargo check"]
+        );
+    }
+
+    #[test]
+    fn ordinary_arguments_are_kept_in_their_stage() {
+        for command in ["node test xxx.js", "pnpm test", "npm run test"] {
             let analysis = analyze_shell_command(command);
+            assert_eq!(analysis.stages.len(), 1, "{command}");
             assert_eq!(
-                analysis.required_capabilities,
-                BTreeSet::from(["node".to_string(), "rust".to_string(), "tauri".to_string()])
-                    .into_iter()
-                    .filter(|capability| command.starts_with("pnpm")
-                        || command.starts_with("npm")
-                        || command.starts_with("yarn")
-                        || command.starts_with("npx")
-                        || capability != "node")
-                    .collect(),
-                "{command}"
+                analysis.stages[0].executable,
+                command.split_whitespace().next().unwrap()
             );
         }
-
-        assert_eq!(
-            analyze_shell_command("bash -c 'echo ready'").required_capabilities,
-            BTreeSet::from(["bash".to_string()])
-        );
-        assert_eq!(
-            analyze_shell_command("node test example.js").required_capabilities,
-            BTreeSet::from(["node".to_string()])
-        );
-        assert_eq!(
-            analyze_shell_command("pnpm test").required_capabilities,
-            BTreeSet::from(["node".to_string()])
-        );
     }
 }

@@ -1568,7 +1568,6 @@ fn resolve_agent_sandbox_snapshot(
                 scheme_revision: scheme.updated_at,
                 execution_mode: agent.sandbox_execution_mode.clone(),
                 runtime_preference: scheme.config.runtime_preference,
-                default_profile: String::new(),
                 profiles,
                 host_rules: scheme.config.host_rules,
             });

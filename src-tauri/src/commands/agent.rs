@@ -115,20 +115,22 @@ fn validate_sandbox_scheme_reference(store: &MainStore, agent: &Agent) -> Result
                 .get_sandbox_scheme(scheme_id)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "sandbox scheme not found".to_string())?;
+            if scheme.disabled {
+                return Err("disabled sandbox schemes cannot be assigned to agents".to_string());
+            }
             if agent.sandbox_execution_mode == ShellExecutionMode::Auto
                 && scheme.config.profiles.iter().any(|profile| {
-                    profile
-                        .capabilities
-                        .iter()
-                        .any(|capability| capability.trim().eq_ignore_ascii_case("common"))
+                    profile.enabled
+                        && profile
+                            .command_patterns
+                            .iter()
+                            .any(|pattern| crate::tools::is_catch_all_command_pattern(pattern))
                 })
             {
                 return Err(
-                    "auto agents cannot reference sandbox schemes with common profiles".to_string(),
+                    "auto agents cannot use sandbox profiles with catch-all command patterns"
+                        .to_string(),
                 );
-            }
-            if scheme.disabled {
-                return Err("disabled sandbox schemes cannot be assigned to agents".to_string());
             }
         }
     }
@@ -462,7 +464,6 @@ mod tests {
                     name: "Common".to_string(),
                     enabled: true,
                     priority: 0,
-                    capabilities: vec!["common".to_string()],
                     command_patterns: vec![".*".to_string()],
                     runtime_preference: Default::default(),
                     image: "busybox:latest".to_string(),

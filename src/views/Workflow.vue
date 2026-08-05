@@ -214,6 +214,7 @@
                 :get-parsed-message="getParsedMessage"
                 :should-show-tool-raw-content="shouldShowToolRawContent"
                 :pending-count="currentInlinePendingApprovalIds.length"
+                :pending-approvals="workflowStore.currentInlinePendingApprovals"
                 :pending-approval-ids="currentInlinePendingApprovalIds"
                 :current-workflow-id="currentWorkflowId"
                 :wait-reason="waitReason"

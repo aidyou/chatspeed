@@ -17,9 +17,11 @@
             </div>
           </div>
           <div class="value">
-            <el-tag size="small" :type="scheme.disabled ? 'info' : 'success'">
-              {{ scheme.disabled ? $t('settings.sandbox.disabled') : $t('settings.sandbox.enabled') }}
-            </el-tag>
+            <el-switch
+              :model-value="!scheme.disabled"
+              :loading="togglingSchemeId === scheme.id"
+              :aria-label="$t('settings.sandbox.enabled')"
+              @change="enabled => toggleSchemeEnabled(scheme, enabled)" />
             <el-tooltip :content="$t('settings.sandbox.edit')" placement="top" :enterable="false" :hide-after="0">
               <span class="icon" @click="openEdit(scheme)"><cs name="edit" size="16px" color="secondary" /></span>
             </el-tooltip>
@@ -68,14 +70,20 @@
           </div>
           <div v-if="draft.config.profiles.length" class="profile-list">
             <div v-for="profile in draft.config.profiles" :key="profile._draftKey || profile.id" class="profile-list__row">
-              <div>
-                <strong>{{ profile.name }}</strong>
-                <small>{{ profile.image }} · {{ profile.capabilities.join(', ') || $t('settings.sandbox.capabilities') }}</small>
+              <div class="profile-list__identity">
+                <div class="profile-list__title">
+                  <el-tag size="small" effect="plain">{{ profile.priority }}</el-tag>
+                  <strong>{{ profile.name }}</strong>
+                </div>
+                <small>{{ profile.image }}</small>
               </div>
               <div class="profile-list__actions">
-                <el-tag size="small">{{ profile.priority }}</el-tag>
-                <span class="icon" @click="openProfileEditor(profile)"><cs name="edit" size="16px" color="secondary" /></span>
-                <span class="icon" @click="removeProfile(profile)"><cs name="trash" size="16px" color="secondary" /></span>
+                <el-tooltip :content="$t('settings.sandbox.editProfile')" placement="top" :enterable="false" :hide-after="0">
+                  <span class="icon" @click="openProfileEditor(profile)"><cs name="edit" size="16px" color="secondary" /></span>
+                </el-tooltip>
+                <el-tooltip :content="$t('common.delete')" placement="top" :enterable="false" :hide-after="0">
+                  <span class="icon" @click="removeProfile(profile)"><cs name="trash" size="16px" color="secondary" /></span>
+                </el-tooltip>
               </div>
             </div>
           </div>
@@ -89,14 +97,20 @@
           </div>
           <div v-if="draft.config.hostRules.length" class="profile-list">
             <div v-for="rule in draft.config.hostRules" :key="rule._draftKey || rule.id" class="profile-list__row">
-              <div>
-                <strong>{{ rule.name }}</strong>
-                <small>{{ rule.capabilitiesAll.join(', ') || rule.invocationTagsAny.join(', ') || $t('settings.sandbox.hostRules') }}</small>
+              <div class="profile-list__identity">
+                <div class="profile-list__title">
+                  <el-tag size="small" effect="plain">{{ rule.priority }}</el-tag>
+                  <strong>{{ rule.name }}</strong>
+                </div>
+                <small>{{ $t('settings.sandbox.hostRules') }}</small>
               </div>
               <div class="profile-list__actions">
-                <el-tag size="small">{{ rule.priority }}</el-tag>
-                <span class="icon" @click="openHostRuleEditor(rule)"><cs name="edit" size="16px" color="secondary" /></span>
-                <span class="icon" @click="removeHostRule(rule)"><cs name="trash" size="16px" color="secondary" /></span>
+                <el-tooltip :content="$t('settings.sandbox.editHostRule')" placement="top" :enterable="false" :hide-after="0">
+                  <span class="icon" @click="openHostRuleEditor(rule)"><cs name="edit" size="16px" color="secondary" /></span>
+                </el-tooltip>
+                <el-tooltip :content="$t('common.delete')" placement="top" :enterable="false" :hide-after="0">
+                  <span class="icon" @click="removeHostRule(rule)"><cs name="trash" size="16px" color="secondary" /></span>
+                </el-tooltip>
               </div>
             </div>
           </div>
@@ -138,9 +152,9 @@
             <el-option v-for="image in availableImages" :key="image" :label="image" :value="image" />
           </el-select>
         </el-form-item>
-        <el-form-item :label="$t('settings.sandbox.capabilities')">
-          <el-select v-model="profileDraft.capabilities" multiple filterable style="width: 100%" @change="applyCapabilityPresets">
-            <el-option v-for="capability in Object.keys(CAPABILITY_PRESETS)" :key="capability" :label="$t(`settings.sandbox.capability${capability}`)" :value="capability" />
+        <el-form-item :label="$t('settings.sandbox.commandPresets')">
+          <el-select v-model="profileDraft.commandPresets" multiple filterable style="width: 100%" @change="applyProfileCommandPresets">
+            <el-option v-for="preset in Object.keys(COMMAND_PRESETS)" :key="preset" :label="$t(`settings.sandbox.preset${preset}`)" :value="preset" />
           </el-select>
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.commandPatterns')">
@@ -193,13 +207,10 @@
         <el-form-item :label="$t('settings.sandbox.priority')">
           <el-input-number v-model="hostRuleDraft.priority" :min="-1000" :max="1000" />
         </el-form-item>
-        <el-form-item :label="$t('settings.sandbox.capabilities')">
-          <el-select v-model="hostRuleDraft.capabilitiesAll" multiple filterable style="width: 100%">
-            <el-option v-for="capability in Object.keys(CAPABILITY_PRESETS)" :key="capability" :label="$t(`settings.sandbox.capability${capability}`)" :value="capability" />
+        <el-form-item :label="$t('settings.sandbox.commandPresets')">
+          <el-select v-model="hostRuleDraft.commandPresets" multiple filterable style="width: 100%" @change="applyHostRuleCommandPresets">
+            <el-option v-for="preset in HOST_COMMAND_PRESETS" :key="preset" :label="$t(`settings.sandbox.preset${preset}`)" :value="preset" />
           </el-select>
-        </el-form-item>
-        <el-form-item :label="$t('settings.sandbox.invocationTags')">
-          <el-select v-model="hostRuleDraft.invocationTagsAny" multiple filterable allow-create default-first-option style="width: 100%" />
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.commandPatterns')">
           <el-select v-model="hostRuleDraft.commandPatterns" multiple filterable allow-create default-first-option style="width: 100%" />
@@ -230,6 +241,7 @@ const dialogVisible = ref(false)
 const editing = ref(false)
 const saving = ref(false)
 const checking = ref(false)
+const togglingSchemeId = ref('')
 const healthSummary = ref('')
 const runtimeLoading = ref(false)
 const runtimeStatus = ref(null)
@@ -255,7 +267,7 @@ const normalizeConfig = config => ({
   hostRules: [...(config?.hostRules || [])]
 })
 
-const CAPABILITY_PRESETS = {
+const COMMAND_PRESETS = {
   common: ['.*'],
   bash: ['^bash(?:\\s|$)', '^sh(?:\\s|$)', '^zsh(?:\\s|$)'],
   bun: ['^bun(?:\\s|$)'],
@@ -283,13 +295,15 @@ const CAPABILITY_PRESETS = {
   zig: ['^zig(?:\\s|$)']
 }
 
+const HOST_COMMAND_PRESETS = Object.keys(COMMAND_PRESETS).filter(preset => preset !== 'common')
+
 const defaultProfile = () => ({
   id: '',
   _draftKey: newId('profile'),
   name: '',
   enabled: true,
   priority: 0,
-  capabilities: [],
+  commandPresets: [],
   commandPatterns: [],
   runtimePreference: 'auto',
   image: '',
@@ -301,7 +315,7 @@ const defaultProfile = () => ({
 
 const cloneProfile = profile => ({
   ...profile,
-  capabilities: [...(profile.capabilities || [])],
+  commandPresets: [...(profile.commandPresets || [])],
   commandPatterns: [...(profile.commandPatterns || [])],
   network: { ...profile.network, allowlist: [...(profile.network?.allowlist || [])] },
   resources: { ...profile.resources }
@@ -310,15 +324,13 @@ const cloneProfile = profile => ({
 const cloneSchemeConfig = config => ({
   ...config,
   profiles: config.profiles.map(profile => {
-    const { _draftKey, ...persistedProfile } = cloneProfile(profile)
+    const { _draftKey, commandPresets: _commandPresets, ...persistedProfile } = cloneProfile(profile)
     return persistedProfile
   }),
   hostRules: config.hostRules.map(rule => {
-    const { _draftKey, ...persistedRule } = rule
+    const { _draftKey, commandPresets: _commandPresets, ...persistedRule } = rule
     return {
       ...persistedRule,
-      capabilitiesAll: [...(rule.capabilitiesAll || [])],
-      invocationTagsAny: [...(rule.invocationTagsAny || [])],
       commandPatterns: [...(rule.commandPatterns || [])]
     }
   })
@@ -327,7 +339,7 @@ const cloneSchemeConfig = config => ({
 const normalizeProfile = profile => ({
   ...defaultProfile(),
   ...(profile || {}),
-  capabilities: [...(profile?.capabilities || [])],
+  commandPresets: [],
   commandPatterns: [...(profile?.commandPatterns || [])],
   network: { mode: 'none', allowlist: [], ...(profile?.network || {}) },
   resources: { cpus: 1, memoryMb: 256, timeoutMs: 120000, ...(profile?.resources || {}) }
@@ -338,16 +350,14 @@ const defaultHostRule = () => ({
   name: '',
   enabled: true,
   priority: 0,
-  capabilitiesAll: [],
-  invocationTagsAny: [],
+  commandPresets: [],
   commandPatterns: []
 })
 
 const normalizeHostRule = rule => ({
   ...defaultHostRule(),
   ...(rule || {}),
-  capabilitiesAll: [...(rule?.capabilitiesAll || [])],
-  invocationTagsAny: [...(rule?.invocationTagsAny || [])],
+  commandPresets: [],
   commandPatterns: [...(rule?.commandPatterns || [])]
 })
 
@@ -401,32 +411,25 @@ const openProfileEditor = async profile => {
   profileDialogVisible.value = true
 }
 
-const normalizeCapabilitySelection = (capabilities, commandPatterns) => {
-  const selected = [...new Set(capabilities || [])]
-  if (selected.includes('common')) {
-    return { capabilities: ['common'], commandPatterns: ['.*'] }
+const addCommandPresetPatterns = (presets, commandPatterns) => {
+  const patterns = new Set(commandPatterns || [])
+  for (const preset of new Set(presets || [])) {
+    for (const pattern of COMMAND_PRESETS[preset] || []) patterns.add(pattern)
   }
-
-  const patterns = new Set((commandPatterns || []).filter(pattern => pattern !== '.*'))
-  for (const capability of selected) {
-    for (const pattern of CAPABILITY_PRESETS[capability] || []) patterns.add(pattern)
-  }
-  return { capabilities: selected, commandPatterns: [...patterns] }
+  return [...patterns]
 }
 
-const applyCapabilityPresets = capabilities => {
-  const selected = [...new Set(capabilities)]
-  const existingPatterns = profileDraft.value.commandPatterns || []
-  const hadCommonPattern = existingPatterns.includes('.*')
+const applyProfileCommandPresets = presets => {
+  profileDraft.value.commandPatterns = addCommandPresetPatterns(
+    presets,
+    profileDraft.value.commandPatterns
+  )
+}
 
-  if (selected.includes('common') && (selected.length === 1 || !hadCommonPattern)) {
-    Object.assign(profileDraft.value, normalizeCapabilitySelection(['common'], []))
-    return
-  }
-
-  Object.assign(
-    profileDraft.value,
-    normalizeCapabilitySelection(selected.filter(capability => capability !== 'common'), existingPatterns)
+const applyHostRuleCommandPresets = presets => {
+  hostRuleDraft.value.commandPatterns = addCommandPresetPatterns(
+    presets,
+    hostRuleDraft.value.commandPatterns
   )
 }
 
@@ -436,7 +439,6 @@ const saveProfile = () => {
     showMessage(t('settings.sandbox.profileRequired'), 'error')
     return
   }
-  Object.assign(value, normalizeCapabilitySelection(value.capabilities, value.commandPatterns))
   value.imageSizeBytes = imageSizeForProfile(value)
   const profiles = draft.value.config.profiles
   const existingIndex = profiles.findIndex(profile =>
@@ -469,8 +471,13 @@ const saveHostRule = () => {
     showMessage(t('settings.sandbox.ruleRequired'), 'error')
     return
   }
-  if (!value.capabilitiesAll.length && !value.invocationTagsAny.length && !value.commandPatterns.length) {
+
+  if (!value.commandPatterns.length) {
     showMessage(t('settings.sandbox.ruleCriteriaRequired'), 'error')
+    return
+  }
+  if (value.commandPatterns.some(isCatchAllPattern)) {
+    showMessage(t('settings.sandbox.hostRuleCatchAllForbidden'), 'error')
     return
   }
 
@@ -500,15 +507,39 @@ const openEdit = scheme => {
   dialogVisible.value = true
 }
 
+const toggleSchemeEnabled = async (scheme, enabled) => {
+  togglingSchemeId.value = scheme.id
+  try {
+    await invoke('update_sandbox_scheme', {
+      scheme: {
+        ...scheme,
+        disabled: !enabled,
+        config: cloneSchemeConfig(normalizeConfig(scheme.config))
+      }
+    })
+    await schemeStore.fetchSchemes()
+  } catch (error) {
+    showMessage(String(error), 'error')
+  } finally {
+    togglingSchemeId.value = ''
+  }
+}
+
+const isCatchAllPattern = pattern => ['.*', '^.*', '.*$', '^.*$'].includes(String(pattern || '').trim())
+
 const validateDraft = () => {
   if (!draft.value.name.trim()) return t('settings.sandbox.nameRequired')
   for (const profile of draft.value.config.profiles) {
     if (!profile.name.trim() || !profile.image.trim()) return t('settings.sandbox.profileRequired')
+    if (!profile.commandPatterns?.length) return t('settings.sandbox.profileCommandPatternsRequired')
   }
   for (const rule of draft.value.config.hostRules) {
-    if (!rule.id.trim() || !rule.name.trim()) return t('settings.sandbox.ruleRequired')
-    if (!rule.capabilitiesAll.length && !rule.invocationTagsAny.length && !rule.commandPatterns.length) {
+    if (!rule.name.trim()) return t('settings.sandbox.ruleRequired')
+    if (!rule.commandPatterns?.length) {
       return t('settings.sandbox.ruleCriteriaRequired')
+    }
+    if (rule.commandPatterns.some(isCatchAllPattern)) {
+      return t('settings.sandbox.hostRuleCatchAllForbidden')
     }
   }
   return ''
@@ -620,8 +651,13 @@ schemeStore.fetchSchemes()
   .health-summary { color: var(--cs-text-color-secondary); margin-right: auto; }
 
   .profile-list { display: grid; gap: var(--cs-space-xs); }
-  .profile-list__row { justify-content: space-between; gap: var(--cs-space); min-height: 52px; padding: var(--cs-space-xs) var(--cs-space-sm); border: 1px solid var(--cs-border-color); border-radius: var(--cs-border-radius); background: var(--cs-bg-color-light); }
-  .profile-list__actions { gap: var(--cs-space-sm); flex-shrink: 0; }
+  .profile-list__row { display: flex; align-items: center; justify-content: space-between; gap: var(--cs-space); min-height: 52px; padding: var(--cs-space-xs) var(--cs-space-sm); border: 1px solid var(--cs-border-color); border-radius: var(--cs-border-radius); background: var(--cs-bg-color-light); }
+  .profile-list__identity { min-width: 0; }
+  .profile-list__title { display: flex; align-items: center; gap: var(--cs-space-xs); min-width: 0; }
+  .profile-list__title strong { overflow: hidden; color: var(--cs-text-color-primary); text-overflow: ellipsis; white-space: nowrap; }
+  .profile-list__actions { display: flex; align-items: center; gap: var(--cs-space); flex-shrink: 0; }
+  .profile-list__actions .icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--cs-border-radius); }
+  .profile-list__actions .icon:hover { background: var(--cs-bg-color-dark); }
   .profile-list__empty { padding: var(--cs-space); color: var(--cs-text-color-secondary); border: 1px dashed var(--cs-border-color); border-radius: var(--cs-border-radius); }
 
   .profile-resources { display: grid; grid-template-columns: 1fr; gap: var(--cs-space-sm); }

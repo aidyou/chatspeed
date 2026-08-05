@@ -1,13 +1,11 @@
-use super::{
-    analyzer::analyze_shell_command,
-    types::{
-        AgentSandboxConfig, HostFallbackReason, SandboxAvailabilityState, SandboxMountPlan,
-        SandboxRuntime, SandboxRuntimePreference, SandboxRuntimeStatus,
-        SandboxRuntimeStatusSummary, ShellExecutionBackendKind, ShellExecutionBackendOrigin,
-        ShellExecutionMode, ShellExecutionPlan, ShellExecutionPlanStatus, ShellExecutionRiskFloor,
-    },
+use super::analyzer::analyze_shell_command;
+use super::types::{
+    AgentSandboxConfig, HostFallbackReason, SandboxAvailabilityState, SandboxMountPlan,
+    SandboxRuntime, SandboxRuntimePreference, SandboxRuntimeStatus, SandboxRuntimeStatusSummary,
+    ShellCommandAnalysis, ShellCommandStage, ShellExecutionBackendKind,
+    ShellExecutionBackendOrigin, ShellExecutionMode, ShellExecutionPlan, ShellExecutionPlanStatus,
+    ShellExecutionRiskFloor,
 };
-use crate::tools::helper::{leading_command_index, shell_tokens, split_shell_command_segments};
 use std::path::{Path, PathBuf};
 
 pub struct ShellExecutionResolver;
@@ -70,12 +68,14 @@ impl ShellExecutionResolver {
         runtime_status: &SandboxRuntimeStatusSummary,
         primary_root: Option<&Path>,
     ) -> ShellExecutionPlan {
+        let analysis = analyze_shell_command(command);
         let mut plan = Self::resolve_inner(
             tool_call_id,
             command,
             sandbox_config,
             runtime_status,
             primary_root,
+            &analysis,
         );
         if let Some(config) = sandbox_config {
             plan.scheme_id = config.scheme_id.clone();
@@ -90,6 +90,7 @@ impl ShellExecutionResolver {
         sandbox_config: Option<&AgentSandboxConfig>,
         runtime_status: &SandboxRuntimeStatusSummary,
         primary_root: Option<&Path>,
+        analysis: &ShellCommandAnalysis,
     ) -> ShellExecutionPlan {
         let Some(config) = sandbox_config else {
             return host_plan(
@@ -104,14 +105,14 @@ impl ShellExecutionResolver {
         }
 
         let host_rule = if config.execution_mode == ShellExecutionMode::Auto {
-            match choose_host_rule_for_stages(config, command) {
+            match choose_host_rule_for_stages(config, analysis) {
                 Ok(rule) => rule,
                 Err(reason) => return denied_plan(tool_call_id, command, reason),
             }
         } else {
             None
         };
-        let runnable_profile = match choose_runnable_profile(config, command, runtime_status) {
+        let runnable_profile = match choose_runnable_profile(config, analysis, runtime_status) {
             Ok(profile) => profile,
             Err(reason) => return denied_plan(tool_call_id, command, reason),
         };
@@ -123,7 +124,7 @@ impl ShellExecutionResolver {
                         tool_call_id,
                         command,
                         config,
-                        sandbox_unavailability_reason(config, command, runtime_status),
+                        sandbox_unavailability_reason(config, analysis, runtime_status),
                     )
                 });
         };
@@ -259,76 +260,59 @@ fn guest_path_for_host_path(path: &Path) -> String {
 }
 
 fn host_rule_matches_stage(
-    rule: &super::types::HostCapabilityRule,
-    stage: &super::analyzer::ShellStageCapabilities,
+    rule: &super::types::HostCommandRule,
+    stage: &ShellCommandStage,
 ) -> bool {
     rule.enabled
+        && !rule.command_patterns.is_empty()
         && rule
-            .capabilities_all
+            .command_patterns
             .iter()
-            .all(|capability| stage.capabilities.contains(capability))
-        && (rule.invocation_tags_any.is_empty()
-            || rule
-                .invocation_tags_any
-                .iter()
-                .any(|tag| stage.invocation_tags.contains(tag)))
-        && (rule.command_patterns.is_empty()
-            || rule
-                .command_patterns
-                .iter()
-                .filter_map(|pattern| regex::Regex::new(pattern).ok())
-                .any(|pattern| pattern.is_match(&stage.normalized_command)))
+            .filter_map(|pattern| regex::Regex::new(pattern).ok())
+            .any(|pattern| pattern.is_match(&stage.normalized_command))
 }
 
 fn choose_host_rule_for_stages<'a>(
     config: &'a AgentSandboxConfig,
-    command: &str,
-) -> Result<Option<&'a super::types::HostCapabilityRule>, HostFallbackReason> {
-    let analysis = analyze_shell_command(command);
-    let mut selected = Vec::new();
-
-    for stage in &analysis.stages {
-        let candidates = config
-            .host_rules
-            .iter()
-            .filter(|rule| host_rule_matches_stage(rule, stage))
-            .collect::<Vec<_>>();
-        let Some(priority) = candidates.iter().map(|rule| rule.priority).max() else {
-            selected.push(None);
-            continue;
-        };
-        let winners = candidates
-            .into_iter()
-            .filter(|rule| rule.priority == priority)
-            .collect::<Vec<_>>();
-        if winners.len() != 1 {
-            return Err(HostFallbackReason::AmbiguousRoute);
-        }
-        selected.push(winners.into_iter().next());
-    }
-
-    if selected.iter().all(Option::is_none) {
+    analysis: &ShellCommandAnalysis,
+) -> Result<Option<&'a super::types::HostCommandRule>, HostFallbackReason> {
+    if analysis.stages.is_empty() {
         return Ok(None);
     }
-    if selected.iter().any(Option::is_none) {
+
+    let mut candidates = config
+        .host_rules
+        .iter()
+        .filter(|rule| {
+            analysis
+                .stages
+                .iter()
+                .all(|stage| host_rule_matches_stage(rule, stage))
+        })
+        .collect::<Vec<_>>();
+    if let Some(priority) = candidates.iter().map(|rule| rule.priority).max() {
+        candidates.retain(|rule| rule.priority == priority);
+        if candidates.len() != 1 {
+            return Err(HostFallbackReason::AmbiguousRoute);
+        }
+        return Ok(candidates.pop());
+    }
+
+    if config.host_rules.iter().any(|rule| {
+        analysis
+            .stages
+            .iter()
+            .any(|stage| host_rule_matches_stage(rule, stage))
+    }) {
         return Err(HostFallbackReason::MixedBackendCommand);
     }
 
-    let first = selected
-        .iter()
-        .flatten()
-        .next()
-        .copied()
-        .ok_or(HostFallbackReason::MixedBackendCommand)?;
-    if selected.iter().flatten().any(|rule| rule.id != first.id) {
-        return Err(HostFallbackReason::MixedBackendCommand);
-    }
-    Ok(Some(first))
+    Ok(None)
 }
 
 fn choose_runnable_profile<'a>(
     config: &'a AgentSandboxConfig,
-    command: &str,
+    analysis: &ShellCommandAnalysis,
     runtime_status: &SandboxRuntimeStatusSummary,
 ) -> Result<
     Option<(
@@ -338,11 +322,6 @@ fn choose_runnable_profile<'a>(
     )>,
     HostFallbackReason,
 > {
-    let match_units = command_match_units(command);
-    let required = analyze_shell_command(command)
-        .required_capabilities
-        .into_iter()
-        .collect::<Vec<_>>();
     let mut candidates = config
         .profiles
         .iter()
@@ -350,10 +329,11 @@ fn choose_runnable_profile<'a>(
             profile.enabled
                 && !profile.image.trim().is_empty()
                 && (config.execution_mode != ShellExecutionMode::Auto
-                    || !profile_is_common(profile))
-                && profile_satisfies(profile, &required)
-                && (profile.command_patterns.is_empty()
-                    || profile_matches_all_units(profile, &match_units))
+                    || !profile
+                        .command_patterns
+                        .iter()
+                        .any(|pattern| super::types::is_catch_all_command_pattern(pattern)))
+                && profile_covers_analysis(profile, analysis)
         })
         .filter_map(|(name, profile)| {
             let preference =
@@ -382,6 +362,9 @@ fn choose_runnable_profile<'a>(
     if candidates.len() == 1 {
         return Ok(candidates.pop());
     }
+
+    // Explicit user rule: for equally capable profiles at the same priority, prefer the
+    // uniquely smallest persisted image because it is cheaper to start and transfer.
     let image_sizes = candidates
         .iter()
         .map(|(_, profile, _)| profile.image_size_bytes)
@@ -400,21 +383,18 @@ fn choose_runnable_profile<'a>(
 
 fn sandbox_unavailability_reason(
     config: &AgentSandboxConfig,
-    command: &str,
+    analysis: &ShellCommandAnalysis,
     runtime_status: &SandboxRuntimeStatusSummary,
 ) -> HostFallbackReason {
-    let match_units = command_match_units(command);
-    let required = analyze_shell_command(command)
-        .required_capabilities
-        .into_iter()
-        .collect::<Vec<_>>();
     let matching_profiles = config.profiles.iter().filter(|(_, profile)| {
         profile.enabled
             && !profile.image.trim().is_empty()
-            && profile_satisfies(profile, &required)
-            && (config.execution_mode != ShellExecutionMode::Auto || !profile_is_common(profile))
-            && (profile.command_patterns.is_empty()
-                || profile_matches_all_units(profile, &match_units))
+            && (config.execution_mode != ShellExecutionMode::Auto
+                || !profile
+                    .command_patterns
+                    .iter()
+                    .any(|pattern| super::types::is_catch_all_command_pattern(pattern)))
+            && profile_covers_analysis(profile, analysis)
     });
     if matching_profiles.count() == 0 {
         return HostFallbackReason::ProfileUnavailable;
@@ -442,99 +422,51 @@ fn sandbox_unavailability_reason(
     }
 }
 
-fn profile_matches_all_units(
+fn profile_covers_analysis(
     profile: &super::types::SandboxProfileConfig,
-    match_units: &[String],
+    analysis: &ShellCommandAnalysis,
 ) -> bool {
-    if match_units.is_empty() || profile.command_patterns.is_empty() {
+    if analysis.stages.is_empty() || profile.command_patterns.is_empty() {
         return false;
     }
+
     let patterns = profile
         .command_patterns
         .iter()
         .filter_map(|pattern| regex::Regex::new(pattern).ok())
         .collect::<Vec<_>>();
     !patterns.is_empty()
-        && match_units
-            .iter()
-            .all(|unit| patterns.iter().any(|pattern| pattern.is_match(unit)))
+        && analysis.stages.iter().all(|stage| {
+            patterns
+                .iter()
+                .any(|pattern| pattern.is_match(&stage.normalized_command))
+        })
 }
 
-fn command_match_units(command: &str) -> Vec<String> {
-    let mut units = Vec::new();
-    for segment in split_shell_command_segments(command) {
-        collect_segment_match_units(&segment, &mut units);
-    }
-    units
+pub(crate) fn command_match_units(command: &str) -> Vec<String> {
+    analyze_shell_command(command)
+        .stages
+        .into_iter()
+        .map(|stage| stage.normalized_command)
+        .collect()
 }
 
-fn collect_segment_match_units(segment: &str, units: &mut Vec<String>) {
-    let Some(tokens) = shell_tokens(segment) else {
-        return;
-    };
-    let index = leading_command_index(&tokens);
-    if index >= tokens.len() {
-        return;
-    }
-    let executable = tokens[index].as_str();
-    if matches!(executable, "cd" | "pushd" | "popd" | "tee" | "xargs") {
-        return;
-    }
-
-    units.push(tokens[index..].join(" "));
-
-    if matches!(executable, "npm" | "pnpm" | "yarn" | "npx" | "cargo") {
-        let subcommands = tokens[index + 1..]
-            .iter()
-            .filter(|token| !token.starts_with('-'))
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        if subcommands.first() == Some(&"tauri") {
-            units.push(subcommands.join(" "));
-        } else if subcommands.first() == Some(&"run") && subcommands.get(1) == Some(&"tauri") {
-            units.push(subcommands[1..].join(" "));
-        }
-    }
-
-    if matches!(executable, "sh" | "bash" | "zsh") {
-        if let Some(script) = shell_c_script(&tokens, index + 1) {
-            for nested in split_shell_command_segments(script) {
-                collect_segment_match_units(&nested, units);
-            }
-        }
-    }
-}
-
-fn shell_c_script(tokens: &[String], start: usize) -> Option<&str> {
-    let mut index = start;
-    while index < tokens.len() {
-        match tokens[index].as_str() {
-            "-c" => return tokens.get(index + 1).map(String::as_str),
-            option if option.starts_with('-') => index += 1,
-            _ => return None,
-        }
-    }
-    None
-}
-
-fn profile_is_common(profile: &super::types::SandboxProfileConfig) -> bool {
-    profile
-        .capabilities
-        .iter()
-        .any(|capability| capability.trim().eq_ignore_ascii_case("common"))
-}
-
-fn profile_satisfies(profile: &super::types::SandboxProfileConfig, required: &[String]) -> bool {
-    let capabilities = profile
-        .capabilities
-        .iter()
-        .map(|capability| capability.trim().to_ascii_lowercase())
-        .filter(|capability| !capability.is_empty())
+pub(crate) fn required_command_patterns(config: &AgentSandboxConfig) -> Vec<String> {
+    let mut patterns = config
+        .profiles
+        .values()
+        .flat_map(|profile| profile.command_patterns.iter())
+        .chain(
+            config
+                .host_rules
+                .iter()
+                .flat_map(|rule| rule.command_patterns.iter()),
+        )
+        .cloned()
         .collect::<Vec<_>>();
-    capabilities.iter().any(|capability| capability == "common")
-        || required
-            .iter()
-            .all(|capability| capabilities.iter().any(|available| available == capability))
+    patterns.sort();
+    patterns.dedup();
+    patterns
 }
 
 fn merge_runtime_preference(
@@ -653,17 +585,10 @@ fn host_plan(tool_call_id: &str, command: &str, reason: HostFallbackReason) -> S
 mod tests {
     use super::*;
     use crate::tools::{
-        SandboxNetworkPolicy, SandboxProfileConfig, SandboxResourceLimits, WorkspaceAccess,
+        HostCommandRule, SandboxNetworkPolicy, SandboxProfileConfig, SandboxResourceLimits,
+        WorkspaceAccess,
     };
     use std::collections::BTreeMap;
-
-    fn command_capabilities(command: &str) -> Vec<&'static str> {
-        let required = analyze_shell_command(command).required_capabilities;
-        ["python", "node", "tauri", "rust", "git"]
-            .into_iter()
-            .filter(|capability| required.contains(*capability))
-            .collect()
-    }
 
     fn ready_status(runtime: SandboxRuntime, images: Vec<&str>) -> SandboxRuntimeStatus {
         runtime_status(runtime, SandboxAvailabilityState::Ready, images, Vec::new())
@@ -714,8 +639,11 @@ mod tests {
                 name: "busybox".to_string(),
                 enabled: true,
                 priority: 0,
-                capabilities: vec!["shell".to_string()],
-                command_patterns: vec![".*".to_string()],
+                command_patterns: if mode == ShellExecutionMode::SandboxOnly {
+                    vec![".*".to_string()]
+                } else {
+                    vec![r"^(?:echo|pwd|pnpm|cargo|git|python)(?:\s|$)".to_string()]
+                },
                 runtime_preference: SandboxRuntimePreference::Auto,
                 image: "busybox:latest".to_string(),
                 image_size_bytes: Some(1),
@@ -729,7 +657,6 @@ mod tests {
             scheme_revision: None,
             execution_mode: mode,
             runtime_preference: SandboxRuntimePreference::Auto,
-            default_profile: "busybox".to_string(),
             profiles,
             host_rules: Vec::new(),
         }
@@ -774,18 +701,23 @@ mod tests {
         assert!(plan.mounts.iter().any(|mount| {
             mount.host_path == secondary.path().to_string_lossy()
                 && mount.guest_path == secondary.path().to_string_lossy()
+                && mount.access == WorkspaceAccess::ReadWrite
         }));
         assert!(plan.mounts.iter().any(|mount| {
             mount.host_path == user_skills.path().to_string_lossy()
+                && mount.guest_path == user_skills.path().to_string_lossy()
                 && mount.access == WorkspaceAccess::ReadWrite
         }));
         assert!(plan.mounts.iter().any(|mount| {
             mount.host_path == builtin_skills.path().to_string_lossy()
+                && mount.guest_path == builtin_skills.path().to_string_lossy()
                 && mount.access == WorkspaceAccess::ReadOnly
         }));
+        let physical_temp_root = crate::libs::ai_temp::ai_temp_physical_root_unchecked();
+        #[cfg(target_os = "macos")]
+        assert_eq!(physical_temp_root, Path::new("/private/tmp/chatspeed"));
         assert!(plan.mounts.iter().any(|mount| {
-            mount.host_path
-                == crate::libs::ai_temp::ai_temp_physical_root_unchecked().to_string_lossy()
+            mount.host_path == physical_temp_root.to_string_lossy()
                 && mount.guest_path == crate::libs::ai_temp::AI_TEMP_ROOT
                 && mount.access == WorkspaceAccess::ReadWrite
         }));
@@ -918,9 +850,10 @@ mod tests {
         config: &mut AgentSandboxConfig,
         name: &str,
         image: &str,
-        capabilities: &[&str],
         command_patterns: &[&str],
     ) {
+        assert!(!command_patterns.is_empty());
+        let command_patterns = command_patterns.iter().map(ToString::to_string).collect();
         config.profiles.insert(
             name.to_string(),
             SandboxProfileConfig {
@@ -928,8 +861,7 @@ mod tests {
                 name: name.to_string(),
                 enabled: true,
                 priority: 0,
-                capabilities: capabilities.iter().map(ToString::to_string).collect(),
-                command_patterns: command_patterns.iter().map(ToString::to_string).collect(),
+                command_patterns,
                 runtime_preference: SandboxRuntimePreference::Auto,
                 image: image.to_string(),
                 image_size_bytes: Some(1),
@@ -947,13 +879,13 @@ mod tests {
             &mut config,
             "node-rust",
             "node-rust:latest",
-            &["node", "rust", "git"],
             &[
                 r"^(?:node|npm|pnpm|yarn|npx)(?:\s|$)",
                 r"^(?:cargo|rustc|rustup)(?:\s|$)",
                 r"^git(?:\s|$)",
             ],
         );
+        config.profiles.get_mut("node-rust").unwrap().priority = 10;
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(
                 SandboxRuntime::Msb,
@@ -976,17 +908,137 @@ mod tests {
     }
 
     #[test]
+    fn compound_navigation_command_matches_git_and_cargo_rules() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config.profiles.clear();
+        add_profile(
+            &mut config,
+            "git-cargo",
+            "git-cargo:latest",
+            &[r"^git log(?:\s|$)", r"^cargo check(?:\s|$)"],
+        );
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["git-cargo:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let command = "git log -n 3 && cd src-tauri/src && cargo check";
+        let plan = ShellExecutionResolver::resolve(
+            "tool-1",
+            command,
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
+        );
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+        assert_eq!(plan.profile.as_deref(), Some("git-cargo"));
+        assert_eq!(
+            command_match_units(command),
+            vec!["git log -n 3", "cargo check"]
+        );
+    }
+
+    #[test]
+    fn full_command_host_rule_beats_higher_priority_partial_rule() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config.profiles.clear();
+        config.host_rules.extend([
+            super::super::types::HostCommandRule {
+                id: "full-host".to_string(),
+                name: "Full Host".to_string(),
+                enabled: true,
+                priority: 5,
+                command_patterns: vec![
+                    r"^git log(?:\s|$)".to_string(),
+                    r"^cargo check(?:\s|$)".to_string(),
+                ],
+            },
+            super::super::types::HostCommandRule {
+                id: "partial-host".to_string(),
+                name: "Partial Host".to_string(),
+                enabled: true,
+                priority: 10,
+                command_patterns: vec![r"^git log(?:\s|$)".to_string()],
+            },
+        ]);
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec![]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let plan = ShellExecutionResolver::resolve(
+            "tool-1",
+            "git log -n 3 && cd src-tauri/src && cargo check",
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
+        );
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+        assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
+        assert_eq!(
+            plan.backend_origin,
+            ShellExecutionBackendOrigin::ExplicitHostRule
+        );
+    }
+
+    #[test]
+    fn sandbox_priority_is_compared_with_the_full_command_host_rule() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config.profiles.clear();
+        add_profile(
+            &mut config,
+            "git-cargo",
+            "git-cargo:latest",
+            &[r"^git log(?:\s|$)", r"^cargo check(?:\s|$)"],
+        );
+        config.profiles.get_mut("git-cargo").unwrap().priority = 20;
+        config.host_rules.extend([
+            super::super::types::HostCommandRule {
+                id: "full-host".to_string(),
+                name: "Full Host".to_string(),
+                enabled: true,
+                priority: 10,
+                command_patterns: vec![
+                    r"^git log(?:\s|$)".to_string(),
+                    r"^cargo check(?:\s|$)".to_string(),
+                ],
+            },
+            super::super::types::HostCommandRule {
+                id: "partial-host".to_string(),
+                name: "Partial Host".to_string(),
+                enabled: true,
+                priority: 100,
+                command_patterns: vec![r"^git log(?:\s|$)".to_string()],
+            },
+        ]);
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["git-cargo:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let plan = ShellExecutionResolver::resolve(
+            "tool-1",
+            "git log -n 3 && cd src-tauri/src && cargo check",
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
+        );
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+        assert_eq!(plan.backend, ShellExecutionBackendKind::Msb);
+        assert_eq!(plan.profile.as_deref(), Some("git-cargo"));
+        assert_eq!(
+            plan.backend_origin,
+            ShellExecutionBackendOrigin::SandboxProfile
+        );
+    }
+
+    #[test]
     fn host_rules_only_apply_in_auto_mode() {
         let mut config = config(ShellExecutionMode::SandboxOnly);
         config
             .host_rules
-            .push(super::super::types::HostCapabilityRule {
+            .push(super::super::types::HostCommandRule {
                 id: "tauri-host".to_string(),
                 name: "Tauri Host".to_string(),
                 enabled: true,
                 priority: 100,
-                capabilities_all: vec!["node".to_string()],
-                invocation_tags_any: vec![],
                 command_patterns: vec![],
             });
         let status = SandboxRuntimeStatusSummary {
@@ -1000,20 +1052,25 @@ mod tests {
             &status,
             Some(Path::new("/project")),
         );
-        assert_eq!(plan.status, ShellExecutionPlanStatus::Denied);
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+        assert_eq!(plan.profile.as_deref(), Some("busybox"));
     }
 
     #[test]
     fn runnable_lower_priority_profile_beats_unavailable_higher_priority_profile() {
         let mut config = config(ShellExecutionMode::Auto);
         config.profiles.remove("busybox");
-        add_profile(&mut config, "node-low", "node-low:latest", &["node"], &[]);
+        add_profile(
+            &mut config,
+            "node-low",
+            "node-low:latest",
+            &[r"^pnpm(?:\s|$)"],
+        );
         add_profile(
             &mut config,
             "node-high-unavailable",
             "node-high:latest",
-            &["node"],
-            &[],
+            &[r"^pnpm(?:\s|$)"],
         );
         config.profiles.get_mut("node-low").unwrap().priority = 10;
         config
@@ -1043,8 +1100,18 @@ mod tests {
     #[test]
     fn highest_priority_profile_wins_without_map_order_dependence() {
         let mut config = config(ShellExecutionMode::Auto);
-        add_profile(&mut config, "node-low", "node-low:latest", &["node"], &[]);
-        add_profile(&mut config, "node-high", "node-high:latest", &["node"], &[]);
+        add_profile(
+            &mut config,
+            "node-low",
+            "node-low:latest",
+            &[r"^pnpm(?:\s|$)"],
+        );
+        add_profile(
+            &mut config,
+            "node-high",
+            "node-high:latest",
+            &[r"^pnpm(?:\s|$)"],
+        );
         config.profiles.get_mut("node-low").unwrap().priority = 10;
         config.profiles.get_mut("node-high").unwrap().priority = 20;
         let status = SandboxRuntimeStatusSummary {
@@ -1067,8 +1134,8 @@ mod tests {
     #[test]
     fn equal_priority_profiles_fail_closed_instead_of_requesting_host_fallback() {
         let mut config = config(ShellExecutionMode::Auto);
-        add_profile(&mut config, "node-a", "node-a:latest", &["node"], &[]);
-        add_profile(&mut config, "node-b", "node-b:latest", &["node"], &[]);
+        add_profile(&mut config, "node-a", "node-a:latest", &[r"^pnpm(?:\s|$)"]);
+        add_profile(&mut config, "node-b", "node-b:latest", &[r"^pnpm(?:\s|$)"]);
         config.profiles.remove("busybox");
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec!["node-a:latest", "node-b:latest"]),
@@ -1095,14 +1162,12 @@ mod tests {
         for id in ["host-a", "host-b"] {
             config
                 .host_rules
-                .push(super::super::types::HostCapabilityRule {
+                .push(super::super::types::HostCommandRule {
                     id: id.to_string(),
                     name: id.to_string(),
                     enabled: true,
                     priority: 10,
-                    capabilities_all: vec!["node".to_string()],
-                    invocation_tags_any: vec![],
-                    command_patterns: vec![],
+                    command_patterns: vec![r"^pnpm(?:\s|$)".to_string()],
                 });
         }
         let status = SandboxRuntimeStatusSummary {
@@ -1130,19 +1195,21 @@ mod tests {
             &mut config,
             "node-rust-tauri",
             "node-rust-tauri:latest",
-            &["node", "rust", "tauri"],
-            &[],
+            &[
+                r"^(?:pnpm|npm|yarn|npx)(?:\s+run)?\s+tauri(?:\s|$)",
+                r"^cargo(?:\s|$)",
+            ],
         );
         config
             .host_rules
-            .push(super::super::types::HostCapabilityRule {
+            .push(super::super::types::HostCommandRule {
                 id: "tauri-host".to_string(),
                 name: "Tauri Host".to_string(),
                 enabled: true,
                 priority: 100,
-                capabilities_all: vec!["node".to_string(), "rust".to_string(), "tauri".to_string()],
-                invocation_tags_any: vec!["tauri".to_string()],
-                command_patterns: vec![],
+                command_patterns: vec![
+                    r"^(?:pnpm|npm|yarn|npx)(?:\s+run)?\s+tauri(?:\s|$)".to_string()
+                ],
             });
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(
@@ -1170,14 +1237,12 @@ mod tests {
         let mut config = config(ShellExecutionMode::Auto);
         config
             .host_rules
-            .push(super::super::types::HostCapabilityRule {
-                id: "all-host".to_string(),
-                name: "All Host".to_string(),
+            .push(super::super::types::HostCommandRule {
+                id: "build-host".to_string(),
+                name: "Build Host".to_string(),
                 enabled: true,
                 priority: 100,
-                capabilities_all: vec![],
-                invocation_tags_any: vec![],
-                command_patterns: vec![".*".to_string()],
+                command_patterns: vec![r"^pnpm(?:\s|$)".to_string(), r"^cargo(?:\s|$)".to_string()],
             });
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
@@ -1199,9 +1264,10 @@ mod tests {
     }
 
     #[test]
-    fn auto_ignores_common_profiles_and_requests_host_fallback() {
+    fn auto_profile_without_matching_pattern_requests_host_fallback() {
         let mut config = config(ShellExecutionMode::Auto);
-        config.profiles.get_mut("busybox").unwrap().capabilities = vec!["common".to_string()];
+        config.profiles.get_mut("busybox").unwrap().command_patterns =
+            vec![r"^echo(?:\s|$)".to_string()];
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
             docker: ready_status(SandboxRuntime::Docker, vec![]),
@@ -1222,9 +1288,8 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_only_common_profile_covers_recognized_commands() {
-        let mut config = config(ShellExecutionMode::SandboxOnly);
-        config.profiles.get_mut("busybox").unwrap().capabilities = vec!["common".to_string()];
+    fn sandbox_only_profile_pattern_covers_matching_commands() {
+        let config = config(ShellExecutionMode::SandboxOnly);
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
             docker: ready_status(SandboxRuntime::Docker, vec![]),
@@ -1242,10 +1307,10 @@ mod tests {
     }
 
     #[test]
-    fn profile_and_image_names_do_not_infer_capabilities() {
+    fn profile_command_patterns_route_without_name_inference() {
         let mut config = config(ShellExecutionMode::Auto);
         config.profiles.clear();
-        add_profile(&mut config, "git", "git:latest", &[], &[r"^git(?:\s|$)"]);
+        add_profile(&mut config, "git", "git:latest", &[r"^git(?:\s|$)"]);
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec!["git:latest"]),
             docker: ready_status(SandboxRuntime::Docker, vec![]),
@@ -1257,11 +1322,8 @@ mod tests {
             &status,
             Some(Path::new("/project")),
         );
-        assert_eq!(plan.status, ShellExecutionPlanStatus::ConsentRequired);
-        assert_eq!(
-            plan.fallback_reason,
-            Some(HostFallbackReason::ProfileUnavailable)
-        );
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+        assert_eq!(plan.profile.as_deref(), Some("git"));
     }
 
     #[test]
@@ -1272,15 +1334,13 @@ mod tests {
             &mut config,
             "python-small",
             "python-small:latest",
-            &["python"],
-            &[],
+            &[r"^python(?:\s|$)"],
         );
         add_profile(
             &mut config,
             "python-large",
             "python-large:latest",
-            &["python"],
-            &[],
+            &[r"^python(?:\s|$)"],
         );
         config
             .profiles
@@ -1311,6 +1371,40 @@ mod tests {
     }
 
     #[test]
+    fn same_priority_and_image_size_profiles_fail_closed() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config.profiles.clear();
+        for name in ["python-a", "python-b"] {
+            add_profile(
+                &mut config,
+                name,
+                &format!("{name}:latest"),
+                &[r"^python(?:\s|$)"],
+            );
+            config.profiles.get_mut(name).unwrap().image_size_bytes = Some(50);
+        }
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(
+                SandboxRuntime::Msb,
+                vec!["python-a:latest", "python-b:latest"],
+            ),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let plan = ShellExecutionResolver::resolve(
+            "tool-1",
+            "python -c 'print(1)'",
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
+        );
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Denied);
+        assert_eq!(
+            plan.fallback_reason,
+            Some(HostFallbackReason::AmbiguousRoute)
+        );
+    }
+
+    #[test]
     fn unavailable_compound_profile_without_common_uses_host_fallback() {
         let mut config = config(ShellExecutionMode::Auto);
         config.profiles.remove("busybox");
@@ -1335,50 +1429,73 @@ mod tests {
     }
 
     #[test]
-    fn command_analysis_uses_executable_tokens_not_quoted_text_or_paths() {
-        assert_eq!(
-            command_capabilities("echo 'python cargo node'"),
-            Vec::<&str>::new()
+    fn compound_command_requires_one_profile_to_cover_every_stage() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config.profiles.clear();
+        add_profile(
+            &mut config,
+            "cargo-only",
+            "cargo:latest",
+            &[r"^cargo(?:\s|$)"],
         );
-        assert_eq!(
-            command_capabilities("cat ./fixtures/python-output.txt"),
-            Vec::<&str>::new()
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["cargo:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let command = "cargo check && git diff src-tauri";
+        let plan = ShellExecutionResolver::resolve(
+            "tool-1",
+            command,
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
         );
+        assert_eq!(plan.status, ShellExecutionPlanStatus::ConsentRequired);
         assert_eq!(
-            command_capabilities("PYTHONPATH=src python -m pytest"),
-            vec!["python"]
+            plan.fallback_reason,
+            Some(HostFallbackReason::ProfileUnavailable)
         );
-        assert_eq!(
-            command_capabilities("./scripts/cargo-wrapper --help"),
-            Vec::<&str>::new()
+
+        config
+            .profiles
+            .get_mut("cargo-only")
+            .unwrap()
+            .command_patterns
+            .push(r"^git(?:\s|$)".to_string());
+        let plan = ShellExecutionResolver::resolve(
+            "tool-2",
+            command,
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
         );
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+        assert_eq!(plan.profile.as_deref(), Some("cargo-only"));
     }
 
     #[test]
-    fn command_analysis_handles_compound_pipes_redirects_and_shell_c() {
+    fn fallback_context_uses_all_configured_patterns_and_quote_aware_command_stages() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config.profiles.get_mut("busybox").unwrap().command_patterns =
+            vec![r"^pnpm(?:\s|$)".to_string()];
+        config.host_rules.push(HostCommandRule {
+            id: "host-cargo".to_string(),
+            name: "Host cargo".to_string(),
+            enabled: true,
+            priority: 10,
+            command_patterns: vec![r"^cargo(?:\s|$)".to_string()],
+        });
+
         assert_eq!(
-            command_capabilities("cd app && pnpm build | tee out.log && cargo test > report.txt"),
-            vec!["node", "rust"]
+            required_command_patterns(&config),
+            vec![r"^cargo(?:\s|$)".to_string(), r"^pnpm(?:\s|$)".to_string()]
         );
         assert_eq!(
-            command_capabilities("rustfmt --check src/lib.rs"),
-            vec!["rust"]
-        );
-        assert_eq!(
-            command_capabilities("cargo check && git diff src-tauri"),
-            vec!["rust", "git"]
-        );
-        assert_eq!(
-            command_capabilities("pnpm tauri build && cargo check && git diff"),
-            vec!["node", "tauri", "rust", "git"]
-        );
-        assert_eq!(
-            command_capabilities("bash -c 'python --version && node --version'"),
-            vec!["python", "node"]
-        );
-        assert_eq!(
-            command_capabilities("sh -lc 'echo cargo text only'"),
-            Vec::<&str>::new()
+            command_match_units("pnpm tauri build && sh -c 'cargo test --lib'"),
+            vec![
+                "pnpm tauri build".to_string(),
+                "cargo test --lib".to_string(),
+            ]
         );
     }
 

@@ -47,7 +47,6 @@ pub async fn get_sandbox_scheme_runtime_status(
         scheme_revision: None,
         execution_mode: crate::tools::ShellExecutionMode::Auto,
         runtime_preference: config.runtime_preference,
-        default_profile: String::new(),
         profiles: config
             .profiles
             .into_iter()
@@ -129,7 +128,7 @@ pub async fn delete_sandbox_scheme(
 mod tests {
     use super::*;
     use crate::tools::{
-        HostCapabilityRule, SandboxNetworkPolicy, SandboxProfileConfig, SandboxSchemeConfig,
+        HostCommandRule, SandboxNetworkPolicy, SandboxProfileConfig, SandboxSchemeConfig,
         WorkspaceAccess,
     };
 
@@ -147,7 +146,6 @@ mod tests {
                     name: "Bash".to_string(),
                     enabled: true,
                     priority: 0,
-                    capabilities: vec!["bash".to_string()],
                     command_patterns: vec!["^bash(?:\\s|$)".to_string()],
                     runtime_preference: Default::default(),
                     image: "bash:latest".to_string(),
@@ -156,18 +154,14 @@ mod tests {
                     resources: Default::default(),
                     workspace_access: WorkspaceAccess::ReadWrite,
                 }],
-                host_rules: vec![HostCapabilityRule {
+                host_rules: vec![HostCommandRule {
                     id: String::new(),
                     name: "Tauri Host".to_string(),
                     enabled: true,
                     priority: 10,
-                    capabilities_all: vec![
-                        "node".to_string(),
-                        "rust".to_string(),
-                        "tauri".to_string(),
+                    command_patterns: vec![
+                        "^(?:pnpm|npm|yarn|npx)(?:\\s+run)?\\s+tauri(?:\\s|$)".to_string()
                     ],
-                    invocation_tags_any: vec!["tauri".to_string()],
-                    command_patterns: vec![],
                 }],
             },
             disabled: false,
@@ -179,5 +173,8 @@ mod tests {
 
         assert_eq!(scheme.config.profiles[0].id.len(), 13);
         assert_eq!(scheme.config.host_rules[0].id.len(), 13);
+        scheme
+            .validate()
+            .expect("generated IDs satisfy scheme validation");
     }
 }

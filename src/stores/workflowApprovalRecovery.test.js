@@ -266,7 +266,8 @@ const fallbackTransitionContext = upsertExecutionContextPendingTool(
       approval_kind: 'host_fallback',
       command: 'pnpm tauri build',
       fallback_reason: 'missing_image',
-      required_capabilities: ['node', 'rust', 'tauri']
+      required_command_patterns: ['^pnpm(?:\\s|$)'],
+      matched_command_units: ['pnpm tauri build']
     },
     displayType: 'text'
   }

@@ -351,6 +351,68 @@ mod tests {
     }
 
     #[test]
+    fn runners_preserve_absolute_mount_targets_and_skill_permissions() {
+        let mounts = vec![
+            SandboxMountPlan {
+                host_path: "/a/b/c".to_string(),
+                guest_path: "/a/b/c".to_string(),
+                access: WorkspaceAccess::ReadWrite,
+            },
+            SandboxMountPlan {
+                host_path: "/Users/test/.chatspeed/skills".to_string(),
+                guest_path: "/Users/test/.chatspeed/skills".to_string(),
+                access: WorkspaceAccess::ReadWrite,
+            },
+            SandboxMountPlan {
+                host_path: "/Applications/ChatSpeed/resources/skills".to_string(),
+                guest_path: "/Applications/ChatSpeed/resources/skills".to_string(),
+                access: WorkspaceAccess::ReadOnly,
+            },
+            SandboxMountPlan {
+                host_path: "/private/tmp/chatspeed".to_string(),
+                guest_path: "/tmp".to_string(),
+                access: WorkspaceAccess::ReadWrite,
+            },
+        ];
+
+        let mut msb_plan = plan(ShellExecutionBackendKind::Msb);
+        msb_plan.mounts = mounts.clone();
+        msb_plan.workdir = Some("/a/b/c".to_string());
+        let msb_argv = sandbox_argv_for_plan(&msb_plan, "pwd").unwrap().unwrap();
+        for volume in [
+            "/a/b/c:/a/b/c",
+            "/Users/test/.chatspeed/skills:/Users/test/.chatspeed/skills",
+            "/Applications/ChatSpeed/resources/skills:/Applications/ChatSpeed/resources/skills:ro",
+            "/private/tmp/chatspeed:/tmp",
+        ] {
+            assert!(msb_argv
+                .windows(2)
+                .any(|pair| pair[0] == "--volume" && pair[1] == volume));
+        }
+        assert!(msb_argv
+            .windows(2)
+            .any(|pair| pair[0] == "--workdir" && pair[1] == "/a/b/c"));
+
+        let mut docker_plan = plan(ShellExecutionBackendKind::Docker);
+        docker_plan.mounts = mounts;
+        docker_plan.workdir = Some("/a/b/c".to_string());
+        let docker_argv = sandbox_argv_for_plan(&docker_plan, "pwd").unwrap().unwrap();
+        for mount in [
+            "type=bind,src=/a/b/c,dst=/a/b/c",
+            "type=bind,src=/Users/test/.chatspeed/skills,dst=/Users/test/.chatspeed/skills",
+            "type=bind,src=/Applications/ChatSpeed/resources/skills,dst=/Applications/ChatSpeed/resources/skills,readonly",
+            "type=bind,src=/private/tmp/chatspeed,dst=/tmp",
+        ] {
+            assert!(docker_argv
+                .windows(2)
+                .any(|pair| pair[0] == "--mount" && pair[1] == mount));
+        }
+        assert!(docker_argv
+            .windows(2)
+            .any(|pair| pair[0] == "--workdir" && pair[1] == "/a/b/c"));
+    }
+
+    #[test]
     fn docker_host_network_exposes_container_ports_to_the_host() {
         let mut plan = plan(ShellExecutionBackendKind::Docker);
         plan.network = Some(SandboxNetworkPolicy {

@@ -1,4 +1,38 @@
 <template>
+  <el-dialog
+    v-if="!inline"
+    :model-value="modelValue"
+    :title="t('workflow.approval.hostFallbackTitle')"
+    width="560px"
+    append-to-body
+    class="approval-dialog"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false"
+    :show-close="false"
+    @update:model-value="value => emit('update:modelValue', value)">
+    <div class="approval-content">
+      <div class="details-box">
+        <div v-if="isShellAction" class="shell-view">
+          <div class="shell-command-frame">
+            <span class="shell-command-frame__prompt" aria-hidden="true">$</span>
+            <MarkdownSimple :content="shellMarkdown" class-name="approval-markdown" />
+          </div>
+          <div v-if="shellExecutionRows.length" class="shell-execution-plan">
+            <div v-for="row in shellExecutionRows" :key="row.label" class="shell-execution-plan__row">
+              <span class="shell-execution-plan__label">{{ row.label }}</span>
+              <span class="shell-execution-plan__value">{{ row.value }}</span>
+            </div>
+          </div>
+        </div>
+        <pre v-else class="details-text">{{ detailPayload.detailsText }}</pre>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="onReject" :loading="loading">{{ $t('common.cancel') }}</el-button>
+      <el-button type="primary" @click="onApprove" :loading="loading">{{ $t('common.confirm') }}</el-button>
+    </template>
+  </el-dialog>
+
   <div v-if="inline" class="approval-inline-panel" :class="{ 'diff-dialog': isEditAction }">
     <div class="approval-content">
       <div class="details-box" :class="{ 'plan-details-box': isPlanApproval }">
@@ -319,8 +353,12 @@ const shellExecutionRows = computed(() => {
     ['workflow.approval.workspaceAccess', details.workspace_access],
     ['workflow.approval.limits', details.limits],
     [
-      'workflow.approval.requiredCapabilities',
-      detailsObject.value?.required_capabilities
+      'workflow.approval.requiredCommandPatterns',
+      detailsObject.value?.required_command_patterns
+    ],
+    [
+      'workflow.approval.matchedCommandUnits',
+      detailsObject.value?.matched_command_units
     ],
     [
       'workflow.approval.fallbackReason',

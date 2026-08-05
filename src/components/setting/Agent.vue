@@ -623,7 +623,6 @@
                 <el-option
                   v-for="scheme in sandboxSchemeStore.schemes.filter(scheme => !scheme.disabled)"
                   :key="scheme.id"
-                  :disabled="agentForm.sandboxExecutionMode === 'auto' && schemeHasCommonProfile(scheme)"
                   :label="scheme.name"
                   :value="scheme.id" />
               </el-select>
@@ -1636,11 +1635,6 @@ const copyAgent = async id => {
   }
 }
 
-const schemeHasCommonProfile = scheme =>
-  scheme?.config?.profiles?.some(profile =>
-    profile.capabilities?.some(capability => String(capability).trim().toLowerCase() === 'common')
-  )
-
 const updateAgent = () => {
   formRef.value.validate(async valid => {
     if (valid) {
@@ -1662,17 +1656,20 @@ const updateAgent = () => {
         showMessage(t('settings.agent.sandboxConfigTip'), 'error')
         return
       }
-      if (
-        finalForm.allowShell &&
-        finalForm.sandboxExecutionMode === 'auto' &&
-        schemeHasCommonProfile(
-          sandboxSchemeStore.schemes.find(scheme => scheme.id === finalForm.sandboxSchemeId)
+      if (finalForm.allowShell && finalForm.sandboxExecutionMode === 'auto') {
+        const selectedScheme = sandboxSchemeStore.schemes.find(
+          scheme => scheme.id === finalForm.sandboxSchemeId
         )
-      ) {
-        showMessage(t('settings.agent.sandboxAutoCommonUnavailable'), 'error')
-        return
+        const hasCatchAllProfile = selectedScheme?.config?.profiles?.some(
+          profile => profile.enabled !== false && (profile.commandPatterns || []).some(
+            pattern => ['.*', '^.*', '.*$', '^.*$'].includes(String(pattern).trim())
+          )
+        )
+        if (hasCatchAllProfile) {
+          showMessage(t('settings.agent.sandboxAutoCommonUnavailable'), 'error')
+          return
+        }
       }
-
       try {
         await agentStore.saveAgent({ ...finalForm, id: editId.value })
         await syncCurrentWorkflowSkillsConfig(editId.value, finalForm)

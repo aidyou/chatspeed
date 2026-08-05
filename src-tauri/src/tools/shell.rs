@@ -760,10 +760,9 @@ impl ToolDefinition for ShellExecute {
             .unwrap_or("bash");
         let execution_plan = self.execution_plan_for_params(tool_id, command_str)?;
         if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
-            return Err(ToolError::ExecutionFailed(format!(
-                "Sandbox execution is not authorized before spawn: {:?} ({:?})",
-                execution_plan.status, execution_plan.fallback_reason
-            )));
+            return Err(ToolError::ExecutionFailed(
+                Self::execution_plan_denied_message(&execution_plan),
+            ));
         }
         let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, requested_timeout_ms);
         Self::log_execution_backend_debug(tool_id, command_str, &execution_plan);
@@ -1769,6 +1768,16 @@ impl ShellExecute {
         );
     }
 
+    fn execution_plan_denied_message(plan: &crate::tools::ShellExecutionPlan) -> String {
+        let status = format!("{:?}", plan.status);
+        match &plan.fallback_reason {
+            Some(reason) => {
+                format!("Sandbox execution is not authorized before spawn: {status} ({reason:?})")
+            }
+            None => format!("Sandbox execution is not authorized before spawn: {status}"),
+        }
+    }
+
     fn execution_plan_for_params(
         &self,
         tool_call_id: &str,
@@ -2066,10 +2075,9 @@ impl ShellExecute {
         let working_dir = self.default_working_dir();
         let execution_plan = self.execution_plan_for_params(&tool_id, command_str)?;
         if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
-            return Err(ToolError::ExecutionFailed(format!(
-                "Sandbox execution is not authorized before spawn: {:?} ({:?})",
-                execution_plan.status, execution_plan.fallback_reason
-            )));
+            return Err(ToolError::ExecutionFailed(
+                Self::execution_plan_denied_message(&execution_plan),
+            ));
         }
         let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, requested_timeout_ms);
         Self::log_execution_backend_debug(&tool_id, command_str, &execution_plan);
@@ -3909,6 +3917,24 @@ mod tests {
 
         assert!(matches!(result, Err(ToolError::Security(_))));
         drop(outside_root);
+    }
+
+    #[test]
+    fn denied_execution_plan_message_does_not_leak_option_debug_format() {
+        let temp_root = tempdir().unwrap();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let mut plan = sandbox_test_plan(
+            ShellExecutionBackendKind::Msb,
+            SandboxRuntime::Msb,
+            &project_root,
+        );
+        plan.status = ShellExecutionPlanStatus::Denied;
+        plan.fallback_reason = Some(crate::tools::sandbox::HostFallbackReason::ProfileUnavailable);
+
+        assert_eq!(
+            ShellExecute::execution_plan_denied_message(&plan),
+            "Sandbox execution is not authorized before spawn: Denied (ProfileUnavailable)"
+        );
     }
 
     #[test]

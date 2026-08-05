@@ -168,6 +168,20 @@ pub struct SandboxMountPlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub struct ShellCommandStage {
+    pub normalized_command: String,
+    pub executable: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct ShellCommandAnalysis {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<ShellCommandStage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub struct ShellExecutionPlan {
     pub tool_call_id: String,
     pub command: String,
@@ -348,6 +362,10 @@ pub struct SandboxResourceLimits {
     pub timeout_ms: Option<u64>,
 }
 
+pub(crate) fn is_catch_all_command_pattern(pattern: &str) -> bool {
+    matches!(pattern.trim(), ".*" | "^.*" | ".*$" | "^.*$")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxProfileConfig {
@@ -359,8 +377,6 @@ pub struct SandboxProfileConfig {
     pub enabled: bool,
     #[serde(default)]
     pub priority: i32,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub command_patterns: Vec<String>,
     #[serde(default)]
@@ -382,7 +398,7 @@ fn default_enabled() -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct HostCapabilityRule {
+pub struct HostCommandRule {
     #[serde(default)]
     pub id: String,
     #[serde(default)]
@@ -391,10 +407,6 @@ pub struct HostCapabilityRule {
     pub enabled: bool,
     #[serde(default)]
     pub priority: i32,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities_all: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub invocation_tags_any: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub command_patterns: Vec<String>,
 }
@@ -407,7 +419,7 @@ pub struct SandboxSchemeConfig {
     #[serde(default)]
     pub profiles: Vec<SandboxProfileConfig>,
     #[serde(default)]
-    pub host_rules: Vec<HostCapabilityRule>,
+    pub host_rules: Vec<HostCommandRule>,
 }
 
 impl SandboxSchemeConfig {
@@ -428,6 +440,12 @@ impl SandboxSchemeConfig {
                     profile.name
                 ));
             }
+            if profile.command_patterns.is_empty() {
+                return Err(format!(
+                    "sandbox profile {} has no command patterns",
+                    profile.name
+                ));
+            }
             for pattern in &profile.command_patterns {
                 regex::Regex::new(pattern).map_err(|error| {
                     format!(
@@ -440,24 +458,27 @@ impl SandboxSchemeConfig {
 
         for rule in &self.host_rules {
             if rule.id.trim().is_empty() || rule.name.trim().is_empty() {
-                return Err("host capability rule id and name cannot be empty".to_string());
+                return Err("host command rule id and name cannot be empty".to_string());
             }
             if !host_rule_ids.insert(rule.id.trim().to_string()) {
-                return Err(format!("duplicate host capability rule id: {}", rule.id));
+                return Err(format!("duplicate host command rule id: {}", rule.id));
             }
-            if rule.capabilities_all.is_empty()
-                && rule.invocation_tags_any.is_empty()
-                && rule.command_patterns.is_empty()
-            {
+            if rule.command_patterns.is_empty() {
                 return Err(format!(
-                    "host capability rule {} has no match criteria",
+                    "host command rule {} has no command patterns",
                     rule.name
                 ));
             }
             for pattern in &rule.command_patterns {
+                if is_catch_all_command_pattern(pattern) {
+                    return Err(format!(
+                        "host command rule {} cannot use a catch-all command pattern",
+                        rule.name
+                    ));
+                }
                 regex::Regex::new(pattern).map_err(|error| {
                     format!(
-                        "host capability rule {} command pattern is invalid: {error}",
+                        "host command rule {} command pattern is invalid: {error}",
                         rule.name
                     )
                 })?;
@@ -479,12 +500,10 @@ pub struct AgentSandboxConfig {
     pub execution_mode: ShellExecutionMode,
     #[serde(default)]
     pub runtime_preference: SandboxRuntimePreference,
-    #[serde(default = "default_profile")]
-    pub default_profile: String,
     #[serde(default)]
     pub profiles: BTreeMap<String, SandboxProfileConfig>,
     #[serde(default)]
-    pub host_rules: Vec<HostCapabilityRule>,
+    pub host_rules: Vec<HostCommandRule>,
 }
 
 impl Default for AgentSandboxConfig {
@@ -494,15 +513,10 @@ impl Default for AgentSandboxConfig {
             scheme_revision: None,
             execution_mode: ShellExecutionMode::Auto,
             runtime_preference: SandboxRuntimePreference::Auto,
-            default_profile: default_profile(),
             profiles: BTreeMap::new(),
             host_rules: Vec::new(),
         }
     }
-}
-
-fn default_profile() -> String {
-    "busybox".to_string()
 }
 
 impl AgentSandboxConfig {
@@ -526,5 +540,56 @@ impl AgentSandboxConfig {
 
     pub fn to_json(&self) -> Option<String> {
         serde_json::to_string(self).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(pattern: &str) -> SandboxProfileConfig {
+        SandboxProfileConfig {
+            id: "profile".to_string(),
+            name: "Profile".to_string(),
+            enabled: true,
+            priority: 0,
+            command_patterns: vec![pattern.to_string()],
+            runtime_preference: SandboxRuntimePreference::Auto,
+            image: "busybox:latest".to_string(),
+            image_size_bytes: Some(1),
+            network: SandboxNetworkPolicy::default(),
+            resources: SandboxResourceLimits::default(),
+            workspace_access: WorkspaceAccess::ReadWrite,
+        }
+    }
+
+    #[test]
+    fn scheme_allows_catch_all_sandbox_profile() {
+        let config = SandboxSchemeConfig {
+            profiles: vec![profile(".*")],
+            ..Default::default()
+        };
+        config
+            .validate()
+            .expect("catch-all sandbox profile is reusable");
+    }
+
+    #[test]
+    fn scheme_rejects_catch_all_host_rule() {
+        let config = SandboxSchemeConfig {
+            profiles: vec![profile(r"^git(?:\s|$)")],
+            host_rules: vec![HostCommandRule {
+                id: "host".to_string(),
+                name: "Host".to_string(),
+                enabled: true,
+                priority: 0,
+                command_patterns: vec![".*".to_string()],
+            }],
+            ..Default::default()
+        };
+        assert!(config
+            .validate()
+            .expect_err("catch-all host rule must be rejected")
+            .contains("catch-all"));
     }
 }

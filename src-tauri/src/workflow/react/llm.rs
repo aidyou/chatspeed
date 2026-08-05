@@ -1384,7 +1384,7 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
             crate::tools::ShellExecutionMode::Auto | crate::tools::ShellExecutionMode::SandboxOnly
         ) {
             env_info.push_str(
-                "\n - Shell sandbox: enabled. Commands may run in a sandbox with only configured capabilities, mounted directories, and read/write permissions. Prefer simple portable shell commands and do not rely on unconfigured host tools or paths.",
+                "\n - Shell sandbox: enabled. Commands may run in a sandbox only when configured command rules match, with mounted directories and read/write permissions. Prefer simple portable shell commands and do not rely on unconfigured host tools or paths.",
             );
         }
 

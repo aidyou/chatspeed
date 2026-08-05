@@ -117,6 +117,29 @@ pub trait ReActExecutor: Send + Sync {
     fn messages(&self) -> Vec<WorkflowMessage>;
 }
 
+struct ToolExecutionObservation {
+    id: String,
+    reinforced: ReinforcedResult,
+    original_call: serde_json::Value,
+    execution_plan_metadata: Option<serde_json::Value>,
+}
+
+impl ToolExecutionObservation {
+    fn new(
+        id: String,
+        reinforced: ReinforcedResult,
+        original_call: serde_json::Value,
+        execution_plan_metadata: Option<serde_json::Value>,
+    ) -> Self {
+        Self {
+            id,
+            reinforced,
+            original_call,
+            execution_plan_metadata,
+        }
+    }
+}
+
 pub struct WorkflowExecutor {
     pub session_id: String,
     pub context: ContextManager,
@@ -236,6 +259,17 @@ impl WorkflowExecutor {
 
     fn is_child_agent_workflow(&self) -> bool {
         self.agent_config.role.as_deref() == Some("child")
+    }
+
+    fn extract_shell_execution_plan_metadata(
+        result: &Result<serde_json::Value, crate::tools::ToolError>,
+    ) -> Option<serde_json::Value> {
+        result
+            .as_ref()
+            .ok()
+            .and_then(|value| value.get("structured_content"))
+            .and_then(|value| value.get("execution_plan"))
+            .cloned()
     }
 
     fn enrich_tool_observation_metadata(
@@ -3152,6 +3186,8 @@ impl WorkflowExecutor {
                                     });
 
                                     // 3. Post-processing and Notification
+                                    let execution_plan_metadata =
+                                        Self::extract_shell_execution_plan_metadata(&result);
                                     let reinforced = self
                                         .post_process_tool_result(
                                             &tool_name,
@@ -3160,7 +3196,6 @@ impl WorkflowExecutor {
                                             result,
                                         )
                                         .await?;
-
                                     // Mark as approved since this went through user approval
                                     let mut metadata = serde_json::json!({
                                         "tool_call_id": tool_call_id,
@@ -3174,6 +3209,9 @@ impl WorkflowExecutor {
                                         "display_type": reinforced.display_type,
                                         "approval_status": "approved"
                                     });
+                                    if let Some(execution_plan) = execution_plan_metadata {
+                                        metadata["execution_plan"] = execution_plan;
+                                    }
                                     if let Some(details) = self.build_completed_tool_result_details(
                                         &tool_name,
                                         &tool_args_obj,
@@ -3232,7 +3270,8 @@ impl WorkflowExecutor {
 
                                     let fallback_rejection_details = serde_json::json!({
                                         "fallback_reason": approval_details.get("fallback_reason").cloned().unwrap_or(serde_json::Value::Null),
-                                        "required_capabilities": approval_details.get("required_capabilities").cloned().unwrap_or(serde_json::Value::Null),
+                                        "required_command_patterns": approval_details.get("required_command_patterns").cloned().unwrap_or(serde_json::Value::Null),
+                                        "matched_command_units": approval_details.get("matched_command_units").cloned().unwrap_or(serde_json::Value::Null),
                                         "scheme_id": approval_details.pointer("/execution_plan/scheme_id").cloned().unwrap_or(serde_json::Value::Null),
                                         "scheme_revision": approval_details.pointer("/execution_plan/scheme_revision").cloned().unwrap_or(serde_json::Value::Null),
                                     });
@@ -3245,7 +3284,8 @@ impl WorkflowExecutor {
                                                 "execution_status": "rejected",
                                                 "host_fallback_approved": false,
                                                 "fallback_reason": fallback_rejection_details["fallback_reason"],
-                                                "required_capabilities": fallback_rejection_details["required_capabilities"],
+                                                "required_command_patterns": fallback_rejection_details["required_command_patterns"],
+                                                "matched_command_units": fallback_rejection_details["matched_command_units"],
                                                 "scheme_id": fallback_rejection_details["scheme_id"],
                                                 "scheme_revision": fallback_rejection_details["scheme_revision"],
                                             }),
@@ -3732,6 +3772,8 @@ impl WorkflowExecutor {
                             });
 
                             // 3. Post-processing and Notification
+                            let execution_plan_metadata =
+                                Self::extract_shell_execution_plan_metadata(&result);
                             let reinforced = self
                                 .post_process_tool_result(
                                     &tool_name,
@@ -3740,7 +3782,6 @@ impl WorkflowExecutor {
                                     result,
                                 )
                                 .await?;
-
                             // Mark as approved since this went through user approval
                             let mut metadata = serde_json::json!({
                                 "tool_call_id": signal_id,
@@ -3754,6 +3795,9 @@ impl WorkflowExecutor {
                                 "display_type": reinforced.display_type,
                                 "approval_status": "approved"
                             });
+                            if let Some(execution_plan) = execution_plan_metadata {
+                                metadata["execution_plan"] = execution_plan;
+                            }
                             if let Some(details) = self.build_completed_tool_result_details(
                                 &tool_name,
                                 &tool_args_obj,
@@ -3809,7 +3853,8 @@ impl WorkflowExecutor {
 
                             let fallback_rejection_details = serde_json::json!({
                                 "fallback_reason": approval_details.get("fallback_reason").cloned().unwrap_or(serde_json::Value::Null),
-                                "required_capabilities": approval_details.get("required_capabilities").cloned().unwrap_or(serde_json::Value::Null),
+                                "required_command_patterns": approval_details.get("required_command_patterns").cloned().unwrap_or(serde_json::Value::Null),
+                                "matched_command_units": approval_details.get("matched_command_units").cloned().unwrap_or(serde_json::Value::Null),
                                 "scheme_id": approval_details.pointer("/execution_plan/scheme_id").cloned().unwrap_or(serde_json::Value::Null),
                                 "scheme_revision": approval_details.pointer("/execution_plan/scheme_revision").cloned().unwrap_or(serde_json::Value::Null),
                             });
@@ -3822,7 +3867,8 @@ impl WorkflowExecutor {
                                         "execution_status": "rejected",
                                         "host_fallback_approved": false,
                                         "fallback_reason": fallback_rejection_details["fallback_reason"],
-                                        "required_capabilities": fallback_rejection_details["required_capabilities"],
+                                        "required_command_patterns": fallback_rejection_details["required_command_patterns"],
+                                        "matched_command_units": fallback_rejection_details["matched_command_units"],
                                         "scheme_id": fallback_rejection_details["scheme_id"],
                                         "scheme_revision": fallback_rejection_details["scheme_revision"],
                                     }),
@@ -4243,12 +4289,14 @@ impl WorkflowExecutor {
                 let mut observe_needs_compression = false;
 
                 let todo_update_only = !results.is_empty()
-                    && results.iter().all(|(_, reinforced, original_call)| {
-                        !reinforced.is_error
-                            && original_call
+                    && results.iter().all(|observation| {
+                        !observation.reinforced.is_error
+                            && observation
+                                .original_call
                                 .get("name")
                                 .or_else(|| {
-                                    original_call
+                                    observation
+                                        .original_call
                                         .get("function")
                                         .and_then(|value| value.get("name"))
                                 })
@@ -4271,7 +4319,11 @@ impl WorkflowExecutor {
                     }
                 }
 
-                for (id, reinforced, original_call) in &results {
+                for observation in &results {
+                    let id = &observation.id;
+                    let reinforced = &observation.reinforced;
+                    let original_call = &observation.original_call;
+                    let execution_plan_metadata = &observation.execution_plan_metadata;
                     if Self::is_postponed_turn_block_result(reinforced) {
                         log::info!(
                         "[Workflow][session={}][phase=observe] Suppressing postponed tool observation '{}'",
@@ -4316,6 +4368,9 @@ impl WorkflowExecutor {
                     // Add approval_status if it exists in the reinforced result
                     if let Some(approval_status) = &reinforced.approval_status {
                         metadata["approval_status"] = serde_json::json!(approval_status);
+                    }
+                    if let Some(execution_plan) = execution_plan_metadata {
+                        metadata["execution_plan"] = execution_plan.clone();
                     }
                     if reinforced.approval_status.as_deref() == Some("pending") {
                         if let Some(pending_info) = self.pending_approvals.get(id) {
@@ -4540,45 +4595,44 @@ impl WorkflowExecutor {
                     self.loop_detector.reset_no_tool_response_history();
                 }
 
-                let has_successful_finish_task =
-                    results.iter().any(|(_, reinforced, original_call)| {
-                        if reinforced.is_error {
+                let has_successful_finish_task = results.iter().any(|observation| {
+                    let reinforced = &observation.reinforced;
+                    let original_call = &observation.original_call;
+                    if reinforced.is_error {
+                        return false;
+                    }
+                    let tool_name = original_call
+                        .get("name")
+                        .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    let is_terminal_tool = if self.is_child_agent_workflow() {
+                        tool_name == TOOL_SUBMIT_RESULT
+                    } else {
+                        tool_name == TOOL_COMPLETE_WORKFLOW
+                    };
+                    is_terminal_tool
+                        && reinforced.approval_status.as_deref() != Some("pending")
+                        && reinforced.approval_status.as_deref() != Some("rejected")
+                });
+
+                if has_successful_finish_task {
+                    if let Some(observation) = results.iter().find(|observation| {
+                        let reinforced = &observation.reinforced;
+                        let original_call = &observation.original_call;
+                        if reinforced.is_error || self.is_child_agent_workflow() {
                             return false;
                         }
                         let tool_name = original_call
                             .get("name")
                             .or_else(|| original_call.get("function").and_then(|f| f.get("name")))
-                            .and_then(|v| v.as_str())
+                            .and_then(|value| value.as_str())
                             .unwrap_or_default();
-                        let is_terminal_tool = if self.is_child_agent_workflow() {
-                            tool_name == TOOL_SUBMIT_RESULT
-                        } else {
-                            tool_name == TOOL_COMPLETE_WORKFLOW
-                        };
-                        is_terminal_tool
+                        tool_name == TOOL_COMPLETE_WORKFLOW
                             && reinforced.approval_status.as_deref() != Some("pending")
                             && reinforced.approval_status.as_deref() != Some("rejected")
-                    });
-
-                if has_successful_finish_task {
-                    if let Some((tool_call_id, _, _)) =
-                        results.iter().find(|(_, reinforced, original_call)| {
-                            if reinforced.is_error || self.is_child_agent_workflow() {
-                                return false;
-                            }
-                            let tool_name = original_call
-                                .get("name")
-                                .or_else(|| {
-                                    original_call.get("function").and_then(|f| f.get("name"))
-                                })
-                                .and_then(|value| value.as_str())
-                                .unwrap_or_default();
-                            tool_name == TOOL_COMPLETE_WORKFLOW
-                                && reinforced.approval_status.as_deref() != Some("pending")
-                                && reinforced.approval_status.as_deref() != Some("rejected")
-                        })
-                    {
-                        self.record_task_completed(tool_call_id).await?;
+                    }) {
+                        self.record_task_completed(&observation.id).await?;
                     }
                     if queued_applied {
                         log::info!(
@@ -5255,7 +5309,7 @@ impl WorkflowExecutor {
         signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
     ) -> Result<
         (
-            Vec<(String, ReinforcedResult, serde_json::Value)>,
+            Vec<ToolExecutionObservation>,
             bool, // has_todo_call
         ),
         WorkflowEngineError,
@@ -5334,7 +5388,7 @@ impl WorkflowExecutor {
         let mut predicted_turn_block = false;
 
         // Use a map to collect results and a list to maintain original AI call order
-        let mut result_map: HashMap<String, (ReinforcedResult, serde_json::Value)> = HashMap::new();
+        let mut result_map: HashMap<String, ToolExecutionObservation> = HashMap::new();
         let mut call_order: Vec<String> = Vec::new();
         let mut planned_todo_status_overrides: HashMap<String, String> = HashMap::new();
 
@@ -5384,16 +5438,18 @@ impl WorkflowExecutor {
                     name
                 );
                 result_map.insert(
-                            id,
-                            (
-                                Self::turn_blocked_postponed_result(
-                                    &name,
-                                    "<SYSTEM_REMINDER>Action postponed. A preceding tool in this turn is awaiting user intervention. Please re-issue this command if still necessary once the previous action is resolved.</SYSTEM_REMINDER>",
-                                    "Turn blocked",
-                                ),
-                                call,
-                            ),
-                        );
+                    id.clone(),
+                    ToolExecutionObservation::new(
+                        id,
+                        Self::turn_blocked_postponed_result(
+                            &name,
+                            "<SYSTEM_REMINDER>Action postponed. A preceding tool in this turn is awaiting user intervention. Please re-issue this command if still necessary once the previous action is resolved.</SYSTEM_REMINDER>",
+                            "Turn blocked",
+                        ),
+                        call,
+                        None,
+                    ),
+                );
                 continue;
             }
 
@@ -5419,7 +5475,10 @@ impl WorkflowExecutor {
                         self.dispatch_reinforced_tool_terminal_payload(&id, &name, &early_result)
                             .await;
                     }
-                    result_map.insert(id, (early_result, call));
+                    result_map.insert(
+                        id.clone(),
+                        ToolExecutionObservation::new(id, early_result, call, None),
+                    );
                     if !approval_intercepted && self.state != WorkflowState::AwaitingApproval {
                         predicted_turn_block = true;
                     }
@@ -5432,14 +5491,16 @@ impl WorkflowExecutor {
                             name
                         );
                         result_map.insert(
-                            id,
-                            (
+                            id.clone(),
+                            ToolExecutionObservation::new(
+                                id,
                                 Self::turn_blocked_postponed_result(
                                     &name,
                                     "<SYSTEM_REMINDER>Action postponed. Earlier tools in this turn are queued for FIFO approval. Re-issue this command after those approved actions finish if it is still needed.</SYSTEM_REMINDER>",
                                     "Approval queue blocked",
                                 ),
                                 call,
+                                None,
                             ),
                         );
                         continue;
@@ -5548,10 +5609,14 @@ impl WorkflowExecutor {
                 };
                 self.append_tool_terminal_event(&id, &name, &res);
                 self.dispatch_tool_terminal_payload(&id, &name, &res).await;
+                let execution_plan_metadata = Self::extract_shell_execution_plan_metadata(&res);
                 let reinforced = self
                     .post_process_tool_result(&name, &args, &call, res)
                     .await?;
-                result_map.insert(id, (reinforced, call));
+                result_map.insert(
+                    id.clone(),
+                    ToolExecutionObservation::new(id, reinforced, call, execution_plan_metadata),
+                );
             }
         }
 
@@ -5591,10 +5656,14 @@ impl WorkflowExecutor {
             self.append_tool_terminal_event(&id, &name, &final_res);
             self.dispatch_tool_terminal_payload(&id, &name, &final_res)
                 .await;
+            let execution_plan_metadata = Self::extract_shell_execution_plan_metadata(&final_res);
             let reinforced = self
                 .post_process_tool_result(&name, &args, &call, final_res)
                 .await?;
-            result_map.insert(id, (reinforced, call));
+            result_map.insert(
+                id.clone(),
+                ToolExecutionObservation::new(id, reinforced, call, execution_plan_metadata),
+            );
 
             if self.state == WorkflowState::AwaitingSubAgent
                 || self.state == WorkflowState::AwaitingApproval
@@ -5611,14 +5680,16 @@ impl WorkflowExecutor {
                         self.state
                     );
                     result_map.insert(
-                        remaining_id,
-                        (
+                        remaining_id.clone(),
+                        ToolExecutionObservation::new(
+                            remaining_id,
                             Self::turn_blocked_postponed_result(
                                 &remaining_name,
                                 "<SYSTEM_REMINDER>Action postponed. An earlier tool in this turn moved the workflow into a waiting state before this command could run. Re-issue this command if it is still needed after the blocking action is resolved.</SYSTEM_REMINDER>",
                                 "Sequential queue blocked",
                             ),
                             remaining_call,
+                            None,
                         ),
                     );
                 }
@@ -5630,10 +5701,7 @@ impl WorkflowExecutor {
         // Reassemble all results (executed + postponed) in the order AI requested them.
         let final_results = call_order
             .into_iter()
-            .filter_map(|id| {
-                let (reinforced, call) = result_map.remove(&id)?;
-                Some((id, reinforced, call))
-            })
+            .filter_map(|id| result_map.remove(&id))
             .collect();
 
         Ok((final_results, has_todo_call))
@@ -9057,7 +9125,8 @@ mod recovery_tests {
                 "execution_status": "rejected",
                 "host_fallback_approved": false,
                 "fallback_reason": "missing_image",
-                "required_capabilities": ["node", "rust", "tauri"],
+                "required_command_patterns": ["^pnpm(?:\\s|$)", "^cargo(?:\\s|$)"],
+                "matched_command_units": ["pnpm tauri build"],
                 "scheme_id": "scheme-1",
                 "scheme_revision": "revision-1"
             }),
@@ -9076,8 +9145,8 @@ mod recovery_tests {
             .expect("Host fallback rejection must append ToolFailed");
         assert_eq!(failed.event_data["tool_call_id"], "bash-call");
         assert_eq!(
-            failed.event_data["error_details"]["scheme_revision"],
-            "revision-1"
+            failed.event_data["error_details"]["required_command_patterns"][0],
+            "^pnpm(?:\\s|$)"
         );
         assert!(payloads
             .lock()
@@ -9093,6 +9162,7 @@ mod recovery_tests {
                 } if tool_call_id == "bash-call"
                     && error_type == "HostFallbackRejected"
                     && details["fallback_reason"] == "missing_image"
+                    && details["matched_command_units"][0] == "pnpm tauri build"
             )));
     }
 
@@ -9165,6 +9235,8 @@ mod recovery_tests {
                 "arguments": { "command": command },
                 "details": {
                     "approval_kind": "host_fallback",
+                    "required_command_patterns": ["^(?:pnpm|npm|yarn|npx)(?:\\s+run)?\\s+tauri(?:\\s|$)"],
+                    "matched_command_units": [command],
                     "execution_plan": crate::tools::ShellExecutionPlan {
                         tool_call_id: tool_call_id.to_string(),
                         command: command.to_string(),
@@ -9197,6 +9269,14 @@ mod recovery_tests {
                 .and_then(|details| details.get("approval_kind")),
             Some(&json!("host_fallback")),
             "the fallback must replace the command approval in the canonical pending state"
+        );
+        assert_eq!(
+            snapshot.pending_tools[0]
+                .details
+                .as_ref()
+                .and_then(|details| details.get("matched_command_units")),
+            Some(&json!([command])),
+            "the current fallback route context must survive in the canonical pending state"
         );
         executor
             .release_approved_host_fallback_plan(tool_call_id, &json!({ "command": command }))
@@ -9596,6 +9676,23 @@ mod recovery_tests {
         assert!(sanitized
             .get("__chatspeed_approved_shell_execution_details")
             .is_none());
+    }
+
+    #[test]
+    fn test_extract_shell_execution_plan_metadata_preserves_route_origin() {
+        let result = Ok(json!({
+            "structured_content": {
+                "execution_plan": {
+                    "backend": "host",
+                    "backend_origin": "explicit_host_rule",
+                    "status": "ready"
+                }
+            }
+        }));
+
+        let metadata = WorkflowExecutor::extract_shell_execution_plan_metadata(&result)
+            .expect("shell execution plan metadata should be extracted");
+        assert_eq!(metadata["backend_origin"], "explicit_host_rule");
     }
 
     #[test]
