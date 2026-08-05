@@ -190,9 +190,6 @@
         <el-form-item :label="$t('settings.sandbox.ruleName')" required>
           <el-input v-model="hostRuleDraft.name" />
         </el-form-item>
-        <el-form-item :label="$t('settings.sandbox.ruleId')">
-          <el-input v-model="hostRuleDraft.id" readonly />
-        </el-form-item>
         <el-form-item :label="$t('settings.sandbox.priority')">
           <el-input-number v-model="hostRuleDraft.priority" :min="-1000" :max="1000" />
         </el-form-item>
@@ -337,7 +334,6 @@ const normalizeProfile = profile => ({
 })
 
 const defaultHostRule = () => ({
-  id: newId('host'),
   _draftKey: newId('host-rule'),
   name: '',
   enabled: true,
