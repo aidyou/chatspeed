@@ -152,6 +152,21 @@
             <el-option v-for="image in availableImages" :key="image" :label="image" :value="image" />
           </el-select>
         </el-form-item>
+        <el-form-item :label="$t('settings.sandbox.instanceName')">
+          <div class="instance-name-field">
+            <el-select
+              v-model="profileDraft.instanceName"
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              style="width: 100%"
+              :loading="runtimeLoading">
+              <el-option v-for="instance in availableInstances" :key="instance" :label="instance" :value="instance" />
+            </el-select>
+            <small>{{ $t('settings.sandbox.instanceNameTip') }}</small>
+          </div>
+        </el-form-item>
         <el-form-item :label="$t('settings.sandbox.commandPresets')">
           <el-select v-model="profileDraft.commandPresets" multiple filterable style="width: 100%" @change="applyProfileCommandPresets">
             <el-option v-for="preset in Object.keys(COMMAND_PRESETS)" :key="preset" :label="$t(`settings.sandbox.preset${preset}`)" :value="preset" />
@@ -307,6 +322,7 @@ const defaultProfile = () => ({
   commandPatterns: [],
   runtimePreference: 'auto',
   image: '',
+  instanceName: '',
   imageSizeBytes: null,
   network: { mode: 'none', allowlist: [] },
   resources: { cpus: 1, memoryMb: 256, timeoutMs: 120000 },
@@ -324,8 +340,11 @@ const cloneProfile = profile => ({
 const cloneSchemeConfig = config => ({
   ...config,
   profiles: config.profiles.map(profile => {
-    const { _draftKey, commandPresets: _commandPresets, ...persistedProfile } = cloneProfile(profile)
-    return persistedProfile
+    const { _draftKey, commandPresets: _commandPresets, instanceName, ...persistedProfile } = cloneProfile(profile)
+    return {
+      ...persistedProfile,
+      ...(instanceName?.trim() ? { instanceName: instanceName.trim() } : {})
+    }
   }),
   hostRules: config.hostRules.map(rule => {
     const { _draftKey, commandPresets: _commandPresets, ...persistedRule } = rule
@@ -363,14 +382,28 @@ const normalizeHostRule = rule => ({
 
 const AVAILABLE_RUNTIME_STATES = new Set(['ready', 'ready_missing_image'])
 const runtimeKeys = preference => preference === 'auto' ? ['msb', 'docker'] : [preference]
+const effectiveRuntimePreference = profile =>
+  profile?.runtimePreference && profile.runtimePreference !== 'auto'
+    ? profile.runtimePreference
+    : (draft.value.config?.runtimePreference || 'auto')
 const availableImages = computed(() => {
   const images = new Set()
-  for (const runtime of runtimeKeys(profileDraft.value?.runtimePreference || 'auto')) {
+  for (const runtime of runtimeKeys(effectiveRuntimePreference(profileDraft.value))) {
     const status = runtimeStatus.value?.[runtime]
     if (!AVAILABLE_RUNTIME_STATES.has(status?.state)) continue
     for (const image of status.images || []) images.add(image)
   }
   return [...images].sort()
+})
+
+const availableInstances = computed(() => {
+  const instances = new Set()
+  for (const runtime of runtimeKeys(effectiveRuntimePreference(profileDraft.value))) {
+    const status = runtimeStatus.value?.[runtime]
+    if (!AVAILABLE_RUNTIME_STATES.has(status?.state)) continue
+    for (const instance of status.runningInstances || []) instances.add(instance)
+  }
+  return [...instances].sort()
 })
 
 const loadRuntimeStatus = async () => {
@@ -388,7 +421,7 @@ const loadRuntimeStatus = async () => {
 }
 
 const imageSizeForProfile = profile => {
-  const sizes = runtimeKeys(profile.runtimePreference)
+  const sizes = runtimeKeys(effectiveRuntimePreference(profile))
     .flatMap(runtime => {
       const size = runtimeStatus.value?.[runtime]?.imageSizes?.[profile.image]
       return Number.isSafeInteger(size) && size >= 0 ? [size] : []
@@ -644,6 +677,8 @@ schemeStore.fetchSchemes()
   }
 
   .editor-section { margin-top: var(--cs-space-lg); }
+  .instance-name-field { width: 100%; }
+  .instance-name-field small { display: block; margin-top: var(--cs-space-xs); color: var(--cs-text-color-secondary); line-height: 1.4; }
   .editor-section__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--cs-space-sm); }
   .editor-section__header h3 { margin: 0; font-size: var(--cs-font-size); }
   .editor-card { margin-bottom: var(--cs-space-sm); }

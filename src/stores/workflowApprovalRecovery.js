@@ -288,12 +288,7 @@ export const deriveInlinePendingApprovals = ({
 
       const structuredPending = structuredPendingById.get(toolCallId) || null;
       const latest = latestById.get(toolCallId);
-      const structuredApprovalKind = structuredPending?.details?.approval_kind;
-      const latestApprovalKind = latest?.meta?.details?.approval_kind;
-      const fallbackSupersedesShellCommand =
-        structuredApprovalKind === 'host_fallback' && latestApprovalKind === 'shell_command';
-
-      if (latest?.state === 'resolved' && !fallbackSupersedesShellCommand) return null;
+      if (latest?.state === 'resolved') return null;
       if (!structuredPending && latest?.state !== 'pending') return null;
 
       return buildInlineApprovalEntry({

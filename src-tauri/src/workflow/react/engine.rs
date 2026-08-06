@@ -177,7 +177,7 @@ pub struct WorkflowExecutor {
     pub(crate) pending_approvals: Arc<dashmap::DashMap<String, serde_json::Value>>,
     /// FIFO queue for pending approvals so batch approvals preserve tool order.
     pub(crate) pending_approval_queue: VecDeque<String>,
-    /// Server-side one-time Host fallback plans released only after canonical approval.
+    /// Server-side shell execution plans bound to a canonical approval.
     pub(crate) approved_shell_execution_plans:
         Arc<dashmap::DashMap<String, crate::tools::ShellExecutionPlan>>,
     /// One-shot cache of bash commands approved by Smart AI review to prevent
@@ -2562,52 +2562,6 @@ impl WorkflowExecutor {
         self.pending_approval_queue.retain(|id| id != tool_call_id);
     }
 
-    pub(crate) fn release_approved_host_fallback_plan(
-        &mut self,
-        tool_call_id: &str,
-        tool_args: &serde_json::Value,
-    ) -> Result<(), WorkflowEngineError> {
-        let plan_value = self
-            .pending_approvals
-            .get(tool_call_id)
-            .and_then(|pending| {
-                pending
-                    .get("details")
-                    .and_then(|details| details.get("execution_plan"))
-                    .cloned()
-            })
-            .ok_or_else(|| {
-                WorkflowEngineError::General(
-                    "Host fallback approval is missing its server-side execution plan".to_string(),
-                )
-            })?;
-        let plan: crate::tools::ShellExecutionPlan =
-            serde_json::from_value(plan_value).map_err(|error| {
-                WorkflowEngineError::General(format!(
-                    "Host fallback approval has an invalid server-side execution plan: {error}"
-                ))
-            })?;
-        let command = tool_args
-            .get("command")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        if plan.tool_call_id != tool_call_id
-            || plan.command != command
-            || plan.backend != crate::tools::ShellExecutionBackendKind::Host
-            || plan.backend_origin
-                != crate::tools::ShellExecutionBackendOrigin::ApprovedHostFallback
-            || plan.status != crate::tools::ShellExecutionPlanStatus::Ready
-        {
-            return Err(WorkflowEngineError::General(
-                "Host fallback approval binding no longer matches the authorized command"
-                    .to_string(),
-            ));
-        }
-        self.approved_shell_execution_plans
-            .insert(tool_call_id.to_string(), plan);
-        Ok(())
-    }
-
     pub(crate) fn ordered_pending_approvals(&self) -> Vec<(String, serde_json::Value)> {
         let mut ordered = Vec::new();
         let mut seen = HashSet::new();
@@ -2854,17 +2808,6 @@ impl WorkflowExecutor {
                                             .map(|value| value.to_string())
                                     })
                                     .unwrap_or_else(|| "unknown".to_string());
-                                let approval_kind = self
-                                    .pending_approvals
-                                    .get(&tool_call_id)
-                                    .and_then(|info| {
-                                        info.get("details")
-                                            .and_then(|details| details.get("approval_kind"))
-                                            .and_then(|kind| kind.as_str())
-                                            .map(ToString::to_string)
-                                    })
-                                    .unwrap_or_default();
-                                let approve_all = approve_all && approval_kind != "host_fallback";
                                 let approval_status =
                                     if approved { "approved" } else { "rejected" };
                                 let execution_status = if approved {
@@ -2959,7 +2902,7 @@ impl WorkflowExecutor {
                                         continue;
                                     }
 
-                                    if approve_all && approval_kind != "host_fallback" {
+                                    if approve_all {
                                         if tool_name == "bash" {
                                             if let Some(cmd) =
                                                 tool_args.get("command").and_then(|v| v.as_str())
@@ -3095,13 +3038,6 @@ impl WorkflowExecutor {
                                     }
 
                                     if tool_name == crate::tools::TOOL_BASH
-                                        && approval_kind == "host_fallback"
-                                    {
-                                        self.release_approved_host_fallback_plan(
-                                            &tool_call_id,
-                                            &tool_args,
-                                        )?;
-                                    } else if tool_name == crate::tools::TOOL_BASH
                                         && self
                                             .prepare_authorized_bash_execution(
                                                 &tool_call_id,
@@ -3241,25 +3177,19 @@ impl WorkflowExecutor {
                                         self.update_state(WorkflowState::Thinking).await?;
                                     }
                                 } else {
-                                    let (tool_name, tool_args, approval_details) =
-                                        if let Some(stashed) =
-                                            self.pending_approvals.get(&tool_call_id)
-                                        {
-                                            (
-                                                stashed["name"]
-                                                    .as_str()
-                                                    .unwrap_or("unknown")
-                                                    .to_string(),
-                                                stashed["arguments"].clone(),
-                                                stashed["details"].clone(),
-                                            )
-                                        } else {
-                                            (
-                                                "unknown".to_string(),
-                                                serde_json::json!({}),
-                                                serde_json::Value::Null,
-                                            )
-                                        };
+                                    let (tool_name, tool_args) = if let Some(stashed) =
+                                        self.pending_approvals.get(&tool_call_id)
+                                    {
+                                        (
+                                            stashed["name"]
+                                                .as_str()
+                                                .unwrap_or("unknown")
+                                                .to_string(),
+                                            stashed["arguments"].clone(),
+                                        )
+                                    } else {
+                                        ("unknown".to_string(), serde_json::json!({}))
+                                    };
 
                                     log::info!(
                                         "WorkflowExecutor {}: User REJECTED tool '{}' (ID: {})",
@@ -3268,70 +3198,28 @@ impl WorkflowExecutor {
                                         tool_call_id
                                     );
 
-                                    let fallback_rejection_details = serde_json::json!({
-                                        "fallback_reason": approval_details.get("fallback_reason").cloned().unwrap_or(serde_json::Value::Null),
-                                        "required_command_patterns": approval_details.get("required_command_patterns").cloned().unwrap_or(serde_json::Value::Null),
-                                        "matched_command_units": approval_details.get("matched_command_units").cloned().unwrap_or(serde_json::Value::Null),
-                                        "scheme_id": approval_details.pointer("/execution_plan/scheme_id").cloned().unwrap_or(serde_json::Value::Null),
-                                        "scheme_revision": approval_details.pointer("/execution_plan/scheme_revision").cloned().unwrap_or(serde_json::Value::Null),
-                                    });
-                                    if approval_kind == "host_fallback" {
-                                        let result = Err(crate::tools::ToolError::HostFallbackRejected(
-                                            "Host fallback was rejected after sandbox execution was unavailable"
-                                                .to_string(),
-                                            serde_json::json!({
-                                                "error_type": "HostFallbackRejected",
-                                                "execution_status": "rejected",
-                                                "host_fallback_approved": false,
-                                                "fallback_reason": fallback_rejection_details["fallback_reason"],
-                                                "required_command_patterns": fallback_rejection_details["required_command_patterns"],
-                                                "matched_command_units": fallback_rejection_details["matched_command_units"],
-                                                "scheme_id": fallback_rejection_details["scheme_id"],
-                                                "scheme_revision": fallback_rejection_details["scheme_revision"],
-                                            }),
-                                        ));
-                                        self.append_tool_terminal_event(
-                                            &tool_call_id,
-                                            &tool_name,
-                                            &result,
-                                        );
-                                        self.dispatch_tool_terminal_payload(
-                                            &tool_call_id,
-                                            &tool_name,
-                                            &result,
-                                        )
-                                        .await;
-                                    }
-
                                     let pretty_title = ObservationReinforcer::generate_title(
                                         &tool_name, &tool_args, None, None,
                                     );
-                                    let (observation, error_type, summary) = if approval_kind
-                                        == "host_fallback"
-                                    {
-                                        (
-                                            "Host fallback was rejected. The sandbox cannot execute this already-authorized command, and the user declined one-time Host execution. Do not retry this command on Host; adjust the command, split it, or ask the user to change the sandbox scheme.".to_string(),
-                                            "HostFallbackRejected".to_string(),
-                                            "Host fallback rejected".to_string(),
-                                        )
-                                    } else if tool_name == TOOL_SUBMIT_PLAN {
-                                        (
-                                            Self::build_plan_rejection_observation(
-                                                rejection_message.as_deref(),
-                                            ),
-                                            "UserRejected".to_string(),
-                                            "User rejected".to_string(),
-                                        )
-                                    } else {
-                                        (
-                                            Self::build_rejection_observation(
-                                                &tool_name,
-                                                rejection_message.as_deref(),
-                                            ),
-                                            "UserRejected".to_string(),
-                                            "User rejected".to_string(),
-                                        )
-                                    };
+                                    let (observation, error_type, summary) =
+                                        if tool_name == TOOL_SUBMIT_PLAN {
+                                            (
+                                                Self::build_plan_rejection_observation(
+                                                    rejection_message.as_deref(),
+                                                ),
+                                                "UserRejected".to_string(),
+                                                "User rejected".to_string(),
+                                            )
+                                        } else {
+                                            (
+                                                Self::build_rejection_observation(
+                                                    &tool_name,
+                                                    rejection_message.as_deref(),
+                                                ),
+                                                "UserRejected".to_string(),
+                                                "User rejected".to_string(),
+                                            )
+                                        };
 
                                     self.add_message_and_notify_internal(
                                         "tool".to_string(),
@@ -3353,10 +3241,10 @@ impl WorkflowExecutor {
                                             "summary": summary,
                                             "execution_status": "rejected",
                                             "is_error": true,
-                                            "error_type": if approval_kind == "host_fallback" { "HostFallbackRejected" } else { "UserRejected" },
+                                            "error_type": "UserRejected",
                                             "approval_status": "rejected",
                                             "rejection_message": rejection_message,
-                                            "details": if approval_kind == "host_fallback" { fallback_rejection_details } else { serde_json::Value::Null }
+                                            "details": serde_json::Value::Null
                                         })),
                                     )
                                     .await?;
@@ -3548,19 +3436,6 @@ impl WorkflowExecutor {
                                     (name, args)
                                 };
 
-                            let approval_kind = self
-                                .pending_approvals
-                                .get(signal_id)
-                                .and_then(|pending| {
-                                    pending
-                                        .get("details")
-                                        .and_then(|details| details.get("approval_kind"))
-                                        .and_then(|kind| kind.as_str())
-                                        .map(ToString::to_string)
-                                })
-                                .unwrap_or_default();
-                            let approve_all = approve_all && approval_kind != "host_fallback";
-
                             log::info!(
                                 "WorkflowExecutor {}: User APPROVED tool '{}'{} (ID: {})",
                                 self.session_id,
@@ -3707,10 +3582,6 @@ impl WorkflowExecutor {
                             }
 
                             if tool_name == crate::tools::TOOL_BASH
-                                && approval_kind == "host_fallback"
-                            {
-                                self.release_approved_host_fallback_plan(signal_id, &tool_args)?;
-                            } else if tool_name == crate::tools::TOOL_BASH
                                 && self
                                     .prepare_authorized_bash_execution(signal_id, &tool_args)
                                     .await?
@@ -3823,12 +3694,12 @@ impl WorkflowExecutor {
                             .await?;
                         } else {
                             // Handle Rejection
-                            let (tool_name, tool_args, approval_details) =
+                            let (tool_name, tool_args) =
                                 if let Some(stashed) = self.pending_approvals.get(signal_id) {
                                     let name =
                                         stashed["name"].as_str().unwrap_or("unknown").to_string();
                                     let args = stashed["arguments"].clone();
-                                    (name, args, stashed["details"].clone())
+                                    (name, args)
                                 } else {
                                     (
                                         signal_json["tool_name"]
@@ -3836,13 +3707,8 @@ impl WorkflowExecutor {
                                             .unwrap_or("unknown")
                                             .to_string(),
                                         signal_json["tool_args"].clone(),
-                                        serde_json::Value::Null,
                                     )
                                 };
-                            let approval_kind = approval_details
-                                .get("approval_kind")
-                                .and_then(|kind| kind.as_str())
-                                .unwrap_or_default();
 
                             log::info!(
                                 "WorkflowExecutor {}: User REJECTED tool '{}' (ID: {})",
@@ -3850,33 +3716,6 @@ impl WorkflowExecutor {
                                 tool_name,
                                 signal_id
                             );
-
-                            let fallback_rejection_details = serde_json::json!({
-                                "fallback_reason": approval_details.get("fallback_reason").cloned().unwrap_or(serde_json::Value::Null),
-                                "required_command_patterns": approval_details.get("required_command_patterns").cloned().unwrap_or(serde_json::Value::Null),
-                                "matched_command_units": approval_details.get("matched_command_units").cloned().unwrap_or(serde_json::Value::Null),
-                                "scheme_id": approval_details.pointer("/execution_plan/scheme_id").cloned().unwrap_or(serde_json::Value::Null),
-                                "scheme_revision": approval_details.pointer("/execution_plan/scheme_revision").cloned().unwrap_or(serde_json::Value::Null),
-                            });
-                            if approval_kind == "host_fallback" {
-                                let result = Err(crate::tools::ToolError::HostFallbackRejected(
-                                    "Host fallback was rejected after sandbox execution was unavailable"
-                                        .to_string(),
-                                    serde_json::json!({
-                                        "error_type": "HostFallbackRejected",
-                                        "execution_status": "rejected",
-                                        "host_fallback_approved": false,
-                                        "fallback_reason": fallback_rejection_details["fallback_reason"],
-                                        "required_command_patterns": fallback_rejection_details["required_command_patterns"],
-                                        "matched_command_units": fallback_rejection_details["matched_command_units"],
-                                        "scheme_id": fallback_rejection_details["scheme_id"],
-                                        "scheme_revision": fallback_rejection_details["scheme_revision"],
-                                    }),
-                                ));
-                                self.append_tool_terminal_event(signal_id, &tool_name, &result);
-                                self.dispatch_tool_terminal_payload(signal_id, &tool_name, &result)
-                                    .await;
-                            }
 
                             let pretty_title = {
                                 let primary_root = self
@@ -3892,32 +3731,25 @@ impl WorkflowExecutor {
                                     primary_root.as_deref(),
                                 )
                             };
-                            let (observation, error_type, summary) = if approval_kind
-                                == "host_fallback"
-                            {
-                                (
-                                    "Host fallback was rejected. The sandbox cannot execute this already-authorized command, and the user declined one-time Host execution. Do not retry this command on Host; adjust the command, split it, or ask the user to change the sandbox scheme.".to_string(),
-                                    "HostFallbackRejected".to_string(),
-                                    "Host fallback rejected".to_string(),
-                                )
-                            } else if tool_name == TOOL_SUBMIT_PLAN {
-                                (
-                                    Self::build_plan_rejection_observation(
-                                        rejection_message.as_deref(),
-                                    ),
-                                    "UserRejected".to_string(),
-                                    "User rejected".to_string(),
-                                )
-                            } else {
-                                (
-                                    Self::build_rejection_observation(
-                                        &tool_name,
-                                        rejection_message.as_deref(),
-                                    ),
-                                    "UserRejected".to_string(),
-                                    "User rejected".to_string(),
-                                )
-                            };
+                            let (observation, error_type, summary) =
+                                if tool_name == TOOL_SUBMIT_PLAN {
+                                    (
+                                        Self::build_plan_rejection_observation(
+                                            rejection_message.as_deref(),
+                                        ),
+                                        "UserRejected".to_string(),
+                                        "User rejected".to_string(),
+                                    )
+                                } else {
+                                    (
+                                        Self::build_rejection_observation(
+                                            &tool_name,
+                                            rejection_message.as_deref(),
+                                        ),
+                                        "UserRejected".to_string(),
+                                        "User rejected".to_string(),
+                                    )
+                                };
 
                             self.add_message_and_notify_internal(
                                 "tool".to_string(),
@@ -3939,10 +3771,10 @@ impl WorkflowExecutor {
                                     "summary": summary,
                                     "execution_status": "rejected",
                                     "is_error": true,
-                                    "error_type": if approval_kind == "host_fallback" { "HostFallbackRejected" } else { "UserRejected" },
+                                    "error_type": "UserRejected",
                                     "approval_status": "rejected",
                                     "rejection_message": rejection_message,
-                                    "details": if approval_kind == "host_fallback" { fallback_rejection_details } else { serde_json::Value::Null }
+                                    "details": serde_json::Value::Null
                                 })),
                             )
                             .await?;
@@ -4956,7 +4788,6 @@ impl WorkflowExecutor {
     fn tool_error_details(error: &crate::tools::ToolError) -> Option<serde_json::Value> {
         match error {
             crate::tools::ToolError::SandboxFailure(failure) => serde_json::to_value(failure).ok(),
-            crate::tools::ToolError::HostFallbackRejected(_, details) => Some(details.clone()),
             _ => None,
         }
     }
@@ -4974,7 +4805,6 @@ impl WorkflowExecutor {
             crate::tools::ToolError::AuthError(_) => "AuthError",
             crate::tools::ToolError::ExecutionFailed(_) => "Other",
             crate::tools::ToolError::SandboxFailure(_) => "SandboxFailure",
-            crate::tools::ToolError::HostFallbackRejected(_, _) => "HostFallbackRejected",
             crate::tools::ToolError::Fatal(_) => "Fatal",
             crate::tools::ToolError::McpServerNotFound(_) => "McpServerNotFound",
             crate::tools::ToolError::Serialization(_) => "Serialization",
@@ -7837,8 +7667,6 @@ mod recovery_tests {
     use super::*;
     use crate::db::MainStore;
     use crate::libs::window_channels::WindowChannels;
-    use crate::tools::TOOL_BASH;
-    use crate::workflow::react::events::WorkflowEventType;
     use crate::workflow::react::replay::{RecoveryError, RecoveryResult};
     use tempfile::tempdir;
     use tokio::sync::{mpsc, Mutex};
@@ -9066,247 +8894,6 @@ mod recovery_tests {
     }
 
     #[tokio::test]
-    async fn host_fallback_rejection_emits_structured_tool_failed_terminal_payload() {
-        let (_temp_dir, store) = create_test_store();
-        let session_id = "host-fallback-rejected";
-        let agent = Agent::new(
-            "host-fallback-agent".to_string(),
-            "Host Fallback Agent".to_string(),
-            None,
-            Some("primary".to_string()),
-            None,
-            "test prompt".to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(false),
-            None,
-            Some(false),
-            None,
-            None,
-            Some(false),
-            Some(false),
-            None,
-        );
-        store.add_agent(&agent).expect("failed to add test agent");
-        store
-            .create_workflow(session_id, "test", &agent.id, None, None)
-            .expect("failed to create test workflow");
-        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
-            payloads: payloads.clone(),
-        });
-        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
-        let mut executor = WorkflowExecutor::new(
-            session_id.to_string(),
-            store.clone(),
-            chat_state,
-            gateway,
-            Arc::new(UnusedSubAgentFactory),
-            agent,
-            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
-            std::env::temp_dir(),
-            None,
-            None,
-            Arc::new(crate::libs::tsid::TsidGenerator::new(12).expect("failed to create tsid")),
-            Arc::new(ToolManager::new()),
-            false,
-            ExecutionPolicy::standard(),
-        );
-        executor.dispatcher = None;
-        let result = Err(crate::tools::ToolError::HostFallbackRejected(
-            "Host fallback rejected".to_string(),
-            json!({
-                "error_type": "HostFallbackRejected",
-                "execution_status": "rejected",
-                "host_fallback_approved": false,
-                "fallback_reason": "missing_image",
-                "required_command_patterns": ["^pnpm(?:\\s|$)", "^cargo(?:\\s|$)"],
-                "matched_command_units": ["pnpm tauri build"],
-                "scheme_id": "scheme-1",
-                "scheme_revision": "revision-1"
-            }),
-        ));
-        executor.append_tool_terminal_event("bash-call", TOOL_BASH, &result);
-        executor
-            .dispatch_tool_terminal_payload("bash-call", TOOL_BASH, &result)
-            .await;
-
-        let events = store
-            .list_workflow_events(session_id)
-            .expect("failed to read workflow events");
-        let failed = events
-            .iter()
-            .find(|event| event.event_type == WorkflowEventType::ToolFailed.as_str())
-            .expect("Host fallback rejection must append ToolFailed");
-        assert_eq!(failed.event_data["tool_call_id"], "bash-call");
-        assert_eq!(
-            failed.event_data["error_details"]["required_command_patterns"][0],
-            "^pnpm(?:\\s|$)"
-        );
-        assert!(payloads
-            .lock()
-            .expect("payload lock")
-            .iter()
-            .any(|payload| matches!(
-                payload,
-                GatewayPayload::ToolFailed {
-                    tool_call_id,
-                    error_type: Some(error_type),
-                    error_details: Some(details),
-                    ..
-                } if tool_call_id == "bash-call"
-                    && error_type == "HostFallbackRejected"
-                    && details["fallback_reason"] == "missing_image"
-                    && details["matched_command_units"][0] == "pnpm tauri build"
-            )));
-    }
-
-    #[tokio::test]
-    async fn host_fallback_plan_release_is_same_id_bound_one_time_and_cleanup_safe() {
-        let (_temp_dir, store) = create_test_store();
-        let session_id = "host-fallback-plan-release";
-        let agent = Agent::new(
-            "host-fallback-plan-agent".to_string(),
-            "Host Fallback Plan Agent".to_string(),
-            None,
-            Some("primary".to_string()),
-            None,
-            "test prompt".to_string(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(false),
-            None,
-            Some(false),
-            None,
-            None,
-            Some(false),
-            Some(false),
-            None,
-        );
-        store.add_agent(&agent).expect("failed to add test agent");
-        store
-            .create_workflow(session_id, "test", &agent.id, None, None)
-            .expect("failed to create test workflow");
-        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
-            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
-        });
-        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
-        let mut executor = WorkflowExecutor::new(
-            session_id.to_string(),
-            store,
-            chat_state,
-            gateway,
-            Arc::new(UnusedSubAgentFactory),
-            agent,
-            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
-            std::env::temp_dir(),
-            None,
-            None,
-            Arc::new(crate::libs::tsid::TsidGenerator::new(12).expect("failed to create tsid")),
-            Arc::new(ToolManager::new()),
-            false,
-            ExecutionPolicy::standard(),
-        );
-        let tool_call_id = "bash-fallback-call";
-        let command = "pnpm tauri build";
-        executor.pending_approvals.insert(
-            tool_call_id.to_string(),
-            json!({
-                "name": TOOL_BASH,
-                "arguments": { "command": command },
-                "details": { "approval_kind": "shell_command" }
-            }),
-        );
-        executor.enqueue_pending_approval(tool_call_id);
-        executor.pending_approvals.insert(
-            tool_call_id.to_string(),
-            json!({
-                "name": TOOL_BASH,
-                "arguments": { "command": command },
-                "details": {
-                    "approval_kind": "host_fallback",
-                    "required_command_patterns": ["^(?:pnpm|npm|yarn|npx)(?:\\s+run)?\\s+tauri(?:\\s|$)"],
-                    "matched_command_units": [command],
-                    "execution_plan": crate::tools::ShellExecutionPlan {
-                        tool_call_id: tool_call_id.to_string(),
-                        command: command.to_string(),
-                        scheme_id: Some("scheme-1".to_string()),
-                        scheme_revision: Some("revision-1".to_string()),
-                        backend: crate::tools::ShellExecutionBackendKind::Host,
-                        backend_origin: crate::tools::ShellExecutionBackendOrigin::ApprovedHostFallback,
-                        runtime: None,
-                        profile: None,
-                        image: None,
-                        network: None,
-                        resources: None,
-                        workspace_access: None,
-                        mounts: Vec::new(),
-                        workdir: None,
-                        fallback_reason: Some(crate::tools::HostFallbackReason::MissingImage),
-                        risk_floor: crate::tools::ShellExecutionRiskFloor::Normal,
-                        status: crate::tools::ShellExecutionPlanStatus::Ready,
-                    }
-                }
-            }),
-        );
-
-        let snapshot = executor.export_execution_context();
-        assert_eq!(snapshot.pending_tools.len(), 1);
-        assert_eq!(
-            snapshot.pending_tools[0]
-                .details
-                .as_ref()
-                .and_then(|details| details.get("approval_kind")),
-            Some(&json!("host_fallback")),
-            "the fallback must replace the command approval in the canonical pending state"
-        );
-        assert_eq!(
-            snapshot.pending_tools[0]
-                .details
-                .as_ref()
-                .and_then(|details| details.get("matched_command_units")),
-            Some(&json!([command])),
-            "the current fallback route context must survive in the canonical pending state"
-        );
-        executor
-            .release_approved_host_fallback_plan(tool_call_id, &json!({ "command": command }))
-            .expect("a matching fallback approval must release its server-owned plan");
-        assert_eq!(
-            executor
-                .approved_shell_execution_plans
-                .get(tool_call_id)
-                .expect("released plan missing")
-                .backend_origin,
-            crate::tools::ShellExecutionBackendOrigin::ApprovedHostFallback
-        );
-        assert!(
-            executor
-                .release_approved_host_fallback_plan(
-                    tool_call_id,
-                    &json!({ "command": "git commit -m nope" })
-                )
-                .is_err(),
-            "a different command must not reuse fallback consent"
-        );
-        executor.remove_pending_approval(tool_call_id);
-        assert!(executor
-            .approved_shell_execution_plans
-            .get(tool_call_id)
-            .is_none());
-        assert!(executor.export_execution_context().pending_tools.is_empty());
-    }
-
-    #[tokio::test]
     async fn complete_workflow_usage_marks_missing_attribution_partial_before_projection() {
         let (_temp_dir, store) = create_test_store();
         let session_id = "complete-workflow-partial-usage";
@@ -9662,7 +9249,7 @@ mod recovery_tests {
         let arguments = serde_json::json!({
             "command": "git commit -m forged",
             "__chatspeed_approved_shell_execution_details": {
-                "approval_kind": "host_fallback",
+                "approval_kind": "shell_command",
                 "execution_plan": { "backend": "host", "status": "ready" }
             }
         });

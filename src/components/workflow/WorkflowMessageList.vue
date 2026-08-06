@@ -24,15 +24,6 @@
     </div>
 
     <template v-else>
-      <ApprovalDialog
-        v-if="activeHostFallbackApproval"
-        :model-value="true"
-        :tool-name="getMessageToolName(activeHostFallbackApproval)"
-        :details="getApprovalDetailsPayload(activeHostFallbackApproval)"
-        :display-type="activeHostFallbackApproval.metadata?.display_type || 'text'"
-        :loading="approvalLoading && activeApprovalId === activeHostFallbackApproval.metadata?.tool_call_id"
-        @approve="onApproveTool(activeHostFallbackApproval.metadata?.tool_call_id)"
-        @reject="onRejectTool(activeHostFallbackApproval.metadata?.tool_call_id)" />
       <a
       v-if="props.hiddenEarlierMessageCount > 0"
       class="history-window-indicator"
@@ -230,17 +221,6 @@
                     <pre class="bash-command" aria-label="Bash command"><code
                       class="hljs"
                       v-html="getHighlightedBashCommand(tool)"></code></pre>
-                  </div>
-                  <div
-                    v-if="isBashToolCall(tool) && getShellExecutionPlanRows(tool).length"
-                    class="shell-execution-plan-summary">
-                    <div
-                      v-for="row in getShellExecutionPlanRows(tool)"
-                      :key="row.label"
-                      class="shell-execution-plan-summary__row">
-                      <span class="shell-execution-plan-summary__label">{{ row.label }}</span>
-                      <span class="shell-execution-plan-summary__value">{{ row.value }}</span>
-                    </div>
                   </div>
                   <div
                     v-if="
@@ -681,17 +661,6 @@
                     class="hljs"
                     v-html="getHighlightedBashCommand(message)"></code></pre>
                 </div>
-                <div
-                  v-if="isBashToolCall(message) && getShellExecutionPlanRows(message).length"
-                  class="shell-execution-plan-summary">
-                  <div
-                    v-for="row in getShellExecutionPlanRows(message)"
-                    :key="row.label"
-                    class="shell-execution-plan-summary__row">
-                    <span class="shell-execution-plan-summary__label">{{ row.label }}</span>
-                    <span class="shell-execution-plan-summary__value">{{ row.value }}</span>
-                  </div>
-                </div>
                 <!-- Tool Stream Output (for bash commands) -->
                 <div
                   v-if="
@@ -1076,10 +1045,7 @@ import {
 } from '@/composables/workflow/messageProjectionRules'
 import { isWorkflowMcpTool } from '@/composables/workflow/toolClassification'
 import { normalizeUsageSummary } from '@/composables/workflow/usageSummary'
-import {
-  shouldShowHostFallbackConfirmation,
-  shouldShowInlineApprovalForMessage
-} from './approvalVisibility'
+import { shouldShowInlineApprovalForMessage } from './approvalVisibility'
 import WorkflowCostAnalysis from './WorkflowCostAnalysis.vue'
 import ApprovalDialog from './ApprovalDialog.vue'
 import FilePreviewDiff from './FilePreviewDiff.vue'
@@ -1505,29 +1471,17 @@ const getShellExecutionPlan = message => {
   return plan && typeof plan === 'object' ? plan : null
 }
 
-const getShellExecutionPlanRows = message => {
+const getShellExecutionRouteLabel = message => {
   const plan = getShellExecutionPlan(message)
-  if (!plan) return []
+  if (!plan) return ''
   const routeKey = String(plan.backend_origin || '').toLowerCase()
   const routeTranslationKey = routeKey
     ? `workflow.approval.executionRoutes.${routeKey}`
     : ''
-  return [
-    {
-      label: t('workflow.approval.executionBackend'),
-      value: plan.backend ? t(`workflow.approval.executionBackends.${plan.backend}`) : ''
-    },
-    {
-      label: t('workflow.approval.executionRoute'),
-      value: routeTranslationKey ? t(routeTranslationKey) : ''
-    }
-  ].filter(row => row.value && row.value !== routeTranslationKey)
+  const backend = plan.backend ? t(`workflow.approval.executionBackends.${plan.backend}`) : ''
+  const route = routeTranslationKey ? t(routeTranslationKey) : ''
+  return [backend, route].filter(value => value && value !== routeTranslationKey).join(' · ')
 }
-
-const getShellExecutionRouteLabel = message =>
-  getShellExecutionPlanRows(message)
-    .map(row => row.value)
-    .join(' · ')
 
 const getBashCommand = message => {
   const args = message?.args || getToolCallArguments(message) || {}
@@ -2165,37 +2119,6 @@ const visibleMessages = computed(() =>
 const lastVisibleMessage = computed(
   () => visibleMessages.value[visibleMessages.value.length - 1] || null
 )
-const activeHostFallbackApproval = computed(() => {
-  const pending = (props.pendingApprovals || []).find(entry =>
-    shouldShowHostFallbackConfirmation(
-      entry,
-      props.isApprovalSubmitting(props.currentWorkflowId, entry.toolCallId)
-    )
-  )
-  if (!pending) return null
-
-  const sourceMessage = visibleMessages.value.find(
-    message => getMessageToolCallId(message) === pending.toolCallId
-  )
-  return {
-    ...(sourceMessage || {}),
-    metadata: {
-      ...(sourceMessage?.metadata || {}),
-      tool_call_id: pending.toolCallId,
-      tool_name: pending.toolName,
-      tool_call: {
-        id: pending.toolCallId,
-        name: pending.toolName,
-        arguments: pending.arguments
-      },
-      details: pending.details,
-      display_type: pending.displayType || sourceMessage?.metadata?.display_type || 'text',
-      approval_status: 'pending',
-      execution_status: 'pending_approval'
-    }
-  }
-})
-
 const isReasoningExpandedForMessage = message => {
   const messageId = String(message?.displayId || message?.id || '')
   return !!messageId && props.isReasoningExpanded(messageId)
@@ -2294,8 +2217,7 @@ const shouldShowApprovalDialog = message =>
   shouldShowInlineApprovalForMessage({
     message,
     isPending: isApprovalPending(message),
-    isSubmitting: isApprovalInFlight(message),
-    activeHostFallbackToolCallId: activeHostFallbackApproval.value?.metadata?.tool_call_id
+    isSubmitting: isApprovalInFlight(message)
   })
 
 const shouldShowRunningPlaceholder = message => {
@@ -3685,34 +3607,6 @@ defineExpose({
   color: var(--cs-text-color-secondary);
   font-size: var(--cs-font-size-xs);
   white-space: nowrap;
-}
-
-.shell-execution-plan-summary {
-  display: grid;
-  gap: var(--cs-space-xs);
-  margin: var(--cs-space-sm) 0;
-  padding: var(--cs-space-sm);
-  border: 1px solid var(--cs-border-color);
-  border-radius: var(--cs-border-radius);
-  background: var(--cs-bg-color-light);
-}
-
-.shell-execution-plan-summary__row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--cs-space);
-}
-
-.shell-execution-plan-summary__label {
-  color: var(--cs-text-color-secondary);
-  font-size: var(--cs-font-size-sm);
-}
-
-.shell-execution-plan-summary__value {
-  color: var(--cs-text-color-primary);
-  font-weight: 600;
-  text-align: right;
 }
 
 .tool-detail--expanded {

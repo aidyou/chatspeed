@@ -119,17 +119,10 @@ fn validate_sandbox_scheme_reference(store: &MainStore, agent: &Agent) -> Result
                 return Err("disabled sandbox schemes cannot be assigned to agents".to_string());
             }
             if agent.sandbox_execution_mode == ShellExecutionMode::Auto
-                && scheme.config.profiles.iter().any(|profile| {
-                    profile.enabled
-                        && profile
-                            .command_patterns
-                            .iter()
-                            .any(|pattern| crate::tools::is_catch_all_command_pattern(pattern))
-                })
+                && crate::tools::enabled_common_profile(scheme.config.profiles.iter())?.is_none()
             {
                 return Err(
-                    "auto agents cannot use sandbox profiles with catch-all command patterns"
-                        .to_string(),
+                    "auto agents require one enabled common catch-all sandbox profile".to_string(),
                 );
             }
         }
@@ -451,34 +444,70 @@ mod tests {
     }
 
     #[test]
-    fn auto_agents_cannot_reference_schemes_with_common_profiles() {
+    fn auto_agents_require_exactly_one_enabled_common_profile() {
         let store = MainStore::new(":memory:").expect("create store");
-        let scheme = SandboxScheme {
-            id: "common-scheme".to_string(),
+        let common_profile = SandboxProfileConfig {
+            id: "common".to_string(),
             name: "Common".to_string(),
+            enabled: true,
+            priority: 0,
+            command_patterns: vec![".*".to_string()],
+            runtime_preference: Default::default(),
+            image: "busybox:latest".to_string(),
+            instance_name: None,
+            image_size_bytes: Some(1),
+            network: SandboxNetworkPolicy::default(),
+            resources: Default::default(),
+            workspace_access: WorkspaceAccess::ReadWrite,
+        };
+        let scheme_config = SandboxSchemeConfig {
+            runtime_preference: Default::default(),
+            profiles: vec![common_profile.clone()],
+            host_rules: vec![],
+        };
+        let scheme = SandboxScheme {
+            id: "one-common".to_string(),
+            name: "One common".to_string(),
             description: String::new(),
-            config: SandboxSchemeConfig {
-                runtime_preference: Default::default(),
-                profiles: vec![SandboxProfileConfig {
-                    id: "common".to_string(),
-                    name: "Common".to_string(),
-                    enabled: true,
-                    priority: 0,
-                    command_patterns: vec![".*".to_string()],
-                    runtime_preference: Default::default(),
-                    image: "busybox:latest".to_string(),
-                    image_size_bytes: Some(1),
-                    network: SandboxNetworkPolicy::default(),
-                    resources: Default::default(),
-                    workspace_access: WorkspaceAccess::ReadWrite,
-                }],
-                host_rules: vec![],
-            },
+            config: scheme_config.clone(),
             disabled: false,
             created_at: None,
             updated_at: None,
         };
-        store.add_sandbox_scheme(&scheme).expect("add scheme");
+        store
+            .add_sandbox_scheme(&scheme)
+            .expect("add one-common scheme");
+
+        let mut missing_common_config = scheme_config.clone();
+        missing_common_config.profiles[0].command_patterns = vec![r"^echo(?:\s|$)".to_string()];
+        store
+            .add_sandbox_scheme(&SandboxScheme {
+                id: "missing-common".to_string(),
+                name: "Missing common".to_string(),
+                description: String::new(),
+                config: missing_common_config,
+                disabled: false,
+                created_at: None,
+                updated_at: None,
+            })
+            .expect("add missing-common scheme");
+
+        let mut duplicate_common_config = scheme_config;
+        let mut second_common = common_profile;
+        second_common.id = "common-second".to_string();
+        second_common.name = "Second common".to_string();
+        duplicate_common_config.profiles.push(second_common);
+        store
+            .add_sandbox_scheme(&SandboxScheme {
+                id: "duplicate-common".to_string(),
+                name: "Duplicate common".to_string(),
+                description: String::new(),
+                config: duplicate_common_config,
+                disabled: false,
+                created_at: None,
+                updated_at: None,
+            })
+            .expect("add duplicate-common scheme");
 
         let mut agent = Agent::new(
             "agent".to_string(),
@@ -503,8 +532,16 @@ mod tests {
             Some(false),
             None,
         );
-        agent.sandbox_scheme_id = Some(scheme.id.clone());
         agent.sandbox_execution_mode = ShellExecutionMode::Auto;
+
+        agent.sandbox_scheme_id = Some("one-common".to_string());
+        validate_sandbox_scheme_reference(&store, &agent)
+            .expect("auto accepts one enabled common profile");
+
+        agent.sandbox_scheme_id = Some("missing-common".to_string());
+        assert!(validate_sandbox_scheme_reference(&store, &agent).is_err());
+
+        agent.sandbox_scheme_id = Some("duplicate-common".to_string());
         assert!(validate_sandbox_scheme_reference(&store, &agent).is_err());
 
         agent.sandbox_execution_mode = ShellExecutionMode::SandboxOnly;

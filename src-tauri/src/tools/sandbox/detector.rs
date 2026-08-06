@@ -111,11 +111,30 @@ impl SandboxRuntimeDetector {
                 )
             }
         };
+        let (running_instances, instance_probe_error) = match command_output(
+            &self.options.msb_binary,
+            &["list", "--format", "json"],
+            &self.options,
+        ) {
+            Ok(output) => (parse_msb_running_instances(&output), None),
+            Err(error) => (Vec::new(), Some(error.reason().to_string())),
+        };
         let missing = missing_images(&self.options.required_images, &images);
         let state = if missing.is_empty() {
             SandboxAvailabilityState::Ready
         } else {
             SandboxAvailabilityState::ReadyMissingImage
+        };
+        let (reason_code, reason) = match instance_probe_error {
+            Some(error) => (
+                "instance_probe_failed",
+                format!("Microsandbox is ready, but running instance discovery failed: {error}"),
+            ),
+            None if missing.is_empty() => ("ready", "Microsandbox is ready".to_string()),
+            None => (
+                "ready_missing_image",
+                "Microsandbox is ready but one or more configured images are missing".to_string(),
+            ),
         };
 
         status_with_image_sizes(
@@ -123,18 +142,11 @@ impl SandboxRuntimeDetector {
             state,
             Some(self.options.msb_binary.clone()),
             version,
-            if missing.is_empty() {
-                "ready"
-            } else {
-                "ready_missing_image"
-            },
-            if missing.is_empty() {
-                "Microsandbox is ready"
-            } else {
-                "Microsandbox is ready but one or more configured images are missing"
-            },
+            reason_code,
+            &reason,
             images,
             image_sizes,
+            running_instances,
             missing,
         )
     }
@@ -220,11 +232,30 @@ impl SandboxRuntimeDetector {
                 )
             }
         };
+        let (running_instances, instance_probe_error) = match command_output(
+            &self.options.docker_binary,
+            &["ps", "--format", "{{json .}}"],
+            &self.options,
+        ) {
+            Ok(output) => (parse_running_instances(&output), None),
+            Err(error) => (Vec::new(), Some(error.reason().to_string())),
+        };
         let missing = missing_images(&self.options.required_images, &images);
         let state = if missing.is_empty() {
             SandboxAvailabilityState::Ready
         } else {
             SandboxAvailabilityState::ReadyMissingImage
+        };
+        let (reason_code, reason) = match instance_probe_error {
+            Some(error) => (
+                "instance_probe_failed",
+                format!("Docker is ready, but running instance discovery failed: {error}"),
+            ),
+            None if missing.is_empty() => ("ready", "Docker is ready".to_string()),
+            None => (
+                "ready_missing_image",
+                "Docker is ready but one or more configured images are missing".to_string(),
+            ),
         };
 
         status_with_image_sizes(
@@ -232,18 +263,11 @@ impl SandboxRuntimeDetector {
             state,
             Some(self.options.docker_binary.clone()),
             version,
-            if missing.is_empty() {
-                "ready"
-            } else {
-                "ready_missing_image"
-            },
-            if missing.is_empty() {
-                "Docker is ready"
-            } else {
-                "Docker is ready but one or more configured images are missing"
-            },
+            reason_code,
+            &reason,
             images,
             image_sizes,
+            running_instances,
             missing,
         )
     }
@@ -330,6 +354,7 @@ fn status(
         reason,
         images,
         BTreeMap::new(),
+        Vec::new(),
         missing_images,
     )
 }
@@ -343,6 +368,7 @@ fn status_with_image_sizes(
     reason: &str,
     images: Vec<String>,
     image_sizes: BTreeMap<String, u64>,
+    running_instances: Vec<String>,
     missing_images: Vec<String>,
 ) -> SandboxRuntimeStatus {
     SandboxRuntimeStatus {
@@ -354,6 +380,7 @@ fn status_with_image_sizes(
         reason: Some(reason.to_string()),
         images,
         image_sizes,
+        running_instances,
         missing_images,
         checked_at_ms: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -512,6 +539,76 @@ pub fn parse_docker_image_lines(output: &str) -> Vec<String> {
         .collect()
 }
 
+pub fn parse_running_instances(output: &str) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    collect_instance_names_from_json(output, &mut names, false);
+    names.into_iter().collect()
+}
+
+fn parse_msb_running_instances(output: &str) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    collect_instance_names_from_json(output, &mut names, true);
+    names.into_iter().collect()
+}
+
+fn collect_instance_names_from_json(
+    output: &str,
+    names: &mut std::collections::BTreeSet<String>,
+    require_running_status: bool,
+) {
+    for value in output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    {
+        collect_running_instance_names(&value, names, require_running_status);
+    }
+    if names.is_empty() {
+        if let Ok(value) = serde_json::from_str::<Value>(output) {
+            collect_running_instance_names(&value, names, require_running_status);
+        }
+    }
+}
+
+fn collect_running_instance_names(
+    value: &Value,
+    names: &mut std::collections::BTreeSet<String>,
+    require_running_status: bool,
+) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_running_instance_names(item, names, require_running_status);
+            }
+        }
+        Value::Object(map) => {
+            if require_running_status
+                && map
+                    .get("status")
+                    .or_else(|| map.get("Status"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|status| !status.eq_ignore_ascii_case("running"))
+            {
+                return;
+            }
+            for key in ["name", "Name", "Names", "sandbox_name", "sandboxName"] {
+                if let Some(name) = map
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                {
+                    names.insert(name.trim_start_matches('/').to_string());
+                    return;
+                }
+            }
+            for value in map.values() {
+                collect_running_instance_names(value, names, require_running_status);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn images_from_json_value(value: &Value) -> Vec<String> {
     match value {
         Value::Array(items) => items.iter().flat_map(images_from_json_value).collect(),
@@ -606,6 +703,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_running_instance_names_from_msb_and_docker_output() {
+        assert_eq!(
+            parse_running_instances(r#"[{"name":"dev-msb"},{"name":"/other"}]"#),
+            vec!["dev-msb".to_string(), "other".to_string()]
+        );
+        assert_eq!(
+            parse_running_instances(
+                "{\"Names\":\"nginx\"}\n{\"Names\":\"dev\"}\n{\"Names\":\"nginx\"}\n"
+            ),
+            vec!["dev".to_string(), "nginx".to_string()]
+        );
+        assert!(parse_running_instances("").is_empty());
+        assert!(parse_running_instances("not json").is_empty());
+    }
+
+    #[test]
     fn validates_supported_runtime_versions() {
         assert!(supported_msb_version(Some("0.6.6")));
         assert!(supported_msb_version(Some("0.6.9")));
@@ -628,6 +741,69 @@ mod tests {
             std::fs::set_permissions(&path, permissions).expect("chmod fake runtime");
         }
         (dir, path.display().to_string())
+    }
+
+    #[test]
+    fn fake_msb_discovers_running_instances_and_surfaces_list_failures() {
+        let (_ready_dir, ready_binary) = write_fake_runtime(
+            "msb",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.6'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '[{\"name\":\"busybox:latest\"}]'; exit 0; fi\nif [ \"$1\" = \"list\" ]; then echo '[{\"name\":\"dev-msb\",\"status\":\"Running\"},{\"name\":\"stopped-msb\",\"status\":\"Stopped\"}]'; exit 0; fi\necho \"unexpected args: $*\" >&2; exit 9\n",
+        );
+        let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
+            msb_binary: ready_binary,
+            docker_binary: "definitely-missing-docker-for-chatspeed-test".to_string(),
+            ..SandboxDetectorOptions::default()
+        });
+        let summary = detector.detect();
+        assert_eq!(summary.msb.running_instances, vec!["dev-msb"]);
+        assert_eq!(summary.msb.reason_code.as_deref(), Some("ready"));
+
+        let (_failure_dir, failure_binary) = write_fake_runtime(
+            "msb",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.6'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '[{\"name\":\"busybox:latest\"}]'; exit 0; fi\nif [ \"$1\" = \"list\" ]; then echo 'list failed' >&2; exit 7; fi\nexit 0\n",
+        );
+        let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
+            msb_binary: failure_binary,
+            docker_binary: "definitely-missing-docker-for-chatspeed-test".to_string(),
+            ..SandboxDetectorOptions::default()
+        });
+        let summary = detector.detect();
+        assert!(summary.msb.running_instances.is_empty());
+        assert_eq!(
+            summary.msb.reason_code.as_deref(),
+            Some("instance_probe_failed"),
+            "{}",
+            summary.msb.reason.as_deref().unwrap_or_default()
+        );
+        assert!(summary
+            .msb
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("list failed")));
+
+        let (_timeout_dir, timeout_binary) = write_fake_runtime(
+            "msb",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.6'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '[{\"name\":\"busybox:latest\"}]'; exit 0; fi\nif [ \"$1\" = \"list\" ]; then sleep 2; fi\nexit 0\n",
+        );
+        let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
+            msb_binary: timeout_binary,
+            docker_binary: "definitely-missing-docker-for-chatspeed-test".to_string(),
+            timeout: std::time::Duration::from_millis(500),
+            ..SandboxDetectorOptions::default()
+        });
+        let summary = detector.detect();
+        assert!(summary.msb.running_instances.is_empty());
+        assert_eq!(
+            summary.msb.reason_code.as_deref(),
+            Some("instance_probe_failed"),
+            "{}",
+            summary.msb.reason.as_deref().unwrap_or_default()
+        );
+        assert!(summary
+            .msb
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("timed out")));
     }
 
     #[test]
@@ -662,10 +838,52 @@ mod tests {
     }
 
     #[test]
+    fn fake_docker_discovers_running_instances() {
+        let (_ready_dir, ready_binary) = write_fake_runtime(
+            "docker",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'Docker version 27.0.1, build abc'; exit 0; fi\nif [ \"$1\" = \"info\" ]; then echo '{}'; exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '{\"Repository\":\"busybox\",\"Tag\":\"latest\"}'; exit 0; fi\nif [ \"$1\" = \"ps\" ]; then echo '{\"Names\":\"dev-docker\"}'; exit 0; fi\necho \"unexpected args: $*\" >&2; exit 9\n",
+        );
+        let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
+            msb_binary: "definitely-missing-msb-for-chatspeed-test".to_string(),
+            docker_binary: ready_binary,
+            ..SandboxDetectorOptions::default()
+        });
+        let summary = detector.detect();
+        assert_eq!(summary.docker.running_instances, vec!["dev-docker"]);
+        assert_eq!(summary.docker.reason_code.as_deref(), Some("ready"));
+    }
+
+    #[test]
+    fn fake_docker_surfaces_running_instance_probe_failures() {
+        let (_failure_dir, failure_binary) = write_fake_runtime(
+            "docker",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'Docker version 27.0.1, build abc'; exit 0; fi\nif [ \"$1\" = \"info\" ]; then echo '{}'; exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '{\"Repository\":\"busybox\",\"Tag\":\"latest\"}'; exit 0; fi\nif [ \"$1\" = \"ps\" ]; then echo 'ps failed' >&2; exit 7; fi\nexit 0\n",
+        );
+        let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
+            msb_binary: "definitely-missing-msb-for-chatspeed-test".to_string(),
+            docker_binary: failure_binary,
+            ..SandboxDetectorOptions::default()
+        });
+        let summary = detector.detect();
+        assert!(summary.docker.running_instances.is_empty());
+        assert_eq!(
+            summary.docker.reason_code.as_deref(),
+            Some("instance_probe_failed"),
+            "{}",
+            summary.docker.reason.as_deref().unwrap_or_default()
+        );
+        assert!(summary
+            .docker
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("ps failed")));
+    }
+
+    #[test]
     fn fake_docker_reports_ready_missing_image_and_unhealthy_image_list() {
         let (_ready_dir, ready_binary) = write_fake_runtime(
             "docker",
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'Docker version 27.0.1, build abc'; exit 0; fi\nif [ \"$1\" = \"info\" ]; then echo '{}'; exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '{\"Repository\":\"busybox\",\"Tag\":\"latest\"}'; exit 0; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'Docker version 27.0.1, build abc'; exit 0; fi\nif [ \"$1\" = \"info\" ]; then echo '{}'; exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '{\"Repository\":\"busybox\",\"Tag\":\"latest\"}'; exit 0; fi\nif [ \"$1\" = \"ps\" ]; then exit 0; fi\nexit 0\n",
         );
         let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
             msb_binary: "definitely-missing-msb-for-chatspeed-test".to_string(),
@@ -697,7 +915,7 @@ mod tests {
     fn empty_image_list_reports_ready_missing_required_images() {
         let (_ready_dir, ready_binary) = write_fake_runtime(
             "docker",
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'Docker version 27.0.1, build abc'; exit 0; fi\nif [ \"$1\" = \"info\" ]; then echo '{}'; exit 0; fi\nif [ \"$1\" = \"image\" ]; then exit 0; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'Docker version 27.0.1, build abc'; exit 0; fi\nif [ \"$1\" = \"info\" ]; then echo '{}'; exit 0; fi\nif [ \"$1\" = \"image\" ]; then exit 0; fi\nif [ \"$1\" = \"ps\" ]; then exit 0; fi\nexit 0\n",
         );
         let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
             msb_binary: "definitely-missing-msb-for-chatspeed-test".to_string(),
@@ -708,7 +926,9 @@ mod tests {
         let summary = detector.detect();
         assert_eq!(
             summary.docker.state,
-            SandboxAvailabilityState::ReadyMissingImage
+            SandboxAvailabilityState::ReadyMissingImage,
+            "{}",
+            summary.docker.reason.as_deref().unwrap_or_default()
         );
         assert_eq!(summary.docker.missing_images, vec!["busybox:latest"]);
     }

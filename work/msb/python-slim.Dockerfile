@@ -1,7 +1,15 @@
 FROM python:3.12-slim-bookworm
 
+ARG USE_CN_MIRRORS=0
+
 # Compatibility profile for packages that need glibc or native extensions.
-RUN apt-get update \
+RUN if [ "$USE_CN_MIRRORS" = "1" ]; then \
+        sed -i \
+            -e 's|deb.debian.org/debian|mirrors.aliyun.com/debian|g' \
+            -e 's|security.debian.org/debian-security|mirrors.aliyun.com/debian-security|g' \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
         build-essential \

@@ -206,6 +206,7 @@ mod tests {
                     command_patterns: vec!["^node(?:\\s|$)".to_string()],
                     runtime_preference: Default::default(),
                     image: "node:22".to_string(),
+                    instance_name: None,
                     image_size_bytes: None,
                     network: SandboxNetworkPolicy::default(),
                     resources: Default::default(),

@@ -1368,6 +1368,7 @@ impl ContextManager {
             .unwrap_or_else(|| self.get_initial_query())
     }
 
+    #[cfg(test)]
     pub fn current_user_messages_since_last_completion(&self) -> Vec<WorkflowMessage> {
         self.messages_since_last_completion()
             .into_iter()
@@ -1384,6 +1385,7 @@ impl ContextManager {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn current_approved_plan_since_last_completion(&self) -> Option<String> {
         self.messages_since_last_completion()
             .into_iter()

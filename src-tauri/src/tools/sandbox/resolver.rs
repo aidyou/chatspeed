@@ -104,45 +104,34 @@ impl ShellExecutionResolver {
             return host_plan(tool_call_id, command, HostFallbackReason::HostOnlyMode);
         }
 
-        let host_rule = if config.execution_mode == ShellExecutionMode::Auto {
+        if config.execution_mode == ShellExecutionMode::Auto {
             match choose_host_rule_for_stages(config, analysis) {
-                Ok(rule) => rule,
+                Ok(Some(rule)) => return explicit_host_plan(tool_call_id, command, &rule.name),
+                Ok(None) => {}
                 Err(reason) => return denied_plan(tool_call_id, command, reason),
-            }
-        } else {
-            None
-        };
-        let runnable_profile = match choose_runnable_profile(config, analysis, runtime_status) {
-            Ok(profile) => profile,
-            Err(reason) => return denied_plan(tool_call_id, command, reason),
-        };
-        let Some((profile_name, profile, runtime)) = runnable_profile else {
-            return host_rule
-                .map(|rule| explicit_host_plan(tool_call_id, command, &rule.name))
-                .unwrap_or_else(|| {
-                    fallback_or_denied(
-                        tool_call_id,
-                        command,
-                        config,
-                        sandbox_unavailability_reason(config, analysis, runtime_status),
-                    )
-                });
-        };
-        if let Some(rule) = host_rule {
-            if rule.priority >= profile.priority {
-                return if rule.priority == profile.priority {
-                    denied_plan(tool_call_id, command, HostFallbackReason::AmbiguousRoute)
-                } else {
-                    explicit_host_plan(tool_call_id, command, &rule.name)
-                };
             }
         }
 
-        let Some(primary_root) = primary_root else {
-            return fallback_or_denied(
+        let runnable_profile = match choose_runnable_profile(config, analysis, runtime_status) {
+            Ok(Some(profile)) => Some(profile),
+            Ok(None) => match choose_runnable_common_profile(config, runtime_status) {
+                Ok(profile) => profile,
+                Err(reason) => return denied_plan(tool_call_id, command, reason),
+            },
+            Err(reason) => return denied_plan(tool_call_id, command, reason),
+        };
+        let Some((profile_name, profile, runtime, instance_name)) = runnable_profile else {
+            return denied_plan(
                 tool_call_id,
                 command,
-                config,
+                sandbox_unavailability_reason(config, analysis, runtime_status),
+            );
+        };
+
+        let Some(primary_root) = primary_root else {
+            return denied_plan(
+                tool_call_id,
+                command,
                 HostFallbackReason::ProfileUnavailable,
             );
         };
@@ -171,6 +160,7 @@ impl ShellExecutionResolver {
             runtime: Some(runtime),
             profile: Some(profile_name),
             image: Some(profile.image.clone()),
+            instance_name,
             network: Some(profile.network.clone()),
             resources: Some(profile.resources.clone()),
             workspace_access: Some(profile.workspace_access.clone()),
@@ -319,6 +309,7 @@ fn choose_runnable_profile<'a>(
         String,
         &'a super::types::SandboxProfileConfig,
         SandboxRuntime,
+        Option<String>,
     )>,
     HostFallbackReason,
 > {
@@ -328,37 +319,24 @@ fn choose_runnable_profile<'a>(
         .filter(|(_, profile)| {
             profile.enabled
                 && !profile.image.trim().is_empty()
-                && (config.execution_mode != ShellExecutionMode::Auto
-                    || !profile
-                        .command_patterns
-                        .iter()
-                        .any(|pattern| super::types::is_catch_all_command_pattern(pattern)))
+                && !super::types::is_common_profile(profile)
                 && profile_covers_analysis(profile, analysis)
         })
         .filter_map(|(name, profile)| {
             let preference =
                 merge_runtime_preference(&config.runtime_preference, &profile.runtime_preference);
-            runtime_candidates(&preference)
-                .into_iter()
-                .find(|runtime| {
-                    !(matches!(profile.network.mode, super::types::SandboxNetworkMode::Host)
-                        && *runtime == SandboxRuntime::Msb)
-                        && runtime_can_run_profile(
-                            runtime_status_for(runtime, runtime_status),
-                            &profile.image,
-                        )
-                })
-                .map(|runtime| (name.clone(), profile, runtime))
+            choose_runtime_execution_target(profile, &preference, runtime_status)
+                .map(|(runtime, instance_name)| (name.clone(), profile, runtime, instance_name))
         })
         .collect::<Vec<_>>();
     let Some(priority) = candidates
         .iter()
-        .map(|(_, profile, _)| profile.priority)
+        .map(|(_, profile, _, _)| profile.priority)
         .max()
     else {
         return Ok(None);
     };
-    candidates.retain(|(_, profile, _)| profile.priority == priority);
+    candidates.retain(|(_, profile, _, _)| profile.priority == priority);
     if candidates.len() == 1 {
         return Ok(candidates.pop());
     }
@@ -367,18 +345,48 @@ fn choose_runnable_profile<'a>(
     // uniquely smallest persisted image because it is cheaper to start and transfer.
     let image_sizes = candidates
         .iter()
-        .map(|(_, profile, _)| profile.image_size_bytes)
+        .map(|(_, profile, _, _)| profile.image_size_bytes)
         .collect::<Option<Vec<_>>>()
         .ok_or(HostFallbackReason::AmbiguousRoute)?;
     let image_size_bytes = image_sizes
         .into_iter()
         .min()
         .ok_or(HostFallbackReason::AmbiguousRoute)?;
-    candidates.retain(|(_, profile, _)| profile.image_size_bytes == Some(image_size_bytes));
+    candidates.retain(|(_, profile, _, _)| profile.image_size_bytes == Some(image_size_bytes));
     if candidates.len() != 1 {
         return Err(HostFallbackReason::AmbiguousRoute);
     }
     Ok(candidates.pop())
+}
+
+fn choose_runnable_common_profile<'a>(
+    config: &'a AgentSandboxConfig,
+    runtime_status: &SandboxRuntimeStatusSummary,
+) -> Result<
+    Option<(
+        String,
+        &'a super::types::SandboxProfileConfig,
+        SandboxRuntime,
+        Option<String>,
+    )>,
+    HostFallbackReason,
+> {
+    super::types::enabled_common_profile(config.profiles.values())
+        .map_err(|_| HostFallbackReason::AmbiguousRoute)?;
+    let Some((profile_name, profile)) = config
+        .profiles
+        .iter()
+        .find(|(_, profile)| profile.enabled && super::types::is_common_profile(profile))
+    else {
+        return Ok(None);
+    };
+    let preference =
+        merge_runtime_preference(&config.runtime_preference, &profile.runtime_preference);
+    Ok(
+        choose_runtime_execution_target(profile, &preference, runtime_status).map(
+            |(runtime, instance_name)| (profile_name.clone(), profile, runtime, instance_name),
+        ),
+    )
 }
 
 fn sandbox_unavailability_reason(
@@ -396,7 +404,12 @@ fn sandbox_unavailability_reason(
                     .any(|pattern| super::types::is_catch_all_command_pattern(pattern)))
             && profile_covers_analysis(profile, analysis)
     });
-    if matching_profiles.count() == 0 {
+    if matching_profiles.count() == 0
+        && super::types::enabled_common_profile(config.profiles.values())
+            .ok()
+            .flatten()
+            .is_none()
+    {
         return HostFallbackReason::ProfileUnavailable;
     }
     if runtime_status
@@ -443,32 +456,6 @@ fn profile_covers_analysis(
         })
 }
 
-pub(crate) fn command_match_units(command: &str) -> Vec<String> {
-    analyze_shell_command(command)
-        .stages
-        .into_iter()
-        .map(|stage| stage.normalized_command)
-        .collect()
-}
-
-pub(crate) fn required_command_patterns(config: &AgentSandboxConfig) -> Vec<String> {
-    let mut patterns = config
-        .profiles
-        .values()
-        .flat_map(|profile| profile.command_patterns.iter())
-        .chain(
-            config
-                .host_rules
-                .iter()
-                .flat_map(|rule| rule.command_patterns.iter()),
-        )
-        .cloned()
-        .collect::<Vec<_>>();
-    patterns.sort();
-    patterns.dedup();
-    patterns
-}
-
 fn merge_runtime_preference(
     config_preference: &SandboxRuntimePreference,
     profile_preference: &SandboxRuntimePreference,
@@ -498,11 +485,52 @@ fn runtime_status_for<'a>(
     }
 }
 
-fn runtime_can_run_profile(status: &SandboxRuntimeStatus, image: &str) -> bool {
-    matches!(
+fn choose_runtime_execution_target(
+    profile: &super::types::SandboxProfileConfig,
+    preference: &SandboxRuntimePreference,
+    runtime_status: &SandboxRuntimeStatusSummary,
+) -> Option<(SandboxRuntime, Option<String>)> {
+    let mut image_fallback = None;
+    for runtime in runtime_candidates(preference) {
+        if matches!(profile.network.mode, super::types::SandboxNetworkMode::Host)
+            && runtime == SandboxRuntime::Msb
+        {
+            continue;
+        }
+        match runtime_execution_target(runtime_status_for(&runtime, runtime_status), profile) {
+            Some(Some(instance_name)) => return Some((runtime, Some(instance_name))),
+            Some(None) if image_fallback.is_none() => image_fallback = Some((runtime, None)),
+            _ => {}
+        }
+    }
+    image_fallback
+}
+
+fn runtime_execution_target(
+    status: &SandboxRuntimeStatus,
+    profile: &super::types::SandboxProfileConfig,
+) -> Option<Option<String>> {
+    if !matches!(
         status.state,
         SandboxAvailabilityState::Ready | SandboxAvailabilityState::ReadyMissingImage
-    ) && runtime_has_image(status, image)
+    ) {
+        return None;
+    }
+    if let Some(instance_name) = profile
+        .instance_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        if status
+            .running_instances
+            .iter()
+            .any(|available| available == instance_name)
+        {
+            return Some(Some(instance_name.to_string()));
+        }
+    }
+    runtime_has_image(status, &profile.image).then_some(None)
 }
 
 fn runtime_has_image(status: &SandboxRuntimeStatus, image: &str) -> bool {
@@ -517,39 +545,6 @@ fn denied_plan(
     let mut plan = host_plan(tool_call_id, command, reason);
     plan.status = ShellExecutionPlanStatus::Denied;
     plan
-}
-
-fn fallback_or_denied(
-    tool_call_id: &str,
-    command: &str,
-    config: &AgentSandboxConfig,
-    reason: HostFallbackReason,
-) -> ShellExecutionPlan {
-    if config.execution_mode == ShellExecutionMode::SandboxOnly {
-        ShellExecutionPlan {
-            tool_call_id: tool_call_id.to_string(),
-            command: command.to_string(),
-            scheme_id: None,
-            scheme_revision: None,
-            backend: ShellExecutionBackendKind::Host,
-            backend_origin: ShellExecutionBackendOrigin::HostFallbackPending,
-            runtime: None,
-            profile: None,
-            image: None,
-            network: None,
-            resources: None,
-            workspace_access: None,
-            mounts: Vec::new(),
-            workdir: None,
-            fallback_reason: Some(reason),
-            risk_floor: ShellExecutionRiskFloor::Normal,
-            status: ShellExecutionPlanStatus::Denied,
-        }
-    } else {
-        let mut plan = host_plan(tool_call_id, command, reason);
-        plan.status = ShellExecutionPlanStatus::ConsentRequired;
-        plan
-    }
 }
 
 fn explicit_host_plan(tool_call_id: &str, command: &str, rule_name: &str) -> ShellExecutionPlan {
@@ -570,6 +565,7 @@ fn host_plan(tool_call_id: &str, command: &str, reason: HostFallbackReason) -> S
         runtime: None,
         profile: None,
         image: None,
+        instance_name: None,
         network: None,
         resources: None,
         workspace_access: None,
@@ -585,8 +581,7 @@ fn host_plan(tool_call_id: &str, command: &str, reason: HostFallbackReason) -> S
 mod tests {
     use super::*;
     use crate::tools::{
-        HostCommandRule, SandboxNetworkPolicy, SandboxProfileConfig, SandboxResourceLimits,
-        WorkspaceAccess,
+        SandboxNetworkPolicy, SandboxProfileConfig, SandboxResourceLimits, WorkspaceAccess,
     };
     use std::collections::BTreeMap;
 
@@ -622,6 +617,7 @@ mod tests {
             reason: Some("ready".to_string()),
             images: images.into_iter().map(ToString::to_string).collect(),
             image_sizes: BTreeMap::new(),
+            running_instances: Vec::new(),
             missing_images: missing_images
                 .into_iter()
                 .map(ToString::to_string)
@@ -639,13 +635,10 @@ mod tests {
                 name: "busybox".to_string(),
                 enabled: true,
                 priority: 0,
-                command_patterns: if mode == ShellExecutionMode::SandboxOnly {
-                    vec![".*".to_string()]
-                } else {
-                    vec![r"^(?:echo|pwd|pnpm|cargo|git|python)(?:\s|$)".to_string()]
-                },
+                command_patterns: vec![".*".to_string()],
                 runtime_preference: SandboxRuntimePreference::Auto,
                 image: "busybox:latest".to_string(),
+                instance_name: None,
                 image_size_bytes: Some(1),
                 network: SandboxNetworkPolicy::default(),
                 resources: SandboxResourceLimits::default(),
@@ -660,6 +653,97 @@ mod tests {
             profiles,
             host_rules: Vec::new(),
         }
+    }
+
+    #[test]
+    fn available_instance_is_preferred_and_missing_instance_uses_image() {
+        let mut config = config(ShellExecutionMode::Auto);
+        let profile = config.profiles.get_mut("busybox").expect("common profile");
+        profile.instance_name = Some("dev-container".to_string());
+
+        let mut msb = ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]);
+        msb.running_instances = vec!["dev-container".to_string()];
+        let status = SandboxRuntimeStatusSummary {
+            msb,
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let plan = ShellExecutionResolver::resolve(
+            "tool-instance",
+            "echo hi",
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
+        );
+        assert_eq!(plan.backend, ShellExecutionBackendKind::Msb);
+        assert_eq!(plan.instance_name.as_deref(), Some("dev-container"));
+        assert_eq!(plan.image.as_deref(), Some("busybox:latest"));
+
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let plan = ShellExecutionResolver::resolve(
+            "tool-image-fallback",
+            "echo hi",
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
+        );
+        assert_eq!(plan.backend, ShellExecutionBackendKind::Msb);
+        assert_eq!(plan.instance_name, None);
+        assert_eq!(plan.image.as_deref(), Some("busybox:latest"));
+    }
+
+    #[test]
+    fn auto_runtime_prefers_docker_instance_over_msb_image_fallback() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config
+            .profiles
+            .get_mut("busybox")
+            .expect("common profile")
+            .instance_name = Some("dev-container".to_string());
+        let mut docker = ready_status(SandboxRuntime::Docker, vec![]);
+        docker.running_instances = vec!["dev-container".to_string()];
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
+            docker,
+        };
+
+        let plan = ShellExecutionResolver::resolve(
+            "tool-docker-instance",
+            "echo hi",
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
+        );
+        assert_eq!(plan.backend, ShellExecutionBackendKind::Docker);
+        assert_eq!(plan.instance_name.as_deref(), Some("dev-container"));
+    }
+
+    #[test]
+    fn auto_runtime_prefers_msb_instance_over_docker_image_fallback() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config
+            .profiles
+            .get_mut("busybox")
+            .expect("common profile")
+            .instance_name = Some("dev-container".to_string());
+        let mut msb = ready_status(SandboxRuntime::Msb, vec![]);
+        msb.running_instances = vec!["dev-container".to_string()];
+        let status = SandboxRuntimeStatusSummary {
+            msb,
+            docker: ready_status(SandboxRuntime::Docker, vec!["busybox:latest"]),
+        };
+
+        let plan = ShellExecutionResolver::resolve(
+            "tool-msb-instance",
+            "echo hi",
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
+        );
+        assert_eq!(plan.backend, ShellExecutionBackendKind::Msb);
+        assert_eq!(plan.instance_name.as_deref(), Some("dev-container"));
     }
 
     #[test]
@@ -781,7 +865,7 @@ mod tests {
             Some(Path::new("/project")),
         );
         assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
-        assert_eq!(plan.status, ShellExecutionPlanStatus::ConsentRequired);
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Denied);
         assert_eq!(plan.risk_floor, ShellExecutionRiskFloor::Normal);
         assert_eq!(plan.fallback_reason, Some(HostFallbackReason::MissingImage));
     }
@@ -800,7 +884,7 @@ mod tests {
             Some(Path::new("/project")),
         );
         assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
-        assert_eq!(plan.status, ShellExecutionPlanStatus::ConsentRequired);
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Denied);
         assert_eq!(plan.risk_floor, ShellExecutionRiskFloor::Normal);
         assert_eq!(plan.fallback_reason, Some(HostFallbackReason::MissingImage));
     }
@@ -829,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_only_denies_without_host_fallback() {
+    fn sandbox_only_denies_when_sandbox_is_unavailable() {
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec!["alpine:latest"]),
             docker: ready_status(SandboxRuntime::Docker, vec!["alpine:latest"]),
@@ -864,6 +948,7 @@ mod tests {
                 command_patterns,
                 runtime_preference: SandboxRuntimePreference::Auto,
                 image: image.to_string(),
+                instance_name: None,
                 image_size_bytes: Some(1),
                 network: SandboxNetworkPolicy::default(),
                 resources: SandboxResourceLimits::default(),
@@ -931,10 +1016,6 @@ mod tests {
         );
         assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
         assert_eq!(plan.profile.as_deref(), Some("git-cargo"));
-        assert_eq!(
-            command_match_units(command),
-            vec!["git log -n 3", "cargo check"]
-        );
     }
 
     #[test]
@@ -1021,11 +1102,11 @@ mod tests {
             Some(Path::new("/project")),
         );
         assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
-        assert_eq!(plan.backend, ShellExecutionBackendKind::Msb);
-        assert_eq!(plan.profile.as_deref(), Some("git-cargo"));
+        assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
+        assert_eq!(plan.profile.as_deref(), Some("Full Host"));
         assert_eq!(
             plan.backend_origin,
-            ShellExecutionBackendOrigin::SandboxProfile
+            ShellExecutionBackendOrigin::ExplicitHostRule
         );
     }
 
@@ -1132,7 +1213,7 @@ mod tests {
     }
 
     #[test]
-    fn equal_priority_profiles_fail_closed_instead_of_requesting_host_fallback() {
+    fn equal_priority_profiles_fail_closed() {
         let mut config = config(ShellExecutionMode::Auto);
         add_profile(&mut config, "node-a", "node-a:latest", &[r"^pnpm(?:\s|$)"]);
         add_profile(&mut config, "node-b", "node-b:latest", &[r"^pnpm(?:\s|$)"]);
@@ -1156,7 +1237,7 @@ mod tests {
     }
 
     #[test]
-    fn equal_priority_host_rules_fail_closed_instead_of_requesting_host_fallback() {
+    fn equal_priority_host_rules_fail_closed() {
         let mut config = config(ShellExecutionMode::Auto);
         config.profiles.remove("busybox");
         for id in ["host-a", "host-b"] {
@@ -1264,10 +1345,8 @@ mod tests {
     }
 
     #[test]
-    fn auto_profile_without_matching_pattern_requests_host_fallback() {
-        let mut config = config(ShellExecutionMode::Auto);
-        config.profiles.get_mut("busybox").unwrap().command_patterns =
-            vec![r"^echo(?:\s|$)".to_string()];
+    fn auto_unmatched_command_uses_common_profile() {
+        let config = config(ShellExecutionMode::Auto);
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
             docker: ready_status(SandboxRuntime::Docker, vec![]),
@@ -1279,12 +1358,9 @@ mod tests {
             &status,
             Some(Path::new("/project")),
         );
-        assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
-        assert_eq!(plan.status, ShellExecutionPlanStatus::ConsentRequired);
-        assert_eq!(
-            plan.fallback_reason,
-            Some(HostFallbackReason::ProfileUnavailable)
-        );
+        assert_eq!(plan.backend, ShellExecutionBackendKind::Msb);
+        assert_eq!(plan.profile.as_deref(), Some("busybox"));
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
     }
 
     #[test]
@@ -1405,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_compound_profile_without_common_uses_host_fallback() {
+    fn unavailable_compound_profile_without_common_is_denied() {
         let mut config = config(ShellExecutionMode::Auto);
         config.profiles.remove("busybox");
         let status = SandboxRuntimeStatusSummary {
@@ -1420,7 +1496,7 @@ mod tests {
             Some(Path::new("/project")),
         );
         assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
-        assert_eq!(plan.status, ShellExecutionPlanStatus::ConsentRequired);
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Denied);
         assert_eq!(plan.risk_floor, ShellExecutionRiskFloor::Normal);
         assert_eq!(
             plan.fallback_reason,
@@ -1450,7 +1526,7 @@ mod tests {
             &status,
             Some(Path::new("/project")),
         );
-        assert_eq!(plan.status, ShellExecutionPlanStatus::ConsentRequired);
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Denied);
         assert_eq!(
             plan.fallback_reason,
             Some(HostFallbackReason::ProfileUnavailable)
@@ -1471,32 +1547,6 @@ mod tests {
         );
         assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
         assert_eq!(plan.profile.as_deref(), Some("cargo-only"));
-    }
-
-    #[test]
-    fn fallback_context_uses_all_configured_patterns_and_quote_aware_command_stages() {
-        let mut config = config(ShellExecutionMode::Auto);
-        config.profiles.get_mut("busybox").unwrap().command_patterns =
-            vec![r"^pnpm(?:\s|$)".to_string()];
-        config.host_rules.push(HostCommandRule {
-            id: "host-cargo".to_string(),
-            name: "Host cargo".to_string(),
-            enabled: true,
-            priority: 10,
-            command_patterns: vec![r"^cargo(?:\s|$)".to_string()],
-        });
-
-        assert_eq!(
-            required_command_patterns(&config),
-            vec![r"^cargo(?:\s|$)".to_string(), r"^pnpm(?:\s|$)".to_string()]
-        );
-        assert_eq!(
-            command_match_units("pnpm tauri build && sh -c 'cargo test --lib'"),
-            vec![
-                "pnpm tauri build".to_string(),
-                "cargo test --lib".to_string(),
-            ]
-        );
     }
 
     #[test]

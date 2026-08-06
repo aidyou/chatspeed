@@ -38,6 +38,8 @@ pub struct SandboxRuntimeStatus {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub image_sizes: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub running_instances: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing_images: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checked_at_ms: Option<i64>,
@@ -143,7 +145,6 @@ pub enum ShellExecutionRiskFloor {
 #[serde(rename_all = "snake_case")]
 pub enum ShellExecutionPlanStatus {
     Ready,
-    ConsentRequired,
     Denied,
 }
 
@@ -154,8 +155,6 @@ pub enum ShellExecutionBackendOrigin {
     HostOnly,
     ExplicitHostRule,
     SandboxProfile,
-    HostFallbackPending,
-    ApprovedHostFallback,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -198,6 +197,8 @@ pub struct ShellExecutionPlan {
     pub profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<SandboxNetworkPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -226,6 +227,8 @@ pub struct ShellExecutionPlanDetails {
     pub sandbox_profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_instance_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<SandboxNetworkPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -248,6 +251,7 @@ impl ShellExecutionPlan {
             runtime: self.runtime.clone(),
             sandbox_profile: self.profile.clone(),
             sandbox_image: self.image.clone(),
+            sandbox_instance_name: self.instance_name.clone(),
             network: self.network.clone(),
             workspace_access: self.workspace_access.clone(),
             limits: self.resources.clone(),
@@ -366,6 +370,30 @@ pub(crate) fn is_catch_all_command_pattern(pattern: &str) -> bool {
     matches!(pattern.trim(), ".*" | "^.*" | ".*$" | "^.*$")
 }
 
+pub fn is_common_profile(profile: &SandboxProfileConfig) -> bool {
+    !profile.command_patterns.is_empty()
+        && profile
+            .command_patterns
+            .iter()
+            .all(|pattern| is_catch_all_command_pattern(pattern))
+}
+
+pub fn enabled_common_profile<'a>(
+    profiles: impl IntoIterator<Item = &'a SandboxProfileConfig>,
+) -> Result<Option<&'a SandboxProfileConfig>, String> {
+    let common = profiles
+        .into_iter()
+        .filter(|profile| profile.enabled && is_common_profile(profile))
+        .collect::<Vec<_>>();
+    match common.as_slice() {
+        [] => Ok(None),
+        [profile] => Ok(Some(*profile)),
+        _ => Err(
+            "sandbox scheme must contain at most one enabled common catch-all profile".to_string(),
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxProfileConfig {
@@ -382,6 +410,8 @@ pub struct SandboxProfileConfig {
     #[serde(default)]
     pub runtime_preference: SandboxRuntimePreference,
     pub image: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_size_bytes: Option<u64>,
     #[serde(default)]
@@ -443,6 +473,16 @@ impl SandboxSchemeConfig {
             if profile.command_patterns.is_empty() {
                 return Err(format!(
                     "sandbox profile {} has no command patterns",
+                    profile.name
+                ));
+            }
+            let has_catch_all = profile
+                .command_patterns
+                .iter()
+                .any(|pattern| is_catch_all_command_pattern(pattern));
+            if has_catch_all && !is_common_profile(profile) {
+                return Err(format!(
+                    "sandbox common profile {} may only contain catch-all command patterns",
                     profile.name
                 ));
             }
@@ -556,11 +596,31 @@ mod tests {
             command_patterns: vec![pattern.to_string()],
             runtime_preference: SandboxRuntimePreference::Auto,
             image: "busybox:latest".to_string(),
+            instance_name: None,
             image_size_bytes: Some(1),
             network: SandboxNetworkPolicy::default(),
             resources: SandboxResourceLimits::default(),
             workspace_access: WorkspaceAccess::ReadWrite,
         }
+    }
+
+    #[test]
+    fn profile_instance_name_is_optional_and_round_trips() {
+        let legacy: SandboxProfileConfig = serde_json::from_value(serde_json::json!({
+            "id": "profile",
+            "name": "Profile",
+            "image": "busybox:latest"
+        }))
+        .expect("legacy profile without instance name must deserialize");
+        assert_eq!(legacy.instance_name, None);
+
+        let mut profile = legacy;
+        profile.instance_name = Some("dev-container".to_string());
+        let round_trip: SandboxProfileConfig =
+            serde_json::from_value(serde_json::to_value(&profile).expect("serialize profile"))
+                .expect("deserialize profile");
+        assert_eq!(round_trip.instance_name.as_deref(), Some("dev-container"));
+        assert_eq!(round_trip.image, "busybox:latest");
     }
 
     #[test]

@@ -1,6 +1,15 @@
 FROM rust:1.97.1-slim-bookworm
 
-RUN apt-get update \
+ARG USE_CN_MIRRORS=0
+
+RUN if [ "$USE_CN_MIRRORS" = "1" ]; then \
+        sed -i \
+            -e 's|deb.debian.org/debian|mirrors.aliyun.com/debian|g' \
+            -e 's|security.debian.org/debian-security|mirrors.aliyun.com/debian-security|g' \
+            /etc/apt/sources.list.d/debian.sources; \
+        export RUSTUP_DIST_SERVER=https://rsproxy.cn RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \

@@ -1,9 +1,17 @@
 FROM php:8.3-cli-alpine3.22
 
+ARG USE_CN_MIRRORS=0
+
 COPY --from=composer:2.8 /usr/bin/composer /usr/local/bin/composer
 
 # PDO drivers cover MySQL/MariaDB and PostgreSQL without shipping database servers.
-RUN apk add --no-cache \
+RUN if [ "$USE_CN_MIRRORS" = "1" ]; then \
+        sed -i \
+            -e 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.aliyun.com/alpine|g' \
+            -e 's|http://dl-cdn.alpinelinux.org/alpine|https://mirrors.aliyun.com/alpine|g' \
+            /etc/apk/repositories; \
+    fi \
+    && apk add --no-cache \
         bash \
         ca-certificates \
         curl \

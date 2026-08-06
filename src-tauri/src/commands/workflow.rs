@@ -1557,6 +1557,13 @@ fn resolve_agent_sandbox_snapshot(
                 return Err(format!("sandbox scheme {scheme_id} is disabled"));
             }
             scheme.config.validate()?;
+            if agent.sandbox_execution_mode == crate::tools::ShellExecutionMode::Auto
+                && crate::tools::enabled_common_profile(scheme.config.profiles.iter())?.is_none()
+            {
+                return Err(
+                    "auto sandbox scheme requires one enabled common catch-all profile".to_string(),
+                );
+            }
             let profiles = scheme
                 .config
                 .profiles

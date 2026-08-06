@@ -142,6 +142,26 @@ test('ask-user responses stay in the workflow chain but are hidden from the tran
   )
 })
 
+test('sandbox profile suggestions inherit the effective scheme runtime preference', async () => {
+  const sandboxSettings = await readFile('src/components/setting/Sandbox.vue', 'utf8')
+
+  assert.match(
+    sandboxSettings,
+    /const effectiveRuntimePreference = profile =>[\s\S]*?profile\?\.runtimePreference && profile\.runtimePreference !== 'auto'[\s\S]*?draft\.value\.config\?\.runtimePreference \|\| 'auto'/,
+    'an auto Profile must inherit the scheme runtime preference used by the resolver'
+  )
+  assert.equal(
+    sandboxSettings.match(/runtimeKeys\(effectiveRuntimePreference\(/g)?.length,
+    3,
+    'image candidates, instance candidates, and image-size tie-breaking must share the effective preference'
+  )
+  assert.doesNotMatch(
+    sandboxSettings,
+    /runtimeKeys\(profileDraft\.value\?\.runtimePreference \|\| 'auto'\)/,
+    'a Docker scheme with an auto Profile must not present MSB candidates'
+  )
+})
+
 test('cost analysis interaction is gated by accepted completion and terminal child summaries', async () => {
   const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
   const styles = await readFile('src/styles/workflow/messages.scss', 'utf8')

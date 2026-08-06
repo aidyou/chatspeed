@@ -149,6 +149,7 @@ mod tests {
                     command_patterns: vec!["^bash(?:\\s|$)".to_string()],
                     runtime_preference: Default::default(),
                     image: "bash:latest".to_string(),
+                    instance_name: None,
                     image_size_bytes: None,
                     network: SandboxNetworkPolicy::default(),
                     resources: Default::default(),

@@ -5,15 +5,17 @@ FROM rust:1.97.1-slim-bookworm
 ARG PNPM_VERSION=10.14.0
 ARG YARN_VERSION=4.9.2
 ARG TAURI_CLI_VERSION=2.11.0
-ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG USE_CN_MIRRORS=0
 
 COPY --from=node-runtime /usr/local/ /usr/local/
 
 # Tauri projects require the Node and Rust toolchains plus GTK/WebKit build dependencies.
-RUN sed -i \
-        -e 's|deb.debian.org/debian|mirrors.aliyun.com/debian|g' \
-        -e 's|security.debian.org/debian-security|mirrors.aliyun.com/debian-security|g' \
-        /etc/apt/sources.list.d/debian.sources \
+RUN if [ "$USE_CN_MIRRORS" = "1" ]; then \
+        sed -i \
+            -e 's|deb.debian.org/debian|mirrors.aliyun.com/debian|g' \
+            -e 's|security.debian.org/debian-security|mirrors.aliyun.com/debian-security|g' \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
@@ -34,7 +36,10 @@ RUN sed -i \
     && rm -rf /var/lib/apt/lists/* \
     && corepack disable \
     && rm -f /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/pnpm /usr/local/bin/pnpx \
-    && npm config set registry "${NPM_REGISTRY}" \
+    && if [ "$USE_CN_MIRRORS" = "1" ]; then \
+        npm config set registry https://registry.npmmirror.com; \
+        export RUSTUP_DIST_SERVER=https://rsproxy.cn RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup; \
+    fi \
     && npm config set fetch-retries 5 \
     && npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retry-maxtimeout 120000 \
@@ -52,8 +57,6 @@ RUN sed -i \
     && chmod 755 /usr/local/bin/pnpm \
     && useradd --create-home --uid 1000 --shell /bin/bash sandbox \
     && install -d -o sandbox -g sandbox /workspace /home/sandbox/.cargo \
-    && RUSTUP_DIST_SERVER="https://rsproxy.cn" \
-        RUSTUP_UPDATE_ROOT="https://rsproxy.cn/rustup" \
     && for tool in cargo rustc rustdoc rustfmt cargo-clippy clippy-driver; do \
         printf '#!/bin/sh\nexport RUSTUP_HOME=/usr/local/rustup\nexport CARGO_HOME=/home/sandbox/.cargo\nexec /usr/local/cargo/bin/%s "$@"\n' "$tool" \
           > "/usr/local/bin/$tool"; \

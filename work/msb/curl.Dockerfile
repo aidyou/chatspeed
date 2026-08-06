@@ -1,8 +1,8 @@
-FROM python:3.12-alpine3.22
+FROM alpine:3.22
 
 ARG USE_CN_MIRRORS=0
 
-# Small profile for scripts and packages that publish musllinux wheels.
+# Alpine is the smallest supported base with both curl and wget available.
 RUN if [ "$USE_CN_MIRRORS" = "1" ]; then \
         sed -i \
             -e 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.aliyun.com/alpine|g' \
@@ -10,18 +10,11 @@ RUN if [ "$USE_CN_MIRRORS" = "1" ]; then \
             /etc/apk/repositories; \
     fi \
     && apk add --no-cache \
-        bash \
-        ca-certificates \
-        curl \
-        git \
+    ca-certificates \
+    curl \
     && adduser -D -u 1000 sandbox \
-    && mkdir -p /workspace \
-    && chown sandbox:sandbox /workspace
-
-ENV PATH="/home/sandbox/.local/bin:${PATH}" \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+    && install -d -o sandbox -g sandbox /workspace
 
 USER sandbox
 WORKDIR /workspace
-CMD ["python3"]
+CMD ["/bin/sh"]

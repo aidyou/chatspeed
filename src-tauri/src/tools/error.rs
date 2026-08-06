@@ -49,10 +49,6 @@ pub enum ToolError {
     #[error("sandbox failure: {0:?}")]
     SandboxFailure(crate::tools::SandboxFailure),
 
-    /// A user rejected one-time Host execution after an authorized command could not run in sandbox.
-    #[error("{0}")]
-    HostFallbackRejected(String, serde_json::Value),
-
     /// A non-recoverable error that should terminate the workflow.
     #[error("{}", t!("tools.error.fatal", details = .0))]
     Fatal(String),

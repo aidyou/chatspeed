@@ -5,9 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'EOF'
-Usage: ./build-and-load.sh [name ...]
+Usage: ./build-and-load.sh [--cn] [name ...]
 
 Build Dockerfiles in this directory, export them as Docker archives, and load them into msb.
+
+Options:
+  --cn              Use China mirrors for package downloads during image builds.
+  -h, --help        Show this help.
 
 Arguments:
   No arguments       Build and load every *.Dockerfile in this directory.
@@ -15,8 +19,9 @@ Arguments:
 
 Examples:
   ./build-and-load.sh
+  ./build-and-load.sh --cn
   ./build-and-load.sh php
-  ./build-and-load.sh node python-slim
+  ./build-and-load.sh --cn node python-slim
 
 Images are tagged in msb as: <name>:latest
 EOF
@@ -31,6 +36,7 @@ require_command() {
 
 build_and_load() {
   local dockerfile="$1"
+  local use_cn_mirrors="$2"
   local filename name image_ref temp_dir archive
 
   filename="$(basename "$dockerfile")"
@@ -42,6 +48,7 @@ build_and_load() {
   printf '\n==> Building %s as %s\n' "$filename" "$image_ref"
   docker buildx build \
     --file "$dockerfile" \
+    --build-arg "USE_CN_MIRRORS=${use_cn_mirrors}" \
     --tag "$image_ref" \
     --load \
     "$SCRIPT_DIR"
@@ -57,12 +64,32 @@ build_and_load() {
 
 main() {
   local -a dockerfiles=()
-  local name dockerfile
+  local name dockerfile use_cn_mirrors=0
 
-  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    usage
-    exit 0
-  fi
+  while (( $# > 0 )); do
+    case "$1" in
+      --cn)
+        use_cn_mirrors=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        printf 'Error: unknown option: %s\n' "$1" >&2
+        usage >&2
+        exit 1
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
 
   require_command docker
   require_command msb
@@ -93,7 +120,7 @@ main() {
   fi
 
   for dockerfile in "${dockerfiles[@]}"; do
-    build_and_load "$dockerfile"
+    build_and_load "$dockerfile" "$use_cn_mirrors"
   done
 
   printf '\nDone. View imported images with: msb image list\n'

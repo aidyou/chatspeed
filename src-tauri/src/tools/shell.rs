@@ -1790,16 +1790,7 @@ impl ShellExecute {
                 ));
             }
             let current = self.resolve_execution_plan(tool_call_id, command_str);
-            let approved_host_fallback = plan.backend
-                == crate::tools::ShellExecutionBackendKind::Host
-                && plan.backend_origin
-                    == crate::tools::ShellExecutionBackendOrigin::ApprovedHostFallback
-                && plan.status == crate::tools::ShellExecutionPlanStatus::Ready
-                && current.status == crate::tools::ShellExecutionPlanStatus::ConsentRequired
-                && plan.fallback_reason == current.fallback_reason
-                && plan.scheme_id == current.scheme_id
-                && plan.scheme_revision == current.scheme_revision;
-            if plan != current && !approved_host_fallback {
+            if plan != current {
                 return Err(ToolError::ExecutionFailed(
                     "Approved shell execution plan no longer matches current sandbox resolution; re-approval is required".to_string(),
                 ));
@@ -3048,6 +3039,7 @@ mod tests {
             runtime: Some(runtime),
             profile: Some("busybox".to_string()),
             image: Some("busybox:latest".to_string()),
+            instance_name: None,
             network: Some(SandboxNetworkPolicy::default()),
             resources: Some(SandboxResourceLimits::default()),
             workspace_access: Some(WorkspaceAccess::ReadOnly),
@@ -3585,6 +3577,7 @@ mod tests {
             runtime: Some(SandboxRuntime::Docker),
             profile: Some("busybox".to_string()),
             image: Some("busybox:latest".to_string()),
+            instance_name: None,
             network: Some(SandboxNetworkPolicy::default()),
             resources: Some(SandboxResourceLimits::default()),
             workspace_access: Some(WorkspaceAccess::ReadOnly),
@@ -3672,6 +3665,7 @@ mod tests {
             runtime: Some(SandboxRuntime::Docker),
             profile: Some("busybox".to_string()),
             image: Some("busybox:latest".to_string()),
+            instance_name: None,
             network: Some(SandboxNetworkPolicy::default()),
             resources: Some(SandboxResourceLimits::default()),
             workspace_access: Some(WorkspaceAccess::ReadOnly),
@@ -3756,6 +3750,7 @@ mod tests {
             runtime: Some(SandboxRuntime::Msb),
             profile: Some("busybox".to_string()),
             image: Some("busybox:latest".to_string()),
+            instance_name: None,
             network: Some(SandboxNetworkPolicy::default()),
             resources: Some(SandboxResourceLimits::default()),
             workspace_access: Some(WorkspaceAccess::ReadOnly),

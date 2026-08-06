@@ -70,6 +70,9 @@ pub fn sandbox_cleanup_command_for_plan(plan: &ShellExecutionPlan) -> Option<Com
 }
 
 pub fn sandbox_cleanup_argv_for_plan(plan: &ShellExecutionPlan) -> Option<Vec<String>> {
+    if plan.instance_name.is_some() {
+        return None;
+    }
     let name = sandbox_instance_name(plan);
     match plan.backend {
         ShellExecutionBackendKind::Msb => Some(vec![
@@ -115,6 +118,26 @@ fn build_msb_argv(
     plan: &ShellExecutionPlan,
     original_command: &str,
 ) -> Result<Vec<String>, ToolError> {
+    if let Some(instance_name) = plan.instance_name.as_deref() {
+        let mut argv = vec![
+            "msb".to_string(),
+            "exec".to_string(),
+            "--quiet".to_string(),
+            "--no-tty".to_string(),
+        ];
+        if let Some(workdir) = plan.workdir.as_deref() {
+            argv.extend(["--workdir".to_string(), workdir.to_string()]);
+        }
+        argv.extend([
+            instance_name.to_string(),
+            "--".to_string(),
+            "sh".to_string(),
+            "-lc".to_string(),
+            original_command.to_string(),
+        ]);
+        return Ok(argv);
+    }
+
     let image = plan.image.as_deref().ok_or_else(|| {
         sandbox_failure(
             plan,
@@ -184,6 +207,20 @@ fn build_docker_argv(
     plan: &ShellExecutionPlan,
     original_command: &str,
 ) -> Result<Vec<String>, ToolError> {
+    if let Some(instance_name) = plan.instance_name.as_deref() {
+        let mut argv = vec!["docker".to_string(), "exec".to_string()];
+        if let Some(workdir) = plan.workdir.as_deref() {
+            argv.extend(["--workdir".to_string(), workdir.to_string()]);
+        }
+        argv.extend([
+            instance_name.to_string(),
+            "sh".to_string(),
+            "-lc".to_string(),
+            original_command.to_string(),
+        ]);
+        return Ok(argv);
+    }
+
     let image = plan.image.as_deref().ok_or_else(|| {
         sandbox_failure(
             plan,
@@ -279,6 +316,7 @@ mod tests {
             runtime: Some(SandboxRuntime::Docker),
             profile: Some("busybox".to_string()),
             image: Some("busybox:latest".to_string()),
+            instance_name: None,
             network: Some(SandboxNetworkPolicy::default()),
             resources: Some(SandboxResourceLimits {
                 cpus: Some(1),
@@ -517,6 +555,50 @@ mod tests {
             sandbox_cleanup_argv_for_plan(&msb_plan).unwrap(),
             vec!["msb", "remove", "--force", "--quiet", &name]
         );
+    }
+
+    #[test]
+    fn reuse_instances_use_exec_and_skip_cleanup() {
+        let mut docker_plan = plan(ShellExecutionBackendKind::Docker);
+        docker_plan.instance_name = Some("dev-container".to_string());
+        assert_eq!(
+            sandbox_argv_for_plan(&docker_plan, "echo hi")
+                .unwrap()
+                .unwrap(),
+            vec![
+                "docker",
+                "exec",
+                "--workdir",
+                "/workspace",
+                "dev-container",
+                "sh",
+                "-lc",
+                "echo hi"
+            ]
+        );
+        assert!(sandbox_cleanup_argv_for_plan(&docker_plan).is_none());
+
+        let mut msb_plan = plan(ShellExecutionBackendKind::Msb);
+        msb_plan.instance_name = Some("dev-sandbox".to_string());
+        assert_eq!(
+            sandbox_argv_for_plan(&msb_plan, "echo hi")
+                .unwrap()
+                .unwrap(),
+            vec![
+                "msb",
+                "exec",
+                "--quiet",
+                "--no-tty",
+                "--workdir",
+                "/workspace",
+                "dev-sandbox",
+                "--",
+                "sh",
+                "-lc",
+                "echo hi"
+            ]
+        );
+        assert!(sandbox_cleanup_argv_for_plan(&msb_plan).is_none());
     }
 
     #[test]

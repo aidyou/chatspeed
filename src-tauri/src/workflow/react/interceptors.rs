@@ -195,9 +195,9 @@ impl WorkflowExecutor {
         Ok(report.content)
     }
 
-    fn review_payload_changed_files(&self) -> Vec<Value> {
+    fn review_payload_changed_files(messages: &[WorkflowMessage]) -> Vec<Value> {
         let mut files = BTreeMap::<String, Value>::new();
-        for message in self.context.messages_since_last_completion() {
+        for message in messages {
             if message.role != "tool" || message.is_error {
                 continue;
             }
@@ -284,33 +284,227 @@ impl WorkflowExecutor {
         files.into_values().collect()
     }
 
-    fn review_payload_previous_results(&self) -> Vec<Value> {
-        self.context
-            .messages_since_last_completion()
+    fn current_task_messages_from_durable_history(
+        messages: Vec<WorkflowMessage>,
+    ) -> Vec<WorkflowMessage> {
+        let completion_start = messages
+            .iter()
+            .rposition(
+                crate::workflow::react::context::ContextManager::is_successful_completion_message,
+            )
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let manual_clear_start = messages
+            .iter()
+            .rposition(
+                crate::workflow::react::context::ContextManager::is_manual_clear_context_message,
+            )
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        messages
             .into_iter()
+            .skip(completion_start.max(manual_clear_start))
+            .collect()
+    }
+
+    fn durable_current_task_messages(&self) -> Result<Vec<WorkflowMessage>, WorkflowEngineError> {
+        let snapshot = self
+            .context
+            .main_store
+            .get_workflow_snapshot(&self.session_id)
+            .map_err(WorkflowEngineError::Db)?;
+        Ok(Self::current_task_messages_from_durable_history(
+            snapshot.messages,
+        ))
+    }
+
+    fn strip_embedded_system_reminders(content: &str) -> String {
+        let mut sanitized = content.to_string();
+        loop {
+            let Some(start) = sanitized.find("<SYSTEM_REMINDER>") else {
+                break;
+            };
+            let Some(end) = sanitized[start..].find("</SYSTEM_REMINDER>") else {
+                sanitized.truncate(start);
+                break;
+            };
+            let end = start + end + "</SYSTEM_REMINDER>".len();
+            sanitized.replace_range(start..end, "");
+        }
+        sanitized.trim().to_string()
+    }
+
+    fn review_payload_user_messages(messages: &[WorkflowMessage]) -> Vec<Value> {
+        messages
+            .iter()
+            .filter(|message| {
+                message.role == "user"
+                    && message.step_type.as_deref() != Some("observe")
+                    && (!message.message.trim().is_empty()
+                        || message
+                            .attached_context
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty())
+                        || message.metadata.is_some())
+            })
+            .map(|message| {
+                let mut payload = serde_json::Map::new();
+                payload.insert("id".to_string(), json!(message.id));
+                let content = Self::strip_embedded_system_reminders(&message.message);
+                if !content.is_empty() {
+                    payload.insert("content".to_string(), json!(content));
+                }
+                if let Some(timestamp) = message.created_at.as_ref() {
+                    payload.insert("timestamp".to_string(), json!(timestamp));
+                }
+                if let Some(attached_context) = message.attached_context.as_deref() {
+                    if !attached_context.trim().is_empty() {
+                        payload.insert("attached_context".to_string(), json!(attached_context));
+                    }
+                }
+                if let Some(metadata) = message.metadata.as_ref() {
+                    payload.insert("metadata".to_string(), metadata.clone());
+                }
+                Value::Object(payload)
+            })
+            .collect()
+    }
+
+    fn bounded_review_text(value: Option<&str>) -> Option<String> {
+        const MAX_CHARS: usize = 2_000;
+        let value = value.map(str::trim).filter(|value| !value.is_empty())?;
+        let mut bounded = value.chars().take(MAX_CHARS).collect::<String>();
+        if value.chars().count() > MAX_CHARS {
+            bounded.push_str("\n...[truncated]");
+        }
+        Some(bounded)
+    }
+
+    fn compact_review_verdict(verdict: &Value) -> Value {
+        const MAX_ITEMS: usize = 12;
+        let findings_total = verdict
+            .get("findings")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        let required_fixes_total = verdict
+            .get("required_fixes")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        let findings = verdict
+            .get("findings")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(MAX_ITEMS)
+            .map(|finding| {
+                json!({
+                    "severity": finding.get("severity").cloned().unwrap_or(Value::Null),
+                    "file": finding.get("file").cloned().unwrap_or(Value::Null),
+                    "detail": Self::bounded_review_text(
+                        finding.get("detail").and_then(Value::as_str)
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let required_fixes = verdict
+            .get("required_fixes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .take(MAX_ITEMS)
+            .filter_map(|item| Self::bounded_review_text(Some(item)))
+            .collect::<Vec<_>>();
+        json!({
+            "approved": verdict.get("approved").cloned().unwrap_or(Value::Bool(false)),
+            "summary": Self::bounded_review_text(verdict.get("summary").and_then(Value::as_str)),
+            "findings": findings,
+            "required_fixes": required_fixes,
+            "findings_omitted": findings_total.saturating_sub(findings.len()),
+            "required_fixes_omitted": required_fixes_total.saturating_sub(required_fixes.len())
+        })
+    }
+
+    fn review_payload_previous_results(messages: &[WorkflowMessage]) -> Vec<Value> {
+        let mut seen = HashSet::new();
+        let mut results = messages
+            .iter()
+            .rev()
             .filter_map(|message| {
-                let metadata = message.metadata?;
-                if metadata
-                    .get("message_kind")
-                    .and_then(|value| value.as_str())
+                let metadata = message.metadata.as_ref()?;
+                if metadata.get("message_kind").and_then(Value::as_str)
                     != Some("final_review_feedback")
                 {
                     return None;
                 }
 
-                let verdict = metadata.get("review_verdict")?.clone();
-                let summary = metadata
-                    .get("review_summary")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or_default()
-                    .to_string();
+                let verdict = Self::compact_review_verdict(metadata.get("review_verdict")?);
+                let summary = Self::bounded_review_text(
+                    metadata.get("review_summary").and_then(Value::as_str),
+                );
+                let fingerprint = serde_json::to_string(&json!({
+                    "summary": summary,
+                    "verdict": verdict
+                }))
+                .unwrap_or_default();
+                if !seen.insert(fingerprint) {
+                    return None;
+                }
                 Some(json!({
                     "sub_agent_id": metadata.get("sub_agent_id").cloned().unwrap_or(Value::Null),
                     "summary": summary,
                     "verdict": verdict
                 }))
             })
-            .collect()
+            .collect::<Vec<_>>();
+        results.reverse();
+        results
+    }
+
+    fn final_review_optional_context_budget(reviewer_context_limit: usize) -> usize {
+        reviewer_context_limit.saturating_div(2).min(100_000).max(1)
+    }
+
+    fn estimated_payload_tokens(payload: &serde_json::Map<String, Value>) -> usize {
+        let serialized = serde_json::to_string(payload).unwrap_or_default();
+        crate::ccproxy::utils::token_estimator::estimate_tokens(&serialized).ceil() as usize
+    }
+
+    fn select_previous_review_results(
+        payload: &mut serde_json::Map<String, Value>,
+        previous_results: Vec<Value>,
+        token_budget: usize,
+    ) -> (usize, usize) {
+        let total = previous_results.len();
+        let mut selected = Vec::new();
+        for result in previous_results.into_iter().rev() {
+            let mut candidate = selected.clone();
+            candidate.push(result);
+            payload.insert(
+                "previous_review_results".to_string(),
+                Value::Array(candidate.clone()),
+            );
+            if !selected.is_empty() && Self::estimated_payload_tokens(payload) > token_budget {
+                payload.insert(
+                    "previous_review_results".to_string(),
+                    Value::Array(selected.clone()),
+                );
+                break;
+            }
+            selected = candidate;
+        }
+        if selected.is_empty() {
+            payload.remove("previous_review_results");
+        } else {
+            selected.reverse();
+            payload.insert(
+                "previous_review_results".to_string(),
+                Value::Array(selected.clone()),
+            );
+        }
+        (total.saturating_sub(selected.len()), selected.len())
     }
 
     fn structured_tool_arguments(metadata: &Value) -> Option<Value> {
@@ -364,6 +558,19 @@ impl WorkflowExecutor {
         Some(excerpt)
     }
 
+    fn review_mutation_details(details: Option<&Value>) -> Value {
+        let Some(details) = details else {
+            return Value::Null;
+        };
+
+        json!({
+            "file_path": details.get("file_path").cloned().unwrap_or(Value::Null),
+            "path": details.get("path").cloned().unwrap_or(Value::Null),
+            "start_line": details.get("start_line").cloned().unwrap_or(Value::Null),
+            "end_line": details.get("end_line").cloned().unwrap_or(Value::Null)
+        })
+    }
+
     pub(crate) fn build_final_review_evidence(messages: &[WorkflowMessage]) -> Value {
         let mut mutation_ledger = Vec::new();
         let mut verification_ledger = Vec::new();
@@ -403,7 +610,7 @@ impl WorkflowExecutor {
                         .cloned()
                         .unwrap_or(Value::Null),
                     "summary": summary,
-                    "details": details.cloned().unwrap_or(Value::Null)
+                    "details": Self::review_mutation_details(details)
                 }));
             }
 
@@ -453,44 +660,37 @@ impl WorkflowExecutor {
         completion_summary: &str,
         completion_report_provenance: &Value,
         todo_status_overrides: &HashMap<String, String>,
-    ) -> String {
-        let user_messages = self
-            .context
-            .current_user_messages_since_last_completion()
-            .into_iter()
-            .map(|message| {
-                let mut payload = serde_json::Map::new();
-                payload.insert("id".to_string(), json!(message.id));
-                if !message.message.trim().is_empty() {
-                    payload.insert("content".to_string(), json!(message.message));
-                }
-                if let Some(timestamp) = message.created_at {
-                    payload.insert("timestamp".to_string(), json!(timestamp));
-                }
-                if let Some(attached_context) = message.attached_context {
-                    if !attached_context.trim().is_empty() {
-                        payload.insert("attached_context".to_string(), json!(attached_context));
-                    }
-                }
-                if let Some(metadata) = message.metadata {
-                    payload.insert("metadata".to_string(), metadata);
-                }
-                Value::Object(payload)
-            })
-            .collect::<Vec<_>>();
-        let approved_plan = self.context.current_approved_plan_since_last_completion();
-        let acceptance_contract = self
-            .context
-            .messages_since_last_completion()
-            .into_iter()
+        reviewer_context_limit: usize,
+    ) -> Result<String, WorkflowEngineError> {
+        let task_messages = self.durable_current_task_messages()?;
+        let user_messages = Self::review_payload_user_messages(&task_messages);
+        let approved_plan_message = task_messages
+            .iter()
             .rev()
-            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
-            .and_then(|message| message.metadata)
-            .and_then(|metadata| metadata.get("acceptance_contract").cloned());
-        let changed_files = self.review_payload_changed_files();
-        let evidence_messages = self.context.messages_since_last_completion();
-        let evidence = Self::build_final_review_evidence(&evidence_messages);
-        let previous_review_results = self.review_payload_previous_results();
+            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"));
+        let approved_plan = approved_plan_message
+            .and_then(|message| message.metadata.as_ref())
+            .and_then(|metadata| metadata.get("plan_content"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let acceptance_contract = approved_plan_message
+            .and_then(|message| message.metadata.as_ref())
+            .and_then(|metadata| metadata.get("acceptance_contract"))
+            .cloned();
+        let latest_compression_summary = task_messages
+            .iter()
+            .rev()
+            .find(|message| {
+                crate::workflow::react::context::ContextManager::is_compression_summary_message(
+                    message,
+                )
+            })
+            .map(|message| message.message.clone());
+        let changed_files = Self::review_payload_changed_files(&task_messages);
+        let evidence = Self::build_final_review_evidence(&task_messages);
+        let previous_review_results = Self::review_payload_previous_results(&task_messages);
         let todo_status =
             self.context
                 .main_store
@@ -520,6 +720,13 @@ impl WorkflowExecutor {
         payload.insert("review_type".to_string(), json!("final_review"));
         payload.insert("workflow_session_id".to_string(), json!(self.session_id));
         payload.insert("user_messages".to_string(), json!(user_messages));
+        payload.insert(
+            "task_context_source".to_string(),
+            json!({
+                "kind": "durable_current_task_transcript",
+                "message_count": task_messages.len()
+            }),
+        );
         payload.insert("completion_report".to_string(), json!(completion_summary));
         payload.insert(
             "completion_report_provenance".to_string(),
@@ -532,10 +739,8 @@ impl WorkflowExecutor {
                 evidence.get(key).cloned().unwrap_or_else(|| json!([])),
             );
         }
-        if let Some(approved_plan) = approved_plan {
-            if !approved_plan.trim().is_empty() {
-                payload.insert("approved_plan".to_string(), json!(approved_plan));
-            }
+        if let Some(approved_plan) = approved_plan.as_ref() {
+            payload.insert("approved_plan".to_string(), json!(approved_plan));
         }
         if let Some(acceptance_contract) = acceptance_contract {
             payload.insert("acceptance_contract".to_string(), acceptance_contract);
@@ -543,27 +748,89 @@ impl WorkflowExecutor {
         if !todo_status.is_empty() {
             payload.insert("todo_status".to_string(), json!(todo_status));
         }
-        if !previous_review_results.is_empty() {
-            payload.insert(
-                "previous_review_results".to_string(),
-                json!(previous_review_results),
+
+        let context_limit = reviewer_context_limit.max(1);
+        let token_budget = Self::final_review_optional_context_budget(context_limit);
+        let planned_mode = approved_plan.is_some();
+        let mut compression_summary_included = false;
+        if !planned_mode {
+            if let Some(summary) = latest_compression_summary.as_ref() {
+                payload.insert("runtime_snapshot".to_string(), json!(summary));
+                compression_summary_included = true;
+            }
+        }
+
+        let (reviews_omitted, reviews_included) = Self::select_previous_review_results(
+            &mut payload,
+            previous_review_results,
+            token_budget,
+        );
+
+        if planned_mode && Self::estimated_payload_tokens(&payload) < token_budget {
+            if let Some(summary) = latest_compression_summary.as_ref() {
+                let summary_tokens =
+                    crate::ccproxy::utils::token_estimator::estimate_tokens(summary).ceil()
+                        as usize;
+                payload.insert("runtime_snapshot".to_string(), json!(summary));
+                let payload_tokens_with_summary = Self::estimated_payload_tokens(&payload);
+                if payload_tokens_with_summary <= token_budget {
+                    compression_summary_included = true;
+                } else {
+                    payload.remove("runtime_snapshot");
+                    log::debug!(
+                        "[Workflow][session={}][phase=final_review_context] Omitted compression summary because it exceeded the reviewer optional-context budget: reviewer_context_limit={}, optional_budget={}, payload_tokens_with_summary={}, summary_tokens={}",
+                        self.session_id,
+                        context_limit,
+                        token_budget,
+                        payload_tokens_with_summary,
+                        summary_tokens
+                    );
+                }
+            }
+        }
+
+        let estimated_tokens = Self::estimated_payload_tokens(&payload);
+        if estimated_tokens > token_budget || reviews_omitted > 0 {
+            log::debug!(
+                "[Workflow][session={}][phase=final_review_context] Final review context budget decision: reviewer_context_limit={}, optional_budget={}, estimated_payload_tokens={}, planned_mode={}, compression_summary_included={}, previous_reviews_included={}, previous_reviews_omitted={}",
+                self.session_id,
+                context_limit,
+                token_budget,
+                estimated_tokens,
+                planned_mode,
+                compression_summary_included,
+                reviews_included,
+                reviews_omitted
             );
         }
+        payload.insert(
+            "context_budget".to_string(),
+            json!({
+                "reviewer_model_context_limit": context_limit,
+                "optional_context_token_budget": token_budget,
+                "estimated_payload_tokens_before_budget_metadata": estimated_tokens,
+                "compression_summary_included": compression_summary_included,
+                "previous_review_results_included": reviews_included,
+                "previous_review_results_omitted": reviews_omitted
+            }),
+        );
         let payload = Value::Object(payload);
         let payload_text =
             serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
-        format!(
+        Ok(format!(
             "Review the parent workflow's completion package below. Perform an independent final review using the read-only inspection tools configured for your domain.\n\n\
 Return the final verdict ONLY by calling `submit_result`.\n\
 - `submit_result.result` MUST be a JSON object with this schema:\n\
   {{\"approved\": boolean, \"summary\": string, \"findings\": [{{\"severity\": \"blocker|major|minor|info\", \"file\": string|null, \"detail\": string}}], \"required_fixes\": [string]}}\n\
-- You will also receive `previous_review_results`; use them to avoid repeating the same rejected reasoning unless the parent has actually addressed those findings.\n\
+- `user_messages` is the authoritative current-task user input recovered from the durable transcript.\n\
+- `runtime_snapshot`, when present, is a derived compression snapshot and must not override user messages, the approved plan, or structured evidence.\n\
+- `previous_review_results` contains the newest review rounds that fit the context budget; use them to avoid repeating rejected reasoning and verify whether required fixes were addressed.\n\
 - If the work should not be allowed to finish, set `approved` to false and provide concrete required fixes.\n\
 - If the work is acceptable, set `approved` to true and keep findings minimal.\n\
 - Do not modify the deliverable. Inspect relevant evidence directly with your available read/search tools when needed.\n\n\
 <final_review_package>\n{}\n</final_review_package>",
             payload_text
-        )
+        ))
     }
 
     async fn launch_final_review(
@@ -587,22 +854,34 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     ))
                 })?
         };
-        let reviewer_model_configured = reviewer_agent
+        let reviewer_model = reviewer_agent
             .models
             .as_ref()
             .and_then(|models| models.act.as_ref())
-            .is_some_and(|model| !model.model.trim().is_empty());
-        if !reviewer_model_configured {
+            .filter(|model| !model.model.trim().is_empty());
+        let Some(reviewer_model) = reviewer_model else {
             return Err(WorkflowEngineError::General(format!(
                 "Final reviewer '{}' has no act model configured",
                 reviewer_agent.name
             )));
-        }
+        };
+        let reviewer_context_limit = reviewer_model
+            .context_size
+            .filter(|value| *value > 0)
+            .map(|value| value as usize)
+            .or_else(|| {
+                reviewer_agent
+                    .max_contexts
+                    .filter(|value| *value > 0)
+                    .map(|value| value as usize)
+            })
+            .unwrap_or(128_000);
         let review_prompt = self.build_final_review_prompt(
             &completion_summary,
             &completion_report_provenance,
             todo_status_overrides,
-        );
+            reviewer_context_limit,
+        )?;
         let raw_result = spawn_call_sub_agent(
             self.sub_agent_factory.clone(),
             self.context.main_store.clone(),
@@ -2085,114 +2364,12 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }))
     }
 
-    pub(crate) fn resolve_shell_execution_plan(
-        &self,
-        id: &str,
-        command_str: &str,
-    ) -> crate::tools::ShellExecutionPlan {
-        let sandbox_config = self
-            .agent_config
-            .sandbox_config
-            .as_deref()
-            .and_then(crate::tools::AgentSandboxConfig::from_json);
-        let runtime_status =
-            crate::tools::SandboxRuntimeDetector::new(crate::tools::SandboxDetectorOptions {
-                required_images: sandbox_config
-                    .as_ref()
-                    .map(crate::tools::AgentSandboxConfig::required_images)
-                    .unwrap_or_default(),
-                ..crate::tools::SandboxDetectorOptions::default()
-            })
-            .detect();
-        let (primary_root, mount_context) = self
-            .path_guard
-            .read()
-            .map(|guard| {
-                let skill_roots = guard.skill_roots();
-                (
-                    guard.get_primary_root().map(|path| path.to_path_buf()),
-                    crate::tools::ShellSandboxMountContext {
-                        authorized_roots: guard.workspace_roots(),
-                        writable_skill_roots: skill_roots
-                            .iter()
-                            .filter(|path| {
-                                crate::workflow::react::security::is_user_skill_path(path)
-                            })
-                            .cloned()
-                            .collect(),
-                        skill_roots,
-                    },
-                )
-            })
-            .unwrap_or((
-                None,
-                crate::tools::ShellSandboxMountContext {
-                    authorized_roots: Vec::new(),
-                    skill_roots: Vec::new(),
-                    writable_skill_roots: Vec::new(),
-                },
-            ));
-        crate::tools::ShellExecutionResolver::complete_sandbox_mounts(
-            crate::tools::ShellExecutionResolver::resolve(
-                id,
-                command_str,
-                sandbox_config.as_ref(),
-                &runtime_status,
-                primary_root.as_deref(),
-            ),
-            &mount_context,
-        )
-    }
-
     pub(crate) async fn prepare_authorized_bash_execution(
         &mut self,
-        id: &str,
-        args: &serde_json::Value,
+        _id: &str,
+        _args: &serde_json::Value,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
-        let command = args
-            .get("command")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        let mut plan = self.resolve_shell_execution_plan(id, command);
-        if plan.status != crate::tools::ShellExecutionPlanStatus::ConsentRequired {
-            return Ok(None);
-        }
-        let fallback_reason = plan.fallback_reason.clone();
-        let sandbox_route_context = self
-            .agent_config
-            .sandbox_config
-            .as_deref()
-            .and_then(crate::tools::AgentSandboxConfig::from_json)
-            .map(|config| {
-                serde_json::json!({
-                    "required_command_patterns": crate::tools::required_command_patterns(&config),
-                    "matched_command_units": crate::tools::command_match_units(command),
-                })
-            })
-            .unwrap_or_else(|| {
-                serde_json::json!({
-                    "required_command_patterns": [],
-                    "matched_command_units": crate::tools::command_match_units(command),
-                })
-            });
-        plan.status = crate::tools::ShellExecutionPlanStatus::Ready;
-        plan.backend_origin = crate::tools::ShellExecutionBackendOrigin::ApprovedHostFallback;
-        let details = serde_json::json!({
-            "approval_kind": "host_fallback",
-            "command": command,
-            "execution_plan": plan,
-            "fallback_reason": fallback_reason,
-            "required_command_patterns": sandbox_route_context["required_command_patterns"],
-            "matched_command_units": sandbox_route_context["matched_command_units"],
-        });
-        self.handle_approval_interception(
-            id,
-            TOOL_BASH,
-            args,
-            Some(command.to_string()),
-            Some(details),
-        )
-        .await
+        Ok(None)
     }
 
     pub(crate) async fn handle_bash_security_intercept(
@@ -2529,7 +2706,10 @@ Return the final verdict ONLY by calling `submit_result`.\n\
 mod tests {
     use super::{SmartApprovalDecision, WorkflowExecutor};
     use crate::db::WorkflowMessage;
-    use crate::tools::{TOOL_BASH, TOOL_EDIT_FILE, TOOL_READ_FILE, TOOL_WRITE_FILE};
+    use crate::tools::{
+        TOOL_BASH, TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_READ_FILE, TOOL_WRITE_FILE,
+    };
+    use crate::workflow::react::constants::TASK_FINISHED;
     use crate::workflow::react::policy::ExecutionPhase;
     use crate::workflow::react::types::{PendingCompletionReport, SubAgentCompletion};
     use serde_json::json;
@@ -3048,6 +3228,144 @@ mod tests {
         ));
     }
 
+    fn workflow_message(
+        id: i64,
+        role: &str,
+        message: &str,
+        step_type: Option<&str>,
+        metadata: Option<serde_json::Value>,
+    ) -> WorkflowMessage {
+        WorkflowMessage {
+            id: Some(id),
+            session_id: "final-review-context".to_string(),
+            role: role.to_string(),
+            message: message.to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata,
+            attached_context: None,
+            step_type: step_type.map(str::to_string),
+            step_index: id as i32,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn durable_task_slice_starts_after_the_last_successful_completion() {
+        let messages = vec![
+            workflow_message(1, "user", "Completed task", None, None),
+            workflow_message(
+                2,
+                "tool",
+                TASK_FINISHED,
+                Some("observe"),
+                Some(json!({
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
+                    "execution_status": "completed"
+                })),
+            ),
+            workflow_message(3, "user", "Current task", None, None),
+            workflow_message(4, "user", "Runtime observation", Some("observe"), None),
+        ];
+
+        let current = WorkflowExecutor::current_task_messages_from_durable_history(messages);
+        assert_eq!(
+            current
+                .iter()
+                .filter_map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+        let user_messages = WorkflowExecutor::review_payload_user_messages(&current);
+        assert_eq!(user_messages.len(), 1);
+        assert_eq!(user_messages[0]["content"], "Current task");
+    }
+
+    #[test]
+    fn final_review_optional_context_budget_caps_half_of_a_256k_reviewer_window() {
+        assert_eq!(
+            WorkflowExecutor::final_review_optional_context_budget(256_000),
+            100_000
+        );
+        assert_eq!(
+            WorkflowExecutor::final_review_optional_context_budget(128_000),
+            64_000
+        );
+        assert_eq!(WorkflowExecutor::final_review_optional_context_budget(1), 1);
+    }
+
+    #[test]
+    fn review_history_deduplicates_identical_feedback_and_keeps_the_latest_round() {
+        let feedback = json!({
+            "message_kind": "final_review_feedback",
+            "review_summary": "Fix the missing test",
+            "review_verdict": {
+                "approved": false,
+                "summary": "A focused regression test is required",
+                "findings": [],
+                "required_fixes": ["Add the missing test"]
+            }
+        });
+        let messages = vec![
+            workflow_message(
+                1,
+                "tool",
+                "Earlier feedback",
+                Some("observe"),
+                Some(feedback.clone()),
+            ),
+            workflow_message(
+                2,
+                "tool",
+                "Latest feedback",
+                Some("observe"),
+                Some(feedback),
+            ),
+        ];
+
+        let results = WorkflowExecutor::review_payload_previous_results(&messages);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["sub_agent_id"], json!(null));
+        assert_eq!(results[0]["summary"], "Fix the missing test");
+    }
+
+    #[test]
+    fn review_history_budget_keeps_the_newest_rounds_that_fit() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("base".to_string(), json!("base"));
+        let rounds = (1..=3)
+            .map(|round| json!({"round": round, "detail": "x".repeat(200)}))
+            .collect::<Vec<_>>();
+
+        let (omitted, included) =
+            WorkflowExecutor::select_previous_review_results(&mut payload, rounds, 100);
+
+        assert_eq!(included, 1);
+        assert_eq!(omitted, 2);
+        assert_eq!(payload["previous_review_results"][0]["round"], 3);
+        assert!(WorkflowExecutor::estimated_payload_tokens(&payload) <= 100);
+    }
+
+    #[test]
+    fn review_user_messages_strip_runtime_reminders_without_losing_user_text() {
+        let messages = vec![workflow_message(
+            1,
+            "user",
+            "Implement the fix\n<SYSTEM_REMINDER>Runtime-only guidance</SYSTEM_REMINDER>",
+            None,
+            None,
+        )];
+
+        let user_messages = WorkflowExecutor::review_payload_user_messages(&messages);
+        assert_eq!(user_messages.len(), 1);
+        assert_eq!(user_messages[0]["content"], "Implement the fix");
+    }
+
     fn tool_message(
         id: i64,
         message: &str,
@@ -3085,7 +3403,11 @@ mod tests {
                     "tool_name": "edit_file",
                     "execution_status": "completed",
                     "summary": "Updated completion resolution",
-                    "details": {"file_path": "src/runtime.rs", "start_line": 10}
+                    "details": {
+                        "file_path": "src/runtime.rs",
+                        "start_line": 10,
+                        "new_string": "full replacement content must stay out of the review package"
+                    }
                 }),
             ),
             tool_message(
@@ -3139,6 +3461,10 @@ mod tests {
 
         assert_eq!(evidence["mutation_ledger"].as_array().unwrap().len(), 1);
         assert_eq!(evidence["mutation_ledger"][0]["path"], "src/runtime.rs");
+        assert_eq!(evidence["mutation_ledger"][0]["details"]["start_line"], 10);
+        assert!(!evidence
+            .to_string()
+            .contains("full replacement content must stay out of the review package"));
         assert_eq!(evidence["verification_ledger"].as_array().unwrap().len(), 2);
         assert_eq!(
             evidence["verification_ledger"][0]["command"],

@@ -2,7 +2,7 @@
   <el-dialog
     v-if="!inline"
     :model-value="modelValue"
-    :title="t('workflow.approval.hostFallbackTitle')"
+    :title="t('workflow.approval.title')"
     width="560px"
     append-to-body
     class="approval-dialog"
@@ -86,7 +86,7 @@
           $t('common.approve')
         }}</el-button>
         <el-button
-          v-if="!isPlanApproval && !isHostFallback"
+          v-if="!isPlanApproval"
           type="success"
           @click="onApproveAll"
           :loading="loading"
@@ -94,7 +94,7 @@
           >{{ $t('common.approveAndAddToWhitelist') }}</el-button
         >
         <el-button
-          v-if="!isPlanApproval && !isHostFallback && pendingCount > 1"
+          v-if="!isPlanApproval && pendingCount > 1"
           type="warning"
           @click="onApproveAllPending"
           :loading="loading"
@@ -235,9 +235,6 @@ const isEditAction = computed(() => {
 })
 
 const isShellAction = computed(() => normalizedToolName.value === 'bash')
-const isHostFallback = computed(
-  () => detailsObject.value?.approval_kind === 'host_fallback'
-)
 const isPlanApproval = computed(() => normalizedToolName.value === 'submit_plan')
 const isMarkdownAction = computed(() => {
   if (props.displayType === 'markdown') {

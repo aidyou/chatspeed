@@ -1660,12 +1660,13 @@ const updateAgent = () => {
         const selectedScheme = sandboxSchemeStore.schemes.find(
           scheme => scheme.id === finalForm.sandboxSchemeId
         )
-        const hasCatchAllProfile = selectedScheme?.config?.profiles?.some(
-          profile => profile.enabled !== false && (profile.commandPatterns || []).some(
-            pattern => ['.*', '^.*', '.*$', '^.*$'].includes(String(pattern).trim())
-          )
+        const commonProfiles = (selectedScheme?.config?.profiles || []).filter(
+          profile => profile.enabled !== false && (profile.commandPatterns || []).length > 0 &&
+            (profile.commandPatterns || []).every(pattern =>
+              ['.*', '^.*', '.*$', '^.*$'].includes(String(pattern).trim())
+            )
         )
-        if (hasCatchAllProfile) {
+        if (commonProfiles.length !== 1) {
           showMessage(t('settings.agent.sandboxAutoCommonUnavailable'), 'error')
           return
         }
