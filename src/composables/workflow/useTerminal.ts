@@ -68,8 +68,7 @@ export function useTerminal(
   const outputBuffers = new Map<string, { chunks: Uint8Array[]; lines: number }>()
   const outputHistory = new Map<string, { chunks: Uint8Array[]; lines: number }>()
   const pendingInput = new Map<string, Promise<void>>()
-  const inputBuffers = new Map<string, string>()
-  const inputFlushTimers = new Map<string, number>()
+  const inputQueues = new Map<string, string[]>()
   let persistOutputTimer: number | null = null
   let unlisteners: Array<() => void> = []
 
@@ -219,10 +218,7 @@ export function useTerminal(
     outputBuffers.delete(sessionId)
     outputHistory.delete(sessionId)
     pendingInput.delete(sessionId)
-    inputBuffers.delete(sessionId)
-    const inputFlushTimer = inputFlushTimers.get(sessionId)
-    if (inputFlushTimer !== undefined) window.clearTimeout(inputFlushTimer)
-    inputFlushTimers.delete(sessionId)
+    inputQueues.delete(sessionId)
     scheduleOutputPersistence()
     state.tabs = state.tabs.filter(tab => tab.sessionId !== sessionId)
     if (state.activeSessionId === sessionId) state.activeSessionId = state.tabs[0]?.sessionId || null
@@ -257,33 +253,40 @@ export function useTerminal(
     state.activeSessionId = replacement.sessionId
     state.visible = true
   }
-  const queueWrite = (sessionId: string, input: string) => {
-    const previous = pendingInput.get(sessionId) || Promise.resolve()
-    const settled = previous
-      .catch(() => undefined)
-      .then(() => invokeWrapper('terminal_write', { sessionId, input }))
-      .catch(() => undefined)
-    pendingInput.set(sessionId, settled)
-    return settled
-  }
-  const flushInput = (sessionId: string) => {
-    const inputFlushTimer = inputFlushTimers.get(sessionId)
-    if (inputFlushTimer !== undefined) window.clearTimeout(inputFlushTimer)
-    inputFlushTimers.delete(sessionId)
-    const input = inputBuffers.get(sessionId)
-    inputBuffers.delete(sessionId)
-    return input ? queueWrite(sessionId, input) : Promise.resolve()
+  const queueWrite = (sessionId: string) => {
+    const pending = pendingInput.get(sessionId)
+    if (pending) return pending
+
+    const drain = (async () => {
+      while (true) {
+        const queue = inputQueues.get(sessionId)
+        const input = queue?.shift()
+        if (!input) {
+          inputQueues.delete(sessionId)
+          break
+        }
+        if (queue.length === 0) inputQueues.delete(sessionId)
+        await invokeWrapper('terminal_write', { sessionId, input })
+      }
+    })()
+    pendingInput.set(sessionId, drain)
+    void drain
+      .catch(error => {
+        console.error('Failed to write workflow terminal input:', error)
+      })
+      .finally(() => {
+        if (pendingInput.get(sessionId) !== drain) return
+        pendingInput.delete(sessionId)
+        // Input can arrive after the drain observes an empty queue but before this cleanup runs.
+        if (inputQueues.has(sessionId)) void queueWrite(sessionId)
+      })
+    return drain
   }
   const write = (sessionId: string, input: string) => {
-    inputBuffers.set(sessionId, `${inputBuffers.get(sessionId) || ''}${input}`)
-    // Submit, control sequences, and paste-sized chunks must reach interactive programs now.
-    if (input.includes('\r') || input.includes('\n') || /[\u0000-\u001f]/.test(input) || input.length > 64) {
-      return flushInput(sessionId)
-    }
-    if (!inputFlushTimers.has(sessionId)) {
-      inputFlushTimers.set(sessionId, window.setTimeout(() => void flushInput(sessionId), 8))
-    }
-    return Promise.resolve()
+    const queue = inputQueues.get(sessionId) || []
+    queue.push(input)
+    inputQueues.set(sessionId, queue)
+    return queueWrite(sessionId)
   }
   const resize = (sessionId: string, cols: number, rows: number) => invokeWrapper('terminal_resize', { sessionId, cols, rows })
   const registerWriter = (
@@ -346,9 +349,7 @@ export function useTerminal(
         outputBuffers.clear()
         outputHistory.clear()
         pendingInput.clear()
-        inputBuffers.clear()
-        for (const inputFlushTimer of inputFlushTimers.values()) window.clearTimeout(inputFlushTimer)
-        inputFlushTimers.clear()
+        inputQueues.clear()
         localStorage.removeItem(TERMINAL_OUTPUT_STORAGE_KEY)
         localStorage.removeItem(TERMINAL_PANEL_STORAGE_KEY)
         state.tabs = []
@@ -361,7 +362,7 @@ export function useTerminal(
   }
 
   const persistBeforePageExit = () => {
-    for (const sessionId of inputBuffers.keys()) void flushInput(sessionId)
+    for (const sessionId of inputQueues.keys()) void queueWrite(sessionId)
     persistOutput()
     persistPanelState()
   }

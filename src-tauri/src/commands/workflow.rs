@@ -46,7 +46,7 @@ use tauri::{AppHandle, Manager, State};
 #[cfg(test)]
 use rusqlite::params;
 
-const UI_WORKFLOW_MESSAGE_PAGE_SIZE: usize = 200;
+const UI_WORKFLOW_MESSAGE_PAGE_SIZE: usize = 300;
 
 // ==========================================
 // 0. Helper Functions for @mentions

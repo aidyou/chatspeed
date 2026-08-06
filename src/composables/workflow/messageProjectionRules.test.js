@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 
 import {
+  buildWorkflowTaskGroups,
   collectSubAgentCompletions,
   dedupeQueuedUserMessageProjection,
   excludeLeadingManualClearContextMarkers,
+  excludeLeadingWorkflowTaskBoundaryMessages,
   excludeManualClearContextMarkers,
   getStructuredWorkflowToolName,
   getWorkflowPersistedMessageId,
@@ -401,6 +403,35 @@ assert.deepEqual(
   ['active-message'],
   'the active task group must not retain an orphan new-session marker'
 )
+
+const unifiedBoundaryGroups = buildWorkflowTaskGroups(
+  [
+    { id: 'task-a-content', role: 'user' },
+    { id: 'task-a-completion', role: 'tool', metadata: { tool_name: 'complete_workflow' } },
+    clearContextMarker,
+    { id: 'task-b-content', role: 'assistant' },
+    { ...clearContextMarker, id: 'task-b-clear-context' },
+    { id: 'task-c-content', role: 'user' }
+  ],
+  { buildGroupId: messages => messages.map(message => message.id).join(':') }
+)
+assert.deepEqual(
+  unifiedBoundaryGroups.map(group => group.messages.map(message => message.id)),
+  [
+    ['task-a-content', 'task-a-completion', 'clear-context-marker'],
+    ['task-b-content', 'task-b-clear-context'],
+    ['task-c-content']
+  ],
+  'completion and clear-context boundaries must close and remain attached to preceding content'
+)
+assert.deepEqual(
+  buildWorkflowTaskGroups([
+    { id: 'boundary-only-completion', role: 'tool', metadata: { tool_name: 'complete_workflow' } },
+    clearContextMarker
+  ]),
+  [],
+  'task boundary messages must never form a standalone task group'
+)
 assert.deepEqual(
   excludeManualClearContextMarkers([
     clearContextMarker,
@@ -515,11 +546,11 @@ const boundaryWindow = selectVisibleWorkflowMessageWindow(
   ],
   300
 )
-assert.equal(boundaryWindow.hiddenMessageCount, 1)
+assert.equal(boundaryWindow.hiddenMessageCount, 3)
 assert.deepEqual(
   boundaryWindow.groups[0].messages.slice(0, 2).map(message => message.id),
-  ['boundary-completion', 'clear-context-marker'],
-  'the visible-message limit must keep complete_workflow with its following new-session marker'
+  ['active-1', 'active-2'],
+  'task boundary messages must stay on the hidden side instead of forming a visible segment'
 )
 
 const longRunningTaskMessages = Array.from({ length: 5000 }, (_, index) => ({
@@ -548,30 +579,14 @@ const createTaskWindowHarness = () => {
   const getIdentity = (message, index) => String(message?.id || `message:${index}`)
   const buildGroupId = messages => messages.map(message => message.id).join(':')
   const isAcceptedCompletionMessage = message => message?.isAcceptedCompletion === true
-  const buildTaskGroups = (messages, allowPersistedCompletionFallback = false) => {
-    const groups = []
-    let currentMessages = []
-
-    const pushGroup = isCompleted => {
-      if (!currentMessages.length) return
-      groups.push({
-        id: buildGroupId(currentMessages),
-        isCompleted,
-        messages: currentMessages
-      })
-      currentMessages = []
-    }
-
-    for (const message of messages) {
-      currentMessages.push(message)
-      const isBoundary =
+  const buildTaskGroups = (messages, allowPersistedCompletionFallback = false) =>
+    buildWorkflowTaskGroups(messages, {
+      buildGroupId,
+      preserveLeadingBoundaries: true,
+      isCompletionBoundary: message =>
         acceptedCompletionIds.has(getToolCallId(message)) ||
         (allowPersistedCompletionFallback && isAcceptedCompletionMessage(message))
-      if (isBoundary) pushGroup(true)
-    }
-    pushGroup(false)
-    return mergeManualClearContextMarkersIntoPreviousGroups(groups, buildGroupId)
-  }
+    })
 
   return {
     acceptedCompletionIds,
@@ -715,14 +730,14 @@ const activeBoundaryGroups = selectVisibleWorkflowTaskGroups(
 )
 assert.deepEqual(
   activeBoundaryGroups.flatMap(group => group.messages.map(message => message.id)),
-  ['task-1-completion', 'clear-context-marker', 'task-2-user'],
-  'the default task window must bridge complete_workflow and the new-session divider into active work'
+  ['task-2-user'],
+  'adjacent complete_workflow and clear-context markers must stay in the previous task group'
 )
 const exactBoundaryWindow = selectVisibleWorkflowMessageWindow(
   [
-    activeBoundaryGroups[0],
+    incrementalState.completedGroups[0],
     {
-      ...activeBoundaryGroups[1],
+      ...activeBoundaryGroups[0],
       messages: [
         taskTwoUser,
         ...Array.from({ length: 298 }, (_, index) => ({ id: `task-2-message-${index + 2}` }))
@@ -736,8 +751,37 @@ assert.deepEqual(
     .flatMap(group => group.messages)
     .slice(0, 3)
     .map(message => message.id),
-  ['task-1-completion', 'clear-context-marker', 'task-2-user'],
-  'complete_workflow must remain immediately before the new-session divider at the 300-message edge'
+  ['task-2-user', 'task-2-message-2', 'task-2-message-3'],
+  'the 300-message limit must keep task boundaries attached to hidden earlier content'
+)
+
+const separatedClearContextBoundaryGroups = selectVisibleWorkflowTaskGroups(
+  [
+    {
+      id: 'separated-clear-context-boundary',
+      isCompleted: true,
+      messages: [
+        taskOneUser,
+        taskOneCompletion,
+        { id: 'message-before-clear-context', role: 'assistant' },
+        markerAfterCompletion
+      ]
+    }
+  ],
+  {
+    id: 'active-after-separated-boundary',
+    isCompleted: false,
+    messages: [taskTwoUser]
+  },
+  1,
+  true
+)
+assert.deepEqual(
+  separatedClearContextBoundaryGroups.flatMap(group =>
+    group.messages.map(message => message.id)
+  ),
+  ['task-2-user'],
+  'previous task boundaries must never be projected as a standalone group above active work'
 )
 
 const completedAfterClearContext = {
@@ -762,8 +806,8 @@ const visibleUserQuestionGroups = selectVisibleWorkflowTaskGroups(
 )
 assert.deepEqual(
   visibleUserQuestionGroups.flatMap(group => group.messages.map(message => message.id)).slice(0, 3),
-  ['task-1-completion', 'clear-context-marker', 'task-2-user'],
-  'revealing a task that starts after clear-context must include the preceding completion boundary'
+  ['task-2-user', 'task-2-tool', 'task-2-completion-message'],
+  'revealing later tasks must not extract an adjacent completion and clear marker as another group'
 )
 
 const earlierTaskUser = { id: 'task-0-user', role: 'user' }
@@ -779,7 +823,7 @@ incrementalState = completionEventFirst.reconcile([
   ...refreshedMessages
 ])
 assert.equal(incrementalState.completedGroups.length, 2)
-assert.equal(incrementalState.lastCompletionIndex, 3)
+assert.equal(incrementalState.lastCompletionIndex, 4)
 assert.deepEqual(incrementalState.activeMessages.map(message => message.id), ['task-2-user'])
 assert.equal(
   incrementalState.completedGroups
@@ -801,15 +845,20 @@ const cancelledTaskState = cancelledTaskHarness.reconcile([
 ])
 assert.equal(
   cancelledTaskState.completedGroups.length,
-  0,
-  'a cancelled task must not be projected as completed without complete_workflow'
+  1,
+  'manual clear-context must close unfinished work as a completed display segment'
 )
 assert.deepEqual(
-  excludeLeadingManualClearContextMarkers(cancelledTaskState.activeMessages).map(
+  cancelledTaskState.completedGroups[0].messages.map(message => message.id),
+  ['task-1-user', 'clear-context-marker'],
+  'manual clear-context must stay attached to the unfinished work before it'
+)
+assert.deepEqual(
+  excludeLeadingWorkflowTaskBoundaryMessages(cancelledTaskState.activeMessages).map(
     message => message.id
   ),
-  ['task-1-user', 'clear-context-marker'],
-  'a new-session marker after visible cancelled work must remain visible'
+  [],
+  'manual clear-context must leave a new empty task frame after the closed segment'
 )
 
 const cancelledTaskAfterCompletedHistory = createTaskWindowHarness()
@@ -822,15 +871,20 @@ const cancelledTaskWithHistoryState = cancelledTaskAfterCompletedHistory.reconci
 ])
 assert.equal(
   cancelledTaskWithHistoryState.completedGroups.length,
-  1,
-  'completed history must remain available to the earlier-task expansion control'
+  2,
+  'manual clear-context must preserve both earlier completed and manually closed task segments'
 )
 assert.deepEqual(
-  excludeLeadingManualClearContextMarkers(cancelledTaskWithHistoryState.activeMessages).map(
+  cancelledTaskWithHistoryState.completedGroups[1].messages.map(message => message.id),
+  ['task-1-user', 'clear-context-marker'],
+  'the clear-context boundary must remain attached to the immediately preceding work'
+)
+assert.deepEqual(
+  excludeLeadingWorkflowTaskBoundaryMessages(cancelledTaskWithHistoryState.activeMessages).map(
     message => message.id
   ),
-  ['task-1-user', 'clear-context-marker', 'task-2-user'],
-  'cancelled work, its new-session marker, and following work must remain in the active task group'
+  ['task-2-user'],
+  'work after manual clear-context must start a separate active task segment'
 )
 
 const persistedFallbackHarness = createTaskWindowHarness()

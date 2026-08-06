@@ -642,7 +642,7 @@ const revealEarlierMessagesInTaskWindow = async done => {
 
     const loaded = await workflowStore.loadEarlierMessages()
     if (loaded) {
-      revealEarlierMessages()
+      if (!revealLoadedEarlierTaskGroup()) revealEarlierMessages()
     }
   } finally {
     done?.()

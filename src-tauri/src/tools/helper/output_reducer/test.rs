@@ -74,7 +74,7 @@ fn test_framework(command: &str) -> Option<TestFramework> {
             Some(TestFramework::Vitest)
         }
         [runner, executable, framework, ..]
-            if matches!(runner.as_str(), "pnpm" | "yarn")
+            if matches!(runner.as_str(), "npm" | "pnpm" | "yarn")
                 && executable == "exec"
                 && framework == "vitest" =>
         {
@@ -87,7 +87,7 @@ fn test_framework(command: &str) -> Option<TestFramework> {
             Some(TestFramework::Jest)
         }
         [runner, executable, framework, ..]
-            if matches!(runner.as_str(), "pnpm" | "yarn")
+            if matches!(runner.as_str(), "npm" | "pnpm" | "yarn")
                 && executable == "exec"
                 && framework == "jest" =>
         {
@@ -387,8 +387,12 @@ mod tests {
             "uv run python3 -m pytest tests",
             "pnpm vitest run",
             "pnpm exec vitest run",
+            "npm exec vitest run",
             "npx vitest run",
+            "yarn exec vitest run",
             "yarn jest",
+            "npm exec jest --runInBand",
+            "pnpm exec jest --runInBand",
             "npx jest --runInBand",
             "npm test",
             "pnpm run test",

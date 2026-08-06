@@ -199,8 +199,8 @@ const mountTab = (tab: TerminalTab) => {
     return true
   })
   instance.onData(data => {
-    // Queue every keystroke through the per-session bridge so interactive prompts such as SSH
-    // password entry receive input in order instead of overlapping Tauri invocations.
+    // Forward each xterm input chunk to the per-session FIFO bridge so rapid typing reaches the
+    // PTY in order without debounce/coalescing dropping intermediate characters.
     void terminal.write(tab.sessionId, data)
   })
   const observer = new ResizeObserver(() => syncSize(tab.sessionId))

@@ -125,33 +125,71 @@ export const excludeLeadingManualClearContextMarkers = (messages = []) => {
   )
 }
 
+export const isWorkflowTaskBoundaryMessage = message =>
+  isWorkflowCompletionMessage(message) || isWorkflowManualClearContextMessage(message)
+
+export const excludeLeadingWorkflowTaskBoundaryMessages = (messages = []) => {
+  const firstContentIndex = messages.findIndex(message => !isWorkflowTaskBoundaryMessage(message))
+  return firstContentIndex < 0 ? [] : messages.slice(firstContentIndex)
+}
+
+export const buildWorkflowTaskGroups = (
+  messages = [],
+  {
+    buildGroupId = groupMessages => groupMessages[0]?.id || '',
+    isCompletionBoundary = isWorkflowCompletionMessage,
+    preserveLeadingBoundaries = false
+  } = {}
+) => {
+  const groups = []
+  let currentMessages = []
+
+  const pushGroup = isCompleted => {
+    if (!currentMessages.length) return
+    const isBoundaryOnly = currentMessages.every(isWorkflowTaskBoundaryMessage)
+    if (isBoundaryOnly) {
+      if (groups.length) {
+        const previousGroup = groups[groups.length - 1]
+        const previousMessages = [...previousGroup.messages, ...currentMessages]
+        groups[groups.length - 1] = {
+          ...previousGroup,
+          id: buildGroupId(previousMessages),
+          messages: previousMessages
+        }
+      } else if (preserveLeadingBoundaries) {
+        groups.push({
+          id: buildGroupId(currentMessages),
+          isCompleted,
+          messages: currentMessages
+        })
+      }
+    } else {
+      groups.push({
+        id: buildGroupId(currentMessages),
+        isCompleted,
+        messages: currentMessages
+      })
+    }
+    currentMessages = []
+  }
+
+  for (const message of messages) {
+    currentMessages.push(message)
+    if (isCompletionBoundary(message) || isWorkflowManualClearContextMessage(message)) {
+      pushGroup(true)
+    }
+  }
+  pushGroup(false)
+
+  return groups
+}
+
 export const hasOpenWorkflowTaskFrame = (completedGroups = [], activeMessages = []) => {
   if (activeMessages.length) return true
   const latestCompletedMessages = completedGroups[completedGroups.length - 1]?.messages || []
   return isWorkflowManualClearContextMessage(
     latestCompletedMessages[latestCompletedMessages.length - 1]
   )
-}
-
-const buildClearContextBoundaryGroup = group => {
-  const messages = group?.messages || []
-  const trailingMarker = messages[messages.length - 1]
-  if (!isWorkflowManualClearContextMessage(trailingMarker)) return null
-
-  let completionIndex = -1
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (isWorkflowCompletionMessage(messages[index])) {
-      completionIndex = index
-      break
-    }
-  }
-  if (completionIndex < 0) return null
-
-  return {
-    ...group,
-    id: `${group.id}:clear-context-boundary`,
-    messages: messages.slice(completionIndex)
-  }
 }
 
 export const selectVisibleWorkflowTaskGroups = (
@@ -165,26 +203,6 @@ export const selectVisibleWorkflowTaskGroups = (
   const visibleCompletedGroups = completedLimit
     ? completedGroups.slice(-completedLimit)
     : []
-
-  // Keep the completion cost card attached to its clear-context divider even
-  // when the default one-task window otherwise shows only the active task.
-  if (hasVisibleActiveGroup && !visibleCompletedGroups.length) {
-    const boundaryGroup = buildClearContextBoundaryGroup(
-      completedGroups[completedGroups.length - 1]
-    )
-    if (boundaryGroup) visibleCompletedGroups.push(boundaryGroup)
-  }
-
-  const firstVisibleCompletedGroup = visibleCompletedGroups[0]
-  const firstVisibleCompletedIndex = firstVisibleCompletedGroup
-    ? completedGroups.findIndex(group => group === firstVisibleCompletedGroup)
-    : -1
-  if (firstVisibleCompletedIndex > 0) {
-    const previousBoundaryGroup = buildClearContextBoundaryGroup(
-      completedGroups[firstVisibleCompletedIndex - 1]
-    )
-    if (previousBoundaryGroup) visibleCompletedGroups.unshift(previousBoundaryGroup)
-  }
 
   return activeGroup ? [...visibleCompletedGroups, activeGroup] : visibleCompletedGroups
 }
@@ -205,21 +223,17 @@ export const selectVisibleWorkflowMessageWindow = (groups = [], visibleMessageCo
   for (const group of groups) {
     const messages = group?.messages || []
     if (remainingHiddenCount >= messages.length) {
-      const isClearContextBoundaryGroup =
-        isWorkflowCompletionMessage(messages[0]) &&
-        isWorkflowManualClearContextMessage(messages[messages.length - 1])
-      if (isClearContextBoundaryGroup) visibleGroups.push(group)
       remainingHiddenCount -= messages.length
       continue
     }
 
     if (remainingHiddenCount > 0) {
       let visibleStartIndex = remainingHiddenCount
-      if (
-        isWorkflowManualClearContextMessage(messages[visibleStartIndex]) &&
-        isWorkflowCompletionMessage(messages[visibleStartIndex - 1])
+      while (
+        visibleStartIndex < messages.length &&
+        isWorkflowTaskBoundaryMessage(messages[visibleStartIndex])
       ) {
-        visibleStartIndex -= 1
+        visibleStartIndex += 1
       }
       visibleGroups.push({
         ...group,
@@ -349,7 +363,9 @@ export const reconcileWorkflowTaskWindowState = ({
       if (toolCallId) acceptedCompletionIds.add(toolCallId)
     }
 
-    const groups = buildTaskGroups(messages, true)
+    const groups = buildTaskGroups(messages, true).filter(group =>
+      group.messages.some(message => !isWorkflowTaskBoundaryMessage(message))
+    )
     const completedGroups = groups.filter(group => group.isCompleted)
     const activeGroup = groups.find(group => !group.isCompleted)
     let lastCompletionIndex = -1
@@ -357,6 +373,7 @@ export const reconcileWorkflowTaskWindowState = ({
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index]
       if (
+        isWorkflowManualClearContextMessage(message) ||
         acceptedCompletionIds.has(getMessageToolCallId(message)) ||
         isAcceptedCompletionMessage(message)
       ) {
@@ -430,7 +447,7 @@ export const reconcileWorkflowTaskWindowState = ({
   const reconciledGroups = mergeManualClearContextMarkersIntoPreviousGroups(
     [...state.completedGroups, ...tailGroups],
     buildGroupId
-  )
+  ).filter(group => group.messages.some(message => !isWorkflowTaskBoundaryMessage(message)))
   const completedGroups = reconciledGroups.filter(group => group.isCompleted)
   const activeGroup = reconciledGroups.find(group => !group.isCompleted)
 
@@ -449,7 +466,10 @@ export const reconcileWorkflowTaskWindowState = ({
 
   let nextLastCompletionIndex = lastCompletionIndex
   for (let index = activeStartIndex; index < messages.length; index += 1) {
-    if (acceptedCompletionIds.has(getMessageToolCallId(messages[index]))) {
+    if (
+      isWorkflowManualClearContextMessage(messages[index]) ||
+      acceptedCompletionIds.has(getMessageToolCallId(messages[index]))
+    ) {
       nextLastCompletionIndex = index
     }
   }

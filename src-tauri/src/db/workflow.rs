@@ -224,6 +224,47 @@ fn is_completed_workflow_task_boundary(message: &WorkflowMessage) -> bool {
         && (execution_status.is_empty() || execution_status == "completed")
 }
 
+fn is_workflow_ui_task_boundary(message: &WorkflowMessage) -> bool {
+    is_completed_workflow_task_boundary(message) || is_manual_clear_context_message(message)
+}
+
+struct WorkflowUiMessagePageSelection {
+    messages: Vec<WorkflowMessage>,
+}
+
+fn select_workflow_ui_message_page(
+    messages_descending: Vec<WorkflowMessage>,
+    message_limit: usize,
+) -> WorkflowUiMessagePageSelection {
+    let page_limit = message_limit.max(1);
+    let mut selected_len = messages_descending.len().min(page_limit);
+    let mut has_content = false;
+
+    for (index, message) in messages_descending.iter().enumerate() {
+        if index > page_limit {
+            break;
+        }
+        if is_workflow_ui_task_boundary(message) {
+            if has_content {
+                selected_len = index.min(page_limit);
+                break;
+            }
+            continue;
+        }
+
+        // A run of boundary messages must never become a page by itself. The extra sentinel row may
+        // therefore join the page only when it is the first ordinary message behind those boundaries.
+        if index == page_limit && !has_content && selected_len == page_limit {
+            selected_len = page_limit + 1;
+        }
+        has_content = true;
+    }
+
+    WorkflowUiMessagePageSelection {
+        messages: messages_descending.into_iter().take(selected_len).collect(),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowEfficiencyMetrics {
@@ -1572,103 +1613,30 @@ impl MainStore {
     ) -> Result<WorkflowMessagePage, StoreError> {
         let session_id = session_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
-            let newest_message_id: Option<i64> = conn.query_row(
-                "SELECT MAX(id) FROM workflow_messages WHERE session_id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )?;
-            let mut boundary_statement = conn.prepare(
-                "SELECT id, role, is_error, metadata FROM workflow_messages
-                 WHERE session_id = ?1
-                   AND role = 'tool'
-                   AND is_error = 0
-                   AND metadata LIKE '%complete_workflow%'
-                 ORDER BY id DESC",
-            )?;
-            let boundary_rows = boundary_statement.query_map(params![session_id], |row| {
-                let metadata = row
-                    .get::<_, Option<String>>(3)?
-                    .and_then(|value| serde_json::from_str(&value).ok());
-                Ok(WorkflowMessage {
-                    id: row.get(0)?,
-                    session_id: String::new(),
-                    role: row.get(1)?,
-                    message: String::new(),
-                    reasoning: None,
-                    message_kind: String::new(),
-                    message_subtype: None,
-                    segment_id: 0,
-                    source_event_type: None,
-                    metadata,
-                    attached_context: None,
-                    step_type: None,
-                    step_index: 0,
-                    is_error: row.get(2)?,
-                    error_type: None,
-                    created_at: None,
-                })
-            })?;
-            let mut completion_boundary_ids = Vec::new();
-            for message in boundary_rows {
-                let message = message?;
-                if is_completed_workflow_task_boundary(&message) {
-                    if let Some(id) = message.id {
-                        completion_boundary_ids.push(id);
-                    }
-                }
-            }
-
-            let latest_boundary_id = completion_boundary_ids.first().copied();
-            let has_active_messages = match (newest_message_id, latest_boundary_id) {
-                (Some(newest_id), Some(boundary_id)) => newest_id > boundary_id,
-                (Some(_), None) => true,
-                _ => false,
-            };
-            let lower_boundary_id = if has_active_messages {
-                latest_boundary_id
-            } else {
-                completion_boundary_ids.get(1).copied()
-            };
-            let hidden_completed_task_count = completion_boundary_ids.len().saturating_sub(1);
-            // Include the latest completion boundary only when active messages follow it.
-            // The extra row keeps pagination bounded while preserving the cost-bearing
-            // completion tool next to a following manual clear-context marker.
-            let includes_active_completion_boundary =
-                has_active_messages && lower_boundary_id.is_some();
-            let query_lower_boundary_id = if includes_active_completion_boundary {
-                lower_boundary_id.map(|id| id.saturating_sub(1))
-            } else {
-                lower_boundary_id
-            };
-            let page_limit = message_limit.max(1);
-
             let total_message_count = conn.query_row(
-                "SELECT COUNT(*) FROM workflow_messages
-                 WHERE session_id = ?1 AND (?2 IS NULL OR id > ?2)",
-                params![session_id, query_lower_boundary_id],
+                "SELECT COUNT(*) FROM workflow_messages WHERE session_id = ?1",
+                params![session_id],
                 |row| row.get::<_, i64>(0),
             )? as usize;
-            let includes_completion_at_page_edge = includes_active_completion_boundary
-                && total_message_count <= page_limit.saturating_add(1);
-            let limit =
-                page_limit.saturating_add(usize::from(includes_completion_at_page_edge)) as i64;
-            let mut message_statement = conn.prepare(
+            let query_limit = message_limit.max(1).saturating_add(1) as i64;
+            let mut statement = conn.prepare(
                 "SELECT * FROM workflow_messages
-                 WHERE session_id = ?1 AND (?2 IS NULL OR id > ?2)
+                 WHERE session_id = ?1
                  ORDER BY id DESC
-                 LIMIT ?3",
+                 LIMIT ?2",
             )?;
-            let rows = message_statement
-                .query_map(params![session_id, query_lower_boundary_id, limit], |row| {
-                    Ok(WorkflowMessage::from(row))
-                })?;
-            let mut messages = rows.collect::<Result<Vec<_>, _>>()?;
+            let rows = statement.query_map(params![session_id, query_limit], |row| {
+                Ok(WorkflowMessage::from(row))
+            })?;
+            let descending = rows.collect::<Result<Vec<_>, _>>()?;
+            let selection = select_workflow_ui_message_page(descending, message_limit);
+            let mut messages = selection.messages;
             messages.reverse();
 
             Ok(WorkflowMessagePage {
                 before_message_id: messages.first().and_then(|message| message.id),
                 hidden_message_count: total_message_count.saturating_sub(messages.len()),
-                hidden_completed_task_count,
+                hidden_completed_task_count: 0,
                 messages,
             })
         })
@@ -1682,81 +1650,26 @@ impl MainStore {
     ) -> Result<WorkflowMessagePage, StoreError> {
         let session_id = session_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
-            let mut boundary_statement = conn.prepare(
-                "SELECT id, role, is_error, metadata FROM workflow_messages
-                 WHERE session_id = ?1
-                   AND id < ?2
-                   AND role = 'tool'
-                   AND is_error = 0
-                   AND metadata LIKE '%complete_workflow%'
-                 ORDER BY id DESC",
-            )?;
-            let boundary_rows =
-                boundary_statement.query_map(params![session_id, before_message_id], |row| {
-                    let metadata = row
-                        .get::<_, Option<String>>(3)?
-                        .and_then(|value| serde_json::from_str(&value).ok());
-                    Ok(WorkflowMessage {
-                        id: row.get(0)?,
-                        session_id: String::new(),
-                        role: row.get(1)?,
-                        message: String::new(),
-                        reasoning: None,
-                        message_kind: String::new(),
-                        message_subtype: None,
-                        segment_id: 0,
-                        source_event_type: None,
-                        metadata,
-                        attached_context: None,
-                        step_type: None,
-                        step_index: 0,
-                        is_error: row.get(2)?,
-                        error_type: None,
-                        created_at: None,
-                    })
-                })?;
-            let mut lower_boundary_id = None;
-            for message in boundary_rows {
-                let message = message?;
-                if is_completed_workflow_task_boundary(&message) {
-                    lower_boundary_id = message.id;
-                    break;
-                }
-            }
-            let includes_completion_boundary = lower_boundary_id.is_some();
-            let query_lower_boundary_id = lower_boundary_id.map(|id| id.saturating_sub(1));
-            let page_limit = message_limit.max(1);
-
             let total_message_count = conn.query_row(
                 "SELECT COUNT(*) FROM workflow_messages
-                 WHERE session_id = ?1
-                   AND id < ?2
-                   AND (?3 IS NULL OR id > ?3)",
-                params![session_id, before_message_id, query_lower_boundary_id],
+                 WHERE session_id = ?1 AND id < ?2",
+                params![session_id, before_message_id],
                 |row| row.get::<_, i64>(0),
             )? as usize;
-            let includes_completion_at_page_edge =
-                includes_completion_boundary && total_message_count <= page_limit.saturating_add(1);
-            let limit =
-                page_limit.saturating_add(usize::from(includes_completion_at_page_edge)) as i64;
-            let mut message_statement = conn.prepare(
+            let query_limit = message_limit.max(1).saturating_add(1) as i64;
+            let mut statement = conn.prepare(
                 "SELECT * FROM workflow_messages
-                 WHERE session_id = ?1
-                   AND id < ?2
-                   AND (?3 IS NULL OR id > ?3)
+                 WHERE session_id = ?1 AND id < ?2
                  ORDER BY id DESC
-                 LIMIT ?4",
+                 LIMIT ?3",
             )?;
-            let rows = message_statement.query_map(
-                params![
-                    session_id,
-                    before_message_id,
-                    query_lower_boundary_id,
-                    limit
-                ],
-                |row| Ok(WorkflowMessage::from(row)),
-            )?;
-            let mut messages = rows.collect::<Result<Vec<_>, _>>()?;
+            let rows = statement
+                .query_map(params![session_id, before_message_id, query_limit], |row| {
+                    Ok(WorkflowMessage::from(row))
+                })?;
+            let descending = rows.collect::<Result<Vec<_>, _>>()?;
+            let selection = select_workflow_ui_message_page(descending, message_limit);
+            let mut messages = selection.messages;
             messages.reverse();
 
             Ok(WorkflowMessagePage {
@@ -3195,10 +3108,10 @@ mod tests {
                 .iter()
                 .map(|message| message.message.as_str())
                 .collect::<Vec<_>>(),
-            vec!["task-3-completed", "active-task"]
+            vec!["active-task"]
         );
-        assert_eq!(recent_message_page.hidden_message_count, 0);
-        assert_eq!(recent_message_page.hidden_completed_task_count, 2);
+        assert_eq!(recent_message_page.hidden_message_count, 6);
+        assert_eq!(recent_message_page.hidden_completed_task_count, 0);
 
         let earlier = store
             .get_workflow_message_window("window-session", recent.before_message_id, 2)
@@ -3275,8 +3188,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["completed-2-input", "completed-2-done"]
         );
-        assert_eq!(completed_message_page.hidden_message_count, 0);
-        assert_eq!(completed_message_page.hidden_completed_task_count, 1);
+        assert_eq!(completed_message_page.hidden_message_count, 2);
+        assert_eq!(completed_message_page.hidden_completed_task_count, 0);
 
         store
             .create_workflow(
@@ -3367,7 +3280,7 @@ mod tests {
     }
 
     #[test]
-    fn test_recent_workflow_message_page_keeps_completion_before_clear_context() {
+    fn test_workflow_message_page_keeps_task_boundaries_with_older_content() {
         let (_temp_dir, store) = create_test_store();
         seed_agent(&store, "agent-clear-context-boundary");
         store
@@ -3380,6 +3293,12 @@ mod tests {
             )
             .expect("failed to create workflow");
 
+        add_window_test_message(
+            &store,
+            "clear-context-boundary-session",
+            "completed-task-input",
+            false,
+        );
         add_window_test_message(
             &store,
             "clear-context-boundary-session",
@@ -3406,7 +3325,7 @@ mod tests {
                 created_at: None,
             })
             .expect("failed to add clear-context marker");
-        for index in 1..=299 {
+        for index in 1..=300 {
             add_window_test_message(
                 &store,
                 "clear-context-boundary-session",
@@ -3418,52 +3337,36 @@ mod tests {
         let recent = store
             .get_recent_workflow_message_page("clear-context-boundary-session", 300)
             .expect("failed to load recent clear-context page");
-        assert_eq!(recent.messages.len(), 301);
-        assert_eq!(recent.hidden_message_count, 0);
+        assert_eq!(recent.messages.len(), 300);
+        assert_eq!(recent.hidden_message_count, 3);
         assert_eq!(recent.hidden_completed_task_count, 0);
-        let completion_index = recent
-            .messages
-            .iter()
-            .position(is_completed_workflow_task_boundary)
-            .expect("recent page must retain the completion tool boundary");
-        assert_eq!(completion_index, 0);
-        assert_eq!(
-            recent.messages[completion_index + 1]
-                .message_subtype
-                .as_deref(),
-            Some("manual_clear_context")
+        assert_eq!(recent.messages[0].message, "active-message-1");
+        assert_eq!(recent.messages[299].message, "active-message-300");
+        assert!(
+            recent.messages.iter().all(|message| {
+                !is_completed_workflow_task_boundary(message)
+                    && !is_manual_clear_context_message(message)
+            }),
+            "task boundaries must remain attached to the older task instead of becoming a page"
         );
-        assert_eq!(recent.messages[300].message, "active-message-299");
 
-        let next_page_cursor = add_window_test_message(
-            &store,
-            "clear-context-boundary-session",
-            "next-page-cursor",
-            false,
-        );
         let earlier = store
             .get_earlier_workflow_message_page(
                 "clear-context-boundary-session",
-                next_page_cursor
-                    .id
-                    .expect("cursor message must be persisted"),
+                recent
+                    .before_message_id
+                    .expect("recent page must expose its oldest displayed message"),
                 300,
             )
             .expect("failed to load earlier clear-context page");
-        assert_eq!(earlier.messages.len(), 301);
-        let earlier_completion_index = earlier
-            .messages
-            .iter()
-            .position(is_completed_workflow_task_boundary)
-            .expect("earlier page must retain the completion tool boundary");
-        assert_eq!(earlier_completion_index, 0);
+        assert_eq!(earlier.messages.len(), 3);
+        assert_eq!(earlier.hidden_message_count, 0);
+        assert_eq!(earlier.messages[0].message, "completed-task-input");
+        assert!(is_completed_workflow_task_boundary(&earlier.messages[1]));
         assert_eq!(
-            earlier.messages[earlier_completion_index + 1]
-                .message_subtype
-                .as_deref(),
+            earlier.messages[2].message_subtype.as_deref(),
             Some("manual_clear_context")
         );
-        assert_eq!(earlier.messages[300].message, "active-message-299");
     }
 
     #[test]

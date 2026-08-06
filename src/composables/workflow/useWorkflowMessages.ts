@@ -1,13 +1,13 @@
 import { ref, computed, watch } from 'vue'
 import { useWorkflowStore } from '@/stores/workflow'
 import {
+  buildWorkflowTaskGroups,
   collectSubAgentCompletions,
   dedupeQueuedUserMessageProjection,
-  excludeLeadingManualClearContextMarkers,
+  excludeLeadingWorkflowTaskBoundaryMessages,
   getStructuredWorkflowToolName,
   hasOpenWorkflowTaskFrame,
   isWorkflowManualClearContextMessage,
-  mergeManualClearContextMarkersIntoPreviousGroups,
   normalizeVisibleCompletionReport,
   reconcileWorkflowTaskWindowState,
   selectVisibleWorkflowMessageWindow,
@@ -293,36 +293,18 @@ export function useWorkflowMessages(options = {}) {
     }
   }
 
-  const buildTaskGroups = (messages, allowPersistedCompletionFallback = false) => {
-    if (!messages.length) return []
-
-    const groups = []
-    let currentGroup = []
-
-    const pushGroup = (groupMessages, isCompleted) => {
-      if (!groupMessages.length) return
-      groups.push({
-        id: buildTaskGroupId(groupMessages),
-        isCompleted,
-        messages: groupMessages
-      })
-    }
-
-    for (const message of messages) {
-      currentGroup.push(message)
-      const toolCallId = getMessageToolCallId(message)
-      const isAcceptedBoundary =
-        acceptedTaskCompletionIds.has(toolCallId) ||
-        (allowPersistedCompletionFallback && isAcceptedFinishTaskMessage(message))
-      if (isAcceptedBoundary) {
-        pushGroup(currentGroup, true)
-        currentGroup = []
+  const buildTaskGroups = (messages, allowPersistedCompletionFallback = false) =>
+    buildWorkflowTaskGroups(messages, {
+      buildGroupId: buildTaskGroupId,
+      preserveLeadingBoundaries: true,
+      isCompletionBoundary: message => {
+        const toolCallId = getMessageToolCallId(message)
+        return (
+          acceptedTaskCompletionIds.has(toolCallId) ||
+          (allowPersistedCompletionFallback && isAcceptedFinishTaskMessage(message))
+        )
       }
-    }
-
-    pushGroup(currentGroup, false)
-    return mergeManualClearContextMarkersIntoPreviousGroups(groups, buildTaskGroupId)
-  }
+    })
 
   const getMessageIdentity = (message, index) =>
     String(
@@ -369,7 +351,7 @@ export function useWorkflowMessages(options = {}) {
 
   const visibleTaskGroupsState = computed(() => {
     const state = taskWindowState.value
-    const visibleActiveMessages = excludeLeadingManualClearContextMarkers(state.activeMessages)
+    const visibleActiveMessages = excludeLeadingWorkflowTaskBoundaryMessages(state.activeMessages)
     const activeGroup = visibleActiveMessages.length
       ? {
           id: buildTaskGroupId(visibleActiveMessages),

@@ -212,10 +212,16 @@ fn is_node_build_command_segment(command: &str) -> bool {
         tokens.as_slice(),
         ["pnpm", "build", ..]
             | ["pnpm", "run", "build", ..]
+            | ["pnpm", "exec", "vite", "build", ..]
             | ["npm", "build", ..]
             | ["npm", "run", "build", ..]
+            | ["npm", "exec", "vite", "build", ..]
+            | ["npx", "vite", "build", ..]
             | ["yarn", "build", ..]
             | ["yarn", "run", "build", ..]
+            | ["yarn", "exec", "vite", "build", ..]
+            | ["yarn", "vite", "build", ..]
+            | ["vite", "build", ..]
             | ["pnpm", "tauri", "build", ..]
             | ["pnpm", "run", "tauri", "build", ..]
             | ["npm", "tauri", "build", ..]
@@ -271,10 +277,16 @@ mod tests {
         for command in [
             "pnpm build",
             "pnpm run build",
+            "pnpm exec vite build",
             "npm build",
             "npm run build",
+            "npm exec vite build",
+            "npx vite build",
             "yarn build",
             "yarn run build",
+            "yarn exec vite build",
+            "yarn vite build",
+            "vite build",
             "pnpm tauri build",
             "pnpm run tauri build",
             "npm tauri build",
@@ -318,6 +330,34 @@ mod tests {
         assert!(reduction.persist_complete_output);
         assert!(!reduction.content.contains("bin/assets/index.js"));
         assert!(!reduction.content.contains("Some chunks are larger"));
+    }
+
+    #[test]
+    fn pnpm_exec_vite_build_summarizes_dist_assets() {
+        let output = "vite v6.0.0 building for production...\ntransforming...\n✓ 1939 modules transformed.\nrendering chunks...\ncomputing gzip size...\ndist/index.html                                           0.76 kB │ gzip:   0.41 kB\ndist/assets/KaTeX_Size3-Regular-CTq5MqoE.woff             4.42 kB\ndist/assets/index-CvBT1pZ9.js                         3,303.40 kB │ gzip: 987.65 kB\n✓ built in 15.99s\n";
+
+        for command in [
+            "pnpm exec vite build",
+            "npm exec vite build",
+            "npx vite build",
+            "yarn exec vite build",
+            "yarn vite build",
+            "vite build",
+        ] {
+            let reduction = reduce_command_output(command, 0, output)
+                .unwrap_or_else(|| panic!("node build reducer should match {command}"));
+
+            assert_eq!(
+                reduction.content,
+                "Exit code: 0\n\nBuild result:\nBuild output: 3 files, 3.23 MB (gzip: 988.06 kB across 2 files)\n✓ built in 15.99s"
+            );
+            assert!(reduction.persist_complete_output);
+            assert!(!reduction.content.contains("dist/index.html"));
+            assert!(!reduction
+                .content
+                .contains("dist/assets/KaTeX_Size3-Regular"));
+            assert!(!reduction.content.contains("rendering chunks"));
+        }
     }
 
     #[test]
