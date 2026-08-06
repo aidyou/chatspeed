@@ -414,6 +414,18 @@ assert.match(
 assert.match(workflowStore, /sessionId: message\.sessionId \|\| currentWorkflowId\.value \|\| null/)
 assert.match(
   workflowStore,
+  /queuedUserMessages: Array\.isArray\(ctx\.queued_user_messages\)[\s\S]*queued_user_message_id/
+)
+assert.match(
+  workflowStore,
+  /const hydrateQueuedMessages = \(executionContext, workflowId\) =>[\s\S]*normalizedContext\?\.sessionId === workflowId[\s\S]*messageQueue\.value = queuedMessages/
+)
+assert.match(
+  workflowStore,
+  /hydrateQueuedMessages\(snapshot\.workflow\.executionContext, workflowId\)/
+)
+assert.match(
+  workflowStore,
   /get_auto_approved_tools[\s\S]*currentWorkflowId\.value !== workflowId \|\| messageLoadRevision !== requestRevision/,
   'late workflow hydration must not overwrite the newly selected workflow'
 )

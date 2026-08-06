@@ -43,6 +43,7 @@ fn restore_execution_context_from_manual_clear_marker(
             session_id: session_id.to_string(),
             state: RuntimeState::Pending,
             wait_reason: None,
+            queued_user_messages: Vec::new(),
             current_segment_id: remaining_segment_id,
             current_step: 0,
             max_steps: 100,

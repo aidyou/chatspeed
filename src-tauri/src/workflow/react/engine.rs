@@ -49,8 +49,8 @@ use crate::workflow::react::{
     sinks::{DBSink, Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
     types::{
-        ExecutionContext, GatewayPayload, PendingCompletionReport, PendingTool, RuntimeState,
-        StepType, SubAgentCompletion, WaitReason, WorkflowSignal, WorkflowState,
+        ExecutionContext, GatewayPayload, PendingCompletionReport, PendingTool, QueuedUserMessage,
+        RuntimeState, StepType, SubAgentCompletion, WaitReason, WorkflowSignal, WorkflowState,
     },
 };
 
@@ -1605,6 +1605,24 @@ impl WorkflowExecutor {
             self.pending_sub_agent_completions = context.pending_sub_agent_completions.clone();
             self.pending_final_review = context.pending_final_review.clone();
             self.pending_completion_reports = context.pending_completion_reports.clone();
+            self.queued_user_messages = context
+                .queued_user_messages
+                .iter()
+                .filter(|message| {
+                    !context
+                        .removed_queued_user_message_ids
+                        .iter()
+                        .any(|removed_id| removed_id == &message.queued_user_message_id)
+                })
+                .map(|message| {
+                    (
+                        message.queued_user_message_id.clone(),
+                        message.content.clone(),
+                        message.attached_context.clone(),
+                        message.metadata.clone(),
+                    )
+                })
+                .collect();
             self.removed_queued_user_message_ids = context
                 .removed_queued_user_message_ids
                 .iter()
@@ -1667,6 +1685,24 @@ impl WorkflowExecutor {
                         self.pending_final_review = context.pending_final_review.clone();
                         self.pending_completion_reports =
                             context.pending_completion_reports.clone();
+                        self.queued_user_messages = context
+                            .queued_user_messages
+                            .iter()
+                            .filter(|message| {
+                                !context
+                                    .removed_queued_user_message_ids
+                                    .iter()
+                                    .any(|removed_id| removed_id == &message.queued_user_message_id)
+                            })
+                            .map(|message| {
+                                (
+                                    message.queued_user_message_id.clone(),
+                                    message.content.clone(),
+                                    message.attached_context.clone(),
+                                    message.metadata.clone(),
+                                )
+                            })
+                            .collect();
                         self.removed_queued_user_message_ids = context
                             .removed_queued_user_message_ids
                             .iter()
@@ -6276,22 +6312,14 @@ impl WorkflowExecutor {
         .await?;
         self.dispatch_sub_agent_progress().await;
 
-        // Save snapshot on waiting/terminal states
-        if matches!(
-            new_state,
-            WorkflowState::Paused
-                | WorkflowState::AwaitingUser
-                | WorkflowState::AwaitingApproval
-                | WorkflowState::AwaitingAutoApproval
-                | WorkflowState::AwaitingSubAgent
-                | WorkflowState::Completed
-                | WorkflowState::Error
-                | WorkflowState::Cancelled
-        ) {
+        // Persist the resolved ask_user wait immediately so recovery cannot reuse the previous
+        // user_input reason after a response has transitioned the workflow back to execution.
+        if old_state == WorkflowState::AwaitingUser && new_state != WorkflowState::AwaitingUser {
             if let Err(e) = self.save_snapshot().await {
                 log::error!(
-                    "[Workflow][session={}][phase=snapshot] Failed to save: {}",
+                    "[Workflow][session={}][phase=snapshot] Failed to save resolved user-input state {}: {}",
                     self.session_id,
+                    new_state,
                     e
                 );
             }
@@ -7330,6 +7358,7 @@ impl WorkflowExecutor {
             attached_context,
             metadata.clone(),
         ));
+        self.save_snapshot().await?;
 
         let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
         if !ui_metadata.is_object() {
@@ -7361,13 +7390,13 @@ impl WorkflowExecutor {
     ) -> Result<bool, WorkflowEngineError> {
         self.removed_queued_user_message_ids
             .insert(queued_user_message_id.to_string());
-        self.save_snapshot().await?;
         let before = self.queued_user_messages.len();
         self.queued_user_messages
             .retain(|(queued_id, _, _, _)| queued_id != queued_user_message_id);
         let removed_from_stash =
             remove_stashed_user_message(&self.session_id, queued_user_message_id);
         let removed = self.queued_user_messages.len() != before || removed_from_stash;
+        self.save_snapshot().await?;
 
         if removed {
             self.dispatch_ui_payload(GatewayPayload::QueuedUserMessageRemoved {
@@ -7445,6 +7474,10 @@ impl WorkflowExecutor {
                 );
             }
             applied = true;
+        }
+
+        if applied {
+            self.save_snapshot().await?;
         }
 
         Ok(applied)
@@ -7567,10 +7600,24 @@ impl WorkflowExecutor {
             })
             .collect();
 
+        let queued_user_messages = self
+            .queued_user_messages
+            .iter()
+            .map(
+                |(queued_user_message_id, content, attached_context, metadata)| QueuedUserMessage {
+                    queued_user_message_id: queued_user_message_id.clone(),
+                    content: content.clone(),
+                    attached_context: attached_context.clone(),
+                    metadata: metadata.clone(),
+                },
+            )
+            .collect();
+
         ExecutionContext {
             session_id: self.session_id.clone(),
             state,
             wait_reason,
+            queued_user_messages,
             current_segment_id: self.context.current_segment_id,
             current_step: self.current_step,
             // Kept as a zeroed compatibility field for snapshots written by older builds.
@@ -8460,6 +8507,19 @@ mod recovery_tests {
             .await
             .expect("message should be queued");
         assert!(executor.pending_completion_reports.is_empty());
+        let queued_context = store
+            .get_execution_context(session_id)
+            .expect("failed to read queued execution context")
+            .expect("queued message should be persisted in execution context");
+        assert_eq!(queued_context.queued_user_messages.len(), 1);
+        assert_eq!(
+            queued_context.queued_user_messages[0].queued_user_message_id,
+            "queued-message-1"
+        );
+        assert_eq!(
+            queued_context.queued_user_messages[0].content,
+            "queued once"
+        );
         executor
             .enqueue_user_message(
                 "duplicate delivery".to_string(),
@@ -8474,6 +8534,11 @@ mod recovery_tests {
             .flush_queued_user_messages()
             .await
             .expect("queued message should flush"));
+        let applied_context = store
+            .get_execution_context(session_id)
+            .expect("failed to read applied execution context")
+            .expect("applied queue state should be persisted");
+        assert!(applied_context.queued_user_messages.is_empty());
 
         executor
             .update_state(WorkflowState::Completed)
@@ -8501,6 +8566,74 @@ mod recovery_tests {
             })
             .count();
         assert_eq!(queued_messages, 1);
+    }
+
+    #[tokio::test]
+    async fn answered_user_input_persists_running_snapshot_without_wait_reason() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "answered-user-input-snapshot";
+        let agent = Agent::new(
+            "answered-user-input-agent".to_string(),
+            "Answered User Input Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(12).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::AwaitingUser;
+
+        executor
+            .update_state(WorkflowState::Thinking)
+            .await
+            .expect("answered user-input transition should succeed");
+
+        let context = store
+            .get_execution_context(session_id)
+            .expect("failed to read execution context")
+            .expect("transition should persist execution context");
+        assert_eq!(context.state, RuntimeState::Running);
+        assert_eq!(context.wait_reason, None);
     }
 
     #[tokio::test]

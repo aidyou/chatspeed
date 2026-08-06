@@ -361,6 +361,7 @@ impl EventReducer {
             session_id: self.session_id,
             state: self.state,
             wait_reason: self.wait_reason,
+            queued_user_messages: Vec::new(),
             current_segment_id: 1,
             current_step: self.current_step,
             max_steps: 100,

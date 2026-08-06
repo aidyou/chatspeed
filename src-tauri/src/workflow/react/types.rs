@@ -493,10 +493,22 @@ impl PendingCompletionReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QueuedUserMessage {
+    pub queued_user_message_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub attached_context: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionContext {
     pub session_id: String,
     pub state: RuntimeState,
     pub wait_reason: Option<WaitReason>,
+    #[serde(default)]
+    pub queued_user_messages: Vec<QueuedUserMessage>,
     #[serde(default = "default_execution_context_segment_id")]
     pub current_segment_id: i32,
     pub current_step: usize,
@@ -537,6 +549,7 @@ impl ExecutionContext {
             session_id,
             state: RuntimeState::Pending,
             wait_reason: None,
+            queued_user_messages: Vec::new(),
             current_segment_id: default_execution_context_segment_id(),
             current_step: 0,
             max_steps: 100,

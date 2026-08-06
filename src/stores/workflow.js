@@ -403,8 +403,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
     return {
       ...ctx,
       ...normalizedApproval,
+      sessionId: ctx.session_id,
       currentContextTokens: ctx.currentContextTokens ?? ctx.current_context_tokens ?? null,
       maxContextTokens: ctx.maxContextTokens ?? ctx.max_context_tokens ?? null,
+      queuedUserMessages: Array.isArray(ctx.queued_user_messages)
+        ? ctx.queued_user_messages.map((message) => ({
+            id: message.queued_user_message_id,
+            content: message.content,
+            attachedContext: message.attached_context ?? null,
+            metadata: message.metadata ?? null
+          }))
+        : [],
       waitingOnSubAgentId: ctx.waitingOnSubAgentId ?? ctx.waiting_on_sub_agent_id ?? null,
       subAgentSessions: ctx.subAgentSessions ?? ctx.sub_agent_sessions ?? []
     };
@@ -1306,6 +1315,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         executionContext: snapshot.workflow.executionContext,
         getPendingSummary: toolName => getToolStatusSummary(toolName, 'pending', 'Awaiting approval')
       });
+      hydrateQueuedMessages(snapshot.workflow.executionContext, workflowId);
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
       hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0;
       hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
@@ -1400,6 +1410,28 @@ export const useWorkflowStore = defineStore('workflow', () => {
     } catch (err) {
       await _handleError(err);
     }
+  };
+
+  const hydrateQueuedMessages = (executionContext, workflowId) => {
+    const normalizedContext = normalizeExecutionContext(executionContext);
+    const queuedMessages =
+      normalizedContext?.sessionId === workflowId ? normalizedContext.queuedUserMessages : [];
+    messageQueue.value = queuedMessages
+      .filter((message) => message.id && message.content)
+      .map((message) => ({
+        id: message.id,
+        sessionId: workflowId,
+        content: message.content,
+        status: 'queued',
+        statusText: '',
+        sent: true,
+        acknowledged: true,
+        attachedContext: message.attachedContext,
+        metadata: message.metadata,
+        attachments: [],
+        createdAt: Date.now(),
+        removable: true
+      }));
   };
 
   const addMessageToQueue = (message) => {
@@ -1837,6 +1869,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         executionContext: normalizeExecutionContext(snapshot.executionContext),
         getPendingSummary: toolName => getToolStatusSummary(toolName, 'pending', 'Awaiting approval')
       });
+      hydrateQueuedMessages(snapshot.workflow.executionContext, workflowId);
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
       hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0;
       hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
