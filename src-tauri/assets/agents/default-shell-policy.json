@@ -688,6 +688,10 @@
     "decision": "allow"
   },
   {
+    "pattern": "^msb(?:\\s|$)",
+    "decision": "allow"
+  },
+  {
     "pattern": "^mvn -v($| .*)",
     "decision": "allow"
   },

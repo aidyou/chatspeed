@@ -319,6 +319,11 @@ pub enum WorkflowSignal {
         #[serde(default, alias = "sandboxSchemeId")]
         sandbox_scheme_id: Option<String>,
     },
+    /// Replace the user-selected visible tool set at runtime.
+    UpdateAvailableTools {
+        #[serde(alias = "tools", default)]
+        available_tools: Vec<String>,
+    },
     /// Replace auto-approve tool list at runtime
     UpdateAutoApprovedTools {
         #[serde(alias = "tools", default)]
@@ -372,6 +377,7 @@ impl WorkflowSignal {
             (WorkflowSignal::UpdateModelConfig { .. }, _) => true,
             (WorkflowSignal::UpdateSkillsConfig { .. }, _) => true,
             (WorkflowSignal::UpdateSandboxConfig { .. }, _) => true,
+            (WorkflowSignal::UpdateAvailableTools { .. }, _) => true,
             (WorkflowSignal::UpdateAutoApprovedTools { .. }, _) => true,
             (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
             (WorkflowSignal::RemoveShellPolicyItem { .. }, _) => true,
@@ -408,6 +414,7 @@ impl WorkflowSignal {
             WorkflowSignal::UpdateModelConfig { .. } => "update_model_config",
             WorkflowSignal::UpdateSkillsConfig { .. } => "update_skills_config",
             WorkflowSignal::UpdateSandboxConfig { .. } => "update_sandbox_config",
+            WorkflowSignal::UpdateAvailableTools { .. } => "update_available_tools",
             WorkflowSignal::UpdateAutoApprovedTools { .. } => "update_auto_approved_tools",
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",
             WorkflowSignal::RemoveShellPolicyItem { .. } => "remove_shell_policy_item",

@@ -7063,12 +7063,9 @@ impl WorkflowExecutor {
         }
 
         if sig_type_enum == Some(SignalType::UpdateSandboxConfig) {
-            let Some(execution_mode) = sig_json
-                .get("execution_mode")
-                .and_then(|value| {
-                    serde_json::from_value::<crate::tools::ShellExecutionMode>(value.clone()).ok()
-                })
-            else {
+            let Some(execution_mode) = sig_json.get("execution_mode").and_then(|value| {
+                serde_json::from_value::<crate::tools::ShellExecutionMode>(value.clone()).ok()
+            }) else {
                 return Ok(false);
             };
             let sandbox_config = sig_json
@@ -7153,6 +7150,20 @@ impl WorkflowExecutor {
                     serde_json::json!(enabled),
                 );
             }
+            return Ok(true);
+        }
+
+        if sig_type_enum == Some(SignalType::UpdateAvailableTools) {
+            let available_tools = sig_json
+                .get("available_tools")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+                .unwrap_or_default();
+
+            self.agent_config.available_tools = serde_json::to_string(&available_tools).ok();
+            self.auto_approve
+                .retain(|tool| available_tools.contains(tool));
+            self.rebuild_foundation_tools_for_runtime_update().await?;
             return Ok(true);
         }
 

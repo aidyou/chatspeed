@@ -654,8 +654,9 @@
         :key="group.id"
         :value="group.id"
         class="shell-policy-import-dialog__group">
-        <span class="shell-policy-import-dialog__group-name">{{ $t(group.label) }}</span>
-        <span class="shell-policy-import-dialog__group-count">{{ group.rules.length }}</span>
+        <span class="shell-policy-import-dialog__group-name">
+          {{ $t(group.label) }} ({{ group.rules.length }})
+        </span>
       </el-checkbox>
     </el-checkbox-group>
     <template #footer>
@@ -789,8 +790,9 @@ const DEFAULT_SHELL_POLICY_GROUPS = [
       'serialver'
     ]
   },
-  { id: 'php-ruby', label: 'settings.agent.shellPolicyGroupPhpRuby', commands: ['bundle', 'composer', 'gem', 'php', 'ruby'] },
-  { id: 'containers', label: 'settings.agent.shellPolicyGroupContainers', commands: ['docker', 'helm', 'kubectl', 'terraform'] },
+  { id: 'php', label: 'settings.agent.shellPolicyGroupPhp', commands: ['composer', 'php'] },
+  { id: 'ruby', label: 'settings.agent.shellPolicyGroupRuby', commands: ['bundle', 'gem', 'ruby'] },
+  { id: 'containers', label: 'settings.agent.shellPolicyGroupContainers', commands: ['docker', 'helm', 'kubectl', 'msb', 'terraform'] },
   {
     id: 'macos',
     label: 'settings.agent.shellPolicyGroupMacos',
@@ -2332,12 +2334,8 @@ watch(
       background: var(--cs-bg-color-light);
 
       :deep(.el-checkbox__label) {
-        display: flex;
         min-width: 0;
         flex: 1;
-        align-items: center;
-        justify-content: space-between;
-        gap: var(--cs-space-sm);
       }
     }
 
@@ -2346,13 +2344,6 @@ watch(
       color: var(--cs-text-color-primary);
       text-overflow: ellipsis;
       white-space: nowrap;
-    }
-
-    &__group-count {
-      flex: 0 0 auto;
-      color: var(--cs-text-color-secondary);
-      font-size: var(--cs-font-size-xs);
-      font-variant-numeric: tabular-nums;
     }
   }
 

@@ -804,7 +804,7 @@ mod tests {
                 "nodes": [
                     {
                         "id": "query_weather",
-                        "desc": "获取目的地未来7天天气预报",
+                        "desc": "获取目的地未来7天的天气预报",
                         "tool": {
                             "function": "get_weather_forecast",
                             "param": {

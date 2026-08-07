@@ -305,6 +305,33 @@ assert.ok(
   'workflow tool capabilities must take precedence over a newer unsynchronized Agent definition'
 )
 assert.match(visibleAutoApprovalTools, /filter\(tool => availableSet\.has\(tool\)\)/)
+assert.match(
+  workflowInputArea,
+  /<el-tabs v-model="approvalToolsTab"[\s\S]*settings\.agent\.availableTools[\s\S]*workflow\.autoApprovedTools[\s\S]*workflow\.allowedShellCommands/
+)
+assert.match(
+  workflowInputArea,
+  /toggleWorkflowAvailableTool[\s\S]*availableTools: nextAvailableTools[\s\S]*autoApprove: nextAutoApprove/
+)
+assert.match(workflowInputArea, /const SHELL_POLICY_PAGE_SIZE = 10/)
+assert.match(workflowInputArea, /v-for="\(rule, idx\) in paginatedShellPolicyRules"/)
+assert.match(workflowInputArea, /:page-size="SHELL_POLICY_PAGE_SIZE"/)
+assert.match(workflowCore, /'availableTools'/)
+assert.match(workflowCore, /'sandboxOverride'/)
+assert.match(
+  workflowCore,
+  /normal new workflow sends no inherited configuration[\s\S]*checked `availableTools` set/
+)
+
+const workflowCommands = readProjectFile('src-tauri/src/commands/workflow.rs')
+assert.match(
+  workflowCommands,
+  /user left checked[\s\S]*Agent's tool list/
+)
+assert.match(
+  workflowCommands,
+  /filter\(\|tool\| inherited_tools\.contains\(\*tool\)\)/
+)
 
 const workflowConstitution = readProjectFile(
   'src-tauri/src/workflow/react/CONSTITUTION.md'

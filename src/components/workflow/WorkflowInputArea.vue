@@ -393,48 +393,37 @@
               </template>
 
               <div v-if="autoApprovedPopoverVisible" class="auto-approved-panel">
-                <!-- Auto-Approved Tools Section -->
-                <div class="panel-section">
-                  <div class="section-header">
-                    <cs name="tool" size="14px" class="section-icon" />
-                    <span class="section-title">{{ $t('workflow.autoApprovedTools') }}</span>
-                    <span class="section-count">{{ autoApprovedTools.length }}</span>
-                  </div>
-                  <div
-                    v-if="availableApprovalTools.length > 0"
-                    class="section-content checkbox-list">
-                    <label
-                      v-for="tool in availableApprovalTools"
-                      :key="tool.id"
-                      class="checkbox-item tool-checkbox-item">
-                      <el-checkbox
-                        :model-value="autoApprovedTools.includes(tool.id)"
-                        @change="checked => toggleAutoApprovedTool(tool.id, checked)">
-                        <span class="checkbox-label-wrap">
-                          <code class="tool-name">{{ tool.id }}</code>
-                          <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">
-                            {{ tool.name }}
+                <el-tabs v-model="approvalToolsTab" class="approval-tools-tabs">
+                  <el-tab-pane :label="`${$t('settings.agent.availableTools')} (${agentAvailableTools.length})`" name="available">
+                    <div v-if="agentAvailableTools.length > 0" class="section-content checkbox-list">
+                      <label v-for="tool in agentAvailableTools" :key="tool.id" class="checkbox-item tool-checkbox-item">
+                        <el-checkbox
+                          :model-value="workflowAvailableToolIds.includes(tool.id)"
+                          @change="checked => toggleWorkflowAvailableTool(tool.id, checked)">
+                          <span class="checkbox-label-wrap">
+                            <code class="tool-name">{{ tool.id }}</code>
+                            <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
                           </span>
-                        </span>
-                      </el-checkbox>
-                    </label>
-                  </div>
-                  <div v-else class="section-empty-text">
-                    {{ $t('common.noData') || 'No tools available' }}
-                  </div>
-                </div>
-
-                <div class="section-divider"></div>
-
-                <!-- Allowed Shell Commands Section -->
-                <div class="panel-section">
-                  <div class="section-header">
-                    <cs name="skill-terminal" size="14px" class="section-icon" />
-                    <span class="section-title">{{
-                      $t('workflow.allowedShellCommands') || 'Allowed Shell Patterns'
-                    }}</span>
-                    <span class="section-count">{{ shellPolicyRules.length }}</span>
-                  </div>
+                        </el-checkbox>
+                      </label>
+                    </div>
+                    <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
+                  </el-tab-pane>
+                  <el-tab-pane :label="`${$t('workflow.autoApprovedTools')} (${autoApprovedTools.length})`" name="autoApprove">
+                    <div v-if="availableApprovalTools.length > 0" class="section-content checkbox-list">
+                      <label v-for="tool in availableApprovalTools" :key="tool.id" class="checkbox-item tool-checkbox-item">
+                        <el-checkbox :model-value="autoApprovedTools.includes(tool.id)" @change="checked => toggleAutoApprovedTool(tool.id, checked)">
+                          <span class="checkbox-label-wrap">
+                            <code class="tool-name">{{ tool.id }}</code>
+                            <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
+                          </span>
+                        </el-checkbox>
+                      </label>
+                    </div>
+                    <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
+                  </el-tab-pane>
+                  <el-tab-pane :label="`${$t('workflow.allowedShellCommands')} (${shellPolicyRules.length})`" name="shell">
+                    <div class="panel-section">
                   <div class="section-toolbar shell-policy-search">
                     <el-input
                       v-model="shellCommandSearch"
@@ -473,12 +462,13 @@
                       {{ $t('settings.agent.shellPolicyAdd') || 'Add' }}
                     </el-button>
                   </div>
-                  <div v-if="filteredShellPolicyRules.length > 0" class="section-content">
-                    <div
-                      v-for="(rule, idx) in filteredShellPolicyRules"
-                      :key="`${rule.pattern}-${idx}`"
-                      class="tool-item shell-item">
-                      <div class="tool-info">
+                  <template v-if="filteredShellPolicyRules.length > 0">
+                    <div class="section-content">
+                      <div
+                        v-for="(rule, idx) in paginatedShellPolicyRules"
+                        :key="`${rule.pattern}-${idx}`"
+                        class="tool-item shell-item">
+                        <div class="tool-info">
                         <code class="tool-name shell-pattern">{{ rule.pattern }}</code>
                         <span v-if="rule.description" class="tool-desc">{{ rule.description }}</span>
                       </div>
@@ -507,6 +497,16 @@
                       </el-button>
                     </div>
                   </div>
+                  <el-pagination
+                    v-if="filteredShellPolicyRules.length > SHELL_POLICY_PAGE_SIZE"
+                    v-model:current-page="shellPolicyPage"
+                    class="shell-policy-pagination"
+                    :page-size="SHELL_POLICY_PAGE_SIZE"
+                    :total="filteredShellPolicyRules.length"
+                    layout="prev, pager, next"
+                    size="small"
+                    background />
+                  </template>
                   <div v-else class="section-empty-text">
                     {{
                       shellCommandSearch
@@ -550,7 +550,9 @@
                       </el-tooltip>
                     </div>
                   </div>
-                </div>
+                    </div>
+                  </el-tab-pane>
+                </el-tabs>
               </div>
             </el-popover>
 
@@ -994,11 +996,25 @@ watch(
 )
 
 const autoApprovedPopoverVisible = ref(false)
+const approvalToolsTab = ref('available')
 const isImportingShellPolicies = ref(false)
 const isClearingShellPolicies = ref(false)
 const newShellCommandPattern = ref('')
 const newShellCommandDecision = ref('review')
 const shellCommandSearch = ref('')
+const shellPolicyPage = ref(1)
+const SHELL_POLICY_PAGE_SIZE = 10
+
+const agentAvailableTools = computed(() => {
+  const agentToolIds = Array.isArray(props.selectedAgent?.availableTools)
+    ? props.selectedAgent.availableTools
+    : []
+  const toolDetails = new Map(agentStore.availableTools.map(tool => [tool.id, tool]))
+
+  return agentToolIds
+    .map(id => ({ id, name: toolDetails.get(id)?.name || id }))
+    .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
+})
 
 const workflowAvailableToolIds = computed(() => {
   if (Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)) {
@@ -1037,6 +1053,25 @@ const filteredShellPolicyRules = computed(() => {
     return pattern.includes(keyword) || description.includes(keyword)
   })
 })
+const paginatedShellPolicyRules = computed(() => {
+  const pageCount = Math.max(
+    1,
+    Math.ceil(filteredShellPolicyRules.value.length / SHELL_POLICY_PAGE_SIZE)
+  )
+  const currentPage = Math.min(shellPolicyPage.value, pageCount)
+  const start = (currentPage - 1) * SHELL_POLICY_PAGE_SIZE
+  return filteredShellPolicyRules.value.slice(start, start + SHELL_POLICY_PAGE_SIZE)
+})
+watch(shellCommandSearch, () => {
+  shellPolicyPage.value = 1
+})
+watch(
+  () => filteredShellPolicyRules.value.length,
+  count => {
+    const lastPage = Math.max(1, Math.ceil(count / SHELL_POLICY_PAGE_SIZE))
+    if (shellPolicyPage.value > lastPage) shellPolicyPage.value = lastPage
+  }
+)
 const availableApprovalTools = computed(() => {
   const allowedSet = new Set(
     workflowAvailableToolIds.value.filter(
@@ -1044,12 +1079,9 @@ const availableApprovalTools = computed(() => {
     )
   )
 
-  return agentStore.availableTools
+  return agentAvailableTools.value
     .filter(tool => allowedSet.has(tool.id))
-    .map(tool => ({
-      id: tool.id,
-      name: tool.name || tool.id
-    }))
+    .filter(tool => tool.id !== 'bash' && tool.id !== 'mcp_tool_load')
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
 const autoApprovedItemCount = computed(
@@ -1183,6 +1215,28 @@ watch(sandboxPopoverVisible, async isVisible => {
     console.error('Failed to load sandbox schemes:', error)
   }
 })
+
+const toggleWorkflowAvailableTool = async (toolId, checked) => {
+  if (!props.currentWorkflowId) return
+
+  const currentTools = workflowAvailableToolIds.value
+  const nextAvailableTools = checked
+    ? [...new Set([...currentTools, toolId])]
+    : currentTools.filter(id => id !== toolId)
+  const nextAutoApprove = checked
+    ? autoApprovedTools.value
+    : autoApprovedTools.value.filter(id => id !== toolId)
+
+  try {
+    await persistAgentConfig({
+      availableTools: nextAvailableTools,
+      autoApprove: nextAutoApprove
+    })
+    workflowStore.setAutoApprovedTools(nextAutoApprove)
+  } catch (error) {
+    console.error('Failed to update workflow available tools:', error)
+  }
+}
 
 const toggleAutoApprovedTool = async (toolName, checked) => {
   if (!props.currentWorkflowId) return
@@ -1572,6 +1626,43 @@ defineExpose({
   cursor: pointer;
   flex-shrink: 0;
   color: var(--cs-text-secondary);
+}
+
+.approval-tools-tabs {
+  display: flex;
+  flex-direction: column;
+  height: 360px;
+
+  :deep(.el-tabs__header) {
+    flex: 0 0 auto;
+    margin: 0 0 var(--cs-space-sm);
+  }
+
+  :deep(.el-tabs__content) {
+    flex: 1;
+    min-height: 0;
+  }
+
+  :deep(.el-tab-pane) {
+    height: 100%;
+    overflow-y: auto;
+    padding-right: var(--cs-space-xs);
+  }
+
+  :deep(.el-tabs__item) {
+    min-width: 0;
+    padding: 0 var(--cs-space-sm);
+    font-size: var(--cs-font-size-xs);
+
+    &:nth-child(2){
+        padding-left: var(--cs-space-sm);
+    }
+  }
+}
+
+.shell-policy-pagination {
+  justify-content: center;
+  margin-top: var(--cs-space-sm);
 }
 
 .checkbox-list {

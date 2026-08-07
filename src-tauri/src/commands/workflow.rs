@@ -1465,6 +1465,18 @@ fn merge_shell_allow_rules(
     Some(merged)
 }
 
+/// Merges preferences from "create from current workflow" into a newly created
+/// workflow. This function is not used for a normal new workflow: that path starts
+/// from the current Agent configuration without an inherited payload.
+///
+/// The current Agent is always the capability/default authority. The inherited
+/// snapshot contains only user choices made in the source workflow. In particular,
+/// `available_tools` records the tools the user left checked, rather than a second
+/// capability definition. The merge filters those checked tools through the current
+/// Agent's tool list: removed tools cannot return and newly added Agent tools are not
+/// selected until the user chooses them. Auto-approval is then filtered against that
+/// resulting visible tool set; shell command policy and sandbox configuration keep
+/// their separate inheritance rules below.
 fn merge_inherited_workflow_config(
     agent_config: &AgentConfig,
     inherited_config: &AgentConfig,
@@ -1497,9 +1509,24 @@ fn merge_inherited_workflow_config(
     merged.phase = inherited_config.phase.clone().or(merged.phase);
     merged.models = inherited_config.models.clone().or(merged.models);
 
-    // Tool availability and MCP schema exposure are Agent capabilities. A previous
-    // workflow cannot restore tools that the Agent removed or hide newly added tools.
-    let available_tools = agent_config.available_tools.clone();
+    // Agent configuration defines the available tool capabilities. An inherited
+    // workflow contributes only the user's checked-tool preference: retain selected
+    // tools that the current Agent still exposes, while never restoring removed tools
+    // or auto-enabling capabilities added after the preference was chosen.
+    let available_tools: Option<Vec<String>> = match (
+        agent_config.available_tools.as_ref(),
+        inherited_config.available_tools.as_ref(),
+    ) {
+        (Some(agent_tools), Some(inherited_tools)) => Some(
+            agent_tools
+                .iter()
+                .filter(|tool| inherited_tools.contains(*tool))
+                .cloned()
+                .collect(),
+        ),
+        (Some(agent_tools), None) => Some(agent_tools.clone()),
+        (None, _) => None,
+    };
     merged.available_tools = available_tools.clone();
     let is_tool_allowed = |tool: &str| {
         available_tools.as_ref().map_or(true, |tools| {
@@ -5529,6 +5556,26 @@ pub async fn update_workflow_agent_config(
 
     let mut normalized_config = AgentConfig::from_json(&agent_config)
         .ok_or_else(|| "Invalid agent config JSON".to_string())?;
+    {
+        let store = &*state;
+        let workflow = store
+            .get_workflow(&session_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("Workflow {session_id} not found"))?;
+        let agent = store
+            .get_agent(&workflow.agent_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
+
+        if let (Some(selected_tools), Some(agent_tools_json)) = (
+            normalized_config.available_tools.as_mut(),
+            agent.available_tools.as_deref(),
+        ) {
+            let agent_tools = serde_json::from_str::<Vec<String>>(agent_tools_json)
+                .map_err(|error| format!("Invalid Agent available tools: {error}"))?;
+            selected_tools.retain(|tool| agent_tools.contains(tool));
+        }
+    }
     enforce_auto_approve_tool_visibility(&mut normalized_config);
     let normalized_config_json = normalized_config.to_json();
     let signal_agent_config =
@@ -5539,6 +5586,21 @@ pub async fn update_workflow_agent_config(
         store
             .update_workflow_agent_config(&session_id, &normalized_config_json)
             .map_err(|e| e.to_string())?;
+    }
+
+    if let Some(available_tools) = signal_agent_config.get("availableTools").cloned() {
+        inject_runtime_config_signal(
+            gateway.inner(),
+            workflow_manager.inner(),
+            state.inner(),
+            &session_id,
+            &previous_config_json,
+            serde_json::json!({
+                "type": "update_available_tools",
+                "available_tools": available_tools
+            }),
+        )
+        .await?;
     }
 
     if let Some(auto_approve) = signal_agent_config.get("autoApprove").cloned() {
@@ -7008,7 +7070,7 @@ mod tests {
     }
 
     #[test]
-    fn inherited_workflow_config_keeps_current_agent_tool_capabilities() {
+    fn inherited_workflow_config_applies_user_tool_preferences_to_current_agent_capabilities() {
         let agent_config = AgentConfig {
             available_tools: Some(vec![
                 "read_file".to_string(),
@@ -7040,18 +7102,9 @@ mod tests {
 
         let merged = merge_inherited_workflow_config(&agent_config, &inherited_config);
 
-        assert_eq!(merged.available_tools, agent_config.available_tools);
-        assert_eq!(
-            merged.mcp_tool_exposure,
-            Some(vec!["server__MCP__new_tool".to_string()])
-        );
-        assert_eq!(
-            merged.auto_approve,
-            Some(vec![
-                "read_file".to_string(),
-                "server__MCP__new_tool".to_string(),
-            ])
-        );
+        assert_eq!(merged.available_tools, Some(vec!["read_file".to_string()]));
+        assert_eq!(merged.mcp_tool_exposure, Some(Vec::new()));
+        assert_eq!(merged.auto_approve, Some(vec!["read_file".to_string()]));
         assert_eq!(merged.max_contexts, Some(128_000));
         assert!(merged.shell_policy.is_none());
     }

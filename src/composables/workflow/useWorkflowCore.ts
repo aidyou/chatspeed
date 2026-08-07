@@ -342,6 +342,18 @@ export function useWorkflowCore({
         }
     }
 
+    /**
+     * Builds the preference payload only when the user creates a workflow from the
+     * current workflow. A normal new workflow sends no inherited configuration and
+     * therefore starts directly from the selected Agent's current configuration.
+     *
+     * The Agent remains the source of truth for capabilities and defaults. This
+     * payload carries only user-selected workflow preferences: paths, approval and
+     * planning choices, explicit sandbox overrides, models, skills, shell rules, and
+     * the checked `availableTools` set. The backend merges the payload with the current
+     * Agent configuration, filters stale tool choices against the Agent's current
+     * capabilities, and keeps auto-approval as a subset of the resulting tools.
+     */
     const buildInheritedWorkflowConfig = (baseConfig = {}) => {
         const config = mergeLocalUiOverrides(baseConfig)
         const inheritedKeys = [
@@ -350,10 +362,15 @@ export function useWorkflowCore({
             'autoApprove',
             'autoApprovePlan',
             'autoCompress',
+            'availableTools',
             'finalAudit',
             'finalReviewMode',
             'models',
             'phase',
+            'sandboxConfig',
+            'sandboxExecutionMode',
+            'sandboxOverride',
+            'sandboxSchemeId',
             'selectedSkills',
             'shellPolicy',
             'skillEnabled'
