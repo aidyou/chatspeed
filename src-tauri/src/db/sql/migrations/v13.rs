@@ -43,6 +43,7 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v13 migration: Add shared shell sandbox schemes",
     sql: MIGRATION_SQL,
     ensure: Some(ensure_shared_sandbox_schemes),
+    apply: None,
 };
 
 #[cfg(test)]

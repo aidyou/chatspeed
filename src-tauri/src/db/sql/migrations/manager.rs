@@ -1,5 +1,5 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v2, v3, v4, v5, v6, v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v2, v3, v4, v5, v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -18,6 +18,7 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v11::MIGRATION,
     v12::MIGRATION,
     v13::MIGRATION,
+    v14::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -53,6 +54,25 @@ where
         [version],
     )?;
 
+    tx.commit()?;
+    Ok(())
+}
+
+fn execute_migration(
+    conn: &mut Connection,
+    migration: &MigrationDefinition,
+) -> Result<(), StoreError> {
+    let tx = conn.transaction()?;
+    for (_name, sql) in migration.sql {
+        tx.execute(sql, [])?;
+    }
+    if let Some(apply) = migration.apply {
+        apply(&tx)?;
+    }
+    tx.execute(
+        "INSERT OR REPLACE INTO db_version (version) VALUES (?1)",
+        [migration.version],
+    )?;
     tx.commit()?;
     Ok(())
 }
@@ -141,7 +161,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
             migration.version,
             migration.description
         );
-        execute_migration_statements(conn, migration.sql.iter().copied(), migration.version)?;
+        execute_migration(conn, migration)?;
         log::info!(
             "Successfully applied migration version {}.",
             migration.version
@@ -216,6 +236,51 @@ mod tests {
         assert_eq!(
             recorded_versions, 1,
             "fresh installs should record only the latest schema version"
+        );
+    }
+
+    #[test]
+    fn migration_apply_failure_rolls_back_schema_changes_and_version_marker() {
+        fn fail_after_schema_change(tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
+            tx.execute(
+                "CREATE TABLE migration_apply_should_rollback (id INTEGER)",
+                [],
+            )?;
+            Err(StoreError::InvalidData(
+                "intentional migration failure".to_string(),
+            ))
+        }
+
+        const MIGRATION_SQL: &[(&str, &str)] = &[(
+            "migration_sql_should_rollback",
+            "CREATE TABLE migration_sql_should_rollback (id INTEGER)",
+        )];
+        let migration = MigrationDefinition {
+            version: 14,
+            description: "test migration",
+            sql: MIGRATION_SQL,
+            ensure: None,
+            apply: Some(fail_after_schema_change),
+        };
+        let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
+        conn.execute("CREATE TABLE db_version (version INTEGER PRIMARY KEY)", [])
+            .expect("failed to create db version fixture");
+
+        let error = execute_migration(&mut conn, &migration)
+            .expect_err("failing migration apply should roll back");
+        assert!(error.to_string().contains("intentional migration failure"));
+        assert_eq!(
+            get_db_version(&conn).expect("db version should be readable"),
+            0,
+            "failed migration must not record its version"
+        );
+        assert!(
+            !table_exists(&conn, "migration_sql_should_rollback"),
+            "migration SQL should roll back with the failed apply hook"
+        );
+        assert!(
+            !table_exists(&conn, "migration_apply_should_rollback"),
+            "apply-hook SQL should roll back with the failed migration"
         );
     }
 

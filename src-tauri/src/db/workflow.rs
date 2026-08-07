@@ -1916,12 +1916,14 @@ impl MainStore {
         runtime
             .write(move |conn| {
                 conn.execute(
-                    "INSERT INTO workflow_messages (id, session_id, role, message, reasoning, message_kind, message_subtype, segment_id, source_event_type, metadata, attached_context, step_type, step_index, is_error, error_type)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-                    params![msg.id, msg.session_id, msg.role, msg.message, msg.reasoning, msg.message_kind, msg.message_subtype, msg.segment_id, msg.source_event_type, metadata_json, msg.attached_context, msg.step_type, msg.step_index, if msg.is_error { 1 } else { 0 }, msg.error_type],
+                    "INSERT INTO workflow_messages (session_id, role, message, reasoning, message_kind, message_subtype, segment_id, source_event_type, metadata, attached_context, step_type, step_index, is_error, error_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    params![msg.session_id, msg.role, msg.message, msg.reasoning, msg.message_kind, msg.message_subtype, msg.segment_id, msg.source_event_type, metadata_json, msg.attached_context, msg.step_type, msg.step_index, if msg.is_error { 1 } else { 0 }, msg.error_type],
                 )?;
-                conn.execute("UPDATE workflows SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1", params![msg.session_id])?;
-                Ok(msg)
+                let mut persisted = msg;
+                persisted.id = Some(conn.last_insert_rowid());
+                conn.execute("UPDATE workflows SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1", params![persisted.session_id])?;
+                Ok(persisted)
             })
             .await
     }
@@ -3061,6 +3063,57 @@ mod tests {
                 created_at: None,
             })
             .expect("failed to add window test message")
+    }
+
+    #[tokio::test]
+    async fn async_workflow_message_persistence_uses_sqlite_rowid_instead_of_supplied_id() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "async-workflow-message-id";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+        let first_message = add_window_test_message(&store, session_id, "first", false);
+        assert_eq!(first_message.id, Some(1));
+
+        let persisted = MainStore::add_workflow_message_with_runtime(
+            store
+                .db_runtime()
+                .expect("failed to obtain database runtime"),
+            WorkflowMessage {
+                id: Some(873149882892816384),
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "second".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+        )
+        .await
+        .expect("failed to persist workflow message asynchronously");
+
+        assert_eq!(persisted.id, Some(2));
+        let messages = store
+            .get_recent_workflow_message_page(session_id, 10)
+            .expect("failed to load persisted workflow messages")
+            .messages;
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
     }
 
     #[test]

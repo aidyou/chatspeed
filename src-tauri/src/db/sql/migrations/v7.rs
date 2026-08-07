@@ -37,4 +37,5 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v7 migration: Add provider_id to ccproxy stats",
     sql: MIGRATION_SQL,
     ensure: Some(ensure_ccproxy_provider_id),
+    apply: None,
 };

@@ -265,4 +265,5 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v5 migration: Add workflows table and unified agent configuration columns",
     sql: MIGRATION_SQL,
     ensure: Some(ensure),
+    apply: None,
 };

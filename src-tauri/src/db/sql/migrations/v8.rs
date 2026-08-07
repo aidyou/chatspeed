@@ -14,6 +14,7 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v8 migration: Encrypt provider API keys",
     sql: MIGRATION_SQL,
     ensure: Some(upgrade_api_key_encryption),
+    apply: None,
 };
 
 #[cfg(test)]

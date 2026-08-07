@@ -11,4 +11,5 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v9 migration: Index workflow context source messages",
     sql: MIGRATION_SQL,
     ensure: None,
+    apply: None,
 };

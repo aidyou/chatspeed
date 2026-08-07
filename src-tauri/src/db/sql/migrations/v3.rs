@@ -8,4 +8,5 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v3 migration: Placeholder for compatibility",
     sql: MIGRATION_SQL,
     ensure: None,
+    apply: None,
 };

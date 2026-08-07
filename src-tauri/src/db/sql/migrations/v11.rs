@@ -38,6 +38,7 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v11 migration: Add parent-scoped sub-agent responsibility roles",
     sql: MIGRATION_SQL,
     ensure: Some(ensure_sub_agent_roles),
+    apply: None,
 };
 
 #[cfg(test)]

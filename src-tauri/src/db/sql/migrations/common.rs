@@ -1,13 +1,15 @@
 use crate::db::StoreError;
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 
 pub type MigrationEnsureFn = fn(&Connection) -> Result<(), StoreError>;
+pub type MigrationApplyFn = fn(&Transaction<'_>) -> Result<(), StoreError>;
 
 pub struct MigrationDefinition {
     pub version: i32,
     pub description: &'static str,
     pub sql: &'static [(&'static str, &'static str)],
     pub ensure: Option<MigrationEnsureFn>,
+    pub apply: Option<MigrationApplyFn>,
 }
 
 pub(crate) fn column_exists(

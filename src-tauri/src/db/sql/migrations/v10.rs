@@ -110,6 +110,7 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
         "v10 migration: Persist per-agent direct MCP tool exposure and rename completion tool",
     sql: MIGRATION_SQL,
     ensure: Some(ensure_v10_data),
+    apply: None,
 };
 
 #[cfg(test)]

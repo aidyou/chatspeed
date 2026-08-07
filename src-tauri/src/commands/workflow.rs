@@ -48,6 +48,16 @@ use rusqlite::params;
 
 const UI_WORKFLOW_MESSAGE_PAGE_SIZE: usize = 300;
 
+fn serialize_workflow_message_page_cursor(before_message_id: Option<i64>) -> Option<String> {
+    before_message_id.map(|message_id| message_id.to_string())
+}
+
+fn parse_workflow_message_page_cursor(before_message_id: &str) -> Result<i64, String> {
+    before_message_id
+        .parse::<i64>()
+        .map_err(|_| "Invalid workflow message page cursor".to_string())
+}
+
 // ==========================================
 // 0. Helper Functions for @mentions
 // ==========================================
@@ -2907,7 +2917,9 @@ pub async fn get_workflow_snapshot(
         obj.insert("messages".to_string(), json!(merged_messages));
         obj.insert(
             "messageWindowBeforeId".to_string(),
-            json!(message_window_before_id),
+            json!(serialize_workflow_message_page_cursor(
+                message_window_before_id
+            )),
         );
         obj.insert(
             "hiddenEarlierMessageCount".to_string(),
@@ -2940,8 +2952,9 @@ pub async fn get_workflow_snapshot(
 pub async fn get_earlier_workflow_message_page(
     state: State<'_, Arc<MainStore>>,
     session_id: String,
-    before_message_id: i64,
+    before_message_id: String,
 ) -> Result<Value, String> {
+    let before_message_id = parse_workflow_message_page_cursor(&before_message_id)?;
     let page = {
         let store = &*state;
         store
@@ -2963,7 +2976,7 @@ pub async fn get_earlier_workflow_message_page(
 
     Ok(json!({
         "messages": merged_messages,
-        "beforeMessageId": page.before_message_id,
+        "beforeMessageId": serialize_workflow_message_page_cursor(page.before_message_id),
         "hiddenEarlierMessageCount": page.hidden_message_count,
     }))
 }
@@ -2972,8 +2985,9 @@ pub async fn get_earlier_workflow_message_page(
 pub async fn get_earlier_workflow_messages(
     state: State<'_, Arc<MainStore>>,
     session_id: String,
-    before_message_id: i64,
+    before_message_id: String,
 ) -> Result<Value, String> {
+    let before_message_id = parse_workflow_message_page_cursor(&before_message_id)?;
     let window = {
         let store = &*state;
         store
@@ -2991,7 +3005,7 @@ pub async fn get_earlier_workflow_messages(
 
     Ok(json!({
         "messages": merged_messages,
-        "beforeMessageId": window.before_message_id,
+        "beforeMessageId": serialize_workflow_message_page_cursor(window.before_message_id),
         "hiddenCompletedTaskCount": window.hidden_completed_task_count,
     }))
 }
@@ -5789,6 +5803,20 @@ mod tests {
                 Ok(())
             })
             .expect("failed to seed agent");
+    }
+
+    #[test]
+    fn workflow_message_page_cursor_round_trips_large_i64_ids_as_strings() {
+        let message_id = 873149882892816384_i64;
+        let cursor = serialize_workflow_message_page_cursor(Some(message_id));
+
+        assert_eq!(cursor.as_deref(), Some("873149882892816384"));
+        assert_eq!(
+            parse_workflow_message_page_cursor(cursor.as_deref().expect("cursor should exist")),
+            Ok(message_id)
+        );
+        assert!(parse_workflow_message_page_cursor("873149882892816400").is_ok());
+        assert!(parse_workflow_message_page_cursor("not-a-cursor").is_err());
     }
 
     #[test]

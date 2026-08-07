@@ -40,4 +40,5 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v4 migration: Add ccproxy_stats table",
     sql: MIGRATION_SQL,
     ensure: None,
+    apply: None,
 };

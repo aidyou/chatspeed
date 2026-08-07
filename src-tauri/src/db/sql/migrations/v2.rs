@@ -29,4 +29,5 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v2 migration: Add agents and workflows tables",
     sql: MIGRATION_SQL,
     ensure: None,
+    apply: None,
 };

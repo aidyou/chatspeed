@@ -63,6 +63,7 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v12 migration: Add workflow usage attribution to ccproxy stats",
     sql: MIGRATION_SQL,
     ensure: Some(ensure_workflow_usage_attribution),
+    apply: None,
 };
 
 #[cfg(test)]

@@ -161,4 +161,5 @@ pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     description: "v6 migration: Add workflow automation tables",
     sql: MIGRATION_SQL,
     ensure: Some(ensure_workflow_automation_shell_config),
+    apply: None,
 };
