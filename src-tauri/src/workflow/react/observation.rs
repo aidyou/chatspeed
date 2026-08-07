@@ -928,6 +928,45 @@ mod tests {
     }
 
     #[test]
+    fn reinforce_large_mcp_content_array_uses_shared_overflow_handling() {
+        let text = "mcp-result ".repeat(LARGE_TOOL_OUTPUT_CHAR_LIMIT + 1_000);
+        let mcp_result = json!({
+            "content": [{ "type": "text", "text": text }],
+            "isError": false
+        });
+        let expected_persisted = serde_json::to_string(&mcp_result).unwrap();
+        let tool_call = json!({
+            "function": {
+                "name": "server__MCP__large_result",
+                "arguments": {}
+            }
+        });
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(json!({ "structured_content": mcp_result })),
+            None,
+            None,
+        );
+
+        assert!(reinforced.llm_content.is_none());
+        assert!(reinforced
+            .content
+            .contains("<truncated_content path=\"/tmp/"));
+        assert!(reinforced
+            .content
+            .contains("complete original output was saved"));
+
+        let path = persisted_path(&reinforced.content);
+        let physical_path = resolve_ai_temp_path(Path::new(&path));
+        assert_eq!(
+            fs::read_to_string(&physical_path).unwrap(),
+            expected_persisted
+        );
+        fs::remove_file(physical_path).unwrap();
+    }
+
+    #[test]
     fn reinforce_web_fetch_uses_shared_persistence_failure_fallback() {
         let raw_content = format!("{}SECRET_TAIL", "x".repeat(LARGE_TOOL_OUTPUT_CHAR_LIMIT));
         let tool_call = json!({

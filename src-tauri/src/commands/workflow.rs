@@ -3614,6 +3614,14 @@ fn compat_is_resumable_snapshot_status_for_user_message(status: &str) -> bool {
         )
     )
 }
+
+fn compat_is_awaiting_user_snapshot_status(status: &str) -> bool {
+    matches!(
+        compat_snapshot_workflow_state(status),
+        Some(WorkflowState::AwaitingUser)
+    )
+}
+
 fn restore_context_for_signal(store: Arc<MainStore>, session_id: &str) -> Option<ExecutionContext> {
     match restore_execution_context(store, session_id) {
         RecoveryResult::SnapshotHit { context } | RecoveryResult::ReplayFallback { context } => {
@@ -3658,6 +3666,7 @@ fn can_resume_user_message_from_recovery(
 ) -> bool {
     compat_is_terminal_snapshot_status(snapshot_status)
         || is_resumable_from_context_for_user_message(ctx)
+        || compat_is_awaiting_user_snapshot_status(snapshot_status)
         || (ctx.is_none() && compat_is_resumable_snapshot_status_for_user_message(snapshot_status))
 }
 
@@ -6789,6 +6798,17 @@ mod tests {
         assert!(!can_resume_user_message_from_recovery(
             Some(&running),
             "executing"
+        ));
+    }
+
+    #[test]
+    fn test_can_resume_user_message_from_recovery_uses_awaiting_user_status() {
+        let mut stale_context = ExecutionContext::new("session-6".to_string());
+        stale_context.state = RuntimeState::Running;
+
+        assert!(can_resume_user_message_from_recovery(
+            Some(&stale_context),
+            "awaiting_user"
         ));
     }
 

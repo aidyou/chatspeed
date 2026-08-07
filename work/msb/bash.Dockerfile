@@ -22,6 +22,7 @@ RUN if [ "$USE_CN_MIRRORS" = "1" ]; then \
     less \
     patch \
     sed \
+    sqlite \
     tar \
     unzip \
     xz \

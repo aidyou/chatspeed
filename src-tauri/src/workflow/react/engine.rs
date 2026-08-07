@@ -6360,6 +6360,17 @@ impl WorkflowExecutor {
             }
         }
 
+        if wait_reason.is_some() {
+            if let Err(e) = self.save_snapshot().await {
+                log::error!(
+                    "[Workflow][session={}][phase=snapshot] Failed to save entered wait state {}: {}",
+                    self.session_id,
+                    new_state,
+                    e
+                );
+            }
+        }
+
         self.dispatch_ui_payload(GatewayPayload::State {
             state: new_state.clone(),
             wait_reason,
@@ -8709,6 +8720,74 @@ mod recovery_tests {
             .expect("transition should persist execution context");
         assert_eq!(context.state, RuntimeState::Running);
         assert_eq!(context.wait_reason, None);
+    }
+
+    #[tokio::test]
+    async fn entering_user_input_wait_persists_waiting_snapshot() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "entered-user-input-wait-snapshot";
+        let agent = Agent::new(
+            "entered-user-input-wait-agent".to_string(),
+            "Entered User Input Wait Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(13).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Executing;
+
+        executor
+            .update_state(WorkflowState::AwaitingUser)
+            .await
+            .expect("entering user-input wait should succeed");
+
+        let context = store
+            .get_execution_context(session_id)
+            .expect("failed to read execution context")
+            .expect("entered wait should persist execution context");
+        assert_eq!(context.state, RuntimeState::Waiting);
+        assert_eq!(context.wait_reason, Some(WaitReason::UserInput));
     }
 
     #[tokio::test]

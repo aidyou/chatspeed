@@ -949,6 +949,7 @@
       "image": "イメージ",
       "instanceName": "インスタンス名",
       "instanceNameTip": "実行中の MSB サンドボックスまたは Docker コンテナを再利用します。利用できない場合は設定済みイメージにフォールバックします。",
+      "management": "管理",
       "memoryMb": "メモリ (MB)",
       "name": "スキーム名",
       "nameRequired": "スキーム名を入力してください。",

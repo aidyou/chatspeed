@@ -125,6 +125,10 @@ impl ShellPolicyEngine {
             .to_ascii_lowercase()
     }
 
+    fn is_null_device(token: &str) -> bool {
+        token == "/dev/null"
+    }
+
     fn hard_denied_command(command: &str) -> bool {
         matches!(
             command,
@@ -715,7 +719,7 @@ impl ShellPolicyEngine {
 
             if redirection_ops.contains(&token_str) {
                 if let Some(next_token) = tokens.get(i + 1) {
-                    if !next_token.starts_with('-') {
+                    if !next_token.starts_with('-') && !Self::is_null_device(next_token) {
                         match self.validate_path_token(
                             next_token,
                             restrict_to_planning,
@@ -762,7 +766,11 @@ impl ShellPolicyEngine {
                 continue;
             }
 
-            if !token.starts_with('-') {
+            if !token.starts_with('-')
+                && !(Self::is_null_device(token)
+                    && i > 0
+                    && redirection_ops.contains(&tokens[i - 1].as_str()))
+            {
                 let is_delete = current_binary == "rm";
                 let force_path_validation =
                     Self::should_force_path_validation(&current_binary, current_binary_arg_index);
@@ -3038,6 +3046,25 @@ mod tests {
             engine.check(&format!("ls {}", root_path.display()), false),
             ShellDecision::Allow
         );
+    }
+
+    #[test]
+    fn test_policy_engine_allows_null_device_redirection_without_exposing_dev() {
+        let (_root, _, guard) = setup_test_context();
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+
+        for command in ["git status >/dev/null", "git status 2>/dev/null"] {
+            assert!(
+                !matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "expected the null-device redirection not to be denied: {command}"
+            );
+        }
+        for command in ["git status >/dev/zero", "cat /dev/null"] {
+            assert!(
+                matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "expected sensitive-path access to remain denied: {command}"
+            );
+        }
     }
 
     #[test]

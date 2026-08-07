@@ -1299,12 +1299,17 @@ export const useWorkflowStore = defineStore('workflow', () => {
       canRewindTail.value = snapshot.canRewindTail === true;
       isRunning.value = RUNNING_STATUSES.includes(status) && hasLiveSession.value;
 
-      waitReason.value =
+      const persistedWaitReason =
         snapshot.workflow.waitReason ||
         snapshot.workflow.wait_reason ||
         snapshot.workflow.executionContext?.waitReason ||
         snapshot.workflow.executionContext?.wait_reason ||
         null;
+      waitReason.value =
+        persistedWaitReason ||
+        (status === WORKFLOW_STATUSES.AWAITING_USER
+          ? WORKFLOW_WAIT_REASONS.USER_INPUT
+          : null);
 
       const parsedMessages = (snapshot.messages || []).map(m =>
         normalizeWorkflowMessage(m, workflowId)

@@ -949,6 +949,7 @@
       "image": "映像",
       "instanceName": "實例名稱",
       "instanceNameTip": "重用正在執行的 MSB 沙箱或 Docker 容器。實例無法使用時會回退到已設定的映像。",
+      "management": "管理",
       "memoryMb": "記憶體 (MB)",
       "name": "方案名稱",
       "nameRequired": "請輸入方案名稱。",

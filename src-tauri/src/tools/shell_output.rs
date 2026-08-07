@@ -14,6 +14,7 @@ use serde_json::json;
 
 const MAX_DISPLAY_CHARS: usize = 30_000;
 const GENERIC_LLM_MAX_LINES: usize = 40;
+const GENERIC_LLM_MAX_CHARS: usize = 20_000;
 const EXPLICIT_SHAPED_LLM_MAX_LINES: usize = 240;
 const EXPLICIT_SHAPED_LLM_MAX_CHARS: usize = 20_000;
 const KSP_LLM_PRESERVE_CHARS: usize = 15_000;
@@ -502,7 +503,7 @@ fn reduce_shell_output_for_llm(normalized_command: &str, raw_content: &str) -> S
     }
 
     if raw_content.lines().count() > 120 || raw_content.chars().count() > 8_000 {
-        return reduce_generic_output(raw_content, GENERIC_LLM_MAX_LINES);
+        return reduce_generic_output(raw_content, GENERIC_LLM_MAX_LINES, GENERIC_LLM_MAX_CHARS);
     }
 
     raw_content.to_string()
@@ -532,16 +533,25 @@ fn is_explicitly_shaped_read_output(command: &str) -> bool {
         || command.contains("awk ")
 }
 
-fn reduce_generic_output(raw_content: &str, tail_lines_count: usize) -> String {
+fn reduce_generic_output(raw_content: &str, tail_lines_count: usize, max_chars: usize) -> String {
+    const TRUNCATION_MARKER: &str = "[truncated previous output]\n";
     let lines: Vec<&str> = raw_content.lines().collect();
-    if lines.len() <= tail_lines_count {
+    if lines.len() <= tail_lines_count && raw_content.chars().count() <= max_chars {
         return raw_content.to_string();
     }
 
-    format!(
-        "[truncated previous output]\n{}",
-        lines[lines.len().saturating_sub(tail_lines_count)..].join("\n")
-    )
+    let tail = lines[lines.len().saturating_sub(tail_lines_count)..].join("\n");
+    let max_tail_chars = max_chars.saturating_sub(TRUNCATION_MARKER.chars().count());
+    let tail_char_count = tail.chars().count();
+    let retained_tail = if tail_char_count > max_tail_chars {
+        tail.chars()
+            .skip(tail_char_count.saturating_sub(max_tail_chars))
+            .collect::<String>()
+    } else {
+        tail
+    };
+
+    format!("{TRUNCATION_MARKER}{retained_tail}")
 }
 
 fn reduce_explicitly_shaped_output(raw_content: &str) -> String {
@@ -590,7 +600,7 @@ mod tests {
         build_compound_shell_tool_result, build_shell_tool_result, normalize_shell_output_streams,
         prepare_shell_output, should_render_stderr_line_as_stdout,
         should_suppress_incidental_termination_stderr, strip_ansi_escape_sequences,
-        CompoundShellStageResult,
+        CompoundShellStageResult, GENERIC_LLM_MAX_CHARS,
     };
     use crate::libs::ai_temp::{
         resolve_ai_temp_path, PersistedToolOutput, LARGE_TOOL_OUTPUT_CHAR_LIMIT,
@@ -725,6 +735,44 @@ mod tests {
             .as_str()
             .expect("persisted output path missing");
         fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
+    }
+
+    #[test]
+    fn compound_output_with_few_oversized_lines_is_bounded_for_llm_context() {
+        let stdout = format!(
+            "BEGIN_WORKFLOW_CONFIG{}END_WORKFLOW_CONFIG",
+            "x".repeat(GENERIC_LLM_MAX_CHARS * 2)
+        );
+        let result = build_shell_tool_result(
+            "sqlite3 chatspeed.db 'SELECT * FROM workflows' && sqlite3 chatspeed.db '.tables'",
+            0,
+            &stdout,
+            "",
+        );
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        let llm_content = structured["llm_content"]
+            .as_str()
+            .expect("llm content missing");
+
+        assert!(llm_content.starts_with("[truncated previous output]"));
+        assert!(llm_content.ends_with("END_WORKFLOW_CONFIG"));
+        assert!(!llm_content.contains("BEGIN_WORKFLOW_CONFIG"));
+        assert!(llm_content.chars().count() <= GENERIC_LLM_MAX_CHARS);
+        assert_eq!(
+            structured["persisted_output"]["reason"].as_str(),
+            Some("reduced")
+        );
+
+        let ai_path = structured["persisted_output"]["path"]
+            .as_str()
+            .expect("persisted output path missing");
+        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
+        assert!(fs::read_to_string(&physical_path)
+            .expect("read persisted output")
+            .contains("BEGIN_WORKFLOW_CONFIG"));
+        fs::remove_file(physical_path).unwrap();
     }
 
     #[test]

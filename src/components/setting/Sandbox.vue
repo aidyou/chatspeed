@@ -63,65 +63,102 @@
           </el-select>
         </el-form-item>
 
-        <section class="editor-section">
-          <div class="editor-section__header">
-            <h3>{{ $t('settings.sandbox.profiles') }}</h3>
-            <el-button size="small" @click="openProfileEditor()">{{ $t('settings.sandbox.addProfile') }}</el-button>
+        <section class="editor-section editor-section--rules">
+          <div class="rule-tabs__header">
+            <el-tabs v-model="activeRuleTab" class="rule-tabs">
+              <el-tab-pane :label="$t('settings.sandbox.profiles')" name="profiles" />
+              <el-tab-pane :label="$t('settings.sandbox.hostRules')" name="hostRules" />
+            </el-tabs>
+            <el-button v-if="activeRuleTab === 'profiles'" size="small" @click="openProfileEditor()">
+              {{ $t('settings.sandbox.addProfile') }}
+            </el-button>
+            <el-button v-else size="small" @click="openHostRuleEditor()">
+              {{ $t('settings.sandbox.addHostRule') }}
+            </el-button>
           </div>
-          <div v-if="draft.config.profiles.length" class="profile-list">
-            <div v-for="profile in draft.config.profiles" :key="profile._draftKey || profile.id" class="profile-list__row">
-              <div class="profile-list__identity">
-                <div class="profile-list__title">
-                  <el-tag size="small" effect="plain">{{ profile.priority }}</el-tag>
-                  <strong>{{ profile.name }}</strong>
-                </div>
-                <small>{{ profile.image }}</small>
-              </div>
-              <div class="profile-list__actions">
-                <el-tooltip :content="$t('settings.sandbox.editProfile')" placement="top" :enterable="false" :hide-after="0">
-                  <span class="icon" @click="openProfileEditor(profile)"><cs name="edit" size="16px" color="secondary" /></span>
-                </el-tooltip>
-                <el-tooltip :content="$t('common.delete')" placement="top" :enterable="false" :hide-after="0">
-                  <span class="icon" @click="removeProfile(profile)"><cs name="trash" size="16px" color="secondary" /></span>
-                </el-tooltip>
-              </div>
-            </div>
-          </div>
-          <div v-else class="profile-list__empty">{{ $t('settings.sandbox.emptyProfiles') }}</div>
-        </section>
 
-        <section class="editor-section">
-          <div class="editor-section__header">
-            <h3>{{ $t('settings.sandbox.hostRules') }}</h3>
-            <el-button size="small" @click="openHostRuleEditor()">{{ $t('settings.sandbox.addHostRule') }}</el-button>
+          <div v-if="activeRuleTab === 'profiles'">
+            <el-table
+              v-if="draft.config.profiles.length"
+              :data="draft.config.profiles"
+              size="small"
+              max-height="320"
+              class="rule-table">
+              <el-table-column prop="name" :label="$t('settings.sandbox.profileName')" min-width="150" />
+              <el-table-column prop="priority" :label="$t('settings.sandbox.priority')" width="100" />
+              <el-table-column prop="image" :label="$t('settings.sandbox.image')" width="180" show-overflow-tooltip />
+              <el-table-column
+                v-if="hasProfileWorkspaceAccess"
+                :label="$t('settings.sandbox.workspaceAccess')"
+                width="120">
+                <template #default="{ row }">
+                  {{ workspaceAccessLabel(row.workspaceAccess) }}
+                </template>
+              </el-table-column>
+              <el-table-column
+                :label="$t('settings.sandbox.management')"
+                width="112"
+                align="right"
+                fixed="right">
+                <template #default="{ row }">
+                  <div class="rule-table__actions">
+                    <el-tooltip :content="$t('settings.sandbox.editProfile')" placement="top" :enterable="false" :hide-after="0">
+                      <span class="icon" @click="openProfileEditor(row)"><cs name="edit" size="16px" color="secondary" /></span>
+                    </el-tooltip>
+                    <el-tooltip :content="$t('common.delete')" placement="top" :enterable="false" :hide-after="0">
+                      <span class="icon" @click="removeProfile(row)"><cs name="trash" size="16px" color="secondary" /></span>
+                    </el-tooltip>
+                  </div>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-else class="profile-list__empty">{{ $t('settings.sandbox.emptyProfiles') }}</div>
           </div>
-          <div v-if="draft.config.hostRules.length" class="profile-list">
-            <div v-for="rule in draft.config.hostRules" :key="rule._draftKey || rule.id" class="profile-list__row">
-              <div class="profile-list__identity">
-                <div class="profile-list__title">
-                  <el-tag size="small" effect="plain">{{ rule.priority }}</el-tag>
-                  <strong>{{ rule.name }}</strong>
-                </div>
-                <small>{{ $t('settings.sandbox.hostRules') }}</small>
-              </div>
-              <div class="profile-list__actions">
-                <el-tooltip :content="$t('settings.sandbox.editHostRule')" placement="top" :enterable="false" :hide-after="0">
-                  <span class="icon" @click="openHostRuleEditor(rule)"><cs name="edit" size="16px" color="secondary" /></span>
-                </el-tooltip>
-                <el-tooltip :content="$t('common.delete')" placement="top" :enterable="false" :hide-after="0">
-                  <span class="icon" @click="removeHostRule(rule)"><cs name="trash" size="16px" color="secondary" /></span>
-                </el-tooltip>
-              </div>
-            </div>
+
+          <div v-else>
+            <el-table
+              v-if="draft.config.hostRules.length"
+              :data="draft.config.hostRules"
+              size="small"
+              max-height="320"
+              class="rule-table">
+              <el-table-column prop="name" :label="$t('settings.sandbox.ruleName')" min-width="160" />
+              <el-table-column prop="priority" :label="$t('settings.sandbox.priority')" width="100" />
+              <el-table-column :label="$t('settings.sandbox.commandPatterns')" min-width="180" show-overflow-tooltip>
+                <template #default="{ row }">
+                  {{ (row.commandPatterns || []).join(', ') }}
+                </template>
+              </el-table-column>
+              <el-table-column
+                :label="$t('settings.sandbox.management')"
+                width="112"
+                align="right"
+                fixed="right">
+                <template #default="{ row }">
+                  <div class="rule-table__actions">
+                    <el-tooltip :content="$t('settings.sandbox.editHostRule')" placement="top" :enterable="false" :hide-after="0">
+                      <span class="icon" @click="openHostRuleEditor(row)"><cs name="edit" size="16px" color="secondary" /></span>
+                    </el-tooltip>
+                    <el-tooltip :content="$t('common.delete')" placement="top" :enterable="false" :hide-after="0">
+                      <span class="icon" @click="removeHostRule(row)"><cs name="trash" size="16px" color="secondary" /></span>
+                    </el-tooltip>
+                  </div>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-else class="profile-list__empty">{{ $t('settings.sandbox.emptyHostRules') }}</div>
           </div>
-          <div v-else class="profile-list__empty">{{ $t('settings.sandbox.emptyHostRules') }}</div>
         </section>
       </el-form>
       <template #footer>
-        <span v-if="healthSummary" class="health-summary">{{ healthSummary }}</span>
-        <el-button :loading="checking" @click="checkHealth">{{ $t('settings.sandbox.healthCheck') }}</el-button>
-        <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
-        <el-button type="primary" :loading="saving" @click="save">{{ $t('common.save') }}</el-button>
+        <div class="sandbox-dialog__footer">
+          <div class="sandbox-dialog__actions">
+            <el-button :loading="checking" @click="checkHealth">{{ $t('settings.sandbox.healthCheck') }}</el-button>
+            <el-button @click="dialogVisible = false">{{ $t('common.cancel') }}</el-button>
+            <el-button type="primary" :loading="saving" @click="save">{{ $t('common.save') }}</el-button>
+          </div>
+          <span v-if="healthSummary" class="health-summary">{{ healthSummary }}</span>
+        </div>
       </template>
     </el-dialog>
 
@@ -266,13 +303,26 @@ const profileDraft = ref(null)
 const hostRuleDialogVisible = ref(false)
 const hostRuleEditing = ref(false)
 const hostRuleDraft = ref(null)
+const activeRuleTab = ref('profiles')
 const draft = ref({ id: '', name: '', description: '', disabled: false, config: null })
 
 const defaultConfig = () => ({ runtimePreference: 'auto', profiles: [], hostRules: [] })
 const newId = prefix => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+const hasProfileWorkspaceAccess = computed(() =>
+  (draft.value.config?.profiles || []).some(profile => profile.workspaceAccess)
+)
+const workspaceAccessLabel = workspaceAccess => {
+  if (workspaceAccess === 'read_write') return t('settings.sandbox.workspaceReadWrite')
+  if (workspaceAccess === 'read_only') return t('settings.sandbox.workspaceReadOnly')
+  return ''
+}
+const resetRuleListState = () => {
+  activeRuleTab.value = 'profiles'
+}
 const resetDraft = () => {
   draft.value = { id: '', name: '', description: '', disabled: false, config: defaultConfig() }
   healthSummary.value = ''
+  resetRuleListState()
 }
 
 const normalizeConfig = config => ({
@@ -537,6 +587,7 @@ const openEdit = scheme => {
   editing.value = true
   draft.value = { ...scheme, config: normalizeConfig(scheme.config) }
   healthSummary.value = ''
+  resetRuleListState()
   dialogVisible.value = true
 }
 
@@ -677,22 +728,24 @@ schemeStore.fetchSchemes()
   }
 
   .editor-section { margin-top: var(--cs-space-lg); }
+  .editor-section--rules { min-width: 0; }
+  .rule-tabs__header { display: flex; align-items: center; gap: var(--cs-space); margin-bottom: 5px; }
+  .rule-tabs { flex: 1; min-width: 0; }
+  .rule-tabs :deep(.el-tabs__header) { margin: 0; }
+  .rule-tabs :deep(.el-tabs__content) { display: none; }
+  .sandbox-dialog__footer { display: flex; align-items: center; justify-content: space-between; gap: var(--cs-space); }
+  .sandbox-dialog__actions { display: flex; gap: var(--cs-space-sm); flex-shrink: 0; }
+  .sandbox-dialog__actions :deep(.el-button + .el-button) { margin-left: 0; }
   .instance-name-field { width: 100%; }
   .instance-name-field small { display: block; margin-top: var(--cs-space-xs); color: var(--cs-text-color-secondary); line-height: 1.4; }
-  .editor-section__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--cs-space-sm); }
-  .editor-section__header h3 { margin: 0; font-size: var(--cs-font-size); }
   .editor-card { margin-bottom: var(--cs-space-sm); }
   .editor-card__actions { display: flex; justify-content: flex-end; }
-  .health-summary { color: var(--cs-text-color-secondary); margin-right: auto; }
+  .health-summary { color: var(--cs-text-color-secondary); margin-left: auto; }
 
-  .profile-list { display: grid; gap: var(--cs-space-xs); }
-  .profile-list__row { display: flex; align-items: center; justify-content: space-between; gap: var(--cs-space); min-height: 52px; padding: var(--cs-space-xs) var(--cs-space-sm); border: 1px solid var(--cs-border-color); border-radius: var(--cs-border-radius); background: var(--cs-bg-color-light); }
-  .profile-list__identity { min-width: 0; }
-  .profile-list__title { display: flex; align-items: center; gap: var(--cs-space-xs); min-width: 0; }
-  .profile-list__title strong { overflow: hidden; color: var(--cs-text-color-primary); text-overflow: ellipsis; white-space: nowrap; }
-  .profile-list__actions { display: flex; align-items: center; gap: var(--cs-space); flex-shrink: 0; }
-  .profile-list__actions .icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--cs-border-radius); }
-  .profile-list__actions .icon:hover { background: var(--cs-bg-color-dark); }
+  .rule-table { width: 100%; }
+  .rule-table__actions { display: flex; justify-content: flex-end; gap: var(--cs-space-xs); }
+  .rule-table__actions .icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--cs-border-radius); }
+  .rule-table__actions .icon:hover { background: var(--cs-bg-color-dark); }
   .profile-list__empty { padding: var(--cs-space); color: var(--cs-text-color-secondary); border: 1px dashed var(--cs-border-color); border-radius: var(--cs-border-radius); }
 
   .profile-resources { display: grid; grid-template-columns: 1fr; gap: var(--cs-space-sm); }

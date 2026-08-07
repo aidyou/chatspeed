@@ -214,6 +214,15 @@ test('tool duration badges use structured backend metadata and preserve the requ
   assert.match(workflowEngine, /fn should_expose_tool_duration\(tool_name: &str\)/)
 })
 
+test('persisted awaiting-user status restores answer controls when an older snapshot lacks wait_reason', async () => {
+  const workflowStore = await readFile('src/stores/workflow.js', 'utf8')
+
+  assert.match(
+    workflowStore,
+    /const persistedWaitReason =[\s\S]*?waitReason\.value =[\s\S]*?persistedWaitReason \|\|[\s\S]*?status === WORKFLOW_STATUSES\.AWAITING_USER[\s\S]*?WORKFLOW_WAIT_REASONS\.USER_INPUT/
+  )
+})
+
 test('tool activity grouping keeps only explicit independent segments as boundaries', async () => {
   const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
 
