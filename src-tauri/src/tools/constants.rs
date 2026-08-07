@@ -191,7 +191,6 @@ pub const READ_ONLY_BASH_PREFIXES: &[&str] = &[
     "grep ",
     "egrep ",
     "fgrep ",
-    "find ",
     "locate ",
     "which ",
     "whereis ",

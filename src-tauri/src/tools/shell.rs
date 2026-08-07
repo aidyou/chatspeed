@@ -3,7 +3,8 @@ use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::libs::ai_temp::ToolOutputWriter;
 use crate::tools::helper::is_node_build_command;
 use crate::tools::helper::{
-    classify_shell_stage, shell_tokens, split_shell_command_segments, ShellStage,
+    classify_shell_stage, leading_command_index, shell_tokens, split_shell_command_segments,
+    ShellStage,
 };
 #[cfg(test)]
 use crate::tools::helper::{SafeCompoundCommand, SafeCompoundStage};
@@ -105,6 +106,432 @@ pub struct ShellPolicyEngine {
 }
 
 impl ShellPolicyEngine {
+    const MAX_EXECUTION_AUDIT_DEPTH: usize = 16;
+
+    fn merge_audit_decisions(current: ShellDecision, candidate: ShellDecision) -> ShellDecision {
+        match candidate {
+            ShellDecision::Deny(_) => candidate,
+            ShellDecision::Review(_) if current == ShellDecision::Allow => candidate,
+            _ => current,
+        }
+    }
+
+    fn executable_name(token: &str) -> String {
+        token
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(token)
+            .trim_end_matches(".exe")
+            .to_ascii_lowercase()
+    }
+
+    fn hard_denied_command(command: &str) -> bool {
+        matches!(
+            command,
+            "mkfs"
+                | "dd"
+                | "format"
+                | "fdisk"
+                | "parted"
+                | "sudo"
+                | "su"
+                | "doas"
+                | "pkexec"
+                | "runuser"
+                | "chsh"
+                | "newgrp"
+                | "sg"
+                | "ssh"
+                | "scp"
+                | "useradd"
+                | "adduser"
+                | "userdel"
+                | "deluser"
+                | "usermod"
+                | "chage"
+                | "passwd"
+                | "vipw"
+                | "groupadd"
+                | "addgroup"
+                | "groupdel"
+                | "delgroup"
+                | "groupmod"
+                | "gpasswd"
+                | "vigr"
+        )
+    }
+
+    fn contains_hard_denied_command_text(text: &str) -> bool {
+        text.split(|character: char| !character.is_ascii_alphanumeric())
+            .filter(|token| !token.is_empty())
+            .map(str::to_ascii_lowercase)
+            .any(|token| Self::hard_denied_command(&token))
+    }
+
+    fn command_after_options<'a>(
+        arguments: &'a [String],
+        options_with_values: &[&str],
+    ) -> Option<&'a [String]> {
+        let mut index = 0;
+        while index < arguments.len() {
+            let argument = arguments[index].as_str();
+            if argument == "--" {
+                return arguments.get(index + 1..);
+            }
+            if argument == "-" || !argument.starts_with('-') {
+                return Some(&arguments[index..]);
+            }
+
+            let consumes_next = options_with_values.iter().any(|option| argument == *option);
+            let has_attached_value = options_with_values.iter().any(|option| {
+                argument.starts_with(option)
+                    && argument != *option
+                    && (option.starts_with("--") || option.len() == 2)
+            });
+            index += if consumes_next && !has_attached_value {
+                2
+            } else {
+                1
+            };
+        }
+        None
+    }
+
+    pub fn execution_audit_decision(&self, command_str: &str) -> ShellDecision {
+        self.audit_execution_forms(command_str, 0)
+    }
+
+    fn audit_execution_forms(&self, command_str: &str, depth: usize) -> ShellDecision {
+        if depth >= Self::MAX_EXECUTION_AUDIT_DEPTH {
+            return ShellDecision::Deny(
+                "Nested shell execution exceeds the audit limit.".to_string(),
+            );
+        }
+
+        let mut decision = ShellDecision::Allow;
+        let nested_patterns = [
+            Regex::new(r"\$\((?P<inner>.*?)\)").unwrap(),
+            Regex::new(r"`(?P<inner>.*?)`").unwrap(),
+            Regex::new(r"<\s*\((?P<inner>.*?)\)").unwrap(),
+            Regex::new(r">\s*\((?P<inner>.*?)\)").unwrap(),
+        ];
+        for pattern in nested_patterns {
+            for captures in pattern.captures_iter(command_str) {
+                if let Some(inner) = captures.name("inner") {
+                    decision = Self::merge_audit_decisions(
+                        decision,
+                        self.audit_execution_forms(inner.as_str(), depth + 1),
+                    );
+                    if matches!(decision, ShellDecision::Deny(_)) {
+                        return decision;
+                    }
+                }
+            }
+        }
+
+        for segment in split_shell_command_segments(command_str) {
+            let Some(tokens) = shell_tokens(&segment) else {
+                continue;
+            };
+            decision =
+                Self::merge_audit_decisions(decision, self.audit_execution_tokens(&tokens, depth));
+            if matches!(decision, ShellDecision::Deny(_)) {
+                return decision;
+            }
+        }
+
+        decision
+    }
+
+    fn audit_execution_tokens(&self, tokens: &[String], depth: usize) -> ShellDecision {
+        let index = leading_command_index(tokens);
+        let Some(command) = tokens.get(index) else {
+            return ShellDecision::Allow;
+        };
+        let executable = Self::executable_name(command);
+        if Self::hard_denied_command(&executable) {
+            return ShellDecision::Deny(format!(
+                "System-critical command '{}' is forbidden.",
+                executable
+            ));
+        }
+
+        let arguments = &tokens[index + 1..];
+        match executable.as_str() {
+            "find" => self.audit_find_actions(arguments, depth),
+            "env" => self.audit_env_wrapper(arguments, depth),
+            "command" => self.audit_command_wrapper(arguments, depth),
+            "watch" => self.audit_watch_wrapper(arguments, depth),
+            "xargs" => self.audit_xargs_wrapper(arguments, depth),
+            "sh" | "bash" | "zsh" | "dash" | "ksh" => {
+                let mut decision = ShellDecision::Review(format!(
+                    "Shell interpreter '{}' requires execution audit.",
+                    executable
+                ));
+                if let Some(script_index) = arguments
+                    .iter()
+                    .position(|argument| argument == "-c" || argument.starts_with("-c"))
+                {
+                    let script = arguments[script_index]
+                        .strip_prefix("-c")
+                        .filter(|script| !script.is_empty())
+                        .map(ToString::to_string)
+                        .or_else(|| arguments.get(script_index + 1).cloned());
+                    if let Some(script) = script {
+                        decision = Self::merge_audit_decisions(
+                            decision,
+                            self.audit_execution_forms(&script, depth + 1),
+                        );
+                    }
+                }
+                decision
+            }
+            "eval" => Self::merge_audit_decisions(
+                ShellDecision::Review("Shell eval requires execution audit.".to_string()),
+                self.audit_execution_forms(&arguments.join(" "), depth + 1),
+            ),
+            "awk"
+                if arguments.iter().any(|argument| {
+                    argument.contains("system(")
+                        || argument.contains("| getline")
+                        || argument.contains("|&")
+                        || argument.contains("| \"")
+                        || argument.contains("| '")
+                }) =>
+            {
+                if arguments
+                    .iter()
+                    .any(|argument| Self::contains_hard_denied_command_text(argument))
+                {
+                    ShellDecision::Deny(
+                        "Dynamic awk execution contains a forbidden system command.".to_string(),
+                    )
+                } else {
+                    ShellDecision::Review(
+                        "Dynamic awk execution requires execution audit.".to_string(),
+                    )
+                }
+            }
+            "source" | "." => {
+                ShellDecision::Review("Shell source requires execution audit.".to_string())
+            }
+            "time" => self.audit_direct_wrapper(
+                "time",
+                Self::command_after_options(arguments, &["-o", "--output", "-f", "--format"]),
+                depth,
+            ),
+            "nice" => self.audit_direct_wrapper(
+                "nice",
+                Self::command_after_options(arguments, &["-n", "--adjustment"]),
+                depth,
+            ),
+            "timeout" => self.audit_direct_wrapper(
+                "timeout",
+                Self::command_after_options(arguments, &["-s", "--signal", "-k", "--kill-after"])
+                    .and_then(|arguments| arguments.get(1..)),
+                depth,
+            ),
+            "stdbuf" => self.audit_direct_wrapper(
+                "stdbuf",
+                Self::command_after_options(arguments, &["-i", "-o", "-e"]),
+                depth,
+            ),
+            "nohup" | "setsid" | "exec" | "builtin" | "coproc" => self.audit_direct_wrapper(
+                executable.as_str(),
+                Self::command_after_options(arguments, &["-a"]),
+                depth,
+            ),
+            _ => ShellDecision::Allow,
+        }
+    }
+
+    fn audit_direct_wrapper(
+        &self,
+        wrapper: &str,
+        child_tokens: Option<&[String]>,
+        depth: usize,
+    ) -> ShellDecision {
+        let mut decision = ShellDecision::Review(format!(
+            "Command wrapper '{}' requires execution audit.",
+            wrapper
+        ));
+        if let Some(child_tokens) = child_tokens {
+            decision = Self::merge_audit_decisions(
+                decision,
+                self.audit_execution_tokens(child_tokens, depth + 1),
+            );
+        }
+        decision
+    }
+
+    fn audit_env_wrapper(&self, arguments: &[String], depth: usize) -> ShellDecision {
+        let mut index = 0;
+        while index < arguments.len() {
+            let argument = arguments[index].as_str();
+            if matches!(argument, "-S" | "--split-string") {
+                let mut decision = ShellDecision::Review(
+                    "Environment command with split-string requires execution audit.".to_string(),
+                );
+                if let Some(script) = arguments.get(index + 1) {
+                    decision = Self::merge_audit_decisions(
+                        decision,
+                        self.audit_execution_forms(script, depth + 1),
+                    );
+                }
+                return decision;
+            }
+            if let Some(script) = argument.strip_prefix("--split-string=").or_else(|| {
+                argument
+                    .strip_prefix("-S")
+                    .filter(|script| !script.is_empty())
+            }) {
+                return Self::merge_audit_decisions(
+                    ShellDecision::Review(
+                        "Environment command with split-string requires execution audit."
+                            .to_string(),
+                    ),
+                    self.audit_execution_forms(script, depth + 1),
+                );
+            }
+            if argument == "--" {
+                index += 1;
+                break;
+            }
+            if matches!(argument, "-u" | "--unset" | "-C" | "--chdir") {
+                index += 2;
+                continue;
+            }
+            if argument.starts_with("--unset=")
+                || argument.starts_with("--chdir=")
+                || (argument.starts_with("-u") && argument.len() > 2)
+                || (argument.starts_with("-C") && argument.len() > 2)
+            {
+                index += 1;
+                continue;
+            }
+            if argument.starts_with('-') {
+                index += 1;
+                continue;
+            }
+            break;
+        }
+
+        let child_start = index + leading_command_index(&arguments[index..]);
+        if child_start >= arguments.len() {
+            ShellDecision::Allow
+        } else {
+            self.audit_direct_wrapper("env", arguments.get(child_start..), depth)
+        }
+    }
+
+    fn audit_command_wrapper(&self, arguments: &[String], depth: usize) -> ShellDecision {
+        let mut index = 0;
+        while index < arguments.len() {
+            match arguments[index].as_str() {
+                "--" => {
+                    return self.audit_direct_wrapper("command", arguments.get(index + 1..), depth)
+                }
+                "-v" | "-V" => return ShellDecision::Allow,
+                "-p" => index += 1,
+                argument if argument.starts_with('-') => index += 1,
+                _ => return self.audit_direct_wrapper("command", arguments.get(index..), depth),
+            }
+        }
+        ShellDecision::Allow
+    }
+
+    fn audit_watch_wrapper(&self, arguments: &[String], depth: usize) -> ShellDecision {
+        let mut decision =
+            ShellDecision::Review("Command wrapper 'watch' requires execution audit.".to_string());
+        if let Some(command) = Self::command_after_options(arguments, &["-n", "--interval"]) {
+            decision = Self::merge_audit_decisions(
+                decision,
+                self.audit_execution_forms(&command.join(" "), depth + 1),
+            );
+        }
+        decision
+    }
+
+    fn audit_xargs_wrapper(&self, arguments: &[String], depth: usize) -> ShellDecision {
+        let mut decision =
+            ShellDecision::Review("Command wrapper 'xargs' requires execution audit.".to_string());
+        if let Some(command) = Self::command_after_options(
+            arguments,
+            &[
+                "-E",
+                "--eof",
+                "-I",
+                "--replace",
+                "-L",
+                "--max-lines",
+                "-n",
+                "--max-args",
+                "-P",
+                "--max-procs",
+                "-s",
+                "--max-chars",
+                "-a",
+                "--arg-file",
+                "-d",
+                "--delimiter",
+            ],
+        ) {
+            decision = Self::merge_audit_decisions(
+                decision,
+                self.audit_execution_tokens(command, depth + 1),
+            );
+        }
+        decision
+    }
+
+    fn audit_find_actions(&self, arguments: &[String], depth: usize) -> ShellDecision {
+        let mut decision = ShellDecision::Allow;
+        let mut index = 0;
+        while index < arguments.len() {
+            let argument = arguments[index].as_str();
+            if matches!(
+                argument,
+                "-delete" | "-fprint" | "-fprint0" | "-fprintf" | "-fls"
+            ) {
+                decision = Self::merge_audit_decisions(
+                    decision,
+                    ShellDecision::Review(
+                        "Mutating find action requires execution audit.".to_string(),
+                    ),
+                );
+            }
+            if matches!(argument, "-exec" | "-execdir" | "-ok" | "-okdir") {
+                let command_start = index + 1;
+                let command_end = arguments[command_start..]
+                    .iter()
+                    .position(|token| matches!(token.as_str(), ";" | "+"))
+                    .map(|offset| command_start + offset)
+                    .unwrap_or(arguments.len());
+                decision = Self::merge_audit_decisions(
+                    decision,
+                    ShellDecision::Review(
+                        "Executable find action requires execution audit.".to_string(),
+                    ),
+                );
+                if command_start < command_end {
+                    decision = Self::merge_audit_decisions(
+                        decision,
+                        self.audit_execution_tokens(
+                            &arguments[command_start..command_end],
+                            depth + 1,
+                        ),
+                    );
+                }
+                index = command_end;
+            }
+            if matches!(decision, ShellDecision::Deny(_)) {
+                return decision;
+            }
+            index += 1;
+        }
+        decision
+    }
+
     pub fn new(path_guard: Arc<RwLock<PathGuard>>, custom_rules: Vec<ShellPolicyRule>) -> Self {
         Self {
             path_guard,
@@ -131,9 +558,11 @@ impl ShellPolicyEngine {
             return ShellDecision::Deny("Command is empty".into());
         }
 
-        // 2. Custom Regex/Pattern matching for the full command line or normalized stages.
-        if !self.custom_rules.is_empty() {
-            return self.evaluate_custom_rules(command_str, restrict_to_planning);
+        // 2. Audit command wrappers and indirect execution before evaluating reusable allow rules.
+        // A custom allow rule can grant a known command, but cannot suppress an execution audit.
+        let execution_audit = self.audit_execution_forms(command_str, 0);
+        if let ShellDecision::Deny(reason) = &execution_audit {
+            return ShellDecision::Deny(reason.clone());
         }
 
         // 3. Recursive Check: Audit nested structure contents
@@ -231,9 +660,6 @@ impl ShellPolicyEngine {
         let separators = [";", "&&", "||", "|", "&", "-exec"];
         let redirection_ops = [">", ">>", "1>", "2>", "&>", "<"];
 
-        let hard_deny = [
-            "mkfs", "dd", "format", "fdisk", "parted", "sudo", "su", "ssh", "scp",
-        ];
         let needs_review = [
             "rm",
             "mv",
@@ -273,6 +699,7 @@ impl ShellPolicyEngine {
         let destructive_commands = ["rm", "mv", "chmod", "chown"];
 
         let mut final_decision = ShellDecision::Allow;
+        let mut has_boundary_review = false;
         let mut current_binary = String::new();
         let mut current_binary_arg_index = 0usize;
 
@@ -305,17 +732,18 @@ impl ShellPolicyEngine {
                         }
                     }
                 }
+                has_boundary_review = true;
                 if final_decision == ShellDecision::Allow {
                     final_decision = ShellDecision::Review("File redirection detected".into());
                 }
                 continue;
             }
 
-            let clean_token = token.replace('"', "").replace('\'', "").to_lowercase();
+            let clean_token = Self::executable_name(token);
 
             if next_is_binary {
                 current_binary = clean_token.clone();
-                if hard_deny.contains(&clean_token.as_str()) {
+                if Self::hard_denied_command(&clean_token) {
                     return ShellDecision::Deny(format!(
                         "System-critical command '{}' is forbidden.",
                         clean_token
@@ -346,6 +774,7 @@ impl ShellPolicyEngine {
                 ) {
                     ShellDecision::Deny(reason) => return ShellDecision::Deny(reason),
                     ShellDecision::Review(reason) => {
+                        has_boundary_review = true;
                         if final_decision == ShellDecision::Allow {
                             final_decision = ShellDecision::Review(reason);
                         }
@@ -377,7 +806,26 @@ impl ShellPolicyEngine {
             }
         }
 
-        final_decision
+        let baseline_decision =
+            Self::merge_audit_decisions(execution_audit.clone(), final_decision);
+        if self.custom_rules.is_empty() {
+            return baseline_decision;
+        }
+
+        let custom_decision = self.evaluate_custom_rules(command_str, restrict_to_planning);
+        match custom_decision {
+            ShellDecision::Deny(reason) => ShellDecision::Deny(reason),
+            ShellDecision::Review(reason) if baseline_decision == ShellDecision::Allow => {
+                ShellDecision::Review(reason)
+            }
+            ShellDecision::Review(_) => baseline_decision,
+            ShellDecision::Allow
+                if !has_boundary_review && matches!(execution_audit, ShellDecision::Allow) =>
+            {
+                ShellDecision::Allow
+            }
+            ShellDecision::Allow => baseline_decision,
+        }
     }
 
     fn should_force_path_validation(command: &str, arg_index: usize) -> bool {
@@ -2596,14 +3044,88 @@ mod tests {
     fn test_policy_engine_blocked_binaries() {
         let (_root, _, guard) = setup_test_context();
         let engine = ShellPolicyEngine::new(guard, vec![]);
-        assert!(matches!(
-            engine.check("sudo rm -rf /", false),
-            ShellDecision::Deny(_)
-        ));
+        for command in [
+            "sudo rm -rf /",
+            "su -c 'id'",
+            "chsh -s /bin/sh",
+            "newgrp staff",
+            "sg staff -c id",
+        ] {
+            assert!(
+                matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "expected hard denial for {command}"
+            );
+        }
         assert!(matches!(
             engine.check("rm -rf test", false),
             ShellDecision::Review(_)
         ));
+    }
+
+    #[test]
+    fn test_policy_engine_custom_rules_preserve_path_boundaries() {
+        let (_root, _, guard) = setup_test_context();
+        let outside_root = tempdir().unwrap();
+        let outside_file = outside_root.path().join("outside.txt");
+        std::fs::write(&outside_file, "outside").unwrap();
+        let engine = ShellPolicyEngine::new(
+            guard,
+            vec![ShellPolicyRule {
+                pattern: "^cat .*".to_string(),
+                decision: ShellDecision::Allow,
+                description: None,
+            }],
+        );
+
+        assert!(matches!(
+            engine.check(&format!("cat {}", outside_file.display()), false),
+            ShellDecision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn test_policy_engine_audits_wrapped_and_indirect_execution() {
+        let (_root, _, guard) = setup_test_context();
+        let engine = ShellPolicyEngine::new(
+            guard,
+            vec![ShellPolicyRule {
+                pattern: "^(?:env|time|watch|find|xargs|command)(?:$| .*)".to_string(),
+                decision: ShellDecision::Allow,
+                description: None,
+            }],
+        );
+
+        for command in [
+            "time sudo rm -rf /",
+            "timeout 5 su -c 'id'",
+            "watch -n 5 'sudo id'",
+            "env -S 'sudo id'",
+            "env -uPATH sudo id",
+            "env --unset=PATH sudo id",
+            "find . -exec sudo id {} \\;",
+            "printf x | xargs sudo id",
+            "command sudo id",
+            "awk 'BEGIN { system(\"sudo id\") }'",
+            "awk 'BEGIN { \"sudo id\" | getline }'",
+        ] {
+            assert!(
+                matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "expected wrapped hard denial for {command}"
+            );
+        }
+
+        for command in [
+            "time pnpm tauri dev",
+            "watch -n 5 'ls -l'",
+            "env CI=1 cargo check",
+            "find . -exec ls {} \\;",
+            "printf x | xargs rm",
+        ] {
+            assert!(
+                matches!(engine.check(command, false), ShellDecision::Review(_)),
+                "expected execution audit for {command}"
+            );
+        }
     }
 
     #[test]

@@ -623,8 +623,8 @@ pub(crate) fn approvable_shell_pattern_for_stage(stage_tokens: &[String]) -> Opt
 
     let simple_safe_commands = [
         "ls", "dir", "tree", "pwd", "whoami", "id", "groups", "hostname", "date", "uptime",
-        "uname", "arch", "env", "printenv", "ps", "df", "free", "mount", "lsblk", "cat", "head",
-        "tail", "less", "more", "stat", "file", "wc", "du",
+        "uname", "arch", "printenv", "ps", "df", "free", "mount", "lsblk", "cat", "head", "tail",
+        "less", "more", "stat", "file", "wc", "du",
     ];
     if simple_safe_commands.contains(&base_cmd) {
         return Some(format!("^{}($| .*)", regex::escape(base_cmd)));
@@ -914,5 +914,10 @@ mod tests {
                 "^tail($| .*)".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn generate_shell_approval_patterns_does_not_allow_env_to_wrap_any_command() {
+        assert!(generate_shell_approval_patterns("env CI=1 cargo check").is_empty());
     }
 }

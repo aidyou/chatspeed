@@ -2386,6 +2386,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             .unwrap_or_default();
         let policy_engine =
             crate::tools::ShellPolicyEngine::new(self.path_guard.clone(), custom_rules);
+        let execution_audit = policy_engine.execution_audit_decision(command_str);
         let shell_policy_decision =
             policy_engine.check(command_str, self.policy.phase == ExecutionPhase::Planning);
         if let crate::tools::ShellDecision::Deny(reason) = &shell_policy_decision {
@@ -2405,7 +2406,9 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
-        if !self.auto_approve.contains(TOOL_BASH) {
+        let requires_execution_audit =
+            matches!(execution_audit, crate::tools::ShellDecision::Review(_));
+        if !self.auto_approve.contains(TOOL_BASH) || requires_execution_audit {
             match shell_policy_decision {
                 crate::tools::ShellDecision::Allow => {}
                 crate::tools::ShellDecision::Deny(_) => {
@@ -2418,10 +2421,11 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                             self.session_id, reason
                         );
                     } else if self.policy.approval_level == ApprovalLevel::Smart {
-                        // In Smart mode, allow read-only diagnostic commands even if they use
-                        // command chaining or output shaping to trim noisy output.
-                        if Self::is_smart_mode_read_only_shell_command(command_str)
-                            || Self::is_smart_mode_safe_build_shell_command(command_str)
+                        // Execution-audit findings always go through the AI reviewer in Smart mode.
+                        // Other reviewed commands may still use the established read-only fast path.
+                        if !requires_execution_audit
+                            && (Self::is_smart_mode_read_only_shell_command(command_str)
+                                || Self::is_smart_mode_safe_build_shell_command(command_str))
                         {
                             log::info!(
                                 "WorkflowExecutor {}: Auto-approving low-risk bash command in Smart mode: {}",
@@ -2438,7 +2442,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                                 .iter()
                                 .any(|&p| command_str_lower.starts_with(p));
 
-                        if is_read_only {
+                        if is_read_only && !requires_execution_audit {
                             log::info!(
                                 "WorkflowExecutor {}: Auto-approving read-only bash command in Smart mode: {}",
                                 self.session_id, command_str
@@ -3619,6 +3623,13 @@ mod tests {
             WorkflowExecutor::smart_mode_approval_decision(
                 TOOL_BASH,
                 &json!({"command":"cat secret.txt > out.txt"})
+            ),
+            SmartApprovalDecision::ReviewByUser
+        );
+        assert_eq!(
+            WorkflowExecutor::smart_mode_approval_decision(
+                TOOL_BASH,
+                &json!({"command":"find . -exec rm {} \\;"})
             ),
             SmartApprovalDecision::ReviewByUser
         );
