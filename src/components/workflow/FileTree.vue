@@ -20,48 +20,56 @@
       {{ $t('settings.agent.authorizedPathsTip') }}
     </div>
 
-    <div v-else class="tree-content">
-      <div v-for="root in roots" :key="root" class="root-container">
-        <div class="root-item">
-          <div class="root-info" @click="toggleExpand(root)">
-            <cs :name="isExpanded(root) ? 'ext-folder-open' : 'ext-folder'" size="14px" />
-            <span class="root-name" :title="root">{{ getDirName(root) }}</span>
+    <Sortable
+      v-else
+      class="tree-content"
+      item-key="path"
+      :list="rootItems"
+      :options="rootSortOptions"
+      @update="onRootSort">
+      <template #item="{ element }">
+        <div class="root-container" :key="element.path">
+          <div class="root-item">
+            <div class="root-info" @click="toggleExpand(element.path)">
+              <cs :name="isExpanded(element.path) ? 'ext-folder-open' : 'ext-folder'" size="14px" />
+              <span class="root-name" :title="element.path">{{ getDirName(element.path) }}</span>
+            </div>
+            <div class="root-actions">
+              <cs
+                name="copy"
+                size="12px"
+                class="action-btn copy-btn"
+                @click.stop="copyRootPath(element.path)" />
+              <cs
+                name="ext-folder-open"
+                size="12px"
+                class="action-btn open-btn"
+                @click.stop="openAuthorizedFolder(element.path)" />
+              <cs
+                name="refresh"
+                size="12px"
+                class="action-btn refresh-btn"
+                @click.stop="refreshRoot(element.path)" />
+              <cs
+                name="trash"
+                size="12px"
+                class="action-btn remove-btn"
+                @click.stop="onRemovePath(element.path)" />
+            </div>
           </div>
-          <div class="root-actions">
-            <cs
-              name="copy"
-              size="12px"
-              class="action-btn copy-btn"
-              @click.stop="copyRootPath(root)" />
-            <cs
-              name="ext-folder-open"
-              size="12px"
-              class="action-btn open-btn"
-              @click.stop="openAuthorizedFolder(root)" />
-            <cs
-              name="refresh"
-              size="12px"
-              class="action-btn refresh-btn"
-              @click.stop="refreshRoot(root)" />
-            <cs
-              name="trash"
-              size="12px"
-              class="action-btn remove-btn"
-              @click.stop="onRemovePath(root)" />
+          <div v-if="isExpanded(element.path)" class="children">
+            <tree-node
+              v-for="child in getChildren(element.path)"
+              :key="child.path"
+              :node="child"
+              :expanded-map="expandedNodes"
+              @toggle="toggleExpand"
+              @preview="openFile"
+              @reference="emit('referencePath', $event)" />
           </div>
         </div>
-        <div v-if="isExpanded(root)" class="children">
-          <tree-node
-            v-for="child in getChildren(root)"
-            :key="child.path"
-            :node="child"
-            :expanded-map="expandedNodes"
-            @toggle="toggleExpand"
-            @preview="openFile"
-            @reference="emit('referencePath', $event)" />
-        </div>
-      </div>
-    </div>
+      </template>
+    </Sortable>
 
     <!-- File Preview Dialog -->
     <el-dialog
@@ -110,6 +118,7 @@
 <script setup>
 import { ref, watch, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Sortable } from 'sortablejs-vue3'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invokeWrapper } from '@/libs/tauri'
@@ -127,9 +136,21 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['addPath', 'removePath', 'referencePath', 'openFile'])
+const emit = defineEmits(['addPath', 'removePath', 'reorderPaths', 'referencePath', 'openFile'])
 
 const roots = computed(() => props.paths)
+const rootItems = ref([])
+const rootSortOptions = {
+  animation: 150,
+  ghostClass: 'root-sort-ghost',
+  dragClass: 'root-sort-drag',
+  draggable: '.root-container',
+  filter: '.root-actions',
+  preventOnFilter: false,
+  forceFallback: true,
+  fallbackTolerance: 3,
+  bubbleScroll: true
+}
 const expandedNodes = ref(new Map())
 const childrenMap = ref(new Map())
 const loading = ref(false)
@@ -187,6 +208,16 @@ const onAddPath = async () => {
 
 const onRemovePath = path => {
   emit('removePath', path)
+}
+
+const onRootSort = event => {
+  const { oldIndex, newIndex } = event
+  if (oldIndex === null || newIndex === null || oldIndex === newIndex) return
+
+  const reorderedPaths = [...roots.value]
+  const [movedPath] = reorderedPaths.splice(oldIndex, 1)
+  reorderedPaths.splice(newIndex, 0, movedPath)
+  emit('reorderPaths', reorderedPaths)
 }
 
 const openAuthorizedFolder = async path => {
@@ -312,11 +343,12 @@ const previewFile = async (path) => {
 watch(
   () => props.paths,
   newPaths => {
+    rootItems.value = newPaths.map(path => ({ path }))
     // Clear state when roots change
     expandedNodes.value.clear()
     childrenMap.value.clear()
   },
-  { deep: true }
+  { deep: true, immediate: true }
 )
 
 onMounted(() => {
@@ -385,6 +417,20 @@ onMounted(() => {
 
     .root-container {
       margin-bottom: 4px;
+      cursor: grab;
+
+      &:active {
+        cursor: grabbing;
+      }
+    }
+
+    .root-sort-ghost {
+      opacity: 0.45;
+    }
+
+    .root-sort-drag {
+      background: var(--cs-bg-color);
+      box-shadow: 0 4px 12px rgb(0 0 0 / 15%);
     }
 
     .root-item {

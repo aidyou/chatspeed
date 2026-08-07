@@ -312,6 +312,7 @@
             :paths="currentPaths"
             @add-path="$emit('add-path-from-tree', $event)"
             @remove-path="$emit('remove-path-from-tree', $event)"
+            @reorder-paths="$emit('reorder-paths-from-tree', $event)"
             @reference-path="$emit('insert-path-reference', $event)"
             @open-file="$emit('open-editor-file', $event)" />
         </el-tab-pane>
@@ -398,6 +399,7 @@ const emit = defineEmits([
   'toggle-sidebar',
   'add-path-from-tree',
   'remove-path-from-tree',
+  'reorder-paths-from-tree',
   'insert-path-reference',
   'open-editor-file',
   'open-terminal'

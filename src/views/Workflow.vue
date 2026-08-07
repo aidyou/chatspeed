@@ -161,6 +161,7 @@
         @delete-workflow="onDeleteWorkflow"
         @add-path-from-tree="onAddPathFromTree"
         @remove-path-from-tree="onRemovePathFromTree"
+        @reorder-paths-from-tree="onReorderPathsFromTree"
         @insert-path-reference="insertPathReference"
         @open-editor-file="codeEditor.openFile"
         @toggle-sidebar="onToggleSidebar"
@@ -660,7 +661,8 @@ const {
   canEditPaths,
   displayAllowedPath,
   onAddPathFromTree,
-  onRemovePathFromTree
+  onRemovePathFromTree,
+  onReorderPathsFromTree
 } = useWorkflowPaths({
   currentWorkflowId: computed(() => workflowStore.currentWorkflowId),
   selectedAgent: computed(() => selectedAgent.value),

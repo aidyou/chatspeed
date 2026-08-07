@@ -230,6 +230,30 @@ export function useWorkflowPaths({
     }
   }
 
+  // Handle reordered paths from FileTree component
+  const onReorderPathsFromTree = async paths => {
+    if (!Array.isArray(paths) || paths.length < 2) return
+
+    if (isAutomationContext.value) {
+      const currentPaths = automationAllowedPaths.value
+      if (paths.length !== currentPaths.length || paths.some(path => !currentPaths.includes(path))) return
+      await workflowAutomationStore.updateAutomationAllowedPaths(selectedAutomation.value.id, paths)
+      return
+    }
+
+    if (currentWorkflowId.value) {
+      const currentPaths = allowedPaths.value
+      if (paths.length !== currentPaths.length || paths.some(path => !currentPaths.includes(path))) return
+      await workflowStore.updateWorkflowAllowedPaths(currentWorkflowId.value, paths)
+      return
+    }
+
+    if (pendingPaths.value.length > 0) {
+      if (paths.length !== pendingPaths.value.length || paths.some(path => !pendingPaths.value.includes(path))) return
+      pendingPaths.value = paths
+    }
+  }
+
   return {
     pendingPaths,
     allowedPaths,
@@ -240,6 +264,7 @@ export function useWorkflowPaths({
     onAddPath,
     onRemovePath,
     onAddPathFromTree,
-    onRemovePathFromTree
+    onRemovePathFromTree,
+    onReorderPathsFromTree
   }
 }

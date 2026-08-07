@@ -670,6 +670,23 @@ mod tests {
     }
 
     #[test]
+    fn test_path_guard_reordering_allowed_roots_updates_primary_root() {
+        let root = tempdir().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let first = first.canonicalize().unwrap();
+        let second = second.canonicalize().unwrap();
+        let mut guard = PathGuard::new(vec![first.clone(), second.clone()], vec![], vec![]);
+
+        guard.update_allowed_roots(vec![second.clone(), first.clone()]);
+
+        assert_eq!(guard.workspace_roots(), vec![second.clone(), first]);
+        assert_eq!(guard.get_primary_root(), Some(second.as_path()));
+    }
+
+    #[test]
     fn test_path_guard_empty_roots() {
         let guard = PathGuard::new(vec![], vec![], vec![]);
         assert!(guard

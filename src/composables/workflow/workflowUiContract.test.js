@@ -102,6 +102,36 @@ assert.equal(
 
 console.log('workflow UI contract tests passed')
 
+test('authorized root drag sorting stays on the existing structured allowed-path update path', async () => {
+  const [fileTree, sidebar, workflowView, workflowPaths, workflowStore, workflowCommand, pathGuard, engine] =
+    await Promise.all([
+      readFile('src/components/workflow/FileTree.vue', 'utf8'),
+      readFile('src/components/workflow/WorkflowSidebar.vue', 'utf8'),
+      readFile('src/views/Workflow.vue', 'utf8'),
+      readFile('src/composables/workflow/useWorkflowPaths.ts', 'utf8'),
+      readFile('src/stores/workflow.js', 'utf8'),
+      readFile('src-tauri/src/commands/workflow.rs', 'utf8'),
+      readFile('src-tauri/src/workflow/react/security.rs', 'utf8'),
+      readFile('src-tauri/src/workflow/react/engine.rs', 'utf8')
+    ])
+
+  assert.match(fileTree, /import \{ Sortable \} from 'sortablejs-vue3'/)
+  assert.match(fileTree, /<Sortable[\s\S]*?:list="rootItems"[\s\S]*?@update="onRootSort"/)
+  assert.match(fileTree, /const rootItems = ref\(\[\]\)/)
+  assert.match(fileTree, /filter: '\.root-actions'/)
+  assert.match(fileTree, /rootItems\.value = newPaths\.map\(path => \(\{ path \}\)\)/)
+  assert.match(fileTree, /emit\('reorderPaths', reorderedPaths\)/)
+  assert.doesNotMatch(fileTree, /onRootDrop|onRootDragStart|:draggable=/)
+  assert.match(sidebar, /@reorder-paths="\$emit\('reorder-paths-from-tree', \$event\)"/)
+  assert.match(workflowView, /@reorder-paths-from-tree="onReorderPathsFromTree"/)
+  assert.match(workflowPaths, /const onReorderPathsFromTree = async paths => \{[\s\S]*?updateWorkflowAllowedPaths\(currentWorkflowId\.value, paths\)/)
+  assert.match(workflowPaths, /updateAutomationAllowedPaths\(selectedAutomation\.value\.id, paths\)/)
+  assert.match(workflowStore, /invokeWrapper\('update_workflow_allowed_paths', \{[\s\S]*?allowedPaths: allowedPaths/)
+  assert.match(workflowCommand, /"type": "update_allowed_paths",[\s\S]*?"paths": runtime_paths/)
+  assert.match(pathGuard, /self\.primary_root = self\.workspace_roots\.first\(\)/)
+  assert.match(engine, /guard\.update_allowed_roots\(paths\.clone\(\)\);[\s\S]*?self\.planning_root = Self::planning_root_for_allowed_paths\(&paths\)/)
+})
+
 test('ask-user responses stay in the workflow chain but are hidden from the transcript UI', async () => {
   const [workflowView, workflowCore, workflowMessages, messageList, workflowEngine] =
     await Promise.all([
