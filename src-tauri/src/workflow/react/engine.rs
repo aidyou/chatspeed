@@ -676,6 +676,7 @@ impl WorkflowExecutor {
             sandbox_config: preserved_config.and_then(|config| config.sandbox_config.clone()),
             sandbox_execution_mode: Some(self.agent_config.sandbox_execution_mode.clone()),
             sandbox_scheme_id: self.agent_config.sandbox_scheme_id.clone(),
+            sandbox_override: preserved_config.and_then(|config| config.sandbox_override),
             approval_level: Some(self.policy.approval_level.to_string()),
             auto_approve: self
                 .agent_config
@@ -6671,6 +6672,14 @@ impl WorkflowExecutor {
             .shell_policy
             .as_ref()
             .and_then(|policy| serde_json::to_string(policy).ok());
+        self.agent_config.sandbox_config = config
+            .sandbox_config
+            .as_ref()
+            .and_then(crate::tools::AgentSandboxConfig::to_json);
+        if let Some(execution_mode) = config.sandbox_execution_mode.clone() {
+            self.agent_config.sandbox_execution_mode = execution_mode;
+        }
+        self.agent_config.sandbox_scheme_id = config.sandbox_scheme_id.clone();
     }
 
     async fn rebuild_foundation_tools_for_runtime_update(
@@ -7050,6 +7059,38 @@ impl WorkflowExecutor {
                     .await?;
             }
 
+            return Ok(true);
+        }
+
+        if sig_type_enum == Some(SignalType::UpdateSandboxConfig) {
+            let Some(execution_mode) = sig_json
+                .get("execution_mode")
+                .and_then(|value| {
+                    serde_json::from_value::<crate::tools::ShellExecutionMode>(value.clone()).ok()
+                })
+            else {
+                return Ok(false);
+            };
+            let sandbox_config = sig_json
+                .get("sandbox_config")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok());
+            let sandbox_scheme_id = sig_json
+                .get("sandbox_scheme_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+
+            log::info!(
+                "WorkflowExecutor {}: Updating sandbox execution mode to {}",
+                self.session_id,
+                execution_mode.as_str()
+            );
+            self.agent_config.sandbox_execution_mode = execution_mode;
+            self.agent_config.sandbox_scheme_id = sandbox_scheme_id;
+            self.agent_config.sandbox_config = sandbox_config
+                .as_ref()
+                .and_then(crate::tools::AgentSandboxConfig::to_json);
+            self.rebuild_foundation_tools_for_runtime_update().await?;
             return Ok(true);
         }
 

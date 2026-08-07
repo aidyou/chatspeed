@@ -57,7 +57,13 @@
       </div>
     </div>
     <StatusNotifier :chat-state="chatState" :is-chatting="isChatting" />
-    <div class="input">
+    <div class="input" :class="{ expanded: isInputExpanded }">
+      <button
+        type="button"
+        class="input-expand-toggle"
+        @click="isInputExpanded = !isInputExpanded">
+        <cs :name="isInputExpanded ? 'fullscreen' : 'fullscreen-off'" />
+      </button>
       <div v-if="attachments.length > 0" class="workflow-attachments">
         <div
           v-for="attachment in attachments"
@@ -255,6 +261,61 @@
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
+
+            <el-popover
+              v-model:visible="sandboxPopoverVisible"
+              placement="top"
+              :width="360"
+              trigger="click"
+              popper-class="workflow-sandbox-popover">
+              <template #reference>
+                <label class="icon-btn upperLayer sandbox-mode-badge" :class="{ active: sandboxMode !== 'host_only' }">
+                  <cs name="sandbox" class="small" />
+                  <span class="badge">{{ sandboxModeBadge }}</span>
+                </label>
+              </template>
+              <div v-if="sandboxPopoverVisible" class="workflow-sandbox-panel">
+                <div class="sandbox-section-title">{{ $t('settings.agent.sandboxExecutionMode') }}</div>
+                <button
+                  v-for="option in sandboxModeOptions"
+                  :key="option.value"
+                  type="button"
+                  class="sandbox-option"
+                  :class="{ active: sandboxMode === option.value }"
+                  :disabled="option.disabled || isUpdatingSandboxConfig"
+                  @click="selectSandboxMode(option.value)">
+                  <span class="sandbox-option-copy">
+                    <span>{{ $t(option.label) }}</span>
+                  </span>
+                  <cs v-if="sandboxMode === option.value" name="check" size="14px" class="dropdown-check" />
+                </button>
+
+                <template v-if="sandboxMode !== 'host_only'">
+                  <div class="section-divider"></div>
+                  <div class="sandbox-section-title">{{ $t('settings.agent.sandboxConfig') }}</div>
+                  <button
+                    v-for="scheme in selectableSandboxSchemes"
+                    :key="scheme.id"
+                    type="button"
+                    class="sandbox-option"
+                    :class="{ active: sandboxSchemeId === scheme.id }"
+                    :disabled="isUpdatingSandboxConfig"
+                    @click="selectSandboxScheme(scheme.id)">
+                    <span class="sandbox-option-copy">
+                      <span>{{ scheme.name }}</span>
+                    </span>
+                    <cs
+                      v-if="sandboxSchemeId === scheme.id"
+                      name="check"
+                      size="14px"
+                      class="dropdown-check" />
+                  </button>
+                  <div v-if="selectableSandboxSchemes.length === 0" class="sandbox-empty">
+                    {{ $t('settings.agent.sandboxProfilesEmpty') }}
+                  </div>
+                </template>
+              </div>
+            </el-popover>
 
             <!-- Approval Level Dropdown -->
             <el-dropdown trigger="click" @command="$emit('update-approval-level', $event)">
@@ -595,6 +656,7 @@ import { ElMessageBox } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import { useModelStore } from '@/stores/model'
 import { useSettingStore } from '@/stores/setting'
+import { useSandboxSchemeStore } from '@/stores/sandbox_scheme'
 import { createLatestModelConfigSaver } from '@/composables/workflow/modelConfigPersistence'
 import {
   buildCurrentModelOptions,
@@ -788,6 +850,7 @@ const workflowStore = useWorkflowStore()
 const agentStore = useAgentStore()
 const modelStore = useModelStore()
 const settingStore = useSettingStore()
+const sandboxSchemeStore = useSandboxSchemeStore()
 const modelSelectorOpen = ref(false)
 const modelSelectorRef = ref(null)
 const modelConfigDraft = ref(null)
@@ -995,6 +1058,40 @@ const autoApprovedItemCount = computed(
 const canAddShellPolicyItem = computed(() =>
   Boolean(props.currentWorkflowId && newShellCommandPattern.value.trim())
 )
+const sandboxPopoverVisible = ref(false)
+const isUpdatingSandboxConfig = ref(false)
+const sandboxMode = computed(
+  () => props.currentWorkflow?.agentConfig?.sandboxExecutionMode || props.selectedAgent?.sandboxExecutionMode || 'host_only'
+)
+const sandboxModeBadge = computed(() => ({ auto: 'A', sandbox_only: 'S', host_only: 'H' })[sandboxMode.value] || 'H')
+const sandboxSchemeId = computed(
+  () => props.currentWorkflow?.agentConfig?.sandboxSchemeId || props.selectedAgent?.sandboxSchemeId || null
+)
+const enabledSandboxSchemes = computed(() =>
+  sandboxSchemeStore.schemes.filter(
+    scheme => !scheme.disabled && (scheme.config?.profiles || []).some(profile => profile.enabled)
+  )
+)
+const selectableSandboxSchemes = computed(() => {
+  if (sandboxMode.value !== 'auto') return enabledSandboxSchemes.value
+  return enabledSandboxSchemes.value.filter(scheme =>
+    (scheme.config?.profiles || []).some(
+      profile => profile.enabled && (profile.commandPatterns || []).every(pattern => /^\^?\.\*\$?$/.test(pattern.trim()))
+    )
+  )
+})
+const sandboxModeOptions = computed(() => {
+  const hasSandboxConfig = selectableSandboxSchemes.value.length > 0
+  return [
+    { value: 'auto', label: 'settings.agent.sandboxExecutionModeAuto', disabled: !hasSandboxConfig },
+    {
+      value: 'sandbox_only',
+      label: 'settings.agent.sandboxExecutionModeSandboxOnly',
+      disabled: !enabledSandboxSchemes.value.length
+    },
+    { value: 'host_only', label: 'settings.agent.sandboxExecutionModeHostOnly', disabled: false }
+  ]
+})
 
 // Phase 3: Use semantic computed fields from store for UI control
 const canStop = computed(() => workflowStore.canStop)
@@ -1030,6 +1127,62 @@ const persistAgentConfig = async overrides => {
 
   return nextAgentConfig
 }
+
+const persistSandboxConfig = async (executionMode, schemeId) => {
+  if (!props.currentWorkflowId || isUpdatingSandboxConfig.value) return false
+
+  isUpdatingSandboxConfig.value = true
+  try {
+    await invokeWrapper('update_workflow_sandbox_config', {
+      sessionId: props.currentWorkflowId,
+      executionMode,
+      sandboxSchemeId: schemeId
+    })
+    if (props.currentWorkflow?.agentConfig) {
+      props.currentWorkflow.agentConfig = {
+        ...props.currentWorkflow.agentConfig,
+        sandboxOverride: true,
+        sandboxExecutionMode: executionMode,
+        sandboxSchemeId: schemeId
+      }
+    }
+    return true
+  } catch (error) {
+    console.error('Failed to update workflow sandbox configuration:', error)
+    showMessage(error?.message || t('settings.agent.sandboxConfigTip'), 'error')
+    return false
+  } finally {
+    isUpdatingSandboxConfig.value = false
+  }
+}
+
+const selectSandboxMode = async executionMode => {
+  if (executionMode === sandboxMode.value) return
+
+  const schemes = executionMode === 'auto' ? selectableSandboxSchemes.value : enabledSandboxSchemes.value
+  const schemeId = executionMode === 'host_only'
+    ? null
+    : schemes.some(scheme => scheme.id === sandboxSchemeId.value)
+      ? sandboxSchemeId.value
+      : schemes[0]?.id
+
+  if (executionMode !== 'host_only' && !schemeId) return
+  await persistSandboxConfig(executionMode, schemeId)
+}
+
+const selectSandboxScheme = async schemeId => {
+  if (!schemeId || schemeId === sandboxSchemeId.value) return
+  await persistSandboxConfig(sandboxMode.value, schemeId)
+}
+
+watch(sandboxPopoverVisible, async isVisible => {
+  if (!isVisible || sandboxSchemeStore.loading) return
+  try {
+    await sandboxSchemeStore.fetchSchemes()
+  } catch (error) {
+    console.error('Failed to load sandbox schemes:', error)
+  }
+})
 
 const toggleAutoApprovedTool = async (toolName, checked) => {
   if (!props.currentWorkflowId) return
@@ -1166,6 +1319,13 @@ const createWorkflowDialogVisible = ref(false)
 const createWorkflowInheritCurrent = ref(true)
 
 const inputMessage = defineModel('inputMessage', { type: String, default: '' })
+const isInputExpanded = ref(false)
+
+watch(inputMessage, value => {
+  if (value.trim() === '') {
+    isInputExpanded.value = false
+  }
+})
 
 const autoCompressMenuLabel = computed(() => t('workflow.autoCompressShort'))
 const activeRuntimeOptionCount = computed(

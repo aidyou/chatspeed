@@ -31,6 +31,8 @@ pub struct AgentConfig {
     pub sandbox_config: Option<AgentSandboxConfig>,
     pub sandbox_execution_mode: Option<ShellExecutionMode>,
     pub sandbox_scheme_id: Option<String>,
+    /// Whether sandbox fields are an explicit workflow-level override rather than Agent defaults.
+    pub sandbox_override: Option<bool>,
     pub approval_level: Option<String>,
     pub auto_approve: Option<Vec<String>>,
     pub auto_approve_plan: Option<bool>,

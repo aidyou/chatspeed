@@ -776,6 +776,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             sandbox_config: None,
             sandbox_execution_mode: Some(crate::tools::ShellExecutionMode::HostOnly),
             sandbox_scheme_id: None,
+            sandbox_override: None,
             approval_level: agent_config.approval_level.clone(),
             auto_approve: agent_config
                 .auto_approve

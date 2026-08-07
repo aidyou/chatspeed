@@ -16,10 +16,6 @@
     "decision": "allow"
   },
   {
-    "pattern": "^awk .*",
-    "decision": "allow"
-  },
-  {
     "pattern": "^bandit --version($| .*)",
     "decision": "allow"
   },
@@ -276,15 +272,7 @@
     "decision": "allow"
   },
   {
-    "pattern": "^echo($| .*)",
-    "decision": "allow"
-  },
-  {
     "pattern": "^file($| .*)",
-    "decision": "allow"
-  },
-  {
-    "pattern": "^find .*",
     "decision": "allow"
   },
   {
@@ -1017,10 +1005,6 @@
   },
   {
     "pattern": "^poetry show($| .*)",
-    "decision": "allow"
-  },
-  {
-    "pattern": "^printf($| .*)",
     "decision": "allow"
   },
   {

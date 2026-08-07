@@ -35,6 +35,7 @@ import { useModelStore } from '@/stores/model'
 import { useChatStore } from '@/stores/chat'
 import { useSkillStore } from '@/stores/skill'
 import { useAgentStore } from '@/stores/agent'
+import { useSandboxSchemeStore } from '@/stores/sandbox_scheme'
 import { useUpdateStore } from '@/stores/update'
 import { useWindowStore } from '@/stores/window'
 import { useMcpStore } from './stores/mcp'
@@ -48,6 +49,7 @@ const modelStore = useModelStore()
 const chatStore = useChatStore()
 const skillStore = useSkillStore()
 const agentStore = useAgentStore()
+const sandboxSchemeStore = useSandboxSchemeStore()
 const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
 const proxyGroupStore = useProxyGroupStore()
@@ -173,6 +175,10 @@ onMounted(async () => {
     } else if (eventType === 'mcp_tools_changed') {
       agentStore.fetchAvailableTools().catch(error => {
         console.error('Failed to refresh available tools after MCP tool list change:', error)
+      })
+    } else if (eventType === 'sandbox_schemes_changed') {
+      sandboxSchemeStore.fetchSchemes().catch(error => {
+        console.error('Failed to refresh sandbox schemes after a backend update:', error)
       })
     }
 

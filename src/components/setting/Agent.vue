@@ -639,6 +639,36 @@
     </template>
   </el-dialog>
 
+  <el-dialog
+    v-model="shellPolicyImportDialogVisible"
+    class="shell-policy-import-dialog"
+    :title="$t('settings.agent.shellPolicyImportDefaultTitle')"
+    width="580px"
+    append-to-body>
+    <p class="shell-policy-import-dialog__hint">
+      {{ $t('settings.agent.shellPolicyImportDefaultHint') }}
+    </p>
+    <el-checkbox-group v-model="selectedDefaultShellPolicyGroups" class="shell-policy-import-dialog__groups">
+      <el-checkbox
+        v-for="group in defaultShellPolicyGroups"
+        :key="group.id"
+        :value="group.id"
+        class="shell-policy-import-dialog__group">
+        <span class="shell-policy-import-dialog__group-name">{{ $t(group.label) }}</span>
+        <span class="shell-policy-import-dialog__group-count">{{ group.rules.length }}</span>
+      </el-checkbox>
+    </el-checkbox-group>
+    <template #footer>
+      <el-button @click="shellPolicyImportDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+      <el-button
+        type="primary"
+        :disabled="selectedDefaultShellPolicyGroups.length === 0"
+        @click="importSelectedDefaultShellPolicies">
+        {{ $t('settings.agent.shellPolicyImportSelected') }}
+      </el-button>
+    </template>
+  </el-dialog>
+
 </template>
 
 <script setup>
@@ -673,6 +703,179 @@ const workflowStore = useWorkflowStore()
 const { agents, availableTools } = storeToRefs(agentStore)
 const ALWAYS_ENABLED_SKILL_NAMES = ['help']
 const SHELL_POLICY_PAGE_SIZE = 50
+const DEFAULT_SHELL_POLICY_GROUPS = [
+  {
+    id: 'common',
+    label: 'settings.agent.shellPolicyGroupCommon',
+    commands: [
+      'base64',
+      'basename',
+      'cat',
+      'cksum',
+      'cmp',
+      'comm',
+      'cut',
+      'diff',
+      'dirname',
+      'file',
+      'grep',
+      'head',
+      'jq',
+      'ls',
+      'md5sum',
+      'readlink',
+      'realpath',
+      'rg',
+      'sha256sum',
+      'shasum',
+      'sort',
+      'stat',
+      'tail',
+      'tr',
+      'type',
+      'uniq',
+      'wc',
+      'which'
+    ]
+  },
+  { id: 'rust', label: 'settings.agent.shellPolicyGroupRust', commands: ['cargo', 'rustc', 'rustup'] },
+  { id: 'node', label: 'settings.agent.shellPolicyGroupNode', commands: ['node', 'npm', 'pnpm', 'yarn'] },
+  {
+    id: 'python',
+    label: 'settings.agent.shellPolicyGroupPython',
+    commands: [
+      'bandit',
+      'black',
+      'conda',
+      'flake8',
+      'isort',
+      'mamba',
+      'mypy',
+      'pip',
+      'pipdeptree',
+      'pipenv',
+      'poetry',
+      'pylint',
+      'pyright',
+      'pytest',
+      'python',
+      'python3',
+      'ruff',
+      'tox',
+      'uv',
+      'virtualenv'
+    ]
+  },
+  { id: 'go', label: 'settings.agent.shellPolicyGroupGo', commands: ['go', 'gofmt'] },
+  {
+    id: 'java',
+    label: 'settings.agent.shellPolicyGroupJava',
+    commands: [
+      'ant',
+      'gradle',
+      'jar',
+      'jarsigner',
+      'java',
+      'javac',
+      'javap',
+      'jdeprscan',
+      'jdeps',
+      'jps',
+      'jstack',
+      'jstat',
+      'keytool',
+      'mvn',
+      'sbt',
+      'serialver'
+    ]
+  },
+  { id: 'php-ruby', label: 'settings.agent.shellPolicyGroupPhpRuby', commands: ['bundle', 'composer', 'gem', 'php', 'ruby'] },
+  { id: 'containers', label: 'settings.agent.shellPolicyGroupContainers', commands: ['docker', 'helm', 'kubectl', 'terraform'] },
+  {
+    id: 'macos',
+    label: 'settings.agent.shellPolicyGroupMacos',
+    commands: [
+      'codesign',
+      'defaults',
+      'diskutil',
+      'launchctl',
+      'mdfind',
+      'mdls',
+      'otool',
+      'pkgutil',
+      'plutil',
+      'sw_vers',
+      'system_profiler',
+      'vm_stat',
+      'xcode-select',
+      'xcodebuild'
+    ]
+  },
+  {
+    id: 'linux',
+    label: 'settings.agent.shellPolicyGroupLinux',
+    commands: [
+      'blkid',
+      'dmesg',
+      'free',
+      'getfacl',
+      'iptables',
+      'ldd',
+      'lsblk',
+      'lscpu',
+      'lsmod',
+      'lspci',
+      'lsusb',
+      'nproc',
+      'readelf',
+      'ss',
+      'systemctl',
+      'timedatectl',
+      'ufw'
+    ]
+  },
+  {
+    id: 'windows',
+    label: 'settings.agent.shellPolicyGroupWindows',
+    commands: [
+      'certutil',
+      'Compare-Object',
+      'dir',
+      'fc',
+      'findstr',
+      'Get-Alias',
+      'Get-ChildItem',
+      'Get-Command',
+      'Get-ComputerInfo',
+      'Get-Content',
+      'Get-Date',
+      'Get-DnsClientCache',
+      'Get-ExecutionPolicy',
+      'Get-FileHash',
+      'Get-Item',
+      'Get-Location',
+      'Get-Module',
+      'Get-NetAdapter',
+      'Get-NetIPAddress',
+      'Get-NetRoute',
+      'Get-NetTCPConnection',
+      'Get-Process',
+      'Get-PSDrive',
+      'Get-Service',
+      'Get-Variable',
+      'ipconfig',
+      'Select-String',
+      'systeminfo',
+      'tasklist',
+      'Test-Path',
+      'type',
+      'ver',
+      'where',
+      'Write-Output'
+    ]
+  },
+  { id: 'other', label: 'settings.agent.shellPolicyGroupOther', commands: [] }
+]
 
 const formRef = ref(null)
 const shellPolicyListRef = ref(null)
@@ -683,6 +886,8 @@ const activeTab = ref('basic')
 const systemSkills = ref([])
 const skillSearchKeyword = ref('')
 const defaultShellPolicies = ref([])
+const shellPolicyImportDialogVisible = ref(false)
+const selectedDefaultShellPolicyGroups = ref([])
 const shouldBackfillSelectedSkills = ref(false)
 const groupedPrimaryAgents = ref([])
 const groupedChildAgents = ref({})
@@ -1051,7 +1256,32 @@ watch(
   { deep: true }
 )
 
-const cloneDefaultShellPolicies = () => defaultShellPolicies.value.map(rule => ({ ...rule }))
+const shellPolicyRuleCommand = pattern => {
+  const match = pattern.match(/^\^([A-Za-z0-9_-]+)/)
+  return match?.[1] || null
+}
+
+const shellPolicyRuleGroupId = rule => {
+  if (rule.pattern === '^top -b($| .*)') return 'linux'
+  if (rule.pattern === '^top -l($| .*)') return 'macos'
+  if (rule.pattern === '^type .*') return 'windows'
+
+  const groupByCommand = new Map(
+    DEFAULT_SHELL_POLICY_GROUPS.flatMap(group => group.commands.map(command => [command, group.id]))
+  )
+  return groupByCommand.get(shellPolicyRuleCommand(rule.pattern)) || 'other'
+}
+
+const defaultShellPolicyGroups = computed(() => {
+  const groups = DEFAULT_SHELL_POLICY_GROUPS.map(group => ({ ...group, rules: [] }))
+
+  defaultShellPolicies.value.forEach(rule => {
+    const groupId = shellPolicyRuleGroupId(rule)
+    groups.find(group => group.id === groupId)?.rules.push(rule)
+  })
+
+  return groups.filter(group => group.rules.length > 0)
+})
 
 const ensureDefaultShellPoliciesLoaded = async () => {
   if (defaultShellPolicies.value.length > 0) return
@@ -1141,20 +1371,20 @@ const clearShellPolicyRules = () => {
   })
 }
 
-const importDefaultShellPolicies = () => {
-  ElMessageBox.confirm(
-    t('settings.agent.shellPolicyImportDefaultConfirm'),
-    t('settings.agent.shellPolicyImportDefaultTitle'),
-    {
-      confirmButtonText: t('common.confirm'),
-      cancelButtonText: t('common.cancel'),
-      type: 'info'
-    }
-  ).then(async () => {
-    await ensureDefaultShellPoliciesLoaded()
-    if (!agentForm.value.shellPolicy) agentForm.value.shellPolicy = []
-    // Add default policies if not already present
-    defaultShellPolicies.value.forEach(defaultRule => {
+const importDefaultShellPolicies = async () => {
+  await ensureDefaultShellPoliciesLoaded()
+  selectedDefaultShellPolicyGroups.value = []
+  shellPolicyImportDialogVisible.value = true
+}
+
+const importSelectedDefaultShellPolicies = () => {
+  if (!agentForm.value.shellPolicy) agentForm.value.shellPolicy = []
+
+  const selectedGroups = new Set(selectedDefaultShellPolicyGroups.value)
+  defaultShellPolicyGroups.value
+    .filter(group => selectedGroups.has(group.id))
+    .flatMap(group => group.rules)
+    .forEach(defaultRule => {
       const exists = agentForm.value.shellPolicy.some(
         rule => rule.pattern === defaultRule.pattern && rule.decision === defaultRule.decision
       )
@@ -1162,7 +1392,12 @@ const importDefaultShellPolicies = () => {
         agentForm.value.shellPolicy.push({ ...defaultRule })
       }
     })
-  })
+
+  shellPolicyImportDialogVisible.value = false
+  shellPolicyPage.value = Math.max(
+    1,
+    Math.ceil(agentForm.value.shellPolicy.length / SHELL_POLICY_PAGE_SIZE)
+  )
 }
 
 const agentRules = {
@@ -1450,12 +1685,11 @@ const editAgent = async id => {
           }
         } catch (e) {
           console.error('Failed to parse shellPolicy JSON:', e)
-          // Fallback to default policies
-          agentForm.value.shellPolicy = cloneDefaultShellPolicies()
+          agentForm.value.shellPolicy = []
         }
       } else {
-        // No shell policy, use defaults
-        agentForm.value.shellPolicy = cloneDefaultShellPolicies()
+        // No shell policy configured.
+        agentForm.value.shellPolicy = []
       }
 
       agentForm.value.skillEnabled =
@@ -1507,7 +1741,7 @@ const editAgent = async id => {
     agentForm.value.autoApprove = availableTools.value
       .filter(tool => READ_ONLY_TOOLS.includes(tool.id))
       .map(tool => tool.id)
-    agentForm.value.shellPolicy = cloneDefaultShellPolicies()
+    agentForm.value.shellPolicy = []
     agentForm.value.allowedPaths = []
     agentForm.value.role = AGENT_ROLE.PRIMARY
     agentForm.value.parentAgentId = null
@@ -1577,12 +1811,10 @@ const copyAgent = async id => {
         }
       } catch (e) {
         console.error('Failed to parse shellPolicy JSON during copy:', e)
-        // Fallback to default policies
-        agentForm.value.shellPolicy = cloneDefaultShellPolicies()
+        agentForm.value.shellPolicy = []
       }
     } else {
-      // No shell policy, use defaults
-      agentForm.value.shellPolicy = cloneDefaultShellPolicies()
+      agentForm.value.shellPolicy = []
     }
 
     // Unpack 'allowedPaths' JSON field if it exists
@@ -2073,6 +2305,55 @@ watch(
   .danger-option {
     color: var(--el-color-danger) !important;
     font-weight: bold;
+  }
+
+  .shell-policy-import-dialog {
+    &__hint {
+      margin: 0 0 var(--cs-space-md);
+      color: var(--cs-text-color-secondary);
+      font-size: var(--cs-font-size-sm);
+      line-height: 1.5;
+    }
+
+    &__groups {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--cs-space-sm);
+    }
+
+    &__group {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      margin-right: 0;
+      padding: var(--cs-space-sm);
+      border: 1px solid var(--cs-border-color);
+      border-radius: var(--cs-border-radius-md);
+      background: var(--cs-bg-color-light);
+
+      :deep(.el-checkbox__label) {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--cs-space-sm);
+      }
+    }
+
+    &__group-name {
+      overflow: hidden;
+      color: var(--cs-text-color-primary);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    &__group-count {
+      flex: 0 0 auto;
+      color: var(--cs-text-color-secondary);
+      font-size: var(--cs-font-size-xs);
+      font-variant-numeric: tabular-nums;
+    }
   }
 
   .security-group {

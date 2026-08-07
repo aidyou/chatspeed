@@ -308,6 +308,7 @@ fn can_defer_runtime_config_signal_for_completed_session(signal_type: &str) -> b
             | "update_auto_compress"
             | "update_model_config"
             | "update_skills_config"
+            | "update_sandbox_config"
             | "update_approval_level"
             | "update_phase"
             | "remove_auto_approved_tool"
@@ -1532,13 +1533,18 @@ fn merge_inherited_workflow_config(
     } else {
         agent_config.shell_policy.clone()
     };
-    // Sandbox scheme references are resolved at canonical task boundaries.
-    // Never let a previous workflow snapshot override the current Agent reference.
-    merged.sandbox_config = if is_tool_allowed(crate::tools::TOOL_BASH) {
-        agent_config.sandbox_config.clone()
+
+    // Sandbox settings only inherit when this workflow explicitly overrode the Agent defaults.
+    // The scheme itself is resolved again at the next canonical task boundary.
+    if is_tool_allowed(crate::tools::TOOL_BASH) && inherited_config.sandbox_override == Some(true) {
+        merged.sandbox_override = Some(true);
+        merged.sandbox_execution_mode = inherited_config.sandbox_execution_mode.clone();
+        merged.sandbox_scheme_id = inherited_config.sandbox_scheme_id.clone();
+        merged.sandbox_config = inherited_config.sandbox_config.clone();
     } else {
-        None
-    };
+        merged.sandbox_override = None;
+        merged.sandbox_config = agent_config.sandbox_config.clone();
+    }
 
     merged.max_contexts = agent_config.max_contexts;
     merged.sync_legacy_final_audit_flag();
@@ -1551,12 +1557,29 @@ fn resolve_agent_sandbox_snapshot(
     agent: &Agent,
     config: &mut AgentConfig,
 ) -> Result<(), String> {
+    let (execution_mode, scheme_id) = if config.sandbox_override == Some(true) {
+        (
+            config
+                .sandbox_execution_mode
+                .clone()
+                .unwrap_or(crate::tools::ShellExecutionMode::HostOnly),
+            config.sandbox_scheme_id.clone(),
+        )
+    } else {
+        (
+            agent.sandbox_execution_mode.clone(),
+            agent.sandbox_scheme_id.clone(),
+        )
+    };
+
+    config.sandbox_execution_mode = Some(execution_mode.clone());
+    config.sandbox_scheme_id = scheme_id.clone();
     config.sandbox_config = None;
-    match agent.sandbox_execution_mode {
+
+    match execution_mode {
         crate::tools::ShellExecutionMode::HostOnly => Ok(()),
         crate::tools::ShellExecutionMode::Auto | crate::tools::ShellExecutionMode::SandboxOnly => {
-            let scheme_id = agent
-                .sandbox_scheme_id
+            let scheme_id = scheme_id
                 .as_deref()
                 .ok_or_else(|| "sandbox execution mode requires a scheme reference".to_string())?;
             let scheme = store
@@ -1567,7 +1590,7 @@ fn resolve_agent_sandbox_snapshot(
                 return Err(format!("sandbox scheme {scheme_id} is disabled"));
             }
             scheme.config.validate()?;
-            if agent.sandbox_execution_mode == crate::tools::ShellExecutionMode::Auto
+            if execution_mode == crate::tools::ShellExecutionMode::Auto
                 && crate::tools::enabled_common_profile(scheme.config.profiles.iter())?.is_none()
             {
                 return Err(
@@ -1583,7 +1606,7 @@ fn resolve_agent_sandbox_snapshot(
             config.sandbox_config = Some(crate::tools::AgentSandboxConfig {
                 scheme_id: Some(scheme.id),
                 scheme_revision: scheme.updated_at,
-                execution_mode: agent.sandbox_execution_mode.clone(),
+                execution_mode,
                 runtime_preference: scheme.config.runtime_preference,
                 profiles,
                 host_rules: scheme.config.host_rules,
@@ -1606,8 +1629,7 @@ fn sync_workflow_agent_config_at_tool_boundary(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
 
-    let mut agent_config = build_agent_config_from_agent(&agent, None, None);
-    resolve_agent_sandbox_snapshot(store, &agent, &mut agent_config)?;
+    let agent_config = build_agent_config_from_agent(&agent, None, None);
     let mut merged = workflow
         .agent_config
         .as_deref()
@@ -1615,6 +1637,7 @@ fn sync_workflow_agent_config_at_tool_boundary(
         .map(|inherited| merge_inherited_workflow_config(&agent_config, &inherited))
         .unwrap_or(agent_config);
     fill_missing_agent_config_fields(&mut merged, &agent);
+    resolve_agent_sandbox_snapshot(store, &agent, &mut merged)?;
     enforce_auto_approve_tool_visibility(&mut merged);
 
     let merged_json = merged.to_json();
@@ -5438,6 +5461,60 @@ pub async fn update_workflow_phase(
 }
 
 #[tauri::command]
+pub async fn update_workflow_sandbox_config(
+    state: State<'_, Arc<MainStore>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    session_id: String,
+    execution_mode: crate::tools::ShellExecutionMode,
+    sandbox_scheme_id: Option<String>,
+) -> Result<(), String> {
+    let previous_config_json = {
+        let store = &*state;
+        raw_workflow_agent_config_json(&store, &session_id)?
+    };
+
+    let sandbox_config = {
+        let store = &*state;
+        let workflow = store
+            .get_workflow(&session_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("Workflow {session_id} not found"))?;
+        let agent = store
+            .get_agent(&workflow.agent_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
+        let mut config = raw_workflow_agent_config(&store, &session_id)?;
+        config.sandbox_override = Some(true);
+        config.sandbox_execution_mode = Some(execution_mode.clone());
+        config.sandbox_scheme_id = sandbox_scheme_id;
+        resolve_agent_sandbox_snapshot(&store, &agent, &mut config)?;
+        let sandbox_config = config.sandbox_config.clone();
+        store
+            .update_workflow_agent_config(&session_id, &config.to_json())
+            .map_err(|error| error.to_string())?;
+        sandbox_config
+    };
+
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "update_sandbox_config",
+            "execution_mode": execution_mode,
+            "sandbox_scheme_id": sandbox_config
+                .as_ref()
+                .and_then(|config| config.scheme_id.clone()),
+            "sandbox_config": sandbox_config
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn update_workflow_agent_config(
     state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
@@ -7169,6 +7246,55 @@ mod tests {
             shell_policy[1].decision,
             crate::tools::ShellDecision::Allow
         ));
+    }
+
+    #[test]
+    fn inherited_workflow_sandbox_override_wins_over_agent_defaults() {
+        let agent_config = AgentConfig {
+            available_tools: Some(vec![crate::tools::TOOL_BASH.to_string()]),
+            sandbox_execution_mode: Some(crate::tools::ShellExecutionMode::Auto),
+            sandbox_scheme_id: Some("agent-scheme".to_string()),
+            ..AgentConfig::default()
+        };
+        let inherited_config = AgentConfig {
+            sandbox_override: Some(true),
+            sandbox_execution_mode: Some(crate::tools::ShellExecutionMode::SandboxOnly),
+            sandbox_scheme_id: Some("workflow-scheme".to_string()),
+            ..AgentConfig::default()
+        };
+
+        let merged = merge_inherited_workflow_config(&agent_config, &inherited_config);
+
+        assert_eq!(merged.sandbox_override, Some(true));
+        assert_eq!(
+            merged.sandbox_execution_mode,
+            Some(crate::tools::ShellExecutionMode::SandboxOnly)
+        );
+        assert_eq!(merged.sandbox_scheme_id.as_deref(), Some("workflow-scheme"));
+    }
+
+    #[test]
+    fn inherited_workflow_without_sandbox_override_uses_agent_defaults() {
+        let agent_config = AgentConfig {
+            available_tools: Some(vec![crate::tools::TOOL_BASH.to_string()]),
+            sandbox_execution_mode: Some(crate::tools::ShellExecutionMode::Auto),
+            sandbox_scheme_id: Some("agent-scheme".to_string()),
+            ..AgentConfig::default()
+        };
+        let inherited_config = AgentConfig {
+            sandbox_execution_mode: Some(crate::tools::ShellExecutionMode::SandboxOnly),
+            sandbox_scheme_id: Some("stale-workflow-scheme".to_string()),
+            ..AgentConfig::default()
+        };
+
+        let merged = merge_inherited_workflow_config(&agent_config, &inherited_config);
+
+        assert_eq!(merged.sandbox_override, None);
+        assert_eq!(
+            merged.sandbox_execution_mode,
+            Some(crate::tools::ShellExecutionMode::Auto)
+        );
+        assert_eq!(merged.sandbox_scheme_id.as_deref(), Some("agent-scheme"));
     }
 
     #[test]

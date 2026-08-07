@@ -12,6 +12,13 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 - Unless explicitly requested otherwise, reply in the same language as the user's message.
 - Final reports should be concise and include what changed, what was verified, and any remaining risk.
 
+## Project Shape
+
+- ChatSpeed is a Tauri 2 desktop application: the Rust backend and Tauri commands live under `src-tauri/`, while the Vue 3 + Vite frontend lives under `src/`.
+- Frontend conventions are Vue 3 Composition API with `<script setup>`, Element Plus, Pinia, Vue Router, vue-i18n, and SCSS. Reuse these choices instead of introducing parallel UI or state-management stacks.
+- Use pnpm for frontend dependencies and scripts; `package.json` and `pnpm-lock.yaml` are authoritative. Use Cargo from `src-tauri/` for Rust dependencies and commands. Do not use npm or yarn, and do not create another lockfile.
+- Keep cross-boundary changes explicit: trace Vue/TypeScript or JavaScript calls through the Tauri command/event contract to Rust, and verify both sides when that contract changes.
+
 ## General Workflow
 
 - Read relevant files before editing.
@@ -20,15 +27,14 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 - Prefer the narrowest useful verification. If you cannot run verification, say so.
 - When editing or adding files or modules, test only the affected page, module, or focused behavior. Do not run whole-repository tests unless the user explicitly asks, because they are prone to timing out.
 
-## CodeGraph Usage
+## Work Start Checklist
 
-- When CodeGraph MCP is available and its index is healthy, use it as the default tool for repository navigation, symbol lookup, source reading, and static impact analysis.
-- Do not start with `grep`, or filesystem globbing to locate a known symbol, inspect a known source file, or assess static callers/callees.
-- Use the narrowest CodeGraph query: `codegraph_search` then a file-pinned `codegraph_node` for a known symbol; `codegraph_node(file, symbolsOnly: true)` for a known file; and scoped `codegraph_files` for a known directory or file type.
-- Before changing a resolved symbol, inspect it with `codegraph_node` and use bounded, file-pinned `codegraph_callers` and `codegraph_callees` when assessing its static blast radius.
-- For string-based dispatch, Tauri command names, configuration or i18n keys, events, macros, generated wiring, dynamic property access, runtime data flow, external APIs, and cross-language boundaries, prefer a native permission-aware text-search tool when one is available. Otherwise use `grep`. Use it after CodeGraph for textual verification when needed.
-- Treat CodeGraph edges as incomplete static evidence. Verify behavior-changing conclusions against current source and focused tests; empty caller/callee results do not prove a symbol is unused.
-- If `.codegraph` is missing or CodeGraph reports an uninitialized index, run `codegraph init`. If CodeGraph is unavailable, continue with the native text-search tool when available, or `grep` and standard repository navigation.
+- Start from the user's strongest anchor: exact file, symbol, error, route, config key, test, or unique text. Inspect the target source and trace one concrete execution path before editing; do not begin with broad repository scans when a strong anchor exists.
+- Before the first edit in a module, check that directory and its parents for `AGENTS.md`, `CONSTITUTION.md`, or equivalent guidance. Read each applicable local rule once per task segment, and re-check only when moving into another module or when the rule file changes.
+- Before significant edits, inspect worktree status once, scoped to the intended files or module when practical. Significant edits include multiple files, refactors, configuration or schema changes, generated files, broad formatting, or any target that may already contain user changes. If relevant files are modified, inspect their diff before editing and preserve unrelated work.
+- For multi-step, cross-layer, risky, or interruption-prone work, create a small todo list before implementation and keep one item in progress. Skip todo overhead for a single direct edit or check that can be completed and verified immediately.
+- Define the focused verification path before editing. Prefer affected tests, then typecheck/lint/build or a focused runtime check; do not defer deciding how to verify until after implementation.
+- Treat follow-up requests as continuations: reuse confirmed context and current task state, inspect only the changed assumption or newly affected boundary, and do not repeat startup checks unless their evidence may be stale.
 
 ## Project Constraints
 

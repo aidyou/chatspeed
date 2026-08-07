@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tauri::{command, State};
+use tauri::{command, Emitter, State};
 
 use crate::{
     db::{MainStore, SandboxScheme},
@@ -87,8 +87,16 @@ fn assign_missing_scheme_item_ids(
     Ok(())
 }
 
+fn emit_sandbox_schemes_changed(app: &tauri::AppHandle) {
+    let _ = app.emit(
+        "cs://sync-state",
+        serde_json::json!({ "type": "sandbox_schemes_changed" }),
+    );
+}
+
 #[command]
 pub async fn add_sandbox_scheme(
+    app: tauri::AppHandle,
     state: State<'_, Arc<MainStore>>,
     tsid_generator: State<'_, Arc<crate::libs::tsid::TsidGenerator>>,
     mut scheme: SandboxScheme,
@@ -99,11 +107,14 @@ pub async fn add_sandbox_scheme(
     assign_missing_scheme_item_ids(&mut scheme, &tsid_generator)?;
     state
         .add_sandbox_scheme(&scheme)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    emit_sandbox_schemes_changed(&app);
+    Ok(scheme.id)
 }
 
 #[command]
 pub async fn update_sandbox_scheme(
+    app: tauri::AppHandle,
     state: State<'_, Arc<MainStore>>,
     tsid_generator: State<'_, Arc<crate::libs::tsid::TsidGenerator>>,
     mut scheme: SandboxScheme,
@@ -111,17 +122,22 @@ pub async fn update_sandbox_scheme(
     assign_missing_scheme_item_ids(&mut scheme, &tsid_generator)?;
     state
         .update_sandbox_scheme(&scheme)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    emit_sandbox_schemes_changed(&app);
+    Ok(())
 }
 
 #[command]
 pub async fn delete_sandbox_scheme(
+    app: tauri::AppHandle,
     state: State<'_, Arc<MainStore>>,
     id: String,
 ) -> Result<(), String> {
     state
         .delete_sandbox_scheme(&id)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    emit_sandbox_schemes_changed(&app);
+    Ok(())
 }
 
 #[cfg(test)]

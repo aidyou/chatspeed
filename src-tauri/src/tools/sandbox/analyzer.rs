@@ -19,11 +19,13 @@ fn collect_stage(segment: &str, stages: &mut Vec<ShellCommandStage>) {
         return;
     }
 
-    let executable = executable_name(&tokens[index]);
+    let command_token = &tokens[index];
+    let executable = executable_name(command_token);
     if matches!(
         executable.as_str(),
         "cd" | "pushd" | "popd" | "tee" | "xargs"
-    ) {
+    ) || is_literal_output_helper(segment, &tokens[index..], command_token)
+    {
         return;
     }
 
@@ -40,6 +42,73 @@ fn collect_stage(segment: &str, stages: &mut Vec<ShellCommandStage>) {
         normalized_command: tokens[index..].join(" "),
         executable,
     });
+}
+
+fn is_literal_output_helper(segment: &str, tokens: &[String], command_token: &str) -> bool {
+    if !matches!(command_token, "echo" | "printf")
+        || has_shell_expansion_or_control_operator(segment)
+    {
+        return false;
+    }
+
+    match command_token {
+        "echo" => true,
+        // Bash's `printf -v NAME ...` mutates a shell variable, so do not treat option-bearing
+        // printf invocations as output-only helpers.
+        "printf" => tokens.get(1).is_some_and(|format| !format.starts_with('-')),
+        _ => false,
+    }
+}
+
+fn has_shell_expansion_or_control_operator(command: &str) -> bool {
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+
+    for ch in command.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && !in_single_quote {
+            escaped = true;
+            continue;
+        }
+        if ch == '\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            continue;
+        }
+        if ch == '"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            continue;
+        }
+        if !in_single_quote
+            && matches!(
+                ch,
+                '$' | '`'
+                    | ';'
+                    | '&'
+                    | '|'
+                    | '<'
+                    | '>'
+                    | '('
+                    | ')'
+                    | '*'
+                    | '?'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '~'
+                    | '\n'
+                    | '\r'
+            )
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn executable_name(token: &str) -> String {
@@ -94,6 +163,44 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["git log -n 3", "cargo check"]
         );
+    }
+
+    #[test]
+    fn skips_literal_output_helpers_without_expansions_or_side_effects() {
+        let analysis = analyze_shell_command(
+            "git status --short && printf '\\n-- staged --\\n' && git diff --cached --name-status && echo done",
+        );
+        assert_eq!(
+            analysis
+                .stages
+                .iter()
+                .map(|stage| stage.normalized_command.as_str())
+                .collect::<Vec<_>>(),
+            vec!["git status --short", "git diff --cached --name-status"]
+        );
+    }
+
+    #[test]
+    fn retains_output_helpers_with_shell_expansions_or_side_effects() {
+        for command in [
+            "echo $(pwd)",
+            "printf '%s\\n' \"$HOME\"",
+            "echo hi > output.txt",
+            "printf -v result '%s' value",
+            "echo hi & touch output.txt",
+            "./echo hi",
+            "/tmp/printf '%s\\n' hi",
+        ] {
+            let analysis = analyze_shell_command(command);
+            assert_eq!(analysis.stages.len(), 1, "{command}");
+        }
+    }
+
+    #[test]
+    fn does_not_treat_shell_specific_print_as_an_output_helper() {
+        let analysis = analyze_shell_command("print hello");
+        assert_eq!(analysis.stages.len(), 1);
+        assert_eq!(analysis.stages[0].executable, "print");
     }
 
     #[test]

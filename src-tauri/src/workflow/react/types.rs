@@ -310,6 +310,15 @@ pub enum WorkflowSignal {
         #[serde(alias = "selectedSkills", default)]
         selected_skills: Vec<String>,
     },
+    /// Update the resolved sandbox configuration for Shell execution.
+    UpdateSandboxConfig {
+        #[serde(default, alias = "sandboxConfig")]
+        sandbox_config: Option<crate::tools::AgentSandboxConfig>,
+        #[serde(alias = "executionMode")]
+        execution_mode: crate::tools::ShellExecutionMode,
+        #[serde(default, alias = "sandboxSchemeId")]
+        sandbox_scheme_id: Option<String>,
+    },
     /// Replace auto-approve tool list at runtime
     UpdateAutoApprovedTools {
         #[serde(alias = "tools", default)]
@@ -362,6 +371,7 @@ impl WorkflowSignal {
             (WorkflowSignal::UpdateAllowedPaths { .. }, _) => true,
             (WorkflowSignal::UpdateModelConfig { .. }, _) => true,
             (WorkflowSignal::UpdateSkillsConfig { .. }, _) => true,
+            (WorkflowSignal::UpdateSandboxConfig { .. }, _) => true,
             (WorkflowSignal::UpdateAutoApprovedTools { .. }, _) => true,
             (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
             (WorkflowSignal::RemoveShellPolicyItem { .. }, _) => true,
@@ -397,6 +407,7 @@ impl WorkflowSignal {
             WorkflowSignal::UpdateAllowedPaths { .. } => "update_allowed_paths",
             WorkflowSignal::UpdateModelConfig { .. } => "update_model_config",
             WorkflowSignal::UpdateSkillsConfig { .. } => "update_skills_config",
+            WorkflowSignal::UpdateSandboxConfig { .. } => "update_sandbox_config",
             WorkflowSignal::UpdateAutoApprovedTools { .. } => "update_auto_approved_tools",
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",
             WorkflowSignal::RemoveShellPolicyItem { .. } => "remove_shell_policy_item",

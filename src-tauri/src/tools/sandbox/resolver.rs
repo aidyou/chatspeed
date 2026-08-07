@@ -1314,6 +1314,77 @@ mod tests {
     }
 
     #[test]
+    fn literal_output_helpers_do_not_block_a_host_rule() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config
+            .host_rules
+            .push(super::super::types::HostCommandRule {
+                id: "git-host".to_string(),
+                name: "Git Host".to_string(),
+                enabled: true,
+                priority: 100,
+                command_patterns: vec![r"^git(?:\s|$)".to_string()],
+            });
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let command = "git status --short && printf '\\n-- staged --\\n' && git diff --cached --name-status && echo done";
+        let plan = ShellExecutionResolver::resolve(
+            "tool-1",
+            command,
+            Some(&config),
+            &status,
+            Some(Path::new("/project")),
+        );
+        assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+        assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
+        assert_eq!(
+            plan.backend_origin,
+            ShellExecutionBackendOrigin::ExplicitHostRule
+        );
+    }
+
+    #[test]
+    fn unsafe_output_helpers_do_not_bypass_mixed_backend_protection() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config
+            .host_rules
+            .push(super::super::types::HostCommandRule {
+                id: "git-host".to_string(),
+                name: "Git Host".to_string(),
+                enabled: true,
+                priority: 100,
+                command_patterns: vec![r"^git(?:\s|$)".to_string()],
+            });
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+
+        for command in [
+            "git status --short && echo $(pwd)",
+            "git status --short && printf '%s\\n' \"$HOME\"",
+            "git status --short && echo done > output.txt",
+            "git status --short && printf -v result '%s' value",
+        ] {
+            let plan = ShellExecutionResolver::resolve(
+                "tool-1",
+                command,
+                Some(&config),
+                &status,
+                Some(Path::new("/project")),
+            );
+            assert_eq!(plan.status, ShellExecutionPlanStatus::Denied, "{command}");
+            assert_eq!(
+                plan.fallback_reason,
+                Some(HostFallbackReason::MixedBackendCommand),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
     fn explicit_host_rule_carries_distinct_backend_origin() {
         let mut config = config(ShellExecutionMode::Auto);
         config

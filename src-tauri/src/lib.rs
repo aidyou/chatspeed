@@ -367,6 +367,7 @@ pub async fn run() -> crate::error::Result<()> {
             update_workflow_model_config,
             update_workflow_skills_config,
             update_workflow_phase,
+            update_workflow_sandbox_config,
             update_workflow_agent_config,
             update_workflow_agent_id,
             get_auto_approved_tools,
