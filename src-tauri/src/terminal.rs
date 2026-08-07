@@ -634,7 +634,7 @@ fn install_session_prompt(writer: &mut (dyn Write + Send), shell: &ShellDescript
         let command = match shell.name.as_str() {
             "zsh" => "autoload -Uz add-zsh-hook; _cs_terminal_osc7(){ print -n $'\\e]7;file://'${HOST:-localhost}${PWD}$'\\a'; }; add-zsh-hook precmd _cs_terminal_osc7; PROMPT='%~ > '\n",
             "bash" => "__cs_terminal_osc7(){ printf '\\033]7;file://%s%s\\007' \"${HOSTNAME:-localhost}\" \"$PWD\"; }; PROMPT_COMMAND=\"__cs_terminal_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}\"; PS1='\\w > '\n",
-            "fish" => "function __cs_terminal_osc7 --on-event fish_prompt; printf '\\e]7;file://%s%s\\a' \"$HOSTNAME\" \"$PWD\"; end; function fish_prompt; set -l display_path (string replace -- \"$HOME\" '~' \"$PWD\"); printf '%s > ' \"$display_path\"; end\n",
+            "fish" => "function __cs_terminal_osc7 --on-event fish_prompt; printf '\\e]7;file://%s%s\\a' \"$HOSTNAME\" \"$PWD\"; end; function fish_prompt; set -l display_path \"$PWD\"; if test \"$PWD\" = \"$HOME\"; set display_path '~'; else; set display_path (string replace -- \"$HOME/\" '~/' \"$PWD\"); end; printf '%s > ' \"$display_path\"; end\n",
             _ => "PS1='\\w > '\n",
         };
         let _ = writer
@@ -750,7 +750,8 @@ mod tests {
             String::from_utf8(fish_bootstrap).expect("fish bootstrap must be UTF-8");
         assert!(fish_bootstrap.contains("fish_prompt"));
         assert!(fish_bootstrap.contains("]7;file://"));
-        assert!(fish_bootstrap.contains("string replace -- \"$HOME\" '~' \"$PWD\""));
+        assert!(fish_bootstrap.contains("if test \"$PWD\" = \"$HOME\""));
+        assert!(fish_bootstrap.contains("string replace -- \"$HOME/\" '~/' \"$PWD\""));
         assert!(bootstrap.contains("PS1='\\w > '"));
 
         let zsh = ShellDescriptor {
