@@ -198,6 +198,22 @@ test('message history loading renders an Element Plus skeleton from the store lo
   assert.match(styles, /\.message-skeleton/)
 })
 
+test('tool duration badges use structured backend metadata and preserve the requested exclusions', async () => {
+  const [messageList, workflowEngine] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src-tauri/src/workflow/react/engine.rs', 'utf8')
+  ])
+
+  assert.match(messageList, /message\?\.metadata\?\.duration_ms/)
+  assert.match(messageList, /toolName\.startsWith\('todo_'\)/)
+  assert.match(messageList, /\['ask_user', 'submit_plan', 'submit_result', 'skill'\]/)
+  assert.match(messageList, /durationMs <= 60_000/)
+  assert.match(messageList, /\$\{minutes\}m\$\{seconds\}s/)
+  assert.match(messageList, /getToolExecutionDurationLabel\(message\)[\s\S]*?class="shell-execution-route-badge"[\s\S]*?<cs v-if="message\.isApproved"/)
+  assert.match(workflowEngine, /metadata\["duration_ms"\] = serde_json::json!\(duration_ms\)/)
+  assert.match(workflowEngine, /fn should_expose_tool_duration\(tool_name: &str\)/)
+})
+
 test('tool activity grouping keeps only explicit independent segments as boundaries', async () => {
   const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
 

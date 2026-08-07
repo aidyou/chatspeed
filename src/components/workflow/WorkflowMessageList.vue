@@ -202,6 +202,11 @@
                     class="shell-execution-route-badge">
                     {{ getShellExecutionRouteLabel(tool) }}
                   </span>
+                  <span
+                    v-if="getToolExecutionDurationLabel(tool)"
+                    class="shell-execution-route-badge">
+                    {{ getToolExecutionDurationLabel(tool) }}
+                  </span>
                   <cs v-if="tool.isApproved" name="check" size="14px" class="approved-icon" />
                 </div>
                 <div
@@ -637,6 +642,11 @@
                   v-if="isBashToolCall(message) && getShellExecutionRouteLabel(message)"
                   class="shell-execution-route-badge">
                   {{ getShellExecutionRouteLabel(message) }}
+                </span>
+                <span
+                  v-if="getToolExecutionDurationLabel(message)"
+                  class="shell-execution-route-badge">
+                  {{ getToolExecutionDurationLabel(message) }}
                 </span>
                 <cs v-if="message.isApproved" name="check" size="14px" class="approved-icon" />
               </div>
@@ -1465,6 +1475,28 @@ const getToolCallArguments = message => {
 
 const isBashToolCall = message =>
   String(message?.name || getMessageToolName(message)).toLowerCase() === 'bash'
+
+const TOOL_DURATION_EXCLUDED_NAMES = new Set(['ask_user', 'submit_plan', 'submit_result', 'skill'])
+
+const getToolExecutionDurationLabel = message => {
+  const toolName = getMessageToolName(message)
+  const durationMs = Number(message?.metadata?.duration_ms)
+  if (
+    TOOL_DURATION_EXCLUDED_NAMES.has(toolName) ||
+    toolName.startsWith('todo_') ||
+    !Number.isFinite(durationMs) ||
+    durationMs < 0
+  ) {
+    return ''
+  }
+
+  const totalSeconds = Math.max(1, Math.floor(durationMs / 1000))
+  if (durationMs <= 60_000) return `${totalSeconds}s`
+
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return seconds ? `${minutes}m${seconds}s` : `${minutes}m`
+}
 
 const getShellExecutionPlan = message => {
   const plan = message?.metadata?.execution_plan

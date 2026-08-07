@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use tokio::time::{sleep, Duration};
 
 use crate::ai::chat::openai::OpenAIChat;
@@ -17,7 +18,7 @@ use crate::tools::{
     helper::generate_shell_approval_patterns as shared_generate_shell_approval_patterns,
     ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
     TOOL_COMPLETE_WORKFLOW, TOOL_MCP_TOOL_LOAD, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
-    TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
+    TOOL_PLAN_WRITE_NOTE, TOOL_SKILL, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
@@ -122,6 +123,7 @@ struct ToolExecutionObservation {
     reinforced: ReinforcedResult,
     original_call: serde_json::Value,
     execution_plan_metadata: Option<serde_json::Value>,
+    duration_ms: Option<u64>,
 }
 
 impl ToolExecutionObservation {
@@ -130,12 +132,14 @@ impl ToolExecutionObservation {
         reinforced: ReinforcedResult,
         original_call: serde_json::Value,
         execution_plan_metadata: Option<serde_json::Value>,
+        duration_ms: Option<u64>,
     ) -> Self {
         Self {
             id,
             reinforced,
             original_call,
             execution_plan_metadata,
+            duration_ms,
         }
     }
 }
@@ -270,6 +274,22 @@ impl WorkflowExecutor {
             .and_then(|value| value.get("structured_content"))
             .and_then(|value| value.get("execution_plan"))
             .cloned()
+    }
+
+    fn should_expose_tool_duration(tool_name: &str) -> bool {
+        !tool_name.starts_with("todo_")
+            && !matches!(
+                tool_name,
+                TOOL_ASK_USER | TOOL_SUBMIT_PLAN | TOOL_SUBMIT_RESULT | TOOL_SKILL
+            )
+    }
+
+    fn execution_duration_ms(started_at: Instant) -> u64 {
+        started_at
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
     }
 
     fn enrich_tool_observation_metadata(
@@ -3107,6 +3127,7 @@ impl WorkflowExecutor {
                                     )
                                     .await;
 
+                                    let execution_started_at = Instant::now();
                                     let mcp_tool_allowed = self.is_mcp_tool_allowed(&tool_name);
                                     let tool_manager = self.tool_manager.clone();
                                     let global_tool_manager = self.global_tool_manager.clone();
@@ -3139,6 +3160,8 @@ impl WorkflowExecutor {
                                         },
                                     )
                                     .await?;
+                                    let duration_ms =
+                                        Self::execution_duration_ms(execution_started_at);
                                     self.append_tool_terminal_event(
                                         &tool_call_id,
                                         &tool_name,
@@ -3181,6 +3204,9 @@ impl WorkflowExecutor {
                                         "display_type": reinforced.display_type,
                                         "approval_status": "approved"
                                     });
+                                    if Self::should_expose_tool_duration(&tool_name) {
+                                        metadata["duration_ms"] = serde_json::json!(duration_ms);
+                                    }
                                     if let Some(execution_plan) = execution_plan_metadata {
                                         metadata["execution_plan"] = execution_plan;
                                     }
@@ -3642,6 +3668,7 @@ impl WorkflowExecutor {
                             )
                             .await;
 
+                            let execution_started_at = Instant::now();
                             let mcp_tool_allowed = self.is_mcp_tool_allowed(&tool_name);
                             let tool_manager = self.tool_manager.clone();
                             let global_tool_manager = self.global_tool_manager.clone();
@@ -3668,6 +3695,7 @@ impl WorkflowExecutor {
                                     }
                                 })
                                 .await?;
+                            let duration_ms = Self::execution_duration_ms(execution_started_at);
                             self.append_tool_terminal_event(signal_id, &tool_name, &result);
                             self.dispatch_tool_terminal_payload(signal_id, &tool_name, &result)
                                 .await;
@@ -3702,6 +3730,9 @@ impl WorkflowExecutor {
                                 "display_type": reinforced.display_type,
                                 "approval_status": "approved"
                             });
+                            if Self::should_expose_tool_duration(&tool_name) {
+                                metadata["duration_ms"] = serde_json::json!(duration_ms);
+                            }
                             if let Some(execution_plan) = execution_plan_metadata {
                                 metadata["execution_plan"] = execution_plan;
                             }
@@ -4236,6 +4267,11 @@ impl WorkflowExecutor {
                     // Add approval_status if it exists in the reinforced result
                     if let Some(approval_status) = &reinforced.approval_status {
                         metadata["approval_status"] = serde_json::json!(approval_status);
+                    }
+                    if Self::should_expose_tool_duration(tool_name) {
+                        if let Some(duration_ms) = observation.duration_ms {
+                            metadata["duration_ms"] = serde_json::json!(duration_ms);
+                        }
                     }
                     if let Some(execution_plan) = execution_plan_metadata {
                         metadata["execution_plan"] = execution_plan.clone();
@@ -5314,6 +5350,7 @@ impl WorkflowExecutor {
                         ),
                         call,
                         None,
+                        None,
                     ),
                 );
                 continue;
@@ -5343,7 +5380,7 @@ impl WorkflowExecutor {
                     }
                     result_map.insert(
                         id.clone(),
-                        ToolExecutionObservation::new(id, early_result, call, None),
+                        ToolExecutionObservation::new(id, early_result, call, None, None),
                     );
                     if !approval_intercepted && self.state != WorkflowState::AwaitingApproval {
                         predicted_turn_block = true;
@@ -5366,6 +5403,7 @@ impl WorkflowExecutor {
                                     "Approval queue blocked",
                                 ),
                                 call,
+                                None,
                                 None,
                             ),
                         );
@@ -5449,6 +5487,7 @@ impl WorkflowExecutor {
 
                 tool_futures.push_back(async move {
                     let _permit = semaphore_clone.acquire().await.ok();
+                    let execution_started_at = Instant::now();
 
                     let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                         if mcp_tool_allowed {
@@ -5463,14 +5502,15 @@ impl WorkflowExecutor {
                         // Native tools are managed session-locally. No fallback.
                         tm_clone.tool_call(&name, enriched_args).await
                     };
-                    (id, name, args, call, final_res)
+                    let duration_ms = Self::execution_duration_ms(execution_started_at);
+                    (id, name, args, call, final_res, duration_ms)
                 });
             }
 
             loop {
                 let next_result =
                     await_with_stop(&self.session_id, signal_rx, tool_futures.next()).await?;
-                let Some((id, name, args, call, res)) = next_result else {
+                let Some((id, name, args, call, res, duration_ms)) = next_result else {
                     break;
                 };
                 self.append_tool_terminal_event(&id, &name, &res);
@@ -5481,7 +5521,13 @@ impl WorkflowExecutor {
                     .await?;
                 result_map.insert(
                     id.clone(),
-                    ToolExecutionObservation::new(id, reinforced, call, execution_plan_metadata),
+                    ToolExecutionObservation::new(
+                        id,
+                        reinforced,
+                        call,
+                        execution_plan_metadata,
+                        Some(duration_ms),
+                    ),
                 );
             }
         }
@@ -5495,6 +5541,7 @@ impl WorkflowExecutor {
             // Inject internal tool_call_id for streaming tools
             let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
 
+            let execution_started_at = Instant::now();
             let mcp_tool_allowed = self.is_mcp_tool_allowed(&name);
             let tool_manager = self.tool_manager.clone();
             let global_tool_manager = self.global_tool_manager.clone();
@@ -5519,6 +5566,7 @@ impl WorkflowExecutor {
             })
             .await?;
 
+            let duration_ms = Self::execution_duration_ms(execution_started_at);
             self.append_tool_terminal_event(&id, &name, &final_res);
             self.dispatch_tool_terminal_payload(&id, &name, &final_res)
                 .await;
@@ -5528,7 +5576,13 @@ impl WorkflowExecutor {
                 .await?;
             result_map.insert(
                 id.clone(),
-                ToolExecutionObservation::new(id, reinforced, call, execution_plan_metadata),
+                ToolExecutionObservation::new(
+                    id,
+                    reinforced,
+                    call,
+                    execution_plan_metadata,
+                    Some(duration_ms),
+                ),
             );
 
             if self.state == WorkflowState::AwaitingSubAgent
@@ -5555,6 +5609,7 @@ impl WorkflowExecutor {
                                 "Sequential queue blocked",
                             ),
                             remaining_call,
+                            None,
                             None,
                         ),
                     );
@@ -7717,6 +7772,26 @@ mod recovery_tests {
     use crate::workflow::react::replay::{RecoveryError, RecoveryResult};
     use tempfile::tempdir;
     use tokio::sync::{mpsc, Mutex};
+
+    #[test]
+    fn tool_duration_metadata_excludes_workflow_control_tools() {
+        for tool_name in [
+            TOOL_ASK_USER,
+            TOOL_SUBMIT_PLAN,
+            TOOL_SUBMIT_RESULT,
+            TOOL_SKILL,
+            crate::tools::TOOL_TODO_UPDATE,
+        ] {
+            assert!(!WorkflowExecutor::should_expose_tool_duration(tool_name));
+        }
+
+        assert!(WorkflowExecutor::should_expose_tool_duration(
+            crate::tools::TOOL_BASH
+        ));
+        assert!(WorkflowExecutor::should_expose_tool_duration(
+            crate::tools::TOOL_READ_FILE
+        ));
+    }
 
     struct TerminalStatusGateway {
         store: Arc<MainStore>,
