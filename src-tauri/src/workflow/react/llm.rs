@@ -30,8 +30,8 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 
 use crate::workflow::react::prompts::{
-    CHILD_AGENT_COMPLETION_PROMPT, CHILD_AGENT_CORE_SYSTEM_PROMPT, CHILD_AGENT_DIRECTORY_PROMPT,
-    CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT,
+    AUTO_MODE_BASH_TOOL_GUIDANCE, CHILD_AGENT_COMPLETION_PROMPT, CHILD_AGENT_CORE_SYSTEM_PROMPT,
+    CHILD_AGENT_DIRECTORY_PROMPT, CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT,
     FINAL_AUDIT_COMPLETION_REPORT_PROMPT, PLANNING_MODE_PROMPT,
 };
 
@@ -1387,6 +1387,10 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
                 "\n - Shell sandbox: enabled. Commands may run in a sandbox only when configured command rules match, with mounted directories and read/write permissions. Prefer simple portable shell commands and do not rely on unconfigured host tools or paths.",
             );
         }
+        if self.agent_config.sandbox_execution_mode == crate::tools::ShellExecutionMode::Auto {
+            env_info.push_str("\n\n");
+            env_info.push_str(AUTO_MODE_BASH_TOOL_GUIDANCE);
+        }
 
         format!(
             "{}\n\n<SYSTEM_REMINDER>\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</SYSTEM_REMINDER>\n",
@@ -1974,11 +1978,19 @@ mod tests {
         let rendered = processor.build_environment_context();
         assert!(rendered.contains("Shell sandbox: enabled"));
         assert!(rendered.contains("simple portable shell commands"));
+        assert!(rendered.contains("## Bash Tool Guidance"));
+        assert!(rendered.contains("one execution environment"));
+
+        processor.agent_config.sandbox_execution_mode =
+            crate::tools::ShellExecutionMode::SandboxOnly;
+        let rendered = processor.build_environment_context();
+        assert!(rendered.contains("Shell sandbox: enabled"));
+        assert!(!rendered.contains("## Bash Tool Guidance"));
 
         processor.agent_config.sandbox_execution_mode = crate::tools::ShellExecutionMode::HostOnly;
-        assert!(!processor
-            .build_environment_context()
-            .contains("Shell sandbox: enabled"));
+        let rendered = processor.build_environment_context();
+        assert!(!rendered.contains("Shell sandbox: enabled"));
+        assert!(!rendered.contains("## Bash Tool Guidance"));
     }
 
     #[test]

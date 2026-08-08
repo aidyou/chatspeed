@@ -268,6 +268,12 @@ If `complete_workflow` is rejected:
 
 After successful completion, do not add another final summary unless the system explicitly requires a user-visible response."#;
 
+/// Guidance injected into the environment context when shell sandbox Auto mode is active.
+pub const AUTO_MODE_BASH_TOOL_GUIDANCE: &str = r#"## Bash Tool Guidance
+Auto mode selects one execution environment for each complete Bash tool call; it never splits one command across the host and sandbox. Keep chained commands compatible with the same environment. Use separate Bash calls for unrelated command types, for example: `git status && git log -1`, then `php -l file.php`.
+
+Container-selection-neutral helpers do not determine the execution environment; they follow another command in the same Bash call, or use the common profile when none exists. This analysis is used only to select the host or sandbox profile; it does not audit Shell safety or alter approval decisions. Shell approval and execution policies still apply independently. Helpers include shell state and job controls (`cd`, `dirs`, `export`, `sleep`, `tee`); command lookup (`command -v`, `type`, `which`, `whereis`); path and system inspection (`cat`, `stat`, `realpath`, `uname`, `id`); and text processing (`grep`, `head`, `tail`, `less`, `more`, `tr`, `cut`, `uniq`, `sort`, `sed`, `awk`). Wrappers such as `env`, `xargs`, `find -exec`, `time`, and `nohup` route by their actual nested command. `source`, `.`, and Shell flow syntax are analyzed normally; dynamic command substitutions such as `$(which php)` are also analyzed normally."#;
+
 pub const CHILD_AGENT_CORE_SYSTEM_PROMPT: &str = r#"You are a tool-driven autonomous AI child agent. Your core philosophy is: **Delegated work should converge through tool actions, and delegated completion must be submitted through `submit_result`.**
 
 ## OPERATIONAL GUIDELINES:
@@ -655,6 +661,23 @@ mod tests {
 
     const CODING_PLANNING_PROMPT: &str = include_str!("../../../assets/agents/coding/planning.md");
     const CODING_SYSTEM_PROMPT: &str = include_str!("../../../assets/agents/coding/system.md");
+
+    #[test]
+    fn auto_mode_bash_guidance_distinguishes_routing_from_security() {
+        for required in [
+            "one execution environment for each complete Bash tool call",
+            "Container-selection-neutral helpers do not determine the execution environment",
+            "used only to select the host or sandbox profile",
+            "does not audit Shell safety or alter approval decisions",
+            "less`, `more`",
+            "Wrappers such as `env`, `xargs`, `find -exec`, `time`, and `nohup`",
+        ] {
+            assert!(
+                AUTO_MODE_BASH_TOOL_GUIDANCE.contains(required),
+                "missing: {required}"
+            );
+        }
+    }
 
     #[test]
     fn core_prompt_defines_unambiguous_completion_eligibility() {

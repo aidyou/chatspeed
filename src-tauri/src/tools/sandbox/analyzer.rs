@@ -19,18 +19,24 @@ fn collect_stage(segment: &str, stages: &mut Vec<ShellCommandStage>) {
         return;
     }
 
-    let command_token = &tokens[index];
+    collect_tokens(&tokens, index, stages);
+}
+
+fn collect_tokens(tokens: &[String], command_index: usize, stages: &mut Vec<ShellCommandStage>) {
+    let Some(command_token) = tokens.get(command_index) else {
+        return;
+    };
+    if collect_wrapped_command(tokens, command_index, stages) {
+        return;
+    }
+
     let executable = executable_name(command_token);
-    if matches!(
-        executable.as_str(),
-        "cd" | "pushd" | "popd" | "tee" | "xargs"
-    ) || is_literal_output_helper(segment, &tokens[index..], command_token)
-    {
+    if is_container_selection_neutral(tokens, command_index, command_token) {
         return;
     }
 
     if matches!(executable.as_str(), "sh" | "bash" | "zsh") {
-        if let Some(script) = shell_c_script(&tokens, index + 1) {
+        if let Some(script) = shell_c_script(tokens, command_index + 1) {
             for nested in split_shell_command_segments(script) {
                 collect_stage(&nested, stages);
             }
@@ -39,33 +45,143 @@ fn collect_stage(segment: &str, stages: &mut Vec<ShellCommandStage>) {
     }
 
     stages.push(ShellCommandStage {
-        normalized_command: tokens[index..].join(" "),
+        normalized_command: tokens[command_index..].join(" "),
         executable,
     });
 }
 
-fn is_literal_output_helper(segment: &str, tokens: &[String], command_token: &str) -> bool {
-    if !matches!(command_token, "echo" | "printf")
-        || has_shell_expansion_or_control_operator(segment)
-    {
+fn collect_wrapped_command(
+    tokens: &[String],
+    command_index: usize,
+    stages: &mut Vec<ShellCommandStage>,
+) -> bool {
+    let Some(command_token) = tokens.get(command_index).map(String::as_str) else {
+        return false;
+    };
+
+    let nested_command_index = match command_token {
+        "env" => env_command_index(tokens, command_index + 1),
+        "xargs" => xargs_command_index(tokens, command_index + 1),
+        "find" => find_exec_command_index(tokens, command_index + 1),
+        "time" => time_command_index(tokens, command_index + 1),
+        "nohup" => command_after_options(tokens, command_index + 1, &[]),
+        _ => return false,
+    };
+
+    if let Some(nested_command_index) = nested_command_index {
+        let nested_tokens = &tokens[nested_command_index..];
+        collect_tokens(nested_tokens, 0, stages);
+    }
+    true
+}
+
+fn env_command_index(tokens: &[String], mut index: usize) -> Option<usize> {
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "--" => return (index + 1 < tokens.len()).then_some(index + 1),
+            "-u" | "--unset" | "-C" | "--chdir" => index += 2,
+            "-S" | "--split-string" => return None,
+            option if option.starts_with('-') || is_environment_assignment(option) => index += 1,
+            _ => return Some(index),
+        }
+    }
+    None
+}
+
+fn time_command_index(tokens: &[String], index: usize) -> Option<usize> {
+    command_after_options(tokens, index, &["-f", "--format", "-o", "--output"])
+}
+
+fn command_after_options(
+    tokens: &[String],
+    mut index: usize,
+    value_options: &[&str],
+) -> Option<usize> {
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "--" => return (index + 1 < tokens.len()).then_some(index + 1),
+            option if value_options.contains(&option) => index += 2,
+            option if option.starts_with('-') => index += 1,
+            _ => return Some(index),
+        }
+    }
+    None
+}
+
+fn xargs_command_index(tokens: &[String], mut index: usize) -> Option<usize> {
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "-E" | "--eof" | "-I" | "--replace" | "-L" | "--max-lines" | "-n" | "--max-args"
+            | "-P" | "--max-procs" | "-s" | "--max-chars" | "-a" | "--arg-file" | "-d"
+            | "--delimiter" => index += 2,
+            option if option.starts_with('-') => index += 1,
+            _ => return Some(index),
+        }
+    }
+    None
+}
+
+fn find_exec_command_index(tokens: &[String], start: usize) -> Option<usize> {
+    tokens[start..]
+        .iter()
+        .position(|token| matches!(token.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"))
+        .map(|offset| start + offset + 1)
+        .filter(|index| *index < tokens.len())
+}
+
+fn is_environment_assignment(token: &str) -> bool {
+    token.split_once('=').is_some_and(|(key, _)| {
+        !key.is_empty()
+            && key
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    })
+}
+
+// This analysis is used only to select the host or sandbox profile; it does not audit shell
+// safety or alter shell approval decisions. These commands are excluded from profile routing,
+// execute in the selected environment, and remain subject to the separate shell policies.
+const CONTAINER_SELECTION_NEUTRAL_COMMANDS: &[&str] = &[
+    // Shell control, navigation, and command lookup.
+    "cd", "pushd", "popd", "dirs", "pwd", "echo", "printf", "type", "which", "whereis", "read",
+    "test", "[", "true", "false", ":", "getopts", "export", "unset", "set", "declare", "local",
+    "alias", "unalias", "wait", "exit", "return", "sleep", "seq",
+    // Path, environment, and system inspection.
+    "basename", "dirname", "realpath", "readlink", "stat", "wc", "printenv", "uname", "whoami",
+    "id", // Text-stream helpers.
+    "cat", "grep", "egrep", "fgrep", "tr", "cut", "head", "tail", "less", "more", "uniq", "sort",
+    "sed", "awk", "tee",
+];
+
+fn is_container_selection_neutral(
+    tokens: &[String],
+    command_index: usize,
+    command_token: &str,
+) -> bool {
+    if has_dynamic_shell_execution(&tokens[command_index..].join(" ")) {
         return false;
     }
 
-    match command_token {
-        "echo" => true,
-        // Bash's `printf -v NAME ...` mutates a shell variable, so do not treat option-bearing
-        // printf invocations as output-only helpers.
-        "printf" => tokens.get(1).is_some_and(|format| !format.starts_with('-')),
-        _ => false,
+    if command_token == "hostname" {
+        return tokens.len() == command_index + 1;
     }
+
+    if command_token == "command" {
+        return tokens.len() > command_index + 2
+            && tokens
+                .get(command_index + 1)
+                .is_some_and(|option| matches!(option.as_str(), "-v" | "-V"));
+    }
+
+    CONTAINER_SELECTION_NEUTRAL_COMMANDS.contains(&command_token)
 }
 
-fn has_shell_expansion_or_control_operator(command: &str) -> bool {
+fn has_dynamic_shell_execution(command: &str) -> bool {
     let mut in_single_quote = false;
     let mut in_double_quote = false;
     let mut escaped = false;
 
-    for ch in command.chars() {
+    for (index, ch) in command.char_indices() {
         if escaped {
             escaped = false;
             continue;
@@ -83,26 +199,9 @@ fn has_shell_expansion_or_control_operator(command: &str) -> bool {
             continue;
         }
         if !in_single_quote
-            && matches!(
-                ch,
-                '$' | '`'
-                    | ';'
-                    | '&'
-                    | '|'
-                    | '<'
-                    | '>'
-                    | '('
-                    | ')'
-                    | '*'
-                    | '?'
-                    | '['
-                    | ']'
-                    | '{'
-                    | '}'
-                    | '~'
-                    | '\n'
-                    | '\r'
-            )
+            && (ch == '`'
+                || (ch == '$' && command[index + ch.len_utf8()..].starts_with('('))
+                || ((ch == '<' || ch == '>') && command[index + ch.len_utf8()..].starts_with('(')))
         {
             return true;
         }
@@ -166,34 +265,48 @@ mod tests {
     }
 
     #[test]
-    fn skips_literal_output_helpers_without_expansions_or_side_effects() {
-        let analysis = analyze_shell_command(
-            "git status --short && printf '\\n-- staged --\\n' && git diff --cached --name-status && echo done",
-        );
-        assert_eq!(
-            analysis
-                .stages
-                .iter()
-                .map(|stage| stage.normalized_command.as_str())
-                .collect::<Vec<_>>(),
-            vec!["git status --short", "git diff --cached --name-status"]
-        );
+    fn ignores_container_selection_neutral_helpers() {
+        for command in [
+            "command -v python && type python && which python && whereis python",
+            "cat file | grep needle | tail -20",
+            "less file && more file && sed -i 's/a/b/' file && awk '{ print $1 }' file",
+            "[ -f file ] && : && hostname && printenv && sort -o output input",
+            "dirs && export APP_ENV=dev && sleep 1 && tee output.log && seq 1 3",
+        ] {
+            let analysis = analyze_shell_command(command);
+            assert!(analysis.stages.is_empty(), "{command}");
+        }
     }
 
     #[test]
-    fn retains_output_helpers_with_shell_expansions_or_side_effects() {
-        for command in [
-            "echo $(pwd)",
-            "printf '%s\\n' \"$HOME\"",
-            "echo hi > output.txt",
-            "printf -v result '%s' value",
-            "echo hi & touch output.txt",
-            "./echo hi",
-            "/tmp/printf '%s\\n' hi",
+    fn routes_wrappers_by_their_nested_command() {
+        for (command, expected) in [
+            ("env APP_ENV=test python --version", "python --version"),
+            ("env APP_ENV=test && python --version", "python --version"),
+            ("printf '%s\\n' input | xargs -n 1 python", "python"),
+            ("find . -name '*.py' -exec python {} \\;", "python {} ;"),
+            ("time -f '%E' python --version", "python --version"),
+            ("nohup python --version", "python --version"),
         ] {
             let analysis = analyze_shell_command(command);
             assert_eq!(analysis.stages.len(), 1, "{command}");
+            assert_eq!(analysis.stages[0].executable, "python", "{command}");
+            assert_eq!(analysis.stages[0].normalized_command, expected, "{command}");
         }
+    }
+
+    #[test]
+    fn preserves_dynamic_execution_targets_for_routing() {
+        for command in ["echo $(pwd)", "$(which php) -l file.php"] {
+            let analysis = analyze_shell_command(command);
+            assert_eq!(analysis.stages.len(), 1, "{command}");
+        }
+    }
+
+    #[test]
+    fn ignores_variable_expansions_in_container_selection_neutral_helpers() {
+        let analysis = analyze_shell_command("printf '%s\\n' \"$HOME\"");
+        assert!(analysis.stages.is_empty());
     }
 
     #[test]

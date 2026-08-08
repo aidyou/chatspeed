@@ -185,9 +185,30 @@ struct SanitizedReasoningChunk {
 #[derive(Debug, Default)]
 struct EmptyHtmlCommentStreamState {
     carry: String,
+    last_emitted_char: Option<char>,
+    needs_separator: bool,
 }
 
 impl EmptyHtmlCommentStreamState {
+    fn append_visible(&mut self, content: &mut String, visible: &str) {
+        if visible.is_empty() {
+            return;
+        }
+
+        let first_char = visible.chars().next();
+        if self.needs_separator
+            && self
+                .last_emitted_char
+                .is_some_and(|character| !character.is_whitespace())
+            && first_char.is_some_and(|character| !character.is_whitespace())
+        {
+            content.push('\n');
+        }
+        self.needs_separator = false;
+        content.push_str(visible);
+        self.last_emitted_char = visible.chars().last();
+    }
+
     fn consume(&mut self, chunk: &str) -> SanitizedReasoningChunk {
         let mut input = std::mem::take(&mut self.carry);
         input.push_str(chunk);
@@ -203,12 +224,12 @@ impl EmptyHtmlCommentStreamState {
                     .max()
                     .unwrap_or_default();
                 let split_at = remaining.len().saturating_sub(carry_len);
-                content.push_str(&remaining[..split_at]);
+                self.append_visible(&mut content, &remaining[..split_at]);
                 self.carry.push_str(&remaining[split_at..]);
                 break;
             };
 
-            content.push_str(&remaining[..comment_start]);
+            self.append_visible(&mut content, &remaining[..comment_start]);
             let comment = &remaining[comment_start..];
             let Some(comment_end) = comment.find("-->") else {
                 self.carry.push_str(comment);
@@ -217,6 +238,9 @@ impl EmptyHtmlCommentStreamState {
 
             let end_index = comment_end + 3;
             removed_empty_comment = true;
+            self.needs_separator = self
+                .last_emitted_char
+                .is_some_and(|character| !character.is_whitespace());
             remaining = &comment[end_index..];
         }
 
@@ -231,23 +255,17 @@ impl EmptyHtmlCommentStreamState {
     }
 }
 
-/// Removes HTML comments emitted by some reasoning providers while preserving surrounding text.
+/// Removes HTML comments emitted by some reasoning providers while preserving Markdown boundaries.
 fn sanitize_reasoning_content(content: &str) -> SanitizedReasoningChunk {
-    match regex::Regex::new(r"<!--[\s\S]*?-->") {
-        Ok(pattern) => {
-            let sanitized = pattern.replace_all(content, "").into_owned();
-            let removed_empty_comment = sanitized.len() != content.len();
-            SanitizedReasoningChunk {
-                content: sanitized,
-                removed_empty_comment,
-            }
-        }
-        Err(_) => EmptyHtmlCommentStreamState::default().consume(content),
-    }
+    EmptyHtmlCommentStreamState::default().consume(content)
 }
 
 fn should_emit_reasoning_chunk(chunk: &SanitizedReasoningChunk) -> bool {
     !chunk.removed_empty_comment || !chunk.content.is_empty()
+}
+
+fn trim_reasoning_horizontal_whitespace(content: &str) -> &str {
+    content.trim_matches([' ', '\t'])
 }
 
 fn extract_reasoning_from_openai_message(message: &Value) -> String {
@@ -255,14 +273,14 @@ fn extract_reasoning_from_openai_message(message: &Value) -> String {
         .get("reasoning_content")
         .and_then(|value| value.as_str())
     {
-        let trimmed = reasoning_content.trim();
+        let trimmed = trim_reasoning_horizontal_whitespace(reasoning_content);
         if !trimmed.is_empty() {
             return trimmed.to_string();
         }
     }
 
     if let Some(thinking) = message.get("thinking").and_then(|value| value.as_str()) {
-        let trimmed = thinking.trim();
+        let trimmed = trim_reasoning_horizontal_whitespace(thinking);
         if !trimmed.is_empty() {
             return trimmed.to_string();
         }
@@ -278,7 +296,7 @@ fn extract_reasoning_from_openai_message(message: &Value) -> String {
                 detail.get("type").and_then(|value| value.as_str()) == Some("reasoning.text")
             })
             .filter_map(|detail| detail.get("text").and_then(|value| value.as_str()))
-            .map(str::trim)
+            .map(trim_reasoning_horizontal_whitespace)
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
@@ -672,7 +690,7 @@ impl OpenAIChat {
         let reasoning_content = sanitize_reasoning_content(
             &[structured_reasoning_content, inline_reasoning_content]
                 .into_iter()
-                .filter(|part| !part.trim().is_empty())
+                .filter(|part| !trim_reasoning_horizontal_whitespace(part).is_empty())
                 .collect::<Vec<_>>()
                 .join("\n\n"),
         );
@@ -1119,10 +1137,14 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_reasoning_content_removes_html_comments_only() {
-        let sanitized =
-            sanitize_reasoning_content("Before<!-- -->\n<!--\n\t-->After<!-- note -->End");
-        assert_eq!(sanitized.content, "Before\nAfterEnd");
+    fn sanitize_reasoning_content_removes_html_comments_without_merging_markdown() {
+        let sanitized = sanitize_reasoning_content(
+            "**内容A**<!-- 注释 -->**内容B**\nBefore<!-- -->\n<!--\n\t-->After<!-- note -->End",
+        );
+        assert_eq!(
+            sanitized.content,
+            "**内容A**\n**内容B**\nBefore\nAfter\nEnd"
+        );
         assert!(sanitized.removed_empty_comment);
     }
 
@@ -1159,7 +1181,7 @@ mod tests {
         assert!(!first.removed_empty_comment);
 
         let second = state.consume(" \n-->After");
-        assert_eq!(second.content, "After");
+        assert_eq!(second.content, "\nAfter");
         assert!(second.removed_empty_comment);
         assert_eq!(state.finish(), "");
     }
@@ -1178,7 +1200,7 @@ mod tests {
             assert!(!first_chunk.removed_empty_comment);
 
             let second_chunk = state.consume(second);
-            assert_eq!(second_chunk.content, "After");
+            assert_eq!(second_chunk.content, "\nAfter");
             assert!(second_chunk.removed_empty_comment);
             assert_eq!(state.finish(), "");
         }
@@ -1193,7 +1215,7 @@ mod tests {
         assert!(!first.removed_empty_comment);
 
         let second = state.consume(" -->After");
-        assert_eq!(second.content, "After");
+        assert_eq!(second.content, "\nAfter");
         assert!(second.removed_empty_comment);
         assert_eq!(state.finish(), "");
     }
@@ -1223,6 +1245,18 @@ mod tests {
         assert_eq!(
             extract_reasoning_from_openai_message(&message),
             "thinking text"
+        );
+    }
+
+    #[test]
+    fn extract_reasoning_preserves_boundary_newlines_while_trimming_horizontal_whitespace() {
+        let message = json!({
+            "reasoning_content": " \t\nfirst line\nsecond line\n\t "
+        });
+
+        assert_eq!(
+            extract_reasoning_from_openai_message(&message),
+            "\nfirst line\nsecond line\n"
         );
     }
 

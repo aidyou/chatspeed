@@ -993,6 +993,41 @@ mod tests {
     }
 
     #[test]
+    fn container_selection_neutral_helpers_follow_the_main_profile() {
+        let mut config = config(ShellExecutionMode::Auto);
+        add_profile(
+            &mut config,
+            "python",
+            "python:latest",
+            &[r"^python(?:\s|$)"],
+        );
+        config.profiles.get_mut("python").unwrap().priority = 10;
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest", "python:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+
+        for command in [
+            "command -v python && python --version",
+            "env APP_ENV=test python --version",
+            "env APP_ENV=test && python --version",
+            "grep needle input | python -",
+            "time python --version",
+            "nohup python --version",
+        ] {
+            let plan = ShellExecutionResolver::resolve(
+                "tool-1",
+                command,
+                Some(&config),
+                &status,
+                Some(Path::new("/project")),
+            );
+            assert_eq!(plan.status, ShellExecutionPlanStatus::Ready, "{command}");
+            assert_eq!(plan.profile.as_deref(), Some("python"), "{command}");
+        }
+    }
+
+    #[test]
     fn compound_navigation_command_matches_git_and_cargo_rules() {
         let mut config = config(ShellExecutionMode::Auto);
         config.profiles.clear();

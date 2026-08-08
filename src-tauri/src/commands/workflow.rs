@@ -1395,6 +1395,12 @@ fn build_workflow_config_for_request(
         if let Some(inherited_config) = validated_inherited_agent_config(inherited) {
             config = merge_inherited_workflow_config(&config, &inherited_config);
         }
+    } else {
+        config.auto_approve_plan = Some(false);
+        config.auto_compress = Some(false);
+        config.final_audit = Some(false);
+        config.final_review_mode = Some("off".to_string());
+        config.phase = Some("standard".to_string());
     }
 
     if let Some(final_audit) = request.final_audit {
@@ -7411,6 +7417,49 @@ mod tests {
             .expect("agent shell policy should remain");
         assert_eq!(shell_policy.len(), 1);
         assert_eq!(shell_policy[0].pattern, "^git status$");
+    }
+
+    #[test]
+    fn fresh_workflow_creation_disables_runtime_options_without_changing_agent_defaults() {
+        let agent = Agent::new(
+            "agent-test".to_string(),
+            "Agent Test".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "You are a test agent.".to_string(),
+            None,
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            Some(true),
+            Some("default".to_string()),
+            Some(true),
+            Some("[]".to_string()),
+            Some("planning".to_string()),
+            Some(false),
+            Some(false),
+            Some(128_000),
+        );
+        let request = CreateWorkflowRequest {
+            user_query: None,
+            agent_id: agent.id.clone(),
+            allowed_paths: None,
+            auto_approve_plan: None,
+            final_audit: None,
+            inherited_agent_config: None,
+        };
+
+        let config = build_workflow_config_for_request(&agent, &request);
+
+        assert_eq!(config.phase.as_deref(), Some("standard"));
+        assert_eq!(config.auto_approve_plan, Some(false));
+        assert_eq!(config.auto_compress, Some(false));
+        assert_eq!(config.final_audit, Some(false));
+        assert_eq!(config.final_review_mode.as_deref(), Some("off"));
     }
 
     #[test]
