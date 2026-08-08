@@ -360,8 +360,6 @@ const COMMAND_PRESETS = {
   zig: ['^zig(?:\\s|$)']
 }
 
-const HELP_COMMAND = ["^command\\s+-v(?:\\s|$)"]
-
 const HOST_COMMAND_PRESETS = Object.keys(COMMAND_PRESETS).filter(preset => preset !== 'common')
 
 const defaultProfile = () => ({
@@ -499,12 +497,6 @@ const openProfileEditor = async profile => {
 const addCommandPresetPatterns = (presets, commandPatterns) => {
   const patterns = new Set(commandPatterns || [])
   const selectedPresets = new Set(presets || [])
-  const isCommon = selectedPresets.has('common') || [...patterns].some(pattern =>
-    ['.*', '^.*', '.*$', '^.*$'].includes(String(pattern).trim())
-  )
-  if (!isCommon) {
-    for (const pattern of HELP_COMMAND) patterns.add(pattern)
-  }
   for (const preset of selectedPresets) {
     for (const pattern of COMMAND_PRESETS[preset] || []) patterns.add(pattern)
   }
