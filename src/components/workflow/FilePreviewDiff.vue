@@ -324,11 +324,11 @@ const diffLines = computed(() => {
     min-width: 100%;
 
     &.added {
-      background: rgba(103, 194, 58, 0.12);
+      background: var(--cs-diff-added-bg-color);
     }
 
     &.removed {
-      background: rgba(245, 108, 108, 0.12);
+      background: var(--cs-diff-removed-bg-color);
     }
   }
 

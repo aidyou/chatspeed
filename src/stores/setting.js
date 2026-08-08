@@ -19,6 +19,7 @@ const defaultSettings = {
   primaryLanguage: mapBrowserLangToStandard(navigator.language),
   secondaryLanguage: 'en',
   theme: 'system',
+  primaryColor: 'green',
   codeLightTheme: 'atom-one-light',
   codeDarkTheme: 'github-dark',
   showMenuButton: true,

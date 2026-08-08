@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "test:theme": "node --test src/composables/primaryColorTheme.test.js",
     "test:workflow": "node --test src/components/workflow/approvalVisibility.test.js src/composables/workflow/codeEditorContract.test.js src/composables/workflow/messageProjectionRules.test.js src/composables/workflow/modelConfigSelection.test.js src/composables/workflow/planApproval.test.js src/composables/workflow/terminalContract.test.js src/composables/workflow/toolClassification.test.js src/composables/workflow/workflowConstitution.test.js src/composables/workflow/workflowInputDraftCache.test.js src/composables/workflow/workflowUiContract.test.js src/stores/workflowApprovalRecovery.test.js"
   },
   "dependencies": {

@@ -98,11 +98,11 @@ const activeTab = computed(() => editor.value.activeTab.value)
 const editorTheme = EditorView.theme({
   '&': {
     height: '100%',
-    color: 'var(--cs-text-primary)',
+    color: 'var(--cs-text-color-primary)',
     backgroundColor: 'var(--cs-bg-color)'
   },
   '.cm-scroller': {
-    fontFamily: 'var(--cs-font-mono, "JetBrains Mono", "Fira Code", Consolas, monospace)',
+    fontFamily: 'var(--cs-font-family-mono)',
     fontSize: '13px',
     lineHeight: '1.6'
   },
@@ -110,15 +110,15 @@ const editorTheme = EditorView.theme({
     overflowWrap: 'anywhere'
   },
   '.cm-gutters': {
-    backgroundColor: 'var(--cs-bg-color-secondary)',
-    color: 'var(--cs-text-secondary)',
+    backgroundColor: 'var(--cs-bg-color-light)',
+    color: 'var(--cs-text-color-secondary)',
     borderRight: '1px solid var(--cs-border-color)',
     position: 'sticky',
     left: '0',
     zIndex: '3'
   },
   '.cm-gutter': {
-    backgroundColor: 'var(--cs-bg-color-secondary)'
+    backgroundColor: 'var(--cs-bg-color-light)'
   },
   '.cm-lineNumbers .cm-gutterElement': {
     minWidth: '3.2em',
@@ -126,16 +126,16 @@ const editorTheme = EditorView.theme({
     textAlign: 'right'
   },
   '.cm-activeLine, .cm-activeLineGutter': {
-    backgroundColor: 'var(--cs-hover-bg)'
+    backgroundColor: 'var(--cs-hover-bg-color)'
   },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
-    backgroundColor: 'var(--cs-primary-light, rgba(64, 158, 255, 0.24))'
+    backgroundColor: 'var(--cs-color-primary-lighter)'
   },
   '.cm-panels': {
     borderTop: '1px solid var(--cs-border-color)',
     borderBottom: '0',
-    backgroundColor: 'var(--cs-bg-color-secondary)',
-    color: 'var(--cs-text-primary)'
+    backgroundColor: 'var(--cs-bg-color-light)',
+    color: 'var(--cs-text-color-primary)'
   },
   '.cm-panels-bottom': {
     borderTop: '1px solid var(--cs-border-color)'
@@ -152,7 +152,7 @@ const editorTheme = EditorView.theme({
     border: '1px solid var(--cs-border-color)',
     borderRadius: '6px',
     padding: '0 8px',
-    color: 'var(--cs-text-primary)',
+    color: 'var(--cs-text-color-primary)',
     backgroundColor: 'var(--cs-bg-color)'
   },
   '.cm-search button': {
@@ -160,13 +160,13 @@ const editorTheme = EditorView.theme({
     border: '1px solid var(--cs-border-color)',
     borderRadius: '6px',
     padding: '0 8px',
-    color: 'var(--cs-text-primary)',
+    color: 'var(--cs-text-color-primary)',
     backgroundColor: 'var(--cs-bg-color)',
     cursor: 'pointer'
   },
   '.cm-search button:hover': {
-    borderColor: 'var(--cs-primary-color)',
-    color: 'var(--cs-primary-color)'
+    borderColor: 'var(--cs-color-primary)',
+    color: 'var(--cs-color-primary)'
   }
 })
 
@@ -280,7 +280,7 @@ onBeforeUnmount(() => {
   min-height: 40px;
   padding: 6px 8px;
   border-bottom: 1px solid var(--cs-border-color);
-  background: var(--cs-bg-color-secondary);
+  background: var(--cs-bg-color-light);
 }
 
 .code-editor-tabs {
@@ -303,15 +303,15 @@ onBeforeUnmount(() => {
   border: 1px solid var(--cs-border-color);
   border-radius: 6px;
   background: var(--cs-bg-color);
-  color: var(--cs-text-secondary);
+  color: var(--cs-text-color-secondary);
 
   &.active {
-    color: var(--cs-text-primary);
-    border-color: var(--cs-primary-color);
+    color: var(--cs-text-color-primary);
+    border-color: var(--cs-color-primary);
   }
 
   &.dirty .dirty-dot {
-    background: var(--cs-warning-color, #e6a23c);
+    background: var(--cs-warning-color);
   }
 }
 
@@ -345,7 +345,7 @@ onBeforeUnmount(() => {
 .tab-close {
   border: 0;
   background: transparent;
-  color: var(--cs-text-secondary);
+  color: var(--cs-text-color-secondary);
   cursor: pointer;
   padding: 0 2px;
   line-height: 1;
@@ -364,7 +364,7 @@ onBeforeUnmount(() => {
   gap: 10px;
   min-height: 30px;
   padding: 4px 10px;
-  color: var(--cs-text-secondary);
+  color: var(--cs-text-color-secondary);
   font-size: 12px;
   border-bottom: 1px solid var(--cs-border-color);
 }
@@ -399,6 +399,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--cs-text-secondary);
+  color: var(--cs-text-color-secondary);
 }
 </style>

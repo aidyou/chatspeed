@@ -1218,7 +1218,7 @@ const trimQuotes = str => {
 
           .icon.disabled {
             cursor: not-allowed;
-            background-color: rgba(0, 0, 0, 0);
+            background-color: transparent;
           }
         }
       }
@@ -1307,7 +1307,7 @@ const trimQuotes = str => {
       select {
         width: 100%;
         padding: 8px;
-        border: 1px solid #ddd; // Theme border
+        border: 1px solid var(--cs-border-color); // Theme border
         border-radius: 4px;
         box-sizing: border-box; // Important for width: 100%
       }
@@ -1327,7 +1327,7 @@ const trimQuotes = str => {
       min-height: 300px;
       font-family: monospace;
       padding: 10px;
-      border: 1px solid #ddd; // Theme border
+      border: 1px solid var(--cs-border-color); // Theme border
       border-radius: 4px;
       box-sizing: border-box;
       margin-top: 10px; // Space if it's directly after a tab title
@@ -1340,7 +1340,7 @@ const trimQuotes = str => {
       display: flex;
       align-items: center;
       padding: 10px;
-      border-bottom: 1px solid #eee;
+      border-bottom: 1px solid var(--cs-border-color-lighter);
 
       .preset-info {
         flex-grow: 1;
@@ -1352,7 +1352,7 @@ const trimQuotes = str => {
 
         .preset-desc {
           font-size: 12px;
-          color: #666;
+          color: var(--cs-text-color-secondary);
         }
       }
 

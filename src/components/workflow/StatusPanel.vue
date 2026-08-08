@@ -1072,13 +1072,14 @@ const jumpToChildMessage = child => {
   target.scrollIntoView({ behavior: 'smooth', block: 'center' })
   if (typeof target.animate === 'function') {
     target.animate(
-      [{ backgroundColor: 'rgba(64, 158, 255, 0.18)' }, { backgroundColor: 'transparent' }],
+      [{ backgroundColor: getCssColor('--cs-info-border-color') }, { backgroundColor: 'transparent' }],
       { duration: 1200, easing: 'ease-out' }
     )
   }
 }
 
-// Hide panel when there's no data to show
+const getCssColor = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+
 const hasData = computed(() => {
   return (
     todoList.value.length > 0 ||
@@ -1146,10 +1147,10 @@ const collapsedContextBarStyle = computed(() => ({
 }))
 
 const triggerContextColorMap = {
-  start: 'rgba(103, 194, 58, 0.6)',
-  medium: 'rgba(103, 194, 58, 0.6)',
-  good: 'rgba(230, 162, 60, 0.58)',
-  complete: 'rgba(245, 108, 108, 0.58)'
+  start: 'color-mix(in srgb, var(--cs-success-color) 60%, transparent)',
+  medium: 'color-mix(in srgb, var(--cs-success-color) 60%, transparent)',
+  good: 'color-mix(in srgb, var(--cs-warning-color) 58%, transparent)',
+  complete: 'color-mix(in srgb, var(--cs-error-color) 58%, transparent)'
 }
 
 const triggerContextRingStyle = computed(() => {
@@ -1157,7 +1158,7 @@ const triggerContextRingStyle = computed(() => {
   const color =
     triggerContextColorMap[contextUsageStatusClass.value] || triggerContextColorMap.start
   return {
-    background: `conic-gradient(from 180deg, ${color} 0 ${progress}%, rgba(15, 23, 42, 0.14) ${progress}% 100%)`
+    background: `conic-gradient(from 180deg, ${color} 0 ${progress}%, var(--cs-fill-color-light) ${progress}% 100%)`
   }
 })
 
@@ -1609,15 +1610,15 @@ watch(
 
     &.is-start,
     &.is-medium {
-      background: rgba(103, 194, 58, 0.2);
+      background: var(--cs-success-border-color);
     }
 
     &.is-good {
-      background: rgba(230, 162, 60, 0.2);
+      background: var(--cs-warning-border-color);
     }
 
     &.is-complete {
-      background: rgba(245, 108, 108, 0.2);
+      background: var(--cs-error-border-color);
     }
   }
 
@@ -1722,14 +1723,14 @@ watch(
 
     &.active {
       color: var(--el-color-primary);
-      border-color: rgba(64, 158, 255, 0.18);
+      border-color: var(--cs-info-border-color);
       background: var(--cs-bg-color);
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+      box-shadow: 0 1px 2px var(--cs-shadow-color);
     }
 
     &:hover:not(.active) {
       color: var(--cs-text-color-primary);
-      background: rgba(255, 255, 255, 0.45);
+      background: var(--cs-fill-color-light);
     }
   }
 
@@ -1738,7 +1739,7 @@ watch(
     height: 16px;
     border-radius: 10px;
     background: var(--el-color-primary);
-    color: #fff;
+    color: var(--cs-text-color-on-primary);
     font-size: 10px;
     display: inline-flex;
     align-items: center;
@@ -1898,15 +1899,15 @@ watch(
   border: 1px solid var(--cs-border-color);
 
   &.high {
-    border-color: rgba(103, 194, 58, 0.4);
+    border-color: var(--cs-success-border-color);
   }
 
   &.medium {
-    border-color: rgba(230, 162, 60, 0.4);
+    border-color: var(--cs-warning-border-color);
   }
 
   &.low {
-    border-color: rgba(245, 108, 108, 0.35);
+    border-color: var(--cs-error-border-color);
   }
 }
 
@@ -2155,7 +2156,7 @@ watch(
           }
 
           &.good {
-            background-color: #67c23a;
+            background-color: var(--cs-success-color);
           }
 
           &.complete {
@@ -2166,7 +2167,7 @@ watch(
         // 上下文进度条颜色（新的）
         &.context-progress {
           &.start {
-            background-color: #67c23a;
+            background-color: var(--cs-success-color);
           }
 
           &.medium {
@@ -2365,10 +2366,13 @@ watch(
     font-size: var(--cs-font-size-xs);
     color: var(--cs-text-color-regular);
     background: var(--cs-bg-color-light);
+    border: 0;
+    border-left: 2px solid transparent;
     border-radius: var(--cs-border-radius-sm);
     margin-bottom: 4px;
-    border-left: 2px solid transparent;
-    transition: all 0.2s ease;
+    transition:
+      background-color 0.2s ease,
+      border-left-color 0.2s ease;
 
     &:last-child {
       margin-bottom: 0;
@@ -2400,10 +2404,10 @@ watch(
     }
 
     &.tool-todo {
-      border-left-color: #8b5cf6;
+      border-left-color: var(--cs-color-violet);
 
       .op-icon {
-        color: #8b5cf6;
+        color: var(--cs-color-violet);
       }
     }
 
@@ -2442,7 +2446,7 @@ watch(
 
     &.running {
       background: var(--el-color-primary-light-9);
-      border: 1px solid var(--el-color-primary-light-7);
+      border-left-color: var(--el-color-primary);
 
       .op-icon {
         color: var(--el-color-primary);
@@ -2509,11 +2513,11 @@ watch(
     transition:
       background 0.25s ease,
       opacity 0.25s ease;
-    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), var(--cs-color-black) calc(100% - 2px));
     -webkit-mask: radial-gradient(
       farthest-side,
       transparent calc(100% - 3px),
-      #000 calc(100% - 2px)
+      var(--cs-color-black) calc(100% - 2px)
     );
   }
 

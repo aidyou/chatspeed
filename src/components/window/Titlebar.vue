@@ -389,7 +389,7 @@ init()
       }
 
       &.close {
-        background-color: #ef6051;
+        background-color: var(--cs-traffic-light-close-color);
 
         &::before {
           font-size: 12px;
@@ -397,11 +397,11 @@ init()
       }
 
       &.minimize {
-        background-color: #f4b730;
+        background-color: var(--cs-traffic-light-minimize-color);
       }
 
       &.maximize {
-        background-color: #4bbd38;
+        background-color: var(--cs-traffic-light-maximize-color);
       }
     }
 

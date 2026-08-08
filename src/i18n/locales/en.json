@@ -412,6 +412,14 @@
       "networkSettings": "Network Settings",
       "noteWindowVisibleShortcut": "Open Note Window",
       "pressKeysToSet": "Click then press the shortcut key combination...",
+      "primaryColor": "Primary Color",
+      "primaryColors": {
+        "blue": "Blue",
+        "green": "Green",
+        "pink": "Pink",
+        "purple": "Purple",
+        "yellow": "Yellow"
+      },
       "primaryLanguage": "Primary Language",
       "primaryLanguageTooltip": "Mainly used as the first choice when language translation automatic recognition fails.",
       "proxyPassword": "Proxy Password",

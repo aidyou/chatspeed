@@ -69,6 +69,19 @@
         </div>
       </div>
       <div class="item">
+        <div class="label">{{ $t('settings.general.primaryColor') }}</div>
+        <div class="value">
+          <el-select v-model="settings.primaryColor" class="auto-width-select" placement="bottom" @change="onPrimaryColorChange">
+            <el-option v-for="(label, color) in primaryColors" :key="color" :label="label" :value="color">
+              <span class="primary-color-option">
+                <span class="primary-color-option__dot" :class="`primary-color-option__dot--${color}`"></span>
+                <span>{{ label }}</span>
+              </span>
+            </el-option>
+          </el-select>
+        </div>
+      </div>
+      <div class="item">
         <div class="label">{{ $t('settings.general.codeLightTheme') }}</div>
         <div class="value">
           <el-select v-model="settings.codeLightTheme" class="auto-width-select" placement="bottom" filterable
@@ -1008,6 +1021,14 @@ const themes = computed(() => ({
   dark: t('settings.general.darkTheme')
 }))
 
+const primaryColors = computed(() => ({
+  green: t('settings.general.primaryColors.green'),
+  purple: t('settings.general.primaryColors.purple'),
+  yellow: t('settings.general.primaryColors.yellow'),
+  pink: t('settings.general.primaryColors.pink'),
+  blue: t('settings.general.primaryColors.blue')
+}))
+
 const conversationTitleGenModelList = computed(() => {
   if (settingStore.settings.conversationTitleGenModel.id) {
     return (
@@ -1157,6 +1178,10 @@ const onSecondaryLanguageChange = value => {
 
 const onThemeChange = value => {
   setSetting('theme', value || 'system')
+}
+
+const onPrimaryColorChange = value => {
+  setSetting('primaryColor', value || 'green')
 }
 
 const onCodeLightThemeChange = value => {
@@ -1718,6 +1743,24 @@ const getAllBackups = () => {
 
   .el-input__inner {
     width: 100%;
+  }
+}
+
+.primary-color-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cs-space-xs);
+
+  &__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: var(--cs-border-radius-round);
+
+    &--green { background-color: var(--cs-primary-preset-green-color); }
+    &--purple { background-color: var(--cs-primary-preset-purple-color); }
+    &--yellow { background-color: var(--cs-primary-preset-yellow-color); }
+    &--pink { background-color: var(--cs-primary-preset-pink-color); }
+    &--blue { background-color: var(--cs-primary-preset-blue-color); }
   }
 }
 

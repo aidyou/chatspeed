@@ -2,6 +2,7 @@
     --cs-font-family:
         'PingFang SC', 'Microsoft YaHei', 'SimHei', 'Noto Sans SC', 'Source Han Sans SC',
         'Helvetica Neue', 'Arial', sans-serif;
+    --cs-font-family-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 
     --cs-titlebar-height: 40px;
     --cs-titlebar-zindex: 9999;
@@ -31,22 +32,77 @@
     --cs-font-size-xl: 20px;
     --cs-font-size-xxl: 24px;
 
+    --cs-primary-preset-green-color: rgb(65, 181, 85);
+    --cs-primary-preset-purple-color: rgb(175, 82, 222);
+    --cs-primary-preset-yellow-color: rgb(247, 131, 28);
+    --cs-primary-preset-pink-color: rgb(255, 45, 85);
+    --cs-primary-preset-blue-color: rgb(0, 122, 255);
     --cs-color-primary-rgb: 65, 181, 85;
     --cs-color-primary: rgb(var(--cs-color-primary-rgb));
     --cs-color-primary-dark: #3b3c3d;
     --cs-color-primary-light: rgba(var(--cs-color-primary-rgb), 0.5);
     --cs-color-primary-lighter: rgba(var(--cs-color-primary-rgb), 0.3);
-    --cs-color-primary-red: rgb(245, 108, 108);
-    --cs-color-white: rgb(255, 255, 255);
-    --cs-error-color: var(--cs-color-primary-red);
+    --cs-color-primary-soft: rgba(var(--cs-color-primary-rgb), 0.1);
+    --cs-text-color-on-primary: rgb(255, 255, 255);
+
+    /* Stable semantic status colors. They never follow the primary preset. */
+    --cs-error-color: rgb(245, 108, 108);
     --cs-error-bg-color: rgba(245, 108, 108, 0.1);
+    --cs-error-border-color: rgba(245, 108, 108, 0.2);
     --cs-info-color: rgb(70, 162, 237);
+    --cs-info-bg-color: rgba(70, 162, 237, 0.1);
+    --cs-info-border-color: rgba(70, 162, 237, 0.18);
     --cs-success-color: rgb(65, 181, 85);
+    --cs-success-bg-color: rgba(65, 181, 85, 0.12);
+    --cs-success-border-color: rgba(65, 181, 85, 0.2);
     --cs-warning-color: rgb(255, 193, 7);
+    --cs-warning-bg-color: rgba(255, 193, 7, 0.12);
+    --cs-warning-border-color: rgba(255, 193, 7, 0.2);
 
-    /* override element-plus variables */
+    /* Fixed functional and platform colors. They never follow the primary preset. */
+    --cs-color-white: rgb(255, 255, 255);
+    --cs-color-black: rgb(0, 0, 0);
+    --cs-color-violet: #8b5cf6;
+    --cs-color-violet-soft: rgba(139, 92, 246, 0.1);
+    --cs-color-violet-border: rgba(139, 92, 246, 0.2);
+    --cs-diff-added-bg-color: rgba(103, 194, 58, 0.12);
+    --cs-diff-removed-bg-color: rgba(245, 108, 108, 0.12);
+    --cs-traffic-light-close-color: #ef6051;
+    --cs-traffic-light-minimize-color: #f4b730;
+    --cs-traffic-light-maximize-color: #4bbd38;
+    --cs-avatar-color-1: #10897c;
+    --cs-avatar-color-2: #fb452e;
+    --cs-avatar-color-3: #5ba006;
+    --cs-avatar-color-4: #1399ef;
+    --cs-avatar-color-5: #643eff;
+    --cs-avatar-color-6: #ea950f;
+    --cs-avatar-color-7: #e901f2;
+    --cs-brand-openai-color: #10a37f;
+    --cs-brand-openai-soft-color: rgba(16, 163, 127, 0.1);
+    --cs-brand-claude-color: #e57719;
+    --cs-brand-claude-soft-color: rgba(229, 119, 25, 0.1);
+    --cs-brand-gemini-color: #006cff;
+    --cs-brand-gemini-soft-color: rgba(0, 108, 255, 0.1);
+    --cs-brand-ollama-color: #5055f2;
+    --cs-brand-ollama-soft-color: rgba(80, 85, 242, 0.1);
+    --cs-markmap-background-color: #ffffff;
+    --cs-markmap-highlight-color: #0097e6;
+    --cs-markmap-node-color: #00a8ff;
+    --cs-markmap-line-color: #f0f0f0;
+    --cs-markmap-text-color: #555555;
+    --cs-markmap-note-color: #ffeaa7;
+    --cs-markmap-note-text-color: #333333;
+    --cs-terminal-dark-background: #151515;
+    --cs-terminal-dark-foreground: #e8e8e8;
+    --cs-terminal-dark-cursor: #e8e8e8;
+    --cs-terminal-dark-selection: #4b5563;
+    --cs-terminal-light-background: #ffffff;
+    --cs-terminal-light-foreground: #1f2937;
+    --cs-terminal-light-cursor: #1f2937;
+    --cs-terminal-light-selection: #bfdbfe;
+
+    /* Override Element Plus variables. */
     --el-color-primary: var(--cs-color-primary);
-
     --el-color-primary-dark-2: rgba(var(--cs-color-primary-rgb), 0.8);
     --el-color-primary-light-3: rgba(var(--cs-color-primary-rgb), 0.6);
     --el-color-primary-light-5: rgba(var(--cs-color-primary-rgb), 0.4);
@@ -56,11 +112,37 @@
     --el-bg-color-overlay: var(--cs-color-white);
 }
 
+:root[data-primary-color='green'] {
+    --cs-color-primary-rgb: 65, 181, 85;
+}
+
+:root[data-primary-color='purple'] {
+    --cs-color-primary-rgb: 175, 82, 222;
+}
+
+:root[data-primary-color='yellow'] {
+    --cs-color-primary-rgb: 247, 131, 28;
+    --cs-text-color-on-primary: rgb(0, 0, 0);
+}
+
+:root[data-primary-color='pink'] {
+    --cs-color-primary-rgb: 255, 45, 85;
+}
+
+:root[data-primary-color='blue'] {
+    --cs-color-primary-rgb: 0, 122, 255;
+}
+
 :root.light {
-    --cs-text-color-primary:  rgba(0, 0, 0, 0.95);
+    --cs-text-color-primary: rgba(0, 0, 0, 0.95);
     --cs-text-color-secondary: #999;
     --cs-text-color-tertiary: #ccc;
     --cs-text-color-placeholder: var(--cs-text-color-tertiary);
+    --cs-text-primary: var(--cs-text-color-primary);
+    --cs-text-secondary: var(--cs-text-color-secondary);
+    --cs-text-color: var(--cs-text-color-primary);
+    --cs-text-color-regular: var(--cs-text-color-secondary);
+    --cs-text-color-disabled: var(--cs-text-color-tertiary);
     --cs-shimmer-inverse-color: rgba(255, 255, 255, 0.55);
 
     --cs-bg-color: #f1f2f1;
@@ -68,35 +150,40 @@
     --cs-bg-color-deep: #e7e7e6;
     --cs-bg-color-box-title: #e0e0e0;
     --cs-bg-color-opacity: rgba(0, 0, 0, 0.5);
+    --cs-bg-elevated-color: #fcfcfc;
 
     --cs-code-bg-color: rgb(197, 197, 197, 0.1);
     --cs-code-block-bg-color: transparent;
     --cs-code-text-color: var(--cs-text-color-primary);
     --cs-border-color: #d9dad9;
+    --cs-border-color-light: #e2e2e0;
+    --cs-border-color-lighter: #eee;
+    --cs-fill-color-light: rgba(0, 0, 0, 0.06);
 
     --cs-titlebar-border-color: #e2e2e0;
     --cs-titlebar-bg-color: #fcfcfc;
     --cs-input-bg-color: #e5e6e5;
-
     --cs-active-bg-color: #d2d3d1;
     --cs-hover-bg-color: #efefef;
     --cs-shadow-color: rgba(0, 0, 0, 0.1);
+    --cs-shadow-strong-color: rgba(0, 0, 0, 0.2);
+    --cs-chart-grid-color: rgba(0, 0, 0, 0.1);
+    --cs-chart-axis-color: rgba(128, 128, 128, 0.25);
+    --cs-chart-label-color: var(--cs-text-color-secondary);
+    --cs-overlay-color: rgba(0, 0, 0, 0.5);
 
-    /* override element-plus variables */
+    /* Override Element Plus variables. */
     --el-color-primary: var(--cs-color-primary);
     --el-font-family: var(--cs-font-family);
     --el-menu-text-color: var(--cs-text-color-secondary);
     --el-menu-border-color: var(--cs-border-color);
-
     --el-text-color-primary: var(--cs-text-color-primary);
     --el-bg-color: var(--cs-bg-color-light);
     --el-bg-color-page: var(--cs-bg-color-deep);
     --el-input-placeholder-color: var(--cs-text-color-placeholder);
-
     --el-button-hover-border-color: var(--cs-color-primary-light);
     --el-button-hover-bg-color: var(--cs-color-primary-lighter);
     --el-button-outline-color: var(--cs-color-primary-light);
-
     --el-color-primary-dark-2: rgba(var(--cs-color-primary-rgb), 0.8);
     --el-color-primary-light-3: rgba(var(--cs-color-primary-rgb), 0.6);
     --el-color-primary-light-5: rgba(var(--cs-color-primary-rgb), 0.4);
@@ -110,6 +197,11 @@
     --cs-text-color-secondary: rgba(132, 133, 134, 0.9);
     --cs-text-color-tertiary: rgb(65, 65, 65, 0.9);
     --cs-text-color-placeholder: var(--cs-text-color-tertiary);
+    --cs-text-primary: var(--cs-text-color-primary);
+    --cs-text-secondary: var(--cs-text-color-secondary);
+    --cs-text-color: var(--cs-text-color-primary);
+    --cs-text-color-regular: var(--cs-text-color-secondary);
+    --cs-text-color-disabled: var(--cs-text-color-tertiary);
     --cs-shimmer-inverse-color: rgba(0, 0, 0, 0.55);
 
     --cs-bg-color: #202122;
@@ -117,33 +209,40 @@
     --cs-bg-color-deep: #232629;
     --cs-bg-color-opacity: rgba(0, 0, 0, 0.5);
     --cs-bg-color-box-title: #272829;
+    --cs-bg-elevated-color: #282b2d;
 
     --cs-code-bg-color: rgb(255, 255, 255, 0.1);
     --cs-code-text-color: var(--cs-text-color-primary);
     --cs-code-block-bg-color: transparent;
-
     --cs-border-color: #363738;
+    --cs-border-color-light: #414244;
+    --cs-border-color-lighter: #4b4c4e;
+    --cs-fill-color-light: rgba(255, 255, 255, 0.1);
+
     --cs-input-bg-color: #282b2d;
     --cs-active-bg-color: #2f3234;
     --cs-hover-bg-color: #2e2f2c;
-
     --cs-titlebar-bg-color: #21221e;
     --cs-titlebar-border-color: #111;
     --cs-shadow-color: rgba(255, 255, 255, 0.1);
+    --cs-shadow-strong-color: rgba(255, 255, 255, 0.2);
+    --cs-chart-grid-color: rgba(255, 255, 255, 0.15);
+    --cs-chart-axis-color: rgba(255, 255, 255, 0.15);
+    --cs-chart-label-color: var(--cs-text-color-secondary);
+    --cs-overlay-color: rgba(0, 0, 0, 0.5);
 
-    /* override element-plus variables */
+    /* Override Element Plus variables. */
     --el-color-primary: var(--cs-color-primary);
     --el-font-family: var(--cs-font-family);
     --el-menu-text-color: var(--cs-text-color-secondary);
     --el-menu-border-color: var(--cs-border-color);
-
     --el-text-color-primary: var(--cs-text-color-primary);
     --el-bg-color: var(--cs-bg-color-deep);
     --el-bg-color-page: var(--cs-bg-color-light);
     --el-input-placeholder-color: var(--cs-text-color-placeholder);
     --el-button-hover-border-color: var(--cs-color-primary-light);
     --el-button-hover-bg-color: var(--cs-color-primary-lighter);
-
+    --el-button-outline-color: var(--cs-color-primary-light);
     --el-color-primary-dark-2: rgba(var(--cs-color-primary-rgb), 0.8);
     --el-color-primary-light-3: rgba(var(--cs-color-primary-rgb), 0.6);
     --el-color-primary-light-5: rgba(var(--cs-color-primary-rgb), 0.4);

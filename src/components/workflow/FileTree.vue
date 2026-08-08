@@ -430,7 +430,7 @@ onMounted(() => {
 
     .root-sort-drag {
       background: var(--cs-bg-color);
-      box-shadow: 0 4px 12px rgb(0 0 0 / 15%);
+      box-shadow: 0 4px 12px var(--cs-shadow-strong-color);
     }
 
     .root-item {
@@ -562,7 +562,7 @@ onMounted(() => {
     width: 100%;
     max-height: calc(75vh - 80px);
     border-radius: 8px;
-    background: #000;
+    background: var(--cs-color-black);
   }
 
   .unsupported-preview {

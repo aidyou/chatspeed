@@ -60,6 +60,7 @@ test('shell switching is transactional and OSC 7 preserves Windows drive paths',
     read('src-tauri/src/terminal.rs')
   ])
 
+  assert.match(panel, /\$\{tab\.cwd\.split\(\/\[\\\\\/\]\/\)\.filter\(Boolean\)\.pop\(\) \|\| tab\.cwd\} - \$\{tab\.shellName\}/)
   assert.match(composable, /const replacement = toTab\(await invokeWrapper\('terminal_create'/)
   assert.match(composable, /cwd: tab\.cwd, shellPath/)
   assert.match(composable, /await invokeWrapper\('terminal_close', \{ sessionId: tab\.sessionId \}\)/)

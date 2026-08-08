@@ -2612,7 +2612,7 @@ onBeforeUnmount(() => {
 
   &:hover::before,
   &.dragging::before {
-    background: var(--cs-primary-color);
+    background: var(--cs-color-primary);
   }
 }
 
@@ -2655,7 +2655,7 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   font-size: var(--cs-font-size-sm);
   font-weight: 500;
-  color: var(--cs-text-primary);
+  color: var(--cs-text-color-primary);
 }
 
 .workflow-titlebar-today-cost {
@@ -2666,7 +2666,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   font-size: var(--cs-font-size-sm);
   font-weight: 600;
-  color: var(--cs-success-color);
+  color: var(--cs-color-primary);
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -2680,7 +2680,7 @@ onBeforeUnmount(() => {
 }
 
 .workflow-titlebar-today-cost .cs {
-  color: var(--cs-success-color);
+  color: var(--cs-color-primary);
 }
 
 .workflow-titlebar-today-cost:hover .cs {
@@ -2689,10 +2689,10 @@ onBeforeUnmount(() => {
 
 .update-ready-btn {
   font-size: var(--cs-font-size);
-  color: var(--cs-success-color);
+  color: var(--cs-color-primary);
 
   .cs {
-    color: var(--cs-success-color);
+    color: var(--cs-color-primary);
   }
 }
 </style>

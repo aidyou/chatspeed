@@ -20,7 +20,17 @@ const props = defineProps({
   }
 })
 
-const baseColors = ['#10897C', '#FB452E', '#5BA006', '#1399EF', '#643EFF', '#EA950F', '#E901F2']
+const avatarColorTokens = [
+  '--cs-avatar-color-1',
+  '--cs-avatar-color-2',
+  '--cs-avatar-color-3',
+  '--cs-avatar-color-4',
+  '--cs-avatar-color-5',
+  '--cs-avatar-color-6',
+  '--cs-avatar-color-7'
+]
+
+const getCssColor = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 
 // Get display text (first letter or first CJK character)
 const displayText = computed(() => {
@@ -50,7 +60,7 @@ const backgroundColor = computed(() => {
 
   // Use text hash to select base color
   const textHash = hash(props.text)
-  const baseColor = baseColors[Math.abs(textHash) % baseColors.length]
+  const baseColor = getCssColor(avatarColorTokens[Math.abs(textHash) % avatarColorTokens.length])
 
   // Generate similar color (slightly adjust HSL values)
   const color = baseColor.substring(1)
@@ -81,7 +91,7 @@ const style = computed(() => {
     height: sizeStr,
     borderRadius: sizeStr,
     backgroundColor: props.bgColor || backgroundColor.value,
-    color: props.textColor || 'white',
+    color: props.textColor || 'var(--cs-color-white)',
     fontSize: `calc(${typeof props.size === 'number' ? props.size : parseInt(props.size)}px * 0.5)`
   }
 })
@@ -98,7 +108,7 @@ const style = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: v-bind('textColor || "white"');
+  color: v-bind('textColor || "var(--cs-color-white)"');
   font-weight: bold;
   user-select: none;
   flex-shrink: 0;

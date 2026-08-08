@@ -109,7 +109,7 @@ SYSTEM_REMINDER {
             }
 
             &.important {
-              color: var(--cs-color-primary-red);
+              color: var(--cs-error-color);
               font-size: var(--cs-font-size-sm);
             }
           }
@@ -773,7 +773,7 @@ SYSTEM_REMINDER {
 
     &.error {
       &::before {
-        color: var(--cs-color-primary-red);
+        color: var(--cs-error-color);
         content: '\e6a5';
       }
     }

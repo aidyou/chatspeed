@@ -70,6 +70,12 @@ const isDark = useDark({
   storageKey: null
 })
 
+const PRIMARY_COLORS = new Set(['green', 'purple', 'yellow', 'pink', 'blue'])
+
+const applyPrimaryColor = value => {
+  document.documentElement.dataset.primaryColor = PRIMARY_COLORS.has(value) ? value : 'green'
+}
+
 const updateTrayFlag = ref(false)
 watch(
   () => settings.value.interfaceLanguage,
@@ -107,6 +113,12 @@ watch(
     console.log('settings.theme changed', newTheme)
     setTheme()
   }
+)
+
+watch(
+  () => settings.value.primaryColor,
+  value => applyPrimaryColor(value),
+  { immediate: true }
 )
 
 watch(

@@ -174,15 +174,15 @@ watch(isExpanded, (newVal) => {
       flex: 1;
 
       &.modified {
-        color: #e6a23c;
+        color: var(--cs-warning-color);
       }
 
       &.added {
-        color: #67c23a;
+        color: var(--cs-success-color);
       }
 
       &.deleted {
-        color: #f56c6c;
+        color: var(--cs-error-color);
         text-decoration: line-through;
       }
     }
@@ -210,15 +210,15 @@ watch(isExpanded, (newVal) => {
       flex-shrink: 0;
 
       &.modified {
-        background-color: #e6a23c; // Warning/Yellow
+        background-color: var(--cs-warning-color); // Warning/Yellow
       }
 
       &.added {
-        background-color: #67c23a; // Success/Green
+        background-color: var(--cs-success-color); // Success/Green
       }
 
       &.deleted {
-        background-color: #f56c6c; // Danger/Red
+        background-color: var(--cs-error-color); // Danger/Red
       }
 
       &.other {

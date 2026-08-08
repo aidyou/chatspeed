@@ -2882,7 +2882,7 @@ const onTakeNote = message => {
             align-items: center;
             gap: var(--cs-space-xs);
             padding: var(--cs-space-xs) var(--cs-space-sm);
-            background-color: var(--cs-bg-color-secondary);
+            background-color: var(--cs-bg-color-light);
             border-radius: var(--cs-border-radius-sm);
             font-size: var(--cs-font-size-sm);
 

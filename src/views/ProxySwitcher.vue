@@ -719,10 +719,12 @@ const renderTrendChart = async () => {
     seriesField: selectedTrendMetric.value === 'tokens' ? 'type' : undefined,
     color:
       selectedTrendMetric.value === 'tokens'
-        ? ['#409eff', '#67c23a', '#e6a23c']
-        : getComputedStyle(document.documentElement)
-            .getPropertyValue('--cs-success-color')
-            .trim() || '#67c23a',
+        ? [
+            getComputedStyle(document.documentElement).getPropertyValue('--cs-info-color').trim(),
+            getComputedStyle(document.documentElement).getPropertyValue('--cs-success-color').trim(),
+            getComputedStyle(document.documentElement).getPropertyValue('--cs-warning-color').trim()
+          ]
+        : getComputedStyle(document.documentElement).getPropertyValue('--cs-success-color').trim(),
     legend:
       selectedTrendMetric.value === 'tokens'
         ? {
@@ -740,7 +742,7 @@ const renderTrendChart = async () => {
         line: {
           style: {
             lineDash: [4, 4],
-            stroke: 'rgba(128, 128, 128, 0.25)'
+            stroke: getComputedStyle(document.documentElement).getPropertyValue('--cs-chart-axis-color').trim()
           }
         }
       },
@@ -1798,7 +1800,7 @@ onMounted(async () => {
     height: 28px;
 
     &:hover {
-      background-color: rgba(var(--cs-color-primary-rgb), 0.1);
+      background-color: var(--cs-color-primary-soft);
       color: var(--cs-color-primary);
     }
   }

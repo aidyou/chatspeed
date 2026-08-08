@@ -1628,7 +1628,7 @@ const importPresetModel = model => {
 
 <style lang="scss">
 .ghost {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--cs-fill-color-light);
 }
 
 .el-overlay {

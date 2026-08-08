@@ -250,7 +250,7 @@
                 var(--cs-text-color-primary) 0%,
                 var(--cs-text-color-primary) 34%,
                 color-mix(in srgb, var(--cs-text-color-primary) 28%, var(--cs-color-primary)) 42%,
-                color-mix(in srgb, var(--cs-color-primary) 82%, #0f6f2b) 50%,
+                color-mix(in srgb, var(--cs-color-primary) 82%, var(--cs-success-color)) 50%,
                 color-mix(in srgb, var(--cs-text-color-primary) 28%, var(--cs-color-primary)) 58%,
                 var(--cs-text-color-primary) 66%,
                 var(--cs-text-color-primary) 100%
@@ -268,7 +268,7 @@
           }
 
           &.tool-todo .tool-type-icon {
-            color: #8b5cf6;
+            color: var(--cs-color-violet);
           }
 
           .tool-line {
@@ -936,7 +936,7 @@
         color: var(--el-text-color-primary);
 
         .reasoning-container {
-          background: rgba(var(--el-color-danger-rgb), 0.05);
+          background: color-mix(in srgb, var(--el-color-danger) 5%, transparent);
           border-color: var(--el-color-danger-light-7);
         }
 
@@ -961,7 +961,7 @@
         font-weight: bold;
         font-size: 12px;
         z-index: 10;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        box-shadow: 0 2px 4px var(--cs-shadow-strong-color);
       } */
     }
   }
@@ -1033,7 +1033,7 @@
 
 // Cost analysis is rendered from the durable backend snapshot.
 .workflow-cost-analysis {
-  --cost-analysis-accent: color-mix(in srgb, var(--el-color-success) 84%, var(--el-color-primary));
+  --cost-analysis-accent: var(--cs-color-primary);
   --cost-analysis-accent-soft: color-mix(in srgb, var(--cost-analysis-accent) 13%, transparent);
 
   position: relative;

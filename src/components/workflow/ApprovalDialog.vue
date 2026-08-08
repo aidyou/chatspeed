@@ -87,7 +87,7 @@
         }}</el-button>
         <el-button
           v-if="!isPlanApproval"
-          type="success"
+          type="primary"
           @click="onApproveAll"
           :loading="loading"
           round
@@ -572,11 +572,11 @@ const onReject = () => {
           white-space: pre;
 
           &.added {
-            background: rgba(103, 194, 58, 0.12);
+            background: var(--cs-diff-added-bg-color);
           }
 
           &.removed {
-            background: rgba(245, 108, 108, 0.12);
+            background: var(--cs-diff-removed-bg-color);
           }
 
           &.context {

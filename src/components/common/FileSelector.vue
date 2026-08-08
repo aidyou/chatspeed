@@ -184,7 +184,7 @@ defineExpose({
     &.image {
       margin-left: var(--cs-space);
       border-radius: 50%;
-      border: 1px dashed #ccc;
+      border: 1px dashed var(--cs-border-color);
 
       &:hover {
         color: var(--cs-color-primary);

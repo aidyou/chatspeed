@@ -378,7 +378,7 @@
               v-if="approvalLevel === 'default'"
               v-model:visible="autoApprovedPopoverVisible"
               placement="top"
-              :width="360"
+              :width="400"
               trigger="click"
               popper-class="auto-approved-popover">
               <template #reference>
@@ -392,7 +392,11 @@
                 </label>
               </template>
 
-              <div v-if="autoApprovedPopoverVisible" class="auto-approved-panel">
+              <div
+                v-if="autoApprovedPopoverVisible"
+                class="auto-approved-panel"
+                @click.stop
+                @mousedown.stop>
                 <el-tabs v-model="approvalToolsTab" class="approval-tools-tabs">
                   <el-tab-pane :label="`${$t('settings.agent.availableTools')} (${agentAvailableTools.length})`" name="available">
                     <div v-if="agentAvailableTools.length > 0" class="section-content checkbox-list">
@@ -440,20 +444,11 @@
                         $t('settings.agent.shellPolicyPattern') || 'Enter shell command pattern'
                       "
                       @keydown.enter.prevent="addShellPolicyItem" />
-                    <el-select
-                      v-model="newShellCommandDecision"
-                      size="small"
-                      class="shell-policy-decision-select">
-                      <el-option
-                        :label="$t('settings.agent.shellDecisionAllow')"
-                        value="allow" />
-                      <el-option
-                        :label="$t('settings.agent.shellDecisionDeny')"
-                        value="deny" />
-                      <el-option
-                        :label="$t('settings.agent.shellDecisionReview')"
-                        value="review" />
-                    </el-select>
+                    <el-radio-group v-model="newShellCommandDecision" class="shell-policy-decision-group">
+                      <el-radio-button value="allow">{{ $t('settings.agent.shellDecisionAllow') }}</el-radio-button>
+                      <el-radio-button value="deny">{{ $t('settings.agent.shellDecisionDeny') }}</el-radio-button>
+                      <el-radio-button value="review">{{ $t('settings.agent.shellDecisionReview') }}</el-radio-button>
+                    </el-radio-group>
                     <el-button
                       size="small"
                       type="primary"
@@ -472,21 +467,14 @@
                         <code class="tool-name shell-pattern">{{ rule.pattern }}</code>
                         <span v-if="rule.description" class="tool-desc">{{ rule.description }}</span>
                       </div>
-                      <el-select
+                      <el-radio-group
                         :model-value="rule.decision || 'review'"
-                        size="small"
-                        class="shell-policy-item-decision"
+                        class="shell-policy-decision-group shell-policy-item-decision"
                         @change="decision => updateShellPolicyDecision(rule.pattern, decision)">
-                        <el-option
-                          :label="$t('settings.agent.shellDecisionAllow')"
-                          value="allow" />
-                        <el-option
-                          :label="$t('settings.agent.shellDecisionDeny')"
-                          value="deny" />
-                        <el-option
-                          :label="$t('settings.agent.shellDecisionReview')"
-                          value="review" />
-                      </el-select>
+                        <el-radio-button value="allow">{{ $t('settings.agent.shellDecisionAllow') }}</el-radio-button>
+                        <el-radio-button value="deny">{{ $t('settings.agent.shellDecisionDeny') }}</el-radio-button>
+                        <el-radio-button value="review">{{ $t('settings.agent.shellDecisionReview') }}</el-radio-button>
+                      </el-radio-group>
                       <el-button
                         size="small"
                         type="danger"
@@ -751,7 +739,7 @@ const props = defineProps({
   },
   autoCompressEnabled: {
     type: Boolean,
-    default: true
+    default: false
   },
   agents: {
     type: Array,
@@ -1595,7 +1583,7 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--cs-fill-color-light, rgba(0, 0, 0, 0.06));
+  background: var(--cs-fill-color-light);
 }
 
 .workflow-attachment-spinner {
@@ -1619,13 +1607,13 @@ defineExpose({
 .workflow-attachment-status {
   flex-shrink: 0;
   font-size: 12px;
-  color: var(--cs-text-secondary);
+  color: var(--cs-text-color-secondary);
 }
 
 .workflow-attachment-remove {
   cursor: pointer;
   flex-shrink: 0;
-  color: var(--cs-text-secondary);
+  color: var(--cs-text-color-secondary);
 }
 
 .approval-tools-tabs {
@@ -1710,10 +1698,14 @@ defineExpose({
   }
 }
 
-.shell-policy-decision-select,
-.shell-policy-item-decision {
-  width: 92px;
+.shell-policy-decision-group {
+  display: inline-flex;
   flex-shrink: 0;
+
+  :deep(.el-radio-button__inner) {
+    padding: 5px 7px;
+    font-size: var(--cs-font-size-xs);
+  }
 }
 
 .shell-policy-item-decision {
@@ -1736,7 +1728,7 @@ defineExpose({
 
 .section-empty-text {
   font-size: 12px;
-  color: var(--cs-text-secondary);
+  color: var(--cs-text-color-secondary);
 }
 
 .section-footer {
@@ -1761,7 +1753,7 @@ defineExpose({
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--cs-text-secondary);
+  color: var(--cs-text-color-secondary);
   cursor: pointer;
   transition:
     background-color 0.2s ease,
@@ -1769,7 +1761,7 @@ defineExpose({
 }
 
 .section-footer-action:hover:not(:disabled) {
-  background: var(--cs-fill-color-light, rgba(0, 0, 0, 0.06));
+  background: var(--cs-fill-color-light);
   color: var(--cs-text-color);
 }
 
@@ -1876,7 +1868,7 @@ defineExpose({
     padding: 0 4px;
     border-radius: var(--cs-border-radius-lg);
     background: var(--el-color-primary);
-    color: var(--cs-text-color-on-primary, #fff);
+    color: var(--cs-text-color-on-primary);
     font-size: 10px;
     font-weight: 600;
     line-height: 16px;

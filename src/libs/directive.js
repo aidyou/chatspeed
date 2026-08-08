@@ -185,16 +185,16 @@ function calculateOptimalHeight(root) {
 // CSS variable mapping for Markmap styling with fallback values
 const CSS_VAR_MAP = {
   '--markmap-max-width': { value: 'none', fallback: 'none' },
-  '--markmap-bg-color': { value: '--cs-bg-color', fallback: '#ffffff' },
-  '--markmap-a-color': { value: '--cs-color-primary', fallback: '#0097e6' },
-  '--markmap-a-hover-color': { value: '--cs-color-primary-light', fallback: '#00a8ff' },
-  '--markmap-code-bg': { value: 'transparent', fallback: '#f0f0f0' },
-  '--markmap-code-color': { value: '--cs-text-color-primary', fallback: '#555555' },
-  '--markmap-highlight-bg': { value: '#ffeaa7', fallback: '#ffeaa7' },
+  '--markmap-bg-color': { value: '--cs-bg-color', fallback: '--cs-markmap-background-color' },
+  '--markmap-a-color': { value: '--cs-color-primary', fallback: '--cs-markmap-highlight-color' },
+  '--markmap-a-hover-color': { value: '--cs-color-primary-light', fallback: '--cs-markmap-node-color' },
+  '--markmap-code-bg': { value: 'transparent', fallback: '--cs-markmap-line-color' },
+  '--markmap-code-color': { value: '--cs-text-color-primary', fallback: '--cs-markmap-text-color' },
+  '--markmap-highlight-bg': { value: '--cs-markmap-note-color', fallback: '--cs-markmap-note-color' },
   '--markmap-table-border': { value: '1px solid currentColor', fallback: '1px solid currentColor' },
   '--markmap-font': { value: '300 16px/20px sans-serif', fallback: '300 16px/20px sans-serif' },
-  '--markmap-circle-open-bg': { value: '--cs-bg-color', fallback: '#ffffff' },
-  '--markmap-text-color': { value: '--cs-text-color-primary', fallback: '#333333' }
+  '--markmap-circle-open-bg': { value: '--cs-bg-color', fallback: '--cs-markmap-background-color' },
+  '--markmap-text-color': { value: '--cs-text-color-primary', fallback: '--cs-markmap-note-text-color' }
 }
 
 /**
@@ -209,8 +209,11 @@ function resolveCssVariables(svg) {
   // Resolve CSS variables with type-specific fallback values
   const resolvedVars = {}
   Object.entries(CSS_VAR_MAP).forEach(([key, { value, fallback }]) => {
+    const fallbackValue = fallback.startsWith('--')
+      ? computedStyle.getPropertyValue(fallback).trim()
+      : fallback
     resolvedVars[key] = value.startsWith('--')
-      ? computedStyle.getPropertyValue(value).trim() || fallback
+      ? computedStyle.getPropertyValue(value).trim() || fallbackValue
       : value
   })
 

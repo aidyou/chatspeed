@@ -60,7 +60,7 @@
     <!-- KPI Cards -->
     <div class="kpi-cards">
       <div class="kpi-card">
-        <div class="kpi-icon" style="background-color: rgba(103, 194, 58, 0.1); color: #67c23a">
+        <div class="kpi-icon" style="background-color: var(--cs-success-bg-color); color: var(--cs-success-color)">
           <el-icon>
             <Coin />
           </el-icon>
@@ -71,7 +71,7 @@
         </div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-icon" style="background-color: rgba(64, 158, 255, 0.1); color: #409eff">
+        <div class="kpi-icon" style="background-color: var(--cs-info-bg-color); color: var(--cs-info-color)">
           <el-icon>
             <DataLine />
           </el-icon>
@@ -82,7 +82,7 @@
         </div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-icon" style="background-color: rgba(155, 89, 182, 0.1); color: #9b59b6">
+        <div class="kpi-icon" style="background-color: var(--cs-color-violet-soft); color: var(--cs-color-violet)">
           <el-icon>
             <Coin />
           </el-icon>
@@ -93,7 +93,7 @@
         </div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-icon" style="background-color: rgba(230, 162, 60, 0.1); color: #e6a23c">
+        <div class="kpi-icon" style="background-color: var(--cs-warning-bg-color); color: var(--cs-warning-color)">
           <el-icon>
             <Collection />
           </el-icon>
@@ -104,7 +104,7 @@
         </div>
       </div>
       <!-- <div class="kpi-card">
-        <div class="kpi-icon" style="background-color: rgba(245, 108, 108, 0.1); color: #f56c6c">
+        <div class="kpi-icon" style="background-color: var(--cs-error-bg-color); color: var(--cs-error-color)">
           <el-icon>
             <Warning />
           </el-icon>
@@ -659,13 +659,10 @@ const formatAxisValue = val => {
   return num.toString()
 }
 
-const getAxisColors = () => {
-  const isDark = document.documentElement.classList.contains('dark')
-  return {
-    gridStroke: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
-    lineStroke: isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(0, 0, 0, 0.2)'
-  }
-}
+const getAxisColors = () => ({
+  gridStroke: getCssVar('--cs-chart-grid-color'),
+  lineStroke: getCssVar('--cs-chart-axis-color')
+})
 
 const getCommonAxisConfig = () => {
   const colors = getAxisColors()
@@ -691,7 +688,7 @@ const getBarLabelConfig = formatter => ({
   position: 'middle',
   layout: [{ type: 'interval-adjust-position' }, { type: 'interval-hide-overlap' }],
   style: {
-    fill: '#fff',
+    fill: getCssVar('--cs-color-white'),
     fontWeight: 500
   },
   formatter
@@ -811,20 +808,20 @@ const syncDailyStatsWithCosts = () => {
 
 const getProtocolColor = protocol => {
   const colorMap = {
-    openai: 'rgba(16, 163, 127, 0.1)',
-    claude: 'rgba(229, 119, 25, 0.1)',
-    gemini: 'rgba(0, 108, 255, 0.1)',
-    ollama: 'rgba(80, 85, 242, 0.1)'
+    openai: getCssVar('--cs-brand-openai-soft-color'),
+    claude: getCssVar('--cs-brand-claude-soft-color'),
+    gemini: getCssVar('--cs-brand-gemini-soft-color'),
+    ollama: getCssVar('--cs-brand-ollama-soft-color')
   }
   return colorMap[protocol] || ''
 }
 
 const getProtocolTextColor = protocol => {
   const colorMap = {
-    openai: '#10a37f',
-    claude: '#e57719',
-    gemini: '#006cff',
-    ollama: '#5055f2'
+    openai: getCssVar('--cs-brand-openai-color'),
+    claude: getCssVar('--cs-brand-claude-color'),
+    gemini: getCssVar('--cs-brand-gemini-color'),
+    ollama: getCssVar('--cs-brand-ollama-color')
   }
   return colorMap[protocol] || 'var(--el-text-color-regular)'
 }
@@ -951,7 +948,7 @@ const updateCharts = async () => {
             geometryOptions: [
               {
                 geometry: 'column',
-                color: getCssVar('--cs-info-color') || '#409eff',
+                color: getCssVar('--cs-info-color'),
                 label: getBarLabelConfig(datum => {
                   const dayCount = dailyStats.value?.length || 0
                   return dayCount <= 5 ? formatNumber(datum.value) : ''
@@ -959,7 +956,7 @@ const updateCharts = async () => {
               },
               {
                 geometry: 'line',
-                color: getCssVar('--cs-error-color') || '#f56c6c',
+                color: getCssVar('--cs-error-color'),
                 lineStyle: { lineWidth: 3 },
                 point: { size: 4, shape: 'circle' },
                 label: {
@@ -1005,7 +1002,7 @@ const updateCharts = async () => {
                 if (!items || items.length === 0) return ''
                 let html = `<div style="padding: 8px 12px;"><div style="font-weight: 500; margin-bottom: 8px;">${title}</div>`
                 items.forEach((item, index) => {
-                  const color = item.color || '#999'
+                  const color = item.color || getCssVar('--cs-text-color-secondary')
                   const name =
                     index === 0
                       ? t('settings.proxy.stats.requests')
@@ -1058,8 +1055,8 @@ const updateCharts = async () => {
               isStack: true,
               seriesField: 'type',
               color: [
-                getCssVar('--cs-info-color') || '#409eff',
-                getCssVar('--cs-warning-color') || '#e6a23c'
+                getCssVar('--cs-info-color'),
+                getCssVar('--cs-warning-color')
               ],
               label: getBarLabelConfig(datum => {
                 const dayCount = dailyStats.value?.length || 0
@@ -1069,7 +1066,7 @@ const updateCharts = async () => {
             {
               geometry: 'line',
               seriesField: 'type',
-              color: getCssVar('--cs-success-color') || '#67c23a',
+              color: getCssVar('--cs-success-color'),
               lineStyle: { lineWidth: 3 },
               point: { size: 4, shape: 'circle' }
             }
@@ -1103,7 +1100,7 @@ const updateCharts = async () => {
               if (!stats || !items || items.length === 0) return ''
 
               const colors = items.reduce((map, item) => {
-                map.set(item.name, item.color || '#999')
+                map.set(item.name, item.color || getCssVar('--cs-text-color-secondary'))
                 return map
               }, new Map())
               const values = [
@@ -1113,7 +1110,7 @@ const updateCharts = async () => {
               ]
               let html = `<div style="padding: 8px 12px;"><div style="font-weight: 500; margin-bottom: 8px;">${title}</div>`
               values.forEach(([name, value]) => {
-                const color = colors.get(name) || '#999'
+                const color = colors.get(name) || getCssVar('--cs-text-color-secondary')
                 html += `<div style="display: flex; align-items: center; margin-bottom: 4px;">
                   <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${color}; margin-right: 8px;"></span>
                   <span style="flex: 1;">${name}:</span>
@@ -1139,7 +1136,7 @@ const updateCharts = async () => {
             xField: 'date',
             yField: 'value',
             smooth: true,
-            color: getCssVar('--cs-success-color') || '#67c23a',
+            color: getCssVar('--cs-success-color'),
             lineStyle: {
               lineWidth: 3
             },
@@ -1591,7 +1588,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: var(--cs-space-md);
-  background-color: var(--cs-primary-bg-color);
+  background-color: var(--cs-color-primary-soft);
   border: 1px solid var(--cs-border-color-light);
   border-radius: var(--cs-border-radius-md);
   padding: var(--cs-space);
@@ -1649,7 +1646,7 @@ onUnmounted(() => {
 .chart-card {
   flex: 1;
   min-width: 300px;
-  background-color: var(--cs-primary-bg-color);
+  background-color: var(--cs-color-primary-soft);
   border: 1px solid var(--cs-border-color-light);
   border-radius: var(--cs-border-radius-md);
   padding: var(--cs-space-md);
@@ -1689,7 +1686,7 @@ onUnmounted(() => {
 
           &.is-active {
             color: var(--cs-color-primary);
-            background-color: var(--cs-primary-bg-color);
+            background-color: var(--cs-color-primary-soft);
             font-weight: 500;
           }
 

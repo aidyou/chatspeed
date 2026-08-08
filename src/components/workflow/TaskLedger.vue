@@ -752,7 +752,7 @@ defineExpose({
 
         &.start { background-color: var(--el-color-info); }
         &.medium { background-color: var(--el-color-primary); }
-        &.good { background-color: #67c23a; }
+        &.good { background-color: var(--cs-success-color); }
         &.complete { background-color: var(--el-color-success); }
       }
     }

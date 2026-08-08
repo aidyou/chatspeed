@@ -191,7 +191,7 @@
 
       &.cancelled,
       &.interrupted {
-        background-color: #8b5cf6;
+        background-color: var(--cs-color-violet);
       }
     }
   }
@@ -419,7 +419,7 @@
 
             &.cancelled,
             &.interrupted {
-              background-color: #8b5cf6;
+              background-color: var(--cs-color-violet);
             }
           }
         }
@@ -558,7 +558,7 @@
 
     &.cancelled,
     &.interrupted {
-      background-color: #8b5cf6;
+      background-color: var(--cs-color-violet);
     }
   }
 }

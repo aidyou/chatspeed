@@ -1390,7 +1390,7 @@ const genTableData = () => {
 
 .provider-card {
   margin-bottom: var(--cs-space-sm);
-  background-color: var(--cs-primary-bg-color);
+  background-color: var(--cs-color-primary-soft);
   border: 1px solid var(--cs-border-color-light);
 
   &:last-child {

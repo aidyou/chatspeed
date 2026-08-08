@@ -20,37 +20,42 @@
         </button>
       </div>
       <div class="workflow-terminal__controls">
-        <el-tooltip :content="$t('workflow.terminal.new')">
-          <button type="button" @click="terminal.create()">
-            <cs name="add" />
-          </button>
-        </el-tooltip>
-        <el-tooltip :content="$t('workflow.terminal.minimize')">
-          <button type="button" @click="terminal.visible = false">
-            <cs name="minimize" />
-          </button>
-        </el-tooltip>
-        <el-tooltip :content="$t('workflow.terminal.fullscreen')">
-          <button type="button" @click="terminal.fullscreen = !terminal.fullscreen">
-            <cs :name="terminal.fullscreen ? 'fullscreen' : 'fullscreen-off'" />
-          </button>
-        </el-tooltip>
-        <el-dropdown trigger="click" @command="confirmShellSwitch">
-          <button class="workflow-terminal__shell" type="button">
-            <cs name="bash" />{{ terminal.activeTab?.shellName }}
-            <cs name="caret-down" />
-          </button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item
-                v-for="shell in terminal.shells"
-                :key="shell.path"
-                :command="shell.path"
-                >{{ shell.name }}
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <div class="workflow-terminal__control-group">
+          <el-tooltip :content="$t('workflow.terminal.new')">
+            <button type="button" @click="terminal.create()">
+              <cs name="add" />
+            </button>
+          </el-tooltip>
+          <el-dropdown trigger="click" @command="confirmShellSwitch">
+            <button class="workflow-terminal__shell" type="button">
+              <cs name="bash" />{{ terminal.activeTab?.shellName }}
+              <cs name="caret-down" />
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  v-for="shell in terminal.shells"
+                  :key="shell.path"
+                  :command="shell.path"
+                  >{{ shell.name }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+        <span class="workflow-terminal__control-divider" aria-hidden="true" />
+        <div class="workflow-terminal__control-group">
+          <el-tooltip :content="$t('workflow.terminal.minimize')">
+            <button type="button" @click="terminal.visible = false">
+              <cs name="minimize" />
+            </button>
+          </el-tooltip>
+          <el-tooltip :content="$t('workflow.terminal.fullscreen')">
+            <button type="button" @click="terminal.fullscreen = !terminal.fullscreen">
+              <cs :name="terminal.fullscreen ? 'fullscreen' : 'fullscreen-off'" />
+            </button>
+          </el-tooltip>
+        </div>
       </div>
     </header>
     <div
@@ -87,26 +92,28 @@ const instances = new Map<
   { terminal: Terminal; fit: FitAddon; observer: ResizeObserver; clearOutputQueue: () => void }
 >()
 const pageDark = ref(document.documentElement.classList.contains('dark'))
+const getCssColor = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+
 const terminalTheme = computed(() => {
   const scheme = preferences.colorScheme || 'auto'
   const dark = scheme === 'dark' || (scheme === 'auto' && pageDark.value)
   return dark
     ? {
-        background: '#151515',
-        foreground: '#e8e8e8',
-        cursor: '#e8e8e8',
-        selectionBackground: '#4b5563'
+        background: getCssColor('--cs-terminal-dark-background'),
+        foreground: getCssColor('--cs-terminal-dark-foreground'),
+        cursor: getCssColor('--cs-terminal-dark-cursor'),
+        selectionBackground: getCssColor('--cs-terminal-dark-selection')
       }
     : {
-        background: '#ffffff',
-        foreground: '#1f2937',
-        cursor: '#1f2937',
-        selectionBackground: '#bfdbfe'
+        background: getCssColor('--cs-terminal-light-background'),
+        foreground: getCssColor('--cs-terminal-light-foreground'),
+        cursor: getCssColor('--cs-terminal-light-cursor'),
+        selectionBackground: getCssColor('--cs-terminal-light-selection')
       }
 })
 
 const tabTitle = (tab: TerminalTab) =>
-  `${tab.cwd.split(/[\\/]/).filter(Boolean).pop() || tab.cwd} -- ${tab.shellName}`
+  `${tab.cwd.split(/[\\/]/).filter(Boolean).pop() || tab.cwd} - ${tab.shellName}`
 const selectTab = (sessionId: string) => {
   terminal.activeSessionId = sessionId
 }
@@ -449,8 +456,20 @@ onBeforeUnmount(() => {
 .workflow-terminal__controls {
   display: flex;
   align-items: center;
+  gap: var(--cs-space-xs);
+  padding: 0 var(--cs-space-sm);
+}
+
+.workflow-terminal__control-group {
+  display: flex;
+  align-items: center;
   gap: 3px;
-  padding: 0 8px;
+}
+
+.workflow-terminal__control-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--cs-border-color);
 }
 
 .workflow-terminal__controls button {

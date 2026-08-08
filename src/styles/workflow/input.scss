@@ -669,7 +669,7 @@ footer.input-container {
         padding: 0 3px;
         border-radius: var(--cs-border-radius-lg);
         background: var(--el-color-primary);
-        color: var(--cs-text-color-on-primary, #fff);
+        color: var(--cs-text-color-on-primary);
         font-size: 9px;
         font-weight: 700;
         line-height: 1;
@@ -839,7 +839,7 @@ footer.input-container {
                 white-space: nowrap;
 
                 &.shell-pattern {
-                    color: var(--el-color-success);
+                    color: var(--cs-color-primary);
                     font-size: 11px;
                     word-break: break-all;
                     white-space: pre-wrap;
