@@ -801,7 +801,7 @@
         </div>
       </div>
       <div class="item">
-        <div class="label">{{ $t('settings.general.backup') }}</div>
+        <div class="label">{{ $t('settings.general.completeBackup') }}</div>
         <div class="value">
           <el-button @click="startBackup">
             {{ $t('settings.general.runBackup') }}
@@ -809,7 +809,14 @@
         </div>
       </div>
       <div class="item">
-        <div class="label">{{ $t('settings.general.restore') }}</div>
+        <div class="label">{{ $t('settings.general.configTransfer') }}</div>
+        <div class="value">
+          <el-button @click="exportConfiguration">{{ $t('settings.general.exportConfiguration') }}</el-button>
+          <el-button @click="selectConfigurationImport">{{ $t('settings.general.importConfiguration') }}</el-button>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.completeRestore') }}</div>
         <div class="value">
           <el-select v-model="restoreDir" class="auto-width-select" placement="top" filterable @change="onRestore">
             <el-option v-for="backup in backups" :key="backup.value" :label="backup.label" :value="backup.value">
@@ -879,9 +886,56 @@
       </div>
     </div>
   </div>
+
+  <el-dialog v-model="configExportVisible" :title="$t('settings.general.exportConfiguration')" width="560px" @closed="configExportCategories = []">
+    <el-checkbox-group v-model="configExportCategories">
+      <el-checkbox v-for="category in configCategories" :key="category" :label="category">
+        {{ $t(`settings.general.configCategories.${category}`) }}
+      </el-checkbox>
+    </el-checkbox-group>
+    <template #footer>
+      <el-button @click="configExportVisible = false">{{ $t('common.cancel') }}</el-button>
+      <el-button type="primary" :disabled="configExportCategories.length === 0" @click="submitConfigurationExport">{{ $t('common.confirm') }}</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="configImportVisible" :title="$t('settings.general.importConfiguration')" width="560px" @closed="resetConfigurationImport">
+    <el-alert type="error" :closable="false" :title="$t('settings.general.configImportWarning')" />
+    <p v-if="configImportPreview">{{ $t('settings.general.configImportAvailable') }}</p>
+    <ul v-if="configImportPreview" class="config-transfer-counts">
+      <li v-for="category in configImportPreview.categories" :key="category">
+        {{ $t(`settings.general.configCategories.${category}`) }}: {{ configImportPreview.counts?.[category] || 0 }}
+      </li>
+    </ul>
+    <el-checkbox-group v-model="configImportCategories">
+      <el-checkbox v-for="category in configImportPreview?.categories || []" :key="category" :label="category">
+        {{ $t(`settings.general.configCategories.${category}`) }}
+      </el-checkbox>
+    </el-checkbox-group>
+    <el-checkbox v-model="configImportRiskConfirmed">{{ $t('settings.general.configImportConfirmRisk') }}</el-checkbox>
+    <template #footer>
+      <el-button @click="configImportVisible = false">{{ $t('common.cancel') }}</el-button>
+      <el-button type="danger" :disabled="!configImportRiskConfirmed || configImportCategories.length === 0" @click="importConfiguration">{{ $t('common.confirm') }}</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="configImportResultVisible" :title="$t('settings.general.configImportResultTitle')" width="560px">
+    <ul v-if="configImportResult" class="config-transfer-counts">
+      <li v-for="(count, category) in configImportResult.importedCounts" :key="category">
+        {{ $t(`settings.general.configCategories.${category}`) }}: {{ count }}
+      </li>
+      <li>{{ $t('settings.general.configImportPreservedAgents', { count: configImportResult.preservedAgents }) }}</li>
+      <li>{{ $t('settings.general.configImportPreservedSandboxSchemes', { count: configImportResult.preservedSandboxSchemes }) }}</li>
+      <li>{{ configImportResult.apiKeysLocked ? $t('settings.general.configImportApiKeysLocked') : $t('settings.general.configImportApiKeysReady') }}</li>
+      <li v-if="configImportResult.restartRecommended">{{ $t('settings.general.configImportRestartRecommended') }}</li>
+    </ul>
+    <template #footer>
+      <el-button type="primary" @click="configImportResultVisible = false">{{ $t('common.confirm') }}</el-button>
+    </template>
+  </el-dialog>
 </template>
 <script setup>
-import { computed, onMounted, ref, onBeforeUnmount } from 'vue'
+import { computed, onMounted, ref, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 
@@ -954,6 +1008,30 @@ const manualUpdateButtonText = computed(() => {
 
 const backups = ref([])
 const restoreDir = ref('')
+const configCategories = ['aiModels', 'skills', 'mcp', 'proxy', 'agents', 'sandbox']
+const configExportVisible = ref(false)
+const configExportCategories = ref([])
+const configImportVisible = ref(false)
+const configImportPath = ref('')
+const configImportPreview = ref(null)
+const configImportCategories = ref([])
+const configImportRiskConfirmed = ref(false)
+const configImportResult = ref(null)
+const configImportResultVisible = ref(false)
+const normalizeConfigCategories = categories => {
+  const normalized = new Set(categories)
+  if (normalized.has('proxy')) normalized.add('aiModels')
+  if (normalized.has('agents')) ['aiModels', 'skills', 'mcp', 'sandbox'].forEach(category => normalized.add(category))
+  return [...normalized]
+}
+watch(configExportCategories, categories => {
+  const normalized = normalizeConfigCategories(categories)
+  if (normalized.length !== categories.length) configExportCategories.value = normalized
+})
+watch(configImportCategories, categories => {
+  const normalized = normalizeConfigCategories(categories)
+  if (normalized.length !== categories.length) configImportCategories.value = normalized
+})
 const apiKeyEncryptionStatus = ref(null)
 const apiKeyFileBusy = ref(false)
 const apiKeyStatusType = computed(() => {
@@ -1697,6 +1775,65 @@ const onRestore = async value => {
       showMessage(error.toString(), 'error')
       console.error('Error restoring settings:', error)
     }
+  }
+}
+
+const resetConfigurationImport = () => {
+  configImportPath.value = ''
+  configImportPreview.value = null
+  configImportCategories.value = []
+  configImportRiskConfirmed.value = false
+}
+
+const exportConfiguration = () => {
+  configExportCategories.value = [...configCategories]
+  configExportVisible.value = true
+}
+
+const submitConfigurationExport = async () => {
+  const categories = normalizeConfigCategories(configExportCategories.value)
+  if (categories.length === 0) return
+  const path = await save({
+    defaultPath: `chatspeed-config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  })
+  if (!path) return
+  await invokeWrapper('export_config_package', {
+    path,
+    categories
+  })
+  configExportVisible.value = false
+  showMessage(t('settings.general.configExportSuccess'), 'success')
+}
+
+const selectConfigurationImport = async () => {
+  const path = await open({ multiple: false, filters: [{ name: 'JSON', extensions: ['json'] }] })
+  if (!path) return
+  try {
+    configImportPreview.value = await invokeWrapper('inspect_config_package', { path })
+    configImportPath.value = path
+    configImportCategories.value = [...configImportPreview.value.categories]
+    configImportRiskConfirmed.value = false
+    configImportVisible.value = true
+  } catch (error) {
+    showMessage(error instanceof FrontendAppError ? error.toFormattedString() : error.toString(), 'error')
+  }
+}
+
+const importConfiguration = async () => {
+  if (!configImportRiskConfirmed.value || !configImportPath.value || !configImportPreview.value || configImportCategories.value.length === 0) return
+  try {
+    const result = await invokeWrapper('import_config_package', {
+      path: configImportPath.value,
+      categories: configImportCategories.value
+    })
+    await settingStore.reloadConfig()
+    configImportVisible.value = false
+    configImportResult.value = result
+    configImportResultVisible.value = true
+    showMessage(t('settings.general.configImportSuccess'), 'success')
+  } catch (error) {
+    showMessage(error instanceof FrontendAppError ? error.toFormattedString() : error.toString(), 'error')
   }
 }
 

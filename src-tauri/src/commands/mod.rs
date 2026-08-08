@@ -2,6 +2,7 @@ pub mod agent;
 pub mod ccproxy;
 pub mod chat;
 pub mod clipboard;
+pub mod config_transfer;
 pub mod constants;
 pub mod dev_tool;
 pub mod env;

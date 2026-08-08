@@ -192,6 +192,15 @@ onMounted(async () => {
       sandboxSchemeStore.fetchSchemes().catch(error => {
         console.error('Failed to refresh sandbox schemes after a backend update:', error)
       })
+    } else if (eventType === 'config_imported') {
+      settingStore.updateSettingStore()
+      modelStore.updateModelStore()
+      skillStore.updateSkillStore()
+      mcpStore.fetchMcpServers()
+      proxyGroupStore.getList()
+      agentStore.fetchAgents()
+      agentStore.fetchAvailableTools()
+      sandboxSchemeStore.fetchSchemes()
     }
 
     // Ignore events from current windows

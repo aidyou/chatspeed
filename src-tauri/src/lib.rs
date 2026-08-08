@@ -47,6 +47,7 @@ use commands::agent::*;
 use commands::ccproxy::*;
 use commands::chat::*;
 use commands::clipboard::*;
+use commands::config_transfer::*;
 use commands::dev_tool::*;
 use commands::env::*;
 use commands::fs::*;
@@ -237,6 +238,9 @@ pub async fn run() -> crate::error::Result<()> {
             delete_ai_skill,
             update_shortcut,
             backup_setting,
+            export_config_package,
+            inspect_config_package,
+            import_config_package,
             get_all_backups,
             restore_setting,
             update_tray,

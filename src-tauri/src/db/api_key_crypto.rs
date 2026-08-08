@@ -135,12 +135,25 @@ pub fn inspect_encryption_status(conn: &Connection) -> Result<ApiKeyEncryptionSt
         }
     }
 
+    let legacy_decryption_failed = values.iter().any(|value| {
+        matches!(classify_value(value), StoredValue::LegacyV1)
+            && decrypt_with_keys(conn, value, None, None).is_err()
+    });
     let key_path = configured_key_path(conn)?;
     let key_file = key_path.as_ref().map(|path| path.display().to_string());
     let key = match key_path.as_ref() {
         Some(path) => match read_key_file(path) {
             Ok(key) => Some(key),
             Err(error) => {
+                if legacy_decryption_failed {
+                    return Ok(ApiKeyEncryptionStatus {
+                        state: ApiKeyEncryptionState::Locked,
+                        key_file,
+                        key_id: None,
+                        required_key_ids,
+                        reason: Some("legacy_decryption_failed".to_string()),
+                    });
+                }
                 return Ok(ApiKeyEncryptionStatus {
                     state: if required_key_ids.is_empty() {
                         ApiKeyEncryptionState::Legacy
@@ -156,6 +169,16 @@ pub fn inspect_encryption_status(conn: &Connection) -> Result<ApiKeyEncryptionSt
         },
         None => None,
     };
+
+    if legacy_decryption_failed {
+        return Ok(ApiKeyEncryptionStatus {
+            state: ApiKeyEncryptionState::Locked,
+            key_file,
+            key_id: key.as_ref().map(|key| key.id.clone()),
+            required_key_ids,
+            reason: Some("legacy_decryption_failed".to_string()),
+        });
+    }
 
     if required_key_ids.is_empty() {
         return Ok(ApiKeyEncryptionStatus {
