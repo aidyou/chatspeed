@@ -16,6 +16,7 @@ RUN if [ "$USE_CN_MIRRORS" = "1" ]; then \
         ca-certificates \
         libffi-dev \
         pkg-config \
+    && python -m pip install tqsdk -i https://mirrors.cloud.tencent.com/pypi/simple \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 --shell /bin/bash sandbox \
     && install -d -o sandbox -g sandbox /workspace
