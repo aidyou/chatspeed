@@ -895,7 +895,7 @@
     </el-checkbox-group>
     <template #footer>
       <el-button @click="configExportVisible = false">{{ $t('common.cancel') }}</el-button>
-      <el-button type="primary" :disabled="configExportCategories.length === 0" @click="submitConfigurationExport">{{ $t('common.confirm') }}</el-button>
+      <el-button type="primary" :loading="configExportBusy" :disabled="configExportCategories.length === 0" @click="submitConfigurationExport">{{ $t('common.confirm') }}</el-button>
     </template>
   </el-dialog>
 
@@ -1010,6 +1010,7 @@ const backups = ref([])
 const restoreDir = ref('')
 const configCategories = ['aiModels', 'skills', 'mcp', 'proxy', 'agents', 'sandbox']
 const configExportVisible = ref(false)
+const configExportBusy = ref(false)
 const configExportCategories = ref([])
 const configImportVisible = ref(false)
 const configImportPath = ref('')
@@ -1793,17 +1794,27 @@ const exportConfiguration = () => {
 const submitConfigurationExport = async () => {
   const categories = normalizeConfigCategories(configExportCategories.value)
   if (categories.length === 0) return
-  const path = await save({
-    defaultPath: `chatspeed-config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
-    filters: [{ name: 'JSON', extensions: ['json'] }]
-  })
-  if (!path) return
-  await invokeWrapper('export_config_package', {
-    path,
-    categories
-  })
-  configExportVisible.value = false
-  showMessage(t('settings.general.configExportSuccess'), 'success')
+
+  configExportBusy.value = true
+  try {
+    const path = await save({
+      defaultPath: `chatspeed-config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (!path) return
+
+    await invokeWrapper('export_config_package', {
+      path,
+      categories
+    })
+    configExportVisible.value = false
+    showMessage(t('settings.general.configExportSuccess'), 'success')
+  } catch (error) {
+    console.error('Failed to export configuration:', error)
+    showMessage(error instanceof FrontendAppError ? error.toFormattedString() : error.toString(), 'error')
+  } finally {
+    configExportBusy.value = false
+  }
 }
 
 const selectConfigurationImport = async () => {

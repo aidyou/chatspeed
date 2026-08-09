@@ -18,7 +18,7 @@ use rusqlite::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{db::agent::AgentModels, tools::MCP_TOOL_NAME_SPLIT};
+use crate::db::agent::AgentModels;
 
 use super::StoreError;
 
@@ -145,37 +145,57 @@ pub fn export_config_package(
 
     if categories.contains(&ConfigCategory::AiModels) {
         package.ai_models = Some(TablePayload {
-            rows: read_rows(conn, "SELECT * FROM ai_model ORDER BY id")?,
+            rows: read_package_rows(
+                conn,
+                ConfigCategory::AiModels,
+                "SELECT * FROM ai_model ORDER BY id",
+            )?,
             config: read_config(conn, AI_CONFIG_KEYS)?,
         });
     }
     if categories.contains(&ConfigCategory::Skills) {
         package.skills = Some(TablePayload {
-            rows: read_rows(conn, "SELECT * FROM ai_skill ORDER BY id")?,
+            rows: read_package_rows(
+                conn,
+                ConfigCategory::Skills,
+                "SELECT * FROM ai_skill ORDER BY id",
+            )?,
             config: BTreeMap::new(),
         });
     }
     if categories.contains(&ConfigCategory::Mcp) {
         package.mcp = Some(TablePayload {
-            rows: read_rows(conn, "SELECT * FROM mcp ORDER BY id")?,
+            rows: read_package_rows(conn, ConfigCategory::Mcp, "SELECT * FROM mcp ORDER BY id")?,
             config: BTreeMap::new(),
         });
     }
     if categories.contains(&ConfigCategory::Proxy) {
         package.proxy = Some(TablePayload {
-            rows: read_rows(conn, "SELECT * FROM proxy_group ORDER BY id")?,
+            rows: read_package_rows(
+                conn,
+                ConfigCategory::Proxy,
+                "SELECT * FROM proxy_group ORDER BY id",
+            )?,
             config: read_config(conn, PROXY_CONFIG_KEYS)?,
         });
     }
     if categories.contains(&ConfigCategory::Agents) {
         package.agents = Some(TablePayload {
-            rows: read_rows(conn, "SELECT * FROM agents ORDER BY id")?,
+            rows: read_package_rows(
+                conn,
+                ConfigCategory::Agents,
+                "SELECT * FROM agents ORDER BY id",
+            )?,
             config: BTreeMap::new(),
         });
     }
     if categories.contains(&ConfigCategory::Sandbox) {
         package.sandbox = Some(TablePayload {
-            rows: read_rows(conn, "SELECT * FROM sandbox_schemes ORDER BY id")?,
+            rows: read_package_rows(
+                conn,
+                ConfigCategory::Sandbox,
+                "SELECT * FROM sandbox_schemes ORDER BY id",
+            )?,
             config: BTreeMap::new(),
         });
     }
@@ -243,7 +263,6 @@ pub fn validate_package(
     }
     validate_config_keys(package.ai_models.as_ref(), AI_CONFIG_KEYS)?;
     validate_config_keys(package.proxy.as_ref(), PROXY_CONFIG_KEYS)?;
-    validate_package_references(package, &categories)?;
 
     Ok(ConfigTransferPreview {
         format_version: package.format_version,
@@ -929,195 +948,10 @@ fn required_columns(category: ConfigCategory) -> &'static [&'static str] {
     }
 }
 
-fn validate_package_references(
-    package: &ConfigTransferPackage,
-    categories: &BTreeSet<ConfigCategory>,
-) -> Result<(), StoreError> {
-    let model_ids = package
-        .ai_models
-        .as_ref()
-        .map(|payload| integer_ids(&payload.rows))
-        .unwrap_or_default();
-    if categories.contains(&ConfigCategory::AiModels) {
-        let payload = package.ai_models.as_ref().ok_or_else(|| {
-            StoreError::InvalidData("package is missing AI models payload".into())
-        })?;
-        for key in AI_CONFIG_KEYS {
-            if let Some(value) = payload.config.get(*key) {
-                validate_model_selection_reference(value, &model_ids, key)?;
-            }
-        }
-    }
-    if categories.contains(&ConfigCategory::Proxy) {
-        let payload = package
-            .proxy
-            .as_ref()
-            .ok_or_else(|| StoreError::InvalidData("package is missing proxy payload".into()))?;
-        if let Some(value) = payload.config.get("chat_completion_proxy") {
-            validate_proxy_target_references(value, &model_ids)?;
-        }
-        if let Some(active_group) = payload
-            .config
-            .get("active_proxy_group")
-            .and_then(Value::as_str)
-        {
-            let proxy_groups = string_field_set(&payload.rows, "name");
-            if !active_group.is_empty() && !proxy_groups.contains(active_group) {
-                return Err(StoreError::InvalidData(
-                    "active proxy group is absent from the package".into(),
-                ));
-            }
-        }
-    }
-    if categories.contains(&ConfigCategory::Agents) {
-        let payload = package
-            .agents
-            .as_ref()
-            .ok_or_else(|| StoreError::InvalidData("package is missing agents payload".into()))?;
-        let skill_names = package
-            .skills
-            .as_ref()
-            .map(|payload| string_field_set(&payload.rows, "name"))
-            .unwrap_or_default();
-        let mcp_server_names = package
-            .mcp
-            .as_ref()
-            .map(|payload| string_field_set(&payload.rows, "name"))
-            .unwrap_or_default();
-        let sandbox_ids = package
-            .sandbox
-            .as_ref()
-            .map(|payload| string_field_set(&payload.rows, "id"))
-            .unwrap_or_default();
-        for row in &payload.rows {
-            validate_agent_row_references(
-                row,
-                &model_ids,
-                &skill_names,
-                &mcp_server_names,
-                &sandbox_ids,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn integer_ids(rows: &[BTreeMap<String, Value>]) -> BTreeSet<i64> {
-    rows.iter()
-        .filter_map(|row| row.get("id")?.as_i64())
-        .collect()
-}
-
 fn string_field_set(rows: &[BTreeMap<String, Value>], field: &str) -> BTreeSet<String> {
     rows.iter()
         .filter_map(|row| row.get(field)?.as_str().map(ToString::to_string))
         .collect()
-}
-
-fn validate_model_selection_reference(
-    value: &Value,
-    model_ids: &BTreeSet<i64>,
-    key: &str,
-) -> Result<(), StoreError> {
-    let Some(id) = value.as_object().and_then(|selection| selection.get("id")) else {
-        return Ok(());
-    };
-    let Some(id) = id.as_i64() else {
-        return Ok(());
-    };
-    if !model_ids.contains(&id) {
-        return Err(StoreError::InvalidData(format!(
-            "{key} references an unknown AI model"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_proxy_target_references(
-    value: &Value,
-    model_ids: &BTreeSet<i64>,
-) -> Result<(), StoreError> {
-    let groups = value
-        .as_object()
-        .ok_or_else(|| StoreError::InvalidData("proxy targets must be an object".into()))?;
-    for aliases in groups.values() {
-        let aliases = aliases.as_object().ok_or_else(|| {
-            StoreError::InvalidData("proxy target group must be an object".into())
-        })?;
-        for targets in aliases.values() {
-            let targets = targets
-                .as_array()
-                .ok_or_else(|| StoreError::InvalidData("proxy targets must be an array".into()))?;
-            for target in targets {
-                let id = target.get("id").and_then(Value::as_i64).ok_or_else(|| {
-                    StoreError::InvalidData("proxy target ID must be an integer".into())
-                })?;
-                if !model_ids.contains(&id) {
-                    return Err(StoreError::InvalidData(
-                        "proxy configuration references an unknown AI model".into(),
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_agent_row_references(
-    row: &BTreeMap<String, Value>,
-    model_ids: &BTreeSet<i64>,
-    skill_names: &BTreeSet<String>,
-    mcp_server_names: &BTreeSet<String>,
-    sandbox_ids: &BTreeSet<String>,
-) -> Result<(), StoreError> {
-    if let Some(models) = row.get("models").and_then(Value::as_str) {
-        let models: AgentModels = serde_json::from_str(models)?;
-        for model in [models.plan, models.act, models.vision, models.utility]
-            .into_iter()
-            .flatten()
-        {
-            if !model_ids.contains(&model.id) {
-                return Err(StoreError::InvalidData(
-                    "agent models references an unknown AI model".into(),
-                ));
-            }
-        }
-    }
-    if let Some(values) = row.get("selected_skills").and_then(Value::as_str) {
-        for value in serde_json::from_str::<Vec<String>>(values)? {
-            if !skill_names.contains(&value) {
-                return Err(StoreError::InvalidData(
-                    "agent references an unknown skill".into(),
-                ));
-            }
-        }
-    }
-    if let Some(values) = row.get("mcp_tool_exposure").and_then(Value::as_str) {
-        for tool_id in serde_json::from_str::<Vec<String>>(values)? {
-            let Some((server_name, tool_name)) = tool_id.split_once(MCP_TOOL_NAME_SPLIT) else {
-                return Err(StoreError::InvalidData(
-                    "agent MCP tool exposure has an invalid tool ID".into(),
-                ));
-            };
-            if server_name.is_empty()
-                || tool_name.is_empty()
-                || tool_name.contains(MCP_TOOL_NAME_SPLIT)
-                || !mcp_server_names.contains(server_name)
-            {
-                return Err(StoreError::InvalidData(
-                    "agent references an unknown MCP server".into(),
-                ));
-            }
-        }
-    }
-    if let Some(scheme_id) = row.get("sandbox_scheme_id").and_then(Value::as_str) {
-        if !sandbox_ids.contains(scheme_id) {
-            return Err(StoreError::InvalidData(
-                "agent references an unknown sandbox scheme".into(),
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn read_rows(conn: &Connection, sql: &str) -> Result<Vec<BTreeMap<String, Value>>, StoreError> {
@@ -1149,6 +983,22 @@ fn read_rows(conn: &Connection, sql: &str) -> Result<Vec<BTreeMap<String, Value>
     })?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(StoreError::from)
+}
+
+fn read_package_rows(
+    conn: &Connection,
+    category: ConfigCategory,
+    sql: &str,
+) -> Result<Vec<BTreeMap<String, Value>>, StoreError> {
+    let allowed_columns = package_columns(category);
+    Ok(read_rows(conn, sql)?
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .filter(|(column, _)| allowed_columns.contains(column.as_str()))
+                .collect()
+        })
+        .collect())
 }
 
 fn read_config(conn: &Connection, keys: &[&str]) -> Result<BTreeMap<String, Value>, StoreError> {
@@ -1220,8 +1070,6 @@ fn import_in_transaction(
     } else {
         BTreeSet::new()
     };
-    validate_import_preflight(transaction, package, selected, &protected_agents)?;
-
     if selected.contains(&ConfigCategory::Sandbox) {
         let incoming = package
             .sandbox
@@ -1291,53 +1139,20 @@ fn import_in_transaction(
             .insert(ConfigCategory::Agents, payload.rows.len());
     }
 
-    validate_references(transaction, selected)?;
-    let foreign_key_errors: i64 =
-        transaction.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
-            row.get(0)
-        })?;
-    if foreign_key_errors != 0 {
-        return Err(StoreError::InvalidData(
-            "configuration import would violate foreign key constraints".into(),
-        ));
-    }
+    sanitize_missing_agent_parents(transaction)?;
     result.api_keys_locked =
         super::api_key_crypto::inspect_encryption_status(transaction)?.is_locked();
     Ok(result)
 }
 
-fn validate_import_preflight(
-    transaction: &Transaction<'_>,
-    package: &ConfigTransferPackage,
-    selected: &BTreeSet<ConfigCategory>,
-    protected_agents: &BTreeSet<String>,
-) -> Result<(), StoreError> {
-    if !selected.contains(&ConfigCategory::Agents) {
-        return Ok(());
-    }
-    let payload = package
-        .agents
-        .as_ref()
-        .ok_or_else(|| StoreError::InvalidData("package is missing agents payload".into()))?;
-    let incoming_ids = string_field_set(&payload.rows, "id");
-    for row in &payload.rows {
-        let Some(parent) = row.get("parent_agent_id").and_then(Value::as_str) else {
-            continue;
-        };
-        if incoming_ids.contains(parent) || protected_agents.contains(parent) {
-            continue;
-        }
-        let builtin_exists: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM agents WHERE id = ?1 AND id LIKE 'builtin:%')",
-            [parent],
-            |row| row.get(0),
-        )?;
-        if !builtin_exists {
-            return Err(StoreError::InvalidData(
-                "agent parent is absent from the package and target database".into(),
-            ));
-        }
-    }
+fn sanitize_missing_agent_parents(transaction: &Transaction<'_>) -> Result<(), StoreError> {
+    transaction.execute(
+        "UPDATE agents
+         SET parent_agent_id = NULL
+         WHERE parent_agent_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM agents parent WHERE parent.id = agents.parent_agent_id)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -1526,197 +1341,6 @@ fn replace_agents(
     Ok(())
 }
 
-fn validate_references(
-    transaction: &Transaction<'_>,
-    selected: &BTreeSet<ConfigCategory>,
-) -> Result<(), StoreError> {
-    let ai_models_replaced = selected.contains(&ConfigCategory::AiModels);
-    if ai_models_replaced {
-        for key in AI_CONFIG_KEYS {
-            let value: Option<String> = transaction
-                .query_row("SELECT value FROM config WHERE key = ?1", [key], |row| {
-                    row.get(0)
-                })
-                .ok();
-            if let Some(value) = value {
-                validate_json_model_ids(transaction, &value)?;
-            }
-        }
-    }
-    if ai_models_replaced || selected.contains(&ConfigCategory::Proxy) {
-        let value: Option<String> = transaction
-            .query_row(
-                "SELECT value FROM config WHERE key = 'chat_completion_proxy'",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-        if let Some(value) = value {
-            let value: Value = serde_json::from_str(&value)?;
-            let model_ids = integer_ids(&read_rows(transaction, "SELECT id FROM ai_model")?);
-            validate_proxy_target_references(&value, &model_ids)?;
-        }
-    }
-    validate_retained_agent_references(transaction, selected)?;
-    let dangling_sandbox: i64 = transaction.query_row(
-        "SELECT COUNT(*) FROM agents a LEFT JOIN sandbox_schemes s ON s.id = a.sandbox_scheme_id WHERE a.sandbox_scheme_id IS NOT NULL AND s.id IS NULL",
-        [], |row| row.get(0),
-    )?;
-    if dangling_sandbox != 0 {
-        return Err(StoreError::InvalidData(
-            "agent has an unknown sandbox scheme".into(),
-        ));
-    }
-    let dangling_parent: i64 = transaction.query_row(
-        "SELECT COUNT(*) FROM agents a LEFT JOIN agents parent ON parent.id = a.parent_agent_id WHERE a.parent_agent_id IS NOT NULL AND parent.id IS NULL",
-        [], |row| row.get(0),
-    )?;
-    if dangling_parent != 0 {
-        return Err(StoreError::InvalidData(
-            "agent has an unknown parent agent".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_retained_agent_references(
-    transaction: &Transaction<'_>,
-    selected: &BTreeSet<ConfigCategory>,
-) -> Result<(), StoreError> {
-    let validates_agent_dependencies = selected.contains(&ConfigCategory::AiModels)
-        || selected.contains(&ConfigCategory::Skills)
-        || selected.contains(&ConfigCategory::Mcp)
-        || selected.contains(&ConfigCategory::Sandbox);
-    if !validates_agent_dependencies {
-        return Ok(());
-    }
-
-    let model_ids = if selected.contains(&ConfigCategory::AiModels) {
-        integer_ids(&read_rows(transaction, "SELECT id FROM ai_model")?)
-    } else {
-        BTreeSet::new()
-    };
-    let skill_names = if selected.contains(&ConfigCategory::Skills) {
-        string_field_set(
-            &read_rows(transaction, "SELECT name FROM ai_skill")?,
-            "name",
-        )
-    } else {
-        BTreeSet::new()
-    };
-    let mcp_server_names = if selected.contains(&ConfigCategory::Mcp) {
-        string_field_set(&read_rows(transaction, "SELECT name FROM mcp")?, "name")
-    } else {
-        BTreeSet::new()
-    };
-    let sandbox_ids = if selected.contains(&ConfigCategory::Sandbox) {
-        string_field_set(
-            &read_rows(transaction, "SELECT id FROM sandbox_schemes")?,
-            "id",
-        )
-    } else {
-        BTreeSet::new()
-    };
-
-    for row in read_rows(transaction, "SELECT * FROM agents")? {
-        if selected.contains(&ConfigCategory::AiModels) {
-            if let Some(models) = row.get("models").and_then(Value::as_str) {
-                let models: AgentModels = serde_json::from_str(models)?;
-                for model in [models.plan, models.act, models.vision, models.utility]
-                    .into_iter()
-                    .flatten()
-                {
-                    if !model_ids.contains(&model.id) {
-                        return Err(StoreError::InvalidData(
-                            "retained agent references an unknown AI model".into(),
-                        ));
-                    }
-                }
-            }
-        }
-        if selected.contains(&ConfigCategory::Skills) {
-            if let Some(values) = row.get("selected_skills").and_then(Value::as_str) {
-                for value in serde_json::from_str::<Vec<String>>(values)? {
-                    if !skill_names.contains(&value) {
-                        return Err(StoreError::InvalidData(
-                            "retained agent references an unknown skill".into(),
-                        ));
-                    }
-                }
-            }
-        }
-        if selected.contains(&ConfigCategory::Mcp) {
-            if let Some(values) = row.get("mcp_tool_exposure").and_then(Value::as_str) {
-                for tool_id in serde_json::from_str::<Vec<String>>(values)? {
-                    let Some((server_name, tool_name)) = tool_id.split_once(MCP_TOOL_NAME_SPLIT)
-                    else {
-                        return Err(StoreError::InvalidData(
-                            "retained agent has an invalid MCP tool ID".into(),
-                        ));
-                    };
-                    if server_name.is_empty()
-                        || tool_name.is_empty()
-                        || tool_name.contains(MCP_TOOL_NAME_SPLIT)
-                        || !mcp_server_names.contains(server_name)
-                    {
-                        return Err(StoreError::InvalidData(
-                            "retained agent references an unknown MCP server".into(),
-                        ));
-                    }
-                }
-            }
-        }
-        if selected.contains(&ConfigCategory::Sandbox) {
-            if let Some(scheme_id) = row.get("sandbox_scheme_id").and_then(Value::as_str) {
-                if !sandbox_ids.contains(scheme_id) {
-                    return Err(StoreError::InvalidData(
-                        "retained agent references an unknown sandbox scheme".into(),
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_json_model_ids(transaction: &Transaction<'_>, json: &str) -> Result<(), StoreError> {
-    let value: Value = serde_json::from_str(json)?;
-    let mut ids = Vec::new();
-    collect_model_ids(&value, &mut ids);
-    for id in ids {
-        let exists: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM ai_model WHERE id = ?1)",
-            [id],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Err(StoreError::InvalidData(
-                "proxy configuration references an unknown AI model".into(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn collect_model_ids(value: &Value, ids: &mut Vec<i64>) {
-    match value {
-        Value::Object(object) => {
-            if let Some(id) = object.get("id").and_then(Value::as_i64) {
-                ids.push(id);
-            }
-            for value in object.values() {
-                collect_model_ids(value, ids);
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                collect_model_ids(value, ids);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn insert_row(
     transaction: &Transaction<'_>,
     table: &str,
@@ -1893,6 +1517,114 @@ mod tests {
     }
 
     #[test]
+    fn import_ignores_preexisting_foreign_key_violations() {
+        let directory = tempfile::tempdir().unwrap();
+        let package_path = directory.path().join("configuration.json");
+        let store = super::super::MainStore::new(directory.path().join("store.sqlite")).unwrap();
+        let runtime = store.db_runtime().unwrap();
+        runtime
+            .write_blocking(|connection| {
+                connection.execute(
+                    "INSERT INTO ai_model (id, name, models, default_model, api_protocol, base_url, api_key)
+                     VALUES (1, 'Provider', '[]', '', 'openai', 'https://example.test', '')",
+                    [],
+                )?;
+                connection.execute(
+                    "INSERT INTO agents (id, name, system_prompt) VALUES ('agent', 'Agent', 'system')",
+                    [],
+                )?;
+                connection.execute(
+                    "INSERT INTO workflows (id, user_query, agent_id) VALUES ('workflow', 'query', 'agent')",
+                    [],
+                )?;
+                connection.execute_batch("PRAGMA foreign_keys = OFF;")?;
+                connection.execute("DELETE FROM agents WHERE id = 'agent'", [])?;
+                connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+                Ok(())
+            })
+            .unwrap();
+        let export_path = package_path.clone();
+        runtime
+            .read_blocking(move |connection| {
+                export_config_package(connection, export_path, [ConfigCategory::AiModels])
+            })
+            .unwrap();
+
+        import_config_package(&store, &package_path, [ConfigCategory::AiModels]).unwrap();
+    }
+
+    #[test]
+    fn stale_proxy_model_reference_exports_and_imports_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let package_path = directory.path().join("stale-proxy.json");
+        let source = super::super::MainStore::new(directory.path().join("source.sqlite")).unwrap();
+        let source_runtime = source.db_runtime().unwrap();
+        source_runtime
+            .write_blocking(|connection| {
+                connection.execute(
+                    "INSERT INTO config (key, value) VALUES ('chat_completion_proxy', ?1)",
+                    [r#"{"default":{"alias":[{"id":999,"model":"deleted-model"}]}}"#],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let export_path = package_path.clone();
+        source_runtime
+            .read_blocking(move |connection| {
+                export_config_package(connection, export_path, [ConfigCategory::Proxy])
+            })
+            .unwrap();
+        assert!(inspect_config_package(&package_path).is_ok());
+
+        let destination =
+            super::super::MainStore::new(directory.path().join("destination.sqlite")).unwrap();
+        import_config_package(&destination, &package_path, [ConfigCategory::Proxy]).unwrap();
+        let proxy_config: String = destination
+            .db_runtime()
+            .unwrap()
+            .read_blocking(|connection| {
+                connection
+                    .query_row(
+                        "SELECT value FROM config WHERE key = 'chat_completion_proxy'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(StoreError::from)
+            })
+            .unwrap();
+        assert!(proxy_config.contains("\"id\":999"));
+    }
+
+    #[test]
+    fn export_agents_ignores_local_extension_columns() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agents.json");
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE ai_model (id INTEGER PRIMARY KEY, name TEXT, models TEXT, default_model TEXT, api_protocol TEXT, base_url TEXT, api_key TEXT);
+                 CREATE TABLE ai_skill (id INTEGER PRIMARY KEY, name TEXT, prompt TEXT);
+                 CREATE TABLE mcp (id INTEGER PRIMARY KEY, name TEXT, description TEXT, config TEXT);
+                 CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT, system_prompt TEXT, local_extension TEXT);
+                 CREATE TABLE sandbox_schemes (id TEXT PRIMARY KEY, name TEXT, description TEXT, config TEXT, disabled INTEGER);
+                 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO agents (id, name, system_prompt, local_extension)
+                 VALUES ('agent-1', 'Agent', 'system', 'runtime-only-value');",
+            )
+            .unwrap();
+
+        export_config_package(&connection, &path, [ConfigCategory::Agents]).unwrap();
+
+        let package = read_config_package(&path).unwrap();
+        let agent = &package.agents.unwrap().rows[0];
+        assert_eq!(agent.get("id"), Some(&Value::String("agent-1".to_string())));
+        assert!(!agent.contains_key("local_extension"));
+        assert!(!fs::read_to_string(path)
+            .unwrap()
+            .contains("runtime-only-value"));
+    }
+
+    #[test]
     fn import_replaces_ai_models_and_resets_sequence() {
         let directory = tempfile::tempdir().unwrap();
         let database_path = directory.path().join("config-transfer.sqlite");
@@ -1947,7 +1679,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_model_references_are_rejected_during_inspection() {
+    fn stale_model_references_are_allowed_during_inspection() {
         let package = ConfigTransferPackage {
             format_version: FORMAT_VERSION,
             exported_at: "now".into(),
@@ -1973,7 +1705,7 @@ mod tests {
             agents: None,
             sandbox: None,
         };
-        assert!(validate_package(&package).is_err());
+        assert!(validate_package(&package).is_ok());
     }
 
     #[test]
@@ -2005,7 +1737,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_config_contract_rejects_string_ids_malformed_targets_and_unknown_groups() {
+    fn config_contract_rejects_malformed_values_but_allows_stale_references() {
         assert!(validate_model_selection(
             &serde_json::json!({ "id": "7", "model": "gpt" }),
             "vision_model"
@@ -2048,43 +1780,35 @@ mod tests {
             agents: None,
             sandbox: None,
         };
-        assert!(validate_package(&package).is_err());
+        assert!(validate_package(&package).is_ok());
 
         let directory = tempfile::tempdir().unwrap();
-        let package_path = directory.path().join("invalid-proxy.json");
+        let package_path = directory.path().join("stale-proxy.json");
         fs::write(&package_path, serde_json::to_vec(&package).unwrap()).unwrap();
-        assert!(inspect_config_package(&package_path).is_err());
+        assert!(inspect_config_package(&package_path).is_ok());
 
         let destination =
             super::super::MainStore::new(directory.path().join("target.sqlite")).unwrap();
-        let runtime = destination.db_runtime().unwrap();
-        runtime
-            .write_blocking(|connection| {
-                connection.execute(
-                    "INSERT INTO config (key, value) VALUES ('sentinel', '\"unchanged\"')",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
-        assert!(import_config_package(
+        import_config_package(
             &destination,
             &package_path,
             [ConfigCategory::AiModels, ConfigCategory::Proxy],
         )
-        .is_err());
-        let sentinel: String = runtime
+        .unwrap();
+        let active_proxy_group: String = destination
+            .db_runtime()
+            .unwrap()
             .read_blocking(|connection| {
                 connection
                     .query_row(
-                        "SELECT value FROM config WHERE key = 'sentinel'",
+                        "SELECT value FROM config WHERE key = 'active_proxy_group'",
                         [],
                         |row| row.get(0),
                     )
                     .map_err(StoreError::from)
             })
             .unwrap();
-        assert_eq!(sentinel, r#""unchanged""#);
+        assert_eq!(active_proxy_group, r#""Missing""#);
     }
 
     #[test]
@@ -2454,6 +2178,86 @@ mod tests {
     }
 
     #[test]
+    fn same_store_full_configuration_reimport_preserves_workflow_agent_references() {
+        let directory = tempfile::tempdir().unwrap();
+        let package_path = directory.path().join("configuration.json");
+        let store = super::super::MainStore::new(directory.path().join("store.sqlite")).unwrap();
+        let runtime = store.db_runtime().unwrap();
+        runtime
+            .write_blocking(|connection| {
+                connection.execute(
+                    "INSERT INTO ai_model (id, name, models, default_model, api_protocol, base_url, api_key)
+                     VALUES (1, 'Provider', '[]', '', 'openai', 'https://example.test', '')",
+                    [],
+                )?;
+                connection.execute(
+                    "INSERT INTO agents (id, name, system_prompt) VALUES ('agent', 'Agent', 'system')",
+                    [],
+                )?;
+                connection.execute(
+                    "INSERT INTO workflows (id, user_query, agent_id) VALUES ('workflow', 'query', 'agent')",
+                    [],
+                )?;
+                connection.execute(
+                    "INSERT INTO workflow_automations (id, title, agent_id, schedule_kind, schedule_config)
+                     VALUES ('automation', 'Automation', 'agent', 'manual', '{}')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let export_path = package_path.clone();
+        runtime
+            .read_blocking(move |connection| {
+                export_config_package(
+                    connection,
+                    export_path,
+                    [
+                        ConfigCategory::AiModels,
+                        ConfigCategory::Skills,
+                        ConfigCategory::Mcp,
+                        ConfigCategory::Proxy,
+                        ConfigCategory::Agents,
+                        ConfigCategory::Sandbox,
+                    ],
+                )
+            })
+            .unwrap();
+
+        import_config_package(
+            &store,
+            &package_path,
+            [
+                ConfigCategory::AiModels,
+                ConfigCategory::Skills,
+                ConfigCategory::Mcp,
+                ConfigCategory::Proxy,
+                ConfigCategory::Agents,
+                ConfigCategory::Sandbox,
+            ],
+        )
+        .unwrap();
+
+        let references: (String, String) = runtime
+            .read_blocking(|connection| {
+                Ok((
+                    connection.query_row(
+                        "SELECT agent_id FROM workflows WHERE id = 'workflow'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT agent_id FROM workflow_automations WHERE id = 'automation'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(references, ("agent".to_string(), "agent".to_string()));
+    }
+
+    #[test]
     fn all_auto_increment_categories_restore_explicit_ids_and_sequences() {
         let directory = tempfile::tempdir().unwrap();
         let source_path = directory.path().join("source.sqlite");
@@ -2625,7 +2429,7 @@ mod tests {
     }
 
     #[test]
-    fn ai_only_import_rejects_retained_proxy_target_to_removed_model() {
+    fn ai_only_import_preserves_retained_proxy_target_to_removed_model() {
         let directory = tempfile::tempdir().unwrap();
         let source_path = directory.path().join("source.sqlite");
         let destination_path = directory.path().join("destination.sqlite");
@@ -2663,9 +2467,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        assert!(
-            import_config_package(&destination, &package_path, [ConfigCategory::AiModels]).is_err()
-        );
+        import_config_package(&destination, &package_path, [ConfigCategory::AiModels]).unwrap();
         let (model_exists, proxy): (bool, String) = runtime
             .read_blocking(|connection| {
                 Ok((
@@ -2682,12 +2484,12 @@ mod tests {
                 ))
             })
             .unwrap();
-        assert!(model_exists);
+        assert!(!model_exists);
         assert!(proxy.contains("\"id\":9"));
     }
 
     #[test]
-    fn agents_import_rejects_protected_agent_with_removed_model() {
+    fn agents_import_preserves_protected_agent_with_removed_model() {
         let directory = tempfile::tempdir().unwrap();
         let source_path = directory.path().join("source.sqlite");
         let destination_path = directory.path().join("destination.sqlite");
@@ -2733,9 +2535,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        assert!(
-            import_config_package(&destination, &package_path, [ConfigCategory::Agents]).is_err()
-        );
+        import_config_package(&destination, &package_path, [ConfigCategory::Agents]).unwrap();
         let (model_exists, agent_exists): (bool, bool) = runtime
             .read_blocking(|connection| {
                 Ok((
@@ -2752,7 +2552,53 @@ mod tests {
                 ))
             })
             .unwrap();
-        assert!(model_exists && agent_exists);
+        assert!(!model_exists && agent_exists);
+    }
+
+    #[test]
+    fn import_clears_missing_agent_parents_without_rejecting_agents() {
+        let directory = tempfile::tempdir().unwrap();
+        let package_path = directory.path().join("orphan-agent.json");
+        let store = super::super::MainStore::new(directory.path().join("target.sqlite")).unwrap();
+        let package = ConfigTransferPackage {
+            format_version: FORMAT_VERSION,
+            exported_at: "now".into(),
+            categories: category_closure([ConfigCategory::Agents])
+                .into_iter()
+                .collect(),
+            ai_models: Some(TablePayload::default()),
+            skills: Some(TablePayload::default()),
+            mcp: Some(TablePayload::default()),
+            proxy: None,
+            agents: Some(TablePayload {
+                rows: vec![BTreeMap::from([
+                    ("id".into(), Value::from("child")),
+                    ("name".into(), Value::from("Child")),
+                    ("system_prompt".into(), Value::from("system")),
+                    ("parent_agent_id".into(), Value::from("missing-parent")),
+                ])],
+                config: BTreeMap::new(),
+            }),
+            sandbox: Some(TablePayload::default()),
+        };
+        fs::write(&package_path, serde_json::to_vec(&package).unwrap()).unwrap();
+
+        import_config_package(&store, &package_path, [ConfigCategory::Agents]).unwrap();
+
+        let parent: Option<String> = store
+            .db_runtime()
+            .unwrap()
+            .read_blocking(|connection| {
+                connection
+                    .query_row(
+                        "SELECT parent_agent_id FROM agents WHERE id = 'child'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(StoreError::from)
+            })
+            .unwrap();
+        assert_eq!(parent, None);
     }
 
     #[test]
@@ -2811,7 +2657,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_mcp_tool_id_is_rejected_during_inspection() {
+    fn stale_mcp_tool_id_is_allowed_during_inspection() {
         let package = ConfigTransferPackage {
             format_version: FORMAT_VERSION,
             exported_at: "now".into(),
@@ -2844,7 +2690,7 @@ mod tests {
             }),
             sandbox: Some(TablePayload::default()),
         };
-        assert!(validate_package(&package).is_err());
+        assert!(validate_package(&package).is_ok());
     }
 
     #[test]
