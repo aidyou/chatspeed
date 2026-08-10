@@ -195,6 +195,45 @@ impl WorkflowExecutor {
         Ok(report.content)
     }
 
+    fn normalize_review_file_path(path: &str) -> Option<String> {
+        let normalized = path.trim().replace('\\', "/");
+        if normalized.is_empty() {
+            return None;
+        }
+
+        let root_prefix = if normalized.starts_with("//") {
+            "//"
+        } else if normalized.starts_with('/') {
+            "/"
+        } else {
+            ""
+        };
+        let mut components = Vec::new();
+        for component in normalized.split('/') {
+            match component {
+                "" | "." => {}
+                ".." if components.last().is_some_and(|value| *value != "..") => {
+                    components.pop();
+                }
+                ".." if root_prefix.is_empty() => components.push(component),
+                ".." => {}
+                _ => components.push(component),
+            }
+        }
+
+        let normalized = format!("{}{}", root_prefix, components.join("/"));
+        (!normalized.is_empty()).then_some(normalized)
+    }
+
+    fn review_file_path(details: &Value) -> Option<String> {
+        details
+            .get("display_path")
+            .or_else(|| details.get("file_path"))
+            .or_else(|| details.get("path"))
+            .and_then(Value::as_str)
+            .and_then(Self::normalize_review_file_path)
+    }
+
     fn review_payload_changed_files(messages: &[WorkflowMessage]) -> Vec<Value> {
         let mut files = BTreeMap::<String, Value>::new();
         for message in messages {
@@ -204,42 +243,51 @@ impl WorkflowExecutor {
             let Some(metadata) = message.metadata.as_ref() else {
                 continue;
             };
-            let Some(tool_name) = metadata.get("tool_name").and_then(|value| value.as_str()) else {
+            if metadata.get("execution_status").and_then(Value::as_str) != Some("completed") {
+                continue;
+            }
+            let Some(tool_name) = metadata.get("tool_name").and_then(Value::as_str) else {
                 continue;
             };
-            if !matches!(
-                tool_name,
-                crate::tools::TOOL_EDIT_FILE | crate::tools::TOOL_WRITE_FILE
-            ) {
+            if !matches!(tool_name, TOOL_EDIT_FILE | TOOL_WRITE_FILE) {
                 continue;
             }
             let Some(details) = metadata.get("details") else {
                 continue;
             };
-            let Some(path) = details
-                .get("file_path")
-                .or_else(|| details.get("path"))
-                .and_then(|value| value.as_str())
-            else {
+            let Some(path) = Self::review_file_path(details) else {
                 continue;
             };
-            let entry = files.entry(path.to_string()).or_insert_with(|| {
+            let entry = files.entry(path.clone()).or_insert_with(|| {
                 json!({
                     "path": path,
                     "operations": Vec::<String>::new(),
+                    "change_types": Vec::<String>::new(),
+                    "successful_call_count": 0,
+                    "first_message_id": message.id,
+                    "last_message_id": message.id,
                     "line_ranges": Vec::<Value>::new(),
                     "summaries": Vec::<String>::new(),
                 })
             });
-            if let Some(operations) = entry
-                .get_mut("operations")
-                .and_then(|value| value.as_array_mut())
-            {
-                let operation = if tool_name == crate::tools::TOOL_WRITE_FILE {
-                    "write_file"
-                } else {
-                    "edit_file"
-                };
+
+            entry["successful_call_count"] = json!(entry["successful_call_count"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_add(1));
+            if entry["first_message_id"].is_null() && message.id.is_some() {
+                entry["first_message_id"] = json!(message.id);
+            }
+            if message.id.is_some() {
+                entry["last_message_id"] = json!(message.id);
+            }
+
+            let operation = if tool_name == TOOL_WRITE_FILE {
+                "write_file"
+            } else {
+                "edit_file"
+            };
+            if let Some(operations) = entry["operations"].as_array_mut() {
                 if !operations
                     .iter()
                     .any(|value| value.as_str() == Some(operation))
@@ -247,34 +295,57 @@ impl WorkflowExecutor {
                     operations.push(json!(operation));
                 }
             }
-            if let Some(start_line) = details.get("start_line").and_then(|value| value.as_u64()) {
+
+            let change_type = if tool_name == TOOL_EDIT_FILE {
+                "edited"
+            } else if details
+                .get("overwritten")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "overwritten"
+            } else {
+                "created"
+            };
+            if let Some(change_types) = entry["change_types"].as_array_mut() {
+                if !change_types
+                    .iter()
+                    .any(|value| value.as_str() == Some(change_type))
+                {
+                    change_types.push(json!(change_type));
+                }
+            }
+
+            if let Some(start_line) = details.get("start_line").and_then(Value::as_u64) {
                 let end_line = details
                     .get("new_string")
                     .or_else(|| details.get("content"))
-                    .and_then(|value| value.as_str())
+                    .and_then(Value::as_str)
                     .map(|text| text.lines().count())
                     .filter(|count| *count > 0)
                     .map(|count| start_line + count.saturating_sub(1) as u64)
                     .unwrap_or(start_line);
-                if let Some(line_ranges) = entry
-                    .get_mut("line_ranges")
-                    .and_then(|value| value.as_array_mut())
-                {
-                    line_ranges.push(json!({
-                        "start_line": start_line,
-                        "end_line": end_line
-                    }));
+                let line_range = json!({
+                    "start_line": start_line,
+                    "end_line": end_line
+                });
+                if let Some(line_ranges) = entry["line_ranges"].as_array_mut() {
+                    if !line_ranges.contains(&line_range) {
+                        line_ranges.push(line_range);
+                    }
                 }
             }
-            if let Some(summary) = metadata.get("summary").and_then(|value| value.as_str()) {
-                if let Some(summaries) = entry
-                    .get_mut("summaries")
-                    .and_then(|value| value.as_array_mut())
-                {
-                    if !summary.trim().is_empty()
-                        && !summaries
-                            .iter()
-                            .any(|value| value.as_str() == Some(summary))
+
+            if let Some(summary) = metadata
+                .get("summary")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                if let Some(summaries) = entry["summaries"].as_array_mut() {
+                    if !summaries
+                        .iter()
+                        .any(|value| value.as_str() == Some(summary))
                     {
                         summaries.push(json!(summary));
                     }
@@ -606,8 +677,8 @@ impl WorkflowExecutor {
                     "tool_name": tool_name,
                     "status": execution_status,
                     "path": details
-                        .and_then(|value| value.get("file_path").or_else(|| value.get("path")))
-                        .cloned()
+                        .and_then(Self::review_file_path)
+                        .map(Value::String)
                         .unwrap_or(Value::Null),
                     "summary": summary,
                     "details": Self::review_mutation_details(details)
@@ -733,6 +804,16 @@ impl WorkflowExecutor {
             completion_report_provenance.clone(),
         );
         payload.insert("changed_files".to_string(), json!(changed_files));
+        payload.insert(
+            "changed_files_source".to_string(),
+            json!({
+                "kind": "successful_structured_file_tool_calls",
+                "scope": "durable_current_task_transcript",
+                "included_tools": [TOOL_EDIT_FILE, TOOL_WRITE_FILE],
+                "included_statuses": ["completed"],
+                "limitations": "Git status/diff remains authoritative for current workspace changes made through shell commands, generators, MCP tools, deletions, renames, or other non-file-tool paths."
+            }),
+        );
         for key in ["mutation_ledger", "verification_ledger", "failed_actions"] {
             payload.insert(
                 key.to_string(),
@@ -3394,6 +3475,122 @@ mod tests {
             error_type: is_error.then(|| "ToolExecutionError".to_string()),
             created_at: None,
         }
+    }
+
+    #[test]
+    fn changed_files_include_only_successful_normalized_file_tool_calls() {
+        let messages = vec![
+            tool_message(
+                41,
+                "created file",
+                false,
+                json!({
+                    "tool_name": TOOL_WRITE_FILE,
+                    "execution_status": "completed",
+                    "summary": "Created feature",
+                    "details": {
+                        "file_path": "/workspace/src/feature.rs",
+                        "display_path": "src\\feature.rs",
+                        "overwritten": false
+                    }
+                }),
+            ),
+            tool_message(
+                42,
+                "edited file",
+                false,
+                json!({
+                    "tool_name": TOOL_EDIT_FILE,
+                    "execution_status": "completed",
+                    "summary": "Updated feature",
+                    "details": {
+                        "file_path": "/workspace/src/feature.rs",
+                        "display_path": "./src/feature.rs",
+                        "start_line": 10,
+                        "new_string": "first\nsecond"
+                    }
+                }),
+            ),
+            tool_message(
+                43,
+                "pending edit",
+                false,
+                json!({
+                    "tool_name": TOOL_EDIT_FILE,
+                    "execution_status": "pending_approval",
+                    "details": {
+                        "display_path": "src/feature.rs",
+                        "start_line": 20,
+                        "new_string": "pending"
+                    }
+                }),
+            ),
+            tool_message(
+                44,
+                "failed edit",
+                true,
+                json!({
+                    "tool_name": TOOL_EDIT_FILE,
+                    "execution_status": "failed",
+                    "details": {
+                        "display_path": "src/feature.rs",
+                        "start_line": 30,
+                        "new_string": "failed"
+                    }
+                }),
+            ),
+            tool_message(
+                45,
+                "overwrote config",
+                false,
+                json!({
+                    "tool_name": TOOL_WRITE_FILE,
+                    "execution_status": "completed",
+                    "summary": "Replaced config",
+                    "details": {
+                        "display_path": "config/../config/app.toml",
+                        "overwritten": true
+                    }
+                }),
+            ),
+            tool_message(
+                46,
+                "generated another file",
+                false,
+                json!({
+                    "tool_name": TOOL_BASH,
+                    "execution_status": "completed",
+                    "details": { "display_path": "src/generated.rs" }
+                }),
+            ),
+        ];
+
+        let changed_files = WorkflowExecutor::review_payload_changed_files(&messages);
+
+        assert_eq!(changed_files.len(), 2);
+        assert_eq!(changed_files[0]["path"], "config/app.toml");
+        assert_eq!(changed_files[0]["change_types"], json!(["overwritten"]));
+        assert_eq!(changed_files[0]["successful_call_count"], 1);
+        assert_eq!(changed_files[1]["path"], "src/feature.rs");
+        assert_eq!(
+            changed_files[1]["operations"],
+            json!([TOOL_WRITE_FILE, TOOL_EDIT_FILE])
+        );
+        assert_eq!(
+            changed_files[1]["change_types"],
+            json!(["created", "edited"])
+        );
+        assert_eq!(changed_files[1]["successful_call_count"], 2);
+        assert_eq!(changed_files[1]["first_message_id"], 41);
+        assert_eq!(changed_files[1]["last_message_id"], 42);
+        assert_eq!(
+            changed_files[1]["line_ranges"],
+            json!([{"start_line": 10, "end_line": 11}])
+        );
+        assert_eq!(
+            changed_files[1]["summaries"],
+            json!(["Created feature", "Updated feature"])
+        );
     }
 
     #[test]
